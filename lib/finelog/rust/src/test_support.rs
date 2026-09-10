@@ -4,6 +4,7 @@
 //! Fixtures shared by tests across the crate's modules. Module-specific ones (a served
 //! store, a Connect client) live beside the module they exercise.
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -34,7 +35,9 @@ pub enum ObjectOp {
     Write,
     Read,
     LocalPath,
+    List,
     CompareAndSwap,
+    Delete,
 }
 
 /// Which object IDs a fault applies to.
@@ -224,6 +227,21 @@ impl FaultInjectingObjectStore {
         });
         self.selected(op, key)
     }
+
+    async fn execute<T, F, Fut>(&self, op: ObjectOp, key: &str, run: F) -> Result<T, StatsError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, StatsError>>,
+    {
+        match resolve(self.record(op, key)).await {
+            Proceed::Run => run().await,
+            Proceed::Reject(error) => Err(error),
+            Proceed::RunThenFail { error, gate } => {
+                run().await?;
+                Err(lost(error, gate).await)
+            }
+        }
+    }
 }
 
 /// How a faulted call proceeds once its action is known.
@@ -264,25 +282,17 @@ async fn lost(error: StatsError, gate: Option<Arc<FaultGate>>) -> StatsError {
 #[async_trait]
 impl ObjectStore for FaultInjectingObjectStore {
     async fn write(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
-        match resolve(self.record(ObjectOp::Write, id.as_str())).await {
-            Proceed::Run => self.inner.write(id, bytes).await,
-            Proceed::Reject(error) => Err(error),
-            Proceed::RunThenFail { error, gate } => {
-                self.inner.write(id, bytes).await?;
-                Err(lost(error, gate).await)
-            }
-        }
+        self.execute(ObjectOp::Write, id.as_str(), || self.inner.write(id, bytes))
+            .await
     }
 
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {
-        match resolve(self.record(ObjectOp::Read, id.as_str())).await {
-            Proceed::Run => self.inner.read(id).await,
-            Proceed::Reject(error) => Err(error),
-            Proceed::RunThenFail { error, gate } => {
-                self.inner.read(id).await?;
-                Err(lost(error, gate).await)
-            }
-        }
+        self.execute(ObjectOp::Read, id.as_str(), || self.inner.read(id))
+            .await
+    }
+
+    async fn exists(&self, id: &ObjectId) -> Result<bool, StatsError> {
+        self.inner.exists(id).await
     }
 
     /// Staging is a local write; faults model the remote, so it always runs.
@@ -293,25 +303,17 @@ impl ObjectStore for FaultInjectingObjectStore {
     /// The upload half of a staged write is a remote write: `Write` faults
     /// apply, so an outage scenario fails uploads while staging succeeds.
     async fn upload_staged(&self, reference: &ObjectReference) -> Result<(), StatsError> {
-        match resolve(self.record(ObjectOp::Write, reference.id.as_str())).await {
-            Proceed::Run => self.inner.upload_staged(reference).await,
-            Proceed::Reject(error) => Err(error),
-            Proceed::RunThenFail { error, gate } => {
-                self.inner.upload_staged(reference).await?;
-                Err(lost(error, gate).await)
-            }
-        }
+        self.execute(ObjectOp::Write, reference.id.as_str(), || {
+            self.inner.upload_staged(reference)
+        })
+        .await
     }
 
     async fn local_path(&self, reference: &ObjectReference) -> Result<PathBuf, StatsError> {
-        match resolve(self.record(ObjectOp::LocalPath, reference.id.as_str())).await {
-            Proceed::Run => self.inner.local_path(reference).await,
-            Proceed::Reject(error) => Err(error),
-            Proceed::RunThenFail { error, gate } => {
-                self.inner.local_path(reference).await?;
-                Err(lost(error, gate).await)
-            }
-        }
+        self.execute(ObjectOp::LocalPath, reference.id.as_str(), || {
+            self.inner.local_path(reference)
+        })
+        .await
     }
 
     fn planned_local_path(&self, id: &ObjectId) -> Result<PathBuf, StatsError> {
@@ -339,22 +341,20 @@ impl ObjectStore for FaultInjectingObjectStore {
         expected: Option<&ObjectVersion>,
         bytes: bytes::Bytes,
     ) -> Result<ObjectVersion, StatsError> {
-        match resolve(self.record(ObjectOp::CompareAndSwap, id.as_str())).await {
-            Proceed::Run => self.inner.compare_and_swap(id, expected, bytes).await,
-            Proceed::Reject(error) => Err(error),
-            Proceed::RunThenFail { error, gate } => {
-                self.inner.compare_and_swap(id, expected, bytes).await?;
-                Err(lost(error, gate).await)
-            }
-        }
+        self.execute(ObjectOp::CompareAndSwap, id.as_str(), || {
+            self.inner.compare_and_swap(id, expected, bytes)
+        })
+        .await
     }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
-        self.inner.delete(id).await
+        self.execute(ObjectOp::Delete, id.as_str(), || self.inner.delete(id))
+            .await
     }
 
     async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {
-        self.inner.list(prefix).await
+        self.execute(ObjectOp::List, prefix.as_str(), || self.inner.list(prefix))
+            .await
     }
 
     async fn list_tables(&self) -> Result<Vec<String>, StatsError> {

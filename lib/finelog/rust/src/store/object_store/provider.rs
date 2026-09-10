@@ -9,10 +9,9 @@ use object_store::path::Path as OsPath;
 use object_store::{
     ObjectStore as BackendObjectStore, ObjectStoreExt, PutMode, PutOptions, UpdateVersion,
 };
-use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
-use crate::store::object_store::{ObjectVersion, StoredObject};
+use crate::store::object_store::{ObjectId, ObjectVersion, StoredObject};
 
 use super::local_file::compare_and_swap as local_compare_and_swap;
 
@@ -67,13 +66,16 @@ impl Provider {
 
         std::fs::create_dir_all(value)
             .map_err(|error| StatsError::Internal(format!("create remote dir {value}: {error}")))?;
-        let backend = LocalFileSystem::new_with_prefix(value).map_err(|error| {
+        let local_root = std::fs::canonicalize(value).map_err(|error| {
+            StatsError::Internal(format!("resolve local remote store {value}: {error}"))
+        })?;
+        let backend = LocalFileSystem::new_with_prefix(&local_root).map_err(|error| {
             StatsError::Internal(format!("local remote store {value}: {error}"))
         })?;
         Ok(Some(Self {
             backend: Arc::new(backend),
             prefix: String::new(),
-            local_root: Some(PathBuf::from(value)),
+            local_root: Some(local_root),
             base_url: None,
         }))
     }
@@ -94,6 +96,28 @@ impl Provider {
 
     pub(super) fn local_root(&self) -> Option<&Path> {
         self.local_root.as_deref()
+    }
+
+    /// Provider-relative physical path for one validated logical object ID.
+    pub(super) fn object_path(&self, id: &ObjectId) -> OsPath {
+        OsPath::from_iter(
+            self.prefix_parts()
+                .chain(id.as_str().split('/').filter(|part| !part.is_empty())),
+        )
+    }
+
+    /// URL or filesystem path used to scan the same physical object.
+    pub(super) fn scan_url(&self, id: &ObjectId) -> String {
+        let path = self.object_path(id);
+        match self.base_url() {
+            Some(base) => format!("{base}/{path}"),
+            None => self
+                .local_root()
+                .expect("a provider without a base URL has a local root")
+                .join(path.as_ref())
+                .to_string_lossy()
+                .into_owned(),
+        }
     }
 
     /// Read the object at `path`, or `None` when it does not exist.
@@ -121,8 +145,8 @@ impl Provider {
             version: ObjectVersion {
                 e_tag,
                 provider_version,
-                content_sha256: Sha256::digest(&bytes).into(),
                 byte_size: bytes.len() as u64,
+                local_value: self.local_root().is_some().then(|| bytes.clone()),
             },
             bytes,
         }))
@@ -131,8 +155,8 @@ impl Provider {
     /// Swap the pointer at `path` from `expected` to `bytes`.
     ///
     /// `local_path` is the filesystem path backing `path` when the provider is a
-    /// local directory, in which case the swap goes through the content-hash
-    /// comparison in [`local_compare_and_swap`].
+    /// local directory, in which case the swap compares the exact pointer bytes
+    /// under the local file lock in [`local_compare_and_swap`].
     ///
     /// A precondition failure is the one outcome the backend states
     /// definitively: the swap did not apply, reported as `SchemaConflict`. Every
@@ -147,9 +171,9 @@ impl Provider {
         description: &str,
     ) -> Result<ObjectVersion, StatsError> {
         if let Some(local_path) = local_path {
-            let expected_hash = expected.map(|version| version.content_sha256);
+            let expected_value = expected.and_then(|version| version.local_value.clone());
             return tokio::task::spawn_blocking(move || {
-                local_compare_and_swap(&local_path, expected_hash, &bytes)
+                local_compare_and_swap(&local_path, expected_value.as_deref(), &bytes)
             })
             .await
             .map_err(|error| StatsError::Internal(format!("{description} CAS task: {error}")))?;
@@ -161,7 +185,6 @@ impl Provider {
                 version: version.provider_version.clone(),
             }),
         };
-        let content_sha256 = Sha256::digest(&bytes).into();
         let byte_size = bytes.len() as u64;
         match self
             .backend
@@ -178,8 +201,8 @@ impl Provider {
             Ok(result) => Ok(ObjectVersion {
                 e_tag: result.e_tag,
                 provider_version: result.version,
-                content_sha256,
                 byte_size,
+                local_value: None,
             }),
             Err(object_store::Error::AlreadyExists { .. })
             | Err(object_store::Error::Precondition { .. }) => Err(StatsError::SchemaConflict(
@@ -192,8 +215,8 @@ impl Provider {
     }
 }
 
-/// Whether `value` names an object store rather than a local directory.
-pub fn is_object_store(value: &str) -> bool {
+/// Whether `value` names a remote bucket URL rather than a local directory.
+pub fn is_remote_object_store(value: &str) -> bool {
     let value = value.trim();
     value.starts_with(GCS_SCHEME) || value.starts_with(S3_SCHEME)
 }

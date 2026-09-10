@@ -5,8 +5,6 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use sha2::{Digest, Sha256};
-
 use super::ObjectVersion;
 use crate::errors::StatsError;
 
@@ -59,8 +57,14 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), StatsError> 
     if let Err(error) = published {
         // A failed write (e.g. a full disk) must not leave the staging file
         // behind: staging files are exempt from cache eviction.
-        let _ = std::fs::remove_file(&staging);
-        return Err(error);
+        return match std::fs::remove_file(&staging) {
+            Ok(()) => Err(error),
+            Err(cleanup) if cleanup.kind() == std::io::ErrorKind::NotFound => Err(error),
+            Err(cleanup) => Err(StatsError::Internal(format!(
+                "{error}; failed to remove local object staging {}: {cleanup}",
+                staging.display()
+            ))),
+        };
     }
     std::fs::File::open(parent)
         .and_then(|directory| directory.sync_all())
@@ -74,7 +78,7 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), StatsError> 
 
 pub(crate) fn compare_and_swap(
     path: &Path,
-    expected_hash: Option<[u8; 32]>,
+    expected_value: Option<&[u8]>,
     bytes: &[u8],
 ) -> Result<ObjectVersion, StatsError> {
     let parent = path.parent().ok_or_else(|| {
@@ -118,8 +122,7 @@ pub(crate) fn compare_and_swap(
             )))
         }
     };
-    let current_hash = current.as_deref().map(|value| Sha256::digest(value).into());
-    if current_hash != expected_hash {
+    if current.as_deref() != expected_value {
         return Err(StatsError::SchemaConflict(format!(
             "object pointer {} changed concurrently",
             path.display()
@@ -130,8 +133,8 @@ pub(crate) fn compare_and_swap(
     Ok(ObjectVersion {
         e_tag: None,
         provider_version: None,
-        content_sha256: Sha256::digest(bytes).into(),
         byte_size: bytes.len() as u64,
+        local_value: Some(bytes::Bytes::copy_from_slice(bytes)),
     })
 }
 

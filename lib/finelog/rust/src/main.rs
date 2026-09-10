@@ -18,7 +18,8 @@ use finelog::server::diagnostics::spawn_pool_diagnostics;
 use finelog::server::{
     build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,
 };
-use finelog::store::object_store::is_object_store;
+use finelog::store::object_store::is_remote_object_store;
+use finelog::store::table::AckDurability;
 use finelog::store::{ServeMode, Store, TelemetryRootWriteMode};
 use tokio::sync::Notify;
 
@@ -109,6 +110,16 @@ struct Args {
     #[arg(long = "forwarding", env = "FINELOG_FORWARDING", default_value = "")]
     forwarding: String,
 
+    /// Recovery authority an ingest acknowledgement waits for. Node-local
+    /// caches use `object-store`; persistent volumes may use `local-disk`.
+    #[arg(
+        long,
+        env = "FINELOG_ACK_DURABILITY",
+        value_enum,
+        default_value_t = AckDurability::LocalDisk
+    )]
+    ack_durability: AckDurability,
+
     /// This server's Ed25519 private key (PKCS#8 PEM, env `FINELOG_SIGNING_KEY`),
     /// which signs the `aud="finelog"` bearer the hub verifies against the matching
     /// public key in its `jwt` auth layer. Only the forwarder uses it. Deliver it
@@ -194,6 +205,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "telemetry dual-write migration fence active"
         );
     }
+    store
+        .configure_ack_durability(args.ack_durability)
+        .map_err(|e| format!("invalid acknowledgement durability: {e}"))?;
+    // Resolve the host role before maintenance starts. A forwarding deployment
+    // is a relay: it keeps its schema contract but omits query-serving physical
+    // work and retires only downstream-settled objects.
+    let forwarder = build_forwarder(&args, Arc::clone(&store))?.map(Arc::new);
+
     // Start each namespace's maintenance task. Each task runs its boot remote
     // reconcile (adopt unknown remote parquet, redundancy-drop covered segments)
     // in the BACKGROUND as its first step, so a large first-time reconcile (e.g.
@@ -216,13 +235,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ServerConfig::with_debug_admin(args.debug_admin).with_auth(auth);
     let app = build_app_with_config(Arc::clone(&store), config);
 
-    // Cross-cluster forwarding, when configured. Spawned before the listener binds
-    // so a store with a backlog starts draining immediately, and latched off in the
-    // shutdown block below.
-    let (forward_stop, forward_task) = match build_forwarder(&args, Arc::clone(&store))? {
+    // Cross-cluster forwarding starts before the listener binds so an existing
+    // backlog drains immediately. Keep the sender alive while serving; shutdown
+    // aborts the task after the listener stops.
+    // The sender is a liveness token for the task's watch receiver. Production
+    // shutdown aborts the task after the listener drains; tests can still use
+    // the receiver's cooperative stop path directly.
+    let (_forward_liveness, forward_task) = match &forwarder {
         Some(forwarder) => {
             let (tx, rx) = tokio::sync::watch::channel(false);
-            (Some(tx), Some(spawn_forwarder(forwarder, rx)))
+            (Some(tx), Some(spawn_forwarder(Arc::clone(forwarder), rx)))
         }
         None => (None, None),
     };
@@ -253,23 +275,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     tracing::info!("finelog-server draining background tasks");
 
-    // Stop the forwarder first: it reads the store, so it must be off the segments
-    // before the namespaces drain. It observes the latch between bounded outbound
-    // requests and interrupts retry delays; the join timeout is defense in depth.
-    if let (Some(stop), Some(task)) = (forward_stop, forward_task) {
-        let _ = stop.send(true);
-        let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
-    }
+    let forward_result = if let Some(task) = forward_task {
+        task.abort();
+        match task.await {
+            Ok(()) => Ok(()),
+            Err(error) if error.is_cancelled() => Ok(()),
+            Err(error) => Err(error),
+        }
+    } else {
+        Ok(())
+    };
 
-    // Stop the diagnostics task, then cooperatively cancel + join the
-    // per-namespace flush/maintenance tasks. The per-namespace join is bounded;
-    // an OUTER timeout here guarantees the process still exits promptly even if
-    // a namespace shutdown is somehow slow (defense in depth; durability is
-    // already preserved because writes ack only after L0 persist).
     diag_stop.store(true, Ordering::SeqCst);
     diag_shutdown.notify_waiters();
-    // Bound the diagnostics join too: even with the latch the task does no
-    // durable work, so it must never delay the store drain.
     let _ = tokio::time::timeout(Duration::from_secs(2), diag).await;
     let _ = tokio::time::timeout(
         Duration::from_secs(10),
@@ -277,6 +295,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await;
     tracing::info!("finelog-server stopped");
+    forward_result?;
     Ok(())
 }
 
@@ -295,7 +314,7 @@ fn resolve_serve_mode(args: &Args) -> Result<ServeMode, String> {
             "shadow mode needs --log-dir: an in-memory store has no boot to rehearse".into(),
         );
     }
-    if is_object_store(&args.remote_log_dir) {
+    if is_remote_object_store(&args.remote_log_dir) {
         return Err(format!(
             "shadow mode refuses the archive {:?}: point --remote-log-dir at a local directory, \
              or leave it empty",
@@ -341,6 +360,7 @@ fn build_forwarder(args: &Args, store: Arc<Store>) -> Result<Option<Forwarder>, 
         cluster = %config.cluster,
         "finelog-server: forwarding configured"
     );
+    store.configure_relay();
     Ok(Some(Forwarder::new(store, config, &args.signing_key)?))
 }
 

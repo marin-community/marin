@@ -11,18 +11,23 @@ large or changing files stay out of the image and the repository. A Python app's
 mounted at ``/<name>/api/`` behind the same authentication, with the caller's identity
 bound for its handlers. ``/api/marina/*`` is the surface shared by every
 app (the app directory and the caller's identity); ``/`` lists the apps. A per-app
-Content-Security-Policy restricts what the page may fetch to itself plus the manifest's
-``connect_src``.
+Content-Security-Policy restricts what the page may fetch to itself, the manifest's
+``connect_src``, and the configured Loom origin for apps that enable the agent panel.
 """
 
 import html
 import mimetypes
 import os
 import posixpath
+import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, Request
+import httpx
+import sqlalchemy
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import prefix_join
@@ -39,10 +44,26 @@ from rigging.server_auth import (
 from starlette.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from marina.applets import (
+    MAX_ARCHIVE_BYTES,
+    AppletBackendUnavailable,
+    AppletConflict,
+    AppletForbidden,
+    AppletNotFound,
+    AppletPackage,
+    AppletRuntime,
+    AppletStore,
+    InvalidQuery,
+    PublishResult,
+    QueryLimitExceeded,
+    read_applet_package,
+    validate_backend_import,
+)
 from marina.apps import create_api, data_url_for, is_python_app, services_for
 from marina.auth import build_policy, identity_for
 from marina.db import DatabaseSpec, database_from_env
 from marina.manifest import AppManifest, discover_apps
+from marina.mcp import marina_mcp
 
 INDEX_FILE = "index.html"
 # A file committed as `x.gz` is served at `x` with a Content-Encoding header, so a large
@@ -59,13 +80,25 @@ HOST_APPS_ENV = "MARINA_HOST_APPS"
 # The origin the apps are served from. Aliased hosts send every request here, so one URL
 # space holds the apps and a link from one app to another resolves against this origin.
 CANONICAL_ORIGIN_ENV = "MARINA_CANONICAL_ORIGIN"
+APPLET_ORIGIN_ENV = "MARINA_APPLET_ORIGIN"
+APPLET_OPERATORS_ENV = "MARINA_APPLET_OPERATORS"
+AGENT_ORIGIN_ENV = "MARINA_AGENT_ORIGIN"
 DATA_PREFIX = "data/"
 API_PREFIX = "/api"
+MCP_PATH = "/api/marina/mcp"
+MCP_READ_PATH = "/api/marina/mcp/read"
 # The first path segment the kernel answers itself. An app named for one of these would
 # register the same route and lose it: FastAPI keeps the first match, and the kernel's
 # routes are installed before any app's.
-KERNEL_PREFIXES = frozenset({"api", "healthz"})
+KERNEL_PREFIXES = frozenset({"a", "api", "healthz"})
 DATA_CACHE_CONTROL = "private, max-age=300"
+
+
+@dataclass(frozen=True)
+class AgentPanelService:
+    """Deployment-specific location of the Loom service."""
+
+    origin: str
 
 
 @dataclass(frozen=True)
@@ -81,6 +114,10 @@ class MarinaConfig:
     host_apps: dict[str, str] = field(default_factory=dict)
     # Scheme and host the aliased hosts redirect to, e.g. https://marina.oa.dev.
     canonical_origin: str | None = None
+    # A separate IAP-gated origin that exposes only /a/* applet routes.
+    applet_origin: str | None = None
+    applet_operators: frozenset[str] = frozenset()
+    agent_panel: AgentPanelService | None = None
 
     @classmethod
     def from_env(cls, default_apps_dir: Path) -> "MarinaConfig":
@@ -99,6 +136,15 @@ class MarinaConfig:
             database=database_from_env(os.environ),
             host_apps=parse_host_apps(os.environ.get(HOST_APPS_ENV, "")),
             canonical_origin=(os.environ.get(CANONICAL_ORIGIN_ENV) or "").rstrip("/") or None,
+            applet_origin=(os.environ.get(APPLET_ORIGIN_ENV) or "").rstrip("/") or None,
+            applet_operators=frozenset(
+                item.strip() for item in os.environ.get(APPLET_OPERATORS_ENV, "").split(",") if item.strip()
+            ),
+            agent_panel=(
+                AgentPanelService(origin=os.environ[AGENT_ORIGIN_ENV].rstrip("/"))
+                if os.environ.get(AGENT_ORIGIN_ENV)
+                else None
+            ),
         )
 
 
@@ -112,6 +158,29 @@ def parse_host_apps(spec: str) -> dict[str, str]:
             raise ValueError(f"{HOST_APPS_ENV} entry {pair!r} is not host=app")
         result[host.strip().lower()] = app.strip()
     return result
+
+
+def validate_agent_panel(service: AgentPanelService | None, iap_audience: str | None) -> None:
+    """Reject origins that cannot safely receive credentialed browser requests."""
+    if service is None:
+        return
+    parsed = urlparse(service.origin)
+    absolute_origin = (
+        parsed.scheme in {"http", "https"}
+        and parsed.hostname is not None
+        and parsed.path in {"", "/"}
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+        and parsed.username is None
+        and parsed.password is None
+    )
+    if not absolute_origin:
+        raise ValueError(f"{AGENT_ORIGIN_ENV} must be an absolute HTTP origin without a path")
+    if parsed.scheme == "https":
+        return
+    if iap_audience is not None or parsed.hostname not in {"127.0.0.1", "::1"}:
+        raise ValueError(f"{AGENT_ORIGIN_ENV} must use HTTPS outside a loopback development kernel")
 
 
 def host_redirect(host: str, path: str, host_apps: dict[str, str], canonical_origin: str) -> str | None:
@@ -141,8 +210,8 @@ def legacy_api_app(host: str, path: str, host_apps: dict[str, str]) -> str | Non
     return app
 
 
-def content_security_policy(app: AppManifest) -> str:
-    connect = " ".join(("'self'", *app.connect_src))
+def content_security_policy(connect_src: tuple[str, ...]) -> str:
+    connect = " ".join(("'self'", *connect_src))
     return (
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
         f"img-src 'self' data:; font-src 'self' data:; connect-src {connect}; frame-ancestors 'none'"
@@ -153,10 +222,68 @@ def app_directory(apps: list[AppManifest]) -> list[dict[str, str]]:
     return [{"name": app.name, "title": app.title, "description": app.description, "path": app.path} for app in apps]
 
 
-def landing_page(apps: list[AppManifest]) -> str:
+def applet_directory(store: AppletStore | None, applet_origin: str | None) -> list[dict[str, object]]:
+    if store is None:
+        return []
+    return [
+        {
+            "name": str(applet.id),
+            "title": applet.title,
+            "description": applet.description,
+            "path": (applet_origin or "") + applet.path,
+            "kind": "applet",
+            "published_by": applet.owner,
+            "version": applet.current_version,
+        }
+        for applet in store.active_applets()
+    ]
+
+
+def accepts_encoding(header: str, encoding: str) -> bool:
+    """Whether an HTTP Accept-Encoding value permits one named encoding."""
+    qualities: dict[str, float] = {}
+    for item in header.split(","):
+        name, *parameters = item.split(";")
+        name = name.strip().lower()
+        if name not in {encoding.lower(), "*"}:
+            continue
+        quality = next((value for value in parameters if value.strip().lower().startswith("q=")), "q=1")
+        try:
+            qualities[name] = float(quality.split("=", 1)[1])
+        except ValueError:
+            qualities[name] = 0
+    return qualities.get(encoding.lower(), qualities.get("*", 0)) > 0
+
+
+def accepts_html(header: str) -> bool:
+    accepted = {item.split(";", 1)[0].strip().lower() for item in header.split(",")}
+    return not accepted or "text/html" in accepted or "*/*" in accepted
+
+
+def sqlstate(error: sqlalchemy.exc.SQLAlchemyError) -> str | None:
+    original = getattr(error, "orig", None)
+    if original is None or not original.args or not isinstance(original.args[0], dict):
+        return None
+    value = original.args[0].get("C")
+    return str(value) if value is not None else None
+
+
+async def request_json(request: Request) -> object:
+    try:
+        return await request.json()
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="request body is not valid JSON") from error
+
+
+def landing_page(apps: list[AppManifest], applets: list[dict[str, object]] | None = None) -> str:
+    entries = [
+        *({"title": app.title, "description": app.description, "path": app.path} for app in apps),
+        *(applets or []),
+    ]
     rows = "".join(
-        f'<li><a href="{app.path}">{html.escape(app.title)}</a>' f"<span>{html.escape(app.description)}</span></li>"
-        for app in apps
+        f'<li><a href="{html.escape(str(app["path"]))}">{html.escape(str(app["title"]))}</a>'
+        f'<span>{html.escape(str(app["description"]))}</span></li>'
+        for app in entries
     )
     return (
         "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -170,7 +297,7 @@ def landing_page(apps: list[AppManifest]) -> str:
     )
 
 
-def serve_app_file(app: AppManifest, path: str) -> Response:
+def serve_app_file(app: AppManifest, path: str, connect_src: tuple[str, ...] | None = None) -> Response:
     """A file from the app's dist, or index.html for a client-side route."""
     dist = app.dist.resolve()
     if not (dist / INDEX_FILE).is_file():
@@ -178,7 +305,7 @@ def serve_app_file(app: AppManifest, path: str) -> Response:
             f"<h1>{html.escape(app.title)}</h1><p>Frontend not built. Run <code>marina build</code>.</p>",
             status_code=503,
         )
-    headers = {"Content-Security-Policy": content_security_policy(app)}
+    headers = {"Content-Security-Policy": content_security_policy(connect_src or app.connect_src)}
     candidate = (dist / path).resolve() if path else dist / INDEX_FILE
     inside = candidate == dist or dist in candidate.parents
     if not inside:
@@ -200,14 +327,22 @@ def clean_relative_path(path: str) -> str | None:
     return normalized
 
 
-async def serve_data_file(app: AppManifest, data_root: str, path: str) -> Response:
+async def serve_data_file(
+    app: AppManifest,
+    data_root: str,
+    path: str,
+    connect_src: tuple[str, ...] | None = None,
+) -> Response:
     """A file from the app's data directory, gzip-encoded when only ``x.gz`` exists."""
     relative = clean_relative_path(path)
     if relative is None:
         return JSONResponse({"error": "not found"}, status_code=404)
     fs, root = url_to_fs(data_url_for(data_root, app.name))
     target = prefix_join(root, relative)
-    headers = {"Content-Security-Policy": content_security_policy(app), "Cache-Control": DATA_CACHE_CONTROL}
+    headers = {
+        "Content-Security-Policy": content_security_policy(connect_src or app.connect_src),
+        "Cache-Control": DATA_CACHE_CONTROL,
+    }
     media_type = mimetypes.guess_type(relative)[0] or "application/octet-stream"
     if await run_in_threadpool(fs.isfile, target):
         body = await run_in_threadpool(fs.cat_file, target)
@@ -244,8 +379,14 @@ class AuthenticatedMount:
             return await self._app(scope, receive, send)
 
 
-def install_app_routes(api: FastAPI, app: AppManifest, data_root: str) -> None:
+def install_app_routes(
+    api: FastAPI,
+    app: AppManifest,
+    data_root: str,
+    agent_panel: AgentPanelService | None,
+) -> None:
     prefix = app.path.rstrip("/")
+    connect_src = app.connect_src + ((agent_panel.origin,) if app.agent is not None and agent_panel is not None else ())
 
     @api.get(prefix, include_in_schema=False)
     @requires_auth
@@ -255,21 +396,137 @@ def install_app_routes(api: FastAPI, app: AppManifest, data_root: str) -> None:
     @api.api_route(prefix + "/" + DATA_PREFIX + "{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     @requires_auth
     async def app_data(path: str) -> Response:
-        return await serve_data_file(app, data_root, path)
+        return await serve_data_file(app, data_root, path, connect_src)
 
     @api.api_route(prefix + "/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     @requires_auth
     def app_file(path: str) -> Response:
-        return serve_app_file(app, path)
+        return serve_app_file(app, path, connect_src)
+
+
+async def call_applet_api(app: ASGIApp, request: Request, path: str) -> Response:
+    """Forward one request to a revision-specific in-process ASGI app."""
+    headers = {
+        name: value
+        for name, value in request.headers.items()
+        if name.lower() not in {"content-length", "host", "transfer-encoding"}
+    }
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://applet") as client:
+        response = await client.request(
+            request.method,
+            f"/{path}",
+            params=request.query_params,
+            headers=headers,
+            content=await request.body(),
+        )
+    forwarded = {
+        name: value
+        for name, value in response.headers.items()
+        if name.lower() not in {"content-length", "content-encoding", "transfer-encoding", "connection"}
+    }
+    return Response(response.content, status_code=response.status_code, headers=forwarded)
+
+
+async def uploaded_applet_package(request: Request) -> AppletPackage:
+    payload = await request.body()
+    if len(payload) > MAX_ARCHIVE_BYTES:
+        raise HTTPException(status_code=400, detail=f"archive exceeds {MAX_ARCHIVE_BYTES} bytes")
+    try:
+        package = await run_in_threadpool(read_applet_package, payload)
+        await run_in_threadpool(validate_backend_import, package)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return package
+
+
+def publish_result_response(published: PublishResult, applet_origin: str | None) -> JSONResponse:
+    return JSONResponse(
+        {
+            "id": str(published.applet_id),
+            "version": published.version,
+            "path": published.path,
+            "url": (applet_origin or "") + published.path,
+        },
+        status_code=201,
+    )
+
+
+async def dispatch_applet_api(
+    store: AppletStore | None,
+    runtime: AppletRuntime | None,
+    policy: RequestAuthPolicy,
+    applet_id: uuid.UUID,
+    version: int | None,
+    path: str,
+    request: Request,
+) -> Response:
+    if store is None or runtime is None:
+        raise HTTPException(status_code=404, detail="applet API not found")
+    try:
+        selected_version = version
+        if selected_version is None:
+            selected_version = await run_in_threadpool(store.current_version, applet_id)
+        applet_api = await run_in_threadpool(runtime.api, applet_id, selected_version)
+        with identity_scope(identity_for(request, policy)):
+            return await call_applet_api(applet_api, request, path)
+    except AppletNotFound as error:
+        raise HTTPException(status_code=404, detail="applet API not found") from error
+    except AppletBackendUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+def install_agent_panel_config_route(
+    api: FastAPI,
+    apps: list[AppManifest],
+    service: AgentPanelService | None,
+) -> None:
+    """Expose an app's checked-in launch coordinates with the deployment Loom origin."""
+
+    @api.get("/api/marina/agent/config")
+    @requires_auth
+    def agent_config(app: str) -> JSONResponse:
+        manifest = next((candidate for candidate in apps if candidate.name == app), None)
+        if manifest is None:
+            raise HTTPException(status_code=404, detail="app not found")
+        if service is None or manifest.agent is None:
+            return JSONResponse({"enabled": False})
+        return JSONResponse(
+            {
+                "enabled": True,
+                "origin": service.origin,
+                "profile": manifest.agent.profile,
+                "repository": manifest.agent.repository,
+                "starters": list(manifest.agent.starters),
+            }
+        )
 
 
 def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
+    validate_agent_panel(config.agent_panel, config.iap_audience)
     apps = discover_apps(config.apps_dir)
     shadowed = sorted(app.name for app in apps if app.name in KERNEL_PREFIXES)
     if shadowed:
         raise ValueError(f"app {shadowed[0]!r} is named for a kernel route; rename it")
     policy = build_policy(config.iap_audience)
-    api = FastAPI(title="Marina", docs_url=None, redoc_url=None)
+    registered_apis = {
+        app.name: create_api(app, services_for(app, config.data_root, config.database))
+        for app in apps
+        if is_python_app(app)
+    }
+    mcp = marina_mcp({name: registered.mcp for name, registered in registered_apis.items()})
+    read_mcp = marina_mcp({name: registered.read_mcp for name, registered in registered_apis.items()})
+    mcp_app = mcp.http_app(path="/", json_response=True, stateless_http=True)
+    read_mcp_app = read_mcp.http_app(path="/", json_response=True, stateless_http=True)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        async with mcp_app.lifespan(_app):
+            async with read_mcp_app.lifespan(_app):
+                yield
+
+    api = FastAPI(title="Marina", docs_url=None, redoc_url=None, lifespan=lifespan)
+    applet_store = AppletStore(config.database) if config.database is not None else None
+    applet_runtime = AppletRuntime(applet_store) if applet_store is not None else None
 
     @api.get("/healthz", include_in_schema=False)
     @public
@@ -279,7 +536,12 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
     @api.get("/api/marina/apps")
     @requires_auth
     def list_apps() -> JSONResponse:
-        return JSONResponse({"apps": app_directory(apps)})
+        return JSONResponse({"apps": [*app_directory(apps), *applet_directory(applet_store, config.applet_origin)]})
+
+    @api.get("/api/marina/applets")
+    @requires_auth
+    def list_applets() -> JSONResponse:
+        return JSONResponse({"applets": applet_directory(applet_store, config.applet_origin)})
 
     @api.get("/api/marina/me")
     @requires_auth
@@ -287,10 +549,287 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
         identity = identity_for(request, policy)
         return JSONResponse({"user": identity.user_id, "role": identity.role})
 
+    install_agent_panel_config_route(api, apps, config.agent_panel)
+
     @api.get("/", include_in_schema=False)
     @requires_auth
     def landing() -> HTMLResponse:
-        return HTMLResponse(landing_page(apps))
+        return HTMLResponse(landing_page(apps, applet_directory(applet_store, config.applet_origin)))
+
+    @api.post("/api/marina/applets")
+    @requires_auth
+    async def publish_applet(request: Request) -> JSONResponse:
+        if applet_store is None:
+            raise HTTPException(status_code=503, detail="Marina has no database configured")
+        package = await uploaded_applet_package(request)
+        try:
+            owner = identity_for(request, policy).user_id
+            published = await run_in_threadpool(applet_store.publish, package, owner)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return publish_result_response(published, config.applet_origin)
+
+    @api.post("/api/marina/applets/{applet_id}")
+    @requires_auth
+    async def update_applet(applet_id: uuid.UUID, base_version: int, request: Request) -> JSONResponse:
+        if applet_store is None:
+            raise HTTPException(status_code=503, detail="Marina has no database configured")
+        package = await uploaded_applet_package(request)
+        try:
+            owner = identity_for(request, policy).user_id
+            published = await run_in_threadpool(
+                applet_store.publish,
+                package,
+                owner,
+                applet_id,
+                base_version,
+                config.applet_operators,
+            )
+            retained = await run_in_threadpool(applet_store.versions, applet_id)
+            assert applet_runtime is not None
+            await run_in_threadpool(
+                applet_runtime.retain_versions,
+                applet_id,
+                {item.version for item in retained},
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except AppletNotFound as error:
+            raise HTTPException(status_code=404, detail="applet not found") from error
+        except AppletForbidden as error:
+            raise HTTPException(status_code=403, detail="only the publisher may update this applet") from error
+        except AppletConflict as error:
+            raise HTTPException(status_code=409, detail="applet has a newer current version") from error
+        return publish_result_response(published, config.applet_origin)
+
+    @api.get("/api/marina/applets/{applet_id}")
+    @requires_auth
+    async def applet_details(applet_id: uuid.UUID) -> JSONResponse:
+        if applet_store is None:
+            raise HTTPException(status_code=404, detail="applet not found")
+        try:
+            current = await run_in_threadpool(applet_store.current_version, applet_id)
+            versions = await run_in_threadpool(applet_store.versions, applet_id)
+        except AppletNotFound as error:
+            raise HTTPException(status_code=404, detail="applet not found") from error
+        return JSONResponse(
+            {
+                "id": str(applet_id),
+                "current_version": current,
+                "url": f"{config.applet_origin or ''}/a/{applet_id}/",
+                "versions": [
+                    {
+                        "version": item.version,
+                        "published_by": item.published_by,
+                        "published_at": item.published_at.isoformat(),
+                        "byte_size": item.byte_size,
+                    }
+                    for item in versions
+                ],
+            }
+        )
+
+    @api.put("/api/marina/applets/{applet_id}/current")
+    @requires_auth
+    async def rollback_applet(applet_id: uuid.UUID, request: Request) -> JSONResponse:
+        if applet_store is None:
+            raise HTTPException(status_code=404, detail="applet not found")
+        body = await request_json(request)
+        if (
+            not isinstance(body, dict)
+            or not isinstance(body.get("version"), int)
+            or not isinstance(body.get("base_version"), int)
+        ):
+            raise HTTPException(status_code=400, detail="body must contain integer version and base_version")
+        actor = identity_for(request, policy).user_id
+        try:
+            await run_in_threadpool(
+                applet_store.rollback,
+                applet_id,
+                body["version"],
+                actor,
+                body["base_version"],
+                config.applet_operators,
+            )
+        except AppletNotFound as error:
+            raise HTTPException(status_code=404, detail="applet or revision not found") from error
+        except AppletForbidden as error:
+            raise HTTPException(
+                status_code=403, detail="only the publisher or an operator may roll back this applet"
+            ) from error
+        except AppletConflict as error:
+            raise HTTPException(status_code=409, detail="applet has a newer current version") from error
+        return JSONResponse({"id": str(applet_id), "version": body["version"]})
+
+    @api.delete("/api/marina/applets/{applet_id}", status_code=204)
+    @requires_auth
+    async def archive_applet(applet_id: uuid.UUID, request: Request) -> Response:
+        if applet_store is None:
+            raise HTTPException(status_code=404, detail="applet not found")
+        actor = identity_for(request, policy).user_id
+        try:
+            await run_in_threadpool(applet_store.archive, applet_id, actor, config.applet_operators)
+            assert applet_runtime is not None
+            await run_in_threadpool(applet_runtime.retain_versions, applet_id, set())
+        except AppletNotFound as error:
+            raise HTTPException(status_code=404, detail="applet not found") from error
+        except AppletForbidden as error:
+            raise HTTPException(
+                status_code=403, detail="only the publisher or an operator may archive this applet"
+            ) from error
+        return Response(status_code=204)
+
+    @api.get("/a/{applet_id}", include_in_schema=False)
+    @requires_auth
+    def applet_without_slash(applet_id: uuid.UUID) -> RedirectResponse:
+        return RedirectResponse(f"/a/{applet_id}/")
+
+    @api.get("/a/{applet_id}/", include_in_schema=False)
+    @requires_auth
+    def current_applet(applet_id: uuid.UUID) -> RedirectResponse:
+        if applet_store is None:
+            raise HTTPException(status_code=404, detail="applet not found")
+        try:
+            version = applet_store.current_version(applet_id)
+        except AppletNotFound as error:
+            raise HTTPException(status_code=404, detail="applet not found") from error
+        return RedirectResponse(
+            f"/a/{applet_id}/v/{version}/",
+            status_code=307,
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    async def execute_applet_query(applet_id: uuid.UUID, request: Request) -> JSONResponse:
+        if applet_store is None:
+            raise HTTPException(status_code=404, detail="applet not found")
+        body = await request_json(request)
+        if not isinstance(body, dict) or not isinstance(body.get("sql"), str):
+            raise HTTPException(status_code=400, detail="body must contain a SQL string")
+        parameters = body.get("parameters", {})
+        if not isinstance(parameters, dict):
+            raise HTTPException(status_code=400, detail="parameters must be an object")
+        try:
+            result = await run_in_threadpool(applet_store.query, applet_id, body["sql"], parameters)
+        except AppletNotFound as error:
+            raise HTTPException(status_code=404, detail="applet not found") from error
+        except QueryLimitExceeded as error:
+            raise HTTPException(status_code=413, detail=str(error)) from error
+        except InvalidQuery as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except sqlalchemy.exc.SQLAlchemyError as error:
+            if sqlstate(error) == "57014":
+                raise HTTPException(status_code=504, detail="query exceeded its statement timeout") from error
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return JSONResponse(result)
+
+    @api.post("/a/{applet_id}/query")
+    @requires_auth
+    async def query_applet(applet_id: uuid.UUID, request: Request) -> JSONResponse:
+        return await execute_applet_query(applet_id, request)
+
+    @api.post("/a/{applet_id}/v/{version}/query")
+    @requires_auth
+    async def versioned_applet_query(applet_id: uuid.UUID, version: int, request: Request) -> JSONResponse:
+        if applet_store is None:
+            raise HTTPException(status_code=404, detail="applet not found")
+        try:
+            await run_in_threadpool(applet_store.version, applet_id, version)
+        except AppletNotFound as error:
+            raise HTTPException(status_code=404, detail="applet or revision not found") from error
+        return await execute_applet_query(applet_id, request)
+
+    @api.api_route(
+        "/a/{applet_id}/api/{path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        include_in_schema=False,
+    )
+    @requires_auth
+    async def current_applet_api(applet_id: uuid.UUID, path: str, request: Request) -> Response:
+        return await dispatch_applet_api(applet_store, applet_runtime, policy, applet_id, None, path, request)
+
+    @api.api_route(
+        "/a/{applet_id}/v/{version}/api/{path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        include_in_schema=False,
+    )
+    @requires_auth
+    async def versioned_applet_api(applet_id: uuid.UUID, version: int, path: str, request: Request) -> Response:
+        return await dispatch_applet_api(applet_store, applet_runtime, policy, applet_id, version, path, request)
+
+    def applet_file_response(applet_id: uuid.UUID, version: int, path: str, request: Request) -> Response:
+        if applet_store is None:
+            raise HTTPException(status_code=404, detail="applet not found")
+        try:
+            record = applet_store.version(applet_id, version)
+            stored = applet_store.file(
+                applet_id,
+                version,
+                path,
+                accept_gzip=accepts_encoding(request.headers.get("accept-encoding", ""), "gzip"),
+                accept_html=accepts_html(request.headers.get("accept", "")),
+            )
+        except AppletNotFound as error:
+            raise HTTPException(status_code=404, detail="applet file not found") from error
+        etag = f'"{stored.digest.hex()}"'
+        headers = {
+            "Cache-Control": "private, max-age=31536000, immutable",
+            "Content-Security-Policy": content_security_policy(record.manifest.connect_src),
+            "ETag": etag,
+            "Vary": "Accept-Encoding",
+        }
+        if stored.content_encoding is not None:
+            headers["Content-Encoding"] = stored.content_encoding
+        if etag in {item.strip() for item in request.headers.get("if-none-match", "").split(",")}:
+            return Response(status_code=304, headers=headers)
+        return Response(stored.body, media_type=stored.media_type, headers=headers)
+
+    @api.api_route(
+        "/a/{applet_id}/v/{version}/",
+        methods=["GET", "HEAD"],
+        include_in_schema=False,
+    )
+    @requires_auth
+    def applet_root(applet_id: uuid.UUID, version: int, request: Request) -> Response:
+        return applet_file_response(applet_id, version, "", request)
+
+    @api.api_route(
+        "/a/{applet_id}/v/{version}/{path:path}",
+        methods=["GET", "HEAD"],
+        include_in_schema=False,
+    )
+    @requires_auth
+    def applet_file(applet_id: uuid.UUID, version: int, path: str, request: Request) -> Response:
+        return applet_file_response(applet_id, version, path, request)
+
+    if config.applet_origin is not None:
+        parsed_applet_origin = urlparse(config.applet_origin)
+        applet_host = parsed_applet_origin.hostname
+        if (
+            applet_host is None
+            or parsed_applet_origin.scheme not in {"http", "https"}
+            or parsed_applet_origin.path not in {"", "/"}
+        ):
+            raise ValueError(f"{APPLET_ORIGIN_ENV} must be an absolute URL")
+
+        @api.middleware("http")
+        async def isolate_applet_host(request: Request, call_next):
+            host = request.headers.get("host", "").split(":", 1)[0].lower()
+            path = request.url.path
+            is_applet_path = path == "/a" or path.startswith("/a/")
+            if host == applet_host:
+                if not is_applet_path:
+                    return JSONResponse({"error": "not found"}, status_code=404)
+                return await call_next(request)
+            if is_applet_path and request.method in {"GET", "HEAD"}:
+                query = f"?{request.url.query}" if request.url.query else ""
+                return RedirectResponse(
+                    config.applet_origin + path + query,
+                    status_code=307,
+                    headers={"Cache-Control": "no-store"},
+                )
+            if is_applet_path:
+                return JSONResponse({"error": "not found"}, status_code=404)
+            return await call_next(request)
 
     if config.host_apps:
         origin = config.canonical_origin
@@ -320,10 +859,12 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
             # earlier target would keep following it after this mapping changes.
             return RedirectResponse(target + query, status_code=307, headers={"Cache-Control": "no-store"})
 
+    api.mount(MCP_READ_PATH, AuthenticatedMount(read_mcp_app, policy))
+    api.mount(MCP_PATH, AuthenticatedMount(mcp_app, policy))
+
     for app in apps:
         if is_python_app(app):
-            services = services_for(app, config.data_root, config.database)
-            api.mount(app.path.rstrip("/") + API_PREFIX, AuthenticatedMount(create_api(app, services), policy))
-        install_app_routes(api, app, config.data_root)
+            api.mount(app.path.rstrip("/") + API_PREFIX, AuthenticatedMount(registered_apis[app.name].app, policy))
+        install_app_routes(api, app, config.data_root, config.agent_panel)
 
     return RouteAuthMiddleware(api, policy)

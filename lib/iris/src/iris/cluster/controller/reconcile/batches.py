@@ -84,6 +84,7 @@ def _finish_non_terminal_tasks(
 ) -> None:
     """Finish all non-terminal tasks for a job and stop their active attempts."""
     for row in overlay.active_tasks_for_job(job_id, states=NON_TERMINAL_TASK_STATES):
+        # A pending task can retain an unfinished worker attempt after preemption.
         task.merge_task_termination(
             overlay,
             row.task_id.to_wire(),
@@ -91,7 +92,7 @@ def _finish_non_terminal_tasks(
             task_state,
             error,
             now_ms,
-            stamp_attempt_finished=False,
+            stamp_attempt_finished=row.state in ACTIVE_TASK_STATES and row.current_worker_id is None,
             exit_code=exit_code,
         )
         overlay.emit_task_event(

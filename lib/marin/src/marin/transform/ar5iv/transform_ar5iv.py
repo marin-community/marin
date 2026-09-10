@@ -13,6 +13,11 @@ import re
 from dataclasses import dataclass
 
 from bs4 import BeautifulSoup
+from rigging.filesystem.storage_path import StoragePath
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.readers import load_jsonl
+
 from marin.schemas.web.convert import ExtractionConfig
 from marin.transform.ar5iv.transform import (
     clean_li,
@@ -31,10 +36,6 @@ from marin.transform.ar5iv.transform import (
     unwrap_eqn,
 )
 from marin.web.convert import convert_page
-from rigging.filesystem.storage_path import StoragePath
-from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset
-from zephyr.readers import load_jsonl
 
 logger = logging.getLogger(__name__)
 

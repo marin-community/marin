@@ -18,11 +18,12 @@ from dataclasses import dataclass, field
 import datasets
 import draccus
 from datasets import get_dataset_config_info
-from marin.utils import is_path_like
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.writers import write_jsonl_file
+
+from marin.utils import is_path_like
 
 from .preference_data_adapters import PreferenceTransformAdapter, get_preference_adapter
 from .transform_conversation import get_shard_dir

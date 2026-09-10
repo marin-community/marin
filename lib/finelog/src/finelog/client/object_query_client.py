@@ -3,21 +3,22 @@
 
 """Client-directed SQL over immutable per-table Finelog catalog snapshots."""
 
-import base64
-import hashlib
-import json
 import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import TypeVar
 
 import duckdb
 import pyarrow as pa
+from google.protobuf import json_format
+from google.protobuf.message import Message
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 
 from finelog.errors import QueryResultTooLargeError, QueryTimeoutError, StatsError
+from finelog.rpc import finelog_stats_pb2 as stats_pb2
 
 
 @dataclass(frozen=True)
@@ -38,8 +39,11 @@ class CatalogPin:
 
 
 _OBJECT_CATALOG_ROOT = ("_finelog", "tables")
-# Mirrors the server's TABLE_STATE_FORMAT_VERSION.
-_SUPPORTED_CATALOG_FORMAT = 1
+_LEGACY_CATALOG_FORMAT = 1
+_CATALOG_TREE_FORMAT = 2
+_MAX_CATALOG_DELTAS = 64
+_MAX_CATALOG_DELTA_BYTES = 1024 * 1024
+_MessageT = TypeVar("_MessageT", bound=Message)
 
 
 class ObjectQueryClient:
@@ -108,93 +112,113 @@ class ObjectQueryClient:
         """Load one immutable catalog projection for a direct query."""
         if not namespace or "/" in namespace or namespace in {".", ".."}:
             raise ValueError(f"invalid namespace {namespace!r}")
-        table_root = self._table_root(namespace)
-        head = self._read_json(table_root / "HEAD.json", "HEAD")
-        catalog_ref = _mapping(head.get("catalog"), "HEAD.catalog")
-        catalog_id = _table_object_id(catalog_ref.get("objectId"), namespace, "HEAD.catalog.objectId")
-        catalog_path = self._root / catalog_id
-        catalog_bytes = self._read_bytes(catalog_path)
-        expected_sha = _base64_bytes(catalog_ref.get("sha256"), "HEAD.catalog.sha256")
-        if hashlib.sha256(catalog_bytes).digest() != expected_sha:
-            raise StatsError(f"catalog checksum mismatch for namespace {namespace!r}")
-        try:
-            catalog = json.loads(catalog_bytes)
-        except (TypeError, json.JSONDecodeError) as error:
-            raise StatsError(f"invalid catalog JSON for namespace {namespace!r}: {error}") from error
-
-        if head.get("tombstoned"):
-            raise StatsError(f"namespace {namespace!r} was deleted")
-
-        head_format = _integer(head.get("formatVersion"), "HEAD.formatVersion")
-        catalog_format = _integer(catalog.get("formatVersion"), "catalog.formatVersion")
-        if head_format != _SUPPORTED_CATALOG_FORMAT or catalog_format != _SUPPORTED_CATALOG_FORMAT:
-            raise StatsError(
-                f"unsupported object catalog format for namespace {namespace!r}: "
-                f"HEAD={head_format}, catalog={catalog_format}"
-            )
-
-        generation = _integer(catalog.get("catalogGeneration"), "catalog.catalogGeneration")
-        head_generation = _integer(head.get("catalogGeneration"), "HEAD.catalogGeneration")
-        active_version = _integer(catalog.get("activeTableSpecVersion"), "catalog.activeTableSpecVersion")
-        if active_version == 0:
-            raise StatsError(
-                f"namespace {namespace!r} is still using its legacy query version; "
-                "client-directed reads become available after object-store activation"
-            )
-        if (
-            head.get("namespace") != namespace
-            or catalog.get("namespace") != namespace
-            or generation != head_generation
-            or active_version != _integer(head.get("activeTableSpecVersion"), "HEAD.activeTableSpecVersion")
-        ):
-            raise StatsError(f"HEAD/catalog identity mismatch for namespace {namespace!r}")
-
+        head, catalog = self._load_catalog(namespace)
+        active_version, spec = _validated_active_spec(namespace, head, catalog)
         object_uris = tuple(
             self._object_uri(
                 _table_object_id(
-                    _mapping(
-                        _mapping(segment, "directQuerySegments[]").get("source"),
-                        "directQuerySegments[].source",
-                    ).get("objectId"),
+                    segment.source.object_id,
                     namespace,
                     "directQuerySegments[].source.objectId",
                 ),
             )
-            for segment in _sequence(
-                catalog.get("directQuerySegments", []),
-                "catalog.directQuerySegments",
-            )
+            for segment in catalog.direct_query_segments
         )
-        spec = next(
-            (
-                _mapping(item, "retainedTableSpecs[]")
-                for item in _sequence(catalog.get("retainedTableSpecs"), "catalog.retainedTableSpecs")
-                if _integer(
-                    _mapping(item, "retainedTableSpecs[]").get("version"),
-                    "retainedTableSpecs[].version",
-                )
-                == active_version
-            ),
-            None,
-        )
-        if spec is None:
-            raise StatsError(f"catalog for namespace {namespace!r} has no retained TableSpec {active_version}")
-        operating_policy = _mapping(spec.get("operatingPolicy"), "TableSpec.operatingPolicy")
-        if operating_policy.get("l0Mode") != "L0_MODE_OBJECT_STORE":
-            raise StatsError(f"namespace {namespace!r} active TableSpec {active_version} is not object-backed")
-        columns = _catalog_columns(_mapping(spec.get("logicalSchema"), "TableSpec.logicalSchema"))
-        max_query_time_ms = _integer(catalog.get("maxQueryTimeMs"), "catalog.maxQueryTimeMs")
-        if max_query_time_ms == 0:
+        if catalog.max_query_time_ms == 0:
             raise StatsError(f"catalog for namespace {namespace!r} has no direct-query lifetime")
         return CatalogPin(
             namespace=namespace,
-            catalog_generation=generation,
+            catalog_generation=catalog.catalog_generation,
             table_spec_version=active_version,
-            max_query_time_ms=max_query_time_ms,
-            high_water=_integer(catalog.get("directQueryHighWater", 0), "catalog.directQueryHighWater"),
+            max_query_time_ms=catalog.max_query_time_ms,
+            high_water=catalog.direct_query_high_water,
             object_uris=object_uris,
-            columns=columns,
+            columns=_catalog_columns(spec.logical_schema),
         )
+
+    def _load_catalog(self, namespace: str) -> tuple[stats_pb2.CatalogHead, stats_pb2.NamespaceCatalog]:
+        table_root = self._table_root(namespace)
+        head = self._read_message(table_root / "HEAD.json", "HEAD", stats_pb2.CatalogHead())
+        if head.tombstoned:
+            raise StatsError(f"namespace {namespace!r} was deleted")
+        if head.format_version == _LEGACY_CATALOG_FORMAT:
+            catalog = _parse_message(
+                self._read_catalog_object(namespace, head.catalog, "HEAD.catalog"),
+                stats_pb2.NamespaceCatalog(),
+                f"catalog for namespace {namespace!r}",
+            )
+        elif head.format_version == _CATALOG_TREE_FORMAT:
+            catalog = self._fold_catalog_tree(namespace, head.catalog)
+        else:
+            raise StatsError(
+                f"unsupported object catalog format for namespace {namespace!r}: HEAD={head.format_version}"
+            )
+        return head, catalog
+
+    def _fold_catalog_tree(
+        self,
+        namespace: str,
+        tip: stats_pb2.ObjectRef,
+    ) -> stats_pb2.NamespaceCatalog:
+        nodes: list[stats_pb2.CatalogNode] = []
+        seen: set[str] = set()
+        reference = tip
+        while True:
+            if reference.byte_size <= 0:
+                raise StatsError(f"catalog reference for namespace {namespace!r} has no byte size")
+            object_id = _table_object_id(reference.object_id, namespace, "CatalogNode.objectId")
+            if object_id in seen:
+                raise StatsError(f"catalog tree for namespace {namespace!r} contains a cycle")
+            if len(nodes) > _MAX_CATALOG_DELTAS:
+                raise StatsError(f"catalog tree for namespace {namespace!r} exceeds {_MAX_CATALOG_DELTAS} deltas")
+            seen.add(object_id)
+            node = _parse_message(
+                self._read_catalog_object(namespace, reference, "CatalogNode"),
+                stats_pb2.CatalogNode(),
+                f"catalog node for namespace {namespace!r}",
+            )
+            if (
+                node.format_version != _CATALOG_TREE_FORMAT
+                or node.namespace != namespace
+                or node.catalog_generation == 0
+                or node.delta_depth > _MAX_CATALOG_DELTAS
+                or node.delta_bytes_since_checkpoint > _MAX_CATALOG_DELTA_BYTES
+            ):
+                raise StatsError(f"invalid catalog node for namespace {namespace!r}")
+            nodes.append(node)
+            if node.HasField("checkpoint"):
+                if (
+                    node.HasField("parent")
+                    or node.HasField("delta")
+                    or node.delta_depth != 0
+                    or node.delta_bytes_since_checkpoint != 0
+                ):
+                    raise StatsError(f"invalid catalog checkpoint for namespace {namespace!r}")
+                break
+            if not node.HasField("delta") or not node.HasField("parent"):
+                raise StatsError(f"catalog delta for namespace {namespace!r} has no parent")
+            reference = node.parent
+        if nodes[0].delta_depth != len(nodes) - 1:
+            raise StatsError(f"catalog tip shape does not match its chain for namespace {namespace!r}")
+        catalog = stats_pb2.NamespaceCatalog()
+        catalog.CopyFrom(nodes[-1].checkpoint)
+        for node in reversed(nodes[:-1]):
+            if node.catalog_generation <= catalog.catalog_generation:
+                raise StatsError(f"catalog generations do not increase for namespace {namespace!r}")
+            catalog = _apply_catalog_delta(namespace, catalog, node.delta)
+        return catalog
+
+    def _read_catalog_object(
+        self,
+        namespace: str,
+        reference: stats_pb2.ObjectRef,
+        field: str,
+    ) -> bytes:
+        object_id = _table_object_id(reference.object_id, namespace, f"{field}.objectId")
+        data = self._read_bytes(self._root / object_id)
+        if reference.byte_size and len(data) != reference.byte_size:
+            raise StatsError(f"{field} for namespace {namespace!r} has the wrong byte size")
+        return data
 
     def _register_namespace(self, connection: duckdb.DuckDBPyConnection, pin: CatalogPin) -> None:
         escaped_namespace = pin.namespace.replace('"', '""')
@@ -219,48 +243,114 @@ class ObjectQueryClient:
         except OSError as error:
             raise StatsError(f"read object catalog {str(path)!r}: {error}") from error
 
-    def _read_json(self, path: StoragePath, kind: str) -> dict[str, object]:
-        try:
-            return _mapping(json.loads(self._read_bytes(path)), kind)
-        except (TypeError, json.JSONDecodeError) as error:
-            raise StatsError(f"invalid {kind} JSON at {str(path)!r}: {error}") from error
+    def _read_message(self, path: StoragePath, kind: str, message: _MessageT) -> _MessageT:
+        return _parse_message(self._read_bytes(path), message, f"{kind} at {str(path)!r}")
 
 
-def _mapping(value: object, field: str) -> dict[str, object]:
-    if not isinstance(value, dict):
-        raise StatsError(f"{field} must be an object")
-    return value
-
-
-def _sequence(value: object, field: str) -> list[object]:
-    if not isinstance(value, list):
-        raise StatsError(f"{field} must be an array")
-    return value
-
-
-def _integer(value: object, field: str) -> int:
-    if isinstance(value, bool):
-        raise StatsError(f"{field} must be an integer")
+def _parse_message(data: bytes, message: _MessageT, description: str) -> _MessageT:
     try:
-        result = int(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError) as error:
-        raise StatsError(f"{field} must be an integer") from error
-    if result < 0:
-        raise StatsError(f"{field} must not be negative")
+        return json_format.Parse(data.decode(), message, ignore_unknown_fields=True)
+    except (UnicodeDecodeError, json_format.ParseError) as error:
+        raise StatsError(f"invalid {description} JSON: {error}") from error
+
+
+def _validated_active_spec(
+    namespace: str,
+    head: stats_pb2.CatalogHead,
+    catalog: stats_pb2.NamespaceCatalog,
+) -> tuple[int, stats_pb2.TableSpec]:
+    if head.format_version not in {_LEGACY_CATALOG_FORMAT, _CATALOG_TREE_FORMAT}:
+        raise StatsError(
+            f"unsupported object catalog format for namespace {namespace!r}: "
+            f"HEAD={head.format_version}, catalog={catalog.format_version}"
+        )
+    if catalog.format_version != head.format_version:
+        raise StatsError(f"HEAD/catalog format mismatch for namespace {namespace!r}")
+    active_version = catalog.active_table_spec_version
+    if active_version == 0:
+        raise StatsError(
+            f"namespace {namespace!r} is still using its legacy query version; "
+            "client-directed reads become available after object-store activation"
+        )
+    if (
+        head.namespace != namespace
+        or catalog.namespace != namespace
+        or catalog.catalog_generation != head.catalog_generation
+        or active_version != head.active_table_spec_version
+    ):
+        raise StatsError(f"HEAD/catalog identity mismatch for namespace {namespace!r}")
+    spec = next(
+        (item for item in catalog.retained_table_specs if item.version == active_version),
+        None,
+    )
+    if spec is None:
+        raise StatsError(f"catalog for namespace {namespace!r} has no retained TableSpec {active_version}")
+    if not spec.HasField("logical_schema"):
+        raise StatsError(f"catalog for namespace {namespace!r} TableSpec {active_version} has no logical schema")
+    if spec.operating_policy.l0_mode != stats_pb2.L0_MODE_OBJECT_STORE:
+        raise StatsError(f"namespace {namespace!r} active TableSpec {active_version} is not object-backed")
+    return active_version, spec
+
+
+def _apply_catalog_delta(
+    namespace: str,
+    previous: stats_pb2.NamespaceCatalog,
+    delta: stats_pb2.CatalogDelta,
+) -> stats_pb2.NamespaceCatalog:
+    if not delta.HasField("metadata"):
+        raise StatsError(f"catalog delta for namespace {namespace!r} has no metadata")
+    segments = {
+        (version.table_spec_version, retired, segment.segment_id): segment
+        for version in previous.version_segments
+        for retired, values in ((False, version.live_segments), (True, version.retired_segments))
+        for segment in values
+    }
+    for removal in delta.segment_removals:
+        key = (removal.table_spec_version, removal.retired, removal.segment_id)
+        if key not in segments:
+            raise StatsError(f"catalog delta for namespace {namespace!r} removes absent segment {removal.segment_id!r}")
+        del segments[key]
+    for addition in delta.segment_additions:
+        if not addition.HasField("key") or not addition.HasField("segment"):
+            raise StatsError(f"catalog delta for namespace {namespace!r} has an incomplete segment addition")
+        key = (
+            addition.key.table_spec_version,
+            addition.key.retired,
+            addition.key.segment_id,
+        )
+        if not addition.key.segment_id or addition.segment.segment_id != addition.key.segment_id:
+            raise StatsError(f"catalog delta for namespace {namespace!r} has an invalid segment addition")
+        segments[key] = addition.segment
+
+    direct = {segment.segment_id: segment for segment in previous.direct_query_segments}
+    for segment_id in delta.direct_query_removals:
+        if segment_id not in direct:
+            raise StatsError(
+                f"catalog delta for namespace {namespace!r} removes absent direct-query segment {segment_id!r}"
+            )
+        del direct[segment_id]
+    for segment in delta.direct_query_additions:
+        if not segment.segment_id:
+            raise StatsError(f"catalog delta for namespace {namespace!r} adds an unnamed direct-query segment")
+        direct[segment.segment_id] = segment
+
+    result = stats_pb2.NamespaceCatalog()
+    result.CopyFrom(delta.metadata)
+    versions = {version.table_spec_version: version for version in result.version_segments}
+    for version_number, retired, segment_id in sorted(segments):
+        version = versions.get(version_number)
+        if version is None:
+            version = result.version_segments.add(table_spec_version=version_number)
+            versions[version_number] = version
+        destination = version.retired_segments if retired else version.live_segments
+        destination.add().CopyFrom(segments[(version_number, retired, segment_id)])
+    for segment_id in sorted(direct):
+        result.direct_query_segments.add().CopyFrom(direct[segment_id])
     return result
 
 
-def _base64_bytes(value: object, field: str) -> bytes:
-    if not isinstance(value, str):
-        raise StatsError(f"{field} must be base64 text")
-    try:
-        return base64.b64decode(value, validate=True)
-    except ValueError as error:
-        raise StatsError(f"{field} must be valid base64") from error
-
-
-def _table_object_id(value: object, namespace: str, field: str) -> str:
-    if not isinstance(value, str) or not value:
+def _table_object_id(value: str, namespace: str, field: str) -> str:
+    if not value:
         raise StatsError(f"{field} must be a non-empty object ID")
     path = PurePosixPath(value)
     if path.is_absolute() or str(path) != value or ".." in path.parts or "\\" in value or "://" in value:
@@ -271,31 +361,28 @@ def _table_object_id(value: object, namespace: str, field: str) -> str:
     return str(path)
 
 
-_DUCKDB_TYPES = {
-    "COLUMN_TYPE_STRING": "VARCHAR",
-    "COLUMN_TYPE_INT64": "BIGINT",
-    "COLUMN_TYPE_FLOAT64": "DOUBLE",
-    "COLUMN_TYPE_BOOL": "BOOLEAN",
-    "COLUMN_TYPE_TIMESTAMP_MS": "TIMESTAMP_MS",
-    "COLUMN_TYPE_BYTES": "BLOB",
-    "COLUMN_TYPE_INT32": "INTEGER",
-    "COLUMN_TYPE_MAP": "MAP(VARCHAR, VARCHAR)",
-    "COLUMN_TYPE_FLOAT64_LIST": "DOUBLE[]",
-    "COLUMN_TYPE_INT64_LIST": "BIGINT[]",
+_DUCKDB_TYPES: dict[int, str] = {
+    stats_pb2.COLUMN_TYPE_STRING: "VARCHAR",
+    stats_pb2.COLUMN_TYPE_INT64: "BIGINT",
+    stats_pb2.COLUMN_TYPE_FLOAT64: "DOUBLE",
+    stats_pb2.COLUMN_TYPE_BOOL: "BOOLEAN",
+    stats_pb2.COLUMN_TYPE_TIMESTAMP_MS: "TIMESTAMP_MS",
+    stats_pb2.COLUMN_TYPE_BYTES: "BLOB",
+    stats_pb2.COLUMN_TYPE_INT32: "INTEGER",
+    stats_pb2.COLUMN_TYPE_MAP: "MAP(VARCHAR, VARCHAR)",
+    stats_pb2.COLUMN_TYPE_FLOAT64_LIST: "DOUBLE[]",
+    stats_pb2.COLUMN_TYPE_INT64_LIST: "BIGINT[]",
 }
 
 
-def _catalog_columns(logical_schema: dict[str, object]) -> tuple[CatalogColumn, ...]:
+def _catalog_columns(logical_schema: stats_pb2.Schema) -> tuple[CatalogColumn, ...]:
     declarations = [CatalogColumn("seq", "BIGINT")]
-    for raw in _sequence(logical_schema.get("columns", []), "logicalSchema.columns"):
-        column = _mapping(raw, "logicalSchema.columns[]")
-        name = column.get("name")
-        type_name = column.get("type")
-        if not isinstance(name, str) or not name:
+    for column in logical_schema.columns:
+        if not column.name:
             raise StatsError("logicalSchema column name must be non-empty")
-        if not isinstance(type_name, str) or type_name not in _DUCKDB_TYPES:
-            raise StatsError(f"unsupported logicalSchema type {type_name!r}")
-        declarations.append(CatalogColumn(name, _DUCKDB_TYPES[type_name]))
+        if column.type not in _DUCKDB_TYPES:
+            raise StatsError(f"unsupported logicalSchema type {column.type!r}")
+        declarations.append(CatalogColumn(column.name, _DUCKDB_TYPES[column.type]))
     if all(column.name != "cluster" for column in declarations):
         declarations.append(CatalogColumn("cluster", "VARCHAR"))
     return tuple(declarations)

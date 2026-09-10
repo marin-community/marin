@@ -43,20 +43,6 @@ const PARTITIONING_BUDGET: Duration = Duration::from_secs(3);
 const PARTITIONING_CONCURRENCY: usize = 2;
 const PARTITIONING_WORKER_COMPRESSED_BYTES: i64 = 32 * 1024 * 1024;
 
-/// Process-wide permit for the encoding rewrite, so only one table re-encodes at
-/// a time.
-///
-/// A per-table budget alone let a store with dozens of tables spend dozens of
-/// budgets at once. On the marin hub that saturated the box: a 10 min telemetry
-/// query that normally answers in 0.18 s took 15 s, and `count(*)` went from
-/// 0.3 s to 17 s, because re-encoding pushes tens of GiB through the page cache
-/// the queries are served from and invalidates the parquet metadata cache entry
-/// for every segment it touches.
-///
-/// A table that cannot take the permit skips the step for this tick rather than
-/// queueing behind it, which would stall the rest of its maintenance.
-static REWRITE_SLOT: Mutex<()> = Mutex::new(());
-
 /// Everything the layout work reads and commits through.
 pub struct LocalLayout<'a> {
     pub compaction: LocalCompaction<'a>,
@@ -496,7 +482,7 @@ fn archive_placement_candidates(
 /// replaces its local generation identity with a UUID, so its bundle safely falls
 /// back until the next index-backfill pass rebuilds it.
 pub fn rewrite_stale_encodings(layout: &LocalLayout<'_>, budget: Duration) -> usize {
-    let Ok(_permit) = REWRITE_SLOT.try_lock() else {
+    let Ok(_permit) = layout.limits.encoding_rewrite().try_lock() else {
         return 0;
     };
     let deadline = Instant::now() + budget;
@@ -846,6 +832,7 @@ mod tests {
             )
         })
         .await
+        .unwrap()
         .unwrap();
         let mut legacy = catalog.list_segments("levanter.metrics").unwrap().remove(0);
         assert_eq!(legacy.location, SegmentLocation::Remote);

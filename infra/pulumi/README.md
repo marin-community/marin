@@ -123,8 +123,10 @@ Cluster infrastructure comes from the per-cluster Iris config
   read access, including `get` on `pods/log`. The stack adds only `create` on `pods/exec` and
   `pods/portforward` in that cluster's Iris namespace. `pods/portforward` is required because
   the Iris CLI reaches the controller through `kubectl port-forward`.
-- Kueue's controller-manager memory request and limit default to `2Gi`.
-  `manager_memory_limit` accepts larger per-cluster values and rejects values below `2Gi`.
+- For IaC-managed CoreWeave clusters, Kueue's controller-manager memory request and limit
+  default to `8Gi`; its Kubernetes API client defaults to `1000` QPS and `2000` burst.
+  `manager_memory_limit` accepts per-cluster values at or above `2Gi`, and
+  `client_connection` accepts positive `qps` and `burst` overrides.
 - The GCP GCLB route set from `provisioning.gcp.gclb`. Controller runtime details come from
   each referenced Iris config, finelog VM details come from `lib/finelog/config`, and current
   internal VM addresses are read from GCE during preview. See

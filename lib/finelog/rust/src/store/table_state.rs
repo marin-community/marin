@@ -149,7 +149,8 @@ impl TableSnapshot {
     /// Whether this snapshot selects exactly `state`, comparing the revision
     /// and the complete state value HEAD's catalog reference is hashed over.
     pub fn selects(&self, state: &TableState) -> bool {
-        self.revision() == state.revision() && self.state.catalog == state.catalog
+        self.revision() == state.revision()
+            && crate::store::state_store::tree::catalogs_equal(&self.state.catalog, &state.catalog)
     }
 }
 
@@ -250,13 +251,6 @@ pub enum CommitError {
     Fenced(StatsError),
 }
 
-impl CommitError {
-    /// Whether durable local state advanced despite the failure.
-    pub fn is_committed(&self) -> bool {
-        !matches!(self, CommitError::NotCommitted(_))
-    }
-}
-
 impl From<CommitError> for StatsError {
     fn from(error: CommitError) -> StatsError {
         match error {
@@ -288,9 +282,9 @@ pub struct Committed<T> {
 /// `published` is the state HEAD selects after the failure. HEAD recording
 /// another writer's fence means this writer no longer owns the table, whatever
 /// revision HEAD holds. Otherwise the attempted state is durable when HEAD
-/// names it, or when this writer has already published a later revision that
-/// contains it; HEAD behind the attempted revision means the publication did
-/// not apply and must be retried at the same revision.
+/// names it exactly. A later revision does not prove that this mutation was an
+/// ancestor: another in-process request may have won after an unobserved CAS
+/// failure. Any non-exact selection leaves publication deferred.
 pub fn resolve_publication(
     table: &str,
     attempted: &TableState,
@@ -307,9 +301,6 @@ pub fn resolve_publication(
             published.revision(),
             published.fence()
         ))));
-    }
-    if published.revision() > attempted.revision() {
-        return Ok(published.clone());
     }
     if published.revision() == attempted.revision() {
         if published.selects(attempted) {
@@ -362,17 +353,17 @@ mod tests {
     }
 
     #[test]
-    fn a_later_revision_from_the_same_writer_contains_the_attempted_state() {
+    fn a_later_revision_from_the_same_writer_does_not_prove_the_attempted_tip_won() {
         let attempted = state(7, 2);
-        let published = resolve_publication(
+        let error = resolve_publication(
             "iris.worker",
             &attempted,
             WriterFence::new(11),
             Some(&snapshot(state(9, 2), 11)),
             lost_response(),
         )
-        .unwrap();
-        assert_eq!(published.revision(), TableRevision::new(9));
+        .unwrap_err();
+        assert!(matches!(error, CommitError::PublicationDeferred(_)));
     }
 
     #[test]
@@ -387,7 +378,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, CommitError::PublicationDeferred(_)));
-        assert!(error.is_committed());
     }
 
     #[test]
@@ -430,7 +420,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, CommitError::Fenced(_)));
-        assert!(error.is_committed());
     }
 
     #[test]

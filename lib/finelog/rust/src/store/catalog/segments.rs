@@ -157,7 +157,8 @@ impl Catalog {
             .prepare(
                 "SELECT namespace, path, level, min_seq, max_seq, row_count, byte_size, \
                  created_at_ms, min_key_value, max_key_value, location, partition_json \
-                 FROM segments WHERE namespace = ?1 AND level >= ?2 ORDER BY min_seq",
+                 FROM segments WHERE namespace = ?1 AND level >= ?2
+                 ORDER BY min_seq, max_seq, path",
             )
             .map_err(sqlite_err)?;
         let rows = stmt

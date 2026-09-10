@@ -2909,6 +2909,38 @@ def test_worker_death_cascades_children_terminal(state):
     assert child_job.state == job_pb2.JOB_STATE_KILLED
 
 
+def test_parent_failure_keeps_preempted_child_capacity_until_worker_confirmation(state):
+    parent_worker = register_worker(state, "parent-worker", "parent:8080", make_worker_metadata())
+    child_worker = register_worker(state, "child-worker", "child:8080", make_worker_metadata())
+    parent = submit_job(state, "parent", make_job_request("parent"))[0]
+    child_request = make_job_request("child")
+    child_request.max_retries_preemption = 1
+    child = submit_job(state, "/test-user/parent/child", child_request)[0]
+    dispatch_task(state, parent, parent_worker)
+    dispatch_task(state, child, child_worker)
+    child_usage = _usage_for_worker(state, child_worker)
+
+    with state._db.transaction() as cur:
+        finalize(cur, [TerminalDecision(TerminalKind.PREEMPT, child.task_id, "reclaim")], now=Timestamp.now())
+    assert _query_task(state, child.task_id).state == job_pb2.TASK_STATE_PENDING
+
+    transition_task(state, parent.task_id, job_pb2.TASK_STATE_FAILED)
+
+    assert _query_task(state, child.task_id).state == job_pb2.TASK_STATE_KILLED
+    assert _query_attempt(state, child.task_id, 0).finished_at_ms is None
+    assert _usage_for_worker(state, child_worker) == child_usage
+
+    with state._db.transaction() as cur:
+        apply_task_observations(
+            cur,
+            [WorkerTaskUpdates(child_worker, [TaskUpdate(child.task_id, 0, job_pb2.TASK_STATE_KILLED)])],
+            health=state._health,
+            now=Timestamp.now(),
+        )
+    assert _query_attempt(state, child.task_id, 0).finished_at_ms is not None
+    assert _usage_for_worker(state, child_worker) == _ZERO_USAGE
+
+
 def test_worker_death_preemption_policy_terminate(state):
     """Single-task parent retried after worker death -> children killed (default TERMINATE)."""
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())

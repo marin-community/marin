@@ -2,7 +2,7 @@
 //!
 //! Callers use the [`ObjectStore`] interface. Cache membership and filesystem
 //! layout stay private to these wrappers; `local_path` is the only operation
-//! that promises a verified local file suitable for DataFusion.
+//! that promises a local file suitable for DataFusion.
 //!
 //! Writes are dual-ported: the bytes an upload already holds also land in the
 //! cache, so the flush → query path never re-downloads its own output. Cache
@@ -18,19 +18,20 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
-use sha2::{Digest, Sha256};
 use tokio::sync::{RwLock, Semaphore};
 
 use crate::errors::StatsError;
 use crate::store::object_store::{
-    ObjectId, ObjectMetadata, ObjectPrefix, ObjectReference, ObjectStore, ObjectVersion,
-    StoredObject, FINELOG_ROOT_COMPONENT,
+    DeleteManyOutcome, ObjectId, ObjectMetadata, ObjectPrefix, ObjectReference, ObjectStore,
+    ObjectVersion, StoredObject, FINELOG_ROOT_COMPONENT,
 };
 
 use super::local_file::atomic_write;
 
 /// Concurrent cache-miss downloads across every caller of this store.
 const MAX_PARALLEL_FETCHES: usize = 8;
+
+const MAX_PARALLEL_UPLOADS: usize = 8;
 
 /// Minimum gap between eviction sweeps. `gc` runs once per table per
 /// maintenance cycle; the sweep is store-wide, so most calls return
@@ -45,12 +46,6 @@ const STALE_STAGING_GRACE: Duration = Duration::from_secs(60 * 60);
 #[derive(Clone)]
 struct FileCache {
     root: PathBuf,
-    /// Paths whose on-disk bytes hashed to their reference in this process.
-    ///
-    /// Object keys are content-addressed, so a path names exactly one byte
-    /// string; once a file has verified, later lookups only re-check its
-    /// size. Entries drop on remove/eviction so a re-created file re-verifies.
-    verified: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 impl FileCache {
@@ -58,10 +53,7 @@ impl FileCache {
         std::fs::create_dir_all(&root).map_err(|error| {
             StatsError::Internal(format!("create object cache {}: {error}", root.display()))
         })?;
-        Ok(Self {
-            root,
-            verified: Arc::new(Mutex::new(HashSet::new())),
-        })
+        Ok(Self { root })
     }
 
     fn path(&self, id: &ObjectId) -> PathBuf {
@@ -70,63 +62,40 @@ impl FileCache {
         path
     }
 
-    fn verified_path(&self, reference: &ObjectReference) -> Result<Option<PathBuf>, StatsError> {
+    fn cached_path(&self, reference: &ObjectReference) -> Result<Option<PathBuf>, StatsError> {
         let path = self.path(&reference.id);
-        if self.verified.lock().unwrap().contains(&path) {
-            match std::fs::metadata(&path) {
-                Ok(meta) if meta.len() == reference.version.byte_size => {
-                    touch(&path)?;
-                    return Ok(Some(path));
-                }
-                // Vanished or truncated behind our back: fall through to the
-                // full check, which removes the entry and the file.
-                _ => {
-                    self.verified.lock().unwrap().remove(&path);
-                }
-            }
-        }
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
+        let metadata = match std::fs::metadata(&path) {
+            Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
                 return Err(StatsError::Internal(format!(
-                    "read object cache {}: {error}",
+                    "stat object cache {}: {error}",
                     path.display()
                 )))
             }
         };
-        let valid_size = bytes.len() as u64 == reference.version.byte_size;
-        let valid_hash =
-            Sha256::digest(&bytes).as_slice() == reference.version.content_sha256.as_slice();
-        if valid_size && valid_hash {
+        if metadata.len() == reference.version.byte_size {
             touch(&path)?;
-            self.verified.lock().unwrap().insert(path.clone());
             return Ok(Some(path));
         }
         std::fs::remove_file(&path).map_err(|error| {
             StatsError::Internal(format!(
-                "remove invalid object cache {}: {error}",
+                "remove truncated object cache {}: {error}",
                 path.display()
             ))
         })?;
         Ok(None)
     }
 
-    /// Land `bytes` as the cache file for `reference`. Callers hold bytes whose
-    /// hash already matches the reference — a download verified in
-    /// `materialize`, or an upload whose version was computed from this buffer —
-    /// so nothing is re-verified here; on-disk integrity is `verified_path`'s
-    /// job at read time.
+    /// Land `bytes` as the cache file for `reference`.
     fn write(&self, reference: &ObjectReference, bytes: &[u8]) -> Result<PathBuf, StatsError> {
         let path = self.path(&reference.id);
         atomic_write(&path, bytes)?;
-        self.verified.lock().unwrap().insert(path.clone());
         Ok(path)
     }
 
     fn remove(&self, id: &ObjectId) -> Result<(), StatsError> {
         let path = self.path(id);
-        self.verified.lock().unwrap().remove(&path);
         match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -144,6 +113,8 @@ pub struct CachedObjectStore {
     cache: FileCache,
     /// Bounds concurrent cache-miss downloads.
     fetches: Arc<Semaphore>,
+    /// Bounds write-through uploads independently of reads and flush encoding.
+    uploads: Arc<Semaphore>,
     /// Total cache bytes to retain; `None` retains everything.
     capacity_bytes: Option<u64>,
     /// Store-wide scan lock. Eviction unlinks only behind its write side, so a
@@ -166,6 +137,7 @@ impl CachedObjectStore {
             source,
             cache: FileCache::new(root)?,
             fetches: Arc::new(Semaphore::new(MAX_PARALLEL_FETCHES)),
+            uploads: Arc::new(Semaphore::new(MAX_PARALLEL_UPLOADS)),
             capacity_bytes,
             query_visibility,
             last_gc: Arc::new(Mutex::new(None)),
@@ -176,7 +148,7 @@ impl CachedObjectStore {
     async fn lookup(&self, reference: &ObjectReference) -> Result<Option<PathBuf>, StatsError> {
         let cache = self.cache.clone();
         let reference = reference.clone();
-        tokio::task::spawn_blocking(move || cache.verified_path(&reference))
+        tokio::task::spawn_blocking(move || cache.cached_path(&reference))
             .await
             .map_err(|error| StatsError::Internal(format!("object cache lookup task: {error}")))?
     }
@@ -199,9 +171,9 @@ impl CachedObjectStore {
                 reference.id.as_str()
             ))
         })?;
-        if object.version.content_sha256 != reference.version.content_sha256 {
+        if object.version.byte_size != reference.version.byte_size {
             return Err(StatsError::Internal(format!(
-                "object cache source {:?} failed SHA-256 validation",
+                "object cache source {:?} has unexpected byte size",
                 reference.id.as_str()
             )));
         }
@@ -242,12 +214,6 @@ impl CachedObjectStore {
         // No scan may hold any of these paths: eviction waits out every pinned
         // read before the first unlink.
         let _visibility = self.query_visibility.write().await;
-        {
-            let mut verified = self.cache.verified.lock().unwrap();
-            for path in &victims {
-                verified.remove(path);
-            }
-        }
         tokio::task::spawn_blocking(move || {
             for path in victims {
                 match std::fs::remove_file(&path) {
@@ -292,14 +258,13 @@ impl ObjectStore for CachedObjectStore {
 
     /// Land the bytes in the cache only, pinned against eviction until
     /// [`Self::upload_staged`] makes them remotely durable. The version is
-    /// computed from the buffer; content addressing makes the eventual upload
-    /// produce the same object.
+    /// computed from the buffer.
     async fn stage(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
         let version = ObjectVersion {
             e_tag: None,
             provider_version: None,
-            content_sha256: Sha256::digest(&bytes).into(),
             byte_size: bytes.len() as u64,
+            local_value: None,
         };
         let cache = self.cache.clone();
         let reference = ObjectReference {
@@ -314,9 +279,12 @@ impl ObjectStore for CachedObjectStore {
     }
 
     async fn upload_staged(&self, reference: &ObjectReference) -> Result<(), StatsError> {
+        let _permit = self.uploads.acquire().await.map_err(|error| {
+            StatsError::Internal(format!("object cache upload semaphore: {error}"))
+        })?;
         let Some(path) = self.lookup(reference).await? else {
             return Err(StatsError::Internal(format!(
-                "staged object {:?} has no verified local bytes to upload",
+                "staged object {:?} has no local bytes to upload",
                 reference.id.as_str()
             )));
         };
@@ -332,6 +300,10 @@ impl ObjectStore for CachedObjectStore {
 
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {
         self.source.read(id).await
+    }
+
+    async fn exists(&self, id: &ObjectId) -> Result<bool, StatsError> {
+        self.source.exists(id).await
     }
 
     async fn local_path(&self, reference: &ObjectReference) -> Result<PathBuf, StatsError> {
@@ -376,12 +348,43 @@ impl ObjectStore for CachedObjectStore {
     }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
+        // A scan may already hold the planned cache path. Wait for every pinned
+        // read before removing the remote object or its cache copy.
+        let _visibility = self.query_visibility.write().await;
         self.source.delete(id).await?;
         let cache = self.cache.clone();
         let id = id.clone();
         tokio::task::spawn_blocking(move || cache.remove(&id))
             .await
             .map_err(|error| StatsError::Internal(format!("object cache delete task: {error}")))?
+    }
+
+    async fn delete_many(&self, ids: Vec<ObjectId>) -> DeleteManyOutcome {
+        let outcome = self.source.delete_many(ids).await;
+        if outcome.deleted.is_empty() {
+            return outcome;
+        }
+        let _visibility = self.query_visibility.write().await;
+        let cache = self.cache.clone();
+        let deleted = outcome.deleted.clone();
+        let cache_result = tokio::task::spawn_blocking(move || {
+            for id in &deleted {
+                cache.remove(id)?;
+            }
+            Ok::<(), StatsError>(())
+        })
+        .await;
+        let cache_error = match cache_result {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error),
+            Err(error) => Some(StatsError::Internal(format!(
+                "object cache delete task: {error}"
+            ))),
+        };
+        DeleteManyOutcome {
+            deleted: outcome.deleted,
+            error: outcome.error.or(cache_error),
+        }
     }
 
     async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {
@@ -506,14 +509,14 @@ mod tests {
             version: ObjectVersion {
                 e_tag: None,
                 provider_version: None,
-                content_sha256: Sha256::digest(bytes).into(),
                 byte_size: bytes.len() as u64,
+                local_value: None,
             },
         }
     }
 
     #[tokio::test]
-    async fn local_path_materializes_validates_and_deletes_with_the_object() {
+    async fn local_path_materializes_and_deletes_with_the_object() {
         let remote_root = unique_dir("object_cache_remote");
         let cache_root = unique_dir("object_cache_local");
         let source = Arc::new(
@@ -532,12 +535,6 @@ mod tests {
 
         let path = store.local_path(&reference).await.unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"kept");
-        std::fs::write(&path, b"corrupt").unwrap();
-        assert_eq!(
-            std::fs::read(store.local_path(&reference).await.unwrap()).unwrap(),
-            b"kept"
-        );
-
         store.gc().await.unwrap();
         assert!(path.exists());
 
@@ -548,24 +545,16 @@ mod tests {
     }
 
     #[test]
-    fn verification_runs_once_until_removal_revokes_trust() {
-        let root = unique_dir("object_cache_trust");
+    fn cache_hits_do_not_read_file_contents() {
+        let root = unique_dir("object_cache_hit");
         let cache = FileCache::new(root.clone()).unwrap();
-        let reference = reference("iris.worker", "objects/trusted.parquet", b"real");
+        let reference = reference("iris.worker", "objects/cached.parquet", b"real");
         let path = cache.write(&reference, b"real").unwrap();
 
-        // A write records trust, so same-size disk corruption afterwards is
-        // served without re-hashing — the deliberate trade that keeps hot
-        // queries from hashing every object on every scan.
+        // Cache lookup intentionally performs metadata I/O only. A same-sized
+        // change remains a hit instead of triggering a full-file read.
         std::fs::write(&path, b"fake").unwrap();
-        assert_eq!(cache.verified_path(&reference).unwrap(), Some(path.clone()));
-
-        // Removal revokes trust: the recreated file re-hashes, fails, and is
-        // deleted rather than served.
-        cache.remove(&reference.id).unwrap();
-        std::fs::write(&path, b"fake").unwrap();
-        assert_eq!(cache.verified_path(&reference).unwrap(), None);
-        assert!(!path.exists());
+        assert_eq!(cache.cached_path(&reference).unwrap(), Some(path));
         std::fs::remove_dir_all(root).ok();
     }
 

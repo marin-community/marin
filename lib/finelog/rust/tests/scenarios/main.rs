@@ -26,6 +26,7 @@
 
 mod support;
 
+mod catalog_tree_failures;
 mod cold_restart;
 mod fence_steal;
 mod headless_recovery;
@@ -33,6 +34,7 @@ mod legacy_import_rehearsal;
 mod migration_backfill_crash;
 mod missing_remote_object;
 mod registration_race;
+mod relay_settlement;
 mod remote_outage;
 mod schema_evolution;
 mod write_during_backfill;

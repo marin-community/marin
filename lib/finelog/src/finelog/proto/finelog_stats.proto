@@ -206,7 +206,7 @@ message ObjectRef {
   string provider_version = 2;
   string etag = 3;
   uint64 byte_size = 4;
-  bytes sha256 = 5;
+  reserved 5;
 }
 
 message CatalogSegment {
@@ -307,6 +307,57 @@ message CatalogHead {
   // Mirrors NamespaceCatalog.tombstoned so a deleted table is recognizable
   // from HEAD alone.
   bool tombstoned = 7;
+}
+
+// One segment's position in the catalog state. Segment IDs are unique within
+// a table-version/live-or-retired set, rather than across the whole table.
+message CatalogSegmentKey {
+  uint64 table_spec_version = 1;
+  string segment_id = 2;
+  bool retired = 3;
+}
+
+message CatalogSegmentAddition {
+  CatalogSegmentKey key = 1;
+  CatalogSegment segment = 2;
+}
+
+// Typed changes made by one catalog commit. Metadata is the complete
+// non-segment portion of NamespaceCatalog; its segment collections are empty.
+message CatalogDelta {
+  NamespaceCatalog metadata = 1;
+  repeated CatalogSegmentAddition segment_additions = 2;
+  repeated CatalogSegmentKey segment_removals = 3;
+  repeated CatalogSegment direct_query_additions = 4;
+  repeated string direct_query_removals = 5;
+}
+
+message ReleasedObject {
+  ObjectRef object = 1;
+  int64 delete_after_ms = 2;
+}
+
+// An immutable node in the remote catalog tree. A checkpoint carries a full
+// NamespaceCatalog. A delta carries typed changes and names its exact parent.
+// HEAD selects exactly one tip; uploaded siblings that lose the HEAD CAS are
+// harmless and later collected as orphans.
+message CatalogNode {
+  uint64 format_version = 1;
+  string namespace = 2;
+  uint64 catalog_generation = 3;
+  ObjectRef parent = 4;
+  uint32 delta_depth = 5;
+  uint64 delta_bytes_since_checkpoint = 6;
+  NamespaceCatalog checkpoint = 7;
+  CatalogDelta delta = 8;
+  repeated ReleasedObject released_objects = 9;
+  // This node was written by a publisher that folds released_objects across
+  // the whole selected checkpoint span. Every node through the checkpoint
+  // must carry this marker before history-free collection is safe.
+  bool release_summary = 10;
+  // Pre-summary history may carry releases outside the bounded selected span.
+  // Orphan and historical-node collection waits through this deadline.
+  int64 legacy_history_safe_after_ms = 11;
 }
 
 // ============================================================================

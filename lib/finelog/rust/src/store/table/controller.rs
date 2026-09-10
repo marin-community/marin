@@ -10,9 +10,11 @@
 //! - `mutation_gate` serializes the short synchronous transaction that allocates
 //!   the next [`TableRevision`]. It is a plain lock because that transaction
 //!   never awaits.
-//! - the controller task is the only code that publishes state. Callers request
-//!   publication over a mailbox and await the outcome, so concurrent flushes,
-//!   compactions, migrations, and cursor advances never race for HEAD.
+//! - the controller task is the only code that publishes state. Durability
+//!   callers request publication over a mailbox and await the outcome, while
+//!   replayable maintenance leaves its revision owed. Concurrent flushes,
+//!   compactions, migrations, and cursor advances therefore never race for
+//!   HEAD.
 //!
 //! Heavy work — Parquet encoding, index building, compaction merges — stays with
 //! its caller. The controller serializes lease creation and the short commit
@@ -24,18 +26,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use bytes::Bytes;
-use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{MigrationPhase, NamespaceCatalog, ObjectRef};
-use crate::store::catalog::projection::namespace_catalog;
+use crate::store::catalog::projection::{floor_persisted_high_water, namespace_catalog};
 use crate::store::catalog::{Catalog, ObjectSegmentRecord, SpecLifecycle};
 use crate::store::object_store::OBJECTS_PREFIX;
 use crate::store::object_store::{
     ObjectId, ObjectPrefix, ObjectReference, ObjectStore, ObjectVersion,
 };
 use crate::store::state_store::object::{ObjectTableStateStore, StateGcPolicy};
+use crate::store::state_store::tree::{catalogs_equal, referenced_objects};
 use crate::store::state_store::StoredTableState;
 use crate::store::table_spec::TablePolicy;
 use crate::store::table_state::{
@@ -84,6 +86,12 @@ struct LeaseLifecycle {
     phase: MigrationPhase,
 }
 
+struct AppliedMutation<T> {
+    previous: TableRevision,
+    revision: TableRevision,
+    output: T,
+}
+
 impl LeaseLifecycle {
     fn from_status(status: &SpecLifecycle) -> Self {
         Self {
@@ -96,25 +104,27 @@ impl LeaseLifecycle {
 
 /// Work only the controller task performs.
 enum ControllerCommand {
-    Publish(oneshot::Sender<Result<Arc<TableSnapshot>, CommitError>>),
+    Publish {
+        required: TableRevision,
+        reply: oneshot::Sender<Result<Arc<TableSnapshot>, CommitError>>,
+    },
     PublishOwed(oneshot::Sender<Result<(), StatsError>>),
     Claim(oneshot::Sender<Result<(), StatsError>>),
     Tombstone(oneshot::Sender<Result<(), StatsError>>),
-    GcStates {
-        now_ms: i64,
-        policy: StateGcPolicy,
-        reply: oneshot::Sender<Result<usize, StatsError>>,
+    PruneReleases {
+        deleted: Vec<String>,
+        reply: oneshot::Sender<Result<(), StatsError>>,
     },
 }
 
 const COMMAND_QUEUE_DEPTH: usize = 32;
 
 /// Floor between owed publications of one table. Every flush and compaction
-/// commit marks HEAD owed, and each publication PUTs a full catalog snapshot
-/// and rewrites the same `HEAD.json` object — which object stores rate-limit
-/// per object. Acknowledgement is local, so deferring publication batches the
-/// staged-object uploads and snapshot churn without touching write latency;
-/// the revision stays owed and the next maintenance cycle publishes it.
+/// commit marks HEAD owed, and each publication writes one catalog-tree node
+/// and rewrites the same `HEAD.json` object, which object stores rate-limit per
+/// object. Local-disk acknowledgement can defer publication to batch staged
+/// uploads and snapshot churn. Object-store acknowledgement uses an explicit
+/// publication command and bypasses this throttle.
 const MIN_PUBLISH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
 pub struct TableController {
@@ -133,8 +143,9 @@ pub struct TableController {
     /// specification that introduced it: a transition rolled back to the
     /// version-0 layout still owns its objects and its HEAD.
     head_published: AtomicBool,
-    /// Serializes the revision-allocating transaction. Held only across the
-    /// synchronous mutation, never across I/O.
+    /// Serializes revision-allocating transactions with the synchronous
+    /// projection of one revision into a publishable state. Never held across
+    /// object-store I/O.
     mutation_gate: Mutex<()>,
     /// The state this writer last observed selected, and the token it presents
     /// on its next commit. Absent until this process claims the table.
@@ -163,6 +174,8 @@ pub struct TableController {
     degraded: Mutex<Option<String>>,
     /// The latest committed state, republished after every transition.
     snapshot: watch::Sender<Option<Arc<TableSnapshot>>>,
+    /// Highest sequence selected by a remotely committed HEAD.
+    published_high_water: watch::Sender<i64>,
     commands: Option<mpsc::Sender<ControllerCommand>>,
 }
 
@@ -179,6 +192,7 @@ impl TableController {
         fence: WriterFence,
     ) -> Arc<Self> {
         let (snapshot, _) = watch::channel(None);
+        let (published_high_water, _) = watch::channel(0);
         let object_persistence = objects.is_some();
         let (sender, receiver) = mpsc::channel(COMMAND_QUEUE_DEPTH);
         let controller = Arc::new(Self {
@@ -198,6 +212,7 @@ impl TableController {
             boot_reconciled: AtomicBool::new(false),
             degraded: Mutex::new(None),
             snapshot,
+            published_high_water,
             commands: object_persistence.then(|| sender.clone()),
         });
         if let Err(error) = controller.refresh_object_backing() {
@@ -309,6 +324,44 @@ impl TableController {
         self.snapshot.subscribe()
     }
 
+    /// Highest sequence recoverable from the object state HEAD.
+    pub fn published_high_water(&self) -> i64 {
+        *self.published_high_water.borrow()
+    }
+
+    /// Wait for object state HEAD to cover `target`.
+    pub async fn await_published_high_water(
+        &self,
+        target: i64,
+        timeout: std::time::Duration,
+    ) -> Result<(), StatsError> {
+        if target < 0 {
+            return Ok(());
+        }
+        let mut receiver = self.published_high_water.subscribe();
+        if *receiver.borrow() >= target {
+            return Ok(());
+        }
+        let wait = async {
+            while *receiver.borrow() < target {
+                if receiver.changed().await.is_err() {
+                    return;
+                }
+            }
+        };
+        match tokio::time::timeout(timeout, wait).await {
+            Ok(()) if *self.published_high_water.borrow() >= target => Ok(()),
+            Ok(()) => Err(StatsError::Internal(format!(
+                "table {:?} published-high-water channel closed before seq>={target}",
+                self.table
+            ))),
+            Err(_) => Err(StatsError::DeadlineExceeded(format!(
+                "timed out waiting for table {:?} object state to publish seq>={target}",
+                self.table
+            ))),
+        }
+    }
+
     /// The object store holding this table's immutable data and artifacts.
     pub fn object_store(&self) -> Option<&Arc<dyn ObjectStore>> {
         self.objects.as_ref().map(|objects| &objects.store)
@@ -375,12 +428,23 @@ impl TableController {
     /// Recovery loads and claims each head before any table accepts writes; this
     /// seeds the controller with that outcome and publishes the table's initial
     /// snapshot without a second round trip to the state store.
-    pub fn adopt_claimed(&self, claimed: StoredTableState) {
+    pub fn adopt_claimed(&self, claimed: StoredTableState) -> Result<(), StatsError> {
+        // Recovery has already reconciled the local projection with this HEAD.
+        // When HEAD covers the local revision, every referenced object was
+        // necessarily durable before HEAD selected it, so the first new write
+        // need only upload objects staged by this process. A projection ahead
+        // of HEAD may contain a pre-crash local commit whose object upload did
+        // not finish, and therefore retains the once-per-boot remote scan.
+        let selected_covers_local = claimed.revision() >= self.local_revision()?;
         let snapshot = TableSnapshot::from_stored(&claimed);
+        self.record_published_high_water(claimed.catalog.persisted_high_water.unwrap_or(0));
         *self.selected.lock().unwrap() = Some(claimed);
         self.claimed.store(true, Ordering::SeqCst);
         self.head_published.store(true, Ordering::SeqCst);
+        self.boot_reconciled
+            .store(selected_covers_local, Ordering::SeqCst);
         self.snapshot.send_replace(Some(Arc::new(snapshot)));
+        Ok(())
     }
 
     /// Apply one durable state transition and publish the resulting state.
@@ -393,7 +457,11 @@ impl TableController {
     where
         F: FnOnce() -> Result<(TableRevision, T), StatsError>,
     {
-        let (previous, revision, output) = self.apply(mutation)?;
+        let AppliedMutation {
+            previous,
+            revision,
+            output,
+        } = self.apply(mutation)?;
         if !self.is_object_backed() {
             return Ok(Committed {
                 token: CommitToken::local(revision, WriterFence::UNCLAIMED),
@@ -423,7 +491,11 @@ impl TableController {
     where
         F: FnOnce() -> Result<(TableRevision, T), StatsError>,
     {
-        let (previous, revision, output) = self.apply(mutation)?;
+        let AppliedMutation {
+            previous,
+            revision,
+            output,
+        } = self.apply(mutation)?;
         let fence = if self.is_object_backed() {
             if revision > previous {
                 self.publish_local_snapshot(revision);
@@ -443,7 +515,7 @@ impl TableController {
     /// A revision that advances is owed to HEAD from the moment it is durable
     /// locally, so a failure between here and publication republishes the same
     /// revision instead of undoing it.
-    fn apply<T, F>(&self, mutation: F) -> Result<(TableRevision, TableRevision, T), CommitError>
+    fn apply<T, F>(&self, mutation: F) -> Result<AppliedMutation<T>, CommitError>
     where
         F: FnOnce() -> Result<(TableRevision, T), StatsError>,
     {
@@ -463,7 +535,11 @@ impl TableController {
                 .map_err(CommitError::NotCommitted)?;
             self.mark_publication_owed();
         }
-        Ok((previous, revision, output))
+        Ok(AppliedMutation {
+            previous,
+            revision,
+            output,
+        })
     }
 
     fn local_revision(&self) -> Result<TableRevision, StatsError> {
@@ -512,7 +588,13 @@ impl TableController {
     /// committed revision.
     pub async fn publish_state(&self) -> Result<Arc<TableSnapshot>, CommitError> {
         self.mark_publication_owed();
-        match self.dispatch(ControllerCommand::Publish).await {
+        let required = self
+            .local_revision()
+            .map_err(CommitError::PublicationDeferred)?;
+        match self
+            .dispatch(|reply| ControllerCommand::Publish { required, reply })
+            .await
+        {
             Ok(result) => result,
             Err(error) => Err(CommitError::PublicationDeferred(error)),
         }
@@ -531,26 +613,28 @@ impl TableController {
         self.dispatch(ControllerCommand::Tombstone).await?
     }
 
-    /// Remove superseded state documents and unreferenced objects.
-    pub async fn gc_published(
+    /// Collect catalog and data objects that exceeded their retention periods.
+    pub(crate) async fn gc_published(
         &self,
         now_ms: i64,
-        pin_retention_ms: u64,
-        state_retention_ms: u64,
-        orphan_grace_ms: u64,
-        sweep_orphans: bool,
+        policy: StateGcPolicy,
     ) -> Result<usize, StatsError> {
-        self.dispatch(|reply| ControllerCommand::GcStates {
-            now_ms,
-            policy: StateGcPolicy {
-                pin_retention_ms,
-                state_retention_ms,
-                orphan_grace_ms,
-                sweep_orphans,
-            },
-            reply,
-        })
-        .await?
+        let Some(selected) = self.selected.lock().unwrap().clone() else {
+            return Ok(0);
+        };
+        let result = self
+            .require_objects()?
+            .state_store
+            .gc_selected(&self.table, now_ms, policy, &selected)
+            .await?;
+        if !result.deleted_releases.is_empty() {
+            self.dispatch(|reply| ControllerCommand::PruneReleases {
+                deleted: result.deleted_releases,
+                reply,
+            })
+            .await??;
+        }
+        Ok(result.removed)
     }
 
     /// Take a lease for one compaction.
@@ -588,13 +672,19 @@ impl TableController {
         Ok(lease)
     }
 
-    /// Commit a compaction result, rebasing it onto the current state.
+    /// Commit replayable maintenance locally, rebasing it onto the current state.
     ///
     /// The lease is rejected when this writer was fenced or the table's active
     /// definition version moved while the work ran. Input liveness is checked by
     /// `mutation`, which runs inside the same gated transaction that replaces
     /// them.
-    pub async fn commit_maintenance<T, F>(
+    ///
+    /// Maintenance does not wait for HEAD publication. Its immutable outputs
+    /// are already remotely durable, and the previously published inputs stay
+    /// live until a later client write or maintenance tick publishes the new
+    /// revision. A crash can therefore lose maintenance progress but cannot
+    /// lose acknowledged rows.
+    pub fn commit_maintenance<T, F>(
         &self,
         lease: &MaintenanceLease,
         mutation: F,
@@ -621,17 +711,16 @@ impl TableController {
                 ),
             )));
         }
-        self.commit(mutation).await
+        self.commit_owing_publication(mutation)
     }
 
-    /// Stage an immutable content-addressed Parquet object locally.
+    /// Stage an immutable Parquet object locally.
     ///
     /// The bytes are durable on local disk when this returns; publication
     /// uploads them before HEAD names the revision that references them.
     pub async fn stage_parquet(&self, bytes: Bytes) -> Result<WrittenObject, StatsError> {
         let objects = self.require_objects()?;
-        let sha256: [u8; 32] = Sha256::digest(&bytes).into();
-        let key = format!("{OBJECTS_PREFIX}/{}.parquet", crate::hex::encode(&sha256));
+        let key = format!("{OBJECTS_PREFIX}/{}.parquet", uuid::Uuid::new_v4());
         let id = ObjectId::table(&self.table, &key)?;
         let version = objects.store.stage(&id, bytes).await?;
         let reference = ObjectReference {
@@ -650,7 +739,7 @@ impl TableController {
         })
     }
 
-    /// Upload a staged local file as an immutable content-addressed object.
+    /// Upload a staged local file as an immutable object.
     ///
     /// `kind` selects the object prefix (`objects`, `indices`, `projections`)
     /// and `extension` its suffix.
@@ -663,12 +752,11 @@ impl TableController {
         let bytes = Bytes::from(tokio::fs::read(staged).await.map_err(|error| {
             StatsError::Internal(format!("read staged object {}: {error}", staged.display()))
         })?);
-        let sha256: [u8; 32] = Sha256::digest(&bytes).into();
-        let key = format!("{kind}/{}.{extension}", crate::hex::encode(&sha256));
-        self.write_content_addressed(&key, bytes).await
+        let key = format!("{kind}/{}.{extension}", uuid::Uuid::new_v4());
+        self.write_immutable(&key, bytes).await
     }
 
-    async fn write_content_addressed(
+    async fn write_immutable(
         &self,
         relative_key: &str,
         bytes: Bytes,
@@ -688,7 +776,7 @@ impl TableController {
         })
     }
 
-    /// Return the verified local file for one immutable object this table
+    /// Return the local file for one immutable object this table
     /// references. The reference, not adjacency to any other file, decides which
     /// bytes the caller reads.
     pub async fn localize(&self, reference: &ObjectRef) -> Result<PathBuf, StatsError> {
@@ -774,6 +862,7 @@ impl TableController {
                 .await?;
             self.snapshot
                 .send_replace(Some(Arc::new(TableSnapshot::from_stored(&claimed))));
+            self.record_published_high_water(claimed.catalog.persisted_high_water.unwrap_or(0));
             *self.selected.lock().unwrap() = Some(claimed);
             self.head_published.store(true, Ordering::SeqCst);
         }
@@ -795,33 +884,48 @@ impl TableController {
         let objects = self
             .require_objects()
             .map_err(CommitError::PublicationDeferred)?;
-        let mut catalog = namespace_catalog(&self.catalog, &self.table, &objects.table_dir)
-            .map_err(CommitError::PublicationDeferred)?;
+        // `namespace_catalog` reads several catalog relations. Keep the
+        // revision gate until that projection is complete so a concurrent
+        // cursor or segment commit cannot produce a hybrid value carrying the
+        // old revision with fields from the new one.
         let expected = self.selected.lock().unwrap().clone();
-        // A root that holds catalog history without a HEAD is an external
-        // anomaly (the software never deletes HEAD). Creating a fresh HEAD
-        // would start a second history over the first, so publication defers
-        // until an operator restores HEAD from the newest catalog document.
-        if expected.is_none()
-            && objects
-                .state_store
-                .catalog_history_exists(&self.table)
-                .await
-                .map_err(CommitError::PublicationDeferred)?
-        {
-            let reason = format!(
-                "table {:?} remote root holds catalog history but no HEAD; refusing to start a \
-                 new history — restore HEAD.json from the newest catalog document and restart",
-                self.table
-            );
-            self.mark_degraded(&reason);
+        let mut catalog = {
+            let _gate = self.mutation_gate.lock().unwrap();
+            let mut projected = namespace_catalog(&self.catalog, &self.table, &objects.table_dir)
+                .map_err(CommitError::PublicationDeferred)?;
+            if let Some(previous) = &expected {
+                let floor = previous.catalog.persisted_high_water.unwrap_or(0);
+                floor_persisted_high_water(&mut projected, floor);
+                if projected.catalog_generation == previous.catalog.catalog_generation
+                    && !catalogs_equal(&projected, &previous.catalog)
+                {
+                    let revision = self
+                        .catalog
+                        .advance_object_state_revision(&self.table)
+                        .map_err(CommitError::PublicationDeferred)?;
+                    tracing::warn!(
+                        table = %self.table,
+                        revision = revision.get(),
+                        "advanced a divergent recovered projection to a fresh revision"
+                    );
+                    projected = namespace_catalog(&self.catalog, &self.table, &objects.table_dir)
+                        .map_err(CommitError::PublicationDeferred)?;
+                    floor_persisted_high_water(&mut projected, floor);
+                }
+            }
+            projected
+        };
+        // Recovery marks a root that lost HEAD as degraded. A node uploaded by
+        // this process before a failed first CAS is different: it is merely an
+        // unselected sibling, and retrying the same local revision may safely
+        // create another checkpoint and attempt HEAD again.
+        if let (None, Some(reason)) = (expected.as_ref(), self.degraded_reason()) {
             return Err(CommitError::PublicationDeferred(StatsError::Internal(
                 reason,
             )));
         }
         // HEAD must never name a state whose data objects are not remotely
-        // durable: acknowledgement is local, so the upload happens here, on
-        // the publication path, before the swap.
+        // durable, so the upload happens here before the swap.
         self.sync_referenced_objects(&catalog)
             .await
             .map_err(CommitError::PublicationDeferred)?;
@@ -830,9 +934,7 @@ impl TableController {
         // a shrunken mark would let a later recovery reissue sequence numbers.
         if let Some(previous) = &expected {
             let floor = previous.catalog.persisted_high_water.unwrap_or(0);
-            if catalog.persisted_high_water.unwrap_or(0) < floor {
-                catalog.persisted_high_water = Some(floor);
-            }
+            floor_persisted_high_water(&mut catalog, floor);
         }
         let state = TableState::new(catalog);
         let outcome = objects
@@ -864,12 +966,50 @@ impl TableController {
         // HEAD now names a state for this table, and keeps doing so however
         // its specification later moves.
         self.head_published.store(true, Ordering::SeqCst);
-        self.publication_owed.store(false, Ordering::SeqCst);
         *self.last_published.lock().unwrap() = Some(tokio::time::Instant::now());
         *self.degraded.lock().unwrap() = None;
         let published = Arc::new(published);
-        self.snapshot.send_replace(Some(Arc::clone(&published)));
+        // A local mutation may commit while the remote swap is in flight. Make
+        // the owed decision under the same short gate as mutation allocation,
+        // so an older publication cannot clear a newer revision's obligation.
+        let still_owed = {
+            let _gate = self.mutation_gate.lock().unwrap();
+            let still_owed = match self.local_revision() {
+                Ok(local) => local > published.revision(),
+                Err(error) => {
+                    tracing::warn!(
+                        table = %self.table,
+                        %error,
+                        "published table state but could not compare the local revision"
+                    );
+                    true
+                }
+            };
+            self.publication_owed.store(still_owed, Ordering::SeqCst);
+            still_owed
+        };
+        self.record_published_high_water(
+            published
+                .state()
+                .catalog()
+                .persisted_high_water
+                .unwrap_or(0),
+        );
+        // A synchronous local mutation publishes its newer snapshot before
+        // this older remote CAS returns. Keep that view while its revision is
+        // still owed; replacing it here would temporarily hide an acknowledged
+        // segment from forwarding and queries.
+        if !still_owed {
+            self.snapshot.send_replace(Some(Arc::clone(&published)));
+        }
         Ok(published)
+    }
+
+    fn record_published_high_water(&self, high_water: i64) {
+        let current = *self.published_high_water.borrow();
+        if high_water > current {
+            self.published_high_water.send_replace(high_water);
+        }
     }
 
     /// Whether an owed publication is past the per-table throttle.
@@ -905,6 +1045,7 @@ impl TableController {
         let mut live = Vec::new();
         let mut retired = Vec::new();
         for version in &catalog.version_segments {
+            let version_number = version.table_spec_version.unwrap_or(0);
             let segments = version
                 .live_segments
                 .iter()
@@ -916,21 +1057,38 @@ impl TableController {
                         .map(|segment| (segment, false)),
                 );
             for (segment, is_live) in segments {
-                let Some(source) = segment.source.as_option() else {
-                    continue;
-                };
-                let in_object_layout = source
-                    .object_id
-                    .as_deref()
-                    .and_then(|id| ObjectId::parse(id).ok())
-                    .and_then(|id| id.table_relative(&self.table).map(str::to_string))
-                    .is_some_and(|key| key.starts_with(&data_object_prefix));
-                if !in_object_layout {
+                let table_spec_version = segment.table_spec_version.unwrap_or(version_number);
+                if table_spec_version == 0 {
                     continue;
                 }
-                let Ok(reference) = ObjectReference::try_from(source) else {
-                    continue;
+                let Some(source) = segment.source.as_option() else {
+                    return Err(StatsError::Internal(format!(
+                        "table {:?} version {table_spec_version} segment {:?} has no source object",
+                        self.table, segment.segment_id
+                    )));
                 };
+                let reference = ObjectReference::try_from(source).map_err(|error| {
+                    StatsError::Internal(format!(
+                        "table {:?} version {table_spec_version} segment {:?} has an invalid source object: {error}",
+                        self.table, segment.segment_id
+                    ))
+                })?;
+                let relative = reference.id.table_relative(&self.table).ok_or_else(|| {
+                    StatsError::Internal(format!(
+                        "table {:?} version {table_spec_version} segment {:?} references object {:?} from another table",
+                        self.table,
+                        segment.segment_id,
+                        reference.id.as_str()
+                    ))
+                })?;
+                if !relative.starts_with(&data_object_prefix) {
+                    return Err(StatsError::Internal(format!(
+                        "table {:?} version {table_spec_version} segment {:?} source {:?} is outside the data-object prefix",
+                        self.table,
+                        segment.segment_id,
+                        reference.id.as_str()
+                    )));
+                }
                 if is_live {
                     live.push(reference);
                 } else {
@@ -1027,12 +1185,30 @@ impl TableController {
         Ok(())
     }
 
-    async fn run_gc_states(&self, now_ms: i64, policy: StateGcPolicy) -> Result<usize, StatsError> {
-        let objects = self.require_objects()?;
-        objects
-            .state_store
-            .gc_obsolete_states(&self.table, now_ms, policy, self.fence)
-            .await
+    fn run_prune_releases(&self, deleted: Vec<String>) -> Result<(), StatsError> {
+        let deleted = deleted.into_iter().collect::<HashSet<_>>();
+        let mut selected = self.selected.lock().unwrap();
+        let Some(selected) = selected.as_mut() else {
+            return Ok(());
+        };
+        let referenced = referenced_objects(&selected.catalog)
+            .into_iter()
+            .filter_map(|reference| reference.object_id)
+            .collect::<HashSet<_>>();
+        if let Some(object_id) = deleted.intersection(&referenced).next() {
+            return Err(StatsError::Internal(format!(
+                "deleted released object {object_id:?} re-entered table {:?}",
+                self.table
+            )));
+        }
+        selected.pending_releases.retain(|released| {
+            released
+                .object
+                .as_option()
+                .and_then(|object| object.object_id.as_deref())
+                .is_none_or(|object_id| !deleted.contains(object_id))
+        });
+        Ok(())
     }
 }
 
@@ -1049,8 +1225,28 @@ async fn run_controller(
             return;
         };
         match command {
-            ControllerCommand::Publish(reply) => {
-                let _ = reply.send(controller.run_publish().await);
+            ControllerCommand::Publish { required, reply } => {
+                // One publication reads the latest local catalog, so it may
+                // cover several requests queued while its remote swap was in
+                // flight. Avoid another HEAD read for every already-covered
+                // request; a later caller re-arms `publication_owed` before it
+                // enters the queue and therefore still validates its state.
+                let selected = controller.selected.lock().unwrap().clone();
+                let local_revision = controller.local_revision();
+                let covered = selected.as_ref().filter(|selected| {
+                    selected.revision() >= required
+                        && (!controller.publication_owed()
+                            || local_revision
+                                .as_ref()
+                                .is_ok_and(|local| *local > selected.revision()))
+                });
+                let covered = covered.map(TableSnapshot::from_stored).map(Arc::new);
+                let result = if let Some(snapshot) = covered {
+                    Ok(snapshot)
+                } else {
+                    controller.run_publish().await
+                };
+                let _ = reply.send(result);
             }
             ControllerCommand::PublishOwed(reply) => {
                 // Within the throttle the revision simply stays owed; a later
@@ -1073,12 +1269,8 @@ async fn run_controller(
             ControllerCommand::Tombstone(reply) => {
                 let _ = reply.send(controller.run_tombstone().await);
             }
-            ControllerCommand::GcStates {
-                now_ms,
-                policy,
-                reply,
-            } => {
-                let _ = reply.send(controller.run_gc_states(now_ms, policy).await);
+            ControllerCommand::PruneReleases { deleted, reply } => {
+                let _ = reply.send(controller.run_prune_releases(deleted));
             }
         }
     }
@@ -1090,19 +1282,8 @@ fn object_ref(id: &ObjectId, version: &ObjectVersion) -> ObjectRef {
         provider_version: version.provider_version.clone(),
         etag: version.e_tag.clone(),
         byte_size: Some(version.byte_size),
-        sha256: Some(version.content_sha256.to_vec()),
         ..Default::default()
     }
-}
-
-pub fn file_sha256(path: &Path) -> Result<[u8; 32], StatsError> {
-    let mut file = std::fs::File::open(path).map_err(|error| {
-        StatsError::Internal(format!("open {} for hashing: {error}", path.display()))
-    })?;
-    let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)
-        .map_err(|error| StatsError::Internal(format!("hash {}: {error}", path.display())))?;
-    Ok(hasher.finalize().into())
 }
 
 #[cfg(test)]
@@ -1110,9 +1291,11 @@ mod tests {
     use super::*;
 
     use buffa::MessageField;
+    use sha2::{Digest, Sha256};
 
     use crate::proto::finelog::stats::{
-        ColumnType, L0Mode, OperatingPolicy, SourceLayout, TableSpec as ProtoTableSpec,
+        CatalogSegment, ColumnType, ForwardCursor, L0Mode, OperatingPolicy, SourceLayout,
+        TableSpec as ProtoTableSpec, TableVersionSegments,
     };
     use crate::store::object_store::build_remote_object_store;
     use crate::store::schema::{schema_to_proto_owned, with_implicit_seq, Column, Schema};
@@ -1237,6 +1420,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn publication_rejects_a_malformed_live_object_reference() {
+        let (controller, _states, _faults) = faulted_controller("controller_malformed_ref", 11);
+        let state = NamespaceCatalog {
+            version_segments: vec![TableVersionSegments {
+                table_spec_version: Some(1),
+                live_segments: vec![CatalogSegment {
+                    table_spec_version: Some(1),
+                    source: MessageField::some(ObjectRef {
+                        object_id: Some("not/a/canonical/object".to_string()),
+                        byte_size: Some(1),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            controller.sync_referenced_objects(&state).await,
+            Err(StatsError::Internal(_))
+        ));
+    }
+
+    #[tokio::test]
     async fn a_commit_the_store_never_applied_stays_owed_at_the_same_revision() {
         let (controller, _states, faults) = faulted_controller("controller_unapplied", 11);
         let (op, pattern) = head_swap();
@@ -1254,7 +1463,6 @@ mod tests {
         let error = controller.publish_state().await.unwrap_err();
 
         assert!(matches!(error, CommitError::PublicationDeferred(_)));
-        assert!(error.is_committed());
         assert!(controller.publication_owed());
         assert!(controller.writes_ready());
         assert_eq!(
@@ -1327,6 +1535,43 @@ mod tests {
         assert_eq!(selected.revision().get(), 1);
     }
 
+    #[tokio::test]
+    async fn adopting_a_claimed_head_only_reconciles_an_ahead_local_projection() {
+        let remote_dir = crate::test_support::unique_dir("controller_adopt_reconcile");
+        let remote = Arc::new(
+            build_remote_object_store(remote_dir.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        );
+        let states = Arc::new(ObjectTableStateStore::new(remote.clone()));
+        let published_catalog = registered_catalog();
+        let publisher = object_controller(
+            remote_dir.clone(),
+            Arc::clone(&published_catalog),
+            remote.clone(),
+            states.clone(),
+            11,
+        );
+        publisher.publish_state().await.unwrap();
+        let selected = states.load(TABLE).await.unwrap().unwrap();
+
+        let matching = object_controller(
+            remote_dir.clone(),
+            registered_catalog(),
+            remote.clone(),
+            states.clone(),
+            11,
+        );
+        matching.adopt_claimed(selected.clone()).unwrap();
+        assert!(matching.boot_reconciled.load(Ordering::SeqCst));
+
+        let ahead_catalog = registered_catalog();
+        ahead_catalog.set_forward_cursor("hub", TABLE, 5).unwrap();
+        let ahead = object_controller(remote_dir, ahead_catalog, remote, states, 11);
+        ahead.adopt_claimed(selected).unwrap();
+        assert!(!ahead.boot_reconciled.load(Ordering::SeqCst));
+    }
+
     /// A fenced controller refuses to lease maintenance work.
     #[tokio::test]
     async fn a_fenced_controller_refuses_maintenance_and_reports_unready() {
@@ -1362,7 +1607,6 @@ mod tests {
         assert!(!stale.writes_ready());
         let rejected = stale
             .commit_maintenance(&lease, || Ok((TableRevision::new(99), ())))
-            .await
             .map(|committed| committed.token.revision());
         assert!(matches!(rejected, Err(CommitError::Fenced(_))));
         assert!(stale.begin_compaction().is_err());
@@ -1416,12 +1660,10 @@ mod tests {
             )
             .unwrap();
         let mut invoked = false;
-        let rejected = controller
-            .commit_maintenance(&lease, || {
-                invoked = true;
-                Ok((TableRevision::new(99), ()))
-            })
-            .await;
+        let rejected = controller.commit_maintenance(&lease, || {
+            invoked = true;
+            Ok((TableRevision::new(99), ()))
+        });
         assert!(matches!(
             rejected,
             Err(CommitError::NotCommitted(StatsError::SchemaConflict(_)))
@@ -1500,6 +1742,357 @@ mod tests {
         let second = watcher.borrow_and_update().clone().unwrap();
         assert!(second.revision() > published.revision());
         assert_eq!(second.state().catalog().forward_cursors[0].cursor, Some(9));
+    }
+
+    #[tokio::test]
+    async fn queued_publications_skip_revisions_an_earlier_request_already_published() {
+        let (controller, states, faults) = faulted_controller("controller_publish_coalesce", 11);
+        let first_gate = crate::test_support::FaultGate::new();
+        let second_gate = crate::test_support::FaultGate::new();
+        let (op, pattern) = head_swap();
+        faults.arm(ObjectFault::new(
+            op,
+            pattern.clone(),
+            FaultAction::Park(first_gate.clone()),
+        ));
+        faults.arm(ObjectFault::new(
+            op,
+            pattern,
+            FaultAction::Park(second_gate.clone()),
+        ));
+
+        let first = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move { controller.publish_state().await.unwrap() })
+        };
+        first_gate.entered().await;
+
+        controller
+            .catalog
+            .set_forward_cursor("hub", TABLE, 5)
+            .unwrap();
+        let second = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move { controller.publish_state().await.unwrap() })
+        };
+        tokio::task::yield_now().await;
+        controller
+            .catalog
+            .set_forward_cursor("hub", TABLE, 9)
+            .unwrap();
+        let third = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move { controller.publish_state().await.unwrap() })
+        };
+        tokio::task::yield_now().await;
+
+        first_gate.release();
+        let first = first.await.unwrap();
+        second_gate.entered().await;
+
+        controller
+            .commit_owing_publication(|| {
+                let revision = controller.catalog.set_forward_cursor("hub", TABLE, 13)?;
+                Ok((revision, ()))
+            })
+            .unwrap();
+        let fourth = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move { controller.publish_state().await.unwrap() })
+        };
+        second_gate.release();
+
+        let second = second.await.unwrap();
+        let third = third.await.unwrap();
+        let fourth = fourth.await.unwrap();
+
+        assert_eq!(first.revision().get(), 1);
+        assert_eq!(second.revision().get(), 3);
+        assert_eq!(third.revision().get(), 3);
+        assert_eq!(fourth.revision().get(), 4);
+        let head_reads = faults
+            .keys_for(ObjectOp::Read)
+            .into_iter()
+            .filter(|key| key.ends_with("HEAD.json"))
+            .count();
+        assert_eq!(head_reads, 4);
+        assert_eq!(faults.keys_for(ObjectOp::CompareAndSwap).len(), 3);
+        assert_eq!(
+            states.load(TABLE).await.unwrap().unwrap().revision().get(),
+            4
+        );
+        assert!(!controller.publication_owed());
+    }
+
+    #[tokio::test]
+    async fn a_commit_during_publication_stays_owed_after_the_older_revision_lands() {
+        let (controller, states, faults) = faulted_controller("controller_publish_race", 11);
+        let gate = crate::test_support::FaultGate::new();
+        let (op, pattern) = head_swap();
+        faults.arm(ObjectFault::new(
+            op,
+            pattern,
+            FaultAction::Park(gate.clone()),
+        ));
+
+        let first = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move { controller.publish_state().await.unwrap() })
+        };
+        gate.entered().await;
+        controller
+            .commit_owing_publication(|| {
+                let revision = controller.catalog.set_forward_cursor("hub", TABLE, 5)?;
+                Ok((revision, ()))
+            })
+            .unwrap();
+        gate.release();
+
+        assert_eq!(first.await.unwrap().revision().get(), 1);
+        assert!(controller.publication_owed());
+        assert_eq!(
+            states.load(TABLE).await.unwrap().unwrap().revision().get(),
+            1
+        );
+
+        let second = controller.publish_state().await.unwrap();
+        assert_eq!(second.revision().get(), 2);
+        assert!(!controller.publication_owed());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn publication_projects_after_an_in_flight_local_mutation() {
+        let (controller, states, _faults) = faulted_controller("controller_projection_race", 11);
+        controller.publish_state().await.unwrap();
+        let (entered_send, entered_receive) = std::sync::mpsc::channel();
+        let (release_send, release_receive) = std::sync::mpsc::channel();
+        let mutation = {
+            let controller = Arc::clone(&controller);
+            std::thread::spawn(move || {
+                controller
+                    .commit_owing_publication(|| {
+                        entered_send.send(()).unwrap();
+                        release_receive.recv().unwrap();
+                        let revision = controller.catalog.set_forward_cursor("hub", TABLE, 5)?;
+                        Ok((revision, ()))
+                    })
+                    .unwrap();
+            })
+        };
+        entered_receive.recv().unwrap();
+
+        let mut publication = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move { controller.publish_state().await.unwrap() })
+        };
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(250), &mut publication)
+                .await
+                .is_err(),
+            "publication must wait for the revision-owning mutation"
+        );
+
+        release_send.send(()).unwrap();
+        mutation.join().unwrap();
+        let published = publication.await.unwrap();
+        assert_eq!(published.revision().get(), 2);
+        assert_eq!(
+            published.state().catalog().forward_cursors[0].cursor,
+            Some(5)
+        );
+        assert_eq!(
+            states.load(TABLE).await.unwrap().unwrap().revision().get(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn divergent_recovered_projection_gets_a_fresh_revision() {
+        let (controller, states, _faults) =
+            faulted_controller("controller_recovered_projection_revision", 11);
+        let first = controller.publish_state().await.unwrap();
+        assert_eq!(first.revision().get(), 1);
+
+        let mut divergent = first.state().catalog().clone();
+        divergent.forward_cursors.push(ForwardCursor {
+            target: Some("hub".to_string()),
+            cursor: Some(5),
+            ..Default::default()
+        });
+        let schema = with_implicit_seq(Schema::new(
+            vec![Column::new(
+                "timestamp_ms",
+                ColumnType::COLUMN_TYPE_INT64,
+                false,
+            )],
+            "",
+        ));
+        controller
+            .catalog
+            .replace_with_published_snapshot(
+                TABLE,
+                schema,
+                crate::store::policy::StoragePolicy::default(),
+                &divergent,
+                &[],
+            )
+            .unwrap();
+
+        let repaired = controller.publish_state().await.unwrap();
+        assert_eq!(repaired.revision().get(), 2);
+        assert_eq!(
+            repaired.state().catalog().forward_cursors[0].cursor,
+            Some(5)
+        );
+        assert_eq!(
+            states.load(TABLE).await.unwrap().unwrap().revision().get(),
+            2
+        );
+        assert!(controller.writes_ready());
+    }
+
+    #[tokio::test]
+    async fn maintenance_commits_while_an_older_publication_is_in_flight() {
+        let (controller, states, faults) = faulted_controller("controller_maintenance_publish", 11);
+        let gate = crate::test_support::FaultGate::new();
+        let (op, pattern) = head_swap();
+        faults.arm(ObjectFault::new(
+            op,
+            pattern,
+            FaultAction::Park(gate.clone()),
+        ));
+        let lease = controller.begin_compaction().unwrap();
+
+        let first = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move { controller.publish_state().await.unwrap() })
+        };
+        gate.entered().await;
+
+        let committed = controller
+            .commit_maintenance(&lease, || {
+                let revision = controller.catalog.set_forward_cursor("hub", TABLE, 5)?;
+                Ok((revision, ()))
+            })
+            .unwrap();
+        assert_eq!(committed.token.revision().get(), 2);
+        assert!(controller.publication_owed());
+        assert!(states.load(TABLE).await.unwrap().is_none());
+
+        gate.release();
+        assert_eq!(first.await.unwrap().revision().get(), 1);
+        assert!(controller.publication_owed());
+
+        let second = controller.publish_state().await.unwrap();
+        assert_eq!(second.revision().get(), 2);
+        assert!(!controller.publication_owed());
+    }
+
+    #[tokio::test]
+    async fn object_collection_does_not_block_a_durability_publication() {
+        let (controller, _states, faults) = faulted_controller("controller_gc_publish", 11);
+        controller.publish_state().await.unwrap();
+        let gate = crate::test_support::FaultGate::new();
+        faults.arm(ObjectFault::new(
+            ObjectOp::List,
+            ObjectPattern::Contains("/catalogs".to_string()),
+            FaultAction::Park(gate.clone()),
+        ));
+        let collection = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move {
+                controller
+                    .gc_published(
+                        crate::store::table::now_ms(),
+                        StateGcPolicy {
+                            pin_retention_ms: 600_000,
+                            state_retention_ms: 600_000,
+                            orphan_grace_ms: 86_400_000,
+                            sweep_orphans: false,
+                        },
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        if tokio::time::timeout(std::time::Duration::from_secs(1), gate.entered())
+            .await
+            .is_err()
+        {
+            panic!(
+                "collection did not reach catalog LIST: {:?}",
+                faults.calls()
+            );
+        }
+
+        controller
+            .catalog
+            .set_forward_cursor("hub", TABLE, 5)
+            .unwrap();
+        let published = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            controller.publish_state(),
+        )
+        .await
+        .expect("publication must not wait for object collection")
+        .unwrap();
+        assert_eq!(published.revision().get(), 2);
+
+        gate.release();
+        collection.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn object_deletion_does_not_block_a_durability_publication() {
+        let (controller, _states, faults) = faulted_controller("controller_gc_delete", 11);
+        controller.publish_state().await.unwrap();
+        let orphan = ObjectId::table(TABLE, "objects/v1/l0/orphan/source.parquet").unwrap();
+        faults
+            .write(&orphan, Bytes::from_static(b"orphan"))
+            .await
+            .unwrap();
+        let gate = crate::test_support::FaultGate::new();
+        faults.arm(ObjectFault::new(
+            ObjectOp::Delete,
+            ObjectPattern::Contains("/objects/".to_string()),
+            FaultAction::Park(gate.clone()),
+        ));
+        let collection = {
+            let controller = Arc::clone(&controller);
+            tokio::spawn(async move {
+                controller
+                    .gc_published(
+                        i64::MAX,
+                        StateGcPolicy {
+                            pin_retention_ms: 0,
+                            state_retention_ms: 0,
+                            orphan_grace_ms: 0,
+                            sweep_orphans: true,
+                        },
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(1), gate.entered())
+            .await
+            .expect("collection must reach object deletion");
+
+        controller
+            .catalog
+            .set_forward_cursor("hub", TABLE, 5)
+            .unwrap();
+        let published = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            controller.publish_state(),
+        )
+        .await
+        .expect("publication must not wait for object deletion")
+        .unwrap();
+        assert_eq!(published.revision().get(), 2);
+
+        gate.release();
+        assert_eq!(collection.await.unwrap(), 1);
     }
 
     #[tokio::test(start_paused = true)]

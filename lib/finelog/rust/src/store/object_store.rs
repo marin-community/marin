@@ -12,7 +12,7 @@ mod remote;
 
 pub use cached::CachedObjectStore;
 pub use legacy::LegacyObjectStore;
-pub use provider::is_object_store;
+pub use provider::is_remote_object_store;
 pub use remote::{build_remote_object_store, RemoteObjectStore};
 
 use std::path::PathBuf;
@@ -43,14 +43,30 @@ pub struct StoredObject {
 pub struct ObjectVersion {
     pub e_tag: Option<String>,
     pub provider_version: Option<String>,
-    pub content_sha256: [u8; 32],
     pub byte_size: u64,
+    /// Exact bytes for a mutable pointer read from a local provider.
+    ///
+    /// Remote providers compare their opaque version or ETag. The local
+    /// provider has neither, so its locked compare-and-swap compares this
+    /// value directly. It shares the read buffer and lives only as long as the
+    /// returned object version; durable references never retain it.
+    pub(crate) local_value: Option<bytes::Bytes>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectReference {
     pub id: ObjectId,
     pub version: ObjectVersion,
+}
+
+/// Result of a best-effort batch deletion.
+///
+/// Confirmed IDs are safe to forget even when the provider reports a later
+/// error. Every unconfirmed ID remains eligible for an idempotent retry.
+#[derive(Debug)]
+pub struct DeleteManyOutcome {
+    pub deleted: Vec<ObjectId>,
+    pub error: Option<StatsError>,
 }
 
 impl TryFrom<&ProtoObjectRef> for ObjectReference {
@@ -60,23 +76,15 @@ impl TryFrom<&ProtoObjectRef> for ObjectReference {
         let id = ObjectId::parse(reference.object_id.as_deref().ok_or_else(|| {
             StatsError::Internal("object reference has no object ID".to_string())
         })?)?;
-        let content_sha256: [u8; 32] = reference
-            .sha256
-            .as_deref()
-            .ok_or_else(|| StatsError::Internal("object reference has no SHA-256".to_string()))?
-            .try_into()
-            .map_err(|_| {
-                StatsError::Internal("object reference SHA-256 is not 32 bytes".to_string())
-            })?;
         Ok(Self {
             id,
             version: ObjectVersion {
                 e_tag: reference.etag.clone(),
                 provider_version: reference.provider_version.clone(),
-                content_sha256,
                 byte_size: reference.byte_size.ok_or_else(|| {
                     StatsError::Internal("object reference has no byte size".to_string())
                 })?,
+                local_value: None,
             },
         })
     }
@@ -182,6 +190,16 @@ pub trait ObjectStore: Send + Sync {
 
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError>;
 
+    /// Whether one exact immutable object exists without reading its contents.
+    async fn exists(&self, id: &ObjectId) -> Result<bool, StatsError> {
+        let prefix = ObjectPrefix::table(id.table_name(), id.relative_key())?;
+        Ok(self
+            .list(&prefix)
+            .await?
+            .iter()
+            .any(|metadata| metadata.id == *id))
+    }
+
     /// Make `bytes` locally durable under `id` for a later
     /// [`ObjectStore::upload_staged`]. A store without local staging uploads
     /// immediately instead, so callers get remote durability either way.
@@ -196,7 +214,7 @@ pub trait ObjectStore: Send + Sync {
         Ok(())
     }
 
-    /// Return a verified local file usable by DataFusion.
+    /// Return a local file usable by DataFusion.
     async fn local_path(&self, reference: &ObjectReference) -> Result<PathBuf, StatsError> {
         Err(StatsError::Internal(format!(
             "object store has no local file for {:?}",
@@ -221,7 +239,7 @@ pub trait ObjectStore: Send + Sync {
         None
     }
 
-    /// The verified local cache file for `reference` when one is already
+    /// The local cache file for `reference` when one is already
     /// present, without fetching anything.
     async fn cached_path(
         &self,
@@ -249,6 +267,25 @@ pub trait ObjectStore: Send + Sync {
     }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError>;
+
+    async fn delete_many(&self, ids: Vec<ObjectId>) -> DeleteManyOutcome {
+        let mut deleted = Vec::with_capacity(ids.len());
+        for id in ids {
+            match self.delete(&id).await {
+                Ok(()) => deleted.push(id),
+                Err(error) => {
+                    return DeleteManyOutcome {
+                        deleted,
+                        error: Some(error),
+                    };
+                }
+            }
+        }
+        DeleteManyOutcome {
+            deleted,
+            error: None,
+        }
+    }
 
     async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError>;
 

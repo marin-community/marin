@@ -33,6 +33,9 @@ pub struct SegmentSnapshot {
     /// Exact per-segment `seq` bounds, so a `seq`-bounded scan selects only the
     /// segments whose disjoint ranges it overlaps.
     pub seq_bounds: BTreeMap<String, (i64, i64)>,
+    /// Exact row counts used to bound unfiltered LIMIT scans to a sufficient
+    /// prefix of the ordered segment snapshot.
+    pub row_counts: BTreeMap<String, u64>,
     pub partitions: BTreeMap<String, SegmentPartition>,
     pub min_seq: Option<i64>,
     /// What each snapshotted segment advertises, so a scan opens artifacts by
@@ -207,6 +210,14 @@ impl SegmentView {
                 .iter()
                 .map(|segment| (segment.path.clone(), (segment.min_seq, segment.max_seq)))
                 .collect(),
+            row_counts: segments
+                .iter()
+                .filter_map(|segment| {
+                    u64::try_from(segment.row_count)
+                        .ok()
+                        .map(|rows| (segment.path.clone(), rows))
+                })
+                .collect(),
             partitions: segments
                 .iter()
                 .filter_map(|segment| Some((segment.path.clone(), segment.partition.clone()?)))
@@ -225,7 +236,7 @@ impl SegmentView {
 /// Debug-only invariant: no two entries share a path.
 ///
 /// A same-path duplicate is a phantom reference — two entries for one seq range,
-/// one of whose file a prior compaction already unlinked (#7361). It surfaces
+/// one of whose file a prior compaction already unlinked. It surfaces
 /// duplicate rows in a query and wedges compaction when the planner picks the
 /// dead entry. Compiled out of release builds; a cheap guard that trips tests
 /// the instant any mutation reintroduces a duplicate.

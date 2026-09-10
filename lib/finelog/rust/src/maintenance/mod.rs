@@ -71,6 +71,9 @@ pub struct MaintenanceLimits {
     index_backfill: tokio::sync::Mutex<()>,
     /// At most one two-worker physical-layout migration wave runs at a time.
     layout_migration: Mutex<()>,
+    /// At most one legacy encoding rewrite runs at a time. A table skips this
+    /// opportunistic work when the permit is busy instead of queueing.
+    encoding_rewrite: Mutex<()>,
     /// How many tables may run a maintenance cycle concurrently.
     maintenance_cycles: tokio::sync::Semaphore,
     /// A table whose spec migration is mid-flight cycles in this dedicated
@@ -79,6 +82,10 @@ pub struct MaintenanceLimits {
     /// backfill behind other tables' multi-minute backlog drains stretches it
     /// from hours into days.
     spec_migration: tokio::sync::Mutex<()>,
+    /// Object-backed relays perform catalog publication and object collection,
+    /// but no compaction or index construction. Keep that I/O backlog out of the
+    /// two query-serving maintenance slots.
+    relay_io: tokio::sync::Semaphore,
     /// How many tables may flush concurrently. Flushes are short and are the
     /// durability path, so this is looser than the maintenance limit.
     flushes: tokio::sync::Semaphore,
@@ -86,6 +93,10 @@ pub struct MaintenanceLimits {
 
 /// Concurrent maintenance cycles across all tables.
 const MAX_CONCURRENT_MAINTENANCE_CYCLES: usize = 2;
+// Physical relay collection is intentionally low priority. A cycle can walk a
+// large remote catalog tree; concurrent walks compete with durability flushes
+// and forwarding settlements for the same object-store budget.
+const MAX_CONCURRENT_RELAY_IO_CYCLES: usize = 1;
 
 /// Concurrent flushes across all tables.
 const MAX_CONCURRENT_FLUSHES: usize = 4;
@@ -95,8 +106,10 @@ impl MaintenanceLimits {
         Arc::new(Self {
             index_backfill: tokio::sync::Mutex::new(()),
             layout_migration: Mutex::new(()),
+            encoding_rewrite: Mutex::new(()),
             maintenance_cycles: tokio::sync::Semaphore::new(MAX_CONCURRENT_MAINTENANCE_CYCLES),
             spec_migration: tokio::sync::Mutex::new(()),
+            relay_io: tokio::sync::Semaphore::new(MAX_CONCURRENT_RELAY_IO_CYCLES),
             flushes: tokio::sync::Semaphore::new(MAX_CONCURRENT_FLUSHES),
         })
     }
@@ -109,12 +122,20 @@ impl MaintenanceLimits {
         &self.layout_migration
     }
 
+    pub fn encoding_rewrite(&self) -> &Mutex<()> {
+        &self.encoding_rewrite
+    }
+
     pub fn maintenance_cycles(&self) -> &tokio::sync::Semaphore {
         &self.maintenance_cycles
     }
 
     pub fn spec_migration(&self) -> &tokio::sync::Mutex<()> {
         &self.spec_migration
+    }
+
+    pub fn relay_io(&self) -> &tokio::sync::Semaphore {
+        &self.relay_io
     }
 
     pub fn flushes(&self) -> &tokio::sync::Semaphore {

@@ -118,6 +118,7 @@ class Journey:
     origin: str
     app: str
     shots: Path
+    external_origins: tuple[str, ...] = ()
     refusals: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -131,7 +132,13 @@ class Journey:
             self.refusals.append(f"console {message.text[:300]}")
 
     def _on_response(self, response) -> None:
-        if not response.url.startswith(self.origin) or response.status < 400:
+        external = next((origin for origin in self.external_origins if response.url.startswith(origin)), None)
+        if response.status < 400:
+            return
+        if external is not None:
+            self.refusals.append(f"{response.status} {response.url[len(external):]}")
+            return
+        if not response.url.startswith(self.origin):
             return
         path = response.url[len(self.origin) :]
         if path.startswith("/api/") or path.startswith(f"/{self.app}/data/") or path.startswith(f"/{self.app}/api/"):

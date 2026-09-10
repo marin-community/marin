@@ -11,6 +11,7 @@ use super::*;
 use crate::errors::StatsError;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_from_json, schema_to_json, Schema};
+use rusqlite::OptionalExtension;
 
 /// A live namespace value.
 #[derive(Debug, Clone)]
@@ -194,7 +195,8 @@ impl CatalogInner {
                 [name],
                 |row| row.get(0),
             )
-            .ok();
+            .optional()
+            .map_err(sqlite_err)?;
         let registered_at = existing.unwrap_or(now);
         self.conn
             .execute(

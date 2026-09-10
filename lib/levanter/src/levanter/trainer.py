@@ -989,19 +989,19 @@ class TrainerConfig:
         # Importing cutlass.jax may initialize the XLA backend, so install its
         # cache only after jax.distributed.initialize().
         install_cutlass_kernel_cache(cutlass_kernel_cache())
+
+        if self.require_accelerator is None:
+            self.require_accelerator = not sys.platform.startswith("darwin")
+
+        if self.require_accelerator and jax.default_backend() == "cpu":
+            raise RuntimeError("No accelerator found. Please run on a TPU or GPU.")
+
         self._validate_and_set_defaults()
 
         id = self._maybe_set_id()
         levanter.utils.logging.init_logging(self.log_dir, f"{id}.log")
         _initialize_global_tracker(self.tracker, id)
         levanter.tracker.log_summary({"hardware_topology": hardware_topology_summary()})
-
-        if self.require_accelerator is None:
-            self.require_accelerator = not sys.platform.startswith("darwin")
-
-        if self.require_accelerator:
-            if jax.default_backend() == "cpu":
-                raise RuntimeError("No accelerator found. Please run on a TPU or GPU.")
 
         if self.shutdown_at_exit is not False:
             if isinstance(self.shutdown_at_exit, bool):

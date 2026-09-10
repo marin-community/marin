@@ -17,15 +17,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::StreamExt;
+use futures::{stream, StreamExt};
 use object_store::path::Path as OsPath;
 use object_store::{ObjectStoreExt, PutMode, PutOptions};
-use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
 use crate::store::object_store::{
-    ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore, ObjectVersion, StoredObject,
-    FINELOG_ROOT_COMPONENT, TABLES_COMPONENT,
+    DeleteManyOutcome, ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore, ObjectVersion,
+    StoredObject, FINELOG_ROOT_COMPONENT, TABLES_COMPONENT,
 };
 
 use super::provider::Provider;
@@ -71,28 +70,6 @@ impl RemoteObjectStore {
             .map(|base| (base.to_string(), Arc::clone(self.provider.backend())))
     }
 
-    /// The URL a registered scan reads `id` from.
-    pub(super) fn scan_url(&self, id: &ObjectId) -> String {
-        let key: Vec<&str> = self
-            .prefix_parts()
-            .chain(id.as_str().split('/').filter(|part| !part.is_empty()))
-            .collect();
-        match self.provider.base_url() {
-            Some(base) => format!("{base}/{}", key.join("/")),
-            None => {
-                let mut path = self
-                    .provider
-                    .local_root()
-                    .expect("a provider without a base URL has a local root")
-                    .to_path_buf();
-                for part in key {
-                    path.push(part);
-                }
-                path.to_string_lossy().into_owned()
-            }
-        }
-    }
-
     /// Split the configured prefix on `/` into individual path components.
     /// `OsPath::from_iter` escapes `/` *within* a single part, so a multi-segment
     /// prefix like `logs/sub` must be pushed component-by-component.
@@ -115,20 +92,24 @@ impl RemoteObjectStore {
             self.prefix_parts()
                 .chain([FINELOG_ROOT_COMPONENT, TABLES_COMPONENT]),
         );
-        let mut stream = self.provider.backend().list(Some(&root));
-        let mut namespaces = std::collections::BTreeSet::new();
-        while let Some(result) = stream.next().await {
-            let meta = result.map_err(|error| {
-                StatsError::Internal(format!("list object tables {root}: {error}"))
-            })?;
-            let Some(mut parts) = meta.location.prefix_match(&root) else {
-                continue;
-            };
-            if let Some(namespace) = parts.next() {
-                namespaces.insert(namespace.as_ref().to_string());
-            }
-        }
-        Ok(namespaces.into_iter().collect())
+        let result = self
+            .provider
+            .backend()
+            .list_with_delimiter(Some(&root))
+            .await
+            .map_err(|error| StatsError::Internal(format!("list object tables {root}: {error}")))?;
+        let mut tables = result
+            .common_prefixes
+            .into_iter()
+            .filter_map(|prefix| {
+                prefix
+                    .prefix_match(&root)
+                    .and_then(|mut parts| parts.next())
+                    .map(|namespace| namespace.as_ref().to_string())
+            })
+            .collect::<Vec<_>>();
+        tables.sort();
+        Ok(tables)
     }
 }
 
@@ -136,14 +117,24 @@ impl RemoteObjectStore {
 impl ObjectStore for RemoteObjectStore {
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {
         self.provider
-            .get_path(self.canonical(id.as_str()), "object")
+            .get_path(self.provider.object_path(id), "object")
             .await
+    }
+
+    async fn exists(&self, id: &ObjectId) -> Result<bool, StatsError> {
+        let path = self.provider.object_path(id);
+        match self.provider.backend().head(&path).await {
+            Ok(_) => Ok(true),
+            Err(object_store::Error::NotFound { .. }) => Ok(false),
+            Err(error) => Err(StatsError::Internal(format!(
+                "inspect object {path}: {error}"
+            ))),
+        }
     }
 
     /// Create an immutable object, accepting an identical retry.
     async fn write(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
-        let path = self.canonical(id.as_str());
-        let content_sha256 = Sha256::digest(&bytes).into();
+        let path = self.provider.object_path(id);
         let byte_size = bytes.len() as u64;
         let result = self
             .provider
@@ -161,8 +152,8 @@ impl ObjectStore for RemoteObjectStore {
             Ok(result) => Ok(ObjectVersion {
                 e_tag: result.e_tag,
                 provider_version: result.version,
-                content_sha256,
                 byte_size,
+                local_value: None,
             }),
             Err(object_store::Error::AlreadyExists { .. }) => {
                 let existing = self.read(id).await?.ok_or_else(|| {
@@ -194,7 +185,7 @@ impl ObjectStore for RemoteObjectStore {
             .map(|root| local_object_path(root, id));
         self.provider
             .compare_and_swap_path(
-                self.canonical(id.as_str()),
+                self.provider.object_path(id),
                 local_path,
                 expected,
                 bytes,
@@ -204,7 +195,7 @@ impl ObjectStore for RemoteObjectStore {
     }
 
     fn remote_scan_url(&self, id: &ObjectId) -> Option<String> {
-        Some(self.scan_url(id))
+        Some(self.provider.scan_url(id))
     }
 
     async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {
@@ -231,12 +222,60 @@ impl ObjectStore for RemoteObjectStore {
     }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
-        let path = self.canonical(id.as_str());
+        let path = self.provider.object_path(id);
         match self.provider.backend().delete(&path).await {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
             Err(error) => Err(StatsError::Internal(format!(
                 "delete object {path}: {error}"
             ))),
+        }
+    }
+
+    async fn delete_many(&self, ids: Vec<ObjectId>) -> DeleteManyOutcome {
+        let by_path = ids
+            .into_iter()
+            .map(|id| (self.provider.object_path(&id).to_string(), id))
+            .collect::<std::collections::HashMap<_, _>>();
+        let paths = by_path
+            .keys()
+            .cloned()
+            .map(OsPath::from)
+            .map(Ok)
+            .collect::<Vec<Result<OsPath, object_store::Error>>>();
+        let mut results = self
+            .provider
+            .backend()
+            .delete_stream(stream::iter(paths).boxed());
+        let mut deleted = Vec::with_capacity(by_path.len());
+        let mut first_error = None;
+        while let Some(result) = results.next().await {
+            match result {
+                Ok(path) => {
+                    if let Some(id) = by_path.get(path.as_ref()) {
+                        deleted.push(id.clone());
+                    }
+                }
+                Err(object_store::Error::NotFound { path, .. }) => {
+                    let logical_path = self
+                        .provider
+                        .local_root()
+                        .and_then(|root| Path::new(&path).strip_prefix(root).ok())
+                        .map(|relative| relative.to_string_lossy().into_owned())
+                        .unwrap_or(path);
+                    if let Some(id) = by_path.get(&logical_path) {
+                        deleted.push(id.clone());
+                    }
+                }
+                Err(error) => {
+                    first_error.get_or_insert_with(|| {
+                        StatsError::Internal(format!("delete object batch: {error}"))
+                    });
+                }
+            }
+        }
+        DeleteManyOutcome {
+            deleted,
+            error: first_error,
         }
     }
 
@@ -310,6 +349,7 @@ mod tests {
             store.read(&id).await.unwrap().unwrap().bytes,
             b"parquet"[..]
         );
+        assert!(store.exists(&id).await.unwrap());
         let listed = store
             .list(&ObjectPrefix::table("iris.worker", "objects/v1").unwrap())
             .await
@@ -319,6 +359,86 @@ mod tests {
 
         store.delete(&id).await.unwrap();
         assert!(store.read(&id).await.unwrap().is_none());
+        assert!(!store.exists(&id).await.unwrap());
+        std::fs::remove_dir_all(&remote_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn batch_delete_confirms_existing_and_missing_objects() {
+        let remote_dir = unique_dir("remote_batch_delete");
+        let store = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let existing = [
+            ObjectId::table("iris.task", "catalogs/1.json").unwrap(),
+            ObjectId::table("iris.task", "catalogs/2.json").unwrap(),
+        ];
+        for id in &existing {
+            store
+                .write(id, bytes::Bytes::from_static(b"catalog"))
+                .await
+                .unwrap();
+        }
+        let missing = ObjectId::table("iris.task", "catalogs/missing.json").unwrap();
+        let outcome = store
+            .delete_many(
+                existing
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(missing.clone()))
+                    .collect(),
+            )
+            .await;
+
+        assert!(outcome.error.is_none());
+        assert_eq!(outcome.deleted.len(), 3);
+        for id in existing.iter().chain(std::iter::once(&missing)) {
+            assert!(!store.exists(id).await.unwrap());
+        }
+        std::fs::remove_dir_all(&remote_dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn batch_delete_maps_missing_objects_through_a_symlinked_root() {
+        let parent = unique_dir("remote_batch_delete_symlink");
+        let remote_dir = parent.join("objects");
+        let alias = parent.join("alias");
+        std::fs::create_dir(&remote_dir).unwrap();
+        std::os::unix::fs::symlink(&remote_dir, &alias).unwrap();
+        let store = build_remote_object_store(alias.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let missing = ObjectId::table("iris.task", "catalogs/missing.json").unwrap();
+
+        let outcome = store.delete_many(vec![missing.clone()]).await;
+
+        assert!(outcome.error.is_none());
+        assert_eq!(outcome.deleted, vec![missing]);
+        std::fs::remove_dir_all(&parent).ok();
+    }
+
+    #[tokio::test]
+    async fn table_listing_returns_only_immediate_table_prefixes() {
+        let remote_dir = unique_dir("remote_table_listing");
+        let store = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        for id in [
+            ObjectId::table("iris.task", "objects/v1/a.parquet").unwrap(),
+            ObjectId::table("iris.task", "states/1.json").unwrap(),
+            ObjectId::table("log", "HEAD.json").unwrap(),
+        ] {
+            store
+                .write(&id, bytes::Bytes::from_static(b"data"))
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            store.list_tables().await.unwrap(),
+            vec!["iris.task".to_string(), "log".to_string()]
+        );
         std::fs::remove_dir_all(&remote_dir).ok();
     }
 }

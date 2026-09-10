@@ -24,23 +24,28 @@
 //! That key is distinct from the iris controller's signing key: a compromise of the
 //! log-ingest path grants log-plane authority only.
 //!
-//! # Best effort by design
+//! # Relay durability
 //!
-//! The local store is the system of record — every row stays queryable here whether or
-//! not the hub ever receives it. The forwarder therefore never fails the server and
-//! never grows without bound:
+//! A forwarding deployment is a durable relay spool. Retryable hub failures never
+//! advance its cursor, and object-native maintenance retains every unsettled segment.
+//! Once the hub settles a whole segment, maintenance may retire it from the current
+//! state; normal snapshot, rollback, and orphan windows delay physical collection.
 //!
-//! - Each namespace seeds at its current tip, so enabling forwarding ships new rows
-//!   rather than backfilling a retention window.
+//! - A new legacy cursor seeds at its current tip, preserving the historical behavior
+//!   used when a node-local version-0 store is rebuilt from its archive. A new
+//!   object-native cursor starts at the beginning of the live object state.
 //! - It materializes at most [`FORWARD_BATCH_ROWS`] rows per read, and packs them into
 //!   requests of at most [`FORWARD_BATCH_BYTES`] unless one row alone exceeds the limit.
 //! - It advances a namespace's cursor after the hub acks the batch or permanently
 //!   rejects malformed content. A crash or retryable rejection re-forwards it
 //!   (at-least-once; tolerable for logs and append-only stats).
-//! - A backlog is only a cursor into the source's already-bounded local retention, not a
-//!   separate in-memory queue. The forwarder drains it without an age or row-count cap.
-//!   It also skips a batch the hub identifies as permanently invalid, so one poison row
-//!   cannot wedge every later row in that namespace.
+//! - A backlog is only a cursor into durable table segments, not a separate in-memory
+//!   queue. The forwarder drains it without an age or row-count cap. It also skips a
+//!   batch the hub identifies as permanently invalid, so one poison row cannot wedge
+//!   every later row in that namespace.
+//! - Node-local deployments acknowledge writes after object-state publication. A
+//!   replacement resumes the periodic loop from that state and the durable cursor;
+//!   shutdown does not run a separate forwarding drain.
 //!
 //! A retryable push failure leaves the cursor in place and yields to the next namespace;
 //! nothing here can take the store down.
@@ -66,8 +71,7 @@ use crate::errors::StatsError;
 use crate::policies::storage_policy_for;
 use crate::proto::finelog::stats::{RegisterTableRequest, StatsServiceClient, WriteRowsRequest};
 use crate::query::{
-    make_ctx, query_timeout, run_query_over, run_within_query_timeout, QueryResult,
-    RegisteredProvider,
+    make_ctx, run_query_over, run_within_query_timeout, QueryResult, RegisteredProvider,
 };
 use crate::server::auth::FINELOG_AUDIENCE;
 use crate::server::telemetry::{counter_batch, telemetry_schema, CounterSample};
@@ -86,6 +90,10 @@ use crate::telemetry_policy::{FINELOG_NAMESPACE, TELEMETRY_NAMESPACE};
 /// does not depend on this cadence.
 const FORWARD_INTERVAL: Duration = Duration::from_secs(5);
 
+/// A relay's bounded internal scan may need to open a cold set of remote L0s.
+/// Keep its recovery budget independent of the public Query RPC deadline.
+const FORWARD_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Rows read from one namespace per batch. The hub durably acknowledges each outbound
 /// request, so a small row cap turns its one-second flush-coalescing interval into a
 /// throughput cap. A live telemetry scan showed that reading 200,000 rows was faster
@@ -93,6 +101,11 @@ const FORWARD_INTERVAL: Duration = Duration::from_secs(5);
 /// scan. Byte chunking still bounds each request, and this stays below the store's
 /// million-row write limit.
 const FORWARD_BATCH_ROWS: i64 = 200_000;
+
+/// Maximum number of ordered segment ranges one forwarding scan intentionally spans.
+/// Sparse relay tables can seal thousands of tiny L0s while the hub is unavailable;
+/// bounding by rows alone still makes recovery localize all of them before LIMIT runs.
+const FORWARD_BATCH_SEGMENTS: usize = 128;
 
 /// Encoded bytes per outbound request. Keep ten MiB below the receiving store's hard
 /// Arrow IPC limit. [`chunk_by_bytes`] verifies the resulting size and adjusts each
@@ -131,6 +144,7 @@ const PUSH_RETRY_BACKOFF: Duration = Duration::from_secs(1);
 /// Emit a progress line at most this often, so a healthy forwarder is observable
 /// without flooding the logs it forwards.
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(300);
+const SLOW_FORWARD_TURN: Duration = Duration::from_secs(5);
 
 const OUTCOME_ACCEPTED: &str = "accepted";
 const OUTCOME_PERMANENT_REJECTION: &str = "permanent_rejection";
@@ -428,6 +442,15 @@ where
                 return ForwardTurn::Wait;
             }
         };
+        let starting_cursor = cursor;
+        let object_native = match self.store.namespace_uses_object_state(name) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(namespace = name, %error, "finelog forwarder: cannot resolve storage state; skipping");
+                return ForwardTurn::Wait;
+            }
+        };
+        let turn_started = Instant::now();
         self.observe_lag(name, cursor, persisted);
         // The forwarder stamps this column with its own cluster on the way out and
         // forwards only rows that do not already carry a foreign origin, so a hub's
@@ -447,10 +470,20 @@ where
                 return ForwardTurn::Wait;
             }
         };
-        // The scan reported its oldest locally-readable row. Anything below it was
-        // archived to remote storage while we lagged, and no scan here can reach it —
-        // jump the cursor and say how much was skipped.
+        // The scan reported its oldest locally-readable row. Legacy retention
+        // may require a cursor jump; object-native relays fail closed because
+        // their live spool must retain every unsettled row.
         if let Some(resume_at) = batch.resume_at {
+            if object_native {
+                tracing::error!(
+                    namespace = name,
+                    cursor,
+                    resume_at,
+                    persisted,
+                    "finelog forwarder: object-native cursor precedes the live spool; refusing to skip rows"
+                );
+                return ForwardTurn::Wait;
+            }
             let skipped = resume_at - cursor;
             progress.skipped_seqs += skipped;
             progress.record_seq_positions(name, OUTCOME_RETENTION_EVICTION, skipped);
@@ -462,18 +495,30 @@ where
                 "finelog forwarder: rows evicted before they were forwarded; skipping ahead"
             );
             cursor = resume_at;
-            if !self.persist_cursor(name, cursor).await {
+            if !self
+                .persist_cursor(name, starting_cursor, cursor, turn_started)
+                .await
+            {
                 return ForwardTurn::Wait;
             }
         }
         let Some((ship, seqs)) = batch.rows else {
-            // Every row up to `persisted` was filtered out by the scan (rows already
-            // carrying a foreign origin cluster). Advance the cursor to `persisted`,
+            // Every row up to `scanned_through` was filtered out by the scan (rows already
+            // carrying a foreign origin cluster). Advance the cursor to `scanned_through`,
             // or the loop rereads them forever. Safe against a concurrent writer:
-            // `persisted` is a captured bound, and later rows arrive with a later
+            // `scanned_through` is a captured bound, and later rows arrive with a later
             // watermark.
-            self.persist_cursor(name, persisted).await;
-            return ForwardTurn::Wait;
+            if !self
+                .persist_cursor(name, starting_cursor, batch.scanned_through, turn_started)
+                .await
+            {
+                return ForwardTurn::Wait;
+            }
+            return if batch.scanned_through < persisted {
+                ForwardTurn::MoreRows
+            } else {
+                ForwardTurn::Wait
+            };
         };
         // The hub must hold the namespace before it can take rows for it.
         if !self.ensure_registered(name, schema).await {
@@ -514,11 +559,15 @@ where
                 }
                 Err(PushError::Stopping(e)) => {
                     tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: push interrupted");
+                    self.persist_accepted_prefix(name, starting_cursor, cursor, turn_started)
+                        .await;
                     return ForwardTurn::Wait;
                 }
                 Err(PushError::Retryable(e)) => {
                     progress.record_batch(name, OUTCOME_RETRYABLE_FAILURE);
                     tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: push failed; retrying next sweep");
+                    self.persist_accepted_prefix(name, starting_cursor, cursor, turn_started)
+                        .await;
                     return ForwardTurn::Wait;
                 }
                 Err(PushError::SchemaConflict(e)) => {
@@ -532,6 +581,8 @@ where
                         error = %e,
                         "finelog forwarder: batch conflicts with the hub schema; preserving the cursor and refreshing registration next sweep"
                     );
+                    self.persist_accepted_prefix(name, starting_cursor, cursor, turn_started)
+                        .await;
                     return ForwardTurn::Wait;
                 }
                 Err(PushError::Permanent(e)) => {
@@ -550,9 +601,18 @@ where
                 }
             }
             cursor = last_seq;
-            if !self.persist_cursor(name, cursor).await {
-                return ForwardTurn::Wait;
-            }
+        }
+        // Fewer than LIMIT matching rows means the scan examined the complete bounded
+        // sequence window. Advance over any trailing foreign-origin rows after every
+        // outbound chunk is settled; doing this earlier could skip a failed chunk.
+        if batch.complete_window && cursor < batch.scanned_through {
+            cursor = batch.scanned_through;
+        }
+        if !self
+            .persist_cursor(name, starting_cursor, cursor, turn_started)
+            .await
+        {
+            return ForwardTurn::Wait;
         }
         if cursor < persisted {
             ForwardTurn::MoreRows
@@ -561,12 +621,20 @@ where
         }
     }
 
-    /// The cursor to start `name` from: its stored watermark, or the current tip when
-    /// there is none, or when the watermark sits beyond `persisted` and so names a seq
-    /// space this store no longer has (a recreated volume).
+    /// The cursor to start `name` from.
+    ///
+    /// A stored watermark wins when it remains in range. A watermark beyond
+    /// `persisted` resets to the current tip. Without a watermark, an
+    /// object-native relay starts immediately before its oldest live sequence;
+    /// a legacy table starts at the current tip.
     async fn seed(&self, name: &str, persisted: i64) -> Result<i64, StatsError> {
         match self.store.forward_cursor(&self.config.target, name)? {
             Some(cursor) if cursor <= persisted => Ok(cursor),
+            Some(cursor) if self.store.namespace_uses_object_state(name)? => {
+                Err(StatsError::Internal(format!(
+                    "object-native forwarding cursor {cursor} is ahead of durable high-water {persisted} for {name:?}"
+                )))
+            }
             Some(cursor) => {
                 tracing::warn!(
                     namespace = name,
@@ -578,6 +646,22 @@ where
                 Ok(persisted)
             }
             None => {
+                if self.store.namespace_uses_object_state(name)? {
+                    let cursor = self
+                        .store
+                        .query_snapshot(name)?
+                        .min_seq
+                        .map(|minimum| minimum.saturating_sub(1))
+                        .unwrap_or(persisted);
+                    tracing::info!(
+                        namespace = name,
+                        persisted,
+                        cursor,
+                        "finelog forwarder: no watermark for object-native relay; starting at the beginning"
+                    );
+                    self.persist(name, cursor).await?;
+                    return Ok(cursor);
+                }
                 tracing::info!(
                     namespace = name,
                     persisted,
@@ -634,15 +718,72 @@ where
             .await
     }
 
-    /// Record `cursor` as the durable watermark for `name`, reporting whether the write
-    /// stuck. `false` is not data loss: every row stays queryable in this store, and the
-    /// catalog still names an older cursor for the next round to resume from.
-    async fn persist_cursor(&self, name: &str, cursor: i64) -> bool {
-        if let Err(e) = self.persist(name, cursor).await {
-            tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: persisting the watermark failed");
-            return false;
+    /// Commit `cursor` and retire object-native relay segments it covers.
+    ///
+    /// `false` leaves the previous durable cursor selected, so the next sweep
+    /// retries the same unsettled prefix.
+    async fn persist_cursor(
+        &self,
+        name: &str,
+        previous_cursor: i64,
+        cursor: i64,
+        turn_started: Instant,
+    ) -> bool {
+        let settlement_started = Instant::now();
+        let settlement = match self
+            .store
+            .settle_forwarding(&self.config.target, name, cursor)
+            .await
+        {
+            Ok(settlement) => settlement,
+            Err(e) => {
+                tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: persisting the watermark failed");
+                return false;
+            }
+        };
+        let total = turn_started.elapsed();
+        let settlement_elapsed = settlement_started.elapsed();
+        tracing::debug!(
+            namespace = name,
+            previous_cursor,
+            cursor = settlement.cursor,
+            advanced_seqs = settlement.cursor.saturating_sub(previous_cursor),
+            retired_segments = settlement.removed_paths.len(),
+            retired_rows = settlement.removed_rows,
+            retired_bytes = settlement.removed_bytes,
+            settle_ms = settlement_elapsed.as_millis() as u64,
+            total_ms = total.as_millis() as u64,
+            "finelog forwarder: settled namespace turn"
+        );
+        if total >= SLOW_FORWARD_TURN {
+            tracing::info!(
+                namespace = name,
+                previous_cursor,
+                cursor = settlement.cursor,
+                persisted = self.store.namespace_persisted_seq(name).unwrap_or(cursor),
+                advanced_seqs = settlement.cursor.saturating_sub(previous_cursor),
+                retired_segments = settlement.removed_paths.len(),
+                retired_rows = settlement.removed_rows,
+                retired_bytes = settlement.removed_bytes,
+                settle_ms = settlement_elapsed.as_millis() as u64,
+                total_ms = total.as_millis() as u64,
+                "finelog forwarder: slow namespace turn completed"
+            );
         }
         true
+    }
+
+    async fn persist_accepted_prefix(
+        &self,
+        name: &str,
+        starting_cursor: i64,
+        cursor: i64,
+        turn_started: Instant,
+    ) {
+        if cursor > starting_cursor {
+            self.persist_cursor(name, starting_cursor, cursor, turn_started)
+                .await;
+        }
     }
 
     /// Report a growing backlog once without changing its cursor. Clear the latch after
@@ -676,24 +817,43 @@ where
         persisted: i64,
         has_origin: bool,
     ) -> Result<Batch, StatsError> {
+        let read_started = Instant::now();
         // One guard across both the snapshot and the scan: eviction takes the write side
         // before unlinking, so no segment can vanish between the two.
+        let visibility_started = Instant::now();
         let _read_guard = self.store.query_visibility().read().await;
+        let visibility_wait = visibility_started.elapsed();
 
+        let snapshot_started = Instant::now();
         let store = Arc::clone(&self.store);
         let owned = name.to_string();
         let snapshot = tokio::task::spawn_blocking(move || store.query_snapshot(&owned))
             .await
             .map_err(|e| StatsError::Internal(format!("snapshot task panicked: {e}")))??;
+        let snapshot_elapsed = snapshot_started.elapsed();
 
         let resume_at = resume_after_eviction(cursor, snapshot.min_seq);
         let read_from = resume_at.unwrap_or(cursor);
 
+        let scanned_through = bounded_forward_read_through(
+            &snapshot.paths,
+            &snapshot.seq_bounds,
+            read_from,
+            persisted,
+            FORWARD_BATCH_SEGMENTS,
+        );
+        let candidate_segments = snapshot
+            .seq_bounds
+            .values()
+            .filter(|(minimum, maximum)| *maximum > read_from && *minimum <= scanned_through)
+            .count();
+        let live_segments = snapshot.paths.len();
+        let planning_started = Instant::now();
         let provider = self.store.namespace_provider(name, snapshot)?;
 
         let table = quote_ident(name);
         let mut sql =
-            format!("SELECT * FROM {table} WHERE seq > {read_from} AND seq <= {persisted}");
+            format!("SELECT * FROM {table} WHERE seq > {read_from} AND seq <= {scanned_through}");
         if has_origin {
             // Only rows this store's own writers produced. A row that already carries an
             // origin cluster arrived here by forwarding, and re-forwarding it would loop.
@@ -706,12 +866,19 @@ where
             name: name.to_string(),
             provider,
         }];
-        // The forwarder is a server read like any other: an object-backed source
-        // bounds it by the same non-disableable effective deadline.
+        let planning_elapsed = planning_started.elapsed();
+        // Honor the table's query lifetime and the tighter forwarder deadline.
         let query_ctx = make_ctx();
         let read = run_query_over(&query_ctx, providers, &sql);
+        let timeout = self
+            .store
+            .object_query_bound()
+            .map_or(FORWARD_READ_TIMEOUT, |bound| {
+                bound.min(FORWARD_READ_TIMEOUT)
+            });
+        let scan_started = Instant::now();
         let result = run_within_query_timeout(
-            query_timeout(None, self.store.object_query_bound()),
+            Some(timeout),
             read,
             |timeout| {
                 StatsError::DeadlineExceeded(format!(
@@ -722,10 +889,59 @@ where
             |e| StatsError::Internal(format!("read {name:?} failed: {e}")),
         )
         .await?;
+        let scan_elapsed = scan_started.elapsed();
 
+        let encode_started = Instant::now();
+        let rows = self.ship_batch(result)?;
+        let encode_elapsed = encode_started.elapsed();
+        let row_count = rows.as_ref().map_or(0, |(batch, _)| batch.num_rows());
+        let complete_window = rows
+            .as_ref()
+            .is_none_or(|(batch, _)| batch.num_rows() < FORWARD_BATCH_ROWS as usize);
+        let total = read_started.elapsed();
+        let log_read = || {
+            tracing::info!(
+                namespace = name,
+                cursor,
+                persisted,
+                scanned_through,
+                live_segments,
+                candidate_segments,
+                rows = row_count,
+                visibility_wait_ms = visibility_wait.as_millis() as u64,
+                snapshot_ms = snapshot_elapsed.as_millis() as u64,
+                planning_ms = planning_elapsed.as_millis() as u64,
+                scan_ms = scan_elapsed.as_millis() as u64,
+                encode_ms = encode_elapsed.as_millis() as u64,
+                total_ms = total.as_millis() as u64,
+                "finelog forwarder: slow read completed"
+            );
+        };
+        if total >= SLOW_FORWARD_TURN {
+            log_read();
+        } else {
+            tracing::debug!(
+                namespace = name,
+                cursor,
+                persisted,
+                scanned_through,
+                live_segments,
+                candidate_segments,
+                rows = row_count,
+                visibility_wait_ms = visibility_wait.as_millis() as u64,
+                snapshot_ms = snapshot_elapsed.as_millis() as u64,
+                planning_ms = planning_elapsed.as_millis() as u64,
+                scan_ms = scan_elapsed.as_millis() as u64,
+                encode_ms = encode_elapsed.as_millis() as u64,
+                total_ms = total.as_millis() as u64,
+                "finelog forwarder: read completed"
+            );
+        }
         Ok(Batch {
-            rows: self.ship_batch(result)?,
+            rows,
             resume_at,
+            scanned_through,
+            complete_window,
         })
     }
 
@@ -833,6 +1049,7 @@ where
         arrow_ipc: Vec<u8>,
         mut stop: watch::Receiver<bool>,
     ) -> Result<(), PushError> {
+        let bytes = arrow_ipc.len();
         let request = WriteRowsRequest::default()
             .with_namespace(name)
             .with_arrow_ipc(arrow_ipc);
@@ -842,6 +1059,7 @@ where
             if *stop.borrow() {
                 return Err(PushError::Stopping("shutdown requested".to_string()));
             }
+            let attempt_started = Instant::now();
             let result = match self.minter.bearer() {
                 Ok(bearer) => {
                     let options = CallOptions::default()
@@ -853,7 +1071,24 @@ where
                         .await
                     {
                         Ok(_) => {
-                            tracing::debug!(namespace = name, "finelog forwarder: batch delivered");
+                            let elapsed = attempt_started.elapsed();
+                            if elapsed >= SLOW_FORWARD_TURN {
+                                tracing::info!(
+                                    namespace = name,
+                                    attempt,
+                                    bytes,
+                                    push_ms = elapsed.as_millis() as u64,
+                                    "finelog forwarder: slow hub durability acknowledgement completed"
+                                );
+                            } else {
+                                tracing::debug!(
+                                    namespace = name,
+                                    attempt,
+                                    bytes,
+                                    push_ms = elapsed.as_millis() as u64,
+                                    "finelog forwarder: batch delivered"
+                                );
+                            }
                             return Ok(());
                         }
                         Err(e) if is_permanent_rejection(&e) => {
@@ -937,6 +1172,39 @@ async fn wait_or_stop(backoff: Duration, stop: &mut watch::Receiver<bool>) -> bo
 struct Batch {
     rows: Option<(RecordBatch, Int64Array)>,
     resume_at: Option<i64>,
+    /// Highest sequence position included in this physical scan window.
+    scanned_through: i64,
+    /// Whether LIMIT left no matching rows unread inside the window.
+    complete_window: bool,
+}
+
+/// Bound a forwarding scan by physical segment fanout as well as row count. Segment
+/// paths are ordered by minimum sequence, so the maximum sequence of the first
+/// `max_segments` live ranges gives the provider a tight predicate before localization.
+/// Any later range overlapping that bound is still selected by the provider, preserving
+/// correctness for historical overlapping geometry.
+fn bounded_forward_read_through(
+    paths: &[String],
+    seq_bounds: &BTreeMap<String, (i64, i64)>,
+    read_from: i64,
+    persisted: i64,
+    max_segments: usize,
+) -> i64 {
+    assert!(max_segments > 0);
+    paths
+        .iter()
+        .filter_map(|path| seq_bounds.get(path))
+        .filter(|(min_seq, max_seq)| *max_seq > read_from && *min_seq <= persisted)
+        .take(max_segments)
+        .map(|(_, max_seq)| *max_seq)
+        .max()
+        // `persisted` and the segment snapshot are separate observations. A
+        // concurrent local-disk-acknowledged flush may raise the former before
+        // its segment appears in the latter. No visible range means this scan
+        // can prove no progress, not that every sequence through `persisted`
+        // was inspected.
+        .unwrap_or(read_from)
+        .min(persisted)
 }
 
 /// The seq to resume from when the next row after `cursor` is already gone: `min_seq` is
@@ -1135,9 +1403,8 @@ fn forwarding_attributes(namespace: &str, outcome: &str) -> BTreeMap<String, Str
     ])
 }
 
-/// Start the forward loop on the runtime, returning its handle. The caller latches
-/// `stop` and awaits the handle at shutdown.
-pub fn spawn<T>(forwarder: Forwarder<T>, stop: watch::Receiver<bool>) -> JoinHandle<()>
+/// Start the forward loop, which runs until `stop` changes or closes.
+pub fn spawn<T>(forwarder: Arc<Forwarder<T>>, stop: watch::Receiver<bool>) -> JoinHandle<()>
 where
     T: connectrpc::client::ClientTransport + Send + Sync + 'static,
     <T::ResponseBody as http_body::Body>::Error: std::fmt::Display,

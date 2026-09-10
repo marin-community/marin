@@ -12,7 +12,7 @@
 //! [`TableManager::run_work`](crate::store::table::TableManager::run_work), not
 //! through methods here.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
-use tokio::sync::{watch, Notify, RwLock};
+use tokio::sync::{Notify, RwLock};
 
 use crate::errors::StatsError;
 use crate::indices::IndexRegistry;
@@ -35,6 +35,7 @@ use crate::store::table::controller::TableController;
 use crate::store::table::flush;
 use crate::store::table::index_artifacts::BackfillSkips;
 use crate::store::table::ingest::{FlushDemand, IngestBuffer};
+use crate::store::table::maintenance::MaintenanceProfile;
 use crate::store::table::query_view::{plan_visible_segments, SegmentObjectMap};
 use crate::store::table::segment_format::SegmentFormat;
 use crate::store::table::segment_view::{visible_segments, SegmentSnapshot, SegmentView};
@@ -42,6 +43,8 @@ use crate::store::table::spec_migration::MigrationBlock;
 use crate::store::table_spec::TablePolicy;
 use crate::store::table_state::TableSnapshot;
 use crate::store::types::{segment_to_row, NamespaceStats, SegmentRow};
+
+use super::{AckDurability, MaintenanceClass};
 
 /// A single table's live runtime, disk-backed or in-memory.
 ///
@@ -66,12 +69,21 @@ pub struct TableRuntime {
     /// The operating policy the table's specification resolves to. Replaced on
     /// re-registration and on migration activation.
     pub(super) policy: Mutex<TablePolicy>,
+    /// Whether the query-visible definition is object-native. A migration's
+    /// desired definition controls new L0 placement before it is active, but it
+    /// must not replace the legacy durability watermark during that interval.
+    object_state_active: AtomicBool,
     /// Per-table retention overrides; `None` fields inherit the cluster-wide
     /// [`CompactionConfig`] caps.
     pub(super) storage_policy: Mutex<StoragePolicy>,
     /// Leveled-compaction tuning: the scheduler reads `check_interval`, the
     /// planner reads `level_targets`/`max_segments_per_level`.
     pub(super) compaction_config: CompactionConfig,
+    /// Host-specific physical work. Relays retain the logical table spec but
+    /// do not build query artifacts and may retire downstream-settled objects.
+    pub(super) maintenance_profile: Mutex<MaintenanceProfile>,
+    /// Which recovery authority an ingest acknowledgement must reach.
+    pub(super) ack_durability: Mutex<AckDurability>,
     /// Serializes the whole local flush (seal → write → catalog → commit).
     /// Without it two concurrent flushers race: the second seal would overwrite
     /// the first's in-flight buffer, and the high-water mark could advance before
@@ -97,11 +109,6 @@ pub struct TableRuntime {
     /// How this table's specification transition is failing, carried across
     /// maintenance ticks.
     pub(super) migration_block: Mutex<MigrationBlock>,
-    /// Source identities the running migration already computed, keyed by path
-    /// with the byte size the hash covered. Legacy identities hash the whole
-    /// file, and every backfill tick revisits every source, so an uncached
-    /// migration would re-hash the covered prefix of the table each tick.
-    pub(super) migration_identities: Mutex<std::collections::HashMap<String, (i64, String)>>,
     pub(super) last_object_gc: Mutex<Option<Instant>>,
     pub(super) last_orphan_sweep: Mutex<Option<Instant>>,
     /// Latched stop flag the dispatched work checks at the top of each loop
@@ -198,7 +205,9 @@ impl TableRuntime {
             };
         let local_recovery_ms = local_recovery_started.elapsed().as_millis() as u64;
 
-        let policy = TablePolicy::resolve(catalog.spec_lifecycle(name)?.operative());
+        let lifecycle = catalog.spec_lifecycle(name)?;
+        let policy = TablePolicy::resolve(lifecycle.operative());
+        let object_state_active = TablePolicy::resolve(lifecycle.active.as_ref()).object_backed();
         let runtime = Arc::new(TableRuntime {
             name: name.to_string(),
             buffer: IngestBuffer::new(
@@ -215,8 +224,11 @@ impl TableRuntime {
             catalog: Arc::clone(&catalog),
             controller,
             policy: Mutex::new(policy),
+            object_state_active: AtomicBool::new(object_state_active),
             storage_policy: Mutex::new(storage_policy),
             compaction_config,
+            maintenance_profile: Mutex::new(MaintenanceProfile::default()),
+            ack_durability: Mutex::new(AckDurability::default()),
             flush_lock: Mutex::new(()),
             object_flush_lock: tokio::sync::Mutex::new(()),
             maint_lock: tokio::sync::Mutex::new(()),
@@ -226,7 +238,6 @@ impl TableRuntime {
             layout_tracker: LayoutTracker::default(),
             index_skips: Mutex::new(BackfillSkips::default()),
             migration_block: Mutex::new(MigrationBlock::default()),
-            migration_identities: Mutex::new(std::collections::HashMap::new()),
             last_object_gc: Mutex::new(None),
             last_orphan_sweep: Mutex::new(None),
             stopped: AtomicBool::new(false),
@@ -312,6 +323,32 @@ impl TableRuntime {
     /// Swap in the operating policy a new specification resolves to.
     pub fn update_table_spec(&self, status: &SpecLifecycle) {
         *self.policy.lock().unwrap() = TablePolicy::resolve(status.operative());
+        self.object_state_active.store(
+            TablePolicy::resolve(status.active.as_ref()).object_backed(),
+            Ordering::SeqCst,
+        );
+    }
+
+    pub fn update_maintenance_profile(&self, profile: MaintenanceProfile) {
+        *self.maintenance_profile.lock().unwrap() = profile;
+    }
+
+    pub fn update_ack_durability(&self, durability: AckDurability) {
+        *self.ack_durability.lock().unwrap() = durability;
+    }
+
+    fn requires_object_ack(&self) -> bool {
+        *self.ack_durability.lock().unwrap() == AckDurability::ObjectStore
+            && self.uses_object_state()
+    }
+
+    /// Whether published object state is the active recovery authority.
+    pub fn uses_object_state(&self) -> bool {
+        self.object_state_active.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn maintenance_profile(&self) -> MaintenanceProfile {
+        self.maintenance_profile.lock().unwrap().clone()
     }
 
     /// Rebuild the query view from the segments visible at definition version
@@ -357,12 +394,27 @@ impl TableRuntime {
 
     /// Block until `target` is durable, bounded by `timeout`.
     pub async fn await_persisted(&self, target: i64, timeout: Duration) -> Result<(), StatsError> {
+        if self.requires_object_ack() {
+            self.buffer.request_flush(false);
+            return self
+                .controller
+                .await_published_high_water(target, timeout)
+                .await;
+        }
         self.buffer.await_persisted(target, timeout).await
     }
 
-    /// Subscribe to the durability high-water mark.
-    pub fn watch_persisted_seq(&self) -> watch::Receiver<i64> {
-        self.buffer.watch_persisted()
+    /// The high-water mark acknowledged under this host's durability policy.
+    pub fn persisted_seq(&self) -> i64 {
+        let acknowledged = if self.requires_object_ack() {
+            self.controller.published_high_water()
+        } else {
+            *self.buffer.watch_persisted().borrow()
+        };
+        // Relay settlement can leave a table with no live segments. Its
+        // sequence high-water remains durable in the selected catalog even
+        // though a fresh local buffer necessarily starts empty.
+        acknowledged.max(self.controller.claimed_high_water())
     }
 
     /// The table's readable segments as one consistent observation.
@@ -389,6 +441,31 @@ impl TableRuntime {
         Ok(self.segments.snapshot())
     }
 
+    /// Reconcile the local accounting view after a durable relay settlement.
+    ///
+    /// A retry may publish a locally committed settlement whose second catalog
+    /// transaction has no removal delta. Comparing with the catalog's live set
+    /// keeps namespace stats correct in that case without relying on restart.
+    pub(crate) fn reconcile_settled_segments(&self) -> Result<(), StatsError> {
+        // Capture candidates first. A flush that becomes visible after this
+        // observation cannot be mistaken for an obsolete segment when the
+        // catalog read below races its publication into SegmentView.
+        let candidates = self.segments.segments();
+        let live: HashSet<String> = self
+            .catalog
+            .list_segments(&self.name)?
+            .into_iter()
+            .map(|segment| segment.path)
+            .collect();
+        let removed: Vec<String> = candidates
+            .into_iter()
+            .filter(|segment| !live.contains(&segment.path))
+            .map(|segment| segment.path)
+            .collect();
+        self.segments.replace(&removed, Vec::new());
+        Ok(())
+    }
+
     /// Plan this table's read from the state its controller last published.
     ///
     /// Metadata only: no object is fetched and the local cache is not consulted,
@@ -406,6 +483,7 @@ impl TableRuntime {
             paths: Vec::with_capacity(planned.len()),
             key_bounds: Default::default(),
             seq_bounds: Default::default(),
+            row_counts: Default::default(),
             partitions: Default::default(),
             min_seq: planned.iter().map(|segment| segment.min_seq).min(),
             artifacts: Default::default(),
@@ -417,6 +495,9 @@ impl TableRuntime {
             }
             view.seq_bounds
                 .insert(segment.path.clone(), (segment.min_seq, segment.max_seq));
+            if let Some(row_count) = segment.row_count {
+                view.row_counts.insert(segment.path.clone(), row_count);
+            }
             if let Some(partition) = segment.partition {
                 view.partitions.insert(segment.path.clone(), partition);
             }
@@ -504,20 +585,36 @@ impl TableRuntime {
             .await
             .map_err(|error| StatsError::Internal(format!("flush task panicked: {error}")))?;
         }
-        {
+        let flushed_seq = {
             let _flush_guard = self.object_flush_lock.lock().await;
-            flush::flush_to_objects(self.flush_target(), &policy).await?;
+            flush::flush_to_objects(self.flush_target(), &policy).await?
+        };
+        if let Some(seq) = flushed_seq {
+            if !self.requires_object_ack() {
+                self.buffer.publish_persisted(seq);
+            }
         }
         // Publication leaves the flush entirely: a flush occupies one of the
         // process's few flush permits, every object-backed table flushes on
         // the same cadence, and a network publication inside that window
         // oversubscribes the pool until every table's acks queue behind it.
         // The committed revision is owed from the moment it is locally
-        // durable; publications serialize in the per-table controller mailbox
-        // where bursts coalesce, and a failure stays owed to maintenance.
+        // durable. Publications serialize in the per-table controller mailbox;
+        // local acknowledgements may coalesce there, while object-store
+        // acknowledgements publish immediately. A failure stays owed to
+        // maintenance.
         let runtime = Arc::clone(self);
         Arc::clone(self).spawn_tracked(async move {
-            if let Err(error) = runtime.controller.publish_owed().await {
+            let publication = if runtime.requires_object_ack() {
+                runtime.controller.publish_state().await.map(|_| ())
+            } else {
+                runtime
+                    .controller
+                    .publish_owed()
+                    .await
+                    .map_err(crate::store::table_state::CommitError::PublicationDeferred)
+            };
+            if let Err(error) = publication {
                 tracing::warn!(
                     namespace = %runtime.name,
                     %error,
@@ -575,6 +672,15 @@ impl TableRuntime {
     /// How often this table owes an ordinary maintenance cycle.
     pub fn maintenance_interval(&self) -> Duration {
         self.compaction_config.check_interval
+    }
+
+    /// Resource class for this table's ordinary maintenance visit.
+    pub fn maintenance_class(&self) -> MaintenanceClass {
+        if self.maintenance_profile().is_relay() && self.policy().object_backed() {
+            MaintenanceClass::RelayIo
+        } else {
+            MaintenanceClass::QueryServing
+        }
     }
 
     /// What the scheduler needs to time this table's next flush.

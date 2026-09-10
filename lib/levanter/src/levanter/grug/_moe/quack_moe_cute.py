@@ -6,7 +6,7 @@
 
 Mirrors David's `_fa4_cute_backend.py` pattern: build a thin ``@cute.jit`` launcher
 with the JAX ``cutlass_call`` signature ``(stream, *inputs, *outputs, **scalars)``
-that reuses QuACK's ``GemmGatedSm100`` kernel, then wrap it with
+that composes QuACK's SM100 kernel with a gated epilogue, then wrap it with
 ``cutlass.jax.cutlass_call``. Forward-only for now (grouped SwiGLU): tokens are
 pre-sorted by expert (varlen_m via ``cu_seqlens_m``; no A_idx gather).
 
@@ -20,11 +20,12 @@ import jax.numpy as jnp
 import cutlass
 import cutlass.cute as cute
 import cutlass.jax as cjax
-from quack.gemm_act import GemmActMixin, GemmGatedSm100, act_fn_map, gate_fn_map
-from quack.gemm_act import get_max_active_clusters
+from quack.cute_dsl_utils import get_max_active_clusters
+from quack.epilogue.library import linear_act_mod
 from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
+from quack.rounding import RoundingMode
 
 _ACC = cutlass.Float32
 _FALLBACK_MAX_ACTIVE_CLUSTERS = 148
@@ -62,11 +63,23 @@ def _build_launcher(
       mA:[M,K] tokens (k-major)  mB:[E,K,2N] weights  mCuSeqlens:[E+1] int32
       mD:[M,2N] preact out (n-major)  mPostAct:[M,N] swiglu out (n-major)
     """
-    act = gate_fn_map[activation] if activation in gate_fn_map else act_fn_map[activation]
+    epilogue = linear_act_mod(activation, gated=True, has_c=False, has_rowvec=False, has_colvec=False)
+    # QuACK 0.6.4 composes gated GEMMs from epilogues. Mint the kernel directly because
+    # its public launch planner accepts Torch tensors, while this launcher receives CuTe tensors.
+    gemm_type = epilogue._mint(
+        kind_sig=(),
+        sm=10,
+        paired_acc=True,
+        packed_c=False,
+        prepass_sig=(),
+        rounding=RoundingMode.RN,
+        arg_forms=(),
+        add_to_output=False,
+    )
 
     @cute.jit
     def launcher(stream, mA, mB, mCuSeqlens, mD, mPostAct):
-        gemm = GemmGatedSm100(
+        gemm = gemm_type(
             _ACC,
             a_dtype,
             tile_mn,
@@ -74,12 +87,7 @@ def _build_launcher(
             gather_A=False,
             use_clc_persistence=use_clc_persistence,
         )
-        epi_args = GemmActMixin.EpilogueArguments(
-            mPostAct,
-            act,  # SwiGLU activation function (Constexpr)
-            mRowVecBroadcast=None,
-            mColVecBroadcast=None,
-        )
+        epi_args = gemm_type.EpilogueArguments(mAuxOut=mPostAct)
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
         varlen_args = make_varlen_args(mCuSeqlens, None, None)
         gemm(mA, mB, mD, None, epi_args, scheduler_args, varlen_args, stream)
@@ -120,11 +128,10 @@ def quack_gated_grouped_gemm(
     )
     ts = cjax.TensorSpec
     # divisibility is in physical-dim order (contiguous dim gets the vector width).
-    # B is physically [E,K,2N] but the kernel wants it as [K,2N,E] (expert = trailing
-    # batch/L mode); express that with mode=(1,2,0) rather than a physical transpose.
+    # QuACK 0.6.4 accepts batch-first tensors and rotates the expert axis internally.
     a_spec = ts(divisibility=(1, 8), static=False)  # [M,K] k-major
-    # B is physically [E,K,2N]; kernel wants n-major logical [2N,K,E] (leading_dim 0).
-    b_spec = ts(mode=(2, 1, 0), divisibility=(1, 1, 8), static=False)
+    # B is physically [E,K,2N]; present the n-major logical order [E,2N,K].
+    b_spec = ts(mode=(0, 2, 1), divisibility=(1, 1, 8), static=False)
     cu_spec = ts(static=False)  # [E+1] int32
     d_spec = ts(divisibility=(1, 8), static=False)  # [M,2N] n-major
     p_spec = ts(divisibility=(1, 8), static=False)  # [M,N]  n-major
@@ -211,8 +218,8 @@ def quack_grouped_gemm(
 ):
     """Plain grouped GEMM a[M,K] @ w -> [M,N], grouped by cu_seqlens (varlen_m).
 
-    b_major='n': w is [E,K,N] (n-major, mode (2,1,0)).  b_major='k': w is [E,N,K]
-    (k-major, mode (1,2,0)) for transposed/backward contractions."""
+    b_major='n': w is [E,K,N] (n-major, mode (0,2,1)). b_major='k': w is [E,N,K]
+    (k-major, identity mode) for transposed/backward contractions."""
     M = a.shape[0]
     N = w.shape[2] if b_major == "n" else w.shape[1]
     ts = cjax.TensorSpec
@@ -223,7 +230,7 @@ def quack_grouped_gemm(
         ragged_axis="m",
         a_spec=ts(divisibility=(1, _FEATURE_ALIGNMENT), static=False),
         b_spec=ts(
-            mode=(2, 1, 0) if b_major == "n" else (1, 2, 0), divisibility=(1, 1, _FEATURE_ALIGNMENT), static=False
+            mode=(0, 2, 1) if b_major == "n" else (0, 1, 2), divisibility=(1, 1, _FEATURE_ALIGNMENT), static=False
         ),
         d_spec=ts(divisibility=(1, _FEATURE_ALIGNMENT), static=False),
         out=jax.ShapeDtypeStruct((M, N), a.dtype),
@@ -276,7 +283,7 @@ def quack_grouped_wgrad(
         raise ValueError(f"cu_seqlens must be a rank-1 array of at least two offsets, got {cu_seqlens.shape}")
 
     ts = cjax.TensorSpec
-    # Logical order is (M, K) for A, (N, K) for B, (M, N, L) for D; `mode` maps each logical axis
+    # Logical order is (M, K) for A, (N, K) for B, (L, M, N) for D; `mode` maps each logical axis
     # to the physical one it comes from, and `divisibility` stays in physical order. varlen_k wants
     # A m-major and B n-major, which is what [rows, M] and [rows, N] already are.
     return _grouped_gemm_call(
@@ -286,7 +293,7 @@ def quack_grouped_wgrad(
         ragged_axis="k",
         a_spec=ts(mode=(1, 0), divisibility=(1, _FEATURE_ALIGNMENT), static=False),
         b_spec=ts(mode=(1, 0), divisibility=(1, _FEATURE_ALIGNMENT), static=False),
-        d_spec=ts(mode=(1, 2, 0), divisibility=(1, 1, _FEATURE_ALIGNMENT), static=False),
+        d_spec=ts(divisibility=(1, 1, _FEATURE_ALIGNMENT), static=False),
         out=jax.ShapeDtypeStruct((cu_seqlens.shape[0] - 1, lhs.shape[1], rhs.shape[1]), lhs.dtype),
         tile_mn=tile_mn,
         cluster_mnk=cluster_mnk,

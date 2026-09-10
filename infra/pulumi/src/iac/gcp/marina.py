@@ -40,6 +40,8 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
     iap_agent = f"serviceAccount:service-{_PROJECT_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com"
     return GcpIamGrantSet(
         project_grants=(
+            # Marina's Pulumi program manages one Scheduler trigger per app-declared runner.
+            GcpRoleGrant(role="roles/cloudscheduler.admin", members=(deploy_account,)),
             GcpRoleGrant(role="roles/cloudsql.client", members=(runtime_account, _READER_GROUP)),
             GcpRoleGrant(role="roles/cloudsql.instanceUser", members=(runtime_account, _READER_GROUP)),
             GcpRoleGrant(role="roles/compute.viewer", members=(runtime_account,)),

@@ -11,6 +11,7 @@
 
 use rusqlite::{Connection, OptionalExtension};
 
+use super::object_segments::advance_generation_in;
 use super::segments::remove_segments_in;
 use super::*;
 use crate::errors::StatsError;
@@ -20,6 +21,7 @@ use crate::proto::finelog::stats::{
 use crate::store::table_spec::{
     canonical_json_bytes, definition_requires_rewrite, rollback_window_ms, table_spec_from_json,
 };
+use crate::store::table_state::TableRevision;
 
 /// Where one table stands in its specification lifecycle: the version queries
 /// run against (`active`), the version a registration asked for (`desired`,
@@ -604,31 +606,47 @@ impl Catalog {
     /// skip would compound. The total never drops below the progress already
     /// made, so a source rewritten and then evicted leaves the pair coherent.
     ///
-    /// This is progress reporting. It moves no segment and publishes no state,
-    /// so it does not advance the catalog generation, and whether a backfill is
-    /// finished is decided by its sources rather than by these counters.
-    pub fn refresh_migration_rows_total(&self, namespace: &str) -> Result<(), StatsError> {
+    /// The progress row is part of the published table state. A changed total
+    /// therefore advances the catalog generation like every other durable
+    /// state transition; otherwise a publisher could produce two different
+    /// catalogs at one revision.
+    pub fn refresh_migration_rows_total(
+        &self,
+        namespace: &str,
+    ) -> Result<TableRevision, StatsError> {
         let mut inner = self.inner.lock().unwrap();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        let (from_version, fence_seq, rows_completed): (i64, i64, i64) = transaction
+        let (from_version, fence_seq, rows_total, rows_completed): (i64, i64, i64, i64) = transaction
             .query_row(
-                "SELECT from_version, fence_seq, rows_completed FROM table_migrations
+                "SELECT from_version, fence_seq, rows_total, rows_completed FROM table_migrations
                  WHERE namespace = ?1",
                 [namespace],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .map_err(sqlite_err)?;
-        let rows_total =
+        let refreshed_total =
             migratable_source_rows_in(&transaction, namespace, from_version, fence_seq)?
                 .max(rows_completed);
-        transaction
-            .execute(
-                "UPDATE table_migrations SET rows_total = ?2 WHERE namespace = ?1",
-                rusqlite::params![namespace, rows_total],
+        if refreshed_total != rows_total {
+            transaction
+                .execute(
+                    "UPDATE table_migrations SET rows_total = ?2 WHERE namespace = ?1",
+                    rusqlite::params![namespace, refreshed_total],
+                )
+                .map_err(sqlite_err)?;
+            let revision = advance_generation_in(&transaction, namespace)?;
+            transaction.commit().map_err(sqlite_err)?;
+            return Ok(revision);
+        }
+        let generation: i64 = transaction
+            .query_row(
+                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
+                [namespace],
+                |row| row.get(0),
             )
             .map_err(sqlite_err)?;
         transaction.commit().map_err(sqlite_err)?;
-        Ok(())
+        Ok(TableRevision::new(generation as u64))
     }
     /// Drop the transition's source rows and close the rollback window.
     ///

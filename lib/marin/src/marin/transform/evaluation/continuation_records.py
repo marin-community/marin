@@ -21,6 +21,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
+
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     JsonValue,
@@ -28,9 +32,6 @@ from marin.datakit.ingestion_manifest import (
     verify_content_fingerprint,
     write_ingestion_metadata_json,
 )
-from rigging.filesystem.atomic import atomic_rename
-from rigging.filesystem.factory import open_url
-from rigging.filesystem.storage_path import StoragePath
 
 E = TypeVar("E")
 

@@ -231,18 +231,16 @@ class TableSpec(_message.Message):
     def __init__(self, version: _Optional[int] = ..., logical_schema: _Optional[_Union[Schema, _Mapping]] = ..., source_layout: _Optional[_Union[SourceLayout, _Mapping]] = ..., artifact_policy: _Optional[_Union[ArtifactPolicy, _Mapping]] = ..., operating_policy: _Optional[_Union[OperatingPolicy, _Mapping]] = ...) -> None: ...
 
 class ObjectRef(_message.Message):
-    __slots__ = ("object_id", "provider_version", "etag", "byte_size", "sha256")
+    __slots__ = ("object_id", "provider_version", "etag", "byte_size")
     OBJECT_ID_FIELD_NUMBER: _ClassVar[int]
     PROVIDER_VERSION_FIELD_NUMBER: _ClassVar[int]
     ETAG_FIELD_NUMBER: _ClassVar[int]
     BYTE_SIZE_FIELD_NUMBER: _ClassVar[int]
-    SHA256_FIELD_NUMBER: _ClassVar[int]
     object_id: str
     provider_version: str
     etag: str
     byte_size: int
-    sha256: bytes
-    def __init__(self, object_id: _Optional[str] = ..., provider_version: _Optional[str] = ..., etag: _Optional[str] = ..., byte_size: _Optional[int] = ..., sha256: _Optional[bytes] = ...) -> None: ...
+    def __init__(self, object_id: _Optional[str] = ..., provider_version: _Optional[str] = ..., etag: _Optional[str] = ..., byte_size: _Optional[int] = ...) -> None: ...
 
 class CatalogSegment(_message.Message):
     __slots__ = ("segment_id", "source", "level", "min_seq", "max_seq", "row_count", "created_at_ms", "min_key_value", "max_key_value", "partition_json", "table_spec_version", "retired_at_ms", "delete_after_ms", "migration_source_id", "migration_source_rows", "migration_backfill", "index_bundle", "projections", "source_segment_uuid")
@@ -381,6 +379,72 @@ class CatalogHead(_message.Message):
     catalog: ObjectRef
     tombstoned: bool
     def __init__(self, format_version: _Optional[int] = ..., namespace: _Optional[str] = ..., writer_epoch: _Optional[int] = ..., catalog_generation: _Optional[int] = ..., active_table_spec_version: _Optional[int] = ..., catalog: _Optional[_Union[ObjectRef, _Mapping]] = ..., tombstoned: _Optional[bool] = ...) -> None: ...
+
+class CatalogSegmentKey(_message.Message):
+    __slots__ = ("table_spec_version", "segment_id", "retired")
+    TABLE_SPEC_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SEGMENT_ID_FIELD_NUMBER: _ClassVar[int]
+    RETIRED_FIELD_NUMBER: _ClassVar[int]
+    table_spec_version: int
+    segment_id: str
+    retired: bool
+    def __init__(self, table_spec_version: _Optional[int] = ..., segment_id: _Optional[str] = ..., retired: _Optional[bool] = ...) -> None: ...
+
+class CatalogSegmentAddition(_message.Message):
+    __slots__ = ("key", "segment")
+    KEY_FIELD_NUMBER: _ClassVar[int]
+    SEGMENT_FIELD_NUMBER: _ClassVar[int]
+    key: CatalogSegmentKey
+    segment: CatalogSegment
+    def __init__(self, key: _Optional[_Union[CatalogSegmentKey, _Mapping]] = ..., segment: _Optional[_Union[CatalogSegment, _Mapping]] = ...) -> None: ...
+
+class CatalogDelta(_message.Message):
+    __slots__ = ("metadata", "segment_additions", "segment_removals", "direct_query_additions", "direct_query_removals")
+    METADATA_FIELD_NUMBER: _ClassVar[int]
+    SEGMENT_ADDITIONS_FIELD_NUMBER: _ClassVar[int]
+    SEGMENT_REMOVALS_FIELD_NUMBER: _ClassVar[int]
+    DIRECT_QUERY_ADDITIONS_FIELD_NUMBER: _ClassVar[int]
+    DIRECT_QUERY_REMOVALS_FIELD_NUMBER: _ClassVar[int]
+    metadata: NamespaceCatalog
+    segment_additions: _containers.RepeatedCompositeFieldContainer[CatalogSegmentAddition]
+    segment_removals: _containers.RepeatedCompositeFieldContainer[CatalogSegmentKey]
+    direct_query_additions: _containers.RepeatedCompositeFieldContainer[CatalogSegment]
+    direct_query_removals: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, metadata: _Optional[_Union[NamespaceCatalog, _Mapping]] = ..., segment_additions: _Optional[_Iterable[_Union[CatalogSegmentAddition, _Mapping]]] = ..., segment_removals: _Optional[_Iterable[_Union[CatalogSegmentKey, _Mapping]]] = ..., direct_query_additions: _Optional[_Iterable[_Union[CatalogSegment, _Mapping]]] = ..., direct_query_removals: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class ReleasedObject(_message.Message):
+    __slots__ = ("object", "delete_after_ms")
+    OBJECT_FIELD_NUMBER: _ClassVar[int]
+    DELETE_AFTER_MS_FIELD_NUMBER: _ClassVar[int]
+    object: ObjectRef
+    delete_after_ms: int
+    def __init__(self, object: _Optional[_Union[ObjectRef, _Mapping]] = ..., delete_after_ms: _Optional[int] = ...) -> None: ...
+
+class CatalogNode(_message.Message):
+    __slots__ = ("format_version", "namespace", "catalog_generation", "parent", "delta_depth", "delta_bytes_since_checkpoint", "checkpoint", "delta", "released_objects", "release_summary", "legacy_history_safe_after_ms")
+    FORMAT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_GENERATION_FIELD_NUMBER: _ClassVar[int]
+    PARENT_FIELD_NUMBER: _ClassVar[int]
+    DELTA_DEPTH_FIELD_NUMBER: _ClassVar[int]
+    DELTA_BYTES_SINCE_CHECKPOINT_FIELD_NUMBER: _ClassVar[int]
+    CHECKPOINT_FIELD_NUMBER: _ClassVar[int]
+    DELTA_FIELD_NUMBER: _ClassVar[int]
+    RELEASED_OBJECTS_FIELD_NUMBER: _ClassVar[int]
+    RELEASE_SUMMARY_FIELD_NUMBER: _ClassVar[int]
+    LEGACY_HISTORY_SAFE_AFTER_MS_FIELD_NUMBER: _ClassVar[int]
+    format_version: int
+    namespace: str
+    catalog_generation: int
+    parent: ObjectRef
+    delta_depth: int
+    delta_bytes_since_checkpoint: int
+    checkpoint: NamespaceCatalog
+    delta: CatalogDelta
+    released_objects: _containers.RepeatedCompositeFieldContainer[ReleasedObject]
+    release_summary: bool
+    legacy_history_safe_after_ms: int
+    def __init__(self, format_version: _Optional[int] = ..., namespace: _Optional[str] = ..., catalog_generation: _Optional[int] = ..., parent: _Optional[_Union[ObjectRef, _Mapping]] = ..., delta_depth: _Optional[int] = ..., delta_bytes_since_checkpoint: _Optional[int] = ..., checkpoint: _Optional[_Union[NamespaceCatalog, _Mapping]] = ..., delta: _Optional[_Union[CatalogDelta, _Mapping]] = ..., released_objects: _Optional[_Iterable[_Union[ReleasedObject, _Mapping]]] = ..., release_summary: _Optional[bool] = ..., legacy_history_safe_after_ms: _Optional[int] = ...) -> None: ...
 
 class RegisterTableRequest(_message.Message):
     __slots__ = ("namespace", "schema", "storage_policy", "table_spec")

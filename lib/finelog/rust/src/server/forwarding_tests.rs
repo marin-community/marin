@@ -73,6 +73,20 @@ struct Fixture {
     target_requests: Arc<RequestStats>,
 }
 
+fn test_forwarder(
+    source: Arc<Store>,
+    target_url: String,
+    target_addr: SocketAddr,
+    private_pem: &str,
+) -> Forwarder<TestTransport> {
+    let config = ForwardingConfig {
+        target: target_url,
+        cluster: SOURCE_CLUSTER.to_string(),
+    };
+    let minter = TokenMinter::new(private_pem, config.cluster.clone()).unwrap();
+    Forwarder::with_client(source, config, minter, stats_client(target_addr))
+}
+
 impl Fixture {
     /// A hub that trusts [`SOURCE_CLUSTER`]'s public key, and a source that writes under
     /// it. Each namespace's watermark is unset: a forwarder started now seeds at the tip.
@@ -129,16 +143,11 @@ impl Fixture {
 
     /// A forwarder from this source to this hub, signing with `private_pem`.
     fn forwarder(&self, private_pem: &str) -> Forwarder<TestTransport> {
-        let config = ForwardingConfig {
-            target: self.target_url.clone(),
-            cluster: SOURCE_CLUSTER.to_string(),
-        };
-        let minter = TokenMinter::new(private_pem, config.cluster.clone()).unwrap();
-        Forwarder::with_client(
+        test_forwarder(
             Arc::clone(&self.source),
-            config,
-            minter,
-            stats_client(self.target_addr),
+            self.target_url.clone(),
+            self.target_addr,
+            private_pem,
         )
     }
 
@@ -341,9 +350,13 @@ async fn read_all(client: &LogServiceClient<TestTransport>) -> Vec<(String, Stri
 
 /// Poll `condition` until it holds, or fail after five seconds with `describe()`, so a
 /// wedged forwarder fails the test rather than hanging it.
-async fn poll_until(mut condition: impl FnMut() -> bool, describe: impl Fn() -> String) {
+async fn poll_until<F, Fut>(mut condition: F, describe: impl Fn() -> String)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
     for _ in 0..200 {
-        if condition() {
+        if condition().await {
             return;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -351,12 +364,20 @@ async fn poll_until(mut condition: impl FnMut() -> bool, describe: impl Fn() -> 
     panic!("{}", describe());
 }
 
+async fn wait_for_scalar(store: &Store, sql: &str, expected: i64) {
+    poll_until(
+        || async { scalar_i64(store, sql).await == expected },
+        || format!("query {sql:?} never returned {expected}"),
+    )
+    .await;
+}
+
 /// Wait for `store`'s watermark for `(target, namespace)` to reach `expected`. Reads
 /// local state only, so a test can tell "the forwarder is done" without an RPC that
 /// would perturb the target's request count.
 async fn wait_for_cursor(store: &Store, target: &str, namespace: &str, expected: i64) {
     poll_until(
-        || store.forward_cursor(target, namespace).unwrap() == Some(expected),
+        || std::future::ready(store.forward_cursor(target, namespace).unwrap() == Some(expected)),
         || {
             format!(
                 "watermark for {namespace:?} never reached {expected} (stuck at {:?})",
@@ -372,7 +393,7 @@ async fn wait_for_cursor(store: &Store, target: &str, namespace: &str, expected:
 /// produced it.
 async fn wait_for_requests(counter: &RequestStats, expected: usize) {
     poll_until(
-        || counter.total() >= expected,
+        || std::future::ready(counter.total() >= expected),
         || {
             format!(
                 "hub never served {expected} requests (saw {})",
@@ -392,16 +413,14 @@ async fn wait_for_hub_log_rows(fx: &Fixture, expected: &[(&str, &str)]) {
         .iter()
         .map(|(key, data)| (key.to_string(), data.to_string()))
         .collect();
-    for _ in 0..200 {
-        if fx.hub_log_rows().await == want {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!(
-        "hub never held {want:?} (last saw {:?})",
-        fx.hub_log_rows().await
-    );
+    poll_until(
+        || {
+            let want = &want;
+            async move { fx.hub_log_rows().await == *want }
+        },
+        || format!("hub never held {want:?}"),
+    )
+    .await;
 }
 
 /// A forwarder running on its own task, stopped and joined by [`Self::finish`].
@@ -415,7 +434,7 @@ impl RunningForwarder {
         let (stop, stop_rx) = watch::channel(false);
         Self {
             stop,
-            task: spawn(forwarder, stop_rx),
+            task: spawn(Arc::new(forwarder), stop_rx),
         }
     }
 
@@ -476,7 +495,7 @@ async fn fresh_remote_store_forwarder_registers_progress_without_panicking() {
 
     let running = RunningForwarder::start(forwarder);
     poll_until(
-        || source.get_table_schema(FINELOG_NAMESPACE).is_ok(),
+        || std::future::ready(source.get_table_schema(FINELOG_NAMESPACE).is_ok()),
         || "forwarder did not register its progress namespace".to_string(),
     )
     .await;
@@ -566,6 +585,43 @@ fn resume_after_eviction_reports_only_a_real_gap() {
     assert_eq!(resume_after_eviction(10, Some(41)), Some(40));
     // No local segments at all: nothing to be behind.
     assert_eq!(resume_after_eviction(10, None), None);
+}
+
+#[test]
+fn forwarding_read_window_is_bounded_by_ordered_segment_ranges() {
+    let paths = vec![
+        "settled".into(),
+        "first".into(),
+        "overlap".into(),
+        "later".into(),
+    ];
+    let mut seq_bounds = BTreeMap::from([
+        ("settled".into(), (1, 10)),
+        ("first".into(), (11, 20)),
+        ("overlap".into(), (15, 30)),
+        ("later".into(), (31, 40)),
+    ]);
+
+    assert_eq!(
+        bounded_forward_read_through(&paths, &seq_bounds, 10, 40, 2),
+        30
+    );
+    assert_eq!(
+        bounded_forward_read_through(&paths, &seq_bounds, 10, 25, 2),
+        25
+    );
+
+    seq_bounds.remove("first");
+    assert_eq!(
+        bounded_forward_read_through(&paths, &seq_bounds, 10, 40, 1),
+        30
+    );
+
+    assert_eq!(
+        bounded_forward_read_through(&[], &BTreeMap::new(), 10, 40, 1),
+        10,
+        "a newer durability watermark must not make absent snapshot rows look scanned"
+    );
 }
 
 #[test]
@@ -1342,6 +1398,22 @@ fn id_object_spec() -> crate::store::table_spec::ValidatedTableSpec {
     .unwrap()
 }
 
+async fn drive_object_activation(store: &Store, namespace: &str, rounds: usize) {
+    for _ in 0..rounds {
+        if store.spec_lifecycle(namespace).unwrap().active_version() == 1 {
+            break;
+        }
+        store.maintain_namespace(namespace, false).await.unwrap();
+    }
+    let lifecycle = store.spec_lifecycle(namespace).unwrap();
+    assert_eq!(
+        lifecycle.active_version(),
+        1,
+        "object migration never activated (phase: {:?})",
+        lifecycle.phase
+    );
+}
+
 /// As [`write_id_rows`], but for a store with no background maintenance: one
 /// explicit round makes the rows durable. Returns the last written seq.
 async fn durable_id_rows(store: &Store, namespace: &str, ids: std::ops::Range<usize>) -> i64 {
@@ -1365,6 +1437,165 @@ async fn durable_id_rows(store: &Store, namespace: &str, ids: std::ops::Range<us
         .await
         .unwrap();
     last_seq
+}
+
+/// An object-native relay keeps a durable local copy while the hub is behind,
+/// then advances its cursor and retires covered segments in one publication.
+/// The bytes remain recoverable through retained states until object GC's
+/// rollback window expires.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_object_native_relay_retires_only_hub_settled_segments() {
+    const EVENTS: &str = "events";
+    let target = disk_store("relay_retirement_target");
+    let (target_addr, _target_requests) =
+        serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+    let target_url = format!("http://{target_addr}");
+    let source_data = crate::test_support::unique_dir("relay_retirement_source_data");
+    let source_remote = crate::test_support::unique_dir("relay_retirement_source_remote");
+    let source = Arc::new(
+        Store::new(
+            Some(source_data.clone()),
+            source_remote.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Shadow,
+        )
+        .unwrap(),
+    );
+
+    source
+        .register_table(
+            EVENTS,
+            Schema::new(
+                vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
+                "id",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+    source
+        .register_versioned_table(EVENTS, id_object_spec())
+        .unwrap();
+    source.publish_object_catalog(EVENTS).await.unwrap();
+    drive_object_activation(&source, EVENTS, 8).await;
+    source.configure_relay();
+
+    let first_tip = durable_id_rows(&source, EVENTS, 0..20).await;
+    source.maintain_namespace(EVENTS, false).await.unwrap();
+    assert_eq!(
+        source.list_segments(EVENTS).unwrap().len(),
+        1,
+        "an unacknowledged segment must survive relay maintenance"
+    );
+
+    forward_until(
+        test_forwarder(source.clone(), target_url.clone(), target_addr, PRIV_A),
+        &source,
+        &target_url,
+        EVENTS,
+        first_tip,
+    )
+    .await;
+    assert_eq!(
+        source.forward_cursor(&target_url, EVENTS).unwrap(),
+        Some(first_tip)
+    );
+    assert!(
+        source.list_segments(EVENTS).unwrap().is_empty(),
+        "settlement must remove the covered segment without an age-based maintenance pass"
+    );
+
+    let tip = durable_id_rows(&source, EVENTS, 20..40).await;
+    let remaining = source.list_segments(EVENTS).unwrap();
+    assert_eq!(
+        remaining.len(),
+        1,
+        "the newly written segment remains live until its sequences settle"
+    );
+    source.maintain_namespace(EVENTS, false).await.unwrap();
+    assert_eq!(
+        source.list_segments(EVENTS).unwrap().len(),
+        1,
+        "the second segment must remain until its own sequences settle"
+    );
+
+    forward_until(
+        test_forwarder(source.clone(), target_url.clone(), target_addr, PRIV_A),
+        &source,
+        &target_url,
+        EVENTS,
+        tip,
+    )
+    .await;
+    assert_eq!(
+        source.forward_cursor(&target_url, EVENTS).unwrap(),
+        Some(tip)
+    );
+
+    assert!(
+        source.list_segments(EVENTS).unwrap().is_empty(),
+        "the relay should remove a whole segment once the hub settled it"
+    );
+    wait_for_scalar(&target, &format!("SELECT count(*) FROM \"{EVENTS}\""), 40).await;
+
+    source.shutdown(Duration::from_secs(1)).await;
+    drop(source);
+    let reopened = Store::new(
+        Some(source_data),
+        source_remote.to_string_lossy().into_owned(),
+        crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+        crate::store::ServeMode::Shadow,
+    )
+    .unwrap();
+    reopened.recover_tables().await.unwrap();
+    assert_eq!(
+        reopened.forward_cursor(&target_url, EVENTS).unwrap(),
+        Some(tip)
+    );
+    assert!(reopened.list_segments(EVENTS).unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_object_native_relay_never_compacts_its_unsettled_spool() {
+    const EVENTS: &str = "events";
+    let source_data = crate::test_support::unique_dir("relay_no_compaction_data");
+    let source_remote = crate::test_support::unique_dir("relay_no_compaction_remote");
+    let source = Arc::new(
+        Store::new(
+            Some(source_data.clone()),
+            source_remote.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Shadow,
+        )
+        .unwrap(),
+    );
+    source
+        .register_table(
+            EVENTS,
+            Schema::new(
+                vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
+                "id",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+    source
+        .register_versioned_table(EVENTS, id_object_spec())
+        .unwrap();
+    source.publish_object_catalog(EVENTS).await.unwrap();
+    drive_object_activation(&source, EVENTS, 8).await;
+    source.configure_relay();
+
+    durable_id_rows(&source, EVENTS, 0..10).await;
+    durable_id_rows(&source, EVENTS, 10..20).await;
+    source.maintain_namespace(EVENTS, true).await.unwrap();
+
+    let segments = source.list_segments(EVENTS).unwrap();
+    assert_eq!(segments.len(), 2);
+    assert!(segments.iter().all(|segment| segment.level == 0));
+
+    source.shutdown(Duration::from_secs(1)).await;
+    std::fs::remove_dir_all(source_data).ok();
+    std::fs::remove_dir_all(source_remote).ok();
 }
 
 /// Restarting the forwarding node mid-migration loses nothing: the forward
@@ -1396,17 +1627,7 @@ async fn a_restart_mid_migration_resumes_forwarding_from_the_durable_cursor() {
         )
     };
     let forwarder_for = |source: &Arc<Store>| {
-        let config = ForwardingConfig {
-            target: target_url.clone(),
-            cluster: SOURCE_CLUSTER.to_string(),
-        };
-        let minter = TokenMinter::new(PRIV_A, config.cluster.clone()).unwrap();
-        Forwarder::with_client(
-            Arc::clone(source),
-            config,
-            minter,
-            stats_client(target_addr),
-        )
+        test_forwarder(Arc::clone(source), target_url.clone(), target_addr, PRIV_A)
     };
 
     // First life: ship forty rows, land twenty more, then start the object
@@ -1457,13 +1678,7 @@ async fn a_restart_mid_migration_resumes_forwarding_from_the_durable_cursor() {
         source.forward_cursor(&target_url, EVENTS).unwrap(),
         Some(shipped_tip)
     );
-    for _ in 0..8 {
-        if source.spec_lifecycle(EVENTS).unwrap().active_version() == 1 {
-            break;
-        }
-        source.maintain_namespace(EVENTS, false).await.unwrap();
-    }
-    assert_eq!(source.spec_lifecycle(EVENTS).unwrap().active_version(), 1);
+    drive_object_activation(&source, EVENTS, 8).await;
     forward_until(
         forwarder_for(&source),
         &source,
@@ -1475,13 +1690,7 @@ async fn a_restart_mid_migration_resumes_forwarding_from_the_durable_cursor() {
 
     // The hub ACKs before its async flush seals the rows, so poll the count.
     let count_sql = format!("SELECT count(*) FROM \"{EVENTS}\"");
-    for _ in 0..200 {
-        if scalar_i64(&target, &count_sql).await == 60 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    assert_eq!(scalar_i64(&target, &count_sql).await, 60);
+    wait_for_scalar(&target, &count_sql, 60).await;
     assert_eq!(
         scalar_i64(
             &target,
@@ -1542,19 +1751,7 @@ async fn a_hub_migration_under_live_forwarding_loses_nothing() {
     fx.drain(PRIV_A, EVENTS).await;
     // Drive maintenance rather than waiting out the scheduler cadence; the
     // forwarded traffic above keeps landing between rounds either way.
-    for _ in 0..40 {
-        if hub.spec_lifecycle(EVENTS).unwrap().active_version() == 1 {
-            break;
-        }
-        hub.maintain_namespace(EVENTS, false).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    assert_eq!(
-        hub.spec_lifecycle(EVENTS).unwrap().active_version(),
-        1,
-        "the hub migration never activated (phase: {:?})",
-        hub.spec_lifecycle(EVENTS).unwrap().phase
-    );
+    drive_object_activation(&hub, EVENTS, 40).await;
 
     // Post-activation traffic lands in the object-backed table.
     write_string_rows(&fx.source, EVENTS, ids(200..250)).await;
@@ -1563,13 +1760,7 @@ async fn a_hub_migration_under_live_forwarding_loses_nothing() {
     // Exactly once, before and after the flip. The hub ACKs before its async
     // flush seals rows for queries, so poll the count.
     let count_sql = format!("SELECT count(*) FROM \"{EVENTS}\"");
-    for _ in 0..200 {
-        if scalar_i64(&hub, &count_sql).await == 250 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    assert_eq!(scalar_i64(&hub, &count_sql).await, 250);
+    wait_for_scalar(&hub, &count_sql, 250).await;
     assert_eq!(
         scalar_i64(
             &hub,

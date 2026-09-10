@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use object_store::path::Path as OsPath;
 use object_store::{ObjectMeta, ObjectStoreExt};
-use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
 use crate::store::object_store::{
@@ -92,7 +91,6 @@ impl LegacyObjectStore {
 impl ObjectStore for LegacyObjectStore {
     async fn write(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
         let path = self.path(id);
-        let content_sha256 = Sha256::digest(&bytes).into();
         let byte_size = bytes.len() as u64;
         let result = self
             .provider
@@ -105,13 +103,24 @@ impl ObjectStore for LegacyObjectStore {
         Ok(ObjectVersion {
             e_tag: result.e_tag,
             provider_version: result.version,
-            content_sha256,
             byte_size,
+            local_value: None,
         })
     }
 
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {
         self.provider.get_path(self.path(id), "legacy object").await
+    }
+
+    async fn exists(&self, id: &ObjectId) -> Result<bool, StatsError> {
+        let path = self.path(id);
+        match self.provider.backend().head(&path).await {
+            Ok(_) => Ok(true),
+            Err(object_store::Error::NotFound { .. }) => Ok(false),
+            Err(error) => Err(StatsError::Internal(format!(
+                "inspect legacy object {path}: {error}"
+            ))),
+        }
     }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
