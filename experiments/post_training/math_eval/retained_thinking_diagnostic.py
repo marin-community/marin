@@ -61,15 +61,19 @@ def diagnose_retained_row(native, record, item, decoder, *, stage):
         or not 0 < len(tokens) <= 8192
         or native["stop_reason"] != record["stop_reason"]
         or not math.isfinite(raw)
-        or not math.isclose(raw, record["score_contract"], rel_tol=0, abs_tol=1e-12)
+        or raw != record["score_contract"]
         or decoder.decode(tokens, skip_special_tokens=False) != native["output_response"]
     ):
         raise ValueError("Legacy response differs from its original audited identity")
     full = _diagnostic(tokens, prompt, native["stop_reason"], item["env_class"], item["gold"], decoder)
     cut = len(tokens) > 4096
     censored = _diagnostic(
-        tokens[:4096], prompt, "synthetic_prefix_cutoff" if cut else native["stop_reason"],
-        item["env_class"], item["gold"], decoder,
+        tokens[:4096],
+        prompt,
+        "synthetic_prefix_cutoff" if cut else native["stop_reason"],
+        item["env_class"],
+        item["gold"],
+        decoder,
     )
     return {
         "diagnostic_version": DIAGNOSTIC_VERSION,
