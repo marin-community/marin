@@ -29,13 +29,18 @@ RESPONSE_OUTPUT = "/app/response.txt"
 """Every task in this template tells the agent to write here, not the tool's ``answer.txt`` default."""
 
 
+def _clean(answer: str) -> str:
+    """Trim the stray ``**`` the source left around some reference answers."""
+    return answer.strip().strip("*").strip()
+
+
 def _references(data: dict) -> list[str]:
     """Reference answers, from ``expected_answers`` (a list) or ``reference_answer`` (a string)."""
     expected_answers = data.get("expected_answers")
     if isinstance(expected_answers, list):
-        return [answer for answer in expected_answers if isinstance(answer, str) and answer.strip()]
+        return [_clean(answer) for answer in expected_answers if isinstance(answer, str) and _clean(answer)]
     reference_answer = data.get("reference_answer")
-    return [reference_answer] if isinstance(reference_answer, str) and reference_answer.strip() else []
+    return [_clean(reference_answer)] if isinstance(reference_answer, str) and _clean(reference_answer) else []
 
 
 def _subject_tag(data: dict) -> str:

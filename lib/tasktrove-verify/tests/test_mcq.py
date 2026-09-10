@@ -24,6 +24,12 @@ def _answer(workspace: Path, text: str) -> None:
         ("Answer:C", 1.0),
         ("Answer : C", 1.0),
         ("Answer: B\n", 0.0),
+        # Half of the Nemotron prompts ask for a boxed letter; models also decorate the line.
+        ("Answer: \\boxed{C}\n", 1.0),
+        ("**Answer:** C\n", 1.0),
+        ("Answer: (C)\n", 1.0),
+        ("Answer: `C`\n", 1.0),
+        ("Answer: \\boxed{B}\n", 0.0),
         # The last stated answer wins: a model may revise itself.
         ("Answer: A\nOn reflection that is wrong.\nAnswer: C\n", 1.0),
         # Letters outside A..D cannot be the answer to a four-option question.

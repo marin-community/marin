@@ -63,6 +63,18 @@ def test_math_exemplar_strips_solution_into_its_own_column():
     assert "[answer]" in task.text(DOCKERFILE) or "tasktrove-verify[answer]" in task.text(DOCKERFILE)
 
 
+def test_math_instruction_names_only_the_graded_answer_file():
+    record = convert_one(
+        _info("math", "math-answer"), "t.tar.gz", _fixture("nemotron_math"), converter_index(), TOOL_REF
+    )
+    task = read_task_binary(record.task_binary)
+    spec = parse_spec(task.text(VERIFIER_TOML))
+    assert isinstance(spec, MathSpec)
+    instruction = task.text("instruction.md")
+    assert "/app/solution.txt" not in instruction
+    assert spec.output in instruction
+
+
 def test_multi_letter_gold_is_rejected_not_converted():
     task = read_task_binary(_fixture("nemotron_mcqa"))
     data = json.loads(task.text("tests/verifier_data.json"))

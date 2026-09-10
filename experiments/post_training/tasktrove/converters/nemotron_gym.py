@@ -24,6 +24,9 @@ from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTI
 
 _OPTION_LINE = re.compile(r"^\s*\(?([A-Z])[\.\):]\s", re.MULTILINE)
 _MAX_OPTIONS = 10
+_STALE_ANSWER_PATH = "/app/solution.txt"
+"""The nemotron-math-oracle prompts name this file before their own submission block names
+``/app/answer.txt``, the file the grader reads; the stale mention is rewritten."""
 
 
 def _option_count(instruction: str) -> int:
@@ -61,7 +64,7 @@ def convert_math_boxed(task: TaskFiles) -> ConvertedTask | Rejected:
         return Rejected(ConvertStatus.NULL_GRADER, "empty expected_answer")
     spec = MathSpec(expected=expected, math_type=MathType(data.get("answer_type", "scalar")))
     return ConvertedTask(
-        instruction=task.text(INSTRUCTION),
+        instruction=task.text(INSTRUCTION).replace(_STALE_ANSWER_PATH, spec.output),
         spec=spec,
         dockerfile=task.text(DOCKERFILE),
         tags=("math", "nemotron"),

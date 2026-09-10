@@ -92,6 +92,20 @@ def test_reference_answer_shape_routes_to_the_science_tag():
     assert spec.references == ("Ohmic heating in the transformer windings reduces secondary voltage under load.",)
 
 
+def test_markdown_emphasis_around_a_reference_is_trimmed():
+    task = read_task_binary(_fixture("nemotron_openqa"))
+    data = json.loads(task.text("tests/verifier_data.json"))
+    data["expected_answers"] = ["** The windings heat up. **", "**"]
+    task.files["tests/verifier_data.json"] = json.dumps(data).encode()
+    record = convert_one(
+        _info("science-openq", "llm-judge-freeform"), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF
+    )
+    assert record.status == ConvertStatus.CONVERTED
+    spec = parse_spec(read_task_binary(record.task_binary).text(VERIFIER_TOML))
+    assert isinstance(spec, JudgeSpec)
+    assert spec.references == ("The windings heat up.",)
+
+
 def test_no_non_empty_reference_answers_is_rejected():
     task = read_task_binary(_fixture("nemotron_openqa"))
     data = json.loads(task.text("tests/verifier_data.json"))
