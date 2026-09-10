@@ -10,8 +10,8 @@
 
 Steps: ``raw`` downloads the parquets; ``summaries`` fingerprints every task and groups by
 template; ``templates`` extracts one exemplar per template and writes the converter coverage; ``converted``
-applies the registered converters; ``deduped`` drops repeated instructions; ``verified`` throws
-away tasks whose grader does not hold up; ``clean`` assembles the output.
+applies the registered converters; ``graded`` drops repeated instructions and throws away tasks
+whose grader does not hold up; ``clean`` assembles the output.
 """
 
 from dataclasses import dataclass
@@ -26,13 +26,12 @@ from marin.experiment.data import hf_download
 
 from experiments.post_training.tasktrove.clean import build_clean
 from experiments.post_training.tasktrove.convert import convert_tasks
-from experiments.post_training.tasktrove.dedup import dedup_tasks
 from experiments.post_training.tasktrove.fingerprint import build_template_index, summarize_templates
 from experiments.post_training.tasktrove.raw_tasks import TASKS_GLOB
 from experiments.post_training.tasktrove.sources import TASKTROVE_HF_ID, TASKTROVE_REVISION
-from experiments.post_training.tasktrove.verify import verify_tasks
+from experiments.post_training.tasktrove.verify import grade_tasks
 
-STAGES = ("raw", "summaries", "templates", "converted", "deduped", "verified", "clean")
+STAGES = ("raw", "summaries", "templates", "converted", "graded", "clean")
 
 
 @dataclass(frozen=True)
@@ -41,8 +40,7 @@ class TaskTroveWorkflow:
     summaries: ArtifactStep
     templates: ArtifactStep
     converted: ArtifactStep
-    deduped: ArtifactStep
-    verified: ArtifactStep
+    graded: ArtifactStep
     clean: ArtifactStep
 
 
@@ -70,29 +68,22 @@ def build_workflow(tool_ref: str, max_tasks_per_source: int | None) -> TaskTrove
         output_path=OUT,
         tool_ref=tool_ref,
     )
-    deduped = apply(
-        "tasktrove/deduped",
-        remote(dedup_tasks, resources=coordinator),
+    graded = apply(
+        "tasktrove/graded",
+        remote(grade_tasks, resources=coordinator),
         converted_path=converted,
         output_path=OUT,
         max_tasks_per_source=max_tasks_per_source,
     )
-    verified = apply(
-        "tasktrove/verified",
-        remote(verify_tasks, resources=coordinator),
-        deduped_path=deduped,
-        output_path=OUT,
-    )
     clean = apply(
         "tasktrove/clean",
         remote(build_clean, resources=coordinator),
-        deduped_path=deduped,
-        verified_path=verified,
+        graded_path=graded,
         output_path=OUT,
         tool_ref=tool_ref,
         artifact_type=Artifact,
     )
-    return TaskTroveWorkflow(raw, summaries, templates, converted, deduped, verified, clean)
+    return TaskTroveWorkflow(raw, summaries, templates, converted, graded, clean)
 
 
 @click.command(help=__doc__)

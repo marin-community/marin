@@ -13,13 +13,11 @@ One ledger row per rejection names the check.
 import json
 import logging
 import tempfile
-from collections import Counter
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-import pyarrow as pa
 from rigging.filesystem.storage_path import StoragePath
 from tasktrove_verify.grade import grade
 from tasktrove_verify.modes.ifeval_constraints import CONSTRAINTS
@@ -47,12 +45,12 @@ from tasktrove_verify.spec import (
 )
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.readers import load_parquet
 
 from experiments.post_training.tasktrove.contract import INSTALL_MARKER, OLD_GRADER_LINE, VERIFIER_TOML, VERIFY_TEST_SH
+from experiments.post_training.tasktrove.convert import CONVERTED_GLOB, CONVERTED_SCHEMA
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
-from experiments.post_training.tasktrove.dedup import DEDUPED_GLOB
-from experiments.post_training.tasktrove.raw_tasks import APPROX_SHARD_BYTES, WORKER_RESOURCES
+from experiments.post_training.tasktrove.dedup import cap_rank, cap_source, dedup_key, dropped, keep_first
+from experiments.post_training.tasktrove.raw_tasks import APPROX_SHARD_BYTES, RAW_SHARDS, WORKER_RESOURCES
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     INSTRUCTION,
@@ -65,8 +63,9 @@ from experiments.post_training.tasktrove.taskbinary import (
 
 logger = logging.getLogger(__name__)
 
-VERIFIED_LEDGER_GLOB = "ledger/*.parquet"
-VERIFIED_SUMMARY = "verified.json"
+GRADED_GLOB = "graded/*.parquet"
+VERIFIED_STATUS = "verified:"
+"""Status prefix of a row the grader checks rejected; the check name follows."""
 REQUIRED_FILES = (INSTRUCTION, TASK_TOML, DOCKERFILE, TEST_SH, VERIFIER_TOML)
 _MIN_LEAK_CHARS = 12
 """Expected values shorter than this are not checked against the instruction: a single letter or
@@ -86,16 +85,6 @@ class Check(StrEnum):
 @dataclass(frozen=True)
 class Rejection:
     check: Check
-    detail: str
-
-
-@dataclass(frozen=True)
-class LedgerRow:
-    source: str
-    path: str
-    converter: str
-    mode: str
-    check: str
     detail: str
 
 
@@ -234,55 +223,28 @@ def verify_task(blob: bytes) -> Rejection | None:
     return check_dockerfile(task) or check_gold_leak(task, spec) or check_shape(task, spec) or check_grading(task, spec)
 
 
-def verify_rows(rows: Iterator[dict]) -> Iterator[LedgerRow]:
+def verify_rows(rows: Iterator[dict]) -> Iterator[dict]:
+    """Every row, with converted rows that fail a check re-stamped ``verified:<check>`` and their binaries dropped."""
     for row in rows:
         if row["status"] != ConvertStatus.CONVERTED:
+            yield row
             continue
         rejection = verify_task(row["task_binary"])
-        if rejection is not None:
-            yield LedgerRow(
-                row["source"], row["path"], row["converter"], row["mode"], rejection.check.value, rejection.detail
-            )
+        yield row if rejection is None else dropped(row, VERIFIED_STATUS + rejection.check.value, rejection.detail)
 
 
-def read_ledger(verified_path: str) -> list[LedgerRow]:
-    files = sorted((StoragePath(verified_path) / VERIFIED_LEDGER_GLOB).glob(), key=str)
-    return [LedgerRow(**row) for f in files for row in load_parquet(str(f))]
-
-
-def verify_tasks(deduped_path: str, output_path: str) -> None:
-    """Zephyr stage: one ledger shard of rejections per deduped shard, then a per-check summary."""
-    out = StoragePath(output_path)
-    ds = Dataset.from_files(str(StoragePath(deduped_path) / DEDUPED_GLOB))
-    ds = ds.load_parquet(columns=_VERIFY_COLUMNS, approx_shard_bytes=APPROX_SHARD_BYTES)
-    ds = ds.map_shard(lambda rows, _: (asdict(ledger_row) for ledger_row in verify_rows(rows)))
-    ds = ds.write_parquet(str(out / "ledger/part-{shard:05d}.parquet"), schema=_LEDGER_SCHEMA)
-    ZephyrContext(name="tasktrove-verify", resources=WORKER_RESOURCES).execute(ds)
-    ledger = read_ledger(output_path)
-    summary = {
-        "rejected": len(ledger),
-        "by_check": dict(Counter(r.check for r in ledger)),
-        "by_converter": {k: dict(v) for k, v in _by_converter(ledger).items()},
-    }
-    (out / VERIFIED_SUMMARY).write_text(json.dumps(summary, indent=1))
-    logger.info("verified: %d rejected %s", len(ledger), summary["by_check"])
-
-
-_VERIFY_COLUMNS = ["source", "path", "converter", "mode", "status", "task_binary"]
-_LEDGER_SCHEMA = pa.schema(
-    [
-        ("source", pa.string()),
-        ("path", pa.string()),
-        ("converter", pa.string()),
-        ("mode", pa.string()),
-        ("check", pa.string()),
-        ("detail", pa.string()),
-    ]
-)
-
-
-def _by_converter(ledger: list[LedgerRow]) -> dict[str, Counter]:
-    counts: dict[str, Counter] = {}
-    for row in ledger:
-        counts.setdefault(row.converter, Counter())[row.check] += 1
-    return counts
+def grade_tasks(converted_path: str, output_path: str, max_tasks_per_source: int | None) -> None:
+    """Zephyr stage: dedup the converted rows, grade every survivor, write each row with its final status."""
+    files = Dataset.from_files(str(StoragePath(converted_path) / CONVERTED_GLOB))
+    ds = files.load_parquet(approx_shard_bytes=APPROX_SHARD_BYTES)
+    ds = ds.group_by(key=dedup_key, reducer=keep_first, sort_by=lambda row: row["path"], num_output_shards=RAW_SHARDS)
+    if max_tasks_per_source is not None:
+        ds = ds.group_by(
+            key=lambda row: row["source"],
+            reducer=lambda _source, rows: cap_source(rows, max_tasks_per_source),
+            sort_by=lambda row: cap_rank(row["path"]),
+            num_output_shards=RAW_SHARDS,
+        )
+    ds = ds.map_shard(lambda rows, _: verify_rows(rows))
+    ds = ds.write_parquet(str(StoragePath(output_path) / "graded/part-{shard:05d}.parquet"), schema=CONVERTED_SCHEMA)
+    ZephyrContext(name="tasktrove-grade", resources=WORKER_RESOURCES).execute(ds)

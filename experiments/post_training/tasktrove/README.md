@@ -22,20 +22,19 @@ is part of every task's identity.
 | `summaries` | `fingerprint.py` | fingerprint every task and `group_by` template id (normalized `tests/` and `environment/` code) |
 | `templates` | `fingerprint.py` | `templates.json`, one exemplar per template with 20+ tasks, `coverage.json` per converter key |
 | `converted` | `convert.py` | route by `source_verdicts.json` and converter key; emit the new binary and selection columns |
-| `deduped` | `dedup.py` | drop repeated instructions within a source; optional `--max-tasks-per-source` |
-| `verified` | `verify.py` | throw away tasks whose grader does not hold up; the ledger names the check |
-| `clean` | `clean.py` | `tasks/<source>/*.parquet`, `ledger/`, `manifest.json`, `report.md` |
+| `graded` | `verify.py` | `group_by` instruction within a source (lowest path wins; optional `--max-tasks-per-source`), then throw away tasks whose grader does not hold up; every row leaves with its final status |
+| `clean` | `clean.py` | `tasks/part-*.parquet` (survivors only, copied in parallel), `ledger.parquet`, `manifest.json`, `report.md` |
 
 The Zephyr stages load the source parquets with `load_parquet`, shuffle the rows into 1,024 even
 shards before any per-task work (twenty sources store every task in a single row group), and use
-`group_by` for the template index and dedup; the `templates` and `clean` steps stream one shard at
-a time on the coordinator. `source_verdicts.json` keeps or drops each source with a reason; every
-kept source has a converter in this tree.
+`group_by` for the template index and dedup. The `templates` step and the ledger and manifest of
+`clean` run on the coordinator over small columns only. `source_verdicts.json` keeps or drops each
+source with a reason; every kept source has a converter in this tree.
 
 Output rows carry `source`, `family`, `template_id`, `converter`, `mode`, `dockerfile_id`,
 `language`, `tags`, `has_solution`, `task_binary`, and `solution_binary`. The oracle solution
 never ships inside the binary the agent sees. `python -m experiments.post_training.tasktrove.clean
-<tasks/source-dir> <path>` writes one task back out as a Harbor task directory.
+<tasks-dir> <path>` writes one task back out as a Harbor task directory.
 
 ## Converters
 

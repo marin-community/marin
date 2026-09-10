@@ -40,12 +40,17 @@ def _one_row(_key: tuple[str, str], rows: Iterator[dict]) -> Iterator[dict]:
     return rows
 
 
-def raw_tasks(input_path: str) -> Dataset[dict]:
-    """Every row under ``input_path`` as ``{source, path, task_binary}`` over ``RAW_SHARDS`` even shards."""
+def raw_rows(input_path: str) -> Dataset[dict]:
+    """Every row under ``input_path`` as ``{source, path, task_binary}``, one shard per parquet split."""
     files = Dataset.from_files(str(StoragePath(input_path) / TASKS_GLOB))
     rows = files.load_parquet(
         columns=["path", "task_binary", DEFAULT_FILE_PATH_COLUMN],
         approx_shard_bytes=APPROX_SHARD_BYTES,
         include_file_paths=True,
     )
-    return rows.map(_with_source).group_by(key=_row_key, reducer=_one_row, num_output_shards=RAW_SHARDS)
+    return rows.map(_with_source)
+
+
+def raw_tasks(input_path: str) -> Dataset[dict]:
+    """``raw_rows`` shuffled by path into ``RAW_SHARDS`` even shards, for stages with real per-task work."""
+    return raw_rows(input_path).group_by(key=_row_key, reducer=_one_row, num_output_shards=RAW_SHARDS)

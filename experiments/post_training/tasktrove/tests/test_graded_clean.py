@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The deduped, verified and clean steps over a small converted parquet built from the fixtures."""
+"""The graded and clean steps over a small converted parquet built from the fixtures."""
 
 import json
 import re
@@ -11,15 +11,15 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from experiments.post_training.tasktrove.clean import build_clean, export_task
+from experiments.post_training.tasktrove.clean import TASK_COLUMNS, build_clean, export_task
 from experiments.post_training.tasktrove.contract import VERIFIER_TOML
 from experiments.post_training.tasktrove.convert import ConvertedRecord, convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.dedup import DedupStatus, dedup_tasks
+from experiments.post_training.tasktrove.dedup import DedupStatus
 from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.taskbinary import INSTRUCTION, TaskFiles, read_task_binary, write_task_binary
-from experiments.post_training.tasktrove.verify import verify_tasks
+from experiments.post_training.tasktrove.verify import grade_tasks
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 SOURCE = "mcqa"
@@ -59,7 +59,7 @@ def _rows(path: Path) -> dict[str, dict]:
     return {row["path"]: row for f in files for row in pq.read_table(f).to_pylist()}
 
 
-def test_dedup_marks_repeated_instructions_and_capped_rows(tmp_path):
+def test_grade_marks_repeated_instructions_and_capped_rows(tmp_path):
     blob = (FIXTURES / "nemotron_mcqa.tar.gz").read_bytes()
     original = read_task_binary(blob).text(INSTRUCTION)
     records = [
@@ -71,18 +71,19 @@ def test_dedup_marks_repeated_instructions_and_capped_rows(tmp_path):
     ]
     converted = _write_converted(tmp_path / "converted", records)
 
-    dedup_tasks(str(converted), str(tmp_path / "deduped"), max_tasks_per_source=2)
-    rows = _rows(tmp_path / "deduped" / "deduped")
+    grade_tasks(str(converted), str(tmp_path / "graded"), max_tasks_per_source=2)
+    rows = _rows(tmp_path / "graded" / "graded")
 
     assert rows["b.tar.gz"]["status"] == DedupStatus.DUPLICATE and rows["b.tar.gz"]["task_binary"] is None
+    assert rows["b.tar.gz"]["error"] == "same instruction as a.tar.gz"
     assert rows["e.tar.gz"]["status"] == ConvertStatus.NULL_GRADER
     statuses = sorted(rows[p]["status"] for p in ("a.tar.gz", "c.tar.gz", "d.tar.gz"))
     assert statuses == [DedupStatus.CAPPED, ConvertStatus.CONVERTED, ConvertStatus.CONVERTED]
     capped = next(p for p in ("a.tar.gz", "c.tar.gz", "d.tar.gz") if rows[p]["status"] == DedupStatus.CAPPED)
     assert rows[capped]["task_binary"] is None
 
-    dedup_tasks(str(converted), str(tmp_path / "again"), max_tasks_per_source=2)
-    assert _rows(tmp_path / "again" / "deduped") == rows
+    grade_tasks(str(converted), str(tmp_path / "again"), max_tasks_per_source=2)
+    assert _rows(tmp_path / "again" / "graded") == rows
 
 
 def test_clean_keeps_survivors_and_ledgers_the_rest(tmp_path):
@@ -92,26 +93,27 @@ def test_clean_keeps_survivors_and_ledgers_the_rest(tmp_path):
     leaking = _leaking_math_record("leak.tar.gz")
     unconverted = replace(_record("bad.tar.gz", blob), status=ConvertStatus.NULL_GRADER, error="empty", task_binary=None)
     converted = _write_converted(tmp_path / "converted", [good, duplicate, leaking, unconverted])
-    deduped, verified, clean = (str(tmp_path / name) for name in ("deduped", "verified", "clean"))
+    graded, clean = (str(tmp_path / name) for name in ("graded", "clean"))
 
-    dedup_tasks(str(converted), deduped, max_tasks_per_source=None)
-    verify_tasks(deduped, verified)
-    build_clean(deduped, verified, clean, tool_ref="ref")
+    grade_tasks(str(converted), graded, max_tasks_per_source=None)
+    build_clean(graded, clean, tool_ref="ref")
 
-    tasks = _rows(tmp_path / "clean" / "tasks" / SOURCE)
+    tasks = _rows(tmp_path / "clean" / "tasks")
     assert set(tasks) == {"good.tar.gz"}
     assert tasks["good.tar.gz"]["mode"] == "mcq" and tasks["good.tar.gz"]["converter"] == "nemotron_mcqa"
+    assert set(tasks["good.tar.gz"]) == set(TASK_COLUMNS)
     manifest = json.loads((tmp_path / "clean" / "manifest.json").read_text())
     assert manifest["clean_tasks"] == 1 and manifest["input_tasks"] == 4
     assert manifest["by_status"] == {"converted": 1, "duplicate": 1, "verified:gold_leak": 1, "null_grader": 1}
-    assert not (tmp_path / "clean" / "tasks" / "math").exists()
-    ledger = _rows(tmp_path / "clean" / "ledger" / "convert.parquet")
+    assert manifest["by_check"] == {"gold_leak": 1}
+    ledger = _rows(tmp_path / "clean" / "ledger.parquet")
     assert {p: r["status"] for p, r in ledger.items()} == {
         "later-dup.tar.gz": "duplicate",
         "leak.tar.gz": "verified:gold_leak",
         "bad.tar.gz": "null_grader",
     }
+    assert ledger["bad.tar.gz"]["error"] == "empty"
     assert (tmp_path / "clean" / "report.md").read_text().startswith("# TaskTrove Clean")
 
-    exported = export_task(str(tmp_path / "clean" / "tasks" / SOURCE), "good.tar.gz", tmp_path / "export")
+    exported = export_task(str(tmp_path / "clean" / "tasks"), "good.tar.gz", tmp_path / "export")
     assert (exported / "tests" / "verifier.toml").is_file() and (exported / "environment" / "Dockerfile").is_file()

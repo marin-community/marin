@@ -1,16 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Assemble TaskTrove Clean from the deduped rows and the verified ledger.
+"""Assemble TaskTrove Clean from the graded rows.
 
-    tasks/<source>/part-<n>.parquet  every surviving task with its selection columns
-    ledger/convert.parquet           one row per task that did not survive conversion or dedup
-    ledger/verified.parquet          one row per task the verified step rejected
-    manifest.json                    revision, tool ref, counts per step, status, source, converter, mode
-    report.md                        per-converter summary, regenerated every run
+    tasks/part-<n>.parquet   every surviving task with its selection columns
+    ledger.parquet           one row per task that did not survive: its status and the reason
+    manifest.json            revision, tool ref, counts per status, source, converter, mode, and check
+    report.md                per-source and per-converter summary, regenerated every run
 
-Deduped shards are streamed one at a time and each writes its survivors as one parquet per
-source, so the step holds one shard in memory however large the source.
+The survivors are copied by a Zephyr stage that reads only converted rows; the ledger and counts
+come from one pass over the graded rows' small columns, never their binaries.
 
 ``export_task`` writes one row back out as a Harbor task directory for hand inspection.
 """
@@ -18,20 +17,22 @@ source, so the step holds one shard in memory however large the source.
 import json
 import logging
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
-from zephyr.readers import load_parquet
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 
+from experiments.post_training.tasktrove.convert import CONVERTED_SCHEMA
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
-from experiments.post_training.tasktrove.dedup import DEDUPED_GLOB
+from experiments.post_training.tasktrove.raw_tasks import APPROX_SHARD_BYTES, WORKER_RESOURCES
 from experiments.post_training.tasktrove.sources import TASKTROVE_HF_ID, TASKTROVE_REVISION
 from experiments.post_training.tasktrove.taskbinary import read_task_binary
-from experiments.post_training.tasktrove.verify import read_ledger
+from experiments.post_training.tasktrove.verify import GRADED_GLOB, VERIFIED_STATUS
 
 logger = logging.getLogger(__name__)
 
@@ -49,89 +50,87 @@ TASK_COLUMNS = (
     "task_binary",
     "solution_binary",
 )
+TASKS_SCHEMA = pa.schema([CONVERTED_SCHEMA.field(name) for name in TASK_COLUMNS])
+LEDGER_COLUMNS = ("source", "path", "status", "error")
+SUMMARY_COLUMNS = ("source", "path", "status", "error", "converter", "mode", "dockerfile_id")
+_READERS = 32
 
 
-@dataclass(frozen=True)
-class ConvertLedgerRow:
-    """Why one task is absent from ``tasks/``: its convert, dedup, or ``verified:<check>`` status."""
-
-    source: str
-    path: str
-    status: str
-    detail: str
-
-
-@dataclass
-class CleanCounts:
-    input_tasks: int = 0
-    clean_tasks: int = 0
-    by_status: Counter = None  # type: ignore[assignment]
-    by_source: dict[str, Counter] = None  # type: ignore[assignment]
-    by_converter: dict[str, Counter] = None  # type: ignore[assignment]
-    by_mode: Counter = None  # type: ignore[assignment]
-    dockerfiles_by_converter: dict[str, set[str]] = None  # type: ignore[assignment]
-
-    def __post_init__(self) -> None:
-        self.by_status = Counter()
-        self.by_source = defaultdict(Counter)
-        self.by_converter = defaultdict(Counter)
-        self.by_mode = Counter()
-        self.dockerfiles_by_converter = defaultdict(set)
+def _survivors(graded_path: str, output_path: str) -> None:
+    """Zephyr stage: copy the converted rows' task columns into ``tasks/``."""
+    files = Dataset.from_files(str(StoragePath(graded_path) / GRADED_GLOB))
+    ds = files.load_parquet(columns=[*TASK_COLUMNS, "status"], approx_shard_bytes=APPROX_SHARD_BYTES)
+    ds = ds.filter(lambda row: row["status"] == ConvertStatus.CONVERTED)
+    ds = ds.map(lambda row: {name: row[name] for name in TASK_COLUMNS})
+    ds = ds.write_parquet(str(StoragePath(output_path) / "tasks/part-{shard:05d}.parquet"), schema=TASKS_SCHEMA)
+    ZephyrContext(name="tasktrove-clean", resources=WORKER_RESOURCES).execute(ds)
 
 
-def build_clean(deduped_path: str, verified_path: str, output_path: str, tool_ref: str) -> None:
-    out = StoragePath(output_path)
-    verified = [asdict(row) for row in read_ledger(verified_path)]
-    rejected = {(r["source"], r["path"]): r["check"] for r in verified}
+def read_columns(glob: StoragePath, columns: tuple[str, ...]) -> pa.Table:
+    """The named columns of every parquet the glob matches, read concurrently."""
 
-    counts = CleanCounts()
-    convert_ledger: list[dict] = []
-    for shard in sorted((StoragePath(deduped_path) / DEDUPED_GLOB).glob(), key=str):
-        by_source_rows: dict[str, list[dict]] = defaultdict(list)
-        for row in load_parquet(str(shard)):
-            counts.input_tasks += 1
-            status = row["status"]
-            if status == ConvertStatus.CONVERTED and (row["source"], row["path"]) in rejected:
-                status = f"verified:{rejected[(row['source'], row['path'])]}"
-            counts.by_status[status] += 1
-            counts.by_source[row["source"]][status] += 1
-            if row["converter"]:
-                counts.by_converter[row["converter"]][status] += 1
-            if status != ConvertStatus.CONVERTED:
-                convert_ledger.append(asdict(ConvertLedgerRow(row["source"], row["path"], status, row["error"])))
-                continue
-            counts.clean_tasks += 1
-            counts.by_mode[row["mode"]] += 1
-            counts.dockerfiles_by_converter[row["converter"]].add(row["dockerfile_id"])
-            by_source_rows[row["source"]].append({k: row[k] for k in TASK_COLUMNS})
-        for source, rows in sorted(by_source_rows.items()):
-            _write_parquet(out / "tasks" / source / shard.name, rows)
+    def read(path: StoragePath) -> pa.Table:
+        with path.open("rb") as handle:
+            return pq.read_table(handle, columns=list(columns))
 
-    _write_parquet(out / "ledger" / "convert.parquet", convert_ledger)
-    _write_parquet(out / "ledger" / "verified.parquet", verified)
-    manifest = {
+    files = sorted(glob.glob(), key=str)
+    with ThreadPoolExecutor(_READERS) as pool:
+        tables = list(pool.map(read, files))
+    return pa.concat_tables(tables)
+
+
+def build_manifest(graded: pa.Table, tool_ref: str) -> dict:
+    by_status: Counter = Counter()
+    by_source: dict[str, Counter] = defaultdict(Counter)
+    by_converter: dict[str, Counter] = defaultdict(Counter)
+    by_mode: Counter = Counter()
+    by_check: Counter = Counter()
+    dockerfiles: dict[str, set[str]] = defaultdict(set)
+    columns = {
+        name: graded.column(name).to_pylist() for name in ("source", "status", "converter", "mode", "dockerfile_id")
+    }
+    for source, status, converter, mode, dockerfile_id in zip(*columns.values(), strict=True):
+        by_status[status] += 1
+        by_source[source][status] += 1
+        if converter:
+            by_converter[converter][status] += 1
+        if status.startswith(VERIFIED_STATUS):
+            by_check[status.removeprefix(VERIFIED_STATUS)] += 1
+        if status == ConvertStatus.CONVERTED:
+            by_mode[mode] += 1
+            dockerfiles[converter].add(dockerfile_id)
+    return {
         "tasktrove": {"hf_id": TASKTROVE_HF_ID, "revision": TASKTROVE_REVISION},
         "verify_tool_ref": tool_ref,
-        "input_tasks": counts.input_tasks,
-        "clean_tasks": counts.clean_tasks,
-        "by_status": dict(counts.by_status.most_common()),
-        "by_mode": dict(counts.by_mode.most_common()),
-        "by_source": {s: dict(c) for s, c in sorted(counts.by_source.items())},
-        "by_converter": {s: dict(c) for s, c in sorted(counts.by_converter.items())},
-        "dockerfiles_by_converter": {c: len(ids) for c, ids in sorted(counts.dockerfiles_by_converter.items())},
+        "input_tasks": graded.num_rows,
+        "clean_tasks": by_status[ConvertStatus.CONVERTED],
+        "by_status": dict(by_status.most_common()),
+        "by_check": dict(by_check.most_common()),
+        "by_mode": dict(by_mode.most_common()),
+        "by_source": {s: dict(c.most_common()) for s, c in sorted(by_source.items())},
+        "by_converter": {s: dict(c.most_common()) for s, c in sorted(by_converter.items())},
+        "dockerfiles_by_converter": {c: len(ids) for c, ids in sorted(dockerfiles.items())},
     }
+
+
+def build_clean(graded_path: str, output_path: str, tool_ref: str) -> None:
+    out = StoragePath(output_path)
+    for stale in ("tasks", "ledger.parquet"):
+        if (out / stale).exists():
+            (out / stale).rmtree()
+    _survivors(graded_path, output_path)
+    graded = read_columns(StoragePath(graded_path) / GRADED_GLOB, SUMMARY_COLUMNS)
+    ledger = graded.filter(pa.compute.not_equal(graded.column("status"), ConvertStatus.CONVERTED.value))
+    with (out / "ledger.parquet").open("wb") as handle:
+        pq.write_table(ledger.select(list(LEDGER_COLUMNS)), handle)
+    manifest = build_manifest(graded, tool_ref)
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1))
     (out / "report.md").write_text(render_report(manifest))
-    logger.info("clean: %d of %d tasks; %s", counts.clean_tasks, counts.input_tasks, manifest["by_status"])
-
-
-def _write_parquet(target: StoragePath, rows: list[dict]) -> None:
-    target.parent.mkdirs()
-    with target.open("wb") as handle:
-        pq.write_table(pa.Table.from_pylist(rows), handle)
+    logger.info("clean: %d of %d tasks; %s", manifest["clean_tasks"], manifest["input_tasks"], manifest["by_status"])
 
 
 def render_report(manifest: dict) -> str:
+    converted = ConvertStatus.CONVERTED.value
     lines = [
         "# TaskTrove Clean",
         "",
@@ -144,16 +143,27 @@ def render_report(manifest: dict) -> str:
         "|---|---:|",
         *(f"| {s} | {n} |" for s, n in manifest["by_status"].items()),
         "",
+        "## By source",
+        "",
+        "| source | tasks | clean | main reason for the rest |",
+        "|---|---:|---:|---|",
+    ]
+    for source, statuses in manifest["by_source"].items():
+        rest = [(s, n) for s, n in statuses.items() if s != converted]
+        reason = f"{rest[0][0]} ({rest[0][1]})" if rest else ""
+        lines.append(f"| {source} | {sum(statuses.values())} | {statuses.get(converted, 0)} | {reason} |")
+    lines += [
+        "",
         "## By converter",
         "",
         "| converter | clean | rejected | dockerfiles |",
         "|---|---:|---:|---:|",
     ]
     for converter, statuses in manifest["by_converter"].items():
-        clean = statuses.get(ConvertStatus.CONVERTED.value, 0)
-        rejected = sum(n for s, n in statuses.items() if s != ConvertStatus.CONVERTED.value)
+        rejected = sum(n for s, n in statuses.items() if s != converted)
         lines.append(
-            f"| {converter} | {clean} | {rejected} | {manifest['dockerfiles_by_converter'].get(converter, 0)} |"
+            f"| {converter} | {statuses.get(converted, 0)} | {rejected} |"
+            f" {manifest['dockerfiles_by_converter'].get(converter, 0)} |"
         )
     lines += [
         "",
@@ -162,12 +172,18 @@ def render_report(manifest: dict) -> str:
         "| mode | tasks |",
         "|---|---:|",
         *(f"| {m} | {n} |" for m, n in manifest["by_mode"].items()),
+        "",
+        "## Verifier rejections by check",
+        "",
+        "| check | tasks |",
+        "|---|---:|",
+        *(f"| {c} | {n} |" for c, n in manifest["by_check"].items()),
     ]
     return "\n".join(lines) + "\n"
 
 
 def export_task(tasks_dir: str, path: str, dest: Path) -> Path:
-    """Write the task ``path`` from a clean ``tasks/<source>`` directory as a Harbor task directory under ``dest``."""
+    """Write the task ``path`` from a clean ``tasks/`` directory as a Harbor task directory under ``dest``."""
     rows: list[dict] = []
     for shard in (StoragePath(tasks_dir) / "*.parquet").glob():
         with shard.open("rb") as handle:

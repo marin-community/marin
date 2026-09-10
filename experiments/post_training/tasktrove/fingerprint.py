@@ -24,7 +24,7 @@ from zephyr.readers import load_jsonl
 
 from experiments.post_training.tasktrove.converters.converted_task import ConverterKey
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.raw_tasks import WORKER_RESOURCES, raw_tasks
+from experiments.post_training.tasktrove.raw_tasks import WORKER_RESOURCES, raw_rows
 from experiments.post_training.tasktrove.sources import SourceVerdict, load_source_verdicts
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
@@ -187,7 +187,7 @@ def summarize_template(template_id: str, members: Iterator[dict]) -> dict:
 
 def summarize_templates(input_path: str, output_path: str) -> None:
     """Zephyr stage: fingerprint every task, group by template id, write one summary per template."""
-    ds = raw_tasks(input_path).map(fingerprint_row)
+    ds = raw_rows(input_path).map(fingerprint_row)
     ds = ds.group_by(key=lambda fp: fp["template_id"], reducer=summarize_template)
     ds = ds.write_jsonl(str(StoragePath(output_path) / "template_summaries/part-{shard:05d}.jsonl.gz"))
     ZephyrContext(name="tasktrove-templates", resources=WORKER_RESOURCES).execute(ds)

@@ -52,7 +52,11 @@ def test_summaries_templates_and_convert_over_one_row_group(tmp_path: Path):
 
     convert_tasks(str(raw), templates, converted, tool_ref="ref")
 
-    rows = [row for f in sorted((tmp_path / "converted" / "converted").glob("*.parquet")) for row in pq.read_table(f).to_pylist()]
+    rows = [
+        row
+        for f in sorted((tmp_path / "converted" / "converted").glob("*.parquet"))
+        for row in pq.read_table(f).to_pylist()
+    ]
     assert sorted(row["path"] for row in rows) == sorted(blobs)
     assert {row["status"] for row in rows} == {ConvertStatus.CONVERTED}
     assert len({row["instruction_key"] for row in rows}) == 2
