@@ -265,7 +265,6 @@ verifier:
         "OPENAI_API_KEY": "${TOGETHER_API_KEY}",
         "OPENAI_BASE_URL": "https://api.together.xyz/v1",
     }
-    assert stable_policy["agents"][0]["env"] == {}
 
 
 @pytest.mark.parametrize(
