@@ -35,7 +35,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import metadata, verifier_data
+from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
 # reasoning-gym's own scorer for these two datasets compares a JSON-deserialized ``list`` (the
@@ -85,7 +85,6 @@ def _convert_reasoning_gym(task: TaskFiles, data: dict) -> ConvertedTask | Rejec
         dockerfile=drop_dockerfile_lines(task.text(DOCKERFILE), _OLD_REASONING_GYM_PIP_INSTALL),
         tags=("reasoning", "reasoning-gym", source_dataset.replace("_", "-"), "nemotron"),
         data_files={"tests/entry.json": json.dumps(data).encode()},
-        metadata=metadata(task),
     )
 
 
@@ -102,7 +101,6 @@ def _convert_grid_match(task: TaskFiles, data: dict) -> ConvertedTask | Rejected
         spec=ExactSpec(expected=(expected,)),
         dockerfile=task.text(DOCKERFILE),
         tags=("reasoning", "arc-agi", "grid-match", "nemotron"),
-        metadata=metadata(task),
     )
 
 
@@ -133,7 +131,6 @@ def _convert_grid_transform(task: TaskFiles, data: dict) -> ConvertedTask | Reje
             f"tests/{TRANSFORM_SCRIPT}": _TRANSFORM_RUNNER.encode(),
             f"tests/{CASES_FILE}": json.dumps(cases).encode(),
         },
-        metadata=metadata(task),
     )
 
 

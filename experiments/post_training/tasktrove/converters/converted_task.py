@@ -36,9 +36,10 @@ class ConvertedTask:
     """Files the spec references, keyed by path under the task root (``tests/cases/...``)."""
     solution_files: dict[str, bytes] = field(default_factory=dict)
     """Oracle solution; stored beside the task, never inside the binary the agent sees."""
+    metadata: dict = field(default_factory=dict)
+    """Converter-specific ``task.toml`` metadata; the template's own ``metadata.json`` is merged by ``convert_one``."""
     agent_timeout: float = 900.0
     verifier_timeout: float = 600.0
-    metadata: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from tasktrove_verify.modes.extract import last_line
 from tasktrove_verify.modes.run import STDERR_TAIL, run_command
 from tasktrove_verify.reward import REWARD_JSON, REWARD_TXT, InvalidTask, Reward, scored
 from tasktrove_verify.spec import DEFAULT_WORKSPACE, ScriptSpec, Spec
@@ -100,8 +101,7 @@ def _reported_reward(logs_dir: Path, stdout: str) -> Reported | None:
     value = _float((logs_dir / REWARD_TXT).read_text(errors="replace")) if (logs_dir / REWARD_TXT).is_file() else None
     if value is not None:
         return Reported(value, Channel.REWARD_TXT)
-    last_line = next((line for line in reversed(stdout.splitlines()) if line.strip()), None)
-    value = _float(last_line)
+    value = _float(last_line(stdout))
     return Reported(value, Channel.STDOUT) if value is not None else None
 
 

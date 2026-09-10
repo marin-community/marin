@@ -4,8 +4,23 @@
 """Helpers shared by the SWE-bench-shaped converters (``swe_patched``, ``swe_trusted_paths``)."""
 
 import json
+from collections.abc import Iterable
 
 PLUGIN = "pytest-json-report"
+CONFIG_JSON = "tests/config.json"
+TRUSTED_TEST_PATHS = "tests/trusted_test_paths.txt"
+TESTBED = "/testbed"
+"""Where the SWE images and the environment-setup step in ``instruction.md`` put the repository."""
+
+
+def test_file(node_id: str) -> str:
+    return node_id.split("::", 1)[0]
+
+
+def uncovered_files(graded_files: set[str], manifests: Iterable[str | None]) -> list[str]:
+    """Graded test files that no trusted manifest restores, so an agent could rewrite them."""
+    manifest = {line.strip() for text in manifests for line in (text or "").splitlines() if line.strip()}
+    return sorted(graded_files - manifest)
 
 
 def test_ids(value: object) -> list[str]:

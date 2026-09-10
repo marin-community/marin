@@ -110,6 +110,28 @@ def test_graded_file_missing_from_manifest_is_rejected_as_unsupported_variant():
     assert record.status == ConvertStatus.UNSUPPORTED_VARIANT and record.task_binary is None
 
 
+def test_fail_to_pass_outside_a_python_file_is_rejected():
+    record = convert_one(
+        _info(), "t.tar.gz", _edited(FAIL_TO_PASS=["tests/tests.md::tests.md"]), converter_index(), TOOL_REF
+    )
+    assert record.status == ConvertStatus.UNSUPPORTED_VARIANT
+    assert "tests/tests.md::tests.md" in record.error
+
+
+def test_pass_to_pass_outside_a_python_file_is_dropped_from_the_spec():
+    record = convert_one(
+        _info(),
+        "t.tar.gz",
+        _edited(PASS_TO_PASS=["tests/tests.md::tests.md", "tests/test_common.py::test_other"]),
+        converter_index(),
+        TOOL_REF,
+    )
+    assert record.status == ConvertStatus.CONVERTED
+    spec = parse_spec(read_task_binary(record.task_binary).text(VERIFIER_TOML))
+    assert spec.must_not_break == ("tests/test_common.py::test_other",)
+    assert all(path.endswith(".py") for path in spec.paths)
+
+
 def test_json_encoded_string_fail_to_pass_is_accepted():
     record = convert_one(
         _info(),

@@ -37,6 +37,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
+from experiments.post_training.tasktrove.converters.nemotron_data import metadata as template_metadata
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.fingerprint import COVERAGE_JSON, uncovered_keys
 from experiments.post_training.tasktrove.raw_tasks import WORKER_RESOURCES, raw_tasks
@@ -79,7 +80,7 @@ class ConvertedRecord:
     status: str
     error: str
     instruction_key: str
-    """Hash of the normalized instruction; the deduped step reads this column instead of the binary."""
+    """Hash of the normalized instruction; the graded step's dedup reads this column instead of the binary."""
     task_binary: bytes | None
     solution_binary: bytes | None
 
@@ -167,6 +168,7 @@ def convert_one(
     if isinstance(result, Rejected):
         return _unconverted(info, path, template_id, result.status, result.detail)
     metadata = {
+        **template_metadata(task),
         **result.metadata,
         "tasktrove_source": info.source,
         "tasktrove_path": path,

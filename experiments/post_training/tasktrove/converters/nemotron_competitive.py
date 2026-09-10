@@ -12,11 +12,14 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import metadata, verifier_data
-from experiments.post_training.tasktrove.converters.stdio_cases import case_files, hidden_case_rejection
+from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
+from experiments.post_training.tasktrove.converters.stdio_cases import (
+    SOLUTION_COMMAND,
+    case_files,
+    hidden_case_rejection,
+)
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
-COMMAND = "python3 /app/solution.py"
 """The instruction tells the agent to write its solution at this path; the old grader ran the
 same command once per case."""
 
@@ -44,12 +47,11 @@ def convert_nemotron_competitive(task: TaskFiles) -> ConvertedTask | Rejected:
         return rejection
     return ConvertedTask(
         instruction=instruction,
-        spec=StdioSpec(command=COMMAND, compare=Compare.EXACT),
+        spec=StdioSpec(command=SOLUTION_COMMAND, compare=Compare.EXACT),
         dockerfile=task.text(DOCKERFILE),
         tags=("code", "competitive-programming", "stdio", "nemotron"),
         language="python",
         data_files=cases,
-        metadata=metadata(task),
     )
 
 

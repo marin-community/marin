@@ -29,7 +29,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import metadata, verifier_data
+from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLVE_SH, TaskFiles
 
 CHECKER_NAME = "nl2bash_check.py"
@@ -121,7 +121,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 '''
 
-CHECKER_PY = _CHECKER_TEMPLATE.replace("__DATA_NAME__", DATA_NAME).replace("__OUTPUT_PATH__", OUTPUT_PATH)
+CHECKER_PY = _CHECKER_TEMPLATE.replace("__DATA_NAME__", DATA_NAME)
 
 
 def convert_nl2bash(task: TaskFiles) -> ConvertedTask | Rejected:
@@ -149,7 +149,6 @@ def convert_nl2bash(task: TaskFiles) -> ConvertedTask | Rejected:
         language="bash",
         data_files=data_files,
         solution_files={SOLVE_SH: solve.replace(_BROKEN_SEED_CALL, _FIXED_SEED_CALL).encode()},
-        metadata=metadata(task),
     )
 
 

@@ -19,7 +19,11 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.stdio_cases import case_files, hidden_case_rejection
+from experiments.post_training.tasktrove.converters.stdio_cases import (
+    SOLUTION_COMMAND,
+    case_files,
+    hidden_case_rejection,
+)
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
 TEST_DATA = "tests/test_data.json"
@@ -42,7 +46,7 @@ def convert_code_contests(task: TaskFiles) -> ConvertedTask | Rejected:
         return rejection
     return ConvertedTask(
         instruction=instruction,
-        spec=StdioSpec(command="python3 /app/solution.py", compare=Compare.EXACT, per_case_timeout=PER_CASE_TIMEOUT),
+        spec=StdioSpec(command=SOLUTION_COMMAND, compare=Compare.EXACT, per_case_timeout=PER_CASE_TIMEOUT),
         dockerfile=task.text(DOCKERFILE),
         tags=("code", "competitive-programming", "stdio", "code-contests"),
         language="python",

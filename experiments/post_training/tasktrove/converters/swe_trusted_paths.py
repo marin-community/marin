@@ -15,13 +15,16 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.swe_repo import ensure_pytest_json_report, test_ids
+from experiments.post_training.tasktrove.converters.swe_repo import (
+    CONFIG_JSON,
+    TESTBED,
+    TRUSTED_TEST_PATHS,
+    ensure_pytest_json_report,
+    test_file,
+    test_ids,
+    uncovered_files,
+)
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
-
-CONFIG_JSON = "tests/config.json"
-TRUSTED_TEST_PATHS = "tests/trusted_test_paths.txt"
-WORKSPACE = "/testbed"
-"""Where the environment-setup step in ``instruction.md`` clones the repository."""
 
 # The old ``tests/test.sh`` invokes ``install_trusted_test_paths.sh <repo> <trusted_commit>
 # <manifest> [<patch_path>] [<fallback_commit>]``; the commits are the only per-task values we need
@@ -89,9 +92,15 @@ def convert_swe_trusted_paths(task: TaskFiles) -> ConvertedTask | Rejected:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test.sh does not call install_trusted_test_paths.sh")
     trusted, fallback = match["trusted"], match["fallback"] or ""
 
-    graded_files = {node_id.split("::", 1)[0] for node_id in [*fail_to_pass, *pass_to_pass]}
-    manifest = {line.strip() for line in (task.get_text(TRUSTED_TEST_PATHS) or "").splitlines() if line.strip()}
-    uncovered = sorted(graded_files - manifest)
+    # The pytest mode clears the repository's addopts, which drops any doctest-glob, so a node id
+    # in a non-Python file (voluptuous grades ``tests.md``) is never collected and aborts the run.
+    foreign = [node_id for node_id in fail_to_pass if not test_file(node_id).endswith(".py")]
+    if foreign:
+        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"FAIL_TO_PASS ids outside Python test files: {foreign[:3]}")
+    pass_to_pass = [node_id for node_id in pass_to_pass if test_file(node_id).endswith(".py")]
+
+    graded_files = {test_file(node_id) for node_id in [*fail_to_pass, *pass_to_pass]}
+    uncovered = uncovered_files(graded_files, [task.get_text(TRUSTED_TEST_PATHS)])
     if uncovered:
         detail = f"graded test files missing from trusted manifest: {uncovered[:5]}"
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, detail)
@@ -101,7 +110,7 @@ def convert_swe_trusted_paths(task: TaskFiles) -> ConvertedTask | Rejected:
         must_pass=tuple(fail_to_pass),
         must_not_break=tuple(pass_to_pass),
         setup=_restore_setup(trusted, fallback),
-        workspace=WORKSPACE,
+        workspace=TESTBED,
     )
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),

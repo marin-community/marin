@@ -28,7 +28,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     Rejected,
 )
 from experiments.post_training.tasktrove.converters.json_schemas import usable_schema
-from experiments.post_training.tasktrove.converters.nemotron_data import metadata, verifier_data
+from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
 SCHEMA_NAME = "schema.json"
@@ -53,7 +53,6 @@ def convert_nemotron_structured_outputs(task: TaskFiles) -> ConvertedTask | Reje
         dockerfile=task.text(DOCKERFILE),
         tags=("structured-outputs", "json-schema", "nemotron", schema_type),
         data_files={SCHEMA_FILE: json.dumps(normalized, indent=2).encode()},
-        metadata=metadata(task),
     )
 
 

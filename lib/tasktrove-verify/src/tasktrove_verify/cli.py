@@ -18,7 +18,7 @@ DEFAULT_LOGS_DIR = "/logs/verifier"
 logger = logging.getLogger("tasktrove_verify")
 
 
-def run(spec_path: Path, logs_dir: Path, workspace: Path) -> Reward:
+def run(spec_path: Path, workspace: Path) -> Reward:
     try:
         spec = parse_spec(spec_path.read_text())
     except (OSError, ValueError, KeyError) as error:
@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace", type=Path, default=Path(DEFAULT_WORKSPACE))
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(message)s")
-    reward = run(args.spec, args.logs_dir, args.workspace)
+    reward = run(args.spec, args.workspace)
     write_reward(args.logs_dir, reward)
     logger.info("reward=%s status=%s", reward.reward, reward.status.value)
     return 0

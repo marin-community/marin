@@ -23,7 +23,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import metadata, verifier_data
+from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLVE_SH, TaskFiles
 
 CHECKER_NAME = "prompt_injection_checker.py"
@@ -185,7 +185,6 @@ def convert_prompt_injection(task: TaskFiles) -> ConvertedTask | Rejected:
             f"tests/{DATA_NAME}": json.dumps({"target_tool": tool, "target_args": args}).encode(),
         },
         solution_files={SOLVE_SH: SOLVE_SH_TEXT.encode()},
-        metadata=metadata(task),
     )
 
 

@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
+from tasktrove_verify.modes.extract import last_line
 from tasktrove_verify.modes.run import STDERR_TAIL, Completed, run_command, split_command, workdir
 from tasktrove_verify.reward import InvalidTask, Reward, scored
 from tasktrove_verify.spec import Compare, StdioSpec
@@ -139,5 +140,4 @@ def _judge_accepts(judge: Path, input_path: Path, expected_path: Path, got_path:
 
 
 def _verdict(result: Completed) -> str:
-    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    return lines[-1] if lines else ""
+    return last_line(result.stdout) or ""

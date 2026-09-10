@@ -27,7 +27,6 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import metadata
 from experiments.post_training.tasktrove.converters.stdio_cases import case_files_from_dirs, hidden_case_rejection
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
@@ -116,7 +115,6 @@ def convert_codeforces(task: TaskFiles) -> ConvertedTask | Rejected:
         tags=tags,
         language="python",
         data_files=data_files,
-        metadata=metadata(task),
     )
 
 

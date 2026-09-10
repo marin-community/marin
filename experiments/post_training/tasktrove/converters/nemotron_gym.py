@@ -19,7 +19,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import metadata, verifier_data
+from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TaskFiles
 
 _OPTION_LINE = re.compile(r"^\s*\(?([A-Z])[\.\):]\s", re.MULTILINE)
@@ -52,7 +52,6 @@ def convert_mcqa(task: TaskFiles) -> ConvertedTask | Rejected:
         dockerfile=task.text(DOCKERFILE),
         tags=("qa", "mcq", "nemotron"),
         solution_files=answer_solution(spec),
-        metadata=metadata(task),
     )
 
 
@@ -69,7 +68,6 @@ def convert_math_boxed(task: TaskFiles) -> ConvertedTask | Rejected:
         dockerfile=task.text(DOCKERFILE),
         tags=("math", "nemotron"),
         solution_files=task.under(SOLUTION_DIR) or answer_solution(spec),
-        metadata=metadata(task),
     )
 
 

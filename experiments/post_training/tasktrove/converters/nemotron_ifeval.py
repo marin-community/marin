@@ -20,7 +20,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import metadata, verifier_data
+from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
 
@@ -48,7 +48,6 @@ def convert_nemotron_ifeval(task: TaskFiles) -> ConvertedTask | Rejected:
         spec=IfevalSpec(constraints=constraints),
         dockerfile=task.text(DOCKERFILE),
         tags=("instruction-following", "ifeval", "nemotron"),
-        metadata=metadata(task),
     )
 
 

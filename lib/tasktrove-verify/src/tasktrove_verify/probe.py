@@ -8,7 +8,7 @@ the candidate text. Execution modes need the task image and are exercised by con
 against samples instead.
 """
 
-from tasktrove_verify.spec import ExactSpec, JudgeSpec, MathSpec, McqSpec, NumericSpec, Spec
+from tasktrove_verify.spec import RUBRIC_REFERENCE, ExactSpec, JudgeSpec, MathSpec, McqSpec, NumericSpec, Spec
 
 
 def positive_candidate(spec: Spec) -> str | None:
@@ -22,7 +22,7 @@ def positive_candidate(spec: Spec) -> str | None:
     if isinstance(spec, ExactSpec):
         return "\n".join(spec.expected)
     if isinstance(spec, JudgeSpec):
-        gated = spec.rubric == "reference" and spec.exact_gate and spec.references and not spec.constraints
+        gated = spec.rubric == RUBRIC_REFERENCE and spec.exact_gate and spec.references and not spec.constraints
         return spec.references[0] if gated else None
     return None
 

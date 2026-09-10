@@ -22,7 +22,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import metadata, verifier_data
+from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TaskFiles
 
 CHECKER_NAME = "agent_calendar_checker.py"
@@ -240,7 +240,6 @@ def convert_agent_calendar(task: TaskFiles) -> ConvertedTask | Rejected:
             f"tests/{DATA_NAME}": json.dumps(expected).encode(),
         },
         solution_files=task.under(SOLUTION_DIR),
-        metadata=metadata(task),
     )
 
 

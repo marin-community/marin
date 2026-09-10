@@ -27,11 +27,12 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import metadata
-from experiments.post_training.tasktrove.converters.stdio_cases import case_files_from_dirs, hidden_case_rejection
+from experiments.post_training.tasktrove.converters.stdio_cases import (
+    SOLUTION_COMMAND,
+    case_files_from_dirs,
+    hidden_case_rejection,
+)
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLVE_SH, TaskFiles
-
-COMMAND = "python3 /app/solution.py"
 
 SOLUTION_PY = "solution/solution.py"
 _SOLVE_SCRIPT = "#!/bin/bash\nset -e\ncp /solution/solution.py /app/solution.py\n"
@@ -44,7 +45,7 @@ last digit, so those get float comparison instead of the source's exact token ma
 
 
 def _oracle_solution_files(solution: str) -> dict[str, bytes]:
-    """``solve.sh`` copies the oracle into place at the path ``COMMAND`` runs."""
+    """``solve.sh`` copies the oracle into place at the path ``SOLUTION_COMMAND`` runs."""
     return {SOLVE_SH: _SOLVE_SCRIPT.encode(), SOLUTION_PY: solution.encode()}
 
 
@@ -70,13 +71,12 @@ def convert_taco(task: TaskFiles) -> ConvertedTask | Rejected:
         return rejection
     return ConvertedTask(
         instruction=instruction,
-        spec=StdioSpec(command=COMMAND, compare=_compare(instruction)),
+        spec=StdioSpec(command=SOLUTION_COMMAND, compare=_compare(instruction)),
         dockerfile=task.text(DOCKERFILE),
         tags=("code", "competitive-programming", "stdio", "taco"),
         language="python",
         data_files=cases,
         solution_files=_oracle_solution_files(solution),
-        metadata=metadata(task),
     )
 
 

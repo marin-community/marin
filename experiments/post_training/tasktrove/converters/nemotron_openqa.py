@@ -22,7 +22,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import metadata, verifier_data
+from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
 RESPONSE_OUTPUT = "/app/response.txt"
@@ -68,7 +68,6 @@ def convert_nemotron_openqa(task: TaskFiles) -> ConvertedTask | Rejected:
         ),
         dockerfile=drop_dockerfile_lines(task.text(DOCKERFILE), OLD_GRADER_LINE),
         tags=tags,
-        metadata=metadata(task),
     )
 
 

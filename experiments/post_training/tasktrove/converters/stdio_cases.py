@@ -3,11 +3,14 @@
 
 """Case files for the ``stdio`` mode: ``tests/<cases>/input_<n>.txt`` and ``output_<n>.txt`` pairs."""
 
-import re
+
+from tasktrove_verify.modes.extract import collapse_whitespace
 
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus, Rejected
 from experiments.post_training.tasktrove.taskbinary import TaskFiles
 
+SOLUTION_COMMAND = "python3 /app/solution.py"
+"""How every stdio converter runs the agent's program, once per case."""
 CASES_DIR = "tests/cases"
 
 
@@ -40,10 +43,6 @@ def case_files_from_dirs(
     return files
 
 
-def _squash(text: str) -> str:
-    return re.sub(r"\s+", " ", text.strip())
-
-
 def hidden_case_rejection(files: dict[str, bytes], instruction: str, cases_dir: str = CASES_DIR) -> Rejected | None:
     """Reject a case set that cannot grade: none at all, or every input already printed in the prompt.
 
@@ -54,7 +53,7 @@ def hidden_case_rejection(files: dict[str, bytes], instruction: str, cases_dir: 
     inputs = [data.decode(errors="replace") for path, data in files.items() if path.startswith(cases_dir + "/input_")]
     if not inputs:
         return Rejected(ConvertStatus.NULL_GRADER, "no stdio cases")
-    prompt = _squash(instruction)
-    if all(_squash(stdin) in prompt for stdin in inputs):
+    prompt = collapse_whitespace(instruction)
+    if all(collapse_whitespace(stdin) in prompt for stdin in inputs):
         return Rejected(ConvertStatus.GOLD_IN_INSTRUCTION, f"all {len(inputs)} hidden inputs are samples in the prompt")
     return None

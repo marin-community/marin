@@ -27,6 +27,7 @@ from pathlib import Path
 import click
 from tasktrove_verify.cli import DEFAULT_LOGS_DIR
 from tasktrove_verify.reward import REWARD_JSON
+from tasktrove_verify.spec import DEFAULT_WORKSPACE
 from zephyr.readers import load_parquet
 
 from experiments.post_training.tasktrove.contract import INSTALL_MARKER, TESTS_MOUNT
@@ -104,7 +105,7 @@ def build_image(dockerfile: str, tag: str) -> None:
 def image_workdir(dockerfile: str) -> str:
     """The last ``WORKDIR`` the Dockerfile sets, where the oracle runs; ``/app`` when it sets none."""
     workdirs = _WORKDIR_LINE.findall(dockerfile)
-    return workdirs[-1] if workdirs else "/app"
+    return workdirs[-1] if workdirs else DEFAULT_WORKSPACE
 
 
 def run_check(image: str, task_dir: Path, check: str, timeout: float, network: str) -> CheckResult:

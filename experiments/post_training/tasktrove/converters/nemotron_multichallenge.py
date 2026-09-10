@@ -22,7 +22,6 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import metadata
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
 JUDGE_TOML = "tests/judge.toml"
@@ -61,7 +60,6 @@ def convert_nemotron_multichallenge(task: TaskFiles) -> ConvertedTask | Rejected
         dockerfile=drop_dockerfile_lines(task.text(DOCKERFILE), OLD_GRADER_LINE),
         tags=("instruction-following", "multi-turn", "judge", "checklist", "nemotron"),
         data_files={f"tests/{CONVERSATION}": transcript.encode()},
-        metadata=metadata(task),
     )
 
 

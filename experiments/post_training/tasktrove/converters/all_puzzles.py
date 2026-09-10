@@ -28,7 +28,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
+from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TaskFiles
 
 GOLD_FILE = "tests/gold.json"
 _STRING_ANSWER_TYPES = frozenset({"choice", "exact", "ordered_list"})
@@ -48,7 +48,7 @@ def _math_spec(gold: str) -> MathSpec | None:
 
 
 def _solution_files(task: TaskFiles, spec: Spec) -> dict[str, bytes]:
-    return task.under("solution/") or answer_solution(spec)
+    return task.under(SOLUTION_DIR) or answer_solution(spec)
 
 
 def convert_all_puzzles(task: TaskFiles) -> ConvertedTask | Rejected:

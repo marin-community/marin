@@ -24,15 +24,19 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import metadata
-from experiments.post_training.tasktrove.converters.swe_repo import ensure_pytest_json_report, test_ids
+from experiments.post_training.tasktrove.converters.swe_repo import (
+    CONFIG_JSON,
+    TESTBED,
+    TRUSTED_TEST_PATHS,
+    ensure_pytest_json_report,
+    test_file,
+    test_ids,
+    uncovered_files,
+)
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
 
-CONFIG_JSON = "tests/config.json"
 TEST_PATCH = "tests/test_patch.diff"
-TRUSTED_TEST_PATHS = "tests/trusted_test_paths.txt"
 TRUSTED_PATCH_PATHS = "tests/trusted_patch_paths.txt"
-DEFAULT_WORKSPACE = "/testbed"
 
 # The old ``tests/test.sh`` invokes ``install_trusted_test_patch.sh <repo> <patch> <trusted_commit>``;
 # the commit is the only per-task value we need out of that call, and it only exists embedded in
@@ -162,21 +166,15 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test.sh does not call install_trusted_test_patch.sh")
     trusted_commit = match["commit"]
 
-    graded_files = {node_id.split("::", 1)[0] for node_id in node_ids}
-    manifest = {
-        line.strip()
-        for text in (task.get_text(TRUSTED_TEST_PATHS), task.get_text(TRUSTED_PATCH_PATHS))
-        for line in (text or "").splitlines()
-        if line.strip()
-    }
-    uncovered = sorted(graded_files - manifest)
+    graded_files = {test_file(node_id) for node_id in node_ids}
+    uncovered = uncovered_files(graded_files, [task.get_text(TRUSTED_TEST_PATHS), task.get_text(TRUSTED_PATCH_PATHS)])
     if uncovered:
         return Rejected(
             ConvertStatus.UNSUPPORTED_VARIANT, f"graded test files missing from trusted manifest: {uncovered[:5]}"
         )
 
     workspace_match = _REPO_DIR_RE.search(test_sh)
-    workspace = workspace_match.group(1) if workspace_match else DEFAULT_WORKSPACE
+    workspace = workspace_match.group(1) if workspace_match else TESTBED
     conda_lines = _conda_activation(test_sh)
     python, python_setup = _python_command(conda_lines)
 
@@ -201,7 +199,6 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
         language="python",
         data_files=data_files,
         solution_files=task.under(SOLUTION_DIR),
-        metadata=metadata(task),
     )
 
 
