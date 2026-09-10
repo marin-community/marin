@@ -42,3 +42,24 @@ def test_missing_requirement_block_is_a_null_grader():
     task.files[JUDGE_TOML] = task.text(JUDGE_TOML).replace("Requirement:", "Note:").encode()
     record = _convert(write_task_binary(task))
     assert record.status == ConvertStatus.NULL_GRADER
+
+
+def test_negated_requirement_preserves_criterion_polarity():
+    task = read_task_binary(FIXTURE.read_bytes())
+    task.files[JUDGE_TOML] = (
+        task.text(JUDGE_TOML)
+        .replace(
+            "Pass when the candidate clearly satisfies this requirement.",
+            "Pass when the candidate clearly does not satisfy the condition queried by this requirement.",
+            1,
+        )
+        .encode()
+    )
+    record = _convert(write_task_binary(task))
+    converted = read_task_binary(record.task_binary)
+    spec = parse_spec(converted.text(VERIFIER_TOML))
+    assert isinstance(spec, JudgeSpec)
+    assert spec.criteria[0] == (
+        "The candidate must answer no to this question: Does the response present a single consolidated smoothie or "
+        "bowl (not multiple separate recipes), expressed as one cohesive preparation?"
+    )

@@ -367,7 +367,7 @@
  "laion__nemotron-gym-multichallenge-advanced-v4": {
   "verdict": "keep",
   "family": "llm-judge-freeform",
-  "reason": "Multi-turn with four numeric factual criteria per task; judge compares against fixed values."
+  "reason": "Multi-turn with four factual or formatting criteria per task. The converter preserves the source's explicit positive or negated pass condition."
  },
  "laion__nemotron-gym-multichallenge-vanilla-v3": {
   "verdict": "drop",

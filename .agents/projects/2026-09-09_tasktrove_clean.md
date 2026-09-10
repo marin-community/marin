@@ -38,7 +38,7 @@ raw → summaries → templates → converted → graded → clean
 20. [x] M2 cleanup: leave non-letter MCQA golds, literal-newline prompt failures, and the broken `arc_agi`/`rearc` scorer rows rejected; their small recovery does not justify format-specific parsing or grading paths
 21. [x] M3 cleanup: audit the 25 dropped test sources; reinstate 10 self-contained Python sources through the pytest mode with a `kata` tag, and keep the 15 broken or infrastructure-dependent sources dropped
 22. [x] M4 cleanup: retain sound non-Python SWE repository tasks through the script fallback; drop the JavaScript and TypeScript task sets after their shipped goldens passed only 11/20 and 3/20
-23. [ ] M5 cleanup: sample kept and dropped judge sources against the answerability, rubric, leakage, triviality, and persona checklist
+23. [x] M5 cleanup: sample kept and dropped judge sources against the answerability, rubric, leakage, triviality, and persona checklist; preserve the polarity of 151 negated multichallenge criteria
 24. [ ] M6 cleanup: measure near duplicates over instructions and hidden grading text before changing the exact within-source key
 25. [ ] M7 cleanup: rerun the full pipeline once after the cleanup decisions, regenerate the report and artifact, run the final Docker sample, and update PR #9061
 
@@ -108,6 +108,42 @@ non-Python tasks use `script`. The 4,756 rejected rows are 423 malformed Python 
 JavaScript and 1,879 TypeScript tasks. The converted non-Python pool contains Go (4,087), Rust
 (1,837), Java (660), Julia (599), Kotlin (446), Swift (266), and 193 rows across nine smaller
 languages.
+
+M5 reviewed the 20 task paths with the smallest SHA-256 path hashes from each of the ten kept and
+six dropped judge sources. `Good` means the instruction is answerable, the rubric is coherent and
+nontrivial, no answer leaks to the solver, and the judge prompt is not tied to an unrelated
+persona. `Weak` marks an underspecified question or a rubric that only partially checks it;
+`garbage` marks a contradiction, missing context, answer leakage, or an incompatible persona.
+Safety has no domain or category field in either metadata or verifier data, so it was sampled as
+one source rather than inventing domain labels.
+
+| kept source | good | weak | garbage | decision |
+|---|---:|---:|---:|---|
+| glaive-code-assistant | 20 | 0 | 0 | keep |
+| multichallenge-advanced | 20 | 0 | 0 | keep; normalize criterion polarity |
+| safety | 15 | 3 | 2 | keep; failures have no sound archive-only predicate |
+| science-so-openq | 16 | 2 | 2 | keep; isolated questionable references do not justify dropping the source |
+| stackexchange-codereview | 19 | 1 | 0 | keep |
+| stackexchange-overflow | 17 | 1 | 2 | keep; isolated HTML-stripping damage has no sound local predicate |
+| stackexchange-superuser | 18 | 1 | 1 | keep |
+| stackexchange-tezos | 20 | 0 | 0 | keep |
+| stackexchange-unix | 20 | 0 | 0 | keep |
+| wizardlm-orca | 19 | 0 | 1 | keep |
+
+| dropped source | good | weak | garbage | decision |
+|---|---:|---:|---:|---|
+| magicoder | 18 | 2 | 0 | drop; grading a submitted file bundle needs a new judge input contract |
+| multichallenge-vanilla | 0 | 0 | 20 | drop; the judge prompt gives away the expected `YES` decision |
+| identity-following | 0 | 0 | 20 | drop; every task pins an NVIDIA identity |
+| instruction-following-multiturnchat | 18 | 2 | 0 | drop; recovery needs a second multi-turn converter and conflict resolution |
+| agentic-swe-pivot | 0 | 0 | 20 | drop; the repository named by the task is absent |
+| instruction-following-adversarial | 18 | 0 | 2 | drop; broken source judge examples and a new converter would be required |
+
+The audit exposed one mechanical bug in the kept multichallenge converter. Its source template has
+4,169 positive and 151 negated criteria, but conversion had discarded the `does not satisfy`
+polarity marker and retained only the question. The two source templates are uniform across all
+4,320 criteria, so conversion now rewrites negated criteria as an explicit `must answer no`
+requirement. No content heuristic or judge endpoint is involved.
 
 ## Run 2026.09.10.5
 

@@ -28,14 +28,19 @@ JUDGE_TOML = "tests/judge.toml"
 CONVERSATION = "conversation.txt"
 RESPONSE_FILE = "/app/response.txt"
 _REQUIREMENT = re.compile(r"Requirement:\s*(.+)\Z", re.DOTALL)
+_NEGATED = "Pass when the candidate clearly does not satisfy the condition queried by this requirement."
 
 
 def _criteria(judge_toml: str) -> list[str]:
     config = tomllib.loads(judge_toml)
     questions = []
     for criterion in config.get("criterion", []):
-        match = _REQUIREMENT.search(str(criterion.get("description", "")))
-        questions.append(match.group(1).strip() if match else "")
+        description = str(criterion.get("description", ""))
+        match = _REQUIREMENT.search(description)
+        question = match.group(1).strip() if match else ""
+        if _NEGATED in description:
+            question = f"The candidate must answer no to this question: {question}"
+        questions.append(question)
     return questions
 
 
