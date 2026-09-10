@@ -8,11 +8,14 @@ import pyarrow.parquet as pq
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.chat_normalize import CHAT_SCHEMA
-from marin.datakit.chat_render import render_chat_to_parquet
+from marin.datakit.normalize import generate_id
+from marin.datakit.sft_sources import DatakitChatSource
+from marin.execution.step_spec import StepSpec
 from openai_harmony import Message, Role
 
 
-def test_rendered_parquet_preserves_ids_and_duplicates(tmp_path):
+def test_sft_source_renders_then_normalizes_and_deduplicates(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     messages = [
         Message.from_role_and_content(Role.USER, "What is 2 + 2?"),
         Message.from_role_and_content(Role.ASSISTANT, "Add two and two.").with_channel("analysis"),
@@ -26,15 +29,21 @@ def test_rendered_parquet_preserves_ids_and_duplicates(tmp_path):
         }
         for source_id in ["first-source-id", "second-source-id"]
     ]
-    input_path = tmp_path / "input"
-    input_path.mkdir()
+    input_path = tmp_path / "chat" / "outputs" / "main"
+    input_path.mkdir(parents=True)
     pq.write_table(pa.Table.from_pylist(records, schema=CHAT_SCHEMA), input_path / "part-00000.parquet")
-    output_path = tmp_path / "rendered"
+    source = DatakitChatSource(
+        name="fixture",
+        chat_steps=(StepSpec(name="fixture-chat", override_output_path=str(tmp_path / "chat")),),
+        rough_token_count_b=0,
+    )
 
     with set_current_client(LocalClient()):
-        render_chat_to_parquet(input_path=str(input_path), output_path=str(output_path), max_workers=1)
+        for step in source.normalize_steps[1:]:
+            assert step.fn is not None
+            step.fn(step.output_path)
 
-    table = pq.read_table(output_path)
+    table = pq.read_table(source.rendered.output_path)
     assert table.column_names == ["id", "text"]
     expected_text = (
         "<|begin_of_text|><|start_header_id|>system<|end_header_id|>Reasoning: /think<|eot_id|>"
@@ -46,3 +55,14 @@ def test_rendered_parquet_preserves_ids_and_duplicates(tmp_path):
         {"id": "first-source-id", "text": expected_text},
         {"id": "second-source-id", "text": expected_text},
     ]
+
+    normalized = pq.read_table(f"{source.normalized.output_path}/outputs/main").to_pylist()
+    duplicates = pq.read_table(f"{source.normalized.output_path}/outputs/dups").to_pylist()
+    assert len(normalized) == len(duplicates) == 1
+    assert normalized[0]["id"] == generate_id(expected_text)
+    assert normalized[0]["text"] == expected_text
+    assert {normalized[0]["source_id"], duplicates[0]["source_id"]} == {"first-source-id", "second-source-id"}
+    assert (
+        pq.read_table(f"{source.chat_normalized.output_path}/outputs/main").to_pylist()
+        == pa.Table.from_pylist(records, schema=CHAT_SCHEMA).to_pylist()
+    )
