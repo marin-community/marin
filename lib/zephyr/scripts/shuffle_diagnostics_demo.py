@@ -22,6 +22,8 @@ from zephyr.dataset import Dataset
 from zephyr.shuffle_report import render_shuffle_report
 from zephyr.stats import StatsConfig, ZephyrShuffleStat
 
+NUM_OUTPUT_SHARDS = 16
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -58,7 +60,7 @@ def main() -> None:
                     .group_by(
                         key=lambda row: row["key"],
                         reducer=lambda key, items: (key, sum(row["count"] for row in items)),
-                        num_output_shards=16,
+                        num_output_shards=NUM_OUTPUT_SHARDS,
                     )
                 )
                 result = context.execute(dataset)
@@ -81,8 +83,10 @@ def main() -> None:
                 "AND ts >= now() - INTERVAL '1 hour' AND ts <= now()) "
                 "SELECT * FROM reports WHERE report_rank = 1 ORDER BY target_shard"
             ).to_pylist()
-            assert len(result_rows) == 16, f"Expected 16 persisted targets, got {len(result_rows)}"
-            assert {row["num_targets"] for row in result_rows} == {16}
+            assert (
+                len(result_rows) == NUM_OUTPUT_SHARDS
+            ), f"Expected {NUM_OUTPUT_SHARDS} persisted targets, got {len(result_rows)}"
+            assert {row["num_targets"] for row in result_rows} == {NUM_OUTPUT_SHARDS}
             assert all(row["input_rows"] is not None for row in result_rows), "Some targets remain unreported"
             assert sum(row["input_rows"] for row in result_rows) == 10_000
             records.extend(
