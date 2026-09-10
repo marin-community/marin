@@ -10,7 +10,6 @@ from itertools import groupby
 
 import pyarrow as pa
 from fray.types import ResourceConfig
-from jinja2 import Environment, StrictUndefined
 from openai_harmony import Message, Role
 from rigging.filesystem.storage_path import prefix_join
 from zephyr.context import ZephyrContext
@@ -45,23 +44,6 @@ For each function call, pass a json object with function name and arguments with
 </tool_call>
 
 """
-
-
-# Python prepares message bodies; Jinja owns only the conversation frame.
-_CHAT_TEMPLATE = Environment(undefined=StrictUndefined, autoescape=False).from_string(
-    """{{ bos_token }}
-{%- if system is not none -%}
-<|start_header_id|>system<|end_header_id|>{{ system }}<|eot_id|>
-{%- endif -%}
-{%- for turn in turns -%}
-<|start_header_id|>{{ turn.role.value }}<|end_header_id|>
-{{ turn.content }}<|eot_id|>{{ turn.separator }}
-{%- endfor -%}
-{%- if add_generation_prompt -%}
-<|start_header_id|>assistant<|end_header_id|>{{ "\\n" }}
-{%- endif -%}
-"""
-)
 
 
 @dataclass(frozen=True)
@@ -140,12 +122,13 @@ def render_marin_chat(
         auxiliary.append(custom_instructions.strip())
     if tools:
         auxiliary.append(_TOOL_INSTRUCTIONS + "".join(str(tool) for tool in tools) + _TOOL_CALL_INSTRUCTIONS)
-    return _CHAT_TEMPLATE.render(
-        bos_token=bos_token,
-        system="".join(auxiliary) if auxiliary else None,
-        turns=_chat_turns(messages),
-        add_generation_prompt=add_generation_prompt,
+    system = f"<|start_header_id|>system<|end_header_id|>{''.join(auxiliary)}<|eot_id|>" if auxiliary else ""
+    conversation = "".join(
+        f"<|start_header_id|>{turn.role.value}<|end_header_id|>\n{turn.content}<|eot_id|>{turn.separator}"
+        for turn in _chat_turns(messages)
     )
+    prefix = "<|start_header_id|>assistant<|end_header_id|>\n" if add_generation_prompt else ""
+    return bos_token + system + conversation + prefix
 
 
 def render_chat_record(record: dict) -> dict:
