@@ -5,16 +5,17 @@
 
 A Marina Python app. The kernel mounts :func:`create_api` at ``/evaldash/api/`` behind its own
 authentication and serves ``web/``'s build from ``dist/`` under ``/evaldash/``; this module is
-therefore only the JSON API and the background record ingest behind it.
+therefore the JSON API and its serving stores.
 
 Eval runs write one canonical ``record.json`` per run to object storage. That remains the producer
-and recovery format; the app's own Postgres schema is the serving catalog, and a background
-reconciler scans the record roots after the API is serving and commits changes as new catalog
-generations. The ``local`` store keeps the direct object scan used for development and journeys,
-with no database at all.
+and recovery format; the app's own Postgres schema is the serving catalog. A scheduled job scans
+the record roots and commits new catalog generations. Serving processes check the generation at a
+bounded cadence and atomically install a newer snapshot. The ``local`` store keeps the direct object
+scan used for development and journeys, with no database at all.
 
-``/status`` reports each prefix's last-probe health, the active store, and the ingest cadence;
-``POST /refresh`` runs one ingest pass immediately, serialised with the loop.
+``/status`` reports each prefix's durable last-probe health, the active store, and the ingest
+cadence. In PostgreSQL mode, ``POST /refresh`` reloads an already committed catalog generation and
+queues the ingest job; in local mode it runs one ingest pass immediately, serialised with the loop.
 
 Per-run drill-in endpoints read beyond the record: ``/runs/{id}/jobs`` and ``.../logs`` fetch live
 iris job/attempt status and finelog log lines over Direct VPC egress, ``.../samples`` pages the
@@ -30,13 +31,18 @@ import asyncio
 import functools
 import logging
 import os
+import re
 import threading
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol
 
+import google.auth
+from fastapi import APIRouter, FastAPI
+from google.auth.transport.requests import AuthorizedSession
 from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE, Completeness, MissingPolicy, SelectionRequest
 from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
@@ -45,14 +51,14 @@ from marin.evaluation.records import (
     list_record_paths,
     scan_records,
 )
-from marina.apps import Services
+from marina.apps import RegisteredApi, Services, registered_api
+from marina.mcp import OperationRisk, operation_extension
+from pydantic import BaseModel
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.server_auth import get_verified_identity
 from sqlalchemy.engine import Engine
-from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import review, samples
@@ -86,7 +92,7 @@ from .results_db import (
 
 logger = logging.getLogger(__name__)
 
-CATALOG_POLL_SECONDS = 10
+CATALOG_CHECK_INTERVAL = 10.0
 DEFAULT_RUNS_LIMIT = 200
 MAX_RUNS_LIMIT = 1000
 DEFAULT_LOG_TAIL = 200
@@ -109,6 +115,107 @@ STORE_ENV = "EVALDASH_STORE"
 INGEST_INTERVAL_ENV = "EVALDASH_INGEST_INTERVAL"
 REVALIDATE_AFTER_ENV = "EVALDASH_REVALIDATE_AFTER"
 REVIEW_MODEL_ENV = "EVALDASH_REVIEW_MODEL"
+INGEST_JOB_ENV = "EVALDASH_INGEST_JOB"
+CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
+CLOUD_RUN_JOB_PATTERN = re.compile(r"^projects/[a-z][a-z0-9-]+/locations/[a-z0-9-]+/jobs/[a-z][a-z0-9-]+$")
+
+
+class PanelCellResponse(BaseModel):
+    value: float
+    low: float
+    high: float
+    interval_kind: str
+    metric: str
+    metric_kind: str
+    n_scored: int
+    n_attempted: int | None
+    coverage: float | None
+    errors: dict[str, int]
+    item_cap: int | None
+    flags: list[str]
+    run_id: str
+    created_at: str
+    version: str | None
+    git_sha: str
+    eval_runtime: str
+
+
+class MissingCellResponse(BaseModel):
+    reason: str
+    run_id: str
+    status: str
+    created_at: str
+
+
+class PanelAggregateResponse(BaseModel):
+    value: float
+    low: float
+    high: float
+    interval_kind: str
+    covered: int
+    total: int
+    panel: list[str]
+    missing_policy: str
+    metrics: list[str]
+    runtimes: list[str]
+
+
+class PanelRowResponse(BaseModel):
+    model: str
+    archived: bool
+    cells: dict[str, PanelCellResponse]
+    missing: dict[str, MissingCellResponse]
+    aggregate: PanelAggregateResponse | None
+    covered: int
+
+
+class PanelRequestResponse(BaseModel):
+    min_coverage: float
+    cohort: str
+    cohort_version: str | None
+    completeness: str
+    filters: dict[str, str]
+    model_query: str | None
+    statuses: list[str]
+
+
+class PanelResponse(BaseModel):
+    benchmarks: list[str]
+    panel: list[str]
+    rows: list[PanelRowResponse]
+    request: PanelRequestResponse
+
+
+class RunDetailResponse(EvalRunRecord):
+    headline: PanelCellResponse | None
+
+
+class LogEntryResponse(BaseModel):
+    timestamp: dict[str, object] | None = None
+    source: str
+    data: str
+    attempt_id: int
+    level: str
+    key: str
+    seq: str | int
+
+
+class LogsResponse(BaseModel):
+    reachable: bool
+    error: str | None
+    source: str
+    role: str | None
+    entries: list[LogEntryResponse]
+
+
+class HistoryPointResponse(PanelCellResponse):
+    status: str
+
+
+class HistoryResponse(BaseModel):
+    model: str
+    task: str
+    points: list[HistoryPointResponse]
 
 
 class StoreMode(StrEnum):
@@ -129,6 +236,7 @@ class EvaldashConfig:
     ingest_interval: float
     revalidate_after: float
     review_model: str
+    ingest_job: str | None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> EvaldashConfig:
@@ -137,13 +245,33 @@ class EvaldashConfig:
         store = environ.get(STORE_ENV, StoreMode.POSTGRES).strip().lower()
         if store not in tuple(StoreMode):
             raise ValueError(f"unknown {STORE_ENV}={store!r}; expected one of {[mode.value for mode in StoreMode]}")
+        ingest_job = environ.get(INGEST_JOB_ENV)
+        if ingest_job is not None and not CLOUD_RUN_JOB_PATTERN.fullmatch(ingest_job):
+            raise ValueError(f"invalid {INGEST_JOB_ENV}={ingest_job!r}")
+        mode = StoreMode(store)
+        if mode is StoreMode.POSTGRES and INGEST_INTERVAL_ENV in environ:
+            raise ValueError(f"{INGEST_INTERVAL_ENV} is only supported with {StoreMode.LOCAL.value!r} storage")
         return cls(
             prefixes=tuple(part.strip() for part in raw_prefixes.split(",") if part.strip()),
-            store=StoreMode(store),
+            store=mode,
             ingest_interval=float(environ.get(INGEST_INTERVAL_ENV, DEFAULT_INGEST_INTERVAL)),
             revalidate_after=float(environ.get(REVALIDATE_AFTER_ENV, DEFAULT_REVALIDATE_AFTER)),
             review_model=environ.get(REVIEW_MODEL_ENV, DEFAULT_REVIEW_MODEL),
+            ingest_job=ingest_job,
         )
+
+
+def trigger_cloud_run_job(job: str) -> str:
+    """Start one Cloud Run job execution and return the long-running operation name."""
+    credentials, _project = google.auth.default(scopes=(CLOUD_PLATFORM_SCOPE,))
+    with AuthorizedSession(credentials) as session:
+        response = session.post(f"https://run.googleapis.com/v2/{job}:run", timeout=30)
+        response.raise_for_status()
+        operation = response.json()
+    name = operation.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError("Cloud Run returned an operation without a name")
+    return name
 
 
 # --------------------------------------------------------------------------------------
@@ -408,9 +536,12 @@ class PgRecordStore(RecordStore):
 
     backend = "postgres"
 
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, now: Callable[[], float] = time.monotonic) -> None:
         super().__init__()
         self._engine = engine
+        self._now = now
+        self._refresh_lock = threading.Lock()
+        self._next_catalog_check = 0.0
         # The kernel owns the connection, so all this store can name is where the engine points:
         # a host and database for a URL engine, nothing for one built on the Cloud SQL connector.
         self._instance = engine.url.host
@@ -422,6 +553,7 @@ class PgRecordStore(RecordStore):
         self._set_snapshot(snapshot.records)
 
     def store_info(self) -> StoreInfo:
+        self.refresh_if_due()
         with self._lock:
             return StoreInfo(
                 backend=self.backend,
@@ -433,21 +565,50 @@ class PgRecordStore(RecordStore):
                 catalog_error=self._catalog_error,
             )
 
-    def reload_if_changed(self) -> bool:
-        """Load a newer committed generation, returning whether the snapshot advanced."""
+    def _load_newer_catalog(self) -> None:
         generation = catalog_generation(self._engine)
         with self._lock:
             current_generation = self._catalog_generation
-        if generation == current_generation:
-            return False
+        if generation <= current_generation:
+            return
         snapshot = fetch_snapshot(self._engine)
         with self._lock:
+            if snapshot.generation <= self._catalog_generation:
+                return
             self._records = snapshot.records
             self._by_id = {record.run_id: record for record in snapshot.records}
             self._catalog_generation = snapshot.generation
             self._snapshot_updated_at = snapshot.updated_at
         logger.info("postgres store loaded generation %d with %d records", snapshot.generation, len(snapshot.records))
-        return True
+
+    def reload_if_changed(self) -> None:
+        """Check immediately for a newer committed catalog and install it once."""
+        with self._refresh_lock:
+            try:
+                self._load_newer_catalog()
+            except Exception as exc:
+                self.set_catalog_error(f"{type(exc).__name__}: {exc}")
+                raise
+            self.set_catalog_error(None)
+
+    def refresh_if_due(self) -> None:
+        """Refresh the cached catalog at most once per check interval, serving stale data on failure."""
+        with self._refresh_lock:
+            now = self._now()
+            if now < self._next_catalog_check:
+                return
+            self._next_catalog_check = now + CATALOG_CHECK_INTERVAL
+            try:
+                self._load_newer_catalog()
+            except Exception as exc:
+                self.set_catalog_error(f"{type(exc).__name__}: {exc}")
+                logger.exception("catalog generation check failed; serving the previous snapshot")
+                return
+            self.set_catalog_error(None)
+
+    def _snapshot(self) -> tuple[list[EvalRunRecord], dict[str, EvalRunRecord]]:
+        self.refresh_if_due()
+        return super()._snapshot()
 
     def set_catalog_error(self, error: str | None) -> None:
         with self._lock:
@@ -516,7 +677,7 @@ def create_store(services: Services, config: EvaldashConfig) -> RecordStore:
 
 
 # --------------------------------------------------------------------------------------
-# Background ingest
+# Record ingest
 # --------------------------------------------------------------------------------------
 
 
@@ -525,7 +686,7 @@ def _utcnow_iso() -> str:
 
 
 async def _run_periodically(
-    operation: Callable[[], Awaitable[None]],
+    operation: Callable[[], Awaitable[object]],
     interval: float,
     label: str,
     set_error: Callable[[str | None], None],
@@ -586,14 +747,15 @@ class Ingestor:
         self.last_pass_time: str | None = None
         self.cycle_error: str | None = None
 
-    async def run_once(self) -> None:
-        """Run one full ingest pass, serialised against any other pass via ``_lock``."""
+    async def run_once(self) -> tuple[str, ...]:
+        """Run one ingest pass and return the prefixes whose listings failed."""
         if not self._prefixes:
             # No roots to scan: leave the (externally populated) store untouched rather than
             # refreshing it to empty.
-            return
+            return ()
         async with self._lock:
             records: list[EvalRunRecord] = []
+            failed_prefixes: list[str] = []
             for prefix in self._prefixes:
                 probe = self._probes[prefix]
                 probe.last_probe_time = _utcnow_iso()
@@ -606,6 +768,7 @@ class Ingestor:
                     # rest, and must not drop this prefix's previously-ingested runs from the
                     # snapshot -- carry its last-good listing forward instead.
                     probe.error = f"{type(exc).__name__}: {exc}"
+                    failed_prefixes.append(prefix)
                     logger.exception("ingest: listing %s failed; keeping last-good records this pass", prefix)
                     records.extend(self._last_good[prefix])
                     continue
@@ -619,6 +782,7 @@ class Ingestor:
                 records.extend(found)
             await asyncio.to_thread(self._store.refresh, records)
             self.last_pass_time = _utcnow_iso()
+            return tuple(failed_prefixes)
 
     async def run_loop(self) -> None:
         if not self._prefixes:
@@ -640,7 +804,7 @@ class Ingestor:
 
 
 class PostgresIngestor:
-    """Reconcile object membership and versions into PostgreSQL after serving has started."""
+    """Reconcile object membership and versions into PostgreSQL in one job or manual pass."""
 
     def __init__(
         self,
@@ -655,133 +819,89 @@ class PostgresIngestor:
         self.interval = interval
         self.revalidate_after = revalidate_after
         self._now = now
-        self._lock = asyncio.Lock()
         store.configure_prefixes(prefixes)
-        self._probes = {prefix: PrefixProbe(prefix=prefix) for prefix in prefixes}
-        for row in store.prefix_statuses():
-            probe = self._probes.get(row.prefix)
-            if probe is None:
-                continue
-            probe.last_probe_time = row.last_probe_at.isoformat() if row.last_probe_at else None
-            probe.last_success_time = row.last_success_at.isoformat() if row.last_success_at else None
-            probe.record_count = row.record_count
-            probe.error = row.error
-        for prefix, probe in self._probes.items():
-            probe.parse_failures = [
-                RecordParseFailure(path=path, error=state.error)
-                for path, state in sorted(store.source_states(prefix).items())
-                if state.error is not None
-            ]
-        self.last_pass_time: str | None = None
-        self.cycle_error: str | None = None
 
-    async def run_once(self) -> None:
+    async def run_once(self) -> tuple[str, ...]:
+        """Run one reconciliation pass and return the prefixes whose listings failed."""
         if not self._prefixes:
-            return
-        async with self._lock:
-            for prefix in self._prefixes:
-                probe = self._probes[prefix]
-                probe_at = self._now()
-                probe.last_probe_time = probe_at.isoformat()
-                try:
-                    paths = await asyncio.to_thread(list_record_paths, prefix)
-                    states = await asyncio.to_thread(self._store.source_states, prefix)
-                    observations = await asyncio.to_thread(
-                        inspect_record_paths,
-                        paths,
-                        states,
-                        VerificationSchedule(
-                            checked_at=probe_at,
-                            retry_after=self.interval,
-                            revalidate_after=self.revalidate_after,
-                        ),
-                    )
-                    failures = {
-                        path: state.error for path, state in states.items() if path in paths and state.error is not None
-                    }
-                    for observation in observations:
-                        if observation.error is None:
-                            failures.pop(observation.path, None)
-                        else:
-                            failures[observation.path] = observation.error
-                    await asyncio.to_thread(
-                        self._store.reconcile_prefix,
-                        prefix,
-                        paths,
-                        observations,
-                        probe_at,
-                        self.interval,
-                    )
-                except Exception as exc:
-                    error = f"{type(exc).__name__}: {exc}"
-                    probe.error = error
-                    logger.exception("reconcile: %s failed; keeping its committed catalog rows", prefix)
-                    await asyncio.to_thread(self._store.mark_prefix_failed, prefix, probe_at, error)
-                    continue
-                probe.last_success_time = probe.last_probe_time
-                probe.record_count = len(paths)
-                probe.parse_failures = [
-                    RecordParseFailure(path=path, error=error) for path, error in sorted(failures.items())
-                ]
-                probe.error = None
-                logger.info(
-                    "reconcile: %d candidates, %d checked, %d invalid from %s",
-                    len(paths),
-                    len(observations),
-                    len(probe.parse_failures),
-                    prefix,
+            return ()
+        failed_prefixes: list[str] = []
+        for prefix in self._prefixes:
+            probe_at = self._now()
+            try:
+                paths = await asyncio.to_thread(list_record_paths, prefix)
+                states = await asyncio.to_thread(self._store.source_states, prefix)
+                observations = await asyncio.to_thread(
+                    inspect_record_paths,
+                    paths,
+                    states,
+                    VerificationSchedule(
+                        checked_at=probe_at,
+                        retry_after=self.interval,
+                        revalidate_after=self.revalidate_after,
+                    ),
                 )
-            await asyncio.to_thread(self._store.finish_reconciliation, self._prefixes)
-            self.last_pass_time = self._now().isoformat()
-
-    async def run_loop(self) -> None:
-        if not self._prefixes:
-            return
-        await _run_periodically(self.run_once, self.interval, "reconcile cycle", self._set_cycle_error)
-
-    def _set_cycle_error(self, error: str | None) -> None:
-        self.cycle_error = error
+                failures = {
+                    path: state.error for path, state in states.items() if path in paths and state.error is not None
+                }
+                for observation in observations:
+                    if observation.error is None:
+                        failures.pop(observation.path, None)
+                    else:
+                        failures[observation.path] = observation.error
+                await asyncio.to_thread(
+                    self._store.reconcile_prefix,
+                    prefix,
+                    paths,
+                    observations,
+                    probe_at,
+                    self.interval,
+                )
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                logger.exception("reconcile: %s failed; keeping its committed catalog rows", prefix)
+                await asyncio.to_thread(self._store.mark_prefix_failed, prefix, probe_at, error)
+                failed_prefixes.append(prefix)
+                continue
+            logger.info(
+                "reconcile: %d candidates, %d checked, %d invalid from %s",
+                len(paths),
+                len(observations),
+                len(failures),
+                prefix,
+            )
+        await asyncio.to_thread(self._store.finish_reconciliation, self._prefixes)
+        return tuple(failed_prefixes)
 
     def status(self) -> dict:
+        probes = []
+        rows = {row.prefix: row for row in self._store.prefix_statuses()}
+        for prefix in self._prefixes:
+            row = rows.get(prefix)
+            probe = PrefixProbe(prefix=prefix)
+            if row is not None:
+                probe.last_probe_time = row.last_probe_at.isoformat() if row.last_probe_at else None
+                probe.last_success_time = row.last_success_at.isoformat() if row.last_success_at else None
+                probe.record_count = row.record_count
+                probe.error = row.error
+            probe.parse_failures = [
+                RecordParseFailure(path=path, error=state.error)
+                for path, state in sorted(self._store.source_states(prefix).items())
+                if state.error is not None
+            ]
+            probes.append(probe)
+        last_pass_time = max((probe.last_probe_time for probe in probes if probe.last_probe_time), default=None)
         return {
             "interval_seconds": self.interval,
             "revalidate_after_seconds": self.revalidate_after,
-            "last_pass_time": self.last_pass_time,
-            "cycle_error": self.cycle_error,
-            "prefixes": [asdict(self._probes[prefix]) for prefix in self._prefixes],
+            "last_pass_time": last_pass_time,
+            "cycle_error": None,
+            "prefixes": [asdict(probe) for probe in probes],
         }
 
 
-async def _reload_catalog_loop(store: PgRecordStore) -> None:
-    """Poll for committed generations and expose any refresh failure through store status."""
-
-    async def reload_once() -> None:
-        await asyncio.to_thread(store.reload_if_changed)
-
-    await _run_periodically(
-        reload_once,
-        CATALOG_POLL_SECONDS,
-        "catalog generation poll",
-        store.set_catalog_error,
-    )
-
-
 class ApiWithBackgroundLoops:
-    """The API, with its background loops started on the first request it serves.
-
-    Starlette delivers lifespan events only to the top-level application, and the kernel mounts this
-    API under ``/evaldash/api/``; the first request is therefore the earliest moment inside the
-    running event loop at which the ingest and catalog-reload loops can be started. They start once
-    and then run for the life of the process, which ends with it -- there is no mounted-app shutdown
-    event to cancel them on either.
-
-    More than one instance may run these loops at once. Each reconciliation commits a prefix's
-    source changes and their serving projection in one transaction that advances the catalog
-    generation, so concurrent passes repeat work rather than corrupt state, and every instance picks
-    up whichever generation committed last. What is not shared is per-process and therefore
-    per-instance: the probe health ``/status`` reports, and the memory store's snapshot. Two
-    instances can report different last-probe times for the same prefix.
-    """
+    """Start local-store ingestion once before serving the first HTTP request."""
 
     def __init__(self, app: ASGIApp, loops: tuple[Callable[[], Awaitable[None]], ...]) -> None:
         self._app = app
@@ -886,9 +1006,7 @@ def _collect_job_status(gateway: ClusterGatewayLike, jobs: dict[str, str]) -> li
 class IngestorLike(Protocol):
     interval: float
 
-    async def run_once(self) -> None: ...
-
-    async def run_loop(self) -> None: ...
+    async def run_once(self) -> tuple[str, ...]: ...
 
     def status(self) -> dict: ...
 
@@ -947,19 +1065,21 @@ class NullClusterGateway:
         return {"reachable": False, "error": "local mode: cluster unavailable", "source": "", "entries": []}
 
 
-def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashConfig) -> ApiWithBackgroundLoops:
-    """Build the JSON API over a store, the cluster gateway, and the resolved configuration.
-
-    ``config.prefixes`` are the record roots the background ingest scans; an empty tuple disables
-    ingestion entirely (for a store populated out of band, as the tests do), which keeps the app from
-    ever reaching the remote defaults.
-    """
+def _ingestor_and_loop(
+    store: RecordStore, config: EvaldashConfig
+) -> tuple[IngestorLike, Callable[[], Awaitable[None]] | None]:
     ingestor: IngestorLike
     if isinstance(store, PgRecordStore):
         ingestor = PostgresIngestor(store, config.prefixes, config.ingest_interval, config.revalidate_after)
-    else:
-        ingestor = Ingestor(store, config.prefixes, config.ingest_interval)
+        return ingestor, None
+    local_ingestor = Ingestor(store, config.prefixes, config.ingest_interval)
+    return local_ingestor, local_ingestor.run_loop
 
+
+def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashConfig) -> APIRouter:
+    router = APIRouter()
+
+    @router.get("/runs")
     async def api_runs(request: Request) -> JSONResponse:
         params = request.query_params
         rows = await asyncio.to_thread(
@@ -973,12 +1093,21 @@ def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashC
         )
         return JSONResponse(rows)
 
-    async def api_run_detail(request: Request) -> JSONResponse:
-        record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
+    @router.get(
+        "/runs/{run_id}",
+        operation_id="read_run",
+        summary="Read an evaluation run",
+        description="Read one evaluation record together with its rolled-up headline result.",
+        response_model=RunDetailResponse,
+        openapi_extra=operation_extension(OperationRisk.READ),
+    )
+    async def api_run_detail(run_id: str) -> RunDetailResponse | JSONResponse:
+        record = await asyncio.to_thread(store.get_record, run_id)
         if record is None:
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
-        return JSONResponse({**record, "headline": _run_headline(record)})
+        return RunDetailResponse.model_validate({**record, "headline": _run_headline(record)})
 
+    @router.get("/runs/{run_id}/jobs")
     async def api_run_jobs(request: Request) -> JSONResponse:
         record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
         if record is None:
@@ -986,22 +1115,34 @@ def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashC
         roles = await asyncio.to_thread(_collect_job_status, gateway, record.get("jobs") or {})
         return JSONResponse({"roles": roles})
 
-    async def api_run_logs(request: Request) -> JSONResponse:
-        params = request.query_params
-        record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
+    @router.get(
+        "/runs/{run_id}/logs",
+        operation_id="read_logs",
+        summary="Read run logs",
+        description="Read a bounded tail of Finelog entries for one role in an evaluation run.",
+        response_model=LogsResponse,
+        openapi_extra=operation_extension(OperationRisk.READ),
+    )
+    async def api_run_logs(
+        run_id: str,
+        role: str,
+        tail: str | None = None,
+        substring: str | None = None,
+    ) -> LogsResponse | JSONResponse:
+        record = await asyncio.to_thread(store.get_record, run_id)
         if record is None:
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
-        role = params.get("role")
         jobs = record.get("jobs") or {}
         if role not in jobs:
             return JSONResponse({"error": f"run has no {role!r} job"}, status_code=404)
-        tail = _parse_int(params.get("tail"), default=DEFAULT_LOG_TAIL, low=1, high=MAX_LOG_TAIL)
+        max_lines = _parse_int(tail, default=DEFAULT_LOG_TAIL, low=1, high=MAX_LOG_TAIL)
         payload = await asyncio.to_thread(
-            gateway.fetch_logs, jobs[role], max_lines=tail, substring=params.get("substring") or None
+            gateway.fetch_logs, jobs[role], max_lines=max_lines, substring=substring or None
         )
         payload["role"] = role
-        return JSONResponse(payload)
+        return LogsResponse.model_validate(payload)
 
+    @router.get("/runs/{run_id}/samples/tasks")
     async def api_run_samples_tasks(request: Request) -> JSONResponse:
         record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
         if record is None:
@@ -1009,25 +1150,39 @@ def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashC
         payload = await asyncio.to_thread(samples.list_sample_tasks, record.get("results_path"))
         return JSONResponse(payload.model_dump(mode="json"))
 
-    async def api_run_samples(request: Request) -> JSONResponse:
-        params = request.query_params
-        record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
+    @router.get(
+        "/runs/{run_id}/samples",
+        operation_id="read_samples",
+        summary="Read evaluation samples",
+        description="Read one bounded page of samples and grading results for a task in an evaluation run.",
+        response_model=samples.SamplesResponse,
+        openapi_extra=operation_extension(OperationRisk.READ),
+    )
+    async def api_run_samples(
+        run_id: str,
+        task: str,
+        offset: str | None = None,
+        limit: str | None = None,
+        correct: str | None = None,
+        extraction_filter: str | None = None,
+    ) -> samples.SamplesResponse | JSONResponse:
+        record = await asyncio.to_thread(store.get_record, run_id)
         if record is None:
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
-        task = params.get("task")
         if not task:
             return JSONResponse({"error": "task is required"}, status_code=400)
         payload = await asyncio.to_thread(
             samples.fetch_samples,
             record.get("results_path"),
             task,
-            offset=_parse_int(params.get("offset"), default=0, low=0, high=10_000_000),
-            limit=_parse_int(params.get("limit"), default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
-            correct=params.get("correct") or "all",
-            extraction_filter=params.get("extraction_filter") or None,
+            offset=_parse_int(offset, default=0, low=0, high=10_000_000),
+            limit=_parse_int(limit, default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
+            correct=correct or "all",
+            extraction_filter=extraction_filter or None,
         )
-        return JSONResponse(payload.model_dump(mode="json"))
+        return payload
 
+    @router.get("/runs/{run_id}/samples/artifact")
     async def api_run_samples_artifact(request: Request) -> JSONResponse:
         params = request.query_params
         record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
@@ -1039,6 +1194,7 @@ def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashC
         payload = await asyncio.to_thread(samples.fetch_artifact, record.get("results_path"), uri)
         return JSONResponse(payload.model_dump(mode="json"))
 
+    @router.post("/runs/{run_id}/samples/review")
     async def api_run_samples_review(request: Request) -> JSONResponse:
         record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
         if record is None:
@@ -1061,6 +1217,7 @@ def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashC
         )
         return JSONResponse(payload.model_dump(mode="json"))
 
+    @router.get("/runs/{run_id}/group")
     async def api_run_group(request: Request) -> JSONResponse:
         run_id = request.path_params["run_id"]
         record = await asyncio.to_thread(store.get_record, run_id)
@@ -1070,43 +1227,98 @@ def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashC
         siblings = await asyncio.to_thread(store.group_siblings, group_id, run_id) if group_id else []
         return JSONResponse({"group_id": group_id, "siblings": siblings})
 
-    async def api_history(request: Request) -> JSONResponse:
+    @router.get("/groups")
+    async def api_groups(request: Request) -> JSONResponse:
         params = request.query_params
-        model = params.get("model")
-        task = params.get("task")
-        if not model or not task:
-            return JSONResponse({"error": "model and task are required"}, status_code=400)
-        points = await asyncio.to_thread(store.history, model, task)
-        return JSONResponse({"model": model, "task": task, "points": points})
+        groups = await asyncio.to_thread(
+            store.groups,
+            model=params.get("model") or None,
+            user=params.get("user") or None,
+            limit=_parse_limit(params.get("limit")),
+        )
+        return JSONResponse(groups)
 
+    return router
+
+
+def _selection(params: Mapping[str, str]) -> SelectionRequest:
+    """Return the panel selection requested by panel or comparison query parameters."""
+    return panel_request(
+        benchmarks=_parse_names(params.get("benchmarks")),
+        cohort_version=params.get("cohort") or None,
+        completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
+        min_coverage=_parse_coverage(params.get("min_coverage")),
+        filters={facet: value for facet in RUN_FACETS if (value := params.get(facet))},
+        model_query=params.get("model") or None,
+        include_flagged=_parse_flag(params.get("include_flagged")),
+    )
+
+
+def _analysis_router(store: RecordStore) -> APIRouter:
+    router = APIRouter()
+
+    @router.get("/models/{model_name}")
     async def api_model_detail(request: Request) -> JSONResponse:
         detail = await asyncio.to_thread(store.model_detail, request.path_params["model_name"])
         if detail is None:
             return JSONResponse({"error": "unknown model"}, status_code=404)
         return JSONResponse(detail)
 
-    def _selection(params: Mapping[str, str]) -> SelectionRequest:
-        """The panel selection a query string asks for, shared by the panel and compare endpoints."""
-        return panel_request(
-            benchmarks=_parse_names(params.get("benchmarks")),
-            cohort_version=params.get("cohort") or None,
-            completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
-            min_coverage=_parse_coverage(params.get("min_coverage")),
-            filters={facet: value for facet in RUN_FACETS if (value := params.get(facet))},
-            model_query=params.get("model") or None,
-            include_flagged=_parse_flag(params.get("include_flagged")),
-        )
-
-    async def api_panel(request: Request) -> JSONResponse:
-        params = request.query_params
+    @router.get(
+        "/panel",
+        operation_id="read_panel",
+        summary="Read the evaluation panel",
+        description=(
+            "Read benchmark results for the selected cohort, filters, coverage threshold, and aggregation policy."
+        ),
+        response_model=PanelResponse,
+        openapi_extra=operation_extension(OperationRisk.READ),
+    )
+    async def api_panel(
+        benchmarks: str | None = None,
+        cohort: str | None = None,
+        complete: str | None = None,
+        min_coverage: str | None = None,
+        accelerator: str | None = None,
+        platform: str | None = None,
+        backend: str | None = None,
+        mechanism: str | None = None,
+        user: str | None = None,
+        model: str | None = None,
+        include_flagged: str | None = None,
+        aggregate: str | None = None,
+        include_archived: str | None = None,
+    ) -> PanelResponse | JSONResponse:
+        params = {
+            name: value
+            for name, value in {
+                "benchmarks": benchmarks,
+                "cohort": cohort,
+                "complete": complete,
+                "min_coverage": min_coverage,
+                "accelerator": accelerator,
+                "platform": platform,
+                "backend": backend,
+                "mechanism": mechanism,
+                "user": user,
+                "model": model,
+                "include_flagged": include_flagged,
+                "aggregate": aggregate,
+                "include_archived": include_archived,
+            }.items()
+            if value is not None
+        }
         try:
             selection = _selection(params)
-            aggregate = _parse_aggregate(params.get("aggregate"))
+            aggregate_policy = _parse_aggregate(params.get("aggregate"))
         except BadRequest as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        payload = await asyncio.to_thread(store.panel, selection, aggregate, _parse_flag(params.get("include_archived")))
-        return JSONResponse(payload)
+        payload = await asyncio.to_thread(
+            store.panel, selection, aggregate_policy, _parse_flag(params.get("include_archived"))
+        )
+        return PanelResponse.model_validate(payload)
 
+    @router.get("/compare")
     async def api_compare(request: Request) -> JSONResponse:
         params = request.query_params
         models = _parse_names(params.get("models"))
@@ -1121,16 +1333,38 @@ def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashC
         payload = await asyncio.to_thread(store.comparison, selection, models)
         return JSONResponse(payload)
 
-    async def api_groups(request: Request) -> JSONResponse:
-        params = request.query_params
-        groups = await asyncio.to_thread(
-            store.groups,
-            model=params.get("model") or None,
-            user=params.get("user") or None,
-            limit=_parse_limit(params.get("limit")),
-        )
-        return JSONResponse(groups)
+    @router.get(
+        "/history",
+        operation_id="read_history",
+        summary="Read evaluation history",
+        description="Read the score history for one model and evaluation task.",
+        response_model=HistoryResponse,
+        openapi_extra=operation_extension(OperationRisk.READ),
+    )
+    async def api_history(model: str, task: str) -> HistoryResponse | JSONResponse:
+        if not model or not task:
+            return JSONResponse({"error": "model and task are required"}, status_code=400)
+        points = await asyncio.to_thread(store.history, model, task)
+        return HistoryResponse(model=model, task=task, points=points)
 
+    @router.get("/meta")
+    async def api_meta() -> JSONResponse:
+        meta = store.meta()
+        meta["current_user"] = _current_user()
+        meta["store"] = store.backend
+        return JSONResponse(meta)
+
+    return router
+
+
+def _control_router(
+    store: RecordStore,
+    ingestor: IngestorLike,
+    trigger_ingest: Callable[[], str] | None,
+) -> APIRouter:
+    router = APIRouter()
+
+    @router.post("/models/{model_name}/archive")
     async def api_model_archive(request: Request) -> JSONResponse:
         model_name = request.path_params["model_name"]
         body = await request.json()
@@ -1138,47 +1372,46 @@ def build_api(store: RecordStore, gateway: ClusterGatewayLike, config: EvaldashC
         await asyncio.to_thread(store.set_model_archived, model_name, archived, _current_user())
         return JSONResponse({"model_name": model_name, "archived": archived})
 
-    async def api_meta(_request: Request) -> JSONResponse:
-        meta = store.meta()
-        meta["current_user"] = _current_user()
-        meta["store"] = store.backend
-        return JSONResponse(meta)
-
-    async def api_status(_request: Request) -> JSONResponse:
+    @router.get("/status")
+    async def api_status() -> JSONResponse:
         return JSONResponse(_status_payload(store, ingestor))
 
-    async def api_refresh(_request: Request) -> JSONResponse:
+    @router.post("/refresh")
+    async def api_refresh() -> JSONResponse:
+        if isinstance(store, PgRecordStore):
+            await asyncio.to_thread(store.reload_if_changed)
+            if trigger_ingest is None:
+                return JSONResponse({"detail": "scheduled ingest job is not configured"}, status_code=503)
+            operation = await asyncio.to_thread(trigger_ingest)
+            return JSONResponse({"operation": operation, **_status_payload(store, ingestor)}, status_code=202)
         await ingestor.run_once()
         return JSONResponse(_status_payload(store, ingestor))
 
-    routes = [
-        Route("/runs", api_runs),
-        Route("/groups", api_groups),
-        Route("/models/{model_name:str}/archive", api_model_archive, methods=["POST"]),
-        Route("/models/{model_name:str}", api_model_detail),
-        Route("/runs/{run_id:str}/jobs", api_run_jobs),
-        Route("/runs/{run_id:str}/logs", api_run_logs),
-        Route("/runs/{run_id:str}/samples/tasks", api_run_samples_tasks),
-        Route("/runs/{run_id:str}/samples/artifact", api_run_samples_artifact),
-        Route("/runs/{run_id:str}/samples/review", api_run_samples_review, methods=["POST"]),
-        Route("/runs/{run_id:str}/samples", api_run_samples),
-        Route("/runs/{run_id:str}/group", api_run_group),
-        Route("/runs/{run_id:str}", api_run_detail),
-        Route("/panel", api_panel),
-        Route("/compare", api_compare),
-        Route("/history", api_history),
-        Route("/meta", api_meta),
-        Route("/status", api_status),
-        Route("/refresh", api_refresh, methods=["POST"]),
-    ]
-    loops: tuple[Callable[[], Awaitable[None]], ...] = (ingestor.run_loop,)
-    if isinstance(store, PgRecordStore):
-        loops += (functools.partial(_reload_catalog_loop, store),)
-    return ApiWithBackgroundLoops(Starlette(routes=routes), loops)
+    return router
 
 
-def create_api(services: Services) -> ASGIApp:
-    """The kernel's entry point: the JSON API mounted at ``/evaldash/api/``.
+def build_api(
+    store: RecordStore,
+    gateway: ClusterGatewayLike,
+    config: EvaldashConfig,
+    trigger_ingest: Callable[[], str] | None = None,
+) -> RegisteredApi:
+    """Build the JSON API over a store, the cluster gateway, and the resolved configuration.
+
+    ``config.prefixes`` are the record roots local ingest or the PostgreSQL job scans. An empty tuple
+    disables ingestion entirely for a store populated out of band, as some tests do.
+    """
+    ingestor, local_loop = _ingestor_and_loop(store, config)
+    api = FastAPI(title="evaldash", docs_url=None, redoc_url=None, openapi_url=None)
+    api.include_router(_run_router(store, gateway, config))
+    api.include_router(_analysis_router(store))
+    api.include_router(_control_router(store, ingestor, trigger_ingest))
+    mounted_api: ASGIApp = api if local_loop is None else ApiWithBackgroundLoops(api, (local_loop,))
+    return registered_api(api, mounted_app=mounted_api)
+
+
+def create_api(services: Services) -> RegisteredApi:
+    """The kernel's entry point for the JSON API mounted at ``/evaldash/api/``.
 
     Configuration is resolved from the environment once, here. Nothing in this path writes to the
     database: ``marina migrate`` has already applied the schema when the deploy reaches this point.
@@ -1196,7 +1429,8 @@ def create_api(services: Services) -> ASGIApp:
 
         configure_coreweave_s3()
         gateway = ClusterGateway()
-    return build_api(create_store(services, config), gateway, config)
+    trigger_ingest = functools.partial(trigger_cloud_run_job, config.ingest_job) if config.ingest_job else None
+    return build_api(create_store(services, config), gateway, config, trigger_ingest)
 
 
 def migrate(engine: Engine) -> None:

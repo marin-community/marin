@@ -1,4 +1,5 @@
-import type { ProtoTimestamp } from '@/types/rpc'
+import type { ProtoTimestamp, TaskAttempt } from '@/types/rpc'
+import { stateToName } from '../types/status.ts'
 
 /** Parse a ProtoTimestamp to epoch milliseconds. */
 export function timestampMs(ts?: ProtoTimestamp): number {
@@ -61,6 +62,15 @@ export function formatDuration(startMs: number, endMs?: number): string {
   const hours = Math.floor(diffSec / 3600)
   const mins = Math.floor((diffSec % 3600) / 60)
   return `${hours}h ${mins}m`
+}
+
+/** Use the current time only for active attempts. */
+export function formatAttemptDuration(attempt?: TaskAttempt): string {
+  if (!attempt) return '-'
+  const finished = timestampMs(attempt.finishedAt)
+  const state = stateToName(attempt.state)
+  if (!finished && state !== 'assigned' && state !== 'building' && state !== 'running') return '-'
+  return formatDuration(timestampMs(attempt.startedAt), finished || undefined)
 }
 
 /**

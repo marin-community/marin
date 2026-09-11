@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 import warnings
 from typing import cast
 
@@ -2532,3 +2533,90 @@ def test_xla_fast_backward_emits_no_scatter():
     assert "stablehlo.scatter" not in text
     # Both backward GEMMs must stay on bf16 operands (tensor cores), not upcast to f32.
     assert "tensor<256x128xf32>, tensor<64x128xf32>" not in text
+
+
+@pytest.mark.parametrize(
+    "rows,fast_backward,soft_cap",
+    [(17, False, None), (35, False, 1.3), (17, True, None), (35, True, 1.3), (32, False, None)],
+)
+def test_xla_ce_partial_batch_tiles_preserve_values_and_all_gradients(rows, fast_backward, soft_cap):
+    keys = jax.random.split(jax.random.PRNGKey(281), 5)
+    x = jax.random.normal(keys[0], (rows, 8)) * 0.2
+    w = jax.random.normal(keys[1], (8, 19)) * 0.3
+    labels = jax.random.randint(keys[2], (rows,), 0, 19)
+    loss_weights = jax.random.normal(keys[3], (rows,))
+    lse_weights = jax.random.normal(keys[4], (rows,))
+
+    def actual(x, w):
+        return fused_xla.linear_softmax_cross_entropy_loss_xla(
+            x,
+            labels,
+            w,
+            block_sizes=BlockSizes(b_block_size=8, h_block_size=8, v_block_size=8),
+            fast_backward=fast_backward,
+            bwd_batch_block_size=6 if fast_backward else None,
+            logit_soft_cap=soft_cap,
+        )
+
+    def reference(x, w):
+        logits = x @ w
+        if soft_cap is not None:
+            logits = jnp.tanh(logits / soft_cap) * soft_cap
+        # These small logits need no stabilization. Keep the dense oracle independent
+        # of the production reduction and TPU's approximate default logarithms.
+        accuracy = jax.lax.AccuracyMode.HIGHEST if jax.default_backend() == "tpu" else None
+        lse = jax.lax.log(jnp.sum(jax.lax.exp(logits, accuracy=accuracy), axis=-1), accuracy=accuracy)
+        return lse - logits[jnp.arange(rows), labels], lse
+
+    def objective(x, w, implementation):
+        loss, lse = implementation(x, w)
+        return jnp.sum(loss * loss_weights + lse * lse_weights)
+
+    actual_values = jax.jit(actual)(x, w)
+    expected_values = reference(x, w)
+    dense_values = linear_softmax_cross_entropy_loss_reference(x, labels, w, logit_soft_cap=soft_cap)
+    for value, expected in zip(dense_values, expected_values, strict=True):
+        np.testing.assert_allclose(value, expected, atol=1e-5, rtol=1e-5)
+    actual_grads = jax.jit(jax.grad(lambda x, w: objective(x, w, actual), argnums=(0, 1)))(x, w)
+    expected_grads = jax.grad(lambda x, w: objective(x, w, reference), argnums=(0, 1))(x, w)
+    for value, expected in zip((*actual_values, *actual_grads), (*expected_values, *expected_grads), strict=True):
+        np.testing.assert_allclose(value, expected, atol=1e-5, rtol=1e-5)
+    _, _, argmax = fused_xla.linear_softmax_cross_entropy_loss_xla(
+        x,
+        labels,
+        w,
+        block_sizes=BlockSizes(b_block_size=8, h_block_size=8, v_block_size=8),
+        logit_soft_cap=soft_cap,
+        return_argmax=True,
+    )
+    np.testing.assert_array_equal(argmax, jnp.argmax(x @ w, axis=-1))
+
+
+@pytest.mark.parametrize("rows,backward_tile", [(8192, None), (8519, None), (8521, None), (8519, 1217)])
+def test_xla_ce_packed_length_preserves_requested_gemm_rows(rows, backward_tile):
+    # 8519 = 7 * 1217: divisor-sized GEMMs caused a packed-sequence performance cliff.
+    def loss(x, labels, w):
+        return fused_xla.linear_softmax_cross_entropy_loss_xla(
+            x,
+            labels,
+            w,
+            block_sizes=BlockSizes(b_block_size=256, h_block_size=8, v_block_size=16),
+            fast_backward=backward_tile is not None,
+            bwd_batch_block_size=backward_tile,
+        )
+
+    hlo = str(
+        jax.jit(loss)
+        .lower(
+            jax.ShapeDtypeStruct((rows, 8), jnp.float32),
+            jax.ShapeDtypeStruct((rows,), jnp.int32),
+            jax.ShapeDtypeStruct((8, 19), jnp.float32),
+        )
+        .compiler_ir(dialect="stablehlo")
+    )
+    gemms = [line for line in hlo.splitlines() if "stablehlo.dot_general" in line]
+    assert gemms
+    assert all("tensor<256x8xf32>, tensor<8x16xf32>" in line for line in gemms)
+
+    row_counts = [int(rows) for rows in re.findall(r"tensor<(\d+)x8xf32>", hlo)]
+    assert max(row_counts) < rows + 256

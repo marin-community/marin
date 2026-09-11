@@ -138,9 +138,21 @@ MARIN_PREFIX=local_store uv run python my_experiment.py
 ```
 
 `MARIN_PREFIX` sets the root directory for all outputs. It can be a local path or anything
-[fsspec](https://filesystem-spec.readthedocs.io/en/latest/) supports (e.g. `gs://`). If
+[fsspec](https://filesystem-spec.readthedocs.io/en/latest/) supports (e.g. `gs://`). A
+relative path such as `local_store` resolves against the directory you run from. If
 you already exported `MARIN_PREFIX` in your shell, just run `uv run python my_experiment.py`.
 See [Understanding `MARIN_PREFIX`](../explanations/marin-prefix.md).
+
+Training reports metrics to Weights & Biases. Without an explicit `run_id`, `train_lm` names
+the W&B run ID after the last segment of the output path, which here is the version
+`2026.06.28`. A second person following this tutorial against the same project reuses that
+ID and can get a `403` when W&B attempts to resume the existing run. Either
+keep the run local with `WANDB_MODE=offline`, or pass `run_id="<your-name>-nano-tinystories"`
+to `train_lm` so the run is yours:
+
+```bash
+MARIN_PREFIX=local_store WANDB_MODE=offline uv run python my_experiment.py
+```
 
 This takes a few minutes on a CPU. The output ends with something like:
 
@@ -187,14 +199,62 @@ iterating, or a calendar version to pin outputs:
 uv run python -m experiments.tutorials.train_tiny_model \
   --device cpu --dataset tinystories --version dev
 
-# Run on an Iris H100 worker.
 uv run python -m experiments.tutorials.train_tiny_model \
-  --device h100x8 --dataset wikitext --version dev --run
+  --device cpu --dataset tinystories --version dev --run
 ```
 
-If the launcher appears to do nothing, check whether `--run` was omitted. It also accepts
-`h100x1`, `gb200x1`, `gb200x4`, `v5litepod-16`, and `v6e-4`. TinyStories and WikiText
-tokenize a 1,000-document sample; `fineweb-edu` uses the checked-in pretokenized cache.
+If the launcher appears to do nothing, check whether `--run` was omitted. TinyStories and
+WikiText tokenize a 1,000-document sample; `fineweb-edu` downloads a prebuilt tokenized cache
+from Hugging Face and trains `llama_150m` from `experiments/llama.py`.
+
+### Running the launcher on a cluster
+
+The same launcher runs on an accelerator when you submit it as an Iris job. `--device`
+accepts `h100x1`, `h100x8`, `gb200x1`, `gb200x4`, `v5litepod-16`, and `v6e-4`. Run this
+from the checkout root after `iris --cluster=marin login`:
+
+```bash
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu --region us-east5 \
+  -- python -m experiments.tutorials.train_tiny_model \
+     --device v6e-4 --dataset wikitext --version dev --run
+```
+
+`--region` pins the coordinator, and the accelerator job inherits its region so training stays
+next to the data. The selected region must offer the requested device. Omit `--region` to let
+Iris select a compatible location.
+
+The job you submit is a one-CPU coordinator that runs the launcher; it has no accelerator
+of its own. Inside it, `train_lm` requests the accelerator through Fray, Marin's job-submission
+layer, and Iris schedules that request as a second job, a child of the coordinator. The
+`--cpu` and `--memory` flags size the coordinator only. `--extra=cpu` installs the CPU
+dependency set (the `cpu` extra in `lib/marin/pyproject.toml`) on the coordinator; the child
+installs the `tpu` or `gpu` extra for its device. Do not set `MARIN_PREFIX`: the cluster
+provides one, and the `dev` version places the checkpoint under `users/<you>/checkpoints/`
+so it cannot collide with another person's run. Your `WANDB_API_KEY` is copied from your shell; see
+[Local runs versus submitted jobs](installation.md#local-runs-versus-submitted-jobs) for
+what else reaches a job.
+
+The H100 and GB200 devices live on CoreWeave clusters. Replace the GCP `--region` selector
+with a CoreWeave target and use the matching device:
+
+```bash
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
+  --target-cluster cw-rno2a \
+  -- python -m experiments.tutorials.train_tiny_model \
+     --device h100x8 --dataset wikitext --version dev --run
+```
+
+For GB200, use `--target-cluster cw-us-east-08a` with `--device gb200x1` or `gb200x4`.
+`iris cluster list` shows every configured cluster. [Training on Cloud GPUs](cloud-gpu.md)
+covers the storage and credential differences.
+
+`job run` prints the job id on submission, in the form `/<username>/<job-name>`, and streams
+logs until the job ends. From another shell:
+
+```bash
+uv run iris --cluster=marin job logs -f /<username>/<job-name>
+uv run iris --cluster=marin job describe /<username>/<job-name>
+```
 
 ## Next steps
 

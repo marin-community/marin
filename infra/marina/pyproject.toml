@@ -10,6 +10,8 @@ requires-python = ">=3.12"
 dependencies = [
     "marin-rigging",
     "fastapi>=0.115",
+    "fastmcp-slim[server]>=4",
+    "httpx2>=2.5",
     "uvicorn>=0.30",
     "click>=8.3.1",
     "sqlalchemy>=2",
@@ -26,6 +28,7 @@ dependencies = [
     "anthropic>=0.71.0",
     "connect-python>=0.4",
     "google-cloud-compute>=1.19",
+    "google-auth>=2",
     # echo: ONNX embedding and cross-encoder reranking, its CLI's HTTP client, and the YAML
     # frontmatter of the wiki's OKF documents.
     "fastembed>=0.8,<0.9",

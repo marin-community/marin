@@ -1933,9 +1933,7 @@ class TestBackendAttributes:
                         device_variant="H100",
                         capacity_type=CapacityType.ON_DEMAND,
                     ),
-                    slice_template=SliceConfig(
-                        num_vms=1, coreweave=CoreweaveSliceConfig(region="US-EAST-02A", gpu_class="H100")
-                    ),
+                    slice_template=SliceConfig(num_vms=1, coreweave=CoreweaveSliceConfig(region="US-EAST-02A")),
                 )
             }
         )

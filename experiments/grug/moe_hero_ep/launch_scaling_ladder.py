@@ -4,7 +4,7 @@
 """Hero-shape scaling ladder: one recipe, five widths.
 
 Every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
-hidden/2 latent, pooled-wave all-to-all transport, the Harrier 2026.08.18 two-phase mixture on the
+hidden/2 latent, ragged all-to-all transport, the Harrier 2026.08.18 two-phase mixture on the
 Marin tokenizer, offloaded MuonH state, the QB histogram estimator, and a dropless held-out eval --
 and differs only in width and the rack count it spans. Behaviour is uniform across the ladder so a
 rung predicts the d6144 hero. ``d6144`` is the hero itself.
@@ -26,6 +26,10 @@ Changelog:
         resumes at the right step); pass ``--gate-router-weight-decay 0`` to opt out.
         hero-wd-gate-router-p02-step58k forks hero-12d8b6f0-dee637 at step 58014 on the pooled-wave transport
         (see ``trigger_hero.sh``).
+    2026-09-09 (#8870): the ragged all-to-all transport with fp32 weights on device returns as the
+        default after the pooled-wave fallback of 2026-09-03 (#8884).
+        hero-ragged_a2a-ep-step81k forks hero-wd-gate-router-p02-step58k at step 81716 (see ``trigger_hero.sh``).
+        hero-ragged_a2a-nccl2307-ep-step81k restarts that fork on the NCCL 2.30.7 PJRT wheel (#9062).
 """
 
 import dataclasses

@@ -68,7 +68,31 @@ For example, training checkpoints usually will be written to
 
 You might find it convenient to store `WANDB_API_KEY` and `HF_TOKEN` and
 `MARIN_PREFIX` in an `.env` file, which you can load in one go with `source
-.env`.
+.env`. The file is gitignored.
+
+### Local runs versus submitted jobs
+
+The exports above configure your shell, so they apply to scripts you run
+directly and to the `iris` CLI itself. A job submitted with `iris job run`,
+the Iris job-submission command, runs in a container on the cluster and does
+not inherit your shell. Three things reach it:
+
+- `WANDB_API_KEY` and `HF_TOKEN`, which the CLI copies from your shell when
+  they are set.
+- Any variable passed as `-e KEY VALUE` on the `iris job run` command line.
+- The `env:` section of a gitignored `.marin.yaml` at the checkout root, which
+  the CLI reads when you run it from that directory:
+
+  ```yaml
+  env:
+    WANDB_ENTITY: your-entity
+    WANDB_PROJECT: marin
+  ```
+
+Leave `MARIN_PREFIX` out of `.marin.yaml`. The cluster sets it for every task
+to a bucket in the same region as the worker running the task; a value in the
+file overrides that and can send output across regions. See
+[Understanding `MARIN_PREFIX`](../explanations/marin-prefix.md).
 
 ## Hardware-specific Setup
 
