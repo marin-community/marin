@@ -15,18 +15,19 @@ author: user
 
 ## Current TL;DR
 
-Release `2026.09.10.9` is published and validated with verifier launch commit `b76d03131c`. Its
-single task Parquet contains 1,449,686 rows across 66 row groups and exposes the documented 12
-selector/payload columns. The remaining work is to validate and deploy the Marina pointer, update
-the PR's final evidence, monitor required checks, merge, and remove temporary audit snapshots.
+Release `2026.09.10.9` is published and validated with verifier launch commit `b76d03131c`. Marina
+revision `marina-00055-lkm` serves that release, and its authenticated source filter and row-detail
+API pass against the production Parquet. The remaining work is to update the PR's final evidence,
+monitor required checks, merge, and remove temporary audit snapshots.
 
 ## Remaining Work
 
 - [x] Validate, lint, commit, and push the launch-provenance fix and Parquet layout documentation.
 - [x] Finish release `2026.09.10.9`, launched from clean pushed commit `b76d03131c`.
 - [x] Confirm the manifest and an exported task Dockerfile use the launch commit; confirm row count and schema.
-- [ ] Update the README, Marina dashboard, and PR description from `.8` to the validated `.9` release.
-- [ ] Deploy Marina and verify the authenticated task table, filters, task details, and published S3 paths.
+- [x] Update the README and Marina dashboard from `.8` to the validated `.9` release.
+- [x] Deploy Marina and verify the authenticated task table, filters, task details, and published S3 paths.
+- [ ] Update the PR description with `.9` release and deployment evidence.
 - [ ] Resolve any new review feedback, monitor required checks, and merge PR #9061.
 - [ ] Remove temporary local TaskTrove audit snapshots after the release is accepted.
 
@@ -95,3 +96,13 @@ tags as ordinary selector columns.
 - Result: Iris succeeded. The manifest reports 1,739,326 input rows, 1,449,686 clean rows, 43 kept of 93 sources, 19 converters, 12 modes, and 39 Dockerfiles. The single task file has 1,449,686 rows, 66 row groups, and the exact 12 documented columns; the ledger has 289,640 rows. Sample `codeforces-06236` embeds `b76d03131c` and not the stale ref. The final validator exited zero.
 - Interpretation: `.9` satisfies the provenance and single-shard publication contracts and can supersede `.8` in user-facing pointers.
 - Next action: Build and test the `.9` dashboard pointer, deploy Marina, and verify the authenticated browser and API.
+
+### 2026-09-11 16:39 PDT - Marina `.9` deployment
+
+- Hypothesis: Pointing the existing TaskTrove app at `.9` will preserve the row-oriented browser behavior while exposing the corrected release paths and provenance.
+- Commit Hash: `32845e24c985813813b5d7114bba0b4e8d32fd07`.
+- Commands: Built the TaskTrove frontend; ran its four focused backend tests; previewed and applied Pulumi stack `marin-marina`; authenticated through the repository's cached IAP provider and exercised the landing page, manifest, exact-source filter, and row-detail endpoint.
+- Config: Marina revision `marina-00055-lkm`; image `sha256:8b549ddaeba89c6548ef38698e461e87ccbd36ffa6c1d5e9aca4b198851ad488`; release `.9` task object size 3,837,032,177 bytes.
+- Result: The frontend built with no npm vulnerabilities and all four backend tests passed. Pulumi updated five resources and replaced the migration command; migration execution `marina-hourly-h68qb` succeeded. The live manifest reports `b76d03131c`; source `DCAgent2__nl2bash-tasks-cleaned-oracle-v2` reports 1,497 rows; sample row 16,158 resolves to `task_5407` in script mode.
+- Interpretation: The production dashboard now reads the validated `.9` release through its backend cache and row API. The local browser journey could not start because the all-app local kernel had no Echo database configured; it failed before loading TaskTrove, so authenticated production checks provide the browser/API deployment evidence.
+- Next action: Publish the final PR evidence, monitor checks and review, then merge and clean up temporary audit files.
