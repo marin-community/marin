@@ -483,7 +483,7 @@ class ZephyrCoordinator:
             return PipelinePhase.FAILED
         if run.done:
             return PipelinePhase.SUCCEEDED
-        if not self._worker_states:
+        if WorkerState.ACTIVE not in self._worker_states.values():
             return PipelinePhase.WAITING_FOR_WORKERS
         return PipelinePhase.RUNNING
 
@@ -634,9 +634,11 @@ class ZephyrCoordinator:
 
     def _dashboard_counters(self, query: CounterQuery) -> CounterPage:
         search = query.search.casefold()
+        available_entries = self._dashboard_counter_entries(query.execution_id)
+        stages = tuple(sorted({entry.stage for _, entry in available_entries if entry.stage}))
         entries = [
             (name, entry)
-            for name, entry in self._dashboard_counter_entries(query.execution_id)
+            for name, entry in available_entries
             if (not query.stage or entry.stage == query.stage)
             and (not search or search in name.casefold() or search in (entry.stage or "").casefold())
         ]
@@ -652,6 +654,7 @@ class ZephyrCoordinator:
         return CounterPage(
             counters=tuple(counter_value(name, entry) for name, entry in page),
             total=len(entries),
+            stages=stages,
         )
 
     def _dashboard_workers(self, query: WorkerQuery) -> WorkerPage:

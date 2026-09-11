@@ -91,6 +91,7 @@ export interface CounterValue {
 export interface CounterPage {
   counters: CounterValue[]
   total: number
+  stages: string[]
 }
 
 export interface WorkerAssignment {

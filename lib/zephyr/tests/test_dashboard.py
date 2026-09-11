@@ -307,3 +307,41 @@ def test_dashboard_reports_selected_pipeline_failure(actor_context, tmp_path):
             assert [node["node_id"] for node in failed_nodes] == ["main/stage/0"]
     finally:
         coordinator.shutdown()
+
+
+def test_dashboard_waits_for_worker_recovery(coordinator):
+    plan = compute_plan(Dataset.from_list([1]).map(lambda value: value + 1))
+    _start_pipeline(coordinator, plan, "exec", "pipeline")
+    with TestClient(coordinator.web_application) as client:
+        assert _api(client, "status")["phase"] == "waiting_for_workers"
+        coordinator.register_worker("worker", MagicMock())
+        assert _api(client, "status")["phase"] == "running"
+        coordinator.check_heartbeats(timeout=0.0)
+        assert _api(client, "status")["phase"] == "waiting_for_workers"
+        coordinator.register_worker("replacement", MagicMock())
+        assert _api(client, "status")["phase"] == "running"
+
+
+def test_dashboard_counter_stages_include_rows_outside_the_page(coordinator):
+    plan = compute_plan(Dataset.from_list([1]).map(lambda value: value + 1))
+    _start_pipeline(coordinator, plan, "exec", "pipeline")
+    coordinator.register_worker("worker", MagicMock())
+    coordinator.heartbeat(
+        "worker",
+        {
+            "exec": CounterSnapshot(
+                counters={
+                    "a": CounterEntry(1, stage="first"),
+                    "b": CounterEntry(2, stage="second"),
+                },
+                generation=1,
+            )
+        },
+    )
+    with TestClient(coordinator.web_application) as client:
+        page = _api(client, "counters", {"execution_id": "exec", "limit": 1})
+        assert [row["stage"] for row in page["counters"]] == ["first"]
+        assert page["stages"] == ["first", "second"]
+        filtered = _api(client, "counters", {"execution_id": "exec", "stage": "second", "search": "b"})
+        assert [row["name"] for row in filtered["counters"]] == ["b"]
+        assert filtered["stages"] == ["first", "second"]
