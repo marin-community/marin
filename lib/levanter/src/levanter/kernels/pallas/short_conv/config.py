@@ -5,6 +5,11 @@
 
 from dataclasses import dataclass
 
+#: Segment id for positions outside the sequence. The reference pads its shifted segment ids
+#: with it and every backend must match, which is what makes the first ``kernel_size - 1``
+#: positions of a sequence agree bit for bit.
+OOB_SEGMENT = -1
+
 
 @dataclass(frozen=True, slots=True)
 class ShortConvBlockSizes:
