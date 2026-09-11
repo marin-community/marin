@@ -31,6 +31,10 @@ h3 { margin: 0; }
 .section-heading > p:not(.eyebrow) { color: var(--muted); max-width: 56rem; }
 .two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 5rem; }
 .two-column p { color: var(--muted); max-width: 38rem; }
+.release-paths { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.35rem 0.8rem; margin: 1.25rem 0 0; font-size: 0.78rem; }
+.release-paths dt { color: var(--muted); }
+.release-paths dd { min-width: 0; margin: 0; }
+.release-paths code { overflow-wrap: anywhere; }
 
 .evidence-table { min-width: 70rem; table-layout: fixed; }
 .evidence-table th:nth-child(1) { width: 14rem; }

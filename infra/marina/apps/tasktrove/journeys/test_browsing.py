@@ -12,6 +12,7 @@ from marina.journeys import Journey
 def test_cleanup_report_explains_the_pipeline(journey: Journey) -> None:
     journey.visit("/").sees("A task collection with explicit, testable rewards")
     journey.sees("Cleanup pipeline").sees("1,449,686").sees("clean tasks")
+    journey.sees("s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8/tasks/part-00000.parquet")
     journey.sees("What happened to every source").sees("DCAgent__exp_rle_adversarial-v6")
     journey.click("Source audit").fill("Find a source", "nl2bash")
     journey.sees("Run the oracle command and compare its sandbox effects.").sees("script")
