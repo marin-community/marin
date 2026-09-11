@@ -1,4 +1,4 @@
 title = "TaskTrove"
 description = "Read the TaskTrove cleanup report and browse the converted Parquet file."
 build_command = "cd web && npm ci && npm run build"
-data_url = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8"
+data_url = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9"

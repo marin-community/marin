@@ -29,7 +29,7 @@ const loaded = ref<Manifest>()
 const problem = ref('')
 const sourceQuery = ref('')
 const sourceVerdict = ref<'all' | 'keep' | 'drop'>('all')
-const release = '2026.09.10.8'
+const release = '2026.09.10.9'
 
 onMounted(async () => {
   try {
@@ -190,15 +190,15 @@ function statusSummary(statuses: [string, number][]): string {
         </p>
         <dl class="release-paths">
           <dt>Release root</dt>
-          <dd><code>s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8/</code></dd>
+          <dd><code>s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9/</code></dd>
           <dt>Clean tasks</dt>
-          <dd><code>s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8/tasks/part-00000.parquet</code></dd>
+          <dd><code>s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9/tasks/part-00000.parquet</code></dd>
           <dt>Manifest</dt>
-          <dd><code>s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8/manifest.json</code></dd>
+          <dd><code>s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9/manifest.json</code></dd>
           <dt>Rejection ledger</dt>
-          <dd><code>s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8/ledger.parquet</code></dd>
+          <dd><code>s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9/ledger.parquet</code></dd>
           <dt>Cleanup report</dt>
-          <dd><code>s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8/report.md</code></dd>
+          <dd><code>s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9/report.md</code></dd>
         </dl>
       </div>
     </section>

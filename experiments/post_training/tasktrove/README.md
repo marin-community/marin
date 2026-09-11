@@ -77,7 +77,7 @@ the `source` column when needed; the canonical release stays single-shard so it 
 object, one footer, and one row-count contract.
 
 The current release is under
-`s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8/`:
+`s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9/`:
 
 | path | contents |
 |---|---|
@@ -96,7 +96,7 @@ not cached.
 ## Add a converter
 
 1. Build the `templates` stage. Inspect `coverage.json` and its exemplar under
-   `<Marin prefix>/tasktrove/templates/2026.09.10.8/`; the production prefix is
+   `<Marin prefix>/tasktrove/templates/2026.09.10.9/`; the production prefix is
    `s3://marin-us-east-02a/marin`.
 2. Add a converter under `converters/` that returns `ConvertedTask` or a specific `Rejected`
    status. Use deterministic parsing; reject rows that need heuristic recovery.
@@ -130,5 +130,5 @@ uv run pytest experiments/post_training/tasktrove/tests lib/tasktrove-verify/tes
 
 # Export one Parquet row as a Harbor task directory.
 uv run python -m experiments.post_training.tasktrove.publish export \
-  s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8/tasks <task-path> --dest /tmp/tasktrove-task
+  s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9/tasks <task-path> --dest /tmp/tasktrove-task
 ```
