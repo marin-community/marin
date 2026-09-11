@@ -14,6 +14,11 @@ view covers the complete coordinator pool and labels each active shard with its
 execution ID. Completed executions disappear after the driver reads the result
 and releases coordinator state.
 
+The dashboard source is `src/zephyr/dashboard.html`. The wheel includes this
+HTML page directly. It uses plain JavaScript and SVG, with no frontend build or
+external assets. Live updates refresh the selected view every five seconds.
+Clear the Live checkbox to pause updates, or select Refresh for an immediate update.
+
 See `lib/iris/OPS.md` → "Cluster Lifecycle" for `iris cluster dashboard` and
 `dashboard-proxy` commands.
 

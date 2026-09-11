@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Coordinator-owned JSON API and browser dashboard.
-
-The coordinator and the dashboard asset ship in the same wheel, so the payloads
-are plain dataclasses that :mod:`msgspec` encodes to JSON. The TypeScript
-interfaces in ``dashboard/src/types/dashboard.ts`` mirror them field for field.
-"""
+"""Read-only JSON API and standalone HTML dashboard."""
 
 import enum
 import html
@@ -35,10 +30,6 @@ DEFAULT_METRIC_POINTS = 200
 MAX_METRIC_POINTS = 500
 
 _BASE_ELEMENT = '<base href="/"'
-_NOT_BUILT_HTML = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><base href="/"><title>Zephyr Dashboard</title></head>
-<body><h1>Zephyr Dashboard</h1><p>The dashboard asset is not available.</p></body></html>
-"""
 
 
 class PipelinePhase(enum.StrEnum):
@@ -308,10 +299,7 @@ def pipeline_plan(
 
 def _dashboard_html() -> str:
     resource = importlib.resources.files("zephyr").joinpath("dashboard.html")
-    try:
-        dashboard_html = resource.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return _NOT_BUILT_HTML
+    dashboard_html = resource.read_text(encoding="utf-8")
     if _BASE_ELEMENT not in dashboard_html:
         raise RuntimeError("The Zephyr dashboard HTML does not contain the proxy base element")
     return dashboard_html
@@ -343,7 +331,7 @@ def _integer_parameter(request: Request, name: str) -> int:
 
 
 def create_dashboard_application(coordinator: CoordinatorDashboardData) -> ASGIApp:
-    """Create the coordinator dashboard app with API routes before SPA routes."""
+    """Serve the dashboard and its read-only JSON API."""
     raw_html = _dashboard_html()
 
     async def pipelines(_request: Request) -> Response:
@@ -396,6 +384,5 @@ def create_dashboard_application(coordinator: CoordinatorDashboardData) -> ASGIA
             Route("/api/counters", counters),
             Route("/api/workers", workers),
             Route("/", index),
-            Route("/{path:path}", index),
         ]
     )
