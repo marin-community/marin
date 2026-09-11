@@ -9,7 +9,9 @@ from marin.experiment.cli import experiment_main
 from marin.experiment.train import train_lm
 from marin.training.training import LevanterCheckpoint
 
+from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.prebuilt_caches import fineweb_edu_10B_dataset
+from experiments.marin_tokenizer import marin_tokenizer
 
 tiny_llama = LlamaConfig(
     max_seq_len=512,
@@ -29,6 +31,7 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         model=tiny_llama,
         optimizer=AdamConfig(learning_rate=3e-3, weight_decay=0.1),
         datasets={fineweb_edu_10B_dataset(): 1.0},
+        validation=list(paloma_datasets(tokenizer=marin_tokenizer).values()),
         batch_size=32,
         seq_len=tiny_llama.max_seq_len,
         num_train_steps=100,
