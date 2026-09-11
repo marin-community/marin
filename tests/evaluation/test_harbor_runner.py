@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -477,6 +478,65 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     assert captured["env"]["DAYTONA_API_KEY"] == "daytona-key"
     assert "OPENAI_API_KEY" not in captured["env"]
     assert outcome.metrics[f"toy-{tmp_path.name}"]["accuracy"] == 1.0
+
+
+def test_harbor_executor_explicit_recovery_prunes_only_unscored_trials(tmp_path, monkeypatch):
+    executor = replace(
+        _harbor_executor(f"recover-unscored-{tmp_path.name}"),
+        prune_unscored_trials_before_run=True,
+    )
+    session = _inference_session()
+    job_name = runner._job_name(
+        executor.config.record_dataset,
+        (executor.config.digest, session.model.endpoint.model, executor.task_limit),
+    )
+    job_dir = Path(str(runner._jobs_dir(str(tmp_path)))) / job_name
+    _write_job_record(job_dir, 2)
+    scored_result = job_dir / "scored-zero" / "result.json"
+    scored_result.parent.mkdir(parents=True)
+    scored_result.write_text(
+        json.dumps(
+            {
+                "task_name": "scored-zero",
+                "verifier_result": {"rewards": {"reward": 0.0}},
+                "exception_info": {"exception_type": "AgentTimeoutError"},
+            }
+        )
+    )
+    unscored_result = job_dir / "setup-timeout" / "result.json"
+    unscored_result.parent.mkdir(parents=True)
+    unscored_result.write_text(
+        json.dumps(
+            {
+                "task_name": "setup-timeout",
+                "verifier_result": None,
+                "exception_info": {"exception_type": "AgentSetupTimeoutError"},
+            }
+        )
+    )
+
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        assert Path(overlay.jobs_dir) / overlay.job_name == job_dir
+        assert scored_result.exists()
+        assert not unscored_result.exists()
+        unscored_result.parent.mkdir(parents=True)
+        unscored_result.write_text(
+            json.dumps(
+                {
+                    "task_name": "setup-timeout",
+                    "verifier_result": {"rewards": {"reward": 1.0}},
+                }
+            )
+        )
+
+    monkeypatch.setattr(runner, "run_harbor_driver", run_driver)
+
+    outcome = executor(session, str(tmp_path), {})
+
+    dataset = executor.config.record_dataset
+    assert outcome.metrics[dataset]["total"] == 2.0
+    assert outcome.metrics[dataset]["accuracy"] == 0.5
+    assert outcome.coverage[dataset].errors == {}
 
 
 def _harbor_executor(dataset: str) -> HarborExecutor:
