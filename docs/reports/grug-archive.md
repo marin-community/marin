@@ -67,3 +67,12 @@ goes stale on the next commit.
 - Status: deleted
 - Purpose: historical head-to-head comparison.
 - Superseded by: 8d752a775 — template-first workflow centered on `experiments/grug/base/`.
+
+## Gated latent router (2026-09-11)
+
+- Path: `experiments/grug/moe_latent_gated_router/`
+- Origin: `moe_hero_ep` at `d891fba48a7d3729fdac2595df3c6ca292a53b74`.
+- Purpose: replace latent RMSNorm with GatedNorm and route the gated latent;
+  paired full-width-routing controls. Idea from Zihan Qiu.
+- Status: active, [experiment #9110](https://github.com/marin-community/marin/issues/9110).
+- Diff: [research branch](https://github.com/marin-community/marin/compare/main...codex/moe-latent-gated-router).
