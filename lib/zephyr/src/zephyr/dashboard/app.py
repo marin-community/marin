@@ -298,7 +298,7 @@ def pipeline_plan(
 
 
 def _dashboard_html() -> str:
-    resource = importlib.resources.files("zephyr").joinpath("dashboard.html")
+    resource = importlib.resources.files("zephyr.dashboard").joinpath("index.html")
     dashboard_html = resource.read_text(encoding="utf-8")
     if _BASE_ELEMENT not in dashboard_html:
         raise RuntimeError("The Zephyr dashboard HTML does not contain the proxy base element")
