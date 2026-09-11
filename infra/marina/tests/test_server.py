@@ -422,6 +422,28 @@ def test_data_files_come_from_the_data_root(client: TestClient) -> None:
     assert client.get("/tasktrove/data/..%2Fother%2Fx").status_code == 404
 
 
+def test_data_files_come_from_the_manifest_url(tmp_path: Path) -> None:
+    app_data = tmp_path / "release"
+    app_data.mkdir()
+    (app_data / "manifest.json").write_text('{"clean_tasks": 1450969}')
+    write_app(
+        tmp_path / "apps",
+        "tasktrove",
+        manifest=TASKTROVE_MANIFEST + f'data_url = "{app_data}"\n',
+    )
+    config = MarinaConfig(
+        apps_dir=tmp_path / "apps",
+        data_root=str(tmp_path / "unused"),
+        iap_audience=None,
+    )
+
+    with TestClient(create_app(config), client=("127.0.0.1", 40000)) as app_client:
+        response = app_client.get("/tasktrove/data/manifest.json")
+
+    assert response.status_code == 200
+    assert response.json() == {"clean_tasks": 1450969}
+
+
 def test_data_files_support_head_and_byte_ranges(client: TestClient) -> None:
     head = client.head("/tasktrove/data/tasks.parquet")
     assert head.status_code == 200 and head.content == b""

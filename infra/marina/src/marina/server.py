@@ -5,9 +5,9 @@
 
 One FastAPI application. Each app is mounted under ``/<name>/``: files in its ``dist``
 are served verbatim and every other path under the prefix answers ``index.html`` so a
-client-side route survives a reload. ``/<name>/data/*`` reads from the app's directory
-under the data root (a GCS bucket in production, a local directory in development), so
-large or changing files stay out of the image and the repository. A Python app's API is
+client-side route survives a reload. ``/<name>/data/*`` reads from the app's declared
+data URL or its directory under the deployment data root, so large or changing files
+stay out of the image and the repository. A Python app's API is
 mounted at ``/<name>/api/`` behind the same authentication, with the caller's identity
 bound for its handlers. ``/api/marina/*`` is the surface shared by every
 app (the app directory and the caller's identity); ``/`` lists the apps. A per-app
@@ -30,7 +30,7 @@ import httpx
 import sqlalchemy
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
-from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 from rigging.server_auth import (
     RequestAuthPolicy,
@@ -340,7 +340,7 @@ async def serve_data_file(
     relative = clean_relative_path(path)
     if relative is None:
         return JSONResponse({"error": "not found"}, status_code=404)
-    fs, root = url_to_fs(data_url_for(data_root, app.name))
+    fs, root = filesystem_for(data_url_for(app, data_root))
     target = prefix_join(root, relative)
     headers = {
         "Content-Security-Policy": content_security_policy(connect_src or app.connect_src),

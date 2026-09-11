@@ -25,8 +25,11 @@ infra/marina/
 
 - `/<name>/`: files from `dist/`, `index.html` for every other path so client
   routes survive a reload. A `x.json.gz` beside `x.json` is served compressed.
-- `/<name>/data/<path>`: files from `<data root>/<name>/`. Large or changing
-  data lives there rather than in the image or the repository.
+- `/<name>/data/<path>`: files from the app's `data_url`, or from
+  `<data root>/<name>/` when it has no override. The authenticated Marina route
+  proxies reads and byte ranges, so browser code never receives object-store
+  credentials. Large or changing data lives there rather than in the image or
+  the repository.
 - `/<name>/api/`: the ASGI app in the `RegisteredApi` returned by a checked-in
   Python app's `create_api(services)`, mounted behind the same authentication.
   Handlers read the caller with
@@ -48,6 +51,7 @@ infra/marina/
    description = "Browse the TaskTrove task collection."
    connect_src = []          # extra origins the page may fetch; 'self' is implied
    build_command = "cd web && npm ci && npm run build"
+   data_url = "s3://bucket/release"  # optional; defaults to <data root>/<name>
 
    [[jobs]]                  # optional non-serving work
    name = "refresh"
