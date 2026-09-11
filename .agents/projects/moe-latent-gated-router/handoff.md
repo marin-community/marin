@@ -18,7 +18,7 @@ At handoff the only submitted workload is the five-step smoke:
 
 - Parent: `/kaiyuew/moe-lgr-9110-d512-gated-smoke`.
 - Child: `/kaiyuew/moe-lgr-9110-d512-gated-smoke/grug-train-moe-lgr-9110-d512-gated-smoke`.
-- Child is now running on v5p-8. JAX initialization and the expected W&B run are verified.
+- Attempt 0 was scheduler-preempted. Iris automatically started attempt 1 on another v5p-8; latest logs enter training 0/5 at 17:49:13 UTC. Manual recovery count is zero.
 - Parent has read all cached dependencies and dispatched only the expected child.
 - Model starts from scratch as intended. No advancing training loss or final checkpoint is verified yet.
 - W&B ID/name: `moe-lgr-9110-d512-gated-smoke`, project `marin-community/marin_moe`.
@@ -34,7 +34,7 @@ warnings concern new resource fields; pinned cached outputs are intentionally re
 
 Use `uv run --no-sync iris --cluster=marin job list --prefix <canonical-parent>`.
 The current CLI does not accept `job list --json`. Read bounded recent logs;
-avoid replaying hundreds of dependency-install lines. Use `job summary` on failure.
+avoid replaying hundreds of dependency-install lines. Use `task describe` and `attempt logs` on failure; this checkout has no `job summary`.
 Pending for capacity is not a failure and must not cause a duplicate submission.
 The first smoke submit was rejected because `--reserve v5p-8` conflicted with the
 CPU-parent placement; removing `--reserve` resolved it. Keep the parent CPU-only.

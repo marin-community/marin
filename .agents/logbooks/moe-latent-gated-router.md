@@ -115,3 +115,16 @@ See the [plan](../projects/moe-latent-gated-router/plan.md) and
 - 17:36 UTC update: smoke child allocated, JAX initialized, expected W&B run
   started, and checkpoint loader confirmed a fresh start. Training loss and final
   smoke completion are still pending.
+
+### 2026-09-11 — Automatic preemption recovery
+
+- At 17:48 UTC W&B showed `crashed` while Iris still showed the child running.
+  `iris task describe` resolved the apparent conflict: attempt 0 was scheduler-
+  preempted, and attempt 1 was already running on another v5p-8 worker.
+- Attempt-specific logs show the same run ID reinitialized, read the existing
+  caches and entered training at 0/5 at 17:49:13 UTC. A thread profile confirmed
+  a live Python process during cache loading. No model exception was observed.
+- No job was manually stopped/resubmitted and no code or cluster settings changed.
+  Manual recovery count remains zero. Full Gate 1 is still conditional on smoke success.
+- CLI correction: this checkout has `task describe` and `attempt logs`, but no
+  `job summary`; use the current task/attempt inspection surface on future ticks.
