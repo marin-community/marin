@@ -17,6 +17,7 @@ class ConvertStatus(StrEnum):
     NO_CONVERTER = "no_converter"
     CONVERTER_ERROR = "converter_error"
     DROPPED_SOURCE = "dropped_source"
+    REVIEWED_DEFECT = "reviewed_defect"
     # Typed rejections a converter returns for a task its template cannot grade soundly.
     NULL_GRADER = "null_grader"
     TOO_FEW_CASES = "too_few_cases"

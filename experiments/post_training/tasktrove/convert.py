@@ -34,6 +34,7 @@ from experiments.post_training.tasktrove.dataset import (
     WORKER_RESOURCES,
     SourceInfo,
     SourceVerdict,
+    load_reviewed_defects,
     load_source_verdicts,
     raw_tasks,
 )
@@ -141,6 +142,9 @@ def convert_one(
     template_id = fingerprint.template_id
     if info.verdict == SourceVerdict.DROP:
         return _unconverted(info, path, template_id, ConvertStatus.DROPPED_SOURCE, "")
+    reviewed_defect = load_reviewed_defects().get((info.source, path))
+    if reviewed_defect is not None:
+        return _unconverted(info, path, template_id, ConvertStatus.REVIEWED_DEFECT, reviewed_defect)
     converter = index.get(ConverterKey(info.family, frozenset(fingerprint.code_files)))
     if converter is None:
         return _unconverted(info, path, template_id, ConvertStatus.NO_CONVERTER, "")

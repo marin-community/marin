@@ -11,7 +11,7 @@ from tasktrove_verify.spec import MathSpec, McqSpec, parse_spec
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict, load_source_verdicts
 from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
@@ -90,6 +90,28 @@ def test_dropped_source_passes_through_unconverted():
     info = SourceInfo("mcqa", SourceVerdict.DROP, "qa-short-answer", "")
     record = convert_one(info, "t.tar.gz", _fixture("nemotron_mcqa"), converter_index(), TOOL_REF)
     assert record.status == ConvertStatus.DROPPED_SOURCE and record.task_binary is None
+
+
+def test_reviewed_bad_row_is_recorded_before_conversion():
+    record = convert_one(
+        _info("DCAgent__code-contests-noblock", "competitive-programming"),
+        "code_contests-4395",
+        _fixture("code_contests"),
+        converter_index(),
+        TOOL_REF,
+    )
+
+    assert record.status == ConvertStatus.REVIEWED_DEFECT
+    assert record.task_binary is None
+    assert "constructive" in record.error
+
+
+def test_prompt_injection_source_is_dropped():
+    info = load_source_verdicts()["laion__nemotron-gym-agentic-indirect-prompt-injection-v3"]
+
+    record = convert_one(info, "task.tar.gz", _fixture("prompt_injection"), converter_index(), TOOL_REF)
+
+    assert record.status == ConvertStatus.DROPPED_SOURCE
 
 
 def test_unknown_key_is_reported_not_guessed():

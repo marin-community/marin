@@ -79,6 +79,26 @@ def test_codeforces_exemplar_passes_verification():
     assert verify_task(record.task_binary) is None
 
 
+def test_numeric_tolerance_and_submission_files_follow_the_instruction_contract():
+    task = read_task_binary(_fixture())
+    task.files["instruction.md"] += (
+        b"\nThe answer is correct if its relative or absolute error doesn't exceed 10 - 4.\n"
+        b"Write your solution to one of: `/app/solution.py` (Python 3), `/app/solution.cpp` (C++17), "
+        b"or `/app/Solution.java` (Java).\n"
+    )
+
+    record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
+
+    converted = read_task_binary(record.task_binary)
+    spec = parse_spec(converted.text(VERIFIER_TOML))
+    assert isinstance(spec, StdioSpec)
+    assert spec.compare == Compare.FLOAT
+    assert spec.float_tolerance == 1e-4
+    instruction = converted.text("instruction.md")
+    assert "`/app/solution.py` (Python 3) or `/app/solution.cpp` (C++17)" in instruction
+    assert "Solution.java" not in instruction
+
+
 def test_a_few_hidden_cases_still_convert():
     task = _drop_cases(_fixture(), keep=4)
     record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)

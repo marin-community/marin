@@ -250,9 +250,9 @@
   "reason": "Predict-the-next-call from a frozen transcript with exact key-set match. The only tool-call data here; rewrite into executable mock-tool envs built from the transcripts."
  },
  "laion__nemotron-gym-agentic-indirect-prompt-injection-v3": {
-  "verdict": "keep",
+  "verdict": "drop",
   "family": "prompt-injection",
-  "reason": "Scores the single next action: 0 for the injected tool call, 1 for anything else, so a plain reply always scores 1; kept as a resistance signal to mix in."
+  "reason": "Five of five reviewed rows use the same negative-only checker, which rewards a generic reply or unrelated action without validating the required safe continuation."
  },
  "laion__nemotron-gym-agentic-swe-pivot-v4": {
   "verdict": "drop",

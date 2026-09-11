@@ -1,10 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Case files for the ``stdio`` mode: ``tests/<cases>/input_<n>.txt`` and ``output_<n>.txt`` pairs."""
+"""Case files and explicit numeric tolerance clauses for ``stdio`` converters."""
 
+import re
 
 from tasktrove_verify.modes.extract import collapse_whitespace
+from tasktrove_verify.spec import Compare
 
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus, Rejected
 from experiments.post_training.tasktrove.taskbinary import TaskFiles
@@ -12,6 +14,38 @@ from experiments.post_training.tasktrove.taskbinary import TaskFiles
 SOLUTION_COMMAND = "python3 /app/solution.py"
 """How every stdio converter runs the agent's program, once per case."""
 CASES_DIR = "tests/cases"
+
+_FLOAT_ERROR_CLAUSE_RE = re.compile(
+    r"(?:absolute|relative).{0,80}error|error.{0,80}(?:absolute|relative)", re.IGNORECASE
+)
+_SCIENTIFIC_TOLERANCE_RE = re.compile(r"\b\d+(?:\.\d+)?[eE]-\d+\b")
+_TEN_POWER_TOLERANCE_RE = re.compile(r"\b10\s*(?:\^|\*\*)?\s*\{?\s*[-\N{MINUS SIGN}]\s*(\d+)\s*\}?")
+_DECIMAL_TOLERANCE_RE = re.compile(r"\b0\.\d+\b")
+
+
+def float_tolerance_from_instruction(instruction: str) -> float | None:
+    """Read a numeric tolerance only from a line that explicitly describes float error."""
+    for line in instruction.splitlines():
+        if _FLOAT_ERROR_CLAUSE_RE.search(line) is None:
+            continue
+        scientific = _SCIENTIFIC_TOLERANCE_RE.search(line)
+        if scientific is not None:
+            return float(scientific.group())
+        power = _TEN_POWER_TOLERANCE_RE.search(line)
+        if power is not None:
+            return 10 ** -int(power.group(1))
+        decimal = _DECIMAL_TOLERANCE_RE.search(line)
+        if decimal is not None:
+            return float(decimal.group())
+    return None
+
+
+def comparison_from_instruction(instruction: str, default: Compare) -> tuple[Compare, float]:
+    """Return the declared stdio comparison mode and its numeric tolerance."""
+    tolerance = float_tolerance_from_instruction(instruction)
+    if tolerance is None:
+        return default, 1e-6
+    return Compare.FLOAT, tolerance
 
 
 def case_files(inputs: list[str], outputs: list[str]) -> dict[str, bytes]:

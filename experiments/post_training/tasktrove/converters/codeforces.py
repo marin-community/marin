@@ -5,17 +5,18 @@
 
 Each task ships ``tests/inputs/input_<n>.txt`` / ``tests/outputs/output_<n>.txt`` pairs and a
 fixed ``tests/judge.py`` launcher. The launcher always falls back to a whitespace-normalized exact
-match, which is what plain ``stdio`` token comparison already does, so only the ~16% of tasks that
-also ship a per-task ``tests/checker.py`` need ``special_judge``: :data:`_JUDGE_PY` adapts the
+match, which is what plain ``stdio`` token comparison already does. Instructions with an explicit
+numeric-error tolerance use float comparison. Only the ~16% of tasks that also ship a per-task
+``tests/checker.py`` need ``special_judge``: :data:`_JUDGE_PY` adapts the
 shipped launcher to the ``(input, expected, got)`` argv the special-judge contract calls it with,
 by locating ``checker.py`` next to itself instead of taking it as a fourth argument. About half of
 the shipped checkers define ``main()`` with no parameters and always raise when called positionally
 with three arguments; :data:`_JUDGE_PY` catches that and falls back to the normalized match, same
 as the original launcher did.
 
-The agent may submit ``solution.py`` or ``solution.cpp`` (the Dockerfile has no JDK, so
-``Solution.java`` never worked in the original grader either); :data:`_BUILD` compiles the C++
-case once and :data:`_COMMAND` runs whichever the workspace has.
+The agent may submit ``solution.py`` or ``solution.cpp``. The Dockerfile has no JDK, so the
+converter removes the source's stale ``Solution.java`` boilerplate. :data:`_BUILD` compiles the
+C++ case once and :data:`_COMMAND` runs whichever file the workspace has.
 """
 
 from tasktrove_verify.spec import Compare, StdioSpec
@@ -27,11 +28,22 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.stdio_cases import case_files_from_dirs, hidden_case_rejection
+from experiments.post_training.tasktrove.converters.stdio_cases import (
+    case_files_from_dirs,
+    comparison_from_instruction,
+    hidden_case_rejection,
+)
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
 CHECKER_PATH = "tests/checker.py"
 JUDGE_PATH = "tests/judge.py"
+
+_SUBMISSION_REPLACEMENTS = {
+    "`/app/solution.py` (Python 3), `/app/solution.cpp` (C++17), or `/app/Solution.java` (Java)": (
+        "`/app/solution.py` (Python 3) or `/app/solution.cpp` (C++17)"
+    ),
+    "`/app/solution.py` (or solution.cpp/Solution.java for C++/Java)": "`/app/solution.py` or `/app/solution.cpp`",
+}
 
 _BUILD = (
     "if [ -f solution.py ]; then exit 0; "
@@ -84,6 +96,8 @@ main()
 def convert_codeforces(task: TaskFiles) -> ConvertedTask | Rejected:
     data_files = case_files_from_dirs(task)
     instruction = task.text(INSTRUCTION)
+    for source, replacement in _SUBMISSION_REPLACEMENTS.items():
+        instruction = instruction.replace(source, replacement)
     rejection = hidden_case_rejection(data_files, instruction)
     if rejection is not None:
         return rejection
@@ -102,14 +116,16 @@ def convert_codeforces(task: TaskFiles) -> ConvertedTask | Rejected:
     tags = ("code", "competitive-programming", "stdio", "codeforces")
     if special_judge is not None:
         tags = (*tags, "special-judge")
+    compare, float_tolerance = comparison_from_instruction(instruction, Compare.TOKENS)
 
     return ConvertedTask(
         instruction=instruction,
         spec=StdioSpec(
             command=_COMMAND,
             build=_BUILD,
-            compare=Compare.TOKENS,
+            compare=compare,
             special_judge=special_judge,
+            float_tolerance=float_tolerance,
         ),
         dockerfile=task.text(DOCKERFILE),
         tags=tags,

@@ -5,7 +5,8 @@
 
 The only per-task file is ``tests/test_data.json``: parallel ``inputs``/``outputs`` string lists.
 The old grader ran ``python3 /app/solution.py`` once per case with the case's input on stdin and
-compared stdout to the expected output line for line, so this maps directly onto ``stdio``.
+compared stdout to the expected output line for line. This maps onto ``stdio``; prompts with an
+explicit numeric-error tolerance use float comparison so the grader honors the task contract.
 """
 
 import json
@@ -22,6 +23,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
 from experiments.post_training.tasktrove.converters.stdio_cases import (
     SOLUTION_COMMAND,
     case_files,
+    comparison_from_instruction,
     hidden_case_rejection,
 )
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
@@ -44,9 +46,15 @@ def convert_code_contests(task: TaskFiles) -> ConvertedTask | Rejected:
     rejection = hidden_case_rejection(cases, instruction)
     if rejection is not None:
         return rejection
+    compare, float_tolerance = comparison_from_instruction(instruction, Compare.EXACT)
     return ConvertedTask(
         instruction=instruction,
-        spec=StdioSpec(command=SOLUTION_COMMAND, compare=Compare.EXACT, per_case_timeout=PER_CASE_TIMEOUT),
+        spec=StdioSpec(
+            command=SOLUTION_COMMAND,
+            compare=compare,
+            per_case_timeout=PER_CASE_TIMEOUT,
+            float_tolerance=float_tolerance,
+        ),
         dockerfile=task.text(DOCKERFILE),
         tags=("code", "competitive-programming", "stdio", "code-contests"),
         language="python",

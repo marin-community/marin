@@ -4,7 +4,8 @@ This pipeline converts the pinned
 [open-thoughts/TaskTrove](https://huggingface.co/datasets/open-thoughts/TaskTrove) revision into
 Harbor tasks with explicit grader contracts. It retains sources and rows that can be normalized
 deterministically. `source_verdicts.json` records each source decision, and the release ledger
-records every rejected row.
+records every rejected row. `reviewed_defects.json` contains the small set of source/path pairs
+whose task contract, golden, or grader failed manual review.
 
 Each retained task contains:
 
@@ -48,7 +49,7 @@ Dockerfiles must install a new verifier commit.
 | `release` | `publish.py` | one task Parquet plus the ledger, manifest, and report |
 
 The current release is under
-`s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.7/`:
+`s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8/`:
 
 | path | contents |
 |---|---|
@@ -67,7 +68,7 @@ not cached.
 ## Add a converter
 
 1. Build the `templates` stage. Inspect `coverage.json` and its exemplar under
-   `<Marin prefix>/tasktrove/templates/2026.09.10.7/`; the production prefix is
+   `<Marin prefix>/tasktrove/templates/2026.09.10.8/`; the production prefix is
    `s3://marin-us-east-02a/marin`.
 2. Add a converter under `converters/` that returns `ConvertedTask` or a specific `Rejected`
    status. Use deterministic parsing; reject rows that need heuristic recovery.
@@ -87,6 +88,12 @@ contains `solution/solve.sh`; the audit applies it and requires the resulting wo
 one. An empty workspace must score zero. SWE solutions that install dependencies require
 `--network bridge`.
 
+Rows confirmed broken after release sampling belong in `reviewed_defects.json`, with a reason that
+can stand alone in `ledger.parquet`. Use a source-level drop only when the sampled defect is shared
+by the source template. Explicit acceptance clauses can be normalized without recovering an
+answer; for example, stdin/stdout converters use numeric comparison only when the instruction
+states a numeric error tolerance.
+
 ## Validate and inspect
 
 ```bash
@@ -95,5 +102,5 @@ uv run pytest experiments/post_training/tasktrove/tests lib/tasktrove-verify/tes
 
 # Export one Parquet row as a Harbor task directory.
 uv run python -m experiments.post_training.tasktrove.publish export \
-  s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.7/tasks <task-path> --dest /tmp/tasktrove-task
+  s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8/tasks <task-path> --dest /tmp/tasktrove-task
 ```

@@ -31,6 +31,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
 from experiments.post_training.tasktrove.converters.stdio_cases import (
     SOLUTION_COMMAND,
     case_files_from_dirs,
+    comparison_from_instruction,
     hidden_case_rejection,
 )
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLVE_SH, TaskFiles
@@ -39,10 +40,6 @@ SOLUTION_PY = "solution/solution.py"
 _SOLVE_SCRIPT = "#!/bin/bash\nset -e\ncp /solution/solution.py /app/solution.py\n"
 
 _STDIN_READ_RE = re.compile(r"\b(input\s*\(|sys\.stdin|raw_input\s*\(|fileinput\.|open\(0\))")
-_FLOAT_TOLERANCE_RE = re.compile(r"absolute (?:or relative )?error|relative error|error does not exceed", re.IGNORECASE)
-"""A handful of problems promise a numeric tolerance (``absolute or relative error <= 1e-6``) in
-the prompt itself; token comparison would reject a correctly rounded answer that differs in its
-last digit, so those get float comparison instead of the source's exact token match."""
 
 
 def _oracle_solution_files(solution: str) -> dict[str, bytes]:
@@ -60,10 +57,6 @@ def _syntax_error(solution: str) -> str | None:
         except SyntaxError as error:
             return error.msg
     return None
-
-
-def _compare(instruction: str) -> Compare:
-    return Compare.FLOAT if _FLOAT_TOLERANCE_RE.search(instruction) else Compare.TOKENS
 
 
 def convert_taco(task: TaskFiles) -> ConvertedTask | Rejected:
@@ -85,9 +78,10 @@ def convert_taco(task: TaskFiles) -> ConvertedTask | Rejected:
     rejection = hidden_case_rejection(cases, instruction)
     if rejection is not None:
         return rejection
+    compare, float_tolerance = comparison_from_instruction(instruction, Compare.TOKENS)
     return ConvertedTask(
         instruction=instruction,
-        spec=StdioSpec(command=SOLUTION_COMMAND, compare=_compare(instruction)),
+        spec=StdioSpec(command=SOLUTION_COMMAND, compare=compare, float_tolerance=float_tolerance),
         dockerfile=task.text(DOCKERFILE),
         tags=("code", "competitive-programming", "stdio", "taco"),
         language="python",

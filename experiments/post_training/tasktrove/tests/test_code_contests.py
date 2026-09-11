@@ -67,6 +67,19 @@ def test_code_contests_exemplar_passes_verification():
     assert verify_task(record.task_binary) is None
 
 
+def test_numeric_tolerance_in_instruction_uses_float_comparison():
+    task = read_task_binary(_fixture())
+    task.files["instruction.md"] += b"\nThe answer is correct if its relative or absolute error is at most 10 - 4.\n"
+
+    record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
+
+    converted = read_task_binary(record.task_binary)
+    spec = parse_spec(converted.text(VERIFIER_TOML))
+    assert isinstance(spec, StdioSpec)
+    assert spec.compare == Compare.FLOAT
+    assert spec.float_tolerance == 1e-4
+
+
 def test_two_hidden_cases_still_convert():
     task = read_task_binary(_fixture())
     data = json.loads(task.text("tests/test_data.json"))

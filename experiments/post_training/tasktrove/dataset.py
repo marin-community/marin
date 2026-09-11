@@ -7,6 +7,7 @@ import json
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import cache
 from pathlib import Path
 
 from fray.types import ResourceConfig
@@ -21,6 +22,7 @@ APPROX_SHARD_BYTES = 32 << 20
 WORKING_SHARDS = 64
 WORKER_RESOURCES = ResourceConfig(cpu=1, ram="4g")
 _VERDICTS_PATH = Path(__file__).with_name("source_verdicts.json")
+_REVIEWED_DEFECTS_PATH = Path(__file__).with_name("reviewed_defects.json")
 
 
 class SourceVerdict(StrEnum):
@@ -42,6 +44,16 @@ def load_source_verdicts() -> dict[str, SourceInfo]:
         source: SourceInfo(source, SourceVerdict(row["verdict"]), row["family"], row["reason"])
         for source, row in raw.items()
     }
+
+
+@cache
+def load_reviewed_defects() -> dict[tuple[str, str], str]:
+    """Return task rows rejected after manual review, keyed by source and path."""
+    rows = json.loads(_REVIEWED_DEFECTS_PATH.read_text())
+    defects = {(row["source"], row["path"]): row["reason"] for row in rows}
+    if len(defects) != len(rows):
+        raise ValueError(f"duplicate source/path in {_REVIEWED_DEFECTS_PATH}")
+    return defects
 
 
 def source_name(parquet_path: str) -> str:
