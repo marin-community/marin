@@ -581,3 +581,8 @@ author: benfeuer
 - Reproducibility: removed the compensating agent-timeout multipliers from the external SimpleQA and DS-1000 configs and the checked-in SWE-bench, TB2, and OT-TBLite recovery configs. Inflating task deadlines would change benchmark behavior now that Harbor's real verified outcomes are retained.
 - Lifecycle: cancelled exactly the five inflated-timeout SimpleQA roots (`…-86de`, `…-0f33`, `…-0d04`, `…-c792`, `…-337c`), five DS-1000 roots (`…-80cc`, `…-4843`, `…-f97b`, `…-1c99`, `…-091f`), and five shared agentic roots (`…-f4b8`, `…-0634`, `…-cb28`, `…-2f03`, `…-0d9a`). The three protected historical roots were not touched. Relaunch will use the native task deadlines and corrected scoring boundary.
 - Relaunch: submitted native-deadline SimpleQA roots qk157 `…-7af0`, qk175 `…-7b2e`, skew2 `…-5572`, skew4 `…-cf1b`, and skew8 `…-3a01`; DS-1000 roots `…-bea3`, `…-cd66`, `…-7154`, `…-deeb`, and `…-eea2`; and shared SWE/TB2/OT roots `…-7805`, `…-f585`, `…-1e86`, `…-142b`, and `…-9cbd`. All were submitted from campaign commit `ca96dd42fa` at interactive priority on `cw-rno2a`.
+
+## 2026-09-10 20:26 EDT — MRCR full-coverage gate passed
+
+- Result: qk157 root `/benfeuer/eval-20260910-233618-snowball-final-qk157-base-f415` succeeded with zero failed attempts or preemptions. FineStore compacted exactly 1,196 sample rows, and durable record `20260910-233618-snowball-final-qk157-base-mrcr-8543` reports `status=succeeded`, 1,196 attempted, 1,196 scored, zero unanswered, and `mrcr_accuracy=0.004348118377484316`.
+- Release: submitted the remaining 73,728-token MRCR roots qk175 `…-12e6` (record `…-499f`), skew2 `…-c17f` (`…-ee04`), skew4 `…-24be` (`…-a1fd`), and skew8 `…-f3f7` (`…-f56b`) at interactive priority on `cw-rno2a`.
