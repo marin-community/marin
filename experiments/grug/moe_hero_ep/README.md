@@ -58,7 +58,7 @@ compute-scaled optimizer values stay constant across a sweep.
 
 | option | effect |
 | --- | --- |
-| `--num-experts` | routed expert count. Must divide the 64-way expert axis. |
+| `--num-experts` | routed expert count. Must be divisible by `--expert-axis-size` times `--context-axis-size`, the expert bank's storage split (64 by default). |
 | `--intermediate-dim` | routed expert width |
 | `--num-experts-per-token` | routed top-k |
 | `--latent-dim` | routed input and output width |
@@ -79,6 +79,10 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | --- | --- |
 | `--dp-racks` | sets the data-parallel rack count; `--batch-size` stays global |
 | `--batch-size` | sets global sequences per step and the optimizer token budget |
+| `--seq-len` | sets sequence length; the optimizer uses the resulting token budget |
+| `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
+| `--qk-mult` | multiplies Q before attention; default 1.3, extension recipe 1.84 |
+| `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |
 | `--save-checkpoints` | writes periodic and final checkpoints |
@@ -151,6 +155,21 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
 
 Batch 1024 keeps the production local batch of 16 sequences per GPU. The trace does not include
 the 11-rack `replica_dcn` collectives or their global histogram reduction.
+
+### Long-context diagnostics
+
+For 262,144-token sequences on one rack, use `--seq-len 262144 --batch-size 16
+--context-axis-size 4 --expert-axis-size 16 --qk-mult 1.84`. This keeps 4,194,304
+tokens per step, matching the 4K/batch-1024 diagnostic. FA4 gathers K/V within each
+context group; the residual stream and parameter storage remain context-sharded.
+The short convolution exchanges a left halo across sequence shards.
+
+The 4K control uses `--seq-len 4096 --batch-size 1024 --context-axis-size 1
+--expert-axis-size 64 --qk-mult 1.3`. Use the same checkpoint and `--schedule-steps`
+for the 4K control and 262K probe. `--num-steps` is an
+absolute stop step and must exceed the checkpoint step. Record MFU, elapsed step
+time, peak memory, and routing drops after warmup. A throughput probe alone does
+not establish long-context training quality.
 
 ### Small-scale hero-shape ablations
 
