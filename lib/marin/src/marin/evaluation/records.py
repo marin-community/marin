@@ -200,12 +200,23 @@ class EvalRef(BaseModel):
 
     ``tasks`` and ``evalchemy`` carry the evaluator task list and normalized launch configuration;
     ``harbor`` carries the dataset descriptor for the ``harbor`` mechanism.
+
+    ``family`` names the benchmark that several settings of the same eval share -- ``gsm8k`` and
+    ``gsm8k-0shot`` both declare ``gsm8k`` -- so the dashboard can collapse them into one leaderboard
+    column without maintaining its own table of which name belongs with which. It is written by the
+    launcher from the eval registry and omitted when the registry declares none, which makes an eval
+    a family of one; records written before the field existed read back as ``None``.
     """
 
     model_config = ConfigDict(frozen=True)
 
     name: str
     mechanism: str
+    family: str | None = Field(
+        default=None,
+        description="Benchmark this eval is a setting of, for the leaderboard column it shares",
+        exclude_if=lambda value: value is None,
+    )
     tasks: tuple[EvalTaskRef, ...] = ()
     evalchemy: EvalchemyRef | None = None
     harbor: HarborRef | None = None

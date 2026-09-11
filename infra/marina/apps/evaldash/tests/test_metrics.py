@@ -30,6 +30,7 @@ def _record(
     *,
     coverage: dict[str, TaskCoverage] | None = None,
     accelerator: str = "v6e-8",
+    family: str | None = None,
 ) -> EvalRunRecord:
     succeeded = value is not None
     metrics = {eval_name: {"acc,none": value, "acc_stderr,none": 0.01, "sample_len": float(ITEMS)}} if succeeded else {}
@@ -40,7 +41,12 @@ def _record(
         user="tester",
         version=version,
         model=ModelRef(name=model, location="loc", backend="vllm"),
-        eval=EvalRef(name=eval_name, mechanism="evalchemy", tasks=(EvalTaskRef(name=eval_name, num_fewshot=0),)),
+        eval=EvalRef(
+            name=eval_name,
+            mechanism="evalchemy",
+            family=family,
+            tasks=(EvalTaskRef(name=eval_name, num_fewshot=0),),
+        ),
         hardware=HardwareRef(platform="tpu", accelerator=accelerator, region_or_cluster="us-central2"),
         status=RunStatus.SUCCEEDED if succeeded else RunStatus.INFRA_FAILED,
         error=None,
@@ -244,6 +250,83 @@ def test_smoke_suites_stay_out_of_the_panel():
     panel = build_panel(records, panel_request())
 
     assert panel["benchmarks"] == ["mmlu"]
+
+
+def test_a_family_opens_on_the_variant_with_results_for_the_most_models():
+    """gsm8k at 8 shots and gsm8k at 0 are one column, opened on the setting that says the most about
+    the models on screen. Admission is a property of the request, so the default moves with it:
+    relaxing the coverage gate readmits the two under-covered 8-shot runs and the column flips."""
+    half_graded = {"gsm8k": TaskCoverage(n_attempted=2 * ITEMS, n_scored=ITEMS)}
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k", coverage=half_graded),
+        _record("b", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.55, family="gsm8k", coverage=half_graded),
+        _record("c", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.60, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.40, family="gsm8k"),
+        _record("b", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.45, family="gsm8k"),
+    ]
+
+    strict = build_panel(records, panel_request())
+    relaxed = build_panel(records, panel_request(min_coverage=0.4))
+
+    assert strict["families"] == [{"family": "gsm8k", "variants": ["gsm8k", "gsm8k-0shot"], "default": "gsm8k-0shot"}]
+    assert relaxed["families"][0]["default"] == "gsm8k"
+
+
+def test_an_eval_with_no_declared_family_is_a_column_of_one():
+    """A benchmark run under a single setting, and one the registry never familied, each stand alone
+    rather than needing an entry in a grouping table the dashboard maintains."""
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.5, family="gsm8k"),
+        _record("a", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.6),
+    ]
+
+    panel = build_panel(records, panel_request())
+
+    assert panel["families"] == [
+        {"family": "gsm8k", "variants": ["gsm8k"], "default": "gsm8k"},
+        {"family": "mmlu", "variants": ["mmlu"], "default": "mmlu"},
+    ]
+
+
+def test_variants_with_equally_many_results_default_to_the_first_eval_name():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.5, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.4, family="gsm8k"),
+    ]
+
+    (column,) = build_panel(records, panel_request())["families"]
+
+    assert column["default"] == "gsm8k"
+
+
+def test_a_variant_in_a_family_keeps_its_own_cell_name_and_provenance():
+    """Sharing a column is a heading, not a merge. Cells stay keyed by exact eval name, each naming
+    the run and cohort behind it, so the two settings never average into one number."""
+    records = [
+        _record("a", "gsm8k", "v1", "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k"),
+        _record("a", "gsm8k-0shot", "v2", "2026-02-01T00:00:00+00:00", 0.40, family="gsm8k"),
+    ]
+
+    (row,) = build_panel(records, panel_request())["rows"]
+
+    assert sorted(row["cells"]) == ["gsm8k", "gsm8k-0shot"]
+    assert row["cells"]["gsm8k"]["version"] == "v1"
+    assert row["cells"]["gsm8k-0shot"]["version"] == "v2"
+    assert row["cells"]["gsm8k-0shot"]["run_id"] == "a-gsm8k-0shot-2026-02-01T00:00:00+00:00"
+
+
+def test_meta_keeps_the_variants_a_narrowed_panel_is_not_showing():
+    """A panel pinned to one setting reports only that variant, so the column picker reads the whole
+    family from meta instead; otherwise choosing a variant would hide the way back to its sibling."""
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.5, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.4, family="gsm8k"),
+    ]
+
+    panel = build_panel(records, panel_request(benchmarks=("gsm8k-0shot",)))
+
+    assert panel["families"] == [{"family": "gsm8k", "variants": ["gsm8k-0shot"], "default": "gsm8k-0shot"}]
+    assert build_meta(records)["families"] == [{"family": "gsm8k", "variants": ["gsm8k", "gsm8k-0shot"]}]
 
 
 def test_meta_reports_suites_facets_and_archived_models():

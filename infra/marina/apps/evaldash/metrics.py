@@ -9,14 +9,16 @@ turns records into measurements, answers a :class:`~marin.evaluation.eval_stats.
 with them, and shapes the result for the API -- the statistics and the selection rules live in the
 engine, which the eval runners share, so the dashboard and the producers cannot drift.
 
-Presentation lives here: the suite grouping of columns, the smoke-suite exclusion, and the payload
-shapes. A cell the request rejected is kept as a *missing* entry with the reason, so an empty cell is
-explained rather than blank.
+Presentation lives here: the suite grouping of columns, the family grouping that collapses several
+settings of one benchmark into a single column, the smoke-suite exclusion, and the payload shapes. A
+cell the request rejected is kept as a *missing* entry with the reason, so an empty cell is explained
+rather than blank.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
 
 from marin.evaluation.eval_measurements import measurement_from_record, measurements_from_records
 from marin.evaluation.eval_stats import (
@@ -95,6 +97,50 @@ def eval_suites(evals: set[str]) -> list[dict]:
     if other:
         result.append({"suite": "Other", "evals": other})
     return result
+
+
+def declared_families(records: Iterable[EvalRunRecord]) -> dict[str, str]:
+    """Each eval name's declared benchmark family, from the newest record that declares one.
+
+    The family is a registry property the launcher writes into every record, so the dashboard reads
+    the grouping rather than keeping its own copy of it. A name no record families is absent here and
+    is its own family. A name whose family changed takes the newest declaration.
+    """
+    declared: dict[str, tuple[str, str]] = {}
+    for record in records:
+        family = record.evaluation.family
+        if family is None:
+            continue
+        current = declared.get(record.evaluation.name)
+        if current is None or (record.created_at or "") > current[1]:
+            declared[record.evaluation.name] = (family, record.created_at or "")
+    return {name: family for name, (family, _) in declared.items()}
+
+
+def _family_columns(
+    panel: Sequence[str],
+    families: Mapping[str, str],
+    cells: Mapping[str, Mapping[str, Measurement]],
+) -> list[dict]:
+    """The panel's benchmarks grouped into families, each with the variant to show by default.
+
+    The default is the variant with the most admitted cells under the request that produced ``cells``,
+    ties broken by eval name. Admission depends on the request -- a coverage gate, a pinned cohort, a
+    metadata filter -- so the variant that says the most about the models on screen is a property of
+    the question being asked and cannot be decided once at registry time.
+    """
+    admitted = Counter(name for model_cells in cells.values() for name in model_cells)
+    grouped: dict[str, list[str]] = {}
+    for name in panel:
+        grouped.setdefault(families.get(name, name), []).append(name)
+    return [
+        {
+            "family": family,
+            "variants": variants,
+            "default": min(variants, key=lambda name: (-admitted[name], name)),
+        }
+        for family, variants in grouped.items()
+    ]
 
 
 def _attribute(record: EvalRunRecord, path: str) -> str:
@@ -205,6 +251,10 @@ def build_panel(
     rejections behind any empty cell, and -- only when a caller asks for one by naming an aggregation
     policy -- a panel aggregate carrying its own protocol. No aggregate is produced by default: a mean
     across benchmarks has no interpretation without a declared panel and missing-data policy.
+
+    ``families`` groups the panel's benchmarks into the columns a reader sees, one per declared
+    family, each naming its variants and the one to show by default. Cells stay keyed by exact eval
+    name, so a variant's provenance and every benchmark-named parameter are unchanged.
     """
     eligible = _panel_records(records)
     metadata = run_metadata(eligible)
@@ -238,6 +288,7 @@ def build_panel(
     return {
         "benchmarks": list(selection.benchmarks),
         "panel": list(panel),
+        "families": _family_columns(list(panel), declared_families(eligible), selection.cells),
         "rows": rows,
         "request": {
             "min_coverage": request.min_coverage,
@@ -306,8 +357,17 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
 
 
 def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = frozenset()) -> dict:
-    """Distinct filter values across all records, plus the archived set and the run facets."""
+    """Distinct filter values across all records, plus the archived set and the run facets.
+
+    ``families`` lists every variant each benchmark family has ever been run under, which is what the
+    column picker offers. It is wider than a panel's own ``families``: a panel narrowed to one variant
+    must still be able to switch back to a sibling it is not currently showing.
+    """
     eval_names = {r.evaluation.name for r in records}
+    families = declared_families(records)
+    by_family: dict[str, set[str]] = {}
+    for name in eval_names:
+        by_family.setdefault(families.get(name, name), set()).add(name)
     metadata = run_metadata(records)
     facets = {
         facet: sorted({values[facet] for values in metadata.values() if values.get(facet)}) for facet in RUN_FACETS
@@ -316,6 +376,7 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
         "models": sorted({r.model.name for r in records}),
         "evals": sorted(eval_names),
         "suites": eval_suites(eval_names),
+        "families": [{"family": family, "variants": sorted(variants)} for family, variants in sorted(by_family.items())],
         "users": sorted({r.user for r in records if r.user}),
         "statuses": sorted({r.status.value for r in records}),
         "versions": sorted({r.version for r in records if r.version}),

@@ -127,9 +127,20 @@ export interface PanelRequest {
   statuses: string[]
 }
 
+// Several settings of one benchmark (gsm8k at 8 shots and at 0) share a leaderboard column. The
+// variants are exact eval names and stay the identifier everywhere: cells, sort keys, the
+// `benchmarks=` parameter, and history are all keyed by them, never by the family.
+export interface PanelFamily {
+  family: string
+  variants: string[]
+  /** The variant with the most admitted cells under this request; ties go to the first eval name. */
+  default: string
+}
+
 export interface Panel {
   benchmarks: string[]
   panel: string[]
+  families: PanelFamily[]
   rows: PanelRow[]
   request: PanelRequest
 }
@@ -165,10 +176,18 @@ export interface EvalSuite {
   evals: string[]
 }
 
+// Every variant a family has ever been run under, which is what the column picker offers. Wider than
+// a panel's own families: a panel narrowed to one variant must still be able to switch back.
+export interface EvalFamily {
+  family: string
+  variants: string[]
+}
+
 export interface Meta {
   models: string[]
   evals: string[]
   suites: EvalSuite[]
+  families: EvalFamily[]
   archived_models: string[]
   users: string[]
   statuses: string[]

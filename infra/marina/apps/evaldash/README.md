@@ -87,10 +87,10 @@ GET  /runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (the t
 POST /runs/{run_id}/samples/review   LLM failure-mode review of up to n sampled task rows ({task, filter, n})
 GET  /runs/{run_id}/group          sibling runs sharing the run's group_id
 GET  /models/{model}    one model's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
-GET  /panel?benchmarks=&cohort=&complete=&min_coverage=&aggregate=&model=&<facet>=&include_archived=   the model x benchmark panel: per-cell measurements with intervals, explained gaps, and an optional qualified aggregate
+GET  /panel?benchmarks=&cohort=&complete=&min_coverage=&aggregate=&model=&<facet>=&include_archived=   the model x benchmark panel: per-cell measurements with intervals, explained gaps, the benchmark families its columns group into, and an optional qualified aggregate
 GET  /compare?models=a,b[,c,d]&<panel filters>   head-to-head: per-benchmark cells, each model's difference interval against that benchmark's leader, and each model's aggregate over the shared benchmarks
 GET  /history?model=&task=   every run's headline score for one cell, over time
-GET  /meta              distinct models / evals / suites / users / statuses / versions + filter facets + archived_models + current_user
+GET  /meta              distinct models / evals / suites / families / users / statuses / versions + filter facets + archived_models + current_user
 GET  /status            store info + per-prefix ingest probes (last probe/success/error)
 POST /refresh           queue the EvalDash Cloud Run rescan; returns 202 + operation + /status
 POST /models/{model_name}/archive   set a model's archive flag ({"archived": bool})
@@ -113,6 +113,16 @@ extractable answer is flagged `no_answers`. Such a result is held out of the pan
 than standing as a model's newest score -- the zero is real but is equally consistent with a broken
 grader, and reporting a collapse on that basis would be the same error as hiding it. The empty cell
 names the flag and links the run, and `include_flagged=1` admits it, starred.
+
+Several settings of one benchmark share a leaderboard column. Which names belong together is declared
+once in the launcher's eval registry and written into each run's `eval.family`, so the dashboard reads
+the grouping off the records instead of keeping a table that drifts; a run that declares no family is
+a column of its own. `/panel` returns `families`, each with its variants and the variant to open on:
+the one with the most admitted cells under this request, ties broken by eval name. That default is
+computed per request rather than fixed in the registry, because the coverage gate, a pinned cohort,
+and the metadata filters all change which settings have results for the models on screen. Cells stay
+keyed by the exact eval name, which is also what `benchmarks=` carries, so a shared URL, `/compare`,
+and `/history` resolve the same setting the reader was looking at.
 
 The primary metric per task matches on the base metric name with lm-eval's `,<filter>` suffix
 stripped: the first present of `exact_match`, `accuracy`, `acc_norm`, `acc`, `pass@1` (falling back to
@@ -138,7 +148,8 @@ cannot resolve the ordering, which is weaker than the models being equal. Its si
 the aggregate over the shared benchmarks only, under `require_complete`.
 
 `/meta` echoes the caller the kernel authenticated as `current_user`, groups the eval columns into
-suites for the column tree, and lists the filter facets a panel request accepts.
+suites for the column tree, lists every variant each benchmark family has been run under, and lists
+the filter facets a panel request accepts.
 
 The `jobs` and `logs` endpoints use generated Connect clients to reach the Iris controller and
 finelog hub by internal IP over Direct VPC egress. GCE instance discovery requires
