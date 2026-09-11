@@ -26,6 +26,7 @@ import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
+from itertools import batched
 from pathlib import Path
 
 import click
@@ -497,6 +498,13 @@ def solve(root: Path, model: str, agent_command: str, jobs: int, timeout: float)
 @click.option("--disk", type=int, default=4, show_default=True, help="GiB")
 @click.option("--env", "environment", multiple=True, help="KEY=VALUE forwarded to solve and test commands")
 @click.option("--keep-snapshots", is_flag=True, help="leave snapshots built by this run in place")
+@click.option(
+    "--images-per-batch",
+    type=click.IntRange(min=1),
+    default=8,
+    show_default=True,
+    help="maximum Dockerfile snapshots retained concurrently",
+)
 def grade_sample(
     root: Path,
     jobs: int,
@@ -507,6 +515,7 @@ def grade_sample(
     disk: int,
     environment: tuple[str, ...],
     keep_snapshots: bool,
+    images_per_batch: int,
 ) -> None:
     from daytona import Daytona, DaytonaConfig, Resources  # noqa: PLC0415 -- optional grade dependency
 
@@ -518,7 +527,6 @@ def grade_sample(
     tasks = load_sample(root)
     dockerfiles = {task.dockerfile_id: root / TASKS_DIR / task.name / DOCKERFILE for task in tasks}
     client = Daytona(DaytonaConfig(api_key=os.environ["DAYTONA_API_KEY"]))
-    snapshots = Snapshots(client, Resources(cpu=cpu, memory=memory, disk=disk), dockerfiles)
     pending = [
         (task, check)
         for task in tasks
@@ -533,12 +541,23 @@ def grade_sample(
         logger.info("%s %s: %s %s", task.name, check, result.status, result.reward)
         return result
 
-    try:
-        with ThreadPoolExecutor(jobs) as pool:
-            list(pool.map(run_one, pending))
-    finally:
-        if not keep_snapshots:
-            snapshots.delete_created()
+    by_image: dict[str, list[tuple[SampledTask, str]]] = defaultdict(list)
+    for item in pending:
+        by_image[item[0].dockerfile_id].append(item)
+    for image_ids in batched(sorted(by_image), images_per_batch):
+        image_tasks = [item for image_id in image_ids for item in by_image[image_id]]
+        snapshots = Snapshots(
+            client,
+            Resources(cpu=cpu, memory=memory, disk=disk),
+            {image_id: dockerfiles[image_id] for image_id in image_ids},
+        )
+        logger.info("grading %d checks over %d images", len(image_tasks), len(image_ids))
+        try:
+            with ThreadPoolExecutor(jobs) as pool:
+                list(pool.map(run_one, image_tasks))
+        finally:
+            if not keep_snapshots:
+                snapshots.delete_created()
     results = collect_daytona_results(root, tasks)
     (root / RESULTS_JSON).write_text(json.dumps([asdict(result) for result in results], indent=1))
     scored_results = [result for result in results if result.status == "scored"]
