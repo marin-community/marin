@@ -58,8 +58,11 @@ The current release is under
 | `report.md` | tables generated from the manifest |
 
 The authenticated browser at <https://marina.oa.dev/tasktrove/> uses a paginated Marina API. The
-server reads the Parquet with its existing S3 credentials, caches metadata columns and filtered
-pages in process, and returns one selected task archive at a time.
+server reads the Parquet with its existing S3 credentials. Exact source-only pages use the
+manifest's released count and scan row groups only until the requested page is full, avoiding a
+cold full-column read. Other filters cache their columns, and every process keeps bounded
+row-group, filter-result, and rendered-page caches. Task archives are read one at a time and are
+not cached.
 
 ## Add a converter
 

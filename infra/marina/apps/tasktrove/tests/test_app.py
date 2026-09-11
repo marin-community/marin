@@ -60,7 +60,11 @@ def client(tmp_path) -> TestClient:
                 "dockerfiles": {
                     "python": {"base_image": "python:3.10-slim"},
                     "ubuntu": {"base_image": "ubuntu:24.04"},
-                }
+                },
+                "by_source": {
+                    "source-a": {"converted": 1},
+                    "source-b": {"converted": 2},
+                },
             }
         )
     )
@@ -98,6 +102,16 @@ def test_task_page_filters_and_returns_exact_total(tmp_path) -> None:
         "offset": 0,
         "limit": 50,
     }
+
+
+def test_source_page_uses_manifest_total_across_row_groups(tmp_path) -> None:
+    api = client(tmp_path)
+
+    response = api.get("/tasks", params={"source": "source-b", "offset": 1, "limit": 1})
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 2
+    assert [row["path"] for row in response.json()["rows"]] == ["calendar-002"]
 
 
 def test_task_metadata_and_archive_are_served_by_row(tmp_path) -> None:

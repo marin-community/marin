@@ -90,6 +90,7 @@ class TaskStore:
         self._load_lock = threading.Lock()
         self._row_group_ends: tuple[int, ...] | None = None
         self._environments: dict[str, str] | None = None
+        self._source_counts: dict[str, int] | None = None
         self._columns: dict[str, pa.Array] = {}
         self._row_groups = LRUCache[int, pa.Table](ROW_GROUP_CACHE_SIZE)
         self._matches = LRUCache[TaskFilters, pa.Array](FILTER_CACHE_SIZE)
@@ -113,6 +114,9 @@ class TaskStore:
             self._row_group_ends = tuple(row_group_ends)
             self._environments = {
                 dockerfile_id: details["base_image"] for dockerfile_id, details in manifest["dockerfiles"].items()
+            }
+            self._source_counts = {
+                source: statuses.get("converted", 0) for source, statuses in manifest.get("by_source", {}).items()
             }
 
     @property
@@ -184,6 +188,31 @@ class TaskStore:
         tables = {row_group: self._row_group_metadata(row_group) for _, row_group, _ in located}
         return tuple(self._row(row, tables[row_group], local_row) for row, row_group, local_row in located)
 
+    def _source_page(self, offset: int, limit: int, filters: TaskFilters) -> TaskPage:
+        """Scan cached row groups only until one exact-source page is full."""
+        self._load_index()
+        assert self._row_group_ends is not None
+        assert self._source_counts is not None
+        total = self._source_counts.get(filters.source, 0)
+        if offset >= total:
+            return TaskPage(rows=(), total=total, offset=offset, limit=limit)
+
+        needed = offset + limit
+        matching_rows: list[int] = []
+        for row_group in range(len(self._row_group_ends)):
+            table = self._row_group_metadata(row_group)
+            local_rows = pc.indices_nonzero(pc.equal(table["source"], filters.source)).to_pylist()
+            start = 0 if row_group == 0 else self._row_group_ends[row_group - 1]
+            matching_rows.extend(start + local_row for local_row in local_rows)
+            if len(matching_rows) >= needed:
+                break
+        return TaskPage(
+            rows=self._rows(matching_rows[offset:needed]),
+            total=total,
+            offset=offset,
+            limit=limit,
+        )
+
     def _matching_rows(
         self,
         filters: TaskFilters,
@@ -229,6 +258,10 @@ class TaskStore:
         cached = self._pages.get(key)
         if cached is not None:
             return cached
+        if filters.source and not any(
+            (filters.converter, filters.mode, filters.tag, filters.environment, filters.query)
+        ):
+            return self._pages.put(key, self._source_page(offset, limit, filters))
         matches = self._matching_rows(filters)
         if matches is None:
             total = self.num_rows
