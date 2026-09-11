@@ -59,6 +59,14 @@ goes stale on the next commit.
 - Purpose: measure constant-LR scaling for a one-layer d512 dense Transformer with raw-gradient SGD-H updates.
 - Issue: https://github.com/marin-community/marin/issues/7856
 
+### dense-one-layer-muonh
+- Path: `experiments/grug/dense_one_layer_muonh/`
+- Origin: `dense_one_layer_sgdh`
+- Introduced: ad5aa2928
+- Status: active
+- Purpose: measure matched constant-LR scaling for a one-layer d512 dense Transformer with MuonH updates.
+- Issue: https://github.com/marin-community/marin/issues/7856
+
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`
 - Introduced: 5efe76834
