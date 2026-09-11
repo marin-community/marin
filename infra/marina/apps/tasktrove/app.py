@@ -6,13 +6,14 @@
 import bisect
 import json
 import threading
-from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from fastapi import FastAPI, HTTPException, Query, Response, status
+from iris.cluster.controller.lru_cache import LRUCache
 from marina.apps import RegisteredApi, Services, registered_api
 from pyarrow.fs import FSSpecHandler, PyFileSystem
 from pydantic import BaseModel, ConfigDict
@@ -68,6 +69,16 @@ class TaskPage(BaseModel):
     limit: int
 
 
+@dataclass(frozen=True)
+class TaskFilters:
+    source: str = ""
+    converter: str = ""
+    mode: str = ""
+    tag: str = ""
+    environment: str = ""
+    query: str = ""
+
+
 class TaskStore:
     """A Parquet task table with process-local column, row-group, and query caches."""
 
@@ -77,13 +88,12 @@ class TaskStore:
         self._tasks_path = prefix_join(self._root, TASKS_FILE)
         self._manifest_path = prefix_join(self._root, MANIFEST_FILE)
         self._load_lock = threading.Lock()
-        self._cache_lock = threading.Lock()
         self._row_group_ends: tuple[int, ...] | None = None
         self._environments: dict[str, str] | None = None
         self._columns: dict[str, pa.Array] = {}
-        self._row_groups: OrderedDict[int, pa.Table] = OrderedDict()
-        self._matches: OrderedDict[tuple[str, ...], pa.Array | None] = OrderedDict()
-        self._pages: OrderedDict[tuple[int, int, str, str, str, str, str, str], TaskPage] = OrderedDict()
+        self._row_groups = LRUCache[int, pa.Table](ROW_GROUP_CACHE_SIZE)
+        self._matches = LRUCache[TaskFilters, pa.Array](FILTER_CACHE_SIZE)
+        self._pages = LRUCache[tuple[int, int, TaskFilters], TaskPage](PAGE_CACHE_SIZE)
 
     def _load_index(self) -> None:
         if self._row_group_ends is not None:
@@ -134,19 +144,12 @@ class TaskStore:
         return [dockerfile_id for dockerfile_id, image in self._environments.items() if image == environment]
 
     def _row_group_metadata(self, row_group: int) -> pa.Table:
-        with self._cache_lock:
-            cached = self._row_groups.get(row_group)
-            if cached is not None:
-                self._row_groups.move_to_end(row_group)
-                return cached
+        cached = self._row_groups.get(row_group)
+        if cached is not None:
+            return cached
         with self._fs.open(self._tasks_path, "rb") as handle:
             table = pq.ParquetFile(handle).read_row_group(row_group, columns=list(METADATA_COLUMNS))
-        with self._cache_lock:
-            self._row_groups[row_group] = table
-            self._row_groups.move_to_end(row_group)
-            if len(self._row_groups) > ROW_GROUP_CACHE_SIZE:
-                self._row_groups.popitem(last=False)
-        return table
+        return self._row_groups.put(row_group, table)
 
     def _position(self, row: int) -> tuple[int, int]:
         self._load_index()
@@ -183,69 +186,50 @@ class TaskStore:
 
     def _matching_rows(
         self,
-        source: str,
-        converter: str,
-        mode: str,
-        tag: str,
-        environment: str,
-        query: str,
+        filters: TaskFilters,
     ) -> pa.Array | None:
-        key = (source, converter, mode, tag, environment, query)
-        with self._cache_lock:
-            if key in self._matches:
-                cached = self._matches[key]
-                self._matches.move_to_end(key)
-                return cached
+        cached = self._matches.get(filters)
+        if cached is not None:
+            return cached
         mask: pa.Array | None = None
 
         def add(next_mask: pa.Array) -> None:
             nonlocal mask
             mask = next_mask if mask is None else pc.and_(mask, next_mask)
 
-        for column, value in (("source", source), ("converter", converter), ("mode", mode)):
+        for column, value in (
+            ("source", filters.source),
+            ("converter", filters.converter),
+            ("mode", filters.mode),
+        ):
             if value:
                 add(pc.equal(self._column(column), value))
-        if environment:
-            environment_ids = self._environment_ids(environment)
+        if filters.environment:
+            environment_ids = self._environment_ids(filters.environment)
             if not environment_ids:
-                matches = pa.array([], type=pa.int64())
-                with self._cache_lock:
-                    self._matches[key] = matches
-                return matches
+                return self._matches.put(filters, pa.array([], type=pa.int64()))
             add(pc.is_in(self._column("dockerfile_id"), value_set=pa.array(environment_ids)))
-        if tag:
+        if filters.tag:
             tags = self._column("tags")
-            tag_rows = pc.filter(pc.list_parent_indices(tags), pc.equal(pc.list_flatten(tags), tag))
+            tag_rows = pc.filter(pc.list_parent_indices(tags), pc.equal(pc.list_flatten(tags), filters.tag))
             add(pc.is_in(pa.array(range(self.num_rows), type=pa.int64()), value_set=tag_rows))
-        if query:
-            add(pc.match_substring(self._column("path"), query, ignore_case=True))
+        if filters.query:
+            add(pc.match_substring(self._column("path"), filters.query, ignore_case=True))
         matches = None if mask is None else pc.indices_nonzero(mask)
-        with self._cache_lock:
-            self._matches[key] = matches
-            self._matches.move_to_end(key)
-            if len(self._matches) > FILTER_CACHE_SIZE:
-                self._matches.popitem(last=False)
-        return matches
+        return matches if matches is None else self._matches.put(filters, matches)
 
     def page(
         self,
         offset: int,
         limit: int,
-        source: str,
-        converter: str,
-        mode: str,
-        tag: str,
-        environment: str,
-        query: str,
+        filters: TaskFilters,
     ) -> TaskPage:
         """Return one page after applying the exact API filter tuple."""
-        key = (offset, limit, source, converter, mode, tag, environment, query)
-        with self._cache_lock:
-            cached = self._pages.get(key)
-            if cached is not None:
-                self._pages.move_to_end(key)
-                return cached
-        matches = self._matching_rows(source, converter, mode, tag, environment, query)
+        key = (offset, limit, filters)
+        cached = self._pages.get(key)
+        if cached is not None:
+            return cached
+        matches = self._matching_rows(filters)
         if matches is None:
             total = self.num_rows
             row_numbers = list(range(offset, min(offset + limit, total)))
@@ -253,12 +237,7 @@ class TaskStore:
             total = len(matches)
             row_numbers = matches.slice(offset, limit).to_pylist()
         result = TaskPage(rows=self._rows(row_numbers), total=total, offset=offset, limit=limit)
-        with self._cache_lock:
-            self._pages[key] = result
-            self._pages.move_to_end(key)
-            if len(self._pages) > PAGE_CACHE_SIZE:
-                self._pages.popitem(last=False)
-        return result
+        return self._pages.put(key, result)
 
     def task(self, row: int) -> TaskRow:
         """Return one metadata row by its stable Parquet position."""
@@ -295,12 +274,14 @@ def create_api(services: Services) -> RegisteredApi:
         return store.page(
             offset,
             limit,
-            source.strip(),
-            converter.strip(),
-            mode.strip(),
-            tag.strip(),
-            environment.strip(),
-            query.strip(),
+            TaskFilters(
+                source=source.strip(),
+                converter=converter.strip(),
+                mode=mode.strip(),
+                tag=tag.strip(),
+                environment=environment.strip(),
+                query=query.strip(),
+            ),
         )
 
     @api.get("/tasks/{row}", response_model=TaskRow)
