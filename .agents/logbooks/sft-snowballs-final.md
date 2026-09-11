@@ -619,3 +619,10 @@ author: benfeuer
 
 - The persistent watcher completed 28 controller snapshots with all 20 unfinished target roots running and no terminal parent or root failure.
 - An apparent decrease in one Harbor persistence count proved that `iris job logs --max-lines` exposes a rolling log window rather than a cumulative event stream. Those counts remain useful evidence of fresh activity but are not coverage measurements and must not be treated as monotonic. Final coverage continues to come only from canonical terminal `record.json` artifacts.
+
+## 2026-09-11 01:24 EDT — First SWE-bench records audited; skew2 isolated recovery launched
+
+- Read-only RNO2A audit `/benfeuer/snowball-final-swe-post-preemption-audit` verified four durable successful SWE-bench random-100 records: qk157 2/99 solved, 2.0202%, one `VerifierTimeoutError` (`…-1e17`); qk175 0/100, 0.00%, no attrition (`…-e0d8`); skew2 2/99, 2.0202%, one `RuntimeError` (`…-5a66`); and skew8 0/99, 0.00%, one `RuntimeError` (`…-c23e`). All pass the 95% coverage gate and are reported in external `RESULTS.md`. Skew4 resumed its final three trials.
+- Skew2's first aggregate write had failed after all trials because one 3,318-byte progress snapshot upload hung for Harbor's 300-second artifact deadline. Harbor correctly refused to let a potentially stale in-flight overwrite race the final `result.json`.
+- At 01:24 EDT all five shared agentic orchestrators were fleet-preempted together and resumed automatically on attempt 1 with `failures=0, preemptions=1`. Their stable Harbor job directories preserved completed trials: skew2 reopened the same directory and repaired its canonical record in 35 seconds, while qk157, qk175, and skew8 returned directly to TB2.
+- An isolated skew2 SWE retry `/benfeuer/eval-20260911-052317-snowball-final-qk175-skew2-base-1178` was submitted just before that preemption was understood. It was cancelled at 01:34 EDT before any benchmark trial started because the original root's resumable stage made it redundant and the extra serve could add scheduling pressure. No original, completed-stage, or protected historical root was cancelled.
