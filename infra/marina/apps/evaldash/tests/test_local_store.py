@@ -86,7 +86,7 @@ def test_groups_roll_up_mixed_launch_status(store):
     # tootsie-8b's launch has a success, an eval failure, and an infra failure -> mixed.
     assert groups["tootsie-8b-2026.07.20"]["status"] == "mixed"
     assert groups["snowball-2026.07.20"]["status"] == "succeeded"
-    assert groups["snowball-2026.07.20"]["n_succeeded"] == 5
+    assert groups["snowball-2026.07.20"]["n_succeeded"] == 6
 
 
 def test_status_rollup_does_not_invent_evaluator_failure():
@@ -135,7 +135,7 @@ def test_api_surface_over_fixtures(client):
     assert panel["request"]["min_coverage"] == pytest.approx(0.9)
 
     runs = client.get("/runs?limit=100").json()
-    assert len(runs) == 15
+    assert len(runs) == 17
     # Rows carry version (from the record jsonb) so the client can facet on it.
     assert any(row["version"] == "2026.07.20" for row in runs)
     assert {row["version"] for row in runs} >= {"2026.07.19", "2026.07.20", "2026.07.21"}
@@ -230,7 +230,7 @@ def test_ingestor_surfaces_parse_failures(tmp_path):
     asyncio.run(ingestor.run_once())
 
     probe = ingestor.status()["prefixes"][0]
-    assert probe["record_count"] == 15
+    assert probe["record_count"] == 17
     assert probe["error"] is None
     assert len(probe["parse_failures"]) == 1
     assert probe["parse_failures"][0]["path"].endswith("20260722-000000-legacy-mmlu-broken/record.json")
