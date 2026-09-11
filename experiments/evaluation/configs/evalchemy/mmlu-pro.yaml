@@ -1,0 +1,12 @@
+tasks: [MMLUPro]
+task_options:
+  MMLUPro:
+    num_fewshot: 0
+    task_alias: mmlu-pro
+    generation: true
+apply_chat_template: true
+batch_size: 1
+seed: 42
+max_tokens: 32768
+max_length: 65536
+runtime_extras: [mmlupro]
