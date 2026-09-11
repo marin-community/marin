@@ -19,7 +19,7 @@ from tasktrove_verify.spec import Mode
 VERIFIER_TOML = "tests/verifier.toml"
 TESTS_MOUNT = "/tests"
 RESPONSE_OUTPUT = "/app/response.txt"
-"""Where Harbor mounts the task's ``tests/`` directory at grading time."""
+"""Answer path used by rubric-based source tasks."""
 
 VERIFY_TEST_SH = f"""#!/bin/bash
 set -euo pipefail
@@ -53,15 +53,7 @@ _BLANK_RUN = re.compile(r"\n{3,}")
 
 
 def tool_install_block(tool_ref: str, extras: tuple[str, ...]) -> str:
-    """The Dockerfile lines that install ``tasktrove-verify`` at ``tool_ref``.
-
-    Every task with the same extras gets the same bytes, so images built from otherwise equal
-    Dockerfiles still share layers. Git is installed only when the base image lacks it; every base
-    image in the corpus is Debian or Ubuntu derived. The binary lands in ``/usr/local/bin`` rather
-    than uv's default ``~/.local/bin``, which a login shell's ``/etc/profile`` drops from PATH. The
-    tool needs Python 3.11; ``--python`` lets uv fetch a managed interpreter when the image's own is
-    older, leaving the task's Python untouched.
-    """
+    """Return Dockerfile lines that install the pinned verifier and requested mode extras."""
     package = "tasktrove-verify" + (f"[{','.join(extras)}]" if extras else "")
     url = VERIFY_TOOL_URL.format(ref=tool_ref)
     return (

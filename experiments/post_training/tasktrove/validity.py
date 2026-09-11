@@ -31,6 +31,7 @@ from pathlib import Path
 
 import click
 
+from experiments.post_training.tasktrove.task_format import TESTS_MOUNT
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, read_task_binary
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,6 @@ CHECKS = ("empty", "oracle", "candidate")
 SOLVE_DIR_FOR_CHECK = {"oracle": "solution", "candidate": CANDIDATE_DIR}
 TESTS = "tests"
 SETUP_FILES = "setup_files"
-TESTS_MOUNT = "/tests"
 SOLUTION_MOUNT = "/solution"
 SETUP_FILES_MOUNT = "/setup_files"
 VERDICT = "/logs/verifier/verdict.json"
