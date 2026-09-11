@@ -18,6 +18,7 @@ from jaxtyping import Array, Float, Int
 
 from .config import ShortConvBlockSizes
 from .pallas_gpu import (
+    _OOB_SEGMENT,
     pallas_short_conv_available,
     short_conv_pallas_bwd_local,
     short_conv_pallas_fwd_local,
@@ -166,11 +167,6 @@ def _round_up(value: int, multiple: int) -> int:
     return -(-value // multiple) * multiple
 
 
-# Out-of-sequence sentinel: the `constant_values=-1` pad in short_conv_reference and
-# pallas_gpu._OOB_SEGMENT. It never equals a real segment id, so every tap into it is dropped.
-_OOB_SEGMENT_ID = -1
-
-
 def _short_conv_sequence_sharded(
     weight: Float[Array, "W C"],
     x: Float[Array, "B S C"],
@@ -216,14 +212,14 @@ def _short_conv_sequence_sharded(
             x_halo = jax.lax.ppermute(x_local[:, local_seq - halo :, :], seq_axis, shift)
             seg_halo = jax.lax.ppermute(segment_ids_local[:, local_seq - halo :], seq_axis, shift)
             first = jax.lax.axis_index(seq_axis) == 0
-            seg_halo = jnp.where(first, jnp.full_like(seg_halo, _OOB_SEGMENT_ID), seg_halo)
+            seg_halo = jnp.where(first, jnp.full_like(seg_halo, _OOB_SEGMENT), seg_halo)
 
             x_block = jnp.concatenate([x_halo, x_local], axis=1)
             seg_block = jnp.concatenate([seg_halo, segment_ids_local], axis=1)
         tail = padded_local_seq - x_block.shape[1]
         if tail:
             x_block = jnp.pad(x_block, ((0, 0), (0, tail), (0, 0)))
-            seg_block = jnp.pad(seg_block, ((0, 0), (0, tail)), constant_values=_OOB_SEGMENT_ID)
+            seg_block = jnp.pad(seg_block, ((0, 0), (0, tail)), constant_values=_OOB_SEGMENT)
         return local_call(weight_local, x_block, seg_block)[:, halo : halo + local_seq, :]
 
     # pyrefly: ignore[bad-argument-count]  # jax.shard_map decorator erases _local's real signature
