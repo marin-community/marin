@@ -18,9 +18,9 @@ At handoff the only submitted workload is the five-step smoke:
 
 - Parent: `/kaiyuew/moe-lgr-9110-d512-gated-smoke`.
 - Child: `/kaiyuew/moe-lgr-9110-d512-gated-smoke/grug-train-moe-lgr-9110-d512-gated-smoke`.
-- Child is capacity-pending: insufficient TPUs, need 4 chips, available 0.
+- Child is now running on v5p-8. JAX initialization and the expected W&B run are verified.
 - Parent has read all cached dependencies and dispatched only the expected child.
-- No model initialization, loss, W&B progress, or final checkpoint is verified yet.
+- Model starts from scratch as intended. No advancing training loss or final checkpoint is verified yet.
 - W&B ID/name: `moe-lgr-9110-d512-gated-smoke`, project `marin-community/marin_moe`.
 - Expected final checkpoint:
   `gs://marin-us-central1/users/kaiyuew/grug/moe-lgr-9110-d512-gated-smoke/dev/checkpoints/step-5`.

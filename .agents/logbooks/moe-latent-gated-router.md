@@ -112,3 +112,6 @@ See the [plan](../projects/moe-latent-gated-router/plan.md) and
   3.54216671 at 1,439,170,560 tokens; d768 3.22727251 at 4,423,680,000 tokens.
   Full config/summary snapshots are in `scratch/9110-existing-baselines.json`.
   Retrieve their final 100 throughput samples when calculating the final comparison.
+- 17:36 UTC update: smoke child allocated, JAX initialized, expected W&B run
+  started, and checkpoint loader confirmed a fresh start. Training loss and final
+  smoke completion are still pending.
