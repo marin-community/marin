@@ -15,6 +15,12 @@ const LOSS_PADDING = 0.1;
 const MFU_SOFT_MAX = 30;
 const TRAIN_SOFT_MIN = 1.2;
 const TRAIN_SOFT_MAX = 1.6;
+const TICK_ROUNDING_TOLERANCE = 1e-12;
+
+enum EvalView {
+  AfterInitialization = 'after-initialization',
+  FullRun = 'full-run',
+}
 
 function compact(value: number): string {
   if (value >= 1e12) {return `${(value / 1e12).toFixed(1)}T`;}
@@ -25,14 +31,14 @@ function compact(value: number): string {
 
 export function WandbChart({ frames, width, height }: Props) {
   const theme = useTheme2();
-  const [evalView, setEvalView] = useState('after-initialization');
+  const [evalView, setEvalView] = useState(EvalView.AfterInitialization);
   const frame = frameWithField(frames, 'tokens');
   const points = useMemo(() => (frame ? wandbPoints(frame) : []), [frame]);
   const isMfu = points[0]?.chart === MFU_TITLE;
   const isEval = points[0]?.chart === EVAL_TITLE;
   const { paths, xMin, xMax, yMin, yMax, ticks, decimals } = useMemo(() => {
     const latestTokens = Math.max(0, ...points.map((point) => point.tokens));
-    const cutoff = isEval && evalView === 'after-initialization' ? latestTokens * INITIAL_TOKEN_FRACTION : 0;
+    const cutoff = isEval && evalView === EvalView.AfterInitialization ? latestTokens * INITIAL_TOKEN_FRACTION : 0;
     // Keep every run in the map so the view control does not change run colors.
     const groups = new Map<string, typeof points>();
     for (const point of points) {
@@ -60,9 +66,9 @@ export function WandbChart({ frames, width, height }: Props) {
       const maximum = Math.max(isMfu ? MFU_SOFT_MAX : TRAIN_SOFT_MAX, high);
       const targetStep = (maximum - minimum) / 4;
       const magnitude = 10 ** Math.floor(Math.log10(targetStep));
-      const step = [1, 2, 5, 10].find((factor) => factor * magnitude >= targetStep - 1e-12)! * magnitude;
-      yMin = Math.floor(minimum / step + 1e-12) * step;
-      yMax = Math.ceil(maximum / step - 1e-12) * step;
+      const step = [1, 2, 5, 10].find((factor) => factor * magnitude >= targetStep - TICK_ROUNDING_TOLERANCE)! * magnitude;
+      yMin = Math.floor(minimum / step + TICK_ROUNDING_TOLERANCE) * step;
+      yMax = Math.ceil(maximum / step - TICK_ROUNDING_TOLERANCE) * step;
       ticks = Array.from({ length: Math.round((yMax - yMin) / step) + 1 }, (_, index) => yMin + index * step);
       decimals = isMfu ? 0 : Math.max(1, -Math.floor(Math.log10(step)));
     }
@@ -82,9 +88,9 @@ export function WandbChart({ frames, width, height }: Props) {
       </div>
       <div className={css`display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:4px;color:${theme.colors.text.secondary};`}>
         <span>{isMfu ? 'Model FLOP utilization' : 'nats/token'}</span>
-        {isEval && <select aria-label="Evaluation range" value={evalView} onChange={(event) => setEvalView(event.target.value)} title="After initialization excludes the first 1% of the latest cumulative token count." className={css`color:${theme.colors.text.primary};background:${theme.colors.background.secondary};border:1px solid ${theme.colors.border.weak};border-radius:3px;font:inherit;`}>
-          <option value="after-initialization">After initialization</option>
-          <option value="full-run">Full run</option>
+        {isEval && <select aria-label="Evaluation range" value={evalView} onChange={(event) => setEvalView(event.target.value as EvalView)} title="After initialization excludes the first 1% of the latest cumulative token count." className={css`color:${theme.colors.text.primary};background:${theme.colors.background.secondary};border:1px solid ${theme.colors.border.weak};border-radius:3px;font:inherit;`}>
+          <option value={EvalView.AfterInitialization}>After initialization</option>
+          <option value={EvalView.FullRun}>Full run</option>
         </select>}
       </div>
     </div>
