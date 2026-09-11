@@ -1,5 +1,9 @@
 # Gated latent router continuation
 
+**Paused:** user questioned normalization semantics. Do not submit or resume jobs
+until clarified. Gate-only smoke completed successfully, but the just-submitted full
+d512 parent was cancelled; d768 was never submitted. Heartbeat is PAUSED.
+
 Issue: https://github.com/marin-community/marin/issues/9110. Idea: Zihan Qiu.
 Worktree: `/Users/kaiyuew/Downloads/Project/marin-latent-gated-router`.
 Branch: `codex/moe-latent-gated-router`. Training source: `da78e56d0`.

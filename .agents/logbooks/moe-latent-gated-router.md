@@ -128,3 +128,16 @@ See the [plan](../projects/moe-latent-gated-router/plan.md) and
   Manual recovery count remains zero. Full Gate 1 is still conditional on smoke success.
 - CLI correction: this checkout has `task describe` and `attempt logs`, but no
   `job summary`; use the current task/attempt inspection surface on future ticks.
+
+### 2026-09-11 — Smoke passed; normalization clarification
+
+- Gate-only smoke succeeded in Iris and W&B: five completed steps (global_step 4),
+  655,360 tokens, train loss 11.80024719, Paloma macro 11.78380013. These startup
+  values are not ablation-quality results. Permanent step-5 checkpoint metadata
+  was read successfully (timestamp 17:51:34.166678 UTC, is_temporary=false).
+- Full d512 parent `/kaiyuew/moe-lgr-9110-d512-gated` was submitted at 17:56:53 UTC
+  from `e9cf08610`. Before d768 submission the user asked whether GatedNorm itself
+  includes normalization. It does not: the hero composes the gate with RMSNorm.
+- Clarification pending: retain latent RMSNorm and add the gate, or keep the current
+  gate-only treatment. The full d512 parent was cancelled and the heartbeat paused;
+  d768 and all baseline jobs were never submitted. Do not auto-resume until resolved.
