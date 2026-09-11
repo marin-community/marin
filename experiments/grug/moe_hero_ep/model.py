@@ -124,12 +124,7 @@ def _seq_axis(mesh: jax.sharding.AbstractMesh | None) -> str | None:
 
 
 def _token_axes(mesh: jax.sharding.AbstractMesh | None) -> tuple[str, ...]:
-    """Return the mesh axes that partition flattened batch and sequence tokens.
-
-    Batch axes precede context to match the flattened dimension order. Flattening
-    sequence-sharded activations requires an all-to-all when a device owns multiple
-    batch rows; both MLPs currently pay this cost on entry and exit.
-    """
+    """Return the mesh axes partitioning tokens, with batch axes before context."""
     seq = _seq_axis(mesh)
     return (*_BATCH_AXES, seq) if seq is not None else _BATCH_AXES
 
@@ -744,6 +739,8 @@ class DenseMLP(eqx.Module):
             activation_fn = activation
 
         b, s, _ = x.shape
+        # Flattening sequence shards requires an all-to-all when a device owns multiple
+        # batch rows; restoring the residual layout exchanges them back.
         x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)

@@ -304,12 +304,7 @@ class GrugTrainerConfig:
 
 
 def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
-    """Make TrainerConfig batch arithmetic agree with the hero context mesh.
-
-    The batch spans device_count / context_axis_size devices. Leaving the trainer
-    mesh at its default counts context shards as batch shards and can reduce
-    per_device_parallelism to zero when the global batch is below device_count.
-    """
+    """Build a trainer mesh that excludes context shards from the batch device count."""
     if context_axis_size <= 0:
         raise ValueError(f"context_axis_size must be positive, got {context_axis_size}")
     return MeshConfig(axes={"data": -1, "replica": 1, "model": 1, "context": context_axis_size})

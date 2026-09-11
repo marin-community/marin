@@ -64,7 +64,7 @@ HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 HERO_MODEL_AXIS_SIZE = 1
 
 
-def validate_mesh_axes(
+def validated_batch_axis_size(
     *, device_count: int, dp_racks: int, batch_size: int, context_axis_size: int, expert_axis_size: int
 ) -> int:
     """Run the compact-mesh divisibility checks before allocation; return the batch-axes product.
@@ -183,7 +183,7 @@ def build_diagnostic_run(
         hidden_dim=model.hidden_dim,
         seq_len=model.max_seq_len,
     )
-    batch_axes = validate_mesh_axes(
+    batch_axes = validated_batch_axis_size(
         device_count=HERO_EP_NODES * HERO_GPUS_PER_NODE * dp_racks,
         dp_racks=dp_racks,
         batch_size=batch_size,

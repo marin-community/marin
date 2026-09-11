@@ -107,7 +107,7 @@ def test_sequence_extension_preserves_optimizer_at_fixed_token_budget():
     assert configs[0].optimizer == configs[1].optimizer
 
 
-def _validated_trainer(step, device_count: int):
+def _validated_trainer_and_batch_axis_size(step, device_count: int):
     """Run `TrainerConfig`'s own batch validation for `step` as if `device_count` devices existed.
 
     `_validate_and_set_defaults` is what `trainer.initialize()` calls before anything is placed, and
@@ -136,7 +136,7 @@ def test_context_parallel_batch_below_the_device_count_validates():
         version="dev",
     )
 
-    trainer, data_axis_size = _validated_trainer(step, device_count=64)
+    trainer, data_axis_size = _validated_trainer_and_batch_axis_size(step, device_count=64)
 
     assert data_axis_size == 16
     assert trainer.per_device_parallelism == 1
@@ -146,7 +146,7 @@ def test_the_hero_shape_validates_exactly_as_the_levanter_default_mesh_does():
     # The context axis is length 1 on the hero, so the added axis must not move a single number the
     # hero has always computed.
     step = launch.build_diagnostic_run(run_id="hero-validate", dp_racks=1, num_steps=1, version="dev")
-    trainer, data_axis_size = _validated_trainer(step, device_count=64)
+    trainer, data_axis_size = _validated_trainer_and_batch_axis_size(step, device_count=64)
 
     default_mesh_trainer = dataclasses.replace(
         step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).trainer.trainer,
