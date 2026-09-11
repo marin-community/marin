@@ -23,6 +23,8 @@ CHAT_CONTROL_TOKEN = re.compile(
     r"<\|(?:begin_of_text|end_of_text|finetune_right_pad_id|start_header_id|end_header_id|"
     r"eom_id|eot_id|python_tag|reserved_special_token_\d+)\|>"
 )
+REASONING_START = "<|start_think|>"
+REASONING_END = "<|end_think|>"
 REASONING_TOKEN = re.compile(r"<\|(?:start|end)_think\|>")
 CHAT_ROLE_ALIASES = MappingProxyType(
     {
@@ -75,7 +77,7 @@ def _check_source_markup(value: object) -> None:
             or REASONING_TOKEN.search(value)
             or re.search(r"</?think>", value, re.IGNORECASE)
         ):
-            raise ValueError("Source data contains unexpected control or reasoning tokens")
+            raise ValueError(f"Source data contains unexpected control or reasoning tokens: {value!r}")
     elif isinstance(value, dict):
         for key, item in value.items():
             _check_source_markup(key)
@@ -83,6 +85,88 @@ def _check_source_markup(value: object) -> None:
     elif isinstance(value, list):
         for item in value:
             _check_source_markup(item)
+
+
+def normalize_reasoning_tokens(text: str) -> str:
+    """Normalize balanced reasoning tags to the canonical source delimiters."""
+    text = re.sub(r"<think>", REASONING_START, text, flags=re.IGNORECASE)
+    text = re.sub(r"</think>", REASONING_END, text, flags=re.IGNORECASE)
+    text = re.sub(r"<\|start_think\|>\s*<\|end_think\|>\s*", "", text)
+    depth = 0
+    for match in re.finditer(r"<\|(start|end)_think\|>", text):
+        if match.group(1) == "start":
+            depth += 1
+        else:
+            depth -= 1
+        if depth not in (0, 1):
+            raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
+    if depth != 0:
+        raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
+    text = text.strip()
+    return text
+
+
+def _assistant_messages(
+    message: dict, author: Author, content: str | None, reasoning: str, index: int
+) -> tuple[list[Message], dict[str, str]]:
+    output: list[Message] = []
+    pending: dict[str, str] = {}
+    content = content or ""
+    content = normalize_reasoning_tokens(content)
+    if REASONING_TOKEN.search(content):
+        match = re.fullmatch(r"<\|start_think\|>(.*?)<\|end_think\|>(.*)", content, re.DOTALL)
+        if match is None or not match[1].strip():
+            raise ReasoningFormatError("Assistant reasoning must be a non-empty prefix of the reply")
+        if reasoning:
+            raise ValueError("Assistant reasoning is present in both content and reasoning_content")
+        reasoning, content = match.groups()
+    _check_source_markup(reasoning)
+    _check_source_markup(content)
+    if re.search(r"<tool_call(?::[^>]*)?>", content, re.IGNORECASE):
+        raise ValueError("Inline tool-call syntax must be split out by the source adapter")
+    calls = message.get("tool_calls") or []
+    if not calls and message.get("function_call"):
+        function = message["function_call"]
+        if isinstance(function, str):
+            function = json.loads(function)
+        calls = [{"function": function}]
+    if not isinstance(calls, list):
+        raise ValueError("Source tool_calls must be a list")
+    if not content.strip() and not reasoning.strip() and not calls:
+        raise ValueError("Assistant turns must contain text, reasoning, or a tool call")
+    if reasoning.strip():
+        output.append(Message.from_author_and_content(author, reasoning.strip()).with_channel(ChatChannel.ANALYSIS))
+    if content.strip():
+        output.append(
+            Message.from_author_and_content(author, content.strip()).with_channel(
+                ChatChannel.COMMENTARY if calls else ChatChannel.FINAL
+            )
+        )
+    for call_index, call in enumerate(calls):
+        if not isinstance(call, dict) or not isinstance(call.get("function"), dict):
+            raise ValueError("Each tool call requires a function object")
+        function = call["function"]
+        tool_name = function.get("name")
+        if not isinstance(tool_name, str) or re.fullmatch(r"[A-Za-z0-9_.:-]+", tool_name) is None:
+            raise ValueError("Each tool call requires a valid function name")
+        call_id = call.get("id") or f"call_{index}_{call_index}"
+        if not isinstance(call_id, str) or call_id in pending:
+            raise ValueError("Source tool-call IDs must be unique strings")
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            arguments = json.loads(arguments)
+        if not isinstance(arguments, dict):
+            raise ValueError("Tool-call arguments must be JSON objects")
+        _check_source_markup(arguments)
+        output.append(
+            Message.from_author_and_content(
+                author, json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            )
+            .with_channel(ChatChannel.COMMENTARY)
+            .with_recipient(f"functions.{tool_name}")
+        )
+        pending[call_id] = tool_name
+    return output, pending
 
 
 def openai_chat_messages(messages: list[dict]) -> list[Message]:
@@ -99,18 +183,20 @@ def openai_chat_messages(messages: list[dict]) -> list[Message]:
     for index, message in enumerate(messages):
         role_value = message.get("role", message.get("from"))
         if not isinstance(role_value, str):
-            raise ValueError("Chat messages require a string 'role' or 'from' field")
+            raise ValueError(f"Chat messages require a string 'role' or 'from' field, got {role_value!r}")
         role = Role(CHAT_ROLE_ALIASES.get(role_value.lower(), role_value.lower()))
         content = message.get("content", message.get("value"))
         if content is not None and not isinstance(content, str):
-            raise ValueError("Source message content must be a string or null")
+            raise ValueError(f"Source message content must be a string or null, got {content!r}")
         name = message.get("name")
         if name is not None and not isinstance(name, str):
-            raise ValueError("Source message names must be strings")
+            raise ValueError(f"Source message names must be strings, got {name!r}")
         author = Author.new(role, name)
         reasoning = message.get("reasoning_content") or ""
-        if not isinstance(reasoning, str) or (reasoning and role != Role.ASSISTANT):
-            raise ValueError("reasoning_content is only valid as assistant text")
+        if not isinstance(reasoning, str):
+            raise ValueError(f"reasoning_content must be a string, got {reasoning!r}")
+        if reasoning and role != Role.ASSISTANT:
+            raise ValueError(f"reasoning_content is only valid for assistant messages, got role {role.value!r}")
         _check_source_markup(reasoning)
         match role:
             case Role.TOOL:
@@ -147,77 +233,12 @@ def openai_chat_messages(messages: list[dict]) -> list[Message]:
                 _check_source_markup(content)
                 output.append(Message.from_author_and_content(author, content))
             case Role.ASSISTANT:
-                content = content or ""
-                content = re.sub(r"<think>", "<|start_think|>", content, flags=re.IGNORECASE)
-                content = re.sub(r"</think>", "<|end_think|>", content, flags=re.IGNORECASE)
-                content = re.sub(r"<\|start_think\|>\s*<\|end_think\|>\s*", "", content)
-                depth = 0
-                for match in re.finditer(r"<\|(start|end)_think\|>", content):
-                    if match.group(1) == "start":
-                        depth += 1
-                    else:
-                        depth -= 1
-                    if depth not in (0, 1):
-                        raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
-                if depth != 0:
-                    raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
-                content = content.strip()
-                if REASONING_TOKEN.search(content):
-                    match = re.fullmatch(r"<\|start_think\|>(.*?)<\|end_think\|>(.*)", content, re.DOTALL)
-                    if match is None or not match[1].strip():
-                        raise ReasoningFormatError("Assistant reasoning must be a non-empty prefix of the reply")
-                    if reasoning:
-                        raise ValueError("Assistant reasoning is present in both content and reasoning_content")
-                    reasoning, content = match.groups()
-                _check_source_markup(reasoning)
-                _check_source_markup(content)
-                if re.search(r"<tool_call(?::[^>]*)?>", content, re.IGNORECASE):
-                    raise ValueError("Inline tool-call syntax must be split out by the source adapter")
-                calls = message.get("tool_calls") or []
-                if not calls and message.get("function_call"):
-                    function = message["function_call"]
-                    if isinstance(function, str):
-                        function = json.loads(function)
-                    calls = [{"function": function}]
-                if not isinstance(calls, list):
-                    raise ValueError("Source tool_calls must be a list")
-                if not content.strip() and not reasoning.strip() and not calls:
-                    raise ValueError("Assistant turns must contain text, reasoning, or a tool call")
-                if reasoning.strip():
-                    output.append(
-                        Message.from_author_and_content(author, reasoning.strip()).with_channel(ChatChannel.ANALYSIS)
-                    )
-                if content.strip():
-                    output.append(
-                        Message.from_author_and_content(author, content.strip()).with_channel(
-                            ChatChannel.COMMENTARY if calls else ChatChannel.FINAL
-                        )
-                    )
-                for call_index, call in enumerate(calls):
-                    if not isinstance(call, dict) or not isinstance(call.get("function"), dict):
-                        raise ValueError("Each tool call requires a function object")
-                    function = call["function"]
-                    tool_name = function.get("name")
-                    if not isinstance(tool_name, str) or re.fullmatch(r"[A-Za-z0-9_.:-]+", tool_name) is None:
-                        raise ValueError("Each tool call requires a valid function name")
-                    call_id = call.get("id") or f"call_{index}_{call_index}"
-                    if not isinstance(call_id, str) or call_id in seen_call_ids:
-                        raise ValueError("Source tool-call IDs must be unique strings")
-                    seen_call_ids.add(call_id)
-                    arguments = function.get("arguments")
-                    if isinstance(arguments, str):
-                        arguments = json.loads(arguments)
-                    if not isinstance(arguments, dict):
-                        raise ValueError("Tool-call arguments must be JSON objects")
-                    _check_source_markup(arguments)
-                    output.append(
-                        Message.from_author_and_content(
-                            author, json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                        )
-                        .with_channel(ChatChannel.COMMENTARY)
-                        .with_recipient(f"functions.{tool_name}")
-                    )
-                    pending[call_id] = tool_name
+                assistant_messages, calls = _assistant_messages(message, author, content, reasoning, index)
+                if seen_call_ids.intersection(calls):
+                    raise ValueError("Source tool-call IDs must be unique strings")
+                seen_call_ids.update(calls)
+                pending.update(calls)
+                output.extend(assistant_messages)
     if observations:
         raise ValueError("A parallel tool-call batch is missing observations")
     return output

@@ -89,6 +89,7 @@ or `reasoning_content`. Incorrect answers and tool arguments that violate the
 parameter schema are not rejected solely for being wrong: failed attempts can
 still be useful examples.
 
+
 ## 4. Write and normalize Parquet
 
 Use a Zephyr pipeline to read the pinned download, apply `row_to_chat_doc` with
@@ -98,9 +99,9 @@ from `marin.datakit.chat_normalize`.
 If retaining annotations such as reward or teacher, extend `CHAT_SCHEMA` with
 explicit Arrow fields and pass those values to the document helper. Metadata is
 currently stored as source-specific top-level columns; it is not automatically
-packed into a catchall. Keep original dataset identifiers in `upstream_id`, with
-an explicit Arrow field, rather than supplying `source_id`: normalization owns
-that field. `chat_template_kwargs` is stored as JSON text.
+packed into a catchall. Keep original dataset identifiers in `source_id`.
+Normalization preserves an existing `source_id`; otherwise it uses the input
+record’s `id`. `chat_template_kwargs` is stored as JSON text.
 
 Follow `transform_chat` and `superior_reasoning_chat_normalize_steps` in
 `lib/marin/src/marin/datakit/download/superior_reasoning.py` for a complete writer

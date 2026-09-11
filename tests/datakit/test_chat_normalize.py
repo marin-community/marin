@@ -251,3 +251,19 @@ def test_source_writer_preserves_tool_fields_first_seen_after_plain_conversation
     [tool] = json.loads(normalized_call["chat_template_kwargs"])["tools"]
     assert tool["function"]["parameters"]["properties"]["timeout"] == {"type": "number"}
     assert tool["function"]["parameters"]["required"] == ["command"]
+
+
+@pytest.mark.parametrize("source_id", [None, "upstream-record-7"])
+def test_normalization_retains_source_provenance_across_repeated_normalization(source_id):
+    record = {
+        "id": "intermediate-content-hash",
+        "messages": [
+            Message.from_role_and_content(Role.USER, "Hello").to_dict(),
+            Message.from_role_and_content(Role.ASSISTANT, "Hi").with_channel(ChatChannel.FINAL).to_dict(),
+        ],
+    }
+    if source_id is not None:
+        record["source_id"] = source_id
+    normalized = _normalize_chat_record(record, "messages", "id")
+    assert normalized["source_id"] == (source_id or "intermediate-content-hash")
+    assert _normalize_chat_record(normalized, "messages", "id")["source_id"] == normalized["source_id"]

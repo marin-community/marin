@@ -30,7 +30,6 @@ from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_UNVERIFIED_TAG,
     checked_openai_chat_document,
     load_parquet_batched,
-    openai_chat_document,
     render_role_message,
     text_document,
 )
@@ -1171,26 +1170,17 @@ def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
             )
             messages = merged
         tag = outcome_tag(row.get("verifier_output"), row.get("result"))
-        if dataset.cohort_name in CHAT_QUARANTINE_COUNTER_PREFIXES:
-            return checked_openai_chat_document(
-                messages,
-                dataset.hf_dataset_id,
-                counter_prefix=CHAT_QUARANTINE_COUNTER_PREFIXES[dataset.cohort_name],
-                teacher=dataset.teacher,
-                task_source=dataset.task_source,
-                outcome=tag or "",
-                **metadata,
-            )
-        return [
-            openai_chat_document(
-                messages,
-                dataset.hf_dataset_id,
-                teacher=dataset.teacher,
-                task_source=dataset.task_source,
-                outcome=tag or "",
-                **metadata,
-            )
-        ]
+        return checked_openai_chat_document(
+            messages,
+            dataset.hf_dataset_id,
+            counter_prefix=CHAT_QUARANTINE_COUNTER_PREFIXES.get(
+                dataset.cohort_name, f"penfever_rollouts/{dataset.cohort_name}/chat"
+            ),
+            teacher=dataset.teacher,
+            task_source=dataset.task_source,
+            outcome=tag or "",
+            **metadata,
+        )
 
     return transform_row
 
@@ -1270,6 +1260,7 @@ def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
             ),
             "schema_tokenizer": (OPENCODE_TOKENIZER, OPENCODE_TOKENIZER_REVISION),
             "terminus_version": "2026.09.10.terminal-wait",
+            "conversion_version": "2026.09.11.review-fixes",
             "teacher": dataset.teacher,
             "task_source": dataset.task_source,
         },

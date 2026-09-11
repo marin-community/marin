@@ -17,8 +17,8 @@ from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.opencode import INLINE_TOOL_CALL, opencode_protocol_messages, prompt_tool_definitions
 from marin.datakit.download.rollout_transforms import (
+    checked_openai_chat_document,
     load_parquet_batched,
-    openai_chat_document,
     render_role_message,
     text_document,
 )
@@ -61,7 +61,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     if converted is None:
         return []
     messages, metadata = converted
-    return [openai_chat_document(messages, HF_DATASET_ID, **metadata)]
+    return checked_openai_chat_document(messages, HF_DATASET_ID, counter_prefix="nemotron_terminal/chat", **metadata)
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -81,7 +81,6 @@ def transform_chat(input_path: str, output_path: str) -> None:
         Dataset.from_files(f"{input_path}/**/*.parquet")
         .flat_map(load_parquet_batched)
         .flat_map(row_to_chat_doc)
-        .reshard(64)
         .write_parquet(
             f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", schema=CHAT_SCHEMA, skip_existing=True
         )
@@ -123,7 +122,7 @@ def nemotron_terminal_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/nemotron-terminal-corpus",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.10.terminal-wait"},
+        hash_attrs={"version": "2026.09.11.review-fixes"},
     )
     return processed, normalize_chat_step(
         output_schema=CHAT_SCHEMA, name="normalized-chat/nemotron-terminal", download=processed

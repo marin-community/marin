@@ -24,7 +24,6 @@ reasoning delimiters and rejects trajectories with any truncated generation, sin
 that spent its token budget commonly ends with unclosed reasoning.
 """
 
-import re
 from enum import StrEnum
 
 from fray.types import ResourceConfig
@@ -38,7 +37,8 @@ from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     ReasoningFormatError,
-    openai_chat_document,
+    checked_openai_chat_document,
+    normalize_reasoning_tokens,
     render_role_message,
     text_document,
 )
@@ -69,24 +69,6 @@ class TruncationFilter(StrEnum):
     ANY_TURN = "any_turn"
     """Drop rows with any truncated turn (1,946 of 3,200 rows). Use when no unclosed
     reasoning block may appear anywhere in the context window."""
-
-
-def _normalize_reasoning_tokens(text: str) -> str:
-    """Normalize balanced reasoning tags to the tokenizer's atomic delimiters."""
-    text = re.sub(r"<think>", "<|start_think|>", text, flags=re.IGNORECASE)
-    text = re.sub(r"</think>", "<|end_think|>", text, flags=re.IGNORECASE)
-    text = re.sub(r"<\|start_think\|>\s*<\|end_think\|>\s*", "", text)
-    depth = 0
-    for match in re.finditer(r"<\|(start|end)_think\|>", text):
-        if match.group(1) == "start":
-            depth += 1
-        else:
-            depth -= 1
-        if depth not in (0, 1):
-            raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
-    if depth != 0:
-        raise ReasoningFormatError("Assistant reasoning delimiters must be balanced and cannot nest")
-    return text.strip()
 
 
 def join_reasoning_and_answer(content: str) -> str:
@@ -167,7 +149,7 @@ def chat_conversation_messages(messages: list[dict], turns: list[dict]) -> list[
         repaired.append(
             {
                 **message,
-                "content": _normalize_reasoning_tokens(f"<think>{reasoning}</think>{answer}"),
+                "content": normalize_reasoning_tokens(f"<think>{reasoning}</think>{answer}"),
             }
         )
     return repaired
@@ -211,7 +193,9 @@ def row_to_chat_doc(row: dict, truncation_filter: TruncationFilter) -> list[dict
     except ReasoningFormatError:
         counters.pipeline.update_counter("glm_kernelgym_rollouts/dropped_malformed_reasoning", 1)
         return []
-    return [openai_chat_document(kept, HF_DATASET_ID)] if kept else []
+    return (
+        checked_openai_chat_document(kept, HF_DATASET_ID, counter_prefix="glm_kernelgym_rollouts/chat") if kept else []
+    )
 
 
 def transform(input_path: str, output_path: str, truncation_filter: TruncationFilter) -> None:
@@ -286,7 +270,7 @@ def glm_kernelgym_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/glm-5.2-kernelgym-rollouts",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path, truncation_filter),
-        hash_attrs={"version": "2026.09.04.2.harmony-arrow", "truncation_filter": truncation_filter.value},
+        hash_attrs={"version": "2026.09.11.review-fixes", "truncation_filter": truncation_filter.value},
     )
     return processed, normalize_chat_step(
         output_schema=CHAT_SCHEMA, name="normalized-chat/glm-5.2-kernelgym-rollouts", download=processed

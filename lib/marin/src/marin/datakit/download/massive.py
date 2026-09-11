@@ -28,20 +28,20 @@ from fray.types import ResourceConfig
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import StoragePath
+from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
 from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.http_session import build_retrying_session
-from marin.datakit.download.rollout_transforms import openai_chat_document
+from marin.datakit.download.rollout_transforms import checked_openai_chat_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 SOURCE_CHAT_SCHEMA = pa.schema(
     [
         *CHAT_SCHEMA,
-        pa.field("upstream_id", pa.string()),
         pa.field("locale", pa.string()),
         pa.field("split", pa.string()),
         pa.field("intent", pa.string()),
@@ -673,7 +673,8 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     """Represent one MASSIVE row as a canonical tool-calling conversation."""
     intent = row["intent"]
     if intent not in _TOOLS_BY_NAME:
-        raise ValueError(f"Unknown intent {intent!r}")
+        counters.pipeline.update_counter("massive/chat/unknown_intent_filtered", 1)
+        return []
     arguments: dict[str, list[str]] = {}
     for slot, value in parse_annot_utt(row["annot_utt"]):
         arguments.setdefault(slot, []).append(value)
@@ -695,17 +696,16 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             ],
         },
     ]
-    return [
-        openai_chat_document(
-            messages,
-            HF_DATASET_ID,
-            chat_template_kwargs={"tools": select_tools(intent, doc_id)},
-            locale=row["locale"],
-            split=split,
-            intent=intent,
-            upstream_id=str(row["id"]),
-        )
-    ]
+    return checked_openai_chat_document(
+        messages,
+        HF_DATASET_ID,
+        counter_prefix="massive/chat",
+        chat_template_kwargs={"tools": select_tools(intent, doc_id)},
+        locale=row["locale"],
+        split=split,
+        intent=intent,
+        source_id=str(row["id"]),
+    )
 
 
 def _download_tarball(url: str, dest_path: str) -> None:
@@ -859,7 +859,7 @@ def massive_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/massive_function_calling",
         deps=[staged],
         fn=lambda output_path: transform_staged_massive_chat(staged.output_path, output_path),
-        hash_attrs={"version": "2026.09.09.upstream-id"},
+        hash_attrs={"version": "2026.09.11.review-fixes"},
     )
     return (
         staged,

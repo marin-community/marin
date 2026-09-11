@@ -113,7 +113,7 @@ def test_opencode_protocol_matches_parallel_calls_to_separate_observations():
     assert tool["parameters"]["required"] == ["path"]
 
 
-def test_opencode_protocol_links_bundled_parallel_call_observation_to_each_call():
+def test_opencode_protocol_rejects_parallel_calls_with_missing_observations():
     tools = [
         {
             "type": "function",
@@ -141,14 +141,7 @@ def test_opencode_protocol_links_bundled_parallel_call_observation_to_each_call(
         ],
         tools,
     )
-    messages, metadata = converted
-    document = openai_chat_document(messages, "test", **metadata)
-
-    calls = document["messages"][1:3]
-    observations = document["messages"][3:5]
-    assert [call["recipient"] for call in calls] == ["functions.read", "functions.read"]
-    assert [m["name"] for m in observations] == ["functions.read", "functions.read"]
-    assert [m["content"][0]["text"] for m in observations] == ["combined output", "combined output"]
+    assert converted is None
 
 
 def test_opencode_recovers_task_and_declared_tools_from_served_prompt():

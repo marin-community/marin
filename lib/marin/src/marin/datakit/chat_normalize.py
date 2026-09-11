@@ -31,7 +31,7 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.09.explicit-tools"
+CHAT_NORMALIZE_VERSION = "2026.09.11.source-provenance"
 MAX_REJECTED_RECORD_FRACTION = 0.05
 
 
@@ -203,7 +203,9 @@ def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field
     validate_tool_definitions(tools, messages)
     serialized_messages = [message.to_dict() for message in messages]
 
-    source_id = record.get(id_field)
+    source_id = record.get("source_id")
+    if source_id is None:
+        source_id = record.get(id_field)
     out = {key: value for key, value in record.items() if key not in {id_field, messages_field, "chat_template_kwargs"}}
     identity = json.dumps(
         {"messages": serialized_messages, "chat_template_kwargs": kwargs},

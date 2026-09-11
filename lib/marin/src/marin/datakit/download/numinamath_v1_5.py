@@ -20,7 +20,7 @@ from zephyr.readers import load_parquet
 
 from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import openai_chat_document
+from marin.datakit.download.rollout_transforms import checked_openai_chat_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -100,18 +100,17 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     solution = _clean_text(row, "solution")
     if problem is None or solution is None or not _is_valid_row(row):
         return []
-    return [
-        openai_chat_document(
-            [{"role": "user", "content": problem}, {"role": "assistant", "content": solution}],
-            HF_DATASET_ID,
-            problem_hash=hashlib.sha256(problem.encode("utf-8")).hexdigest(),
-            numina_source=_optional_text(row, "source"),
-            answer=_optional_text(row, "answer"),
-            problem_type=_optional_text(row, "problem_type"),
-            question_type=_optional_text(row, "question_type"),
-            synthetic=row.get("synthetic") is True,
-        )
-    ]
+    return checked_openai_chat_document(
+        [{"role": "user", "content": problem}, {"role": "assistant", "content": solution}],
+        HF_DATASET_ID,
+        counter_prefix="numinamath_v1_5/chat",
+        problem_hash=hashlib.sha256(problem.encode("utf-8")).hexdigest(),
+        numina_source=_optional_text(row, "source"),
+        answer=_optional_text(row, "answer"),
+        problem_type=_optional_text(row, "problem_type"),
+        question_type=_optional_text(row, "question_type"),
+        synthetic=row.get("synthetic") is True,
+    )
 
 
 def transform(input_path: str, output_path: str) -> None:
@@ -177,7 +176,7 @@ def numinamath_v1_5_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/numinamath-1.5",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.04.harmony-arrow"},
+        hash_attrs={"version": "2026.09.11.review-fixes"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/numinamath-1.5", download=processed

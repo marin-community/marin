@@ -387,9 +387,8 @@ def test_numinamath_splits_reasoning_python_and_output() -> None:
         ),
     ],
 )
-def test_chat_preserves_upstream_and_processed_ids(adapter, schema, row, tmp_path):
+def test_chat_preserves_source_id_through_parquet_normalization(adapter, schema, row, tmp_path):
     [source] = adapter(row)
-    assert "source_id" not in source
     processed_path = tmp_path / "processed.parquet"
     pq.write_table(pa.Table.from_pylist([source], schema=schema), processed_path)
     [processed] = pq.read_table(processed_path).to_pylist()
@@ -397,8 +396,7 @@ def test_chat_preserves_upstream_and_processed_ids(adapter, schema, row, tmp_pat
     output_path = tmp_path / "normalized.parquet"
     pq.write_table(pa.Table.from_pylist([normalized], schema=schema), output_path)
     [result] = pq.read_table(output_path).to_pylist()
-    assert result["upstream_id"] == "7"
-    assert result["source_id"] == source["id"]
+    assert result["source_id"] == "7"
 
 
 def test_swe_zero_preserves_system_instructions_when_translating_protocol() -> None:
@@ -426,3 +424,33 @@ def test_swe_zero_preserves_system_instructions_when_translating_protocol() -> N
     assert "```" not in prompt
     assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in prompt
     assert document["messages"][-1]["content"] == [{"type": "text", "text": "Task complete."}]
+
+
+@pytest.mark.parametrize(
+    "adapter,row",
+    [
+        (gpt_oss_row_to_chat_doc, {"user_content": "Explain </think>.", "assistant_content": "A delimiter."}),
+        (
+            nemotron_terminal_row_to_chat_doc,
+            {
+                "conversations": [
+                    {"role": "user", "content": "Task Description:\nInspect."},
+                    {"role": "assistant", "content": '{"commands":[{"keystrokes":"cat file\\n"}]}'},
+                    {"role": "user", "content": "New Terminal Output:\n</think>"},
+                    {"role": "assistant", "content": '{"commands":[],"task_complete":true}'},
+                ]
+            },
+        ),
+        (
+            numinamath_row_to_chat_doc,
+            {
+                "messages": [
+                    {"role": "user", "content": "Explain </think>."},
+                    {"role": "assistant", "content": "```python\nprint(1)\n```\n```output\n1\n```\nThe answer is 1."},
+                ]
+            },
+        ),
+    ],
+)
+def test_chat_sources_quarantine_control_markup_instead_of_aborting(adapter, row):
+    assert adapter(row) == []

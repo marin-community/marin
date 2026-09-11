@@ -43,16 +43,6 @@ SPLITS = ["SWE_Rebench", "SWE_Smith", "R2E_Gym"]
 TOOL_CALL_END = "</tool_call>"
 
 
-def _contains_tool_call_end(value: object) -> bool:
-    if isinstance(value, str):
-        return TOOL_CALL_END in value.lower()
-    if isinstance(value, dict):
-        return any(_contains_tool_call_end(key) or _contains_tool_call_end(item) for key, item in value.items())
-    if isinstance(value, list):
-        return any(_contains_tool_call_end(item) for item in value)
-    return False
-
-
 def reward_to_tag(reward: float | None) -> str:
     if reward is None:
         return "This trajectory has an unknown outcome."
@@ -87,7 +77,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     messages = json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
     if not messages:
         return []
-    if _contains_tool_call_end(messages):
+    if TOOL_CALL_END in str(messages).lower():
         counters.pipeline.update_counter("coderforge/tool_call_end_filtered", 1)
         return []
     tools = row.get("tools") or []
@@ -166,7 +156,7 @@ def coderforge_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/coderforge-preview",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.09.quarantine"},
+        hash_attrs={"version": "2026.09.11.review-fixes"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/coderforge", download=processed

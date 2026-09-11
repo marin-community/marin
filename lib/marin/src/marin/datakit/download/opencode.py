@@ -60,12 +60,10 @@ def opencode_protocol_messages(conversations: list[dict], tools: list[dict]) -> 
                     if following.get("role") not in {"tool", "user"}:
                         break
                     consecutive_observations += 1
-                calls_for_observation = (
-                    pending_calls[:1] if consecutive_observations >= len(pending_calls) else pending_calls[:]
-                )
-                for call_id, tool_name in calls_for_observation:
-                    messages.append({"role": "tool", "content": content, "name": tool_name, "tool_call_id": call_id})
-                del pending_calls[: len(calls_for_observation)]
+                if consecutive_observations < len(pending_calls):
+                    return None
+                call_id, tool_name = pending_calls.pop(0)
+                messages.append({"role": "tool", "content": content, "name": tool_name, "tool_call_id": call_id})
                 continue
             if role == "tool":
                 return None
