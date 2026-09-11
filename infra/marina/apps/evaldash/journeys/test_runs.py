@@ -38,4 +38,4 @@ def test_the_panel_serves_the_committed_catalog(journey: Journey) -> None:
     assert "snowball" in journey.reads()
     store = cast(dict[str, Any], journey.api(f"{API}/status"))["store"]
     assert store["backend"] == "postgres"
-    assert store["record_count"] == 15
+    assert store["record_count"] == 17
