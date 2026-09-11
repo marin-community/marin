@@ -638,3 +638,9 @@ author: benfeuer
 
 - Audit: `/benfeuer/eval-20260910-170609-snowball-final-qk157-base-4463` had remained controller-running for 13h12m after its evaluator was cancelled. Its inference child still occupied one 8-H100 allocation, while the dedicated qk157 MMLU-Pro root `…-2429` supersedes it.
 - Cleanup: cancelled the exact stale parent and its inference child. No durable successful record or protected root was affected.
+
+## 2026-09-11 02:28 EDT — SWE-bench complete for all Bases
+
+- Result: skew4 completed its final resumed SWE-bench trial. Canonical record `20260911-000137-snowball-final-qk175-skew4-base-swebench-recovery-a1d7` is `status=succeeded`, with 0/99 solved, 100 attempted, 99 scored, and one `DaytonaError`.
+- Audit: read-only RNO2A job `/benfeuer/snowball-final-swe-skew4-record-audit` independently parsed the durable record and confirmed the metric and coverage payload.
+- Decision: the record passes the 95% coverage gate. `RESULTS.md` now reports all five SWE-bench random-100 cells. The shared skew4 root continues into Terminal-Bench 2.0.
