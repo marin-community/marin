@@ -22,7 +22,6 @@ def start_test_stage(
     tasks: list[ShardTask],
     *,
     plan: PhysicalPlan | None = None,
-    pipeline_name: str = "test",
     stage_name: str = "test",
     is_last_stage: bool = False,
     execution_id: str = TEST_EXECUTION_ID,
@@ -33,7 +32,6 @@ def start_test_stage(
         map_cost=TEST_TASK_COST,
         reduce_cost=TEST_TASK_COST,
         plan=plan,
-        pipeline_name=pipeline_name,
     )
     coordinator._executions[execution_id] = run
     coordinator._start_stage(run, stage_name, 0, tasks, is_last_stage=is_last_stage)
