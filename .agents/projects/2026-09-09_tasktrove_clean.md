@@ -42,7 +42,8 @@ raw → summaries → templates → converted → graded → clean
 24. [x] M6 cleanup skipped by product decision; retain the existing exact, within-source instruction deduplication without a near-duplicate study or key change
 25. [x] Replace the TaskTrove Marina app with a cleanup report and a paginated viewer over the final clean Parquet file itself
 26. [x] Reshard TaskTrove to 64 working shards and exactly one final clean Parquet shard
-27. [x] Final cleanup: run `2026.09.10.7` at the pushed verifier ref, validate its 64-to-1 outputs, publish the exact final Parquet and manifest, deploy Marina revision `marina-00041-rx2`, and update the artifact and PR #9061
+27. [x] Final cleanup: run `2026.09.10.7` at the pushed verifier ref, validate its 64-to-1 outputs, publish the exact final Parquet and manifest, deploy Marina, and update the artifact and PR #9061
+28. [x] Route the viewer from Marina to the canonical CoreWeave S3 release with its existing credentials; fix the S3 byte-range call, remove the redundant GCS copy, and deploy revision `marina-00045-p7g`
 
 ## Final publication
 
@@ -61,12 +62,13 @@ Canonical outputs:
 - `s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.7/ledger.parquet`
 - `s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.7/report.md`
 
-The production mirror contains only `gs://marin-marina/tasktrove/manifest.json` and
-`gs://marin-marina/tasktrove/tasks/part-00000.parquet`. The manifest MD5 is
-`08dc8a859e8f8645f7eaa8551378a74b` in both stores. Marina revision `marina-00041-rx2` serves
-image digest `sha256:3e8b4024e873b70d2eee66be328368ad883e635175e26959036616127cec1475`.
-Authenticated production checks returned the page and manifest with 200, a 3,880,427,133-byte
-Parquet HEAD with `Accept-Ranges: bytes`, and `PAR1` from both boundary range requests with 206.
+Marina revision `marina-00045-p7g` serves image digest
+`sha256:6e7e1428399c6298c44101f06827331db5ab946cd757e3d5cd8597694badb32a` at 100% traffic. The app
+proxies authenticated requests to the canonical S3 release with Marina's existing CoreWeave
+credentials. After the redundant 3.61 GiB GCS copy was deleted, production still returned the page
+and manifest with 200, returned `PAR1` from both boundary range requests with 206, and rendered 60
+real task rows in Chromium without page or console errors. The deployment incident and S3 range
+failure are recorded at https://marina.oa.dev/echo/wiki/405.
 
 The final run changes sharding and reporting, not the task conversion or verifier semantics already
 covered by the 190-task Daytona validity run, the 100-task random Docker audit, the language-specific
