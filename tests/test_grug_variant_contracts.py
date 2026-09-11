@@ -12,6 +12,10 @@ import dataclasses
 import importlib
 import json
 import logging
+import os
+import subprocess
+import sys
+import textwrap
 import uuid
 from io import StringIO
 from pathlib import Path
@@ -73,7 +77,7 @@ def test_compact_grug_mesh_shape_allows_expert_axis_to_span_processes():
         expert_axis_size=16,
         replica_axis_size=4,
         model_axis_size=1,
-    ) == (4, 2, 16, 1)
+    ) == (4, 2, 1, 16, 1)
 
 
 def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
@@ -89,7 +93,174 @@ def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
         expert_axis_size=1,
         replica_axis_size=1,
         model_axis_size=1,
-    ) == (1, 4, 1, 1)
+    ) == (1, 4, 1, 1, 1)
+
+
+def test_compact_grug_mesh_shape_allocates_context_axis():
+    """Contract: context_axis_size shards the sequence dim; data absorbs the remainder."""
+    assert _compact_grug_mesh_shape(
+        process_count=1,
+        local_device_count=8,
+        expert_axis_size=1,
+        replica_axis_size=1,
+        model_axis_size=1,
+        context_axis_size=2,
+    ) == (1, 4, 2, 1, 1)
+
+
+def test_compact_grug_mesh_shape_folds_context_into_the_divisibility_check():
+    """A context width the device count cannot accommodate must fail rather than silently
+    round `data` down to the same mesh a context_axis_size of 1 would build."""
+    with pytest.raises(ValueError, match="context_axis_size"):
+        _compact_grug_mesh_shape(
+            process_count=1,
+            local_device_count=8,
+            expert_axis_size=1,
+            replica_axis_size=1,
+            model_axis_size=1,
+            context_axis_size=3,
+        )
+
+
+def _run_on_eight_cpu_devices(script: str) -> None:
+    """Run multi-device behavior in a fresh CPU backend."""
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_compact_grug_mesh_pairs_each_axis_name_with_its_own_size():
+    """Distinct context and expert widths detect swapped axis positions."""
+    _run_on_eight_cpu_devices(
+        """
+        from levanter.grug.sharding import compact_grug_mesh
+
+        mesh = compact_grug_mesh(replica_axis_size=1, context_axis_size=2, expert_axis_size=4)
+        assert tuple(mesh.shape.items()) == (
+            ("replica_dcn", 1),
+            ("data", 1),
+            ("context", 2),
+            ("expert", 4),
+            ("model", 1),
+        ), mesh.shape
+        """
+    )
+
+
+def test_a_pre_context_axis_checkpoint_restores_onto_the_context_mesh():
+    """Adding a size-one context axis preserves checkpoint values and placement."""
+    _run_on_eight_cpu_devices(
+        """
+        import tempfile
+
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.checkpoint import load_checkpoint, save_checkpoint
+        from levanter.grug.sharding import compact_grug_mesh
+
+        legacy_mesh = Mesh(
+            np.asarray(jax.devices(), dtype=object).reshape(1, 4, 2, 1),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        mesh = compact_grug_mesh(expert_axis_size=2, replica_axis_size=1)
+        assert dict(mesh.shape) == {"replica_dcn": 1, "data": 4, "context": 1, "expert": 2, "model": 1}, mesh.shape
+
+        spec = P(("replica_dcn", "data", "expert"), None)
+        shape = (8, 4)
+        legacy_sharding = NamedSharding(legacy_mesh, spec)
+        sharding = NamedSharding(mesh, spec)
+        assert sharding.devices_indices_map(shape) == legacy_sharding.devices_indices_map(shape)
+
+        written = jax.device_put(jnp.arange(32, dtype=jnp.float32).reshape(shape), legacy_sharding)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with jax.set_mesh(legacy_mesh):
+                save_checkpoint({"params": written}, step=6000, checkpoint_path=tmpdir)
+            with jax.set_mesh(mesh):
+                restored = load_checkpoint(
+                    {"params": jax.ShapeDtypeStruct(shape, jnp.float32, sharding=sharding)},
+                    checkpoint_path=tmpdir,
+                    mesh=mesh,
+                )["params"]
+
+        assert restored.sharding == sharding, restored.sharding
+        np.testing.assert_array_equal(np.asarray(restored), np.asarray(written))
+        """
+    )
+
+
+def test_a_pre_context_axis_checkpoint_restores_onto_context_sharded_parameters():
+    """A legacy expert checkpoint restores with its target context partitioning."""
+    _run_on_eight_cpu_devices(
+        """
+        import tempfile
+
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.checkpoint import load_checkpoint, save_checkpoint
+        from levanter.grug.sharding import compact_grug_mesh
+
+        legacy_mesh = Mesh(
+            np.asarray(jax.devices(), dtype=object).reshape(1, 4, 2, 1),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        mesh = compact_grug_mesh(expert_axis_size=2, context_axis_size=2, replica_axis_size=1)
+        assert dict(mesh.shape) == {"replica_dcn": 1, "data": 2, "context": 2, "expert": 2, "model": 1}, mesh.shape
+
+        # An expert stack [experts, fan_in, fan_out]: four shards on the target mesh, two on the
+        # mesh that wrote it.
+        shape = (4, 3, 2)
+        written = jax.device_put(
+            jnp.arange(24, dtype=jnp.float32).reshape(shape),
+            NamedSharding(legacy_mesh, P("expert", None, None)),
+        )
+        sharding = NamedSharding(mesh, P(("expert", "context"), None, None))
+        assert len({index for index in sharding.devices_indices_map(shape).values()}) == 4
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with jax.set_mesh(legacy_mesh):
+                save_checkpoint({"params": written}, step=6000, checkpoint_path=tmpdir)
+            with jax.set_mesh(mesh):
+                restored = load_checkpoint(
+                    {"params": jax.ShapeDtypeStruct(shape, jnp.float32, sharding=sharding)},
+                    checkpoint_path=tmpdir,
+                    mesh=mesh,
+                )["params"]
+
+        assert restored.sharding == sharding, restored.sharding
+        np.testing.assert_array_equal(np.asarray(restored), np.asarray(written))
+        """
+    )
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        "experiments.grug.base.train",
+        "experiments.grug.moe.train",
+        "experiments.grug.moe_hero_fsdp.train",
+        "experiments.june_tpu_67b_a2b.moe.train",
+    ],
+)
+def test_unported_variants_reject_context_parallelism_at_configuration(module_name):
+    trainer_config = importlib.import_module(module_name).GrugTrainerConfig
+    with pytest.raises(ValueError, match="context_axis_size=1"):
+        trainer_config(context_axis_size=2)
 
 
 def _variant_has_noverify(variant_dir: Path) -> bool:
@@ -310,7 +481,7 @@ def test_grug_moe_data_loaders_build_against_single_expert_mesh():
 
     See https://github.com/marin-community/marin/issues/6252 — canary configurations
     always have expert_axis_size == 1. Under the standardized
-    ``(replica_dcn, data, expert, model)`` contract the "expert" axis is kept at length 1
+    ``(replica_dcn, data, context, expert, model)`` contract the "expert" axis is kept at length 1
     instead of being dropped, so the data-loader pspec can name it unconditionally.
     """
     train_module = importlib.import_module("experiments.grug.moe.train")
@@ -379,7 +550,7 @@ def test_grug_moe_model_init_against_single_expert_mesh():
 
     See https://github.com/marin-community/marin/issues/6252 — canary configurations
     have expert_axis_size == 1. Under the standardized
-    ``(replica_dcn, data, expert, model)`` contract the "expert" axis is kept at length 1,
+    ``(replica_dcn, data, context, expert, model)`` contract the "expert" axis is kept at length 1,
     so MoEMLP.init reads ``mesh.shape["expert"] == 1`` rather than hitting an
     "axis absent" branch.
     """
