@@ -1,0 +1,120 @@
+{
+  "runs": [
+    {
+      "run_info": {
+        "author": {
+          "affiliation": "HuaZhong University of Science and Technology",
+          "name": "yun1104",
+          "url": "https://github.com/yun1104/marin"
+        },
+        "description": "Nano model based on Llama architecture.",
+        "device_flops": 142500000000000.0,
+        "eval/paloma/c4_en/bpb": 2.7373907566070557,
+        "model_config": {
+          "activation_function": "silu",
+          "attn_backend": null,
+          "flash_attention_block_size": null,
+          "gradient_checkpointing": true,
+          "head_dim": null,
+          "hidden_dim": 16,
+          "hybrid_norm": false,
+          "initializer_range": 0.02,
+          "input_embedding_norm": false,
+          "intermediate_dim": 64,
+          "layer_norm_epsilon": 1e-05,
+          "max_seq_len": 512,
+          "num_heads": 1,
+          "num_kv_heads": 1,
+          "num_layers": 1,
+          "reference_checkpoint": "NousResearch/Llama-2-7b-hf",
+          "rope": {
+            "factor": 1.0,
+            "theta": 10000
+          },
+          "scan_layers": true,
+          "tie_word_embeddings": true,
+          "tokenizer": null,
+          "upcast_attn": false,
+          "use_bias": false,
+          "use_layer_norm_weight": true,
+          "use_qk_norm": false
+        },
+        "model_flops": 20381800857600.0,
+        "model_flops_per_token": 4146688.0,
+        "model_size": 2056240,
+        "num_chips": 1,
+        "num_devices": 1,
+        "resources": {
+          "cpu": 1,
+          "device": {
+            "count": 1,
+            "kind": "gpu",
+            "variant": "RTX3090"
+          },
+          "disk": "16g",
+          "max_concurrency": 1,
+          "preemptible": true,
+          "ram": "1g",
+          "regions": null,
+          "replicas": 1
+        },
+        "run_completion_timestamp": "2026-09-08 07:19:54 UTC",
+        "tokenized_dataset": "local_store/tokenized/subcache/fineweb-edu-10B-ac65f6",
+        "total_tokens": 1638400,
+        "train_config": {
+          "allow_partial_checkpoint": false,
+          "beta1": null,
+          "beta2": null,
+          "cycle_length": null,
+          "data_seed": null,
+          "decay": null,
+          "ema_beta": null,
+          "epsilon": null,
+          "explicit_mesh_axes": false,
+          "initialize_from_checkpoint_path": null,
+          "initialize_from_hf": null,
+          "int8": false,
+          "learning_rate": 0.003,
+          "lr_schedule": null,
+          "max_eval_batches": null,
+          "max_grad_norm": null,
+          "min_lr_ratio": null,
+          "num_train_steps": 100,
+          "optimizer_config": null,
+          "pad_tokenizer_to_match_model": false,
+          "per_device_eval_parallelism": null,
+          "per_device_parallelism": -1,
+          "profiler": false,
+          "profiler_num_steps": 25,
+          "profiler_start_step": 5,
+          "reset_data_loader_on_init": true,
+          "rewarmup": null,
+          "skip_bad_steps": false,
+          "steps_per_eval": 500,
+          "steps_per_export": 10000,
+          "steps_per_hf_export": null,
+          "steps_per_task_eval": null,
+          "train_batch_size": 32,
+          "train_seq_len": null,
+          "warmup": null,
+          "watch": {
+            "include_histograms": false,
+            "include_norms": true,
+            "include_per_parameter_norms": true,
+            "interval": 10,
+            "split_scan_layers": true,
+            "watch_targets": [
+              "grads",
+              "params"
+            ]
+          },
+          "weight_decay": 0.1,
+          "z_loss_weight": null
+        },
+        "training_hardware_flops": 5012438321071677.0,
+        "training_time": 35.175005761906505,
+        "wandb_run_link": "https://wandb.ai/ruan841572227-huazhong-university-of-science-and-technology/marin/runs/llama_nano_gpu_speedrun-d49116"
+      }
+    }
+  ]
+}

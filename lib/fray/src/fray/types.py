@@ -178,6 +178,8 @@ GpuType = Literal[
     "H100",
     "H200",
     "L4",
+    "RTX3090",
+    "RTX3090Ti",
     "T4",
     "V100",
     "auto",
