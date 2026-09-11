@@ -48,7 +48,12 @@ D512_STEPS = {30: 1_058, 60: 2_115, 150: 5_288, 300: 10_575, 600: 21_150}
 
 MAX_CONCURRENT_RUNS = 5
 CHECKPOINT_INTERVAL = timedelta(minutes=30)
-TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-8", regions=("us-central2",), zone="us-central2-b")
+TRAIN_RESOURCES = ResourceConfig.with_tpu(
+    "v4-8",
+    ram="190g",
+    regions=("us-central2",),
+    zone="us-central2-b",
+)
 
 
 @dataclass(frozen=True)

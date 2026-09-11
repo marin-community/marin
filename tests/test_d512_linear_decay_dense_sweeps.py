@@ -9,6 +9,7 @@ from experiments.grug.dense_one_layer_muonh.launch import (
 from experiments.grug.dense_one_layer_muonh.launch import (
     SWEEP_POINTS as MUONH_CONSTANT_POINTS,
 )
+from experiments.grug.dense_one_layer_muonh.launch import TRAIN_RESOURCES as MUONH_TRAIN_RESOURCES
 from experiments.grug.dense_one_layer_muonh.launch import (
     dense_muonh_optimizer,
 )
@@ -24,6 +25,7 @@ from experiments.grug.dense_one_layer_sgdh.launch import (
 from experiments.grug.dense_one_layer_sgdh.launch import (
     SWEEP_POINTS as SGDH_CONSTANT_POINTS,
 )
+from experiments.grug.dense_one_layer_sgdh.launch import TRAIN_RESOURCES as SGDH_TRAIN_RESOURCES
 from experiments.grug.dense_one_layer_sgdh.launch import (
     dense_sgdh_optimizer,
 )
@@ -69,3 +71,8 @@ def test_linear_decay_dense_schedule_warms_up_then_reaches_five_percent_floor(op
     assert float(schedule(0)) == pytest.approx(0.0)
     assert float(schedule(warmup_steps)) == pytest.approx(optimizer.learning_rate)
     assert float(schedule(point.num_train_steps)) == pytest.approx(optimizer.learning_rate * optimizer.min_lr_ratio)
+
+
+def test_dense_sweeps_fit_current_v4_host_memory_limit():
+    assert MUONH_TRAIN_RESOURCES.ram == "190g"
+    assert SGDH_TRAIN_RESOURCES.ram == "190g"
