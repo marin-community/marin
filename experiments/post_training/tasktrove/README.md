@@ -57,8 +57,9 @@ The current release is under
 | `manifest.json` | counts by source, status, converter, grader, tag, and environment |
 | `report.md` | tables generated from the manifest |
 
-The authenticated browser at <https://marina.oa.dev/tasktrove/> reads these files directly with
-footer and byte-range requests.
+The authenticated browser at <https://marina.oa.dev/tasktrove/> uses a paginated Marina API. The
+server reads the Parquet with its existing S3 credentials, caches metadata columns and filtered
+pages in process, and returns one selected task archive at a time.
 
 ## Add a converter
 

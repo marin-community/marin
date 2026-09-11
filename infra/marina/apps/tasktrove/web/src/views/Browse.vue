@@ -1,19 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { count, manifest, queryTasks, rowCount, tasks, type Manifest, type ParquetTask, type TaskFilters } from '../corpus'
+import { count, manifest, rowCount, tasks, type Manifest, type ParquetTask, type TaskFilters } from '../corpus'
 import { taskPath } from '../routes'
 
 const PAGE = 50
-const SCAN = 10_000
 const route = useRoute()
 const router = useRouter()
 const dataset = ref<Manifest>()
 const matches = ref<ParquetTask[]>([])
 const total = ref(0)
-const cursor = ref(0)
+const filteredTotal = ref(0)
 const page = ref(0)
-const exhausted = ref(false)
 const problem = ref('')
 const working = ref(false)
 let generation = 0
@@ -38,10 +36,7 @@ const filters = computed<TaskFilters>(() => ({
   query: value('query'),
 }))
 const active = computed(() => Object.values(filters.value).some(Boolean))
-const predicateOnly = computed(
-  () => !filters.value.query && Object.entries(filters.value).some(([name, item]) => name !== 'query' && item),
-)
-const visible = computed(() => matches.value.slice(page.value * PAGE, (page.value + 1) * PAGE))
+const visible = computed(() => matches.value)
 const sources = computed(() =>
   Object.entries(dataset.value?.by_source ?? {})
     .filter(([, statuses]) => (statuses.converted ?? 0) > 0)
@@ -51,26 +46,9 @@ const converters = computed(() => Object.keys(dataset.value?.by_converter ?? {})
 const modes = computed(() => Object.keys(dataset.value?.by_mode ?? {}).sort())
 const tags = computed(() => Object.keys(dataset.value?.by_tag ?? {}).sort())
 const environments = computed(() => [...new Set(Object.values(dataset.value?.dockerfiles ?? {}).map((item) => item.base_image))].sort())
-const expected = computed(() => {
-  if (!dataset.value || filters.value.query) return undefined
-  const selected = Object.entries(filters.value).filter(([, item]) => item)
-  if (selected.length === 0) return total.value
-  if (selected.length !== 1) return undefined
-  const [name, selectedValue] = selected[0]
-  if (name === 'source') return dataset.value.by_source[selectedValue]?.converted
-  if (name === 'converter') return dataset.value.by_converter[selectedValue]?.converted
-  if (name === 'mode') return dataset.value.by_mode[selectedValue]
-  if (name === 'tag') return dataset.value.by_tag[selectedValue]
-  if (name === 'environment') {
-    return Object.values(dataset.value.dockerfiles)
-      .filter((item) => item.base_image === selectedValue)
-      .reduce((sum, item) => sum + item.tasks, 0)
-  }
-  return undefined
-})
 const firstMatch = computed(() => (visible.value.length ? page.value * PAGE + 1 : 0))
 const lastMatch = computed(() => page.value * PAGE + visible.value.length)
-const hasNext = computed(() => matches.value.length > (page.value + 1) * PAGE || !exhausted.value)
+const hasNext = computed(() => lastMatch.value < filteredTotal.value)
 
 function applyFilters(): void {
   const query = Object.fromEntries(Object.entries(draft).filter(([, item]) => item.trim()))
@@ -87,25 +65,11 @@ async function fill(targetPage: number, currentGeneration: number = generation):
   working.value = true
   problem.value = ''
   try {
-    const needed = (targetPage + 1) * PAGE
-    while (matches.value.length < needed && !exhausted.value) {
-      if (predicateOnly.value) {
-        const start = matches.value.length
-        const found = await queryTasks(start, needed, filters.value)
-        if (currentGeneration !== generation) return
-        matches.value.push(...found)
-        exhausted.value = found.length < needed - start || (expected.value !== undefined && matches.value.length >= expected.value)
-        break
-      }
-      const size = active.value ? SCAN : PAGE
-      const end = Math.min(cursor.value + size, total.value)
-      const found = await tasks(cursor.value, end, filters.value)
-      if (currentGeneration !== generation) return
-      matches.value.push(...found)
-      cursor.value = end
-      exhausted.value = cursor.value >= total.value || (expected.value !== undefined && matches.value.length >= expected.value)
-    }
-    if (targetPage * PAGE < matches.value.length || targetPage === 0) page.value = targetPage
+    const found = await tasks(targetPage * PAGE, PAGE, filters.value)
+    if (currentGeneration !== generation) return
+    matches.value = found.rows
+    filteredTotal.value = found.total
+    page.value = targetPage
   } catch (error) {
     if (currentGeneration === generation) problem.value = String(error)
   } finally {
@@ -117,9 +81,8 @@ async function restart(): Promise<void> {
   generation += 1
   readRoute()
   matches.value = []
-  cursor.value = 0
   page.value = 0
-  exhausted.value = false
+  filteredTotal.value = 0
   working.value = false
   await fill(0, generation)
 }
@@ -147,8 +110,8 @@ watch(() => route.fullPath, restart)
       <p class="eyebrow">Final output</p>
       <h1>Parquet viewer</h1>
       <p>
-        This table range-reads the final <code>tasks/part-00000.parquet</code> in S3. Filters are evaluated against
-        its columns; select a row to inspect the files in <code>task_binary</code>.
+        Marina reads the final <code>tasks/part-00000.parquet</code> in S3 and returns paginated rows. Select a row
+        to inspect the files in <code>task_binary</code>.
       </p>
     </div>
     <div class="coverage" v-if="dataset">
@@ -205,9 +168,9 @@ watch(() => route.fullPath, restart)
   <p class="problem" v-if="problem">{{ problem }}</p>
   <div class="table-status" aria-live="polite">
     <span v-if="visible.length">
-      Matches {{ count(firstMatch) }}–{{ count(lastMatch) }}<template v-if="expected !== undefined"> of {{ count(expected) }}</template>
+      Matches {{ count(firstMatch) }}–{{ count(lastMatch) }} of {{ count(filteredTotal) }}
     </span>
-    <span v-else-if="working">Reading matching Parquet columns…</span>
+    <span v-else-if="working">Reading matching rows…</span>
     <span v-else>No matching rows.</span>
     <span v-if="working && visible.length">Reading ahead…</span>
   </div>
@@ -240,7 +203,7 @@ watch(() => route.fullPath, restart)
   </div>
 
   <nav class="pager" aria-label="Task pages" v-if="visible.length">
-    <button type="button" :disabled="page === 0 || working" @click="page -= 1">Previous</button>
+    <button type="button" :disabled="page === 0 || working" @click="fill(page - 1)">Previous</button>
     <span>Page {{ count(page + 1) }}</span>
     <button type="button" :disabled="!hasNext || working" @click="fill(page + 1)">Next</button>
   </nav>

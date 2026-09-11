@@ -8,7 +8,6 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "hyparquet": "^1.30.0",
     "vue": "^3.5.13",
     "vue-router": "^4.6.4"
   },

@@ -3,6 +3,7 @@
 
 import asyncio
 import gzip
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -49,6 +50,8 @@ def write_app(apps_dir: Path, name: str, manifest: str = TASKTROVE_MANIFEST, bui
 
 
 def write_api_app(apps_dir: Path, name: str) -> Path:
+    sys.modules.pop(f"{name}.app", None)
+    sys.modules.pop(name, None)
     root = write_app(apps_dir, name)
     (root / "__init__.py").write_text("")
     (root / "app.py").write_text(

@@ -1,17 +1,5 @@
-import {
-  asyncBufferFromUrl,
-  parquetMetadataAsync,
-  parquetQuery,
-  parquetReadObjects,
-  rowIndex,
-  type AsyncBuffer,
-  type FileMetaData,
-  type ParquetQueryFilter,
-  type ParquetRow,
-} from 'hyparquet'
-
 const DATA = '/tasktrove/data'
-export const parquetUrl = `${DATA}/tasks/part-00000.parquet`
+const API = '/tasktrove/api'
 
 export type Counts = Record<string, number>
 
@@ -67,6 +55,13 @@ export type TaskFilters = {
   query: string
 }
 
+export type TaskPage = {
+  rows: ParquetTask[]
+  total: number
+  offset: number
+  limit: number
+}
+
 export type ConverterPolicy = {
   transformation: string
   graders: string[]
@@ -103,18 +98,6 @@ const sourceGraderOverrides: Record<string, string[]> = {
   'laion__nemotron-gym-instruction-following-structured-v3': ['json-schema'],
 }
 
-const METADATA_COLUMNS = [
-  'source',
-  'path',
-  'family',
-  'converter',
-  'mode',
-  'dockerfile_id',
-  'language',
-  'tags',
-  'has_solution',
-]
-
 async function json<T>(path: string): Promise<T> {
   const response = await fetch(`${DATA}/${path}`)
   if (!response.ok) throw new Error(`${path}: ${response.status}`)
@@ -128,113 +111,30 @@ export function manifest(): Promise<Manifest> {
   return manifestLoading
 }
 
-let parquetFile: Promise<AsyncBuffer> | undefined
-
-function file(): Promise<AsyncBuffer> {
-  parquetFile ??= asyncBufferFromUrl({ url: parquetUrl })
-  return parquetFile
-}
-
-let metadataLoading: Promise<FileMetaData> | undefined
-
-async function metadata(): Promise<FileMetaData> {
-  metadataLoading ??= file().then(parquetMetadataAsync)
-  return metadataLoading
-}
-
 export async function rowCount(): Promise<number> {
-  return Number((await metadata()).num_rows)
+  return (await manifest()).clean_tasks
 }
 
-function taskFilter(filters: TaskFilters | undefined, dataset: Manifest): ParquetQueryFilter | undefined {
-  const predicates: ParquetQueryFilter[] = []
-  if (filters?.source) predicates.push({ source: { $eq: filters.source } })
-  if (filters?.converter) predicates.push({ converter: { $eq: filters.converter } })
-  if (filters?.mode) predicates.push({ mode: { $eq: filters.mode } })
-  if (filters?.tag) predicates.push({ tags: { $in: [filters.tag] } })
-  if (filters?.environment) {
-    const ids = Object.entries(dataset.dockerfiles)
-      .filter(([, value]) => value.base_image === filters.environment)
-      .map(([id]) => id)
-    predicates.push({ dockerfile_id: { $in: ids } })
-  }
-  return predicates.length > 1 ? { $and: predicates } : predicates[0]
+async function api<T>(path: string): Promise<T> {
+  const response = await fetch(`${API}/${path}`)
+  if (!response.ok) throw new Error(`${path}: ${response.status}`)
+  return response.json() as Promise<T>
 }
 
-function asTask(value: ParquetRow, dataset: Manifest): ParquetTask {
-  const position = value[rowIndex]
-  if (position === undefined) throw new Error('The Parquet reader did not return a row position.')
-  return {
-    row: position,
-    source: value.source,
-    path: value.path,
-    family: value.family,
-    converter: value.converter,
-    mode: value.mode,
-    dockerfile_id: value.dockerfile_id,
-    environment: dataset.dockerfiles[value.dockerfile_id]?.base_image ?? value.dockerfile_id,
-    language: value.language ?? '',
-    tags: value.tags ?? [],
-    has_solution: value.has_solution,
-  }
-}
-
-export async function tasks(rowStart: number, rowEnd: number, filters?: TaskFilters): Promise<ParquetTask[]> {
-  const [parquet, dataset, parquetMetadata] = await Promise.all([file(), manifest(), metadata()])
-  const rows = await parquetReadObjects({
-    file: parquet,
-    metadata: parquetMetadata,
-    columns: METADATA_COLUMNS,
-    filter: taskFilter(filters, dataset),
-    rowStart,
-    rowEnd,
-    includeRowIndex: true,
-    useOffsetIndex: true,
-  })
-  const query = filters?.query.trim().toLocaleLowerCase()
-  return rows
-    .map((value) => asTask(value, dataset))
-    .filter((value) => !query || value.path.toLocaleLowerCase().includes(query))
-}
-
-export async function queryTasks(matchStart: number, matchEnd: number, filters: TaskFilters): Promise<ParquetTask[]> {
-  const [parquet, dataset, parquetMetadata] = await Promise.all([file(), manifest(), metadata()])
-  const filter = taskFilter(filters, dataset)
-  if (!filter) return tasks(matchStart, matchEnd, filters)
-  const rows = await parquetQuery({
-    file: parquet,
-    metadata: parquetMetadata,
-    columns: METADATA_COLUMNS,
-    filter,
-    rowStart: matchStart,
-    rowEnd: matchEnd,
-    includeRowIndex: true,
-    useOffsetIndex: true,
-  })
-  return rows.map((value) => asTask(value, dataset))
+export async function tasks(offset: number, limit: number, filters: TaskFilters): Promise<TaskPage> {
+  const parameters = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+  for (const [name, value] of Object.entries(filters)) if (value.trim()) parameters.set(name, value.trim())
+  return api<TaskPage>(`tasks?${parameters}`)
 }
 
 export async function task(row: number): Promise<ParquetTask> {
-  const found = await tasks(row, row + 1)
-  if (!found[0]) throw new Error(`No Parquet row ${row}.`)
-  return found[0]
+  return api<ParquetTask>(`tasks/${row}`)
 }
 
 export async function archive(row: number): Promise<Uint8Array> {
-  const rows = await parquetReadObjects({
-    file: await file(),
-    metadata: await metadata(),
-    columns: ['task_binary'],
-    rowStart: row,
-    rowEnd: row + 1,
-    utf8: false,
-    useOffsetIndex: true,
-  })
-  const binary = rows[0]?.task_binary
-  if (binary instanceof Uint8Array) return binary
-  if (binary instanceof ArrayBuffer) return new Uint8Array(binary)
-  if (ArrayBuffer.isView(binary)) return new Uint8Array(binary.buffer, binary.byteOffset, binary.byteLength)
-  throw new Error(`Row ${row} has no task_binary value.`)
+  const response = await fetch(`${API}/tasks/${row}/archive`)
+  if (!response.ok) throw new Error(`tasks/${row}/archive: ${response.status}`)
+  return new Uint8Array(await response.arrayBuffer())
 }
 
 function subsetWithTotal(entries: [string, number][], total: number): string[] | undefined {
