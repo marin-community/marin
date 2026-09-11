@@ -22,13 +22,11 @@ from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
 from iris.cluster.client.job_info import get_job_info
-from starlette.types import ASGIApp
 from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, log_time
+from starlette.types import ASGIApp
 
-from zephyr.memory_store import MemoryTableRegistration
-from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, SourceItem, StageType
 from zephyr.dashboard import (
     CounterPage,
     CounterQuery,
@@ -52,6 +50,8 @@ from zephyr.dashboard import (
     source_node_id,
     stage_node_id,
 )
+from zephyr.memory_store import MemoryTableRegistration
+from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, SourceItem, StageType
 from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_io import (
     ShardTask,
@@ -711,11 +711,9 @@ class ZephyrCoordinator:
         )
         return WorkerPage(workers=workers, total=len(snapshots))
 
-    def set_worker_group(self, worker_group: Any) -> None:
-        """Set the worker ActorGroup so the coordinator can detect permanent worker death."""
-        self._worker_group = worker_group
-
-    def register_worker(self, worker_id: str, worker_handle: ActorHandle, task_id: str = "") -> tuple[MemoryTableRegistration, ...]:
+    def register_worker(
+        self, worker_id: str, worker_handle: ActorHandle, task_id: str = ""
+    ) -> tuple[MemoryTableRegistration, ...]:
         """Called by workers when they come online to register with coordinator.
 
         Handles re-registration from reconstructed workers (e.g. after node

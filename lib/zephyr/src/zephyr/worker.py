@@ -414,9 +414,7 @@ class ZephyrWorker:
         snapshots: dict[str, CounterSnapshot] = {}
         execution_ids = entries_by_execution.keys() | self._last_reported_counters.keys()
         for execution_id in execution_ids:
-            current, _ = merge_counter_entries(
-                entries_by_execution.get(execution_id, [])
-            )
+            current, _ = merge_counter_entries(entries_by_execution.get(execution_id, []))
             if current == self._last_reported_counters.get(execution_id, {}):
                 continue
             self._last_reported_counters[execution_id] = current
