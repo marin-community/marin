@@ -155,3 +155,9 @@ See the [plan](../projects/moe-latent-gated-router/plan.md) and
   parity and the dense selected-expert oracle remain valid.
 - Use fresh `rmsgated` run IDs and output roots for corrected smoke and Gate 1.
   Never restore the gate-only checkpoint. No new baseline training is authorized.
+- Corrected source checkpoint: `9dcc3438b`. Type checks and required lint passed.
+- Corrected smoke parent submitted at 18:07:10 UTC; its exact TPU child appeared
+  at 18:08:24 UTC and is capacity-pending with no training steps yet.
+- The same heartbeat is ACTIVE again with the corrected architecture and run IDs.
+  Current state: `scratch/20260911-1105_moe-lgr-9110-rmsgated_monitoring_state.json`.
+  It will verify this smoke before submitting the two corrected Gate 1 cells.
