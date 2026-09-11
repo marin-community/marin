@@ -8,7 +8,7 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
-from iris.cluster.controller import service as service_module
+from iris.cluster.controller import jobs as jobs_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.budget import (
     UserTask,
@@ -321,7 +321,7 @@ def test_child_job_inherits_root_email_budget(service):
 
 
 def test_active_task_cap_uses_email_across_nicknames(service, monkeypatch):
-    monkeypatch.setattr(service_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
+    monkeypatch.setattr(jobs_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
 
     with identity_scope(VerifiedIdentity(user_id=OPENATHENA_USER, role="admin")):
         first = _launch("/power/first")

@@ -111,6 +111,8 @@ message Worker {
     iris.job.ResourceUsage resource_usage = 7;
     iris.job.TaskOutputArchive output_archive = 8;
     string status_message = 9;
+    // True only after the worker observes the exact runtime stopped or absent.
+    bool runtime_released = 10;
 
     reserved 100, 101;  // legacy composite key (task_id, attempt_id)
   }

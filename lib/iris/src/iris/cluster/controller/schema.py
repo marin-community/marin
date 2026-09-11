@@ -430,6 +430,10 @@ task_attempts_table = Table(
     Column("created_at_ms", TimestampMsType, nullable=False),
     Column("started_at_ms", TimestampMsType),
     Column("finished_at_ms", TimestampMsType),
+    # Exact external-runtime convergence. A terminal state records the
+    # controller decision; this timestamp records the later backend observation
+    # that the corresponding container or Pod is stopped or absent.
+    Column("runtime_released_at_ms", TimestampMsType),
     Column("exit_code", Integer),
     Column("error", String),
     Column("attempt_uid", String, nullable=False),
@@ -449,6 +453,11 @@ task_attempts_table = Table(
         sqlite_where=text("worker_id IS NOT NULL AND finished_at_ms IS NULL"),
     ),
     Index("idx_task_attempts_uid", "attempt_uid", unique=True),
+    Index(
+        "idx_task_attempts_runtime_unreleased",
+        "attempt_uid",
+        sqlite_where=text("runtime_released_at_ms IS NULL"),
+    ),
     Index("idx_task_attempts_backend", "backend_id"),
     # Covers the failure/preemption derivation (COUNT by state, filtered on
     # started_at_ms), grouped per task — see iris.cluster.controller.attempt_counts.

@@ -587,6 +587,21 @@ def insert_attempt(
     raise RuntimeError(f"insert_attempt: exhausted attempt_uid retries for task {task_id} attempt {attempt_id}")
 
 
+@writes_to(task_attempts_table)
+def mark_attempt_runtimes_released(tx: Tx, attempt_uids: Iterable[AttemptUid], *, observed_at: Timestamp) -> None:
+    """Persist exact backend observations that terminal runtimes are absent."""
+    uids = sorted(set(attempt_uids))
+    for chunk in batched(uids, _ID_CHUNK_SIZE):
+        tx.execute(
+            update(task_attempts_table)
+            .where(
+                task_attempts_table.c.attempt_uid.in_(chunk),
+                task_attempts_table.c.runtime_released_at_ms.is_(None),
+            )
+            .values(runtime_released_at_ms=observed_at.epoch_ms())
+        )
+
+
 # ---------------------------------------------------------------------------
 # Task writes (previously writes/tasks.py)
 # ---------------------------------------------------------------------------

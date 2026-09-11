@@ -71,7 +71,8 @@ _OUTPUT_HOST_DIRNAME = ".iris-outputs"
 # sleep, runtime daemon hang) from blocking the monitor indefinitely.
 _KILL_EXIT_WAIT_TIMEOUT = Duration.from_seconds(30.0)
 
-# States from which a kill is meaningful. Killing a terminal attempt is a no-op.
+# States from which a kill changes Task state. A terminal attempt whose runtime
+# remains live still follows the idempotent cleanup path in ``kill``.
 _KILLABLE_STATES = (
     job_pb2.TASK_STATE_RUNNING,
     job_pb2.TASK_STATE_BUILDING,
@@ -423,6 +424,22 @@ class TaskAttempt:
             return self._container_handle.container_id
         return None
 
+    @property
+    def runtime_released(self) -> bool:
+        """Whether the exact container runtime is confirmed stopped or absent."""
+        if self._container_handle is None:
+            return True
+        try:
+            return self._container_handle.status().phase == ContainerPhase.STOPPED
+        except RuntimeError as error:
+            logger.warning(
+                "Could not observe runtime release for task %s attempt %d: %s",
+                self.task_id,
+                self.attempt_id,
+                error,
+            )
+            return False
+
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""
         self.should_stop = True
@@ -430,21 +447,27 @@ class TaskAttempt:
         if self._container_handle:
             self._container_handle.stop(force=force)
 
-    def kill(self, term_timeout_ms: int = 5000) -> bool:
+    def kill(self, term_timeout_ms: int = 5000) -> None:
         """Stop this attempt, escalating to a force-kill on timeout.
 
         Issues SIGTERM, waits up to ``term_timeout_ms`` for the container to
-        exit, then force-kills if it is still running. Idempotent: returns
-        ``False`` without acting when the attempt is already terminal.
+        exit, then force-kills if it is still running. A terminal attempt whose
+        runtime remains live is force-stopped again. Completion is reported by
+        :attr:`runtime_released`, not this request method.
         """
         if self.status not in _KILLABLE_STATES:
-            return False
+            if is_task_finished(self.status) and not self.runtime_released:
+                try:
+                    self.stop(force=True)
+                except RuntimeError as error:
+                    logger.warning("Failed to re-stop terminal attempt %s: %s", self.task_id, error)
+            return
         # Signal the execution thread immediately, even with no container yet:
         # this bails an in-progress BUILDING-phase bundle download.
         self.should_stop = True
         self._output_stop.set()
         if not self.has_container:
-            return True
+            return
         try:
             self.stop(force=False)
             running = (job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_BUILDING)
@@ -458,7 +481,6 @@ class TaskAttempt:
         except RuntimeError:
             # Container was already removed or stopped.
             pass
-        return True
 
     @property
     def has_container(self) -> bool:

@@ -19,7 +19,7 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 ## Source Layout
 
 - `src/iris/cli/` — CLI entry point (`main.py` has all commands including `login`, `submit`, `status`)
-- `src/iris/cluster/controller/` — controller server: `service.py` (RPC handlers), `controller.py` (main loop), `backend.py` (the `TaskBackend` contract), `scheduling/` (`scheduler.py` + `policy.py`), `autoscaler/` (capacity), `auth_setup.py` (auth config), `dashboard.py` (dashboard serving), `db.py` (SQLite), `migrations/` (schema)
+- `src/iris/cluster/controller/` — controller server: `service.py` (thin RPC adapter), noun and concern modules such as `jobs.py`, `tasks.py`, `workers.py`, and `attempts.py` (request handling), `controller.py` (main loop), `backend.py` (the `TaskBackend` contract), `scheduling/` (`scheduler.py` + `policy.py`), `autoscaler/` (capacity), `dashboard.py` (dashboard serving), `db.py` (SQLite), `migrations/` (schema)
 - `src/iris/cluster/backends/` — `TaskBackend` implementations (`rpc/backend.py` = `RpcTaskBackend`, `k8s/tasks.py` = `K8sTaskProvider`)
 - `src/iris/cluster/platforms/` — machine-lifecycle providers (`gcp`, `k8s`, `local`, `manual`) behind `protocols.py` (`ControllerProvider`, `WorkerInfraProvider`) with shared handle/status types in `types.py`
 - `src/iris/cluster/worker/` — worker agent
@@ -72,6 +72,13 @@ Prefer existing `reads.py`/`writes.py` helpers before adding new query code.
 Use SQLAlchemy result APIs directly (`.first()`, `.all()`, `.scalar()`); do
 not add wrapper methods that duplicate SQLAlchemy. Define row protocols or
 dataclasses at the usage boundary when a caller needs a typed shape.
+
+Controller request behavior belongs in the noun or concern module that owns it.
+Connect service implementations may construct dependency records and delegate
+generated methods, but must not contain authorization, query, transition,
+federation, or response-building logic. Operation modules may accept and return
+protobuf messages when the wire type already expresses the internal request.
+Do not add a second native request type solely to isolate protobuf imports.
 
 ## Code Conventions
 
@@ -153,13 +160,14 @@ Kubernetes reconcile receives the dispatch queue drain; worker reconcile
 receives a target list pairing each exact plan with its address. Dashboard
 capability strings are derived presentation data.
 
-Backends return one neutral `ReconcileObservation`: exact task updates and
-optional worker-health events, never controller effects. After backend I/O,
-`ops/reconcile.py` reloads current state, fences exact Attempt UIDs, runs one
-lifecycle-policy path, and applies liveness events. The controller then commits
-the effects. There is no ping loop: reconcile RPC outcomes are the worker
-liveness signal. Kubernetes backends report exact Pod observations and no worker
-liveness events.
+Backends return one neutral `ReconcileObservation`: exact task updates,
+optional worker-health events, and exact Attempt UIDs whose runtimes are
+confirmed stopped or absent. After backend I/O, `ops/reconcile.py` reloads
+current state, fences exact Attempt UIDs, runs one lifecycle-policy path, and
+applies liveness events. The controller commits those effects and persists the
+release observations. There is no ping loop: reconcile RPC outcomes are the
+worker liveness signal. Kubernetes backends report exact Pod observations and
+no worker liveness events.
 
 Two implementations satisfy it: `RpcTaskBackend` (`backends/rpc/backend.py`,
 kind `WORKER`, owns the `Scheduler` and optional `Autoscaler`) for
