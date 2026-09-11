@@ -46,7 +46,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HeroThroughputResult,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
-from experiments.grug.moe_hero_ep.launch_diagnostics import validate_mesh_axes
+from experiments.grug.moe_hero_ep.launch_diagnostics import validated_batch_axis_size
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
@@ -77,11 +77,7 @@ EVAL_BATCH_SIZE = 256
 
 
 def eval_batch_size_for(*, batch_size: int, batch_axes_product: int) -> int:
-    """Sequences per eval batch, rounded up to what the eval loader can shard.
-
-    The loader shards the eval batch over the same axes as the train batch, so a count that does not
-    divide them is refused only once the fleet is allocated.
-    """
+    """Return the capped evaluation batch size, rounded up to fit the batch shards."""
     target = min(EVAL_BATCH_SIZE, batch_size)
     return math.ceil(target / batch_axes_product) * batch_axes_product
 
@@ -363,7 +359,7 @@ def build_small_run(
     else:
         expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
     device_count = fleet.gpus_per_node * fleet.nodes * dp_racks
-    batch_axes_product = validate_mesh_axes(
+    batch_axes_product = validated_batch_axis_size(
         device_count=device_count,
         dp_racks=dp_racks,
         batch_size=batch_size,
