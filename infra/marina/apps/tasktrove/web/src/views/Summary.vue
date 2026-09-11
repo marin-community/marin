@@ -190,6 +190,76 @@ function statusSummary(statuses: [string, number][]): string {
       </div>
     </section>
 
+    <section class="paper validation">
+      <div class="section-heading">
+        <p class="eyebrow">Validation evidence</p>
+        <h2>What was checked, and when</h2>
+        <p>
+          Historical checks informed the converters; a separate stratified review inspected the published
+          <code>2026.09.10.7</code> Parquet. The older results are supporting evidence, not a claim that they
+          validate the current file byte-for-byte.
+        </p>
+      </div>
+      <div class="data-table-wrap">
+        <table class="data-table evidence-table">
+          <thead><tr><th>Evidence</th><th>Release</th><th>Coverage</th><th>Result</th><th>Limit</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><b>Local Docker smoke</b><small>Claude conversion workflow</small></td>
+              <td><code>2026.09.10.5</code></td>
+              <td>100 stratified tasks · 11 images · 169 checks</td>
+              <td>100/100 empty workspaces rejected · 69/69 shipped goldens accepted</td>
+              <td>Used the new verifier only; this was not Daytona or old/new grader equivalence.</td>
+            </tr>
+            <tr>
+              <td><b>Sonnet + Daytona study</b><small>One no-tools candidate per task</small></td>
+              <td><code>2026.09.10.5</code></td>
+              <td>190 tasks · 10 per converter</td>
+              <td>190/190 empty rejected · 90/94 goldens accepted · 117/155 scorable candidates accepted</td>
+              <td>30 judge candidates were not scored because no judge endpoint was available.</td>
+            </tr>
+            <tr>
+              <td><b>Terra sniff test</b><small>Fresh task-by-task reading</small></td>
+              <td><code>2026.09.10.7</code></td>
+              <td>100 tasks · 5 per converter · 12 verifier modes · 23 environments</td>
+              <td>47 sound · 29 weak · 24 escalated; a second pass confirmed 17 broken and cleared 7</td>
+              <td>Static review is diagnostic. “Weak” means useful but limited, not automatically rejected.</td>
+            </tr>
+            <tr>
+              <td><b>Fresh Daytona checks</b><small>Same 100-task sample</small></td>
+              <td><code>2026.09.10.7</code></td>
+              <td>141 of 149 applicable empty/golden checks completed</td>
+              <td>96/96 empty rejected · 44/45 shipped goldens accepted</td>
+              <td>One nl2bash golden failed; eight checks did not complete after Daytona sandbox or snapshot failures.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="validation-notes">
+        <article>
+          <h3>What the review found</h3>
+          <p>
+            Confirmed defects included exact grading where a problem allowed tolerance or any valid witness,
+            an under-specified math problem, a structured-output prompt that required absent facts, unrelated SWE
+            tests, and a prompt-injection checker that rewarded arbitrary non-target behavior.
+          </p>
+        </article>
+        <article>
+          <h3>How to read a task archive</h3>
+          <p>
+            <code>tests/test.sh</code> is deliberately a common entrypoint. The converter writes the task-specific
+            contract to <code>tests/verifier.toml</code>; <code>tasktrove-verify</code> executes that contract against
+            the agent workspace. A missing <code>solution.py</code> is expected when the source supplies no golden—the
+            agent is responsible for creating it.
+          </p>
+        </article>
+      </div>
+      <p class="audit-warning">
+        This is the audit of the currently published candidate. Its confirmed row-level findings are not yet
+        subtracted from the <code>2026.09.10.7</code> manifest totals shown above.
+      </p>
+    </section>
+
     <section id="sources" class="paper source-audit">
       <div class="section-heading">
         <p class="eyebrow">Source audit</p>
