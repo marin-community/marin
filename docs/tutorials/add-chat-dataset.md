@@ -123,9 +123,8 @@ is the schema used by its Parquet writer. Import `normalize_chat_step` from
 columns. Pass the same schema to both writing stages so optional fields survive.
 
 Normalization validates conversations, hashes messages plus template arguments,
-and removes exact duplicates. It preserves the incoming document ID as
-`source_id`. Bump the source transformation version when its output changes so
-cached processed and normalized artifacts are rebuilt.
+and removes exact duplicates. Bump the source transformation version when its
+output changes so cached processed and normalized artifacts are rebuilt.
 
 ## 5. Register and verify the source
 

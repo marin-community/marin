@@ -16,6 +16,7 @@ from functools import cache
 import pyarrow as pa
 from fray.types import ResourceConfig
 from huggingface_hub import hf_hub_download
+from rigging.filesystem.storage_path import prefix_join
 from tokenizers import Tokenizer
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -1205,7 +1206,9 @@ def transform_chat(dataset: PenfeverRollout, input_path: str, output_path: str) 
         .flat_map(load_parquet_batched)
         .flat_map(row_to_chat_doc(dataset))
         .write_parquet(
-            f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", schema=SOURCE_CHAT_SCHEMA, skip_existing=True
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+            schema=SOURCE_CHAT_SCHEMA,
+            skip_existing=True,
         )
     )
     ZephyrContext(

@@ -5,6 +5,7 @@
 
 import pyarrow as pa
 from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
@@ -62,7 +63,7 @@ def transform_chat(input_path: str, output_path: str) -> None:
         .flat_map(load_parquet_batched)
         .flat_map(row_to_chat_doc)
         .write_parquet(
-            f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet",
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
             schema=SOURCE_CHAT_SCHEMA,
             skip_existing=True,
         )
@@ -70,17 +71,13 @@ def transform_chat(input_path: str, output_path: str) -> None:
     ZephyrContext(name="openthoughts4-code-chat", resources=ResourceConfig(cpu=1, ram="32g")).execute(pipeline)
 
 
-def _download_step() -> StepSpec:
-    return download_hf_step(
+def openthoughts4_code_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    download = download_hf_step(
         "raw/openthoughts4-code-glm-5.2-n4",
         hf_dataset_id=HF_DATASET_ID,
         revision=HF_REVISION,
         hf_urls_glob=[TRAIN_PARQUET_GLOB],
     )
-
-
-def openthoughts4_code_chat_normalize_steps() -> tuple[StepSpec, ...]:
-    download = _download_step()
     processed = StepSpec(
         name="processed-chat/openthoughts4-code-glm-5.2-n4",
         deps=[download],

@@ -19,8 +19,8 @@ keep an assistant message only when it appears there.
 
 Reasoning is inline in assistant content with a closing ``</think>`` and no opener, because
 the opener comes from the GLM chat template and was never echoed back. The text path turns
-that boundary into a paragraph break. The chat path restores the tokenizer's atomic
-reasoning delimiters and rejects trajectories with any truncated generation, since a turn
+that boundary into a paragraph break. The chat path separates reasoning and final-answer
+Harmony messages and rejects trajectories with any truncated generation, since a turn
 that spent its token budget commonly ends with unclosed reasoning.
 """
 

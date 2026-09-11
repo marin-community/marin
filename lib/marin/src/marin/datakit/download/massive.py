@@ -27,7 +27,7 @@ import pyarrow as pa
 from fray.types import ResourceConfig
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.factory import open_url
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
@@ -808,7 +808,9 @@ def transform_staged_massive_chat(input_path: str, output_path: str) -> None:
         .flat_map(load_jsonl)
         .flat_map(row_to_chat_doc)
         .write_parquet(
-            f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", schema=SOURCE_CHAT_SCHEMA, skip_existing=True
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+            schema=SOURCE_CHAT_SCHEMA,
+            skip_existing=True,
         )
     )
     ZephyrContext(name="massive-chat-transform", resources=ResourceConfig(cpu=1, ram="2g")).execute(pipeline)

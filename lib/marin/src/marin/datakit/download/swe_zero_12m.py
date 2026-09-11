@@ -13,6 +13,7 @@ import re
 from textwrap import dedent
 
 from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
@@ -218,7 +219,7 @@ def transform_chat(input_path: str, output_path: str) -> None:
         .flat_map(load_parquet_batched)
         .flat_map(row_to_chat_doc)
         .write_parquet(
-            f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", schema=CHAT_SCHEMA, skip_existing=True
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), schema=CHAT_SCHEMA, skip_existing=True
         )
     )
     ZephyrContext(name="swe-zero-12m-chat-transform", resources=ResourceConfig(cpu=1, ram="32g")).execute(pipeline)
