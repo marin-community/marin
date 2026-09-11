@@ -626,3 +626,15 @@ author: benfeuer
 - Skew2's first aggregate write had failed after all trials because one 3,318-byte progress snapshot upload hung for Harbor's 300-second artifact deadline. Harbor correctly refused to let a potentially stale in-flight overwrite race the final `result.json`.
 - At 01:24 EDT all five shared agentic orchestrators were fleet-preempted together and resumed automatically on attempt 1 with `failures=0, preemptions=1`. Their stable Harbor job directories preserved completed trials: skew2 reopened the same directory and repaired its canonical record in 35 seconds, while qk157, qk175, and skew8 returned directly to TB2.
 - An isolated skew2 SWE retry `/benfeuer/eval-20260911-052317-snowball-final-qk175-skew2-base-1178` was submitted just before that preemption was understood. It was cancelled at 01:34 EDT before any benchmark trial started because the original root's resumable stage made it redundant and the extra serve could add scheduling pressure. No original, completed-stage, or protected historical root was cancelled.
+
+## 2026-09-11 02:17 EDT — SimpleQA coordinator memory recovery released
+
+- Failure: qk175 and skew4 SimpleQA roots failed after 5h49m and 5h59m with coordinator exit 137. Both were still completing and persisting trials immediately before death. The common 16 GB coordinator had retained full verifier output and exception diagnostics for thousands of trials.
+- Repair: Harbor PR #127 merged at `c0170f1ef3dfa3391935c71f79dadd7f49a7e7f1` after 3,097 unit tests passed with one skip. It slims both newly completed and resumed in-memory results under `release_trial_payloads_in_memory` while leaving each durable child `result.json` intact. Campaign commit `696c3afc71` pins that merge.
+- Lifecycle: cancelled the still-running qk157, skew2, and skew8 SimpleQA roots before the same deterministic OOM. No protected root was touched. Submitted five recovery roots named `/benfeuer/eval-simpleqa-memory-recovery-<base>` at interactive priority on `cw-rno2a`.
+- Reproducibility: `/Users/benfeuer/Documents/experiments/active/sft-snowballs-final/recover_simpleqa.py` rebuilds the standard evaluation batches, preserves each original run ID/output path, 32-way policy, semantic digest `sha256:5e17492e…`, and exact Harbor job name, and changes only the coordinator-memory retention switch. Dry-run assertions matched all five original job IDs before submission.
+
+## 2026-09-11 02:19 EDT — Stale qk157 custom root released
+
+- Audit: `/benfeuer/eval-20260910-170609-snowball-final-qk157-base-4463` had remained controller-running for 13h12m after its evaluator was cancelled. Its inference child still occupied one 8-H100 allocation, while the dedicated qk157 MMLU-Pro root `…-2429` supersedes it.
+- Cleanup: cancelled the exact stale parent and its inference child. No durable successful record or protected root was affected.
