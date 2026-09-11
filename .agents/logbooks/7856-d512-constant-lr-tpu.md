@@ -520,3 +520,30 @@ changes d512 token-budget scaling relative to issue #7856?
   rather than Paloma macro loss, repeat the same deduplicated fit on
   `train/loss`; otherwise use the full-window fit only over the observed
   1,000–21,149-step range.
+
+### 2026-09-11 10:05 PDT - Add dense linear-decay MuonH and SGD-H sweeps
+
+- Hypothesis: 1% warmup followed by linear decay to 5% of peak LR changes the
+  best-LR scaling of the one-layer dense MuonH and raw-gradient SGD-H models
+  relative to their matched constant-LR sweeps.
+- Commit Hash: `33b448027`.
+- Commands:
+  - `uv run pytest -q tests/test_d512_linear_decay_dense_sweeps.py tests/test_d512_constant_lr_sgdh.py`;
+  - `./infra/pre-commit.py --all-files`.
+- Config: two 25-cell sweeps over `30x / 60x / 150x / 300x / 600x` and
+  `0.10x / 0.20x / 0.32x / 0.45x / 0.70x`; one dense d512 layer, MLP width
+  1792, batch 64, sequence length 8192, seed 0, and the existing MuonH or
+  raw-gradient SGD-H parameter-group policy. New prefixes are
+  `AUG-LIN-1L-DENSE-MUONH` and `AUG-LIN-1L-DENSE-SGDH`.
+- Result: the two linear-decay launchers reuse the existing dense training and
+  optimizer implementations through immutable experiment descriptors. The
+  schedule probe reaches the reference peak at the 1% warmup boundary and 5%
+  of peak at the terminal step. Five focused tests and the full repository
+  mechanical checks pass. The broader Grug contract suite has one unrelated
+  existing CPU explicit-sharding failure in `experiments/grug/base/model.py`;
+  the remaining 18 tests pass and one is skipped.
+- Interpretation: the launch code isolates schedule as the intended variable
+  and gives both comparisons new W&B, run, and artifact identities.
+- Next action: push the source snapshot; verify no matching Iris, W&B, or GCS
+  identities exist; submit CPU StepRunner parents in us-central2-b with at most
+  five v4-8 children each; verify child startup and W&B schedule telemetry.

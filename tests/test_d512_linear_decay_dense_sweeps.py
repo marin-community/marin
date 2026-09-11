@@ -5,20 +5,32 @@ import pytest
 
 from experiments.grug.dense_one_layer_muonh.launch import (
     CONSTANT_LR_EXPERIMENT as MUONH_CONSTANT_EXPERIMENT,
+)
+from experiments.grug.dense_one_layer_muonh.launch import (
     SWEEP_POINTS as MUONH_CONSTANT_POINTS,
+)
+from experiments.grug.dense_one_layer_muonh.launch import (
     dense_muonh_optimizer,
 )
 from experiments.grug.dense_one_layer_muonh.launch_linear_decay import (
     EXPERIMENT as MUONH_LINEAR_EXPERIMENT,
+)
+from experiments.grug.dense_one_layer_muonh.launch_linear_decay import (
     SWEEP_POINTS as MUONH_LINEAR_POINTS,
 )
 from experiments.grug.dense_one_layer_sgdh.launch import (
     CONSTANT_LR_EXPERIMENT as SGDH_CONSTANT_EXPERIMENT,
+)
+from experiments.grug.dense_one_layer_sgdh.launch import (
     SWEEP_POINTS as SGDH_CONSTANT_POINTS,
+)
+from experiments.grug.dense_one_layer_sgdh.launch import (
     dense_sgdh_optimizer,
 )
 from experiments.grug.dense_one_layer_sgdh.launch_linear_decay import (
     EXPERIMENT as SGDH_LINEAR_EXPERIMENT,
+)
+from experiments.grug.dense_one_layer_sgdh.launch_linear_decay import (
     SWEEP_POINTS as SGDH_LINEAR_POINTS,
 )
 
@@ -49,15 +61,11 @@ def test_linear_decay_dense_sweep_matches_grid_without_reusing_identity(
         (dense_sgdh_optimizer, SGDH_LINEAR_POINTS[0], SGDH_LINEAR_EXPERIMENT),
     ],
 )
-def test_linear_decay_dense_schedule_warms_up_then_reaches_five_percent_floor(
-    optimizer_factory, point, experiment
-):
+def test_linear_decay_dense_schedule_warms_up_then_reaches_five_percent_floor(optimizer_factory, point, experiment):
     optimizer = optimizer_factory(point, experiment)
     schedule = optimizer.lr_scheduler(point.num_train_steps)
     warmup_steps = int(optimizer.warmup * point.num_train_steps)
 
     assert float(schedule(0)) == pytest.approx(0.0)
     assert float(schedule(warmup_steps)) == pytest.approx(optimizer.learning_rate)
-    assert float(schedule(point.num_train_steps)) == pytest.approx(
-        optimizer.learning_rate * optimizer.min_lr_ratio
-    )
+    assert float(schedule(point.num_train_steps)) == pytest.approx(optimizer.learning_rate * optimizer.min_lr_ratio)
