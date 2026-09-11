@@ -67,6 +67,14 @@ goes stale on the next commit.
 - Purpose: compare matched constant and linear-decay LR scaling for a one-layer d512 dense Transformer with MuonH updates.
 - Issue: https://github.com/marin-community/marin/issues/7856
 
+### dense-one-layer-sgdmh
+- Path: `experiments/grug/dense_one_layer_sgdmh/`
+- Origin: `dense_one_layer_sgdh`
+- Introduced: 218f8ed8f
+- Status: active
+- Purpose: compare matched constant and linear-decay LR scaling for a one-layer d512 dense Transformer with Nesterov momentum before SGD-H's Hyperball projection and no Newton--Schulz step.
+- Issue: https://github.com/marin-community/marin/issues/7856
+
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`
 - Introduced: 5efe76834
