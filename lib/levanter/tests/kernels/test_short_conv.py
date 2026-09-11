@@ -527,6 +527,13 @@ with jax.set_mesh(mesh), interpret_mode():
 
 @pytest.mark.parametrize("implementation", ["reference", "pallas_gpu"])
 def test_context_parallel_halo_matches_the_unsharded_reference(implementation):
+    """Packed and unpacked, halo 0, 3 and 16, on a real 8-device CPU mesh.
+
+    One interpreter per backend runs the whole grid: the JAX import and backend start
+    dominate a fresh process. The Pallas leg runs the kernel body under the interpreter with
+    its halo, ragged tail pad and multi-block local sequence, which the reference backend
+    never exercises.
+    """
     run_on_cpu_devices(_HALO_SCRIPT.replace("__IMPLEMENTATION__", implementation), device_count=8)
 
 
