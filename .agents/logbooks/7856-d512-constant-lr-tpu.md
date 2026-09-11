@@ -572,3 +572,57 @@ changes d512 token-budget scaling relative to issue #7856?
 - Next action: babysit both sweeps to terminal Paloma evaluation and final
   checkpoint metadata; extend an individual budget grid only if its verified
   optimum remains on an LR boundary.
+
+### 2026-09-11 10:39 PDT - Add and launch dense SGD-MH sweeps
+
+- Hypothesis: adding a 0.95 Nesterov momentum trace before the raw-gradient
+  Hyperball projection changes best-LR scaling relative to both stateless SGD-H
+  and MuonH, while isolating the effect of Newton--Schulz orthogonalization.
+- Commit Hash: `ceb043b74` (optimizer and launcher implementation introduced in
+  `218f8ed8f`).
+- Commands:
+  - `uv run pytest -q tests/test_d512_constant_lr_sgdh.py tests/test_d512_linear_decay_dense_sweeps.py`;
+  - `./infra/pre-commit.py --all-files`;
+  - `./infra/pre-commit.py --review` (skipped because the configured `claude`
+    review agent is not installed on this host).
+- Config: two matched 25-cell sweeps over
+  `30x / 60x / 150x / 300x / 600x` and
+  `0.10x / 0.20x / 0.32x / 0.45x / 0.70x`; one dense d512 layer, MLP width
+  1792, batch 64, sequence length 8192, seed 0. Matrix updates use momentum
+  0.95 plus Nesterov lookahead before Hyperball projection, with no
+  Newton--Schulz step. One sweep is constant after 1% warmup. The initially
+  submitted linear descriptor inherited a 5% floor and was cancelled before
+  any child started.
+- Iris parents:
+  - `/kaiyuew/issue-7856-d512-constant-lr-one-layer-dense-sgdmh-scaling`;
+  - `/kaiyuew/issue-7856-d512-linear-decay-one-layer-dense-sgdmh-scaling`.
+- Result: the constant parent remains active in `us-central2-b` and declared
+  all 25 cells with five waiting for v4-8 capacity. The incorrect linear parent
+  was killed; no linear W&B identity or training artifact was created.
+- Monitoring state:
+  `scratch/20260911-1035_dense_sgdmh_lr_scaling_monitoring_state.json`.
+- Next action: launch the corrected zero-tail linear comparison with fresh
+  identities, then verify W&B configs and finite loss after TPU allocation.
+
+### 2026-09-11 10:47 PDT - Correct dense linear decay to zero
+
+- Commit Hash: `ad8a6d61e` (zero-tail schedule fix in `4bba2ae5a`).
+- Correction: cancelled the active 5%-floor Dense MuonH and SGD-H parents and
+  the newly submitted Dense SGD-MH linear parent. The replacements explicitly
+  set `min_lr_ratio=0.0`, use valid artifact version `2026.09.11.1`, and have
+  fresh `AUG-LIN0-*` artifact/run prefixes plus `zero-tail` W&B groups.
+- Iris parents:
+  - `/kaiyuew/issue-7856-d512-linear-decay-zero-tail-one-layer-dense-muonh-scaling`;
+  - `/kaiyuew/issue-7856-d512-linear-decay-zero-tail-one-layer-dense-sgdh-scaling`;
+  - `/kaiyuew/issue-7856-d512-linear-decay-zero-tail-one-layer-dense-sgdmh-scaling`.
+- Validation: 12 focused tests pass, including schedule endpoint zero and
+  artifact-version validation; the full pre-commit suite passes. The first
+  zero-tail submission exposed an invalid textual calendar version before DAG
+  expansion. Those parent attempts failed without children or artifacts; the
+  valid-version commit was pushed before retrying the same parent IDs.
+- Monitoring state:
+  `scratch/20260911-1007_dense_linear_decay_monitoring_state.json` and
+  `scratch/20260911-1035_dense_sgdmh_lr_scaling_monitoring_state.json`.
+- Next action: confirm all three retry attempts expand 25 cells, enforce five
+  children per parent, write only to `gs://marin-us-central2`, and report
+  `min_lr_ratio=0.0` from actual W&B configs once workers start.
