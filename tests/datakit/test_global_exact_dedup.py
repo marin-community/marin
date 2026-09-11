@@ -74,8 +74,9 @@ def test_global_exact_deduplicate_writes_one_attribute_shard_per_input(tmp_path:
     result = global_exact_deduplicate(
         sources={"c": source_c, "b": source_b, "a": source_a},
         output_path=str(tmp_path / "output"),
-        worker_resources=ResourceConfig(cpu=1, ram="1g"),
+        worker_resources=ResourceConfig(cpu=2, ram="2g"),
         max_workers=2,
+        max_parallelism=3,
     )
 
     a_shards = _attribute_shards(result, source_a)
@@ -140,6 +141,7 @@ def test_global_exact_deduplicate_uses_shard_order_within_source(tmp_path: Path,
         output_path=str(tmp_path / "output"),
         worker_resources=ResourceConfig(cpu=1, ram="1g"),
         max_workers=1,
+        max_parallelism=1,
     )
 
     shards = _attribute_shards(result, source)
@@ -160,4 +162,5 @@ def test_global_exact_deduplicate_rejects_duplicate_source_directories(tmp_path:
             output_path=str(tmp_path / "output"),
             worker_resources=ResourceConfig(cpu=1, ram="1g"),
             max_workers=1,
+            max_parallelism=1,
         )

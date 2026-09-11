@@ -120,6 +120,7 @@ def _exact_dups_step(sampled_by_source: dict[str, StepSpec]) -> StepSpec:
             output_path=output_path,
             worker_resources=_EXACT_DUPS_WORKER_RESOURCES,
             max_workers=_EXACT_DUPS_MAX_PARALLELISM,
+            max_parallelism=_EXACT_DUPS_MAX_PARALLELISM,
         ),
     )
 
