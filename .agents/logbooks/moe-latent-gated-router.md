@@ -192,3 +192,15 @@ See the [plan](../projects/moe-latent-gated-router/plan.md) and
   startup values are not final evaluation or steady-state throughput results.
 - Compact startup evidence: `scratch/9110-gate1-startup-wandb.json`. State and
   issue #9110 now record training progress; the same heartbeat remains owner.
+
+### 2026-09-11 — First full-run worker recovery
+
+- At 21:09 UTC, both attempt 0 workers had failed with `worker reconcile failure
+  threshold exceeded`. Iris automatically started attempt 1 on replacement workers.
+  No manual resubmission, code change or cluster modification was made.
+- Last attempt 0 W&B observations: d512 global step 937, loss 4.13557; d768
+  global step 300, loss 5.27849. All numeric metrics were finite, overflow zero.
+- Both attempt 1 loaders confirmed no checkpoint and a step-0 restart: the failure
+  happened before the first 15-minute checkpoint. Corrected run IDs/source persist.
+- W&B suppresses replayed lower steps, so its summary may stay at the prior attempt
+  until catch-up. Use attempt-specific Iris progress logs in this interval.
