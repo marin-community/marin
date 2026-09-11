@@ -547,3 +547,28 @@ changes d512 token-budget scaling relative to issue #7856?
 - Next action: push the source snapshot; verify no matching Iris, W&B, or GCS
   identities exist; submit CPU StepRunner parents in us-central2-b with at most
   five v4-8 children each; verify child startup and W&B schedule telemetry.
+
+### 2026-09-11 10:18 PDT - Launch dense linear-decay sweeps
+
+- Commit Hash: training snapshot `956ccdba5`.
+- Iris parents:
+  - `/kaiyuew/issue-7856-d512-linear-decay-one-layer-dense-muonh-scaling`;
+  - `/kaiyuew/issue-7856-d512-linear-decay-one-layer-dense-sgdh-scaling`.
+- Result: both parents are running in `us-central2-b`; each has exactly 25
+  declared cells and a five-child concurrency limit. All observed artifacts,
+  caches, and compilation-cache paths use `gs://marin-us-central2`. W&B has
+  created the first five MuonH and first five SGD-H identities in their new
+  linear-decay groups. Sampled worker configs confirm one layer, hidden size
+  512, seed 0, `lr_schedule=linear`, 1% warmup, a 5% terminal LR ratio, and
+  the expected 1,058-step 30x budget.
+- Recovery: the initial child requests inherited a 200 GB v4 host-memory
+  default while the live scheduler exposed 192 GB allocatable, so all ten
+  first-wave children were unschedulable. Both parents were cancelled before
+  any W&B identity was created; child RAM was made explicit at 190 GB, tested,
+  committed, pushed, and both fixed-name parents were resubmitted. This is
+  restart count 1; no scientific parameter or output identity changed.
+- Monitoring state:
+  `scratch/20260911-1007_dense_linear_decay_monitoring_state.json`.
+- Next action: babysit both sweeps to terminal Paloma evaluation and final
+  checkpoint metadata; extend an individual budget grid only if its verified
+  optimum remains on an LR boundary.
