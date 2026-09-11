@@ -3,12 +3,12 @@
     {
       "run_info": {
         "author": {
-          "affiliation": "yun1104",
-          "name": "HuaZhong University of Science and Technology",
+          "affiliation": "HuaZhong University of Science and Technology",
+          "name": "yun1104",
           "url": "https://github.com/yun1104/marin"
         },
         "description": "Nano model based on Llama architecture.",
-        "device_flops": 142000000000000.0,
+        "device_flops": 142500000000000.0,
         "eval/paloma/c4_en/bpb": 2.7373907566070557,
         "model_config": {
           "activation_function": "silu",
@@ -111,7 +111,7 @@
           "weight_decay": 0.1,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 4994850818190724.0,
+        "training_hardware_flops": 5012438321071677.0,
         "training_time": 35.175005761906505,
         "wandb_run_link": "https://wandb.ai/ruan841572227-huazhong-university-of-science-and-technology/marin/runs/llama_nano_gpu_speedrun-d49116"
       }

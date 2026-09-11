@@ -176,6 +176,14 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "fp16": 285e12 / 2,
         "bf16": 285e12 / 2,
     },
+    # source: https://www.nvidia.com/en-us/geforce/graphics-cards/30-series/rtx-3090-3090ti/
+    # nvidia tensor-TFLOPS (320) includes a 2x sparsity factor
+    "rtx3090ti": {
+        "fp32": 40e12,
+        "tf32": 80e12 / 2,
+        "fp16": 320e12 / 2,
+        "bf16": 320e12 / 2,
+    },
     # "auto" uses H100 flops for when user doesn't care about specific GPU type
     "auto": {
         "fp64": 67e12,
@@ -317,6 +325,8 @@ def jax_device_kind_to_fray_device_type(kind: str) -> str:
         return "b200"
     if "gb10" in kind:
         return "gb10"
+    if "3090" in kind and "ti" in kind:
+        return "rtx3090ti"
     if "3090" in kind:
         return "rtx3090"
 
