@@ -458,6 +458,34 @@ def test_data_files_support_head_and_byte_ranges(client: TestClient) -> None:
     assert client.get("/tasktrove/data/tasks.parquet", headers={"Range": "bytes=10-"}).status_code == 416
 
 
+def test_data_file_range_uses_s3_compatible_arguments(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    content = b"0123456789"
+
+    class S3Filesystem:
+        def isfile(self, _path: str) -> bool:
+            return True
+
+        def size(self, _path: str) -> int:
+            return len(content)
+
+        def cat_file(
+            self,
+            _path: str,
+            version_id: str | None = None,
+            start: int | None = None,
+            end: int | None = None,
+        ) -> bytes:
+            assert version_id is None
+            return content[start:end]
+
+    monkeypatch.setattr("marina.server.filesystem_for", lambda _url: (S3Filesystem(), "release"))
+
+    response = client.get("/tasktrove/data/tasks.parquet", headers={"Range": "bytes=2-5"})
+
+    assert response.status_code == 206
+    assert response.content == b"2345"
+
+
 def test_non_loopback_without_iap_is_denied(tmp_path: Path) -> None:
     write_app(tmp_path / "apps", "tasktrove")
     app = create_app(config_for(tmp_path))

@@ -374,7 +374,7 @@ async def serve_data_file(
                 "Content-Range": f"bytes {start}-{end - 1}/{size}",
             }
         )
-        body = b"" if request.method == "HEAD" else await run_in_threadpool(fs.cat_file, target, start, end)
+        body = b"" if request.method == "HEAD" else await run_in_threadpool(fs.cat_file, target, start=start, end=end)
         return Response(body, status_code=206, media_type=media_type, headers=headers)
     if await run_in_threadpool(fs.isfile, target + PRECOMPRESSED_SUFFIX):
         body = await run_in_threadpool(fs.cat_file, target + PRECOMPRESSED_SUFFIX)
