@@ -91,7 +91,8 @@ Submit as `IRIS_USER=marin` so the run is attributed to the project, not a perso
 
 ## 4. Execute
 
-1. Preflight.
+1. Run the preflight checks from §3. Stop if any check fails or returns an unknown
+   result.
 2. When the old run is 200 steps past `step-N`, cancel its coordinator and
    confirm the cancel took (coordinator terminal). The new gang can be submitted
    at once; Kueue admits it all-or-nothing once the racks free. A cancel that did
