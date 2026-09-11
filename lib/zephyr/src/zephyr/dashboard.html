@@ -74,6 +74,7 @@ function startDashboard() {
   const pageSize = 50;
   const refreshDelay = 5000;
   const requestTimeout = 15000;
+  const chartLeft = 65;
   const colors = ['#4079c9', '#be6a28', '#40956d', '#a46cc2', '#cf556c', '#718d26'];
   const sortFields = {
     counters: [['name', 'Name'], ['stage', 'Stage'], ['value', 'Value'], ['aggregation', 'Aggregation'], ['observations', 'Samples']],
@@ -200,10 +201,10 @@ function startDashboard() {
     const times = points.map((point) => point.timestamp_ms);
     const start = Math.min(...times), end = Math.max(...times);
     const high = Math.max(1, ...points.map((point) => point[field]));
-    const x = (time) => 65 + 425 * (time - start) / Math.max(1, end - start);
+    const x = (time) => chartLeft + 425 * (time - start) / Math.max(1, end - start);
     const y = (value) => 165 - 145 * value / high;
     for (const value of [0, high / 2, high]) {
-      svg.append(svgNode('line', { x1: 65, x2: 490, y1: y(value), y2: y(value), stroke: '#8885' }));
+      svg.append(svgNode('line', { x1: chartLeft, x2: 490, y1: y(value), y2: y(value), stroke: '#8885' }));
       const label = svgNode('text', { x: 60, y: y(value) + 4, 'text-anchor': 'end', fill: 'currentColor', 'font-size': 11 });
       label.textContent = format(value);
       svg.append(label);

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from zephyr.dashboard import (
+    SOURCE_STAGE_TYPE,
     CounterPage,
     CounterQuery,
     PipelineList,
@@ -191,7 +192,7 @@ class CoordinatorDashboard:
             node_statuses: list[PlanNodeStatus] = []
             phase = self._phase_locked(run)
             for node in safe_plan.nodes:
-                if node.stage_type == "SOURCE":
+                if node.stage_type == SOURCE_STAGE_TYPE:
                     state = PlanNodeState.SUCCEEDED
                 else:
                     parent = nodes_by_id.get(node.parent_node_id)
