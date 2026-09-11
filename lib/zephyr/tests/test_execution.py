@@ -616,7 +616,7 @@ def test_log_status_omits_throughput_when_counters_missing(coordinator, caplog):
     assert all("items=" not in m and "bytes_processed=" not in m for m in msgs), msgs
 
     # Once a counter snapshot exists, the throughput segment reappears.
-    coordinator._worker_counters[("worker-A", _TEST_EXECUTION_ID)] = CounterSnapshot(
+    coordinator._worker_counters[("worker-A", TEST_EXECUTION_ID)] = CounterSnapshot(
         counters={ZEPHYR_STAGE_ITEM_COUNT_KEY: CounterEntry(7, stage="map_only")}, generation=1
     )
     with caplog.at_level(logging.INFO, logger="zephyr.coordinator"):
@@ -626,7 +626,7 @@ def test_log_status_omits_throughput_when_counters_missing(coordinator, caplog):
     assert msgs and "items=7" in msgs[-1] and "bytes_processed=0 bytes" in msgs[-1], msgs
 
     # Same when only the byte counter is present.
-    coordinator._worker_counters[("worker-A", _TEST_EXECUTION_ID)] = CounterSnapshot(
+    coordinator._worker_counters[("worker-A", TEST_EXECUTION_ID)] = CounterSnapshot(
         counters={ZEPHYR_STAGE_BYTES_PROCESSED_KEY: CounterEntry(1024, stage="map_only")}, generation=2
     )
     with caplog.at_level(logging.INFO, logger="zephyr.coordinator"):

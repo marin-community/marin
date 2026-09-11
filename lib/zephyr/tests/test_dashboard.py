@@ -10,7 +10,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import _TEST_TASK_COST, _make_test_coordinator, start_test_stage
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.testclient import TestClient
 from zephyr.coordinator import PullStatus
@@ -19,6 +18,7 @@ from zephyr.plan import PhysicalPlan, compute_plan
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import ShardTask, ZephyrWorkerError
 from zephyr.stats import ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, ZEPHYR_WORKER_MEM_CURRENT_KEY
+from zephyr.testing.coordinator import TEST_TASK_COST, make_test_coordinator, start_test_stage
 from zephyr.worker_context import CounterEntry, CounterSnapshot
 
 _DASHBOARD_ROOT = Path(__file__).parents[1] / "dashboard"
@@ -57,7 +57,7 @@ def _task(shard: int, total_shards: int) -> ShardTask:
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="stage0-Map",
-        cost=_TEST_TASK_COST,
+        cost=TEST_TASK_COST,
     )
 
 
@@ -94,7 +94,7 @@ def test_dashboard_lists_and_selects_concurrent_pipelines(actor_context, tmp_pat
     secret_source_value = "source-value-must-not-leak"
     first_plan = compute_plan(Dataset.from_list([secret_source_value, "second"]).map(lambda value: value.upper()))
     second_plan = compute_plan(Dataset.from_list([1]).filter(lambda value: value > 0))
-    coordinator = _make_test_coordinator(tmp_path)
+    coordinator = make_test_coordinator(tmp_path)
     _start_pipeline(coordinator, first_plan, "exec-map", "document-cleaning")
     _start_pipeline(coordinator, second_plan, "exec-filter", "quality-filter", stage_name="stage0-Filter")
 
@@ -135,7 +135,7 @@ def test_dashboard_scopes_live_counters_and_status_by_pipeline(actor_context, tm
     job_info = MagicMock()
     job_info.task_id.to_wire.return_value = "user/coordinator/0"
     monkeypatch.setattr("zephyr.coordinator.get_job_info", lambda: job_info)
-    coordinator = _make_test_coordinator(tmp_path, expected_workers=2)
+    coordinator = make_test_coordinator(tmp_path, expected_workers=2)
     _start_pipeline(coordinator, plan, "exec-a", "pipeline-a", tasks=[_task(0, 1)])
     _start_pipeline(coordinator, plan, "exec-b", "pipeline-b", tasks=[_task(0, 2), _task(1, 2)])
     coordinator.register_worker("worker-0", MagicMock(), "user/workers/0")
@@ -201,7 +201,7 @@ def test_dashboard_rejects_metrics_for_unknown_execution(actor_context, tmp_path
 
     monkeypatch.setattr("zephyr.coordinator.StatsWriter.connect", lambda: RejectingStatsWriter())
     plan = compute_plan(Dataset.from_list([1]).map(lambda value: value + 1))
-    coordinator = _make_test_coordinator(tmp_path)
+    coordinator = make_test_coordinator(tmp_path)
     _start_pipeline(coordinator, plan, "exec-a", "pipeline-a")
     try:
         with TestClient(coordinator.web_application) as client:
@@ -213,7 +213,7 @@ def test_dashboard_rejects_metrics_for_unknown_execution(actor_context, tmp_path
 
 def test_dashboard_worker_assignments_include_pipeline(actor_context, tmp_path):
     plan = compute_plan(Dataset.from_list([1]).map(lambda value: value + 1))
-    coordinator = _make_test_coordinator(tmp_path)
+    coordinator = make_test_coordinator(tmp_path)
     start_test_stage(
         coordinator,
         [_task(3, 4)],
@@ -223,7 +223,7 @@ def test_dashboard_worker_assignments_include_pipeline(actor_context, tmp_path):
         stage_name="stage0-Map",
     )
     coordinator.register_worker("worker-0", MagicMock())
-    status, work = coordinator.pull_task("worker-0", _TEST_TASK_COST)
+    status, work = coordinator.pull_task("worker-0", TEST_TASK_COST)
     assert status is PullStatus.RUN_TASK
     assert work is not None
 
@@ -241,7 +241,7 @@ def test_dashboard_plan_includes_join_input_without_source_values(actor_context,
     right = Dataset.from_list([{"id": 1, "value": private_right_value}])
     joined = left.sorted_merge_join(right, left_key=lambda item: item["id"], right_key=lambda item: item["id"])
     plan = compute_plan(joined)
-    coordinator = _make_test_coordinator(tmp_path)
+    coordinator = make_test_coordinator(tmp_path)
     _start_pipeline(coordinator, plan, "join-exec", "join")
     try:
         with TestClient(coordinator.web_application) as client:
@@ -256,7 +256,7 @@ def test_dashboard_plan_includes_join_input_without_source_values(actor_context,
 
 def test_dashboard_reports_selected_pipeline_failure(actor_context, tmp_path):
     plan = compute_plan(Dataset.from_list([1]).map(lambda value: value + 1))
-    coordinator = _make_test_coordinator(tmp_path)
+    coordinator = make_test_coordinator(tmp_path)
     coordinator.register_worker("worker-0", MagicMock())
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -265,13 +265,13 @@ def test_dashboard_reports_selected_pipeline_failure(actor_context, tmp_path):
                 plan,
                 "failed-exec",
                 "failed",
-                _TEST_TASK_COST,
-                _TEST_TASK_COST,
+                TEST_TASK_COST,
+                TEST_TASK_COST,
             )
             pulled_work = []
 
             def pull_first_task() -> bool:
-                pull_status, work = coordinator.pull_task("worker-0", _TEST_TASK_COST)
+                pull_status, work = coordinator.pull_task("worker-0", TEST_TASK_COST)
                 if pull_status is not PullStatus.RUN_TASK or work is None:
                     return False
                 pulled_work.append(work)
@@ -283,7 +283,7 @@ def test_dashboard_reports_selected_pipeline_failure(actor_context, tmp_path):
             )
             for failure in range(3):
                 if failure:
-                    pull_status, work = coordinator.pull_task("worker-0", _TEST_TASK_COST)
+                    pull_status, work = coordinator.pull_task("worker-0", TEST_TASK_COST)
                     assert pull_status is PullStatus.RUN_TASK
                     assert work is not None
                 else:
