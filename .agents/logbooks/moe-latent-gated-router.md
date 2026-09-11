@@ -204,3 +204,15 @@ See the [plan](../projects/moe-latent-gated-router/plan.md) and
   happened before the first 15-minute checkpoint. Corrected run IDs/source persist.
 - W&B suppresses replayed lower steps, so its summary may stay at the prior attempt
   until catch-up. Use attempt-specific Iris progress logs in this interval.
+
+### 2026-09-11 — Checkpoints survive scheduler preemption
+
+- At 21:34 UTC, both attempt 1 tasks were scheduler-preempted and pending
+  automatic attempt 2. No manual resubmission or cluster change was made.
+- Both temporary checkpoints were saved and metadata read successfully:
+  d512 step 1921 at 21:24:39 UTC; d768 step 648 at 21:24:53 UTC. Expected
+  automatic resumes use these checkpoints under the existing corrected roots.
+- Last global steps: d512 2492, train loss 3.73923; d768 659, loss 3.94279.
+  Numeric metrics remain finite, overflow zero. Intermediate d512 step-2000
+  Paloma macro loss is 4.25001; no final result or gate decision yet.
+- Checkpoint evidence: `scratch/9110-gate1-checkpoint-metadata.json`.

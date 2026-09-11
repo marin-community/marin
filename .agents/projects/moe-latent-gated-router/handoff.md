@@ -25,11 +25,12 @@ The two full Gate 1 parents were submitted from `edf9b2871`:
 
 Each expected child is `<parent>/grug-train-<run-id>`. Read the `gate1` records in
 state for exact source, current status, checkpoint paths and recovery commands.
-At 21:09 UTC, both runs were automatically recovering on attempt 1 after worker
-reconcile failures. They restarted from step 0 because no checkpoint preceded
-the failure. Last attempt 0 global steps were 937/300 (d512/d768); losses were finite.
-W&B suppresses lower replayed steps, so summaries may be stale until catch-up.
-Use attempt-specific Iris logs for current progress; see state for worker identities.
+At 21:34 UTC, both runs were pending automatic attempt 2 after scheduler
+preemption. Temporary checkpoint metadata is verified: d512 step 1921 and d768
+step 648, saved at 21:24 UTC. Expected retries resume these checkpoints.
+Last recorded global steps were 2492/659; metrics were finite with zero overflow.
+W&B may retain preemption-era values until replay catches up. Use attempt-specific
+Iris logs during recovery, and state for exact checkpoint paths and current status.
 Do not duplicate these submissions or restart either cancelled smoke.
 
 Old `gated` identities are superseded: the gate-only smoke finished, and the
