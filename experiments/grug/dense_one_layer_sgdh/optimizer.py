@@ -90,6 +90,19 @@ def scale_with_grug_sgdh(learning_rate: float = 0.02) -> optax.GradientTransform
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+def scale_with_grug_sgdmh(
+    momentum: float = 0.95,
+    nesterov: bool = True,
+    learning_rate: float = 0.02,
+) -> optax.GradientTransformation:
+    """Apply momentum to the raw gradient before the Hyperball projection."""
+
+    return optax.chain(
+        optax.trace(decay=momentum, nesterov=nesterov),
+        scale_with_grug_sgdh(learning_rate),
+    )
+
+
 def _dense_hyperball_mask(params):
     paths = leaf_key_paths(params)
 
@@ -110,9 +123,11 @@ def _dense_hyperball_mask(params):
 @OptimizerConfig.register_subclass("grug_dense_one_layer_sgdh_v1")
 @dataclass(frozen=True)
 class GrugDenseSGDHConfig(OptimizerConfig):
-    """SGD-H for dense matrices with AdamH/Adam fallback parameter groups."""
+    """SGD-H for dense matrices with optional momentum and AdamH/Adam fallbacks."""
 
     adam_lr: float = 6e-4
+    momentum: float = 0.0
+    nesterov: bool = False
     beta1: float = 0.9
     beta2: float = 0.95
     epsilon: float = 1e-8
@@ -126,7 +141,17 @@ class GrugDenseSGDHConfig(OptimizerConfig):
             sgdh_components = []
             if self.max_grad_norm:
                 sgdh_components.append(optax.clip_by_global_norm(self.max_grad_norm))
-            sgdh_components.extend((scale_with_grug_sgdh(learning_rate), _match_named_update_sharding()))
+            if self.momentum:
+                sgdh_components.append(
+                    scale_with_grug_sgdmh(
+                        momentum=self.momentum,
+                        nesterov=self.nesterov,
+                        learning_rate=learning_rate,
+                    )
+                )
+            else:
+                sgdh_components.append(scale_with_grug_sgdh(learning_rate))
+            sgdh_components.append(_match_named_update_sharding())
 
             adamh_components = []
             if self.max_grad_norm:

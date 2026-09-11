@@ -35,6 +35,10 @@ from experiments.grug.dense_one_layer_sgdh.launch_linear_decay import (
 from experiments.grug.dense_one_layer_sgdh.launch_linear_decay import (
     SWEEP_POINTS as SGDH_LINEAR_POINTS,
 )
+from experiments.grug.dense_one_layer_sgdmh.launch import EXPERIMENT as SGDMH_CONSTANT_EXPERIMENT
+from experiments.grug.dense_one_layer_sgdmh.launch import SWEEP_POINTS as SGDMH_CONSTANT_POINTS
+from experiments.grug.dense_one_layer_sgdmh.launch_linear_decay import EXPERIMENT as SGDMH_LINEAR_EXPERIMENT
+from experiments.grug.dense_one_layer_sgdmh.launch_linear_decay import SWEEP_POINTS as SGDMH_LINEAR_POINTS
 
 
 @pytest.mark.parametrize(
@@ -42,6 +46,7 @@ from experiments.grug.dense_one_layer_sgdh.launch_linear_decay import (
     [
         (MUONH_CONSTANT_POINTS, MUONH_LINEAR_POINTS, MUONH_CONSTANT_EXPERIMENT, MUONH_LINEAR_EXPERIMENT),
         (SGDH_CONSTANT_POINTS, SGDH_LINEAR_POINTS, SGDH_CONSTANT_EXPERIMENT, SGDH_LINEAR_EXPERIMENT),
+        (SGDMH_CONSTANT_POINTS, SGDMH_LINEAR_POINTS, SGDMH_CONSTANT_EXPERIMENT, SGDMH_LINEAR_EXPERIMENT),
     ],
 )
 def test_linear_decay_dense_sweep_matches_grid_without_reusing_identity(
@@ -61,6 +66,7 @@ def test_linear_decay_dense_sweep_matches_grid_without_reusing_identity(
     [
         (dense_muonh_optimizer, MUONH_LINEAR_POINTS[0], MUONH_LINEAR_EXPERIMENT),
         (dense_sgdh_optimizer, SGDH_LINEAR_POINTS[0], SGDH_LINEAR_EXPERIMENT),
+        (dense_sgdh_optimizer, SGDMH_LINEAR_POINTS[0], SGDMH_LINEAR_EXPERIMENT),
     ],
 )
 def test_linear_decay_dense_schedule_warms_up_then_reaches_five_percent_floor(optimizer_factory, point, experiment):

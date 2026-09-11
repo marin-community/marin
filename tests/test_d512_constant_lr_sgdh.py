@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
+from experiments.grug.dense_one_layer_sgdh.optimizer import scale_with_grug_sgdmh
 from experiments.grug.moe_hero_fsdp_constant_lr_tpu.optimizer import scale_with_grug_sgdh
 
 
@@ -24,5 +25,27 @@ def test_sgdh_is_stateless_raw_gradient_hyperball_update():
 
     assert isinstance(state, optax.EmptyState)
     assert isinstance(next_state, optax.EmptyState)
+    np.testing.assert_allclose(param + updates["matrix"], expected_new_param, rtol=1e-6, atol=1e-7)
+    np.testing.assert_allclose(jnp.linalg.norm(param + updates["matrix"]), jnp.linalg.norm(param), rtol=1e-6)
+
+
+def test_sgdmh_applies_nesterov_momentum_before_hyperball_projection():
+    learning_rate = 0.2
+    momentum = 0.5
+    params = {"matrix": jnp.array([[3.0, 0.0], [0.0, 4.0]])}
+    first_gradient = {"matrix": jnp.array([[1.0, 2.0], [-1.0, 0.5]])}
+    second_gradient = {"matrix": jnp.array([[0.5, -1.0], [2.0, 1.0]])}
+    transform = scale_with_grug_sgdmh(momentum=momentum, nesterov=True, learning_rate=learning_rate)
+
+    state = transform.init(params)
+    _, state = transform.update(first_gradient, state, params)
+    updates, _ = transform.update(second_gradient, state, params)
+
+    trace = second_gradient["matrix"] + momentum * first_gradient["matrix"]
+    direction = second_gradient["matrix"] + momentum * trace
+    param = params["matrix"]
+    candidate = param - learning_rate * direction * jnp.linalg.norm(param) / jnp.linalg.norm(direction)
+    expected_new_param = candidate * jnp.linalg.norm(param) / jnp.linalg.norm(candidate)
+
     np.testing.assert_allclose(param + updates["matrix"], expected_new_param, rtol=1e-6, atol=1e-7)
     np.testing.assert_allclose(jnp.linalg.norm(param + updates["matrix"]), jnp.linalg.norm(param), rtol=1e-6)

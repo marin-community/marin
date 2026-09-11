@@ -75,6 +75,9 @@ class DenseSGDHExperiment:
     wandb_group: str
     lr_schedule: str
     schedule_tag: str
+    optimizer_tag: str = "sgdh"
+    momentum: float = 0.0
+    nesterov: bool = False
 
 
 CONSTANT_LR_EXPERIMENT = DenseSGDHExperiment(
@@ -146,6 +149,8 @@ def dense_sgdh_optimizer(
         beta2=reference.beta2,
         epsilon=reference.epsilon,
         max_grad_norm=reference.max_grad_norm,
+        momentum=experiment.momentum,
+        nesterov=experiment.nesterov,
     )
 
 
@@ -189,7 +194,7 @@ def build_dense_sgdh_run(
                     experiment.experiment_prefix,
                     "d512",
                     "one-layer",
-                    "sgdh",
+                    experiment.optimizer_tag,
                     experiment.schedule_tag,
                     "tpu-v4-8",
                 ],
