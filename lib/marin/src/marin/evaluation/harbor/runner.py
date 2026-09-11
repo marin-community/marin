@@ -535,6 +535,8 @@ class HarborExecutor:
     secret_env_keys: tuple[str, ...] = ()
     min_completion_rate: float = DEFAULT_MIN_COMPLETION_RATE
     """Minimum scoreable fraction of attempted trials for accepting the run."""
+    prune_unscored_trials_before_run: bool = False
+    """Re-run only durable trials for which the verifier never produced a result."""
 
     def _run(
         self,
@@ -565,6 +567,10 @@ class HarborExecutor:
             self.task_limit,
             Path(dataset_path).name if dataset_path is not None else None,
         )
+        if self.prune_unscored_trials_before_run:
+            job_dir = _job_dir(output_dir, job_name)
+            logger.info("removing unscored Harbor trials before explicit recovery: %s", job_dir)
+            _remove_unscored_trials(job_dir, self.config.error_taxonomy)
         return _run_harbor_job(
             job_name=job_name,
             config=self.config,
