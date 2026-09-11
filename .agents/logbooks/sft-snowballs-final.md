@@ -593,3 +593,19 @@ author: benfeuer
 - Root `/benfeuer/eval-20260911-002356-snowball-final-qk175-base-12e6` succeeded with zero failures or preemptions after completing the corrected full cohort.
 - Read-only RNO2A audit `/benfeuer/snowball-final-mrcr-qk175-record-audit` verified durable record `20260911-002356-snowball-final-qk175-base-mrcr-499f`: `status=succeeded`, 1,196 attempted, 1,196 scored, zero unanswered, and `mrcr_accuracy=0.0036852286355412247` (0.3685%).
 - The skew2, skew4, and skew8 MRCR roots remain live with zero root failures. MMLU-Pro, native-deadline SimpleQA and DS-1000, and the shared SWE-bench/TB2/OT-TBLite roots also remain active.
+
+## 2026-09-10 21:15 EDT — Skew2 MRCR completed
+
+- Root `/benfeuer/eval-20260911-002401-snowball-final-qk175-skew2-base-c17f` succeeded with zero failures or preemptions.
+- Read-only RNO2A audit `/benfeuer/snowball-final-mrcr-skew2-record-audit` verified durable record `20260911-002401-snowball-final-qk175-skew2-base-mrcr-ee04`: `status=succeeded`, 1,196 attempted, 1,196 scored, zero unanswered, and `mrcr_accuracy=0.0044059850000409476` (0.4406%).
+
+## 2026-09-10 21:19 EDT — Skew4 MRCR completed
+
+- Root `/benfeuer/eval-20260911-002406-snowball-final-qk175-skew4-base-24be` succeeded with zero failures or preemptions.
+- Read-only RNO2A audit `/benfeuer/snowball-final-mrcr-skew4-record-audit2` verified durable record `20260911-002406-snowball-final-qk175-skew4-base-mrcr-a1fd`: `status=succeeded`, 1,196 attempted, 1,196 scored, zero unanswered, and `mrcr_accuracy=0.004299286920810388` (0.4299%).
+
+## 2026-09-10 21:21 EDT — MRCR complete for all Bases
+
+- Final root `/benfeuer/eval-20260911-002410-snowball-final-qk175-skew8-base-f3f7` succeeded with zero failures or preemptions.
+- Read-only RNO2A audit `/benfeuer/snowball-final-mrcr-skew8-record-audit` verified durable record `20260911-002410-snowball-final-qk175-skew8-base-mrcr-f56b`: `status=succeeded`, 1,196 attempted, 1,196 scored, zero unanswered, and `mrcr_accuracy=0.003428902428712473` (0.3429%).
+- MRCR is now complete for all five Bases. Every included record covers the exact corrected 1,196-source cohort.
