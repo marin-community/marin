@@ -46,7 +46,7 @@ def test_sft_source_renders_then_normalizes_and_deduplicates(tmp_path, monkeypat
     table = pq.read_table(source.rendered.output_path)
     assert table.column_names == ["id", "text"]
     expected_text = (
-        "<|begin_of_text|><|start_header_id|>system<|end_header_id|>Reasoning: /think<|eot_id|>"
+        "<|start_header_id|>system<|end_header_id|>Reasoning: /think<|eot_id|>"
         "<|start_header_id|>user<|end_header_id|>\nWhat is 2 + 2?<|eot_id|>\n"
         "<|start_header_id|>assistant<|end_header_id|>\n"
         "<|start_think|>Add two and two.<|end_think|>4<|eot_id|>"

@@ -71,12 +71,12 @@ You can use the following tools in your python code like regular functions:
 {%- endif -%}
 {%- macro text(content) -%}
   {%- if content is string -%}
-    {{- content | trim -}}
+    {{- content -}}
   {%- elif content is mapping -%}
-    {{- content.get('text', '') | trim -}}
+    {{- content.get('text', '') -}}
   {%- elif content is iterable -%}
     {%- for chunk in content if chunk.get('type') == 'text' -%}
-      {{- chunk.text | trim -}}
+      {{- chunk.text -}}
     {%- endfor -%}
   {%- endif -%}
 {%- endmacro -%}
@@ -97,13 +97,18 @@ You can use the following tools in your python code like regular functions:
 {%- endmacro -%}
 
 {%- for message in messages -%}
+  {%- set content = message.get('content') -%}
+  {%- set text_content = content is string
+      or (content is mapping and content.get('text') is string)
+      or (content is sequence and content is not string and content is not mapping
+          and content | selectattr('type', 'equalto', 'text') | list | length == content | length) -%}
   {{- '<|start_header_id|>' ~ message.role ~ '<|end_header_id|>\n' -}}
   {%- if message.role == 'assistant' -%}
     {% generation %}
     {%- if message.get('reasoning_content') -%}
       {{- '<|start_think|>' ~ message.reasoning_content ~ '<|end_think|>' -}}
     {%- endif -%}
-    {{- text(message.get('content')) -}}
+    {{- text(content) | trim -}}
     {{- tool_calls(message.get('tool_calls') or []) -}}
     {{- '<|eot_id|>' -}}
     {% endgeneration %}
@@ -112,21 +117,13 @@ You can use the following tools in your python code like regular functions:
     {%- set name = message.get('name') or tool_names.by_id.get(message.get('tool_call_id')) -%}
     {%- if name -%}{{- ' name="' ~ name ~ '"' -}}{%- endif -%}
     {{- '>' -}}
-    {%- set content = message.get('content') -%}
-    {{- content if content is string else content | tojson if content is not none else '' -}}
+    {{- text(content) if text_content else content | tojson if content is not none else '' -}}
     {{- '</tool_response><|eot_id|>\n' -}}
   {%- elif message.role == 'ipython' -%}
-    {%- set content = message.get('content') -%}
-    {%- if content is iterable and content is not string and content is not mapping -%}
-      {%- for chunk in content if chunk.get('type') == 'text' -%}
-        {{- {"output": chunk.text} | tojson -}}
-      {%- endfor -%}
-    {%- else -%}
-      {{- {"output": content} | tojson -}}
-    {%- endif -%}
+    {{- {"output": text(content) if text_content else content} | tojson -}}
     {{- '<|eot_id|>\n' -}}
   {%- else -%}
-    {{- text(message.get('content')) ~ '<|eot_id|>\n' -}}
+    {{- (text(content) | trim) ~ '<|eot_id|>\n' -}}
   {%- endif -%}
 {%- endfor -%}
 {%- if add_generation_prompt -%}

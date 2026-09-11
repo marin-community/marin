@@ -193,14 +193,24 @@ normalized = source.normalized
 `StepRunner().run([source.normalized], max_concurrent=1)` builds the full dependency
 chain. Rendering preserves input IDs and duplicate rows; standard normalization assigns content hashes and
 deduplicates the rendered text. The original chat IDs become `source_id` in the
-normalized text. The structured Harmony artifact remains available through
-`source.chat_normalized`.
+normalized text. Deduplication compares rendered bytes: equivalent conversations
+rendered with different templates need not deduplicate. Use the same template
+version when combining rendered sources. The structured Harmony artifact remains
+available through `source.chat_normalized`.
+
+Stored text omits BOS; the standard text tokenizer prepends it and appends its
+normal space-plus-EOS document separator after the final chat EOT. Direct
+`render_marin_chat` calls include BOS by default for inference.
 
 Python converts Harmony messages to Hugging Face message dictionaries, then Hugging Face
 renders them with `MARIN_CHAT_TEMPLATE` in `marin.datakit.chat_template`. Tokenizer
-export uses the same template. The adapter joins adjacent assistant analysis, commentary, and function calls
+export uses the same template. The rendering behavior described here is the current Marin format; changes
+to the prompt wording or a switch to Harmony wire tokens require separate
+training and serving validation. The adapter joins adjacent assistant analysis, commentary, and function calls
 into one turn. The template emits one end-of-turn token after all parallel calls,
-so generation can reach the tool handoff. Analysis uses Marin think tokens,
+so generation can reach the tool handoff. The trace evaluation processor also
+keeps inline tool calls in one assistant turn while labeling prose and calls
+separately. Analysis uses Marin think tokens,
 function calls use `<tool_call>` JSON blocks, and named tool replies use
 `<tool_response>` blocks. The template also accepts `reasoning_content` from
 inference clients and serializes structured tool definitions as JSON. API tool

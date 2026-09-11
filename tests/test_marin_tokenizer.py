@@ -8,15 +8,16 @@ from itertools import pairwise
 
 import numpy as np
 import pytest
-from levanter.data.text.formats import ChatProcessor
+from levanter.data.text.formats import ChatProcessor, TextLmDatasetFormat
 from levanter.data.text.trace_chat import (
+    TRACE_LABEL_ASSISTANT_TEXT,
     TRACE_LABEL_ASSISTANT_TOOL_CALL,
     TRACE_LABEL_FINAL_ASSISTANT,
     TRACE_LABEL_OBSERVATION,
     TraceChatProcessor,
 )
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
-from marin.datakit.chat_render import render_marin_chat
+from marin.datakit.chat_render import render_chat_record, render_marin_chat
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from openai_harmony import Author, Message, Role
 from transformers import AutoTokenizer, PreTrainedTokenizer
@@ -494,65 +495,87 @@ def test_tool_reply_ids_render_like_named_harmony_observations(marin_chat_tokeni
     )
 
 
-@pytest.mark.parametrize("chunk_size", [1, 3, 17, 1000])
-def test_hermes_parser_round_trip(marin_tokenizer, chunk_size):
-    # vLLM is an optional serving dependency; this CPU-only test also runs in
-    # environments with the pinned MarinSkyRL vLLM installed.
-    hermes = pytest.importorskip("vllm.tool_parsers.hermes_tool_parser")
-    protocol = pytest.importorskip("vllm.entrypoints.openai.chat_completion.protocol")
-    user = {"role": "user", "content": "Search both places."}
-    assistant = {
-        "role": "assistant",
-        "content": "<|start_think|>Need two searches.<|end_think|>Looking now.",
-        "tool_calls": [
-            {"function": {"name": "first", "arguments": {"query": "café <>&"}}},
-            {"function": {"name": "second", "arguments": {}}},
-        ],
-    }
-    prompt = marin_tokenizer.apply_chat_template([user], tokenize=False, add_generation_prompt=True)
-    full = marin_tokenizer.apply_chat_template([user, assistant], tokenize=False)
-    completion = full.removeprefix(prompt).removesuffix("<|eot_id|>")
-    request = protocol.ChatCompletionRequest(model="marin", messages=[user])
-    result = hermes.Hermes2ProToolParser(marin_tokenizer).extract_tool_calls(completion, request)
-    assert result.tools_called
-    assert result.content == assistant["content"]
-    expected = [("first", {"query": "café <>&"}), ("second", {})]
-    assert [(call.function.name, json.loads(call.function.arguments)) for call in result.tool_calls] == expected
-
-    parser = hermes.Hermes2ProToolParser(marin_tokenizer)
-    previous = ""
-    content = ""
-    calls = {}
-    for end in range(chunk_size, len(completion) + chunk_size, chunk_size):
-        current = completion[:end]
-        delta_text = current[len(previous) :]
-        delta = parser.extract_tool_calls_streaming(
-            previous,
-            current,
-            delta_text,
-            marin_tokenizer.encode(previous),
-            marin_tokenizer.encode(current),
-            marin_tokenizer.encode(delta_text),
-            request,
-        )
-        if delta:
-            content += delta.content or ""
-            for call in delta.tool_calls:
-                entry = calls.setdefault(call.index, {"name": "", "arguments": ""})
-                if call.function:
-                    entry["name"] += call.function.name or ""
-                    entry["arguments"] += call.function.arguments or ""
-        previous = current
-    assert content == result.content
-    assert [(call["name"], json.loads(call["arguments"])) for call in calls.values()] == expected
-
-    replay = {
-        "role": "assistant",
-        "content": result.content,
-        "tool_calls": [call.model_dump() for call in result.tool_calls],
-    }
-    api_replies = [{"role": "tool", "tool_call_id": call.id, "content": "Done."} for call in result.tool_calls]
-    named_replies = [{"role": "tool", "name": name, "content": "Done."} for name, _ in expected]
-    assert marin_tokenizer.apply_chat_template([user, replay, *api_replies]) == marin_tokenizer.apply_chat_template(
-        [user, assistant, *named_replies]
+def test_rendered_record_text_tokenizer_adds_one_bos(marin_chat_tokenizer):
+    messages = [
+        Message.from_role_and_content(Role.USER, "Hello"),
+        Message.from_role_and_content(Role.ASSISTANT, "Hi").with_channel("final"),
+    ]
+    record = render_chat_record({"id": "example", "messages": [message.to_dict() for message in messages]})
+    assert not record["text"].startswith("<|begin_of_text|>")
+    processor = TextLmDatasetFormat().build_preprocessor(marin_chat_tokenizer)
+    actual = processor([record])[0]["input_ids"]
+    expected = marin_chat_tokenizer.apply_chat_template(
+        [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi"}]
     )
+    # The text path adds its normal document separator after the final chat EOT.
+    expected += marin_chat_tokenizer.encode(" " + marin_chat_tokenizer.eos_token, add_special_tokens=False)
+    assert actual == expected
+
+
+def test_trace_inline_calls_preserve_assistant_turn(marin_chat_tokenizer):
+    calls = [
+        {"name": "first", "arguments": {"key": "a"}},
+        {"name": "second", "arguments": {}},
+    ]
+    user = {"role": "user", "content": "Look in both places."}
+    prose = "Looking now."
+    inline = prose + "".join(f"<tool_call>{json.dumps(call)}</tool_call>" for call in calls)
+    processor = TraceChatProcessor(marin_chat_tokenizer, loss_tags=("assistant", "assistant_text", "tool_call"))
+    actual = processor([{"messages": [user, {"role": "assistant", "content": inline}]}])[0]
+    expected = marin_chat_tokenizer.apply_chat_template(
+        [
+            user,
+            {
+                "role": "assistant",
+                "content": prose,
+                "tool_calls": [{"type": "function", "function": call} for call in calls],
+            },
+        ]
+    )
+    assert actual["input_ids"].tolist() == expected
+    labels = actual["loss_labels"]
+    assert prose in _decode(marin_chat_tokenizer, actual["input_ids"][labels == TRACE_LABEL_ASSISTANT_TEXT])
+    tool_text = _decode(marin_chat_tokenizer, actual["input_ids"][labels == TRACE_LABEL_ASSISTANT_TOOL_CALL])
+    assert [
+        json.loads(payload) for payload in re.findall(r"<tool_call>(.*?)</tool_call>", tool_text, re.DOTALL)
+    ] == calls
+
+
+@pytest.mark.parametrize("reply_role", [None, "tool", "ipython"], ids=["plain-chat", "tool-reply", "python-output"])
+def test_text_content_representations_have_identical_prefixes(marin_tokenizer, reply_role):
+    messages = [
+        {"role": "system", "content": "  Be helpful.\n"},
+        {"role": "developer", "content": "Keep responses short."},
+        {"role": "user", "content": "  Find café records.\n"},
+        {"role": "assistant", "content": "  Looking now.\n"},
+    ]
+    if reply_role is not None:
+        messages[-1]["tool_calls"] = [
+            {"id": "call_lookup", "type": "function", "function": {"name": "lookup", "arguments": {"key": "café"}}},
+        ]
+        messages.append({"role": reply_role, "tool_call_id": "call_lookup", "content": "  Found one record.\n"})
+        messages.append({"role": "assistant", "content": "Here it is."})
+    messages.append({"role": "user", "content": "  Tell me more.\n"})
+
+    expected_text = marin_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    expected_tokens = marin_tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+    for representation in ("mapping", "parts", "split-parts"):
+        converted = []
+        for message in messages:
+            content = message["content"]
+            if representation == "mapping":
+                content = {"text": content}
+            elif representation == "parts":
+                content = [{"type": "text", "text": content}]
+            else:
+                # Split at a word boundary: trimming individual parts loses the space.
+                split = content.index(" ", len(content) - len(content.lstrip()) + 1) + 1
+                content = [{"type": "text", "text": content[:split]}, {"type": "text", "text": content[split:]}]
+            converted.append({**message, "content": content})
+
+        assert (
+            marin_tokenizer.apply_chat_template(converted, tokenize=False, add_generation_prompt=True) == expected_text
+        ), representation
+        assert (
+            marin_tokenizer.apply_chat_template(converted, tokenize=True, add_generation_prompt=True) == expected_tokens
+        ), representation

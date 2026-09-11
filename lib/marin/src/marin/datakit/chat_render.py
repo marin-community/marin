@@ -21,7 +21,7 @@ from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.datakit.normalize import DEFAULT_MAX_WORKERS
 from marin.execution.step_spec import StepSpec
 
-CHAT_RENDER_VERSION = "marin-v2"
+CHAT_RENDER_VERSION = "marin-v3"
 MARIN_BOS_TOKEN = "<|begin_of_text|>"
 START_THINK = "<|start_think|>"
 END_THINK = "<|end_think|>"
@@ -113,7 +113,7 @@ def render_chat_record(record: dict) -> dict:
     """Project a normalized chat row into the standard normalizer's id/text input."""
     messages = [Message.from_dict(message) for message in record["messages"]]
     kwargs = json.loads(record["chat_template_kwargs"]) if record.get("chat_template_kwargs") else {}
-    return {"id": record["id"], "text": render_marin_chat(messages, **kwargs)}
+    return {"id": record["id"], "text": render_marin_chat(messages, bos_token="", **kwargs)}
 
 
 def render_chat_to_parquet(
