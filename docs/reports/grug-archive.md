@@ -51,6 +51,14 @@ goes stale on the next commit.
 - Purpose: reproduce the 25 d512 cells from issue #7856 on TPU with constant post-warmup learning rates.
 - Issue: https://github.com/marin-community/marin/issues/7856
 
+### dense-one-layer-sgdh
+- Path: `experiments/grug/dense_one_layer_sgdh/`
+- Origin: `base`
+- Introduced: bd2e753ad
+- Status: active
+- Purpose: measure constant-LR scaling for a one-layer d512 dense Transformer with raw-gradient SGD-H updates.
+- Issue: https://github.com/marin-community/marin/issues/7856
+
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`
 - Introduced: 5efe76834

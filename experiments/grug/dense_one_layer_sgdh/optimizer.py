@@ -154,4 +154,3 @@ class GrugDenseSGDHConfig(OptimizerConfig):
 
     def create_mask(self, params):
         return _dense_hyperball_mask(params)
-
