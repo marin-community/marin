@@ -34,7 +34,7 @@ speedrun_config = SpeedrunConfig(
         affiliation="HuaZhong University of Science and Technology",
         url="https://github.com/yun1104/marin",
     ),
-    description="Nano model based on Llama architecture. To run the first experiment, I need to use a small model.",
+    description="Nano model based on Llama architecture. To run the first experiment, I need to use a small model. I use the RTX3090 GPU.",
     model_config=tiny_llama,
     train_config=SimpleTrainConfig(
         ResourceConfig.with_gpu("RTX3090", count=1),

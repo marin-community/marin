@@ -3,9 +3,9 @@
       {
         "run_info": {
           "author": {
-            "affiliation": "Stanford University",
-            "name": "Herumb Shandilya",
-            "url": "https://www.x.com/krypticmouse"
+            "affiliation": "HuaZhong University of Science and Technology",
+            "name": "yun1104",
+            "url": "Nano model based on Llama architecture. To run the first experiment, I need to use a small model. I use the RTX3090 GPU"
           },
           "description": "Nano model based on Llama architecture.",
           "eval/paloma/c4_en/bpb": 2.4522433280944824,
