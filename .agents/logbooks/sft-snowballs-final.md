@@ -609,3 +609,8 @@ author: benfeuer
 - Final root `/benfeuer/eval-20260911-002410-snowball-final-qk175-skew8-base-f3f7` succeeded with zero failures or preemptions.
 - Read-only RNO2A audit `/benfeuer/snowball-final-mrcr-skew8-record-audit` verified durable record `20260911-002410-snowball-final-qk175-skew8-base-mrcr-f56b`: `status=succeeded`, 1,196 attempted, 1,196 scored, zero unanswered, and `mrcr_accuracy=0.003428902428712473` (0.3429%).
 - MRCR is now complete for all five Bases. Every included record covers the exact corrected 1,196-source cohort.
+
+## 2026-09-10 21:32 EDT — Native-timeout scoring validated in live trials
+
+- Representative SimpleQA, DS-1000, and SWE-bench trials that retained `AgentTimeoutError` all logged verification start, verification completion, and result persistence first. This directly confirms that campaign commit `611d02df57` retains Harbor's verified timeout outcomes as scored benchmark failures.
+- Unverified infrastructure attrition remains isolated and below the 95% coverage gate: one or two LLM connection-timeout trials per SimpleQA Base, one qk157 DS-1000 tmux failure, and one skew2 SWE-bench tmux failure at the time of audit. No corrective restart is warranted while the full roots remain healthy.
