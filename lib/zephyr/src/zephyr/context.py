@@ -70,7 +70,6 @@ V = TypeVar("V")
 # Keep a Zephyr worker actor group below the practical Iris/Kubernetes control-plane
 # ceiling. Additional shards are pulled by these long-lived replicas.
 MAX_IRIS_WORKER_REPLICAS = 1_000
-COORDINATOR_TASK_FAILURE_BUDGET = 1_000
 
 
 def _generate_execution_id() -> str:
@@ -515,10 +514,7 @@ class ZephyrContext:
             name=coordinator_name,
             count=1,
             resources=self.coordinator_resources,
-            actor_config=ActorConfig(
-                max_concurrency=100,
-                max_task_failures=COORDINATOR_TASK_FAILURE_BUDGET,
-            ),
+            actor_config=ActorConfig(max_concurrency=100),
         )
         try:
             coordinator = coordinator_group.wait_ready(count=1)[0]
