@@ -156,11 +156,7 @@ class HarborDefinition:
 
 
 def harbor_model_agent_kwargs(model: ModelConfig) -> dict[str, object]:
-    """Harbor agent kwargs for one model, with ``model_info`` set to its serving context limits.
-
-    A limit the model catalog leaves unset is absent from ``model_info``, which leaves it to the
-    policy and then to Harbor's own default.
-    """
+    """Omit unset catalog limits so the policy or Harbor defaults can supply them."""
     return {
         **model.agent.agent_kwargs,
         MODEL_INFO_KEY: served_model_info(model.serve.max_model_len, model.generation.max_gen_toks),

@@ -93,7 +93,11 @@ class ServeConfig:
 
 @dataclass(frozen=True)
 class GenerationConfig:
-    """Generation overrides applied when an experiment resolves an Evalchemy definition."""
+    """Per-model generation settings for evaluation clients.
+
+    ``max_gen_toks`` sets the Evalchemy generation limit and Harbor agent output budget.
+    ``extra_gen_kwargs`` apply only to Evalchemy.
+    """
 
     max_gen_toks: int | None = None
     extra_gen_kwargs: Mapping[str, str] = field(default_factory=dict)

@@ -52,7 +52,6 @@ _PREFLIGHT_MAX_OUTPUT_TOKENS = 65536
 
 
 def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> list[Mapping[str, object]]:
-    """Stand in for the isolated driver subprocess and record the agent kwargs it was handed."""
     received: list[Mapping[str, object]] = []
 
     def preflight(requests):

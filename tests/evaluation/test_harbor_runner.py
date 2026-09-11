@@ -99,7 +99,6 @@ def test_reconciled_model_info_keeps_harbor_defaults_when_the_model_states_no_li
 
 @pytest.mark.parametrize("policy_max_input_tokens", [64512, 65536])
 def test_reconciled_model_info_keeps_a_policy_limit_within_the_served_window(policy_max_input_tokens):
-    """grug-opencode-id asks for 64512 against a model serving 65536, keeping 1024 tokens of headroom."""
     served = served_model_info(max_model_len=65536, max_gen_toks=16384)
 
     resolved = reconciled_model_info(served, {"max_input_tokens": policy_max_input_tokens})

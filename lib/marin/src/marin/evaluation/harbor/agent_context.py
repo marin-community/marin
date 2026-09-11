@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The context budget a Harbor agent runs under, derived from how the model is served.
-
-Both the Marin launcher and the isolated Harbor driver import this module, so it depends on the
-standard library alone.
-"""
+"""Resolve Harbor context limits without dependencies outside the standard library."""
 
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -25,7 +21,7 @@ DEFAULT_MODEL_INFO: Mapping[str, Any] = MappingProxyType(
     }
 )
 
-# The model-catalog field behind each agent limit, named when a policy contradicts it.
+# Model-catalog fields named in policy-limit errors.
 _MODEL_CONFIG_FIELD: Mapping[str, str] = MappingProxyType(
     {
         MAX_INPUT_TOKENS_KEY: "serve.max_model_len",
@@ -35,11 +31,7 @@ _MODEL_CONFIG_FIELD: Mapping[str, str] = MappingProxyType(
 
 
 def served_model_info(max_model_len: int | None, max_gen_toks: int | None) -> dict[str, int]:
-    """The Harbor ``model_info`` limits implied by how a model is served.
-
-    A limit the model catalog leaves unset is omitted, so the policy and then Harbor's own default
-    still decide it.
-    """
+    """Omit unset catalog limits so the policy or Harbor defaults can supply them."""
     model_info: dict[str, int] = {}
     if max_model_len is not None:
         model_info[MAX_INPUT_TOKENS_KEY] = max_model_len
@@ -57,14 +49,12 @@ def _model_info_mapping(value: object, source: str) -> Mapping[str, Any]:
 
 
 def reconciled_model_info(served: object, policy: object) -> dict[str, Any]:
-    """The agent ``model_info`` for one run: served-model limits, policy kwargs, Harbor defaults.
+    """Reconcile policy limits with the model catalog and Harbor defaults.
 
-    A policy limit at or below the served one wins, which is how a policy keeps headroom under the
-    served window. A policy limit above the served one would let the agent run past what the server
-    accepts.
+    Policy limits may reserve headroom below served limits but cannot exceed them.
 
     Raises:
-        ValueError: a policy context limit exceeds the served model's, or is not an integer.
+        ValueError: A policy context limit exceeds the corresponding served limit.
     """
     served_info = _model_info_mapping(served, "model")
     policy_info = _model_info_mapping(policy, "agent")

@@ -107,8 +107,6 @@ class ValidatedHarborConfig:
     environment: str
     max_input_tokens: int
     max_output_tokens: int
-    """The agent's resolved context budget: the served model's limits, the policy's explicit
-    ``model_info``, then Harbor's own defaults."""
 
     @property
     def record_dataset(self) -> str:

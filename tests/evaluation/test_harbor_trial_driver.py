@@ -220,7 +220,6 @@ def test_preflight_reports_agent_context_resolved_from_the_served_model(tmp_path
 
 
 def test_preflight_keeps_a_policy_agent_context_below_the_served_window(tmp_path):
-    """grug-opencode-id keeps 1024 tokens of headroom under grug-agentic-s3-step1903's 65536."""
     served = {"model_info": {"max_input_tokens": 65536}}
 
     (result,) = json.loads(_preflight(tmp_path, [(_POLICIES / "grug-opencode-id.yaml", served)]).stdout)
