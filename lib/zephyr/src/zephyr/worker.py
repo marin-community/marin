@@ -7,11 +7,13 @@ import logging
 import threading
 import time
 import traceback
+from collections import defaultdict
 from collections.abc import Callable, Hashable
 from contextlib import suppress
 from dataclasses import dataclass, field
 
 from fray.actor import ActorFuture, ActorHandle, current_actor
+from iris.cluster.client.job_info import get_job_info
 from rigging.timing import ExponentialBackoff, RateLimiter
 
 from zephyr.coordinator import CoordinatorUnreachable, PullStatus, PullTask
@@ -83,8 +85,8 @@ class ZephyrWorker:
         self._coordinator = coordinator_handle
         self._stage_runner_factory = stage_runner_factory
         self._shutdown_event = threading.Event()
-        self._counter_generation: int = 0
-        self._last_reported_counters: dict[str, CounterEntry] = {}
+        self._counter_generations: dict[str, int] = defaultdict(int)
+        self._last_reported_counters: dict[str, dict[str, CounterEntry]] = {}
         self._active_shards: list[_ActiveShard] = []
 
         # Resource pool: each accepted task deducts its cost and restores it on
@@ -107,6 +109,8 @@ class ZephyrWorker:
         self._actor_handle = self._actor_ctx.handle
         self._memory_store = MemoryStoreService(self._actor_ctx.index)
         self._stats_writer = StatsWriter.connect()
+        job_info = get_job_info()
+        self._task_id = job_info.task_id.to_wire() if job_info is not None else ""
 
         self._heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop,
@@ -152,7 +156,7 @@ class ZephyrWorker:
         while not self._stopping():
             try:
                 if future is None:
-                    future = self._coordinator.register_worker.remote(self._worker_id, self._actor_handle)
+                    future = self._coordinator.register_worker.remote(self._worker_id, self._actor_handle, self._task_id)
                     request_start = time.monotonic()
                     warned = False
                 registrations = future.result(timeout=RPC_POLL_INTERVAL)
@@ -330,14 +334,14 @@ class ZephyrWorker:
             self._finish_active_shard(active_shard, ZephyrWorkerStatStatus.END, task_counters)
             logger.info("[%s] Shard %d done in %.2fs", self._worker_id, task.shard_idx, time.monotonic() - task_start)
             # Block until coordinator records result — prevents _in_flight races.
-            self._counter_generation += 1
+            counter_generation = self._next_counter_generation(work.execution_id)
             self._coordinator.report_result.remote(
                 self._worker_id,
                 work.execution_id,
                 task.shard_idx,
                 work.attempt,
                 result,
-                CounterSnapshot(counters=dict(task_counters), generation=self._counter_generation),
+                CounterSnapshot(counters=dict(task_counters), generation=counter_generation),
                 work.stage_generation,
             ).result()
         except Exception:
@@ -385,10 +389,15 @@ class ZephyrWorker:
         stage = active[-1].task.stage_name if active else ""
         return _format_worker_status_md(len(active), stage)
 
-    def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
-        """Aggregate live counters from all active runners; return None if unchanged."""
+    def _next_counter_generation(self, execution_id: str) -> int:
         with self._resources_lock:
-            entries: list[tuple[str, CounterEntry]] = []
+            self._counter_generations[execution_id] += 1
+            return self._counter_generations[execution_id]
+
+    def _heartbeat_counter_snapshots(self) -> dict[str, CounterSnapshot] | None:
+        """Return changed live counters, grouped by pipeline execution."""
+        entries_by_execution: dict[str, list[tuple[str, CounterEntry]]] = defaultdict(list)
+        with self._resources_lock:
             for active_shard in self._active_shards:
                 counters = active_shard.runner.live_counters()
                 active_shard.last_counters = dict(counters)
@@ -401,13 +410,19 @@ class ZephyrWorker:
                         active_shard.start_time,
                         _counter_values(counters),
                     )
-                entries.extend(counters.items())
-        current, _ = merge_counter_entries(entries)
-        if current == self._last_reported_counters:
-            return None
-        self._last_reported_counters = current
-        self._counter_generation += 1
-        return CounterSnapshot(counters=current, generation=self._counter_generation)
+                entries_by_execution[active_shard.execution_id].extend(counters.items())
+        snapshots: dict[str, CounterSnapshot] = {}
+        execution_ids = entries_by_execution.keys() | self._last_reported_counters.keys()
+        for execution_id in execution_ids:
+            current, _ = merge_counter_entries(entries_by_execution.get(execution_id, []))
+            if current == self._last_reported_counters.get(execution_id, {}):
+                continue
+            self._last_reported_counters[execution_id] = current
+            snapshots[execution_id] = CounterSnapshot(
+                counters=current,
+                generation=self._next_counter_generation(execution_id),
+            )
+        return snapshots or None
 
     def _heartbeat_loop(
         self, coordinator: ActorHandle, interval: float = 5.0, max_consecutive_failures: int = 5
@@ -417,8 +432,8 @@ class ZephyrWorker:
         consecutive_failures = 0
         while not self._shutdown_event.is_set():
             try:
-                snapshot = self._heartbeat_counter_snapshot()
-                coordinator.heartbeat.remote(self._worker_id, snapshot).result()
+                snapshots = self._heartbeat_counter_snapshots()
+                coordinator.heartbeat.remote(self._worker_id, snapshots).result()
                 heartbeat_count += 1
                 consecutive_failures = 0
                 if heartbeat_count % 10 == 1:

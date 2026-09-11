@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<base href="/">
+<title>Zephyr coordinator</title>
+<style>
+  :root { color-scheme: light dark; font: 14px system-ui, sans-serif; --border: #8885; --muted: #777; }
+  body { max-width: 1400px; margin: auto; padding: 24px; }
+  h1 { font-size: 22px; margin: 0; }
+  h2 { font-size: 16px; }
+  header, nav, form, footer { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  header > div { margin-right: auto; }
+  label { display: flex; align-items: center; gap: 6px; }
+  button, select, input { font: inherit; padding: 6px 10px; }
+  button, select, a { cursor: pointer; }
+  a { color: #548cdb; }
+  nav { border-bottom: 1px solid var(--border); padding: 12px 0; }
+  nav a { text-decoration: none; padding: 6px; }
+  nav a[aria-current] { color: inherit; font-weight: bold; border-bottom: 2px solid; }
+  #summary { display: flex; flex-wrap: wrap; gap: 12px 32px; margin: 20px 0; }
+  #summary div { min-width: 110px; }
+  dt, .muted { color: var(--muted); font-size: 12px; }
+  dd { margin: 4px 0; font-size: 17px; }
+  #error, #failure { color: #b33; white-space: pre-wrap; }
+  #content { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+  th, td { text-align: left; padding: 10px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+  th { font-weight: 600; white-space: nowrap; }
+  tbody tr:hover { background: #8881; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; }
+  .chart { margin: 0; padding: 16px; border: 1px solid var(--border); }
+  svg { width: 100%; height: auto; overflow: visible; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; }
+  .legend span { border-bottom: 3px solid; }
+  [hidden] { display: none !important; }
+  @media (max-width: 600px) { body { padding: 12px; } th, td { padding: 8px 4px; } }
+</style>
+</head>
+<body>
+<header>
+  <div><h1>Zephyr coordinator</h1><p id="phase" class="muted">Loading</p></div>
+  <label>Pipeline <select id="pipeline" aria-label="Pipeline"></select></label>
+  <label><input id="live" type="checkbox" checked> Live</label>
+  <button id="refresh" type="button">Refresh</button>
+  <a id="coordinator" target="_top" hidden>Coordinator task</a>
+</header>
+<p id="error" role="alert" hidden></p>
+<p id="failure" role="alert" hidden></p>
+<dl id="summary"></dl>
+<nav aria-label="Views">
+  <a href="#plan">Plan</a><a href="#counters">Counters</a>
+  <a href="#workers">Workers</a><a href="#metrics">Metrics</a>
+</nav>
+<form id="filters" hidden>
+  <label>Search <input id="search" type="search"></label>
+  <label id="stage-filter">Stage <select id="stage" aria-label="Stage"><option value="">All stages</option></select></label>
+  <label>Sort <select id="sort" aria-label="Sort"></select></label>
+  <label><input id="descending" type="checkbox"> Descending</label>
+  <button type="submit">Apply</button>
+</form>
+<main id="content" aria-live="polite"></main>
+<footer id="pager" hidden>
+  <span id="range"></span>
+  <button id="previous" type="button">Previous</button>
+  <button id="next" type="button">Next</button>
+</footer>
+<p id="updated" class="muted"></p>
+<script>
+function startDashboard() {
+  const byId = (id) => document.getElementById(id);
+  const number = (value) => new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
+  const pageSize = 50;
+  const refreshDelay = 5000;
+  const requestTimeout = 15000;
+  const chartLeft = 65;
+  const colors = ['#4079c9', '#be6a28', '#40956d', '#a46cc2', '#cf556c', '#718d26'];
+  const sortFields = {
+    counters: [['name', 'Name'], ['stage', 'Stage'], ['value', 'Value'], ['aggregation', 'Aggregation'], ['observations', 'Samples']],
+    workers: [['worker_id', 'Worker'], ['state', 'State'], ['active_shards', 'Active shards'], ['cpu', 'CPU'], ['memory', 'Memory'], ['last_seen', 'Heartbeat age']],
+  };
+  let executionId = new URL(location.href).searchParams.get('execution_id') || '';
+  let view;
+  let offset = 0;
+  let timer;
+  let request;
+
+  function bytes(value) {
+    const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+    let unit = 0;
+    while (Math.abs(value) >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+    return `${number(value)} ${units[unit]}`;
+  }
+
+  function element(tag, text) {
+    const node = document.createElement(tag);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function options(select, choices, selected) {
+    select.replaceChildren(...choices.map(([value, label]) => new Option(label, value)));
+    select.value = choices.some(([value]) => value === selected) ? selected : choices[0]?.[0] || '';
+  }
+
+  function taskLink(taskId, label) {
+    const jobId = taskId.slice(0, taskId.lastIndexOf('/'));
+    const link = element('a', label);
+    link.href = `${location.origin}/#/job/${encodeURIComponent(jobId)}/task/${encodeURIComponent(taskId)}`;
+    link.target = '_top';
+    return link;
+  }
+
+  function table(headers, rows) {
+    const result = element('table');
+    const head = result.createTHead().insertRow();
+    for (const label of headers) head.append(element('th', label));
+    const body = result.createTBody();
+    for (const values of rows) {
+      const row = body.insertRow();
+      for (const value of values) {
+        const cell = row.insertCell();
+        if (value instanceof Node) cell.append(value);
+        else cell.textContent = value;
+      }
+    }
+    if (!rows.length) {
+      const cell = body.insertRow().insertCell();
+      cell.colSpan = headers.length;
+      cell.textContent = 'No data for this view.';
+    }
+    return result;
+  }
+
+  function renderStatus(status) {
+    byId('phase').textContent = `${executionId || 'No active pipelines'} · ${status.phase.replaceAll('_', ' ')}`;
+    byId('failure').textContent = status.fatal_error;
+    byId('failure').hidden = !status.fatal_error;
+    const active = status.worker_states.find((worker) => worker.state === 'active')?.count || 0;
+    const elapsed = status.started_at_ms ? `${number(((status.finished_at_ms || Date.now()) - status.started_at_ms) / 1000)} s` : '—';
+    const values = [
+      ['Stage', status.current_stage || '—'], ['Shards', `${status.completed_shards}/${status.total_shards}`],
+      ['Workers', `${active}/${status.expected_workers}`], ['CPU', `${number(status.resources.cpu_cores)} cores`],
+      ['Memory', bytes(status.resources.memory_bytes)], ['Elapsed', elapsed],
+      ['In flight / queued', `${status.in_flight_shards} / ${status.queued_shards}`], ['Retries', status.retries],
+    ];
+    byId('summary').replaceChildren(...values.map(([label, value]) => {
+      const item = element('div');
+      item.append(element('dt', label), element('dd', value));
+      return item;
+    }));
+    byId('coordinator').hidden = !status.coordinator_task_id;
+    if (status.coordinator_task_id) byId('coordinator').href = taskLink(status.coordinator_task_id, '').href;
+  }
+
+  function renderPlan(plan, status) {
+    const states = new Map(status.node_statuses.map((node) => [node.node_id, node.state]));
+    const rows = plan.nodes.map((node) => [
+      node.label, (states.get(node.node_id) || 'pending').replaceAll('_', ' '), node.output_shards,
+      node.operation_types.join(', '), node.auxiliary ? `Join input for ${node.parent_node_id}` : 'Pipeline',
+    ]);
+    byId('content').replaceChildren(
+      element('p', `${plan.pipeline_name || 'Pipeline'} · ${number(plan.source_item_count)} source items`),
+      table(['Stage', 'State', 'Output shards', 'Operations', 'Plan'], rows),
+    );
+  }
+
+  function renderPage(data) {
+    let headers, rows;
+    if (view === 'counters') {
+      options(byId('stage'), [['', 'All stages'], ...data.stages.map((stage) => [stage, stage])], byId('stage').value);
+      headers = ['Name', 'Stage', 'Value', 'Aggregation', 'Samples'];
+      rows = data.counters.map((counter) => [counter.name, counter.stage || 'pipeline', number(counter.value), counter.aggregation, counter.observations]);
+    } else {
+      headers = ['Worker', 'State', 'Active shards', 'CPU', 'Memory', 'Heartbeat age', 'Task'];
+      rows = data.workers.map((worker) => [
+        worker.worker_id, worker.state, worker.assignments.map((item) => `${item.execution_id}:${item.shard}`).join(', ') || '—',
+        `${number(worker.cpu_percent)}%`, bytes(worker.memory_bytes), `${number(worker.last_seen_age_seconds)} s`,
+        worker.task_id ? taskLink(worker.task_id, 'Open task') : '—',
+      ]);
+    }
+    byId('content').replaceChildren(table(headers, rows));
+    const count = rows.length;
+    byId('range').textContent = `${count ? offset + 1 : 0}–${offset + count} of ${data.total}`;
+    byId('previous').disabled = offset === 0;
+    byId('next').disabled = offset + count >= data.total;
+  }
+
+  function chart(points, field, title, format) {
+    const figure = element('figure');
+    figure.className = 'chart';
+    figure.append(element('h2', title));
+    if (!points.length) { figure.append(element('p', 'No samples yet.')); return figure; }
+    const svgNode = (tag, attrs) => {
+      const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+      return node;
+    };
+    const svg = svgNode('svg', { viewBox: '0 0 500 200', role: 'img', 'aria-label': title });
+    const times = points.map((point) => point.timestamp_ms);
+    const start = Math.min(...times), end = Math.max(...times);
+    const high = Math.max(1, ...points.map((point) => point[field]));
+    const x = (time) => chartLeft + 425 * (time - start) / Math.max(1, end - start);
+    const y = (value) => 165 - 145 * value / high;
+    for (const value of [0, high / 2, high]) {
+      svg.append(svgNode('line', { x1: chartLeft, x2: 490, y1: y(value), y2: y(value), stroke: '#8885' }));
+      const label = svgNode('text', { x: 60, y: y(value) + 4, 'text-anchor': 'end', fill: 'currentColor', 'font-size': 11 });
+      label.textContent = format(value);
+      svg.append(label);
+    }
+    const legend = element('div');
+    legend.className = 'legend';
+    const stages = [...new Set(points.map((point) => point.stage))];
+    stages.forEach((stage, index) => {
+      const samples = points.filter((point) => point.stage === stage).sort((a, b) => a.timestamp_ms - b.timestamp_ms);
+      const color = colors[index % colors.length];
+      svg.append(svgNode('polyline', { points: samples.map((point) => `${x(point.timestamp_ms)},${y(point[field])}`).join(' '), fill: 'none', stroke: color, 'stroke-width': 2 }));
+      for (const point of samples) {
+        const dot = svgNode('circle', { cx: x(point.timestamp_ms), cy: y(point[field]), r: 3, fill: color });
+        const tip = svgNode('title', {});
+        tip.textContent = `${stage}: ${format(point[field])} at ${new Date(point.timestamp_ms).toLocaleTimeString()}`;
+        dot.append(tip);
+        svg.append(dot);
+      }
+      const label = element('span', stage || 'pipeline');
+      label.style.borderColor = color;
+      legend.append(label);
+    });
+    const timeRange = element('p', `${new Date(start).toLocaleTimeString()} – ${new Date(end).toLocaleTimeString()}`);
+    timeRange.className = 'muted';
+    figure.append(svg, timeRange, legend);
+    return figure;
+  }
+
+  function renderMetrics(data) {
+    const charts = element('div');
+    charts.className = 'charts';
+    charts.append(
+      chart(data.points, 'item_rate', 'Items / second', number),
+      chart(data.points, 'byte_rate', 'Bytes / second', bytes),
+      chart(data.points, 'cpu_cores', 'CPU cores', number),
+      chart(data.points, 'memory_bytes', 'Memory', bytes),
+    );
+    byId('content').replaceChildren(element('p', data.warning), charts);
+  }
+
+  async function refresh() {
+    clearTimeout(timer);
+    request?.abort();
+    const current = request = new AbortController();
+    const timeout = setTimeout(() => current.abort(), requestTimeout);
+    async function get(path, query = {}) {
+      const response = await fetch(`api/${path}?${new URLSearchParams(query)}`, { signal: current.signal });
+      if (!response.ok) throw new Error(`${path}: ${response.status} ${response.statusText}`);
+      return response.json();
+    }
+    try {
+      const { pipelines } = await get('pipelines');
+      if (current !== request) return;
+      if (!pipelines.some((pipeline) => pipeline.execution_id === executionId)) {
+        executionId = pipelines[0]?.execution_id || '';
+        offset = 0;
+        byId('stage').value = '';
+      }
+      options(byId('pipeline'), pipelines.length ? pipelines.map((pipeline) => [pipeline.execution_id, pipeline.pipeline_name]) : [['', 'No active pipelines']], executionId);
+      const url = new URL(location.href);
+      if (executionId) url.searchParams.set('execution_id', executionId);
+      else url.searchParams.delete('execution_id');
+      history.replaceState(null, '', url);
+      const query = view === 'workers' ? {} : { execution_id: executionId };
+      if (sortFields[view]) Object.assign(query, {
+        search: byId('search').value, stage: byId('stage').value, sort_field: byId('sort').value,
+        sort_descending: byId('descending').checked, offset, limit: pageSize,
+      });
+      if (view === 'metrics') query.max_points = 300;
+      const [status, data] = await Promise.all([get('status', { execution_id: executionId }), get(view, query)]);
+      if (current !== request) return;
+      renderStatus(status);
+      if (view === 'plan') renderPlan(data, status);
+      else if (view === 'metrics') renderMetrics(data);
+      else renderPage(data);
+      byId('error').hidden = true;
+      byId('updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+    } catch (error) {
+      if (current !== request) return;
+      byId('error').textContent = current.signal.aborted ? 'The request timed out. Select Refresh to try again.' : error.message;
+      byId('error').hidden = false;
+      byId('content').replaceChildren();
+      byId('summary').replaceChildren();
+      byId('phase').textContent = `${executionId || 'No active pipelines'} · data unavailable`;
+      byId('failure').hidden = true;
+    } finally {
+      clearTimeout(timeout);
+      if (current === request) {
+        request = null;
+        if (byId('live').checked) timer = setTimeout(refresh, refreshDelay);
+      }
+    }
+  }
+
+  function selectView() {
+    view = ['plan', 'counters', 'workers', 'metrics'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'plan';
+    offset = 0;
+    byId('search').value = '';
+    byId('stage').value = '';
+    byId('descending').checked = false;
+    byId('filters').hidden = byId('pager').hidden = !sortFields[view];
+    byId('stage-filter').hidden = view !== 'counters';
+    options(byId('sort'), sortFields[view] || [], '');
+    for (const link of document.querySelectorAll('nav a')) {
+      if (link.hash === `#${view}`) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    }
+    byId('content').replaceChildren();
+    void refresh();
+  }
+
+  byId('pipeline').onchange = () => {
+    executionId = byId('pipeline').value;
+    offset = 0;
+    byId('stage').value = '';
+    byId('content').replaceChildren();
+    void refresh();
+  };
+  byId('filters').onsubmit = (event) => { event.preventDefault(); offset = 0; void refresh(); };
+  byId('stage').onchange = () => { offset = 0; void refresh(); };
+  byId('previous').onclick = () => { offset = Math.max(0, offset - pageSize); void refresh(); };
+  byId('next').onclick = () => { offset += pageSize; void refresh(); };
+  byId('refresh').onclick = () => void refresh();
+  byId('live').onchange = () => { clearTimeout(timer); if (byId('live').checked) void refresh(); };
+  document.querySelector('nav').onclick = (event) => {
+    const link = event.target.closest('a');
+    if (!link) return;
+    event.preventDefault();
+    location.hash = link.hash;
+  };
+  window.addEventListener('hashchange', selectView);
+  selectView();
+}
+startDashboard();
+</script>
+</body>
+</html>
