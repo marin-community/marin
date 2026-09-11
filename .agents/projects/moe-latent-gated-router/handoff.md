@@ -25,8 +25,10 @@ The two full Gate 1 parents were submitted from `edf9b2871`:
 
 Each expected child is `<parent>/grug-train-<run-id>`. Read the `gate1` records in
 state for exact source, current status, checkpoint paths and recovery commands.
-At 18:58 UTC, both training children were verified pending for v5p-8 capacity,
-with no allocated attempts; both CPU parents were running.
+At 20:56 UTC, both full training children and W&B runs were running on attempt 0.
+Configuration and fresh checkpoint starts were verified; finite metrics were
+advancing (800 completed updates at d512 and 257 at d768), with zero routing overflow.
+See state for the latest progress; startup measurements are not final results.
 Do not duplicate these submissions or restart either cancelled smoke.
 
 Old `gated` identities are superseded: the gate-only smoke finished, and the

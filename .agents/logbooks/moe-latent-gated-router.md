@@ -178,3 +178,17 @@ See the [plan](../projects/moe-latent-gated-router/plan.md) and
 - At 18:58 UTC, both expected training children were confirmed pending for v5p-8
   capacity, with no allocated attempts; both CPU parents were running. The corrected
   smoke parent and child were both confirmed killed. No duplicate jobs were submitted.
+
+### 2026-09-11 — Full Gate 1 training verified
+
+- At 20:56 UTC, both corrected full cells were running on attempt 0, each on a
+  us-central1 v5p-8 worker. No manual recovery was needed.
+- W&B source `edf9b2871`, GATED_LATENT mode, full schedules, batches 32/64,
+  seed 0, data seed 1, EP1 and bf16 compute were verified. Latent RMSNorm and
+  gate parameters are both present. Checkpoint logs confirm fresh starts.
+- d512: 800 completed updates, train loss 4.27357, current 343,555 tokens/sec.
+  d768: 257 completed updates, train loss 5.55921, current 201,524 tokens/sec.
+  Recorded numeric metrics are finite and routing overflow is zero. These
+  startup values are not final evaluation or steady-state throughput results.
+- Compact startup evidence: `scratch/9110-gate1-startup-wandb.json`. State and
+  issue #9110 now record training progress; the same heartbeat remains owner.
