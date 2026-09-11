@@ -5,11 +5,12 @@
 
 import dataclasses
 import json
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
+
+from marin.profiling.semantics import canonical_op_name
 
 PROFILE_SUMMARY_SCHEMA_VERSION = "profile_summary.v1"
 
@@ -437,7 +438,7 @@ def _parse_hot_op(data: Mapping[str, Any]) -> HotOp:
     name = cast(str, data["name"])
     return HotOp(
         name=name,
-        canonical_name=cast(str, data.get("canonical_name") or _canonical_name(name)),
+        canonical_name=cast(str, data.get("canonical_name") or canonical_op_name(name)),
         category=cast(str, data["category"]),
         count=cast(int, data["count"]),
         total_duration=cast(float, data["total_duration"]),
@@ -535,7 +536,3 @@ def _quantile(values: list[float], quantile: float) -> float:
     upper = min(lower + 1, len(values) - 1)
     weight = position - lower
     return values[lower] * (1.0 - weight) + values[upper] * weight
-
-
-def _canonical_name(name: str) -> str:
-    return re.sub(r"\.\d+$", "", name.strip().lstrip("%"))
