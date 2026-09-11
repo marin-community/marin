@@ -17,7 +17,7 @@ Programmatic callers use :func:`build_workflow` and select any stage handle.
 
 Run the same graph in Iris from a CPU coordinator::
 
-    uv run iris --cluster=cw-us-east-08a job run --no-wait \
+    uv run iris --cluster=cw-us-east-02a job run --no-wait \
       -e DAYTONA_API_KEY "$DAYTONA_API_KEY" \
       -- python -m experiments.post_training.iceball_micro --version 2026.08.02 --run
 
@@ -90,10 +90,10 @@ GSM8K_REVISION = "e53f048"
 GSM8K_TRAIN_ROWS = 1024
 GSM8K_VALIDATION_ROWS = 128
 ICEBALL_EVALS = "gsm8k-smoke,aime-smoke"
-ICEBALL_CLUSTER = "cw-us-east-08a"
+ICEBALL_CLUSTER = "cw-us-east-02a"
 ICEBALL_CLUSTER_CONFIG = f"lib/iris/config/{ICEBALL_CLUSTER}.yaml"
-ICEBALL_GPU_VARIANT = "GB200"
-ICEBALL_TRAIN_GPUS = 4
+ICEBALL_GPU_VARIANT = "H100"
+ICEBALL_TRAIN_GPUS = 8
 ICEBALL_TRAIN_ACCELERATOR = f"{ICEBALL_TRAIN_GPUS}x{ICEBALL_GPU_VARIANT}"
 ICEBALL_EVAL_ACCELERATOR = f"{ICEBALL_GPU_VARIANT}x1"
 ICEBALL_SEQUENCE_LENGTH = 512
