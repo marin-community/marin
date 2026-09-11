@@ -6000,10 +6000,12 @@ dev = [
     { name = "pyrefly" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "pytest-json-report" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "ruff" },
+    { name = "tasktrove-verify", extra = ["answer", "reasoning-gym", "schema"] },
     { name = "types-pyyaml" },
     { name = "types-requests" },
 ]
@@ -6032,8 +6034,10 @@ test = [
     { name = "plotly" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "pytest-json-report" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "tasktrove-verify", extra = ["answer", "reasoning-gym", "schema"] },
 ]
 
 [package.metadata]
@@ -6129,10 +6133,12 @@ dev = [
     { name = "pyrefly", specifier = ">=1.0.0,<1.1.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
+    { name = "pytest-json-report", specifier = ">=1.5" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", specifier = "==0.14.3" },
+    { name = "tasktrove-verify", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/tasktrove-verify" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
 ]
@@ -6161,8 +6167,10 @@ test = [
     { name = "plotly" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
+    { name = "pytest-json-report", specifier = ">=1.5" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "tasktrove-verify", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/tasktrove-verify" },
 ]
 
 [[package]]

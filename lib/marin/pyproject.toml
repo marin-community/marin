@@ -62,8 +62,10 @@ test = [
     "cloud-sql-python-connector[pg8000]>=1.9",
     "pytest>=8.3.2",
     "pytest-asyncio",
+    "pytest-json-report>=1.5",
     "pytest-xdist",
     "pytest-timeout",
+    "tasktrove-verify[answer,reasoning-gym,schema]",
     # for scaling law plotting tests
     "plotly",
 ]
