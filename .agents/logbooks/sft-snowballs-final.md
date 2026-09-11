@@ -644,3 +644,9 @@ author: benfeuer
 - Result: skew4 completed its final resumed SWE-bench trial. Canonical record `20260911-000137-snowball-final-qk175-skew4-base-swebench-recovery-a1d7` is `status=succeeded`, with 0/99 solved, 100 attempted, 99 scored, and one `DaytonaError`.
 - Audit: read-only RNO2A job `/benfeuer/snowball-final-swe-skew4-record-audit` independently parsed the durable record and confirmed the metric and coverage payload.
 - Decision: the record passes the 95% coverage gate. `RESULTS.md` now reports all five SWE-bench random-100 cells. The shared skew4 root continues into Terminal-Bench 2.0.
+
+## 2026-09-11 02:30 EDT — SimpleQA durable resume validated
+
+- Runtime: all five recovery roots loaded Harbor commit `c0170f1ef3dfa3391935c71f79dadd7f49a7e7f1` and printed the exact original Harbor job name and S3 job directory.
+- Resume evidence: scans retained 644 qk157, 605 qk175, 542 skew2, 472 skew4, and 566 skew8 completed trials in 5.1–7.2 seconds. Reconciliation identified only benign serving drift and kept every loaded result.
+- Result: each root started missing task IDs under the original 32-way policy. The fix has crossed its live recovery gate: current runtime, prior artifacts, and bounded in-memory representation are active together.
