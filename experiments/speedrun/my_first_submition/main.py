@@ -10,24 +10,34 @@ and process.
 
 import logging
 
-from experiments.llama import llama_nano
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from fray.cluster import ResourceConfig
+from levanter.models.llama import LlamaConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
 
+tiny_llama = LlamaConfig(
+    max_seq_len=512,
+    hidden_dim=16,
+    intermediate_dim=64,
+    num_heads=1,
+    num_kv_heads=1,
+    num_layers=1,
+    tie_word_embeddings=True,
+)
+
 speedrun_config = SpeedrunConfig(
     author=Author(
-        name="Herumb Shandilya",
-        affiliation="Stanford University",
-        url="https://www.x.com/krypticmouse",
+        name="yun1104",
+        affiliation="HuaZhong University of Science and Technology",
+        url="https://github.com/yun1104/marin",
     ),
-    description="Nano model based on Llama architecture.",
-    model_config=llama_nano,
+    description="Nano model based on Llama architecture. To run the first experiment, I need to use a small model.",
+    model_config=tiny_llama,
     train_config=SimpleTrainConfig(
-        ResourceConfig.with_gpu("A100-80G", count=1),
+        ResourceConfig.with_gpu("RTX3090", count=1),
         train_batch_size=32,
         num_train_steps=100,
         learning_rate=3e-3,
