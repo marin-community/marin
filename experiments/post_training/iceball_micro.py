@@ -429,6 +429,8 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
             name=rl_name,
             version=version or resolve_version(rl_base_name, None),
             config_yaml=ICEBALL_RL_CONFIG,
+            # Evaluation consumes the regional export; disable the launcher's default Hub publication.
+            overrides=("++trainer.hf_hub_repo_id=null",),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ArtifactHfModel(
                 step=sft,
