@@ -19,6 +19,7 @@ from marin.evaluation.evalchemy.runner import (
     EvalchemyRuntimeConfig,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
@@ -130,6 +131,8 @@ class HarborDefinition:
                 env=config.environment,
                 task_limit=runtime_task_limit,
                 config_digest=config.digest,
+                max_input_tokens=config.max_input_tokens,
+                max_output_tokens=config.max_output_tokens,
             ),
         )
 
@@ -147,9 +150,22 @@ class HarborDefinition:
         return HarborExecutor(
             config=config,
             task_limit=runtime_task_limit,
-            model_agent_kwargs=model.agent.agent_kwargs,
+            model_agent_kwargs=harbor_model_agent_kwargs(model),
             secret_env_keys=tuple(secret_env),
         )
+
+
+def harbor_model_agent_kwargs(model: ModelConfig) -> dict[str, object]:
+    """Harbor agent kwargs for one model, carrying the context limits it is served with.
+
+    The agent's ``model_info`` is derived from ``serve.max_model_len`` and ``generation.max_gen_toks``
+    so the agent summarizes and truncates against the window the server actually offers. The isolated
+    driver rejects a policy whose own ``model_info`` contradicts these values.
+    """
+    return {
+        **model.agent.agent_kwargs,
+        MODEL_INFO_KEY: served_model_info(model.serve.max_model_len, model.generation.max_gen_toks),
+    }
 
 
 def harbor_definition(

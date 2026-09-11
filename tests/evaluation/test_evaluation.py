@@ -18,9 +18,10 @@ from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, Constra
 from iris.rpc import job_pb2
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.harbor.agent_context import reconciled_model_info
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint
+from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus, TaskCoverage, read_record
 from marin.evaluation.runner import (
     Evaluation,
@@ -47,10 +48,13 @@ from experiments.evaluation.models import models
 
 
 def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the isolated driver subprocess, resolving agent limits the way it does."""
+
     def preflight(requests):
         configs = []
-        for path, _model_agent_kwargs in requests:
+        for path, model_agent_kwargs in requests:
             policy = json.dumps({"source": path.name}, separators=(",", ":"))
+            model_info = reconciled_model_info(model_agent_kwargs.get("model_info"), None)
             configs.append(
                 ValidatedHarborConfig(
                     stable_policy_json=policy,
@@ -61,6 +65,8 @@ def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
                     workspace_dataset_path=None,
                     agent="opencode",
                     environment="daytona",
+                    max_input_tokens=model_info["max_input_tokens"],
+                    max_output_tokens=model_info["max_output_tokens"],
                 )
             )
         return tuple(configs)
@@ -700,6 +706,8 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
             "env": "daytona",
             "task_limit": 2,
             "config_digest": evaluation.identity.eval_ref.harbor.config_digest,
+            "max_input_tokens": 32768,
+            "max_output_tokens": 8192,
         },
     }
     assert batch.secret_env == {
@@ -746,6 +754,74 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
     assert captured["overlay"].served_model == "served-qwen3-8b"
     assert captured["overlay"].endpoint_url == "https://iris.example/capability/v1"
     assert captured["overlay"].model_agent_kwargs["extra_body"] == ('{"chat_template_kwargs":{"enable_thinking":true}}')
+
+
+def test_build_evaluation_batch_gives_harbor_the_served_context_limits(tmp_path, monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    config_path = _write_harbor_config(tmp_path / "aime-policy.yaml")
+    spec = LaunchSpec(
+        model=replace(
+            models()["qwen3-8b"],
+            serve=ServeConfig(max_model_len=1048576),
+            generation=GenerationConfig(max_gen_toks=393216),
+        ),
+        evals=(),
+        evalchemy_definitions=(),
+        harbor_definitions=(HarborDefinition(name="aime-policy", config_path=config_path),),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=None,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    (evaluation,) = batch.evaluations
+    harbor = evaluation.identity.eval_ref.harbor
+    assert (harbor.max_input_tokens, harbor.max_output_tokens) == (1048576, 393216)
+    assert evaluation.executor.model_agent_kwargs["model_info"] == {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+    }
+
+
+def test_launch_dry_run_prints_the_resolved_harbor_agent_context(tmp_path, monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    model_path = tmp_path / "long-context.yaml"
+    model_path.write_text(
+        """\
+name: long-context
+location: Qwen/Qwen3-8B
+resource_hint:
+  hbm_gb: 21
+serve:
+  max_model_len: 1048576
+generation:
+  max_gen_toks: 393216
+"""
+    )
+    config_path = _write_harbor_config(tmp_path / "aime-policy.yaml")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model-config",
+            str(model_path),
+            "--harbor-config",
+            str(config_path),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "max_input_tokens=1048576" in result.output
+    assert "max_output_tokens=393216" in result.output
 
 
 @pytest.mark.parametrize(

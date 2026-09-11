@@ -135,6 +135,16 @@ Runtime values do not change the source-policy digest. Policy kwargs override mo
 the served endpoint/model, output paths, materialized source, and explicit `--limit` override both.
 Temporary policy and overlay files are owner-readable and removed after each isolated call.
 
+## Agent context limits
+
+The agent's `model_info.max_input_tokens` comes from the model's `serve.max_model_len` and its
+`model_info.max_output_tokens` from `generation.max_gen_toks`, so the agent compacts against the
+window the server actually offers. A policy that states a limit the model contradicts fails
+preflight, before Iris opens, with both values named; repeating the served limit in the policy is
+allowed. A limit neither the model nor the policy states falls back to Harbor's own default, 32768
+input and 8192 output tokens. `--dry-run` prints the resolved pair per Harbor eval and `record.json`
+keeps it under `eval.harbor`.
+
 ## Results
 
 Each Harbor evaluation writes:

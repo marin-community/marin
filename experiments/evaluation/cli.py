@@ -70,12 +70,18 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
         f"priority={priority_band_name(batch.priority_band)}"
     )
     for evaluation in batch.evaluations:
-        tasks = [task.name for task in evaluation.identity.eval_ref.tasks]
+        eval_ref = evaluation.identity.eval_ref
+        tasks = [task.name for task in eval_ref.tasks]
+        harbor = eval_ref.harbor
+        agent_context = ""
+        if harbor is not None:
+            agent_context = f"max_input_tokens={harbor.max_input_tokens}  max_output_tokens={harbor.max_output_tokens}  "
         click.echo(
-            f"  eval={evaluation.identity.eval_ref.name}  location={batch.model.location}  "
+            f"  eval={eval_ref.name}  location={batch.model.location}  "
             f"backend={batch.model.serve.backend.value}  accel={batch.accelerator.label}  "
             f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
             f"tasks={tasks}  "
+            f"{agent_context}"
             f"records={batch.records_prefix}"
         )
 

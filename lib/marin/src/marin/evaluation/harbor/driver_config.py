@@ -105,6 +105,10 @@ class ValidatedHarborConfig:
     workspace_dataset_path: Path | None
     agent: str
     environment: str
+    max_input_tokens: int
+    max_output_tokens: int
+    """The agent's resolved context budget: the served model's limits, the policy's explicit
+    ``model_info``, then Harbor's own defaults."""
 
     @property
     def record_dataset(self) -> str:
@@ -217,6 +221,12 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
             raise ValueError(f"Harbor preflight returned invalid {name!r} metadata for {path}")
         return value
 
+    def required_int(name: str) -> int:
+        value = payload.get(name)
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"Harbor preflight returned invalid {name!r} metadata for {path}")
+        return value
+
     revision = payload.get("dataset_revision")
     if revision is not None and not isinstance(revision, str):
         raise ValueError(f"Harbor preflight returned invalid dataset revision metadata for {path}")
@@ -247,6 +257,8 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
         workspace_dataset_path=workspace_dataset_path,
         agent=required_string("agent"),
         environment=required_string("environment"),
+        max_input_tokens=required_int("max_input_tokens"),
+        max_output_tokens=required_int("max_output_tokens"),
     )
 
 

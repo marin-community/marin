@@ -193,6 +193,16 @@ class HarborRef(BaseModel):
         pattern=r"^sha256:[0-9a-f]{64}$",
         exclude_if=lambda value: value is None,
     )
+    max_input_tokens: int | None = Field(
+        default=None,
+        description="Agent context budget resolved from the served model, the policy, and Harbor's defaults",
+        exclude_if=lambda value: value is None,
+    )
+    max_output_tokens: int | None = Field(
+        default=None,
+        description="Agent generation budget resolved from the served model, the policy, and Harbor's defaults",
+        exclude_if=lambda value: value is None,
+    )
 
 
 class EvalRef(BaseModel):

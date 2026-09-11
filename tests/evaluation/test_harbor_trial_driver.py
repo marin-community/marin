@@ -210,6 +210,25 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     assert all(result["digest"] == expected["digest"] for result in seeded)
 
 
+def test_preflight_reports_agent_context_resolved_from_the_served_model(tmp_path):
+    served = {"model_info": {"max_input_tokens": 1048576, "max_output_tokens": 393216}}
+
+    (result,) = json.loads(_preflight(tmp_path, [(_POLICIES / "tb2.yaml", served)]).stdout)
+
+    assert result["max_input_tokens"] == 1048576
+    assert result["max_output_tokens"] == 393216
+
+
+def test_preflight_rejects_a_policy_agent_context_the_served_model_contradicts(tmp_path):
+    served = {"model_info": {"max_input_tokens": 32768}}
+
+    completed = _preflight(tmp_path, [(_POLICIES / "grug-opencode-id.yaml", served)], check=False)
+
+    assert completed.returncode == 2
+    assert "64512" in completed.stderr
+    assert "32768" in completed.stderr
+
+
 @pytest.mark.parametrize(
     ("setup_parameters", "run_parameters", "callback", "keywords"),
     [
@@ -392,7 +411,7 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
                 "task_limit": 3,
                 "model_agent_kwargs": {
                     "extra_body": '{"chat_template_kwargs":{"enable_thinking":true}}',
-                    "model_info": {"max_input_tokens": 123},
+                    "model_info": {"max_input_tokens": 64512, "max_output_tokens": 16384},
                     "trajectory_config": {"raw_content": True},
                 },
             }
