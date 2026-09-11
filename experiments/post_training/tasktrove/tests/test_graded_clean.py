@@ -108,6 +108,12 @@ def test_clean_keeps_survivors_and_ledgers_the_rest(tmp_path):
     assert manifest["clean_tasks"] == 1 and manifest["input_tasks"] == 4
     assert manifest["by_status"] == {"converted": 1, "duplicate": 1, "verified:gold_leak": 1, "null_grader": 1}
     assert manifest["by_check"] == {"gold_leak": 1}
+    assert manifest["source_details"][SOURCE] == {
+        "converters": {"nemotron_mcqa": 1},
+        "modes": {"mcq": 1},
+        "languages": {},
+        "dockerfiles": {good.dockerfile_id: 1},
+    }
     ledger = _rows(tmp_path / "clean" / "ledger.parquet")
     assert {p: r["status"] for p, r in ledger.items()} == {
         "later-dup.tar.gz": "duplicate",

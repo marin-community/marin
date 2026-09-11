@@ -22,8 +22,8 @@ import re
 import threading
 from pathlib import Path
 
-from tasktrove_verify.modes.extract import extract_boxed, last_line, strip_math_delimiters
 from tasktrove_verify.grade import InvalidTask, Reward, read_output, scored
+from tasktrove_verify.modes.extract import extract_boxed, last_line, strip_math_delimiters
 from tasktrove_verify.spec import MathSpec, MathType, NumericSpec
 
 SET_TYPES = frozenset({MathType.SET, MathType.INTERVAL})
@@ -42,14 +42,14 @@ def _timeout() -> int | None:
 
 def _parse(text: str) -> list:
     """math-verify's parse of ``text`` as a LaTeX expression, else of the text as written."""
-    from math_verify import parse
+    from math_verify import parse  # noqa: PLC0415
 
     timeout = _timeout()
     return parse(f"${strip_math_delimiters(text)}$", parsing_timeout=timeout) or parse(text, parsing_timeout=timeout)
 
 
 def _verify(expected: object, candidate: object, allow_set_relation_comp: bool = False) -> bool:
-    from math_verify import verify
+    from math_verify import verify  # noqa: PLC0415
 
     return verify(expected, candidate, allow_set_relation_comp=allow_set_relation_comp, timeout_seconds=_timeout())
 

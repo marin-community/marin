@@ -14,8 +14,7 @@ from pathlib import Path
 
 import reasoning_gym
 
-from tasktrove_verify.grade import read_output
-from tasktrove_verify.grade import InvalidTask, Reward, scored
+from tasktrove_verify.grade import InvalidTask, Reward, read_output, scored
 from tasktrove_verify.spec import ReasoningGymSpec
 
 CANDIDATE_DETAIL_CHARS = 200

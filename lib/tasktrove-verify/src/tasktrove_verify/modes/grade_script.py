@@ -19,9 +19,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from tasktrove_verify.grade import REWARD_JSON, REWARD_TXT, InvalidTask, Reward, scored
 from tasktrove_verify.modes.extract import last_line
 from tasktrove_verify.modes.run import STDERR_TAIL, run_command
-from tasktrove_verify.grade import REWARD_JSON, REWARD_TXT, InvalidTask, Reward, scored
 from tasktrove_verify.spec import DEFAULT_WORKSPACE, ScriptSpec, Spec
 
 SHELL = "bash"

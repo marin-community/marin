@@ -19,9 +19,8 @@ import yaml
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 
+from tasktrove_verify.grade import InvalidTask, Reward, read_output, scored
 from tasktrove_verify.modes.extract import unwrap_fence
-from tasktrove_verify.grade import read_output
-from tasktrove_verify.grade import InvalidTask, Reward, scored
 from tasktrove_verify.spec import JsonSchemaSpec, SchemaFormat
 
 

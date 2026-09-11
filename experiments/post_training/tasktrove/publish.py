@@ -6,7 +6,7 @@
     tasks/part-00000.parquet every surviving task with its selection columns
     ledger.parquet           one row per task that did not survive: its status and the reason
     manifest.json            revision, tool ref, counts per status, source, converter, mode, tag, check
-                             and Dockerfile, plus every source's verdict
+                             and Dockerfile, plus every source's verdict and normalized task shape
     report.md                the manifest as tables, regenerated every run
 
 The survivors are copied by a Zephyr stage that reads only converted rows; the ledger and counts
@@ -37,8 +37,13 @@ from zephyr.dataset import Dataset
 
 from experiments.post_training.tasktrove.convert import CONVERTED_SCHEMA
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
-from experiments.post_training.tasktrove.dataset import APPROX_SHARD_BYTES, WORKER_RESOURCES
-from experiments.post_training.tasktrove.dataset import TASKTROVE_HF_ID, TASKTROVE_REVISION, load_source_verdicts
+from experiments.post_training.tasktrove.dataset import (
+    APPROX_SHARD_BYTES,
+    TASKTROVE_HF_ID,
+    TASKTROVE_REVISION,
+    WORKER_RESOURCES,
+    load_source_verdicts,
+)
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, read_task_binary
 from experiments.post_training.tasktrove.verify import GRADED_GLOB, VERIFIED_STATUS
 
@@ -60,7 +65,17 @@ TASK_COLUMNS = (
 )
 TASKS_SCHEMA = pa.schema([CONVERTED_SCHEMA.field(name) for name in TASK_COLUMNS])
 LEDGER_COLUMNS = ("source", "path", "status", "error")
-SUMMARY_COLUMNS = ("source", "path", "status", "error", "converter", "mode", "dockerfile_id", "tags")
+SUMMARY_COLUMNS = (
+    "source",
+    "path",
+    "status",
+    "error",
+    "converter",
+    "mode",
+    "dockerfile_id",
+    "language",
+    "tags",
+)
 _READERS = 32
 FINAL_SHARDS = 1
 _FROM_LINE = re.compile(r"^FROM\s+(\S+)", re.MULTILINE | re.IGNORECASE)
@@ -123,6 +138,9 @@ def build_manifest(graded: pa.Table, tool_ref: str, dockerfiles: dict[str, str])
     verdicts = load_source_verdicts()
     by_status: Counter = Counter()
     by_source: dict[str, Counter] = defaultdict(Counter)
+    source_details: dict[str, dict[str, Counter]] = defaultdict(
+        lambda: {"converters": Counter(), "modes": Counter(), "languages": Counter(), "dockerfiles": Counter()}
+    )
     by_converter: dict[str, Counter] = defaultdict(Counter)
     by_mode: Counter = Counter()
     by_check: Counter = Counter()
@@ -138,9 +156,9 @@ def build_manifest(graded: pa.Table, tool_ref: str, dockerfiles: dict[str, str])
     }
     columns = {
         name: graded.column(name).to_pylist()
-        for name in ("source", "status", "converter", "mode", "dockerfile_id", "tags")
+        for name in ("source", "status", "converter", "mode", "dockerfile_id", "language", "tags")
     }
-    for source, status, converter, mode, dockerfile_id, tags in zip(*columns.values(), strict=True):
+    for source, status, converter, mode, dockerfile_id, language, tags in zip(*columns.values(), strict=True):
         by_status[status] += 1
         by_source[source][status] += 1
         if converter:
@@ -150,6 +168,12 @@ def build_manifest(graded: pa.Table, tool_ref: str, dockerfiles: dict[str, str])
         if status == ConvertStatus.CONVERTED:
             by_mode[mode] += 1
             by_tag.update(tags)
+            detail = source_details[source]
+            detail["converters"][converter] += 1
+            detail["modes"][mode] += 1
+            detail["dockerfiles"][dockerfile_id] += 1
+            if language:
+                detail["languages"][language] += 1
             entry = by_dockerfile[dockerfile_id]
             entry["tasks"] += 1
             entry["converters"][converter] += 1
@@ -164,6 +188,10 @@ def build_manifest(graded: pa.Table, tool_ref: str, dockerfiles: dict[str, str])
         "by_mode": dict(by_mode.most_common()),
         "by_tag": dict(by_tag.most_common()),
         "by_source": {s: dict(c.most_common()) for s, c in sorted(by_source.items())},
+        "source_details": {
+            source: {name: dict(counts.most_common()) for name, counts in detail.items()}
+            for source, detail in sorted(source_details.items())
+        },
         "source_verdicts": {
             s: {"verdict": v.verdict.value, "family": v.family, "reason": v.reason} for s, v in sorted(verdicts.items())
         },

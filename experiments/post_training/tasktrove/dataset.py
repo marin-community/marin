@@ -38,7 +38,10 @@ class SourceInfo:
 
 def load_source_verdicts() -> dict[str, SourceInfo]:
     raw = json.loads(_VERDICTS_PATH.read_text())
-    return {source: SourceInfo(source, SourceVerdict(row["verdict"]), row["family"], row["reason"]) for source, row in raw.items()}
+    return {
+        source: SourceInfo(source, SourceVerdict(row["verdict"]), row["family"], row["reason"])
+        for source, row in raw.items()
+    }
 
 
 def source_name(parquet_path: str) -> str:

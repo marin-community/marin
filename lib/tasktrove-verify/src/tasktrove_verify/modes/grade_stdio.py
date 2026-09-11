@@ -14,9 +14,9 @@ import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
+from tasktrove_verify.grade import InvalidTask, Reward, scored
 from tasktrove_verify.modes.extract import last_line
 from tasktrove_verify.modes.run import STDERR_TAIL, Completed, run_command, split_command, workdir
-from tasktrove_verify.grade import InvalidTask, Reward, scored
 from tasktrove_verify.spec import Compare, StdioSpec
 
 INPUT_PATTERN = re.compile(r"^input_(.+)\.txt$")

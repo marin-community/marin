@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import Prose from '@marina/Prose.vue'
 import { archive, count, task as parquetTask, type ParquetTask } from '../corpus'
@@ -13,8 +13,13 @@ const files = ref<Entry[]>([])
 const problem = ref('')
 const wrap = ref(true)
 const rendered = ref(true)
+const archiveHref = ref('')
 
 const selectedPath = computed(() => (typeof route.query.file === 'string' ? route.query.file : undefined))
+const back = computed(() => {
+  const value = typeof route.query.back === 'string' ? route.query.back : '/browse'
+  return value.startsWith('/browse') ? value : '/browse'
+})
 const selected = computed(
   () => files.value.find((file) => file.path === selectedPath.value) ?? files.value.find((file) => file.path === 'instruction.md') ?? files.value[0],
 )
@@ -28,17 +33,20 @@ function bytes(value: number): string {
 }
 
 function pick(path: string): void {
-  router.replace({ query: { file: path } })
+  router.replace({ query: { ...route.query, file: path } })
 }
 
 async function start(): Promise<void> {
   problem.value = ''
   files.value = []
+  if (archiveHref.value) URL.revokeObjectURL(archiveHref.value)
+  archiveHref.value = ''
   try {
     const row = Number(props.id)
     if (!Number.isSafeInteger(row) || row < 0) throw new Error(`Invalid Parquet row ${props.id}.`)
     task.value = await parquetTask(row)
     const packed = await archive(row)
+    archiveHref.value = URL.createObjectURL(new Blob([packed as BlobPart], { type: 'application/gzip' }))
     files.value = entries(await gunzip(packed)).sort((a, b) => a.path.localeCompare(b.path))
   } catch (error) {
     problem.value = String(error)
@@ -47,12 +55,15 @@ async function start(): Promise<void> {
 
 onMounted(start)
 watch(() => props.id, start)
+onBeforeUnmount(() => {
+  if (archiveHref.value) URL.revokeObjectURL(archiveHref.value)
+})
 </script>
 
 <template>
   <p class="problem" v-if="problem">{{ problem }}</p>
   <template v-if="task">
-    <RouterLink class="back" to="/browse">← Browse tasks</RouterLink>
+    <RouterLink class="back" :to="back">← Back to results</RouterLink>
     <header class="task-heading">
       <div>
         <p class="eyebrow">{{ task.mode }} · {{ task.environment }}</p>
@@ -61,10 +72,12 @@ watch(() => props.id, start)
       </div>
       <dl>
         <dt>Converter</dt><dd>{{ task.converter }}</dd>
+        <dt>Task type</dt><dd>{{ task.family }}</dd>
         <dt>Language</dt><dd>{{ task.language || 'not specified' }}</dd>
         <dt>Dockerfile</dt><dd><code>{{ task.dockerfile_id.slice(0, 12) }}</code></dd>
         <dt>Parquet row</dt><dd>{{ count(task.row) }}</dd>
         <dt>Oracle</dt><dd>{{ task.has_solution ? 'included separately' : 'none' }}</dd>
+        <dt>Archive</dt><dd><a v-if="archiveHref" :href="archiveHref" :download="task.path">download task_binary</a></dd>
       </dl>
     </header>
     <div class="tags"><span v-for="tag in task.tags" :key="tag">{{ tag }}</span></div>

@@ -24,16 +24,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import click
-from tasktrove_verify.grade import DEFAULT_LOGS_DIR
-from tasktrove_verify.grade import VERDICT_JSON
+from tasktrove_verify.grade import DEFAULT_LOGS_DIR, VERDICT_JSON
 from tasktrove_verify.spec import DEFAULT_WORKSPACE
 from zephyr.readers import load_parquet
 
-from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, TESTS_MOUNT
 from experiments.post_training.tasktrove.convert import ConvertedRecord, convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import load_source_verdicts
+from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, TESTS_MOUNT
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, read_task_binary
 
 logger = logging.getLogger(__name__)

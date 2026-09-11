@@ -13,8 +13,8 @@ grades as a run with no tests.
 import json
 from pathlib import Path
 
-from tasktrove_verify.modes.run import STDERR_TAIL, check_ids, restore, run_command, run_setup, workdir
 from tasktrove_verify.grade import Reward, scored
+from tasktrove_verify.modes.run import STDERR_TAIL, check_ids, restore, run_command, run_setup, workdir
 from tasktrove_verify.spec import GotestSpec
 
 GO = "go"
