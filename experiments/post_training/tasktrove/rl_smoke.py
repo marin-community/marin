@@ -57,7 +57,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.curriculum_rl.launch import HF_EXPORT_SUBDIR, model_step
 from experiments.post_training.curriculum_rl.pool import QWEN3_MODEL, QWEN3_REVISION
-from experiments.post_training.tasktrove.pipeline import build_workflow
+from experiments.post_training.tasktrove.pipeline import build_workflow, launch_commit
 from experiments.post_training.tasktrove.taskbinary import read_task_binary
 
 logger = logging.getLogger(__name__)
@@ -329,7 +329,7 @@ def smoke_step(sample: ArtifactStep) -> ArtifactStep[SkyRLModel]:
 @click.command(help=__doc__)
 @build_options
 def main() -> ArtifactStep:
-    release = build_workflow().release
+    release = build_workflow(launch_commit()).release
     return smoke_step(sample_step(release))
 
 

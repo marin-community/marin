@@ -25,6 +25,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply, lower, run
 from marin.execution.remote import remote
 from marin.experiment.data import hf_download
+from rigging.provenance import launch_provenance
 
 from experiments.post_training.tasktrove.convert import convert_tasks
 from experiments.post_training.tasktrove.dataset import TASKS_GLOB, TASKTROVE_HF_ID, TASKTROVE_REVISION
@@ -33,8 +34,7 @@ from experiments.post_training.tasktrove.task_templates import build_template_in
 from experiments.post_training.tasktrove.verify import filter_tasks
 
 STAGES = ("raw", "summaries", "templates", "converted", "filtered", "release")
-PIPELINE_VERSION = "2026.09.10.8"
-VERIFY_TOOL_REF = "b2b68d8b0a770cdc0ab3903780172c4b3eea81b1"
+PIPELINE_VERSION = "2026.09.10.9"
 RAW_VERSION = "2026.09.09"
 """Pinned download version; bump only when ``TASKTROVE_REVISION`` changes, so reruns reuse the download."""
 
@@ -49,7 +49,17 @@ class TaskTroveWorkflow:
     release: ArtifactStep
 
 
-def build_workflow() -> TaskTroveWorkflow:
+def launch_commit() -> str:
+    """The clean, fetchable commit recorded by the current Marin launch."""
+    provenance = launch_provenance()
+    if provenance.dirty:
+        raise click.ClickException("TaskTrove releases cannot be built with uncommitted changes")
+    if not provenance.base_commit:
+        raise click.ClickException("TaskTrove releases require a Git commit in the launch provenance")
+    return provenance.base_commit
+
+
+def build_workflow(tool_ref: str) -> TaskTroveWorkflow:
     coordinator = ResourceConfig.with_cpu(cpu=4, ram="16g")
     raw = hf_download(
         "raw/tasktrove", hf_id=TASKTROVE_HF_ID, revision=TASKTROVE_REVISION, version=RAW_VERSION, urls_glob=(TASKS_GLOB,)
@@ -76,7 +86,7 @@ def build_workflow() -> TaskTroveWorkflow:
         input_path=raw,
         templates_path=templates,
         output_path=OUT,
-        tool_ref=VERIFY_TOOL_REF,
+        tool_ref=tool_ref,
     )
     filtered = apply(
         "tasktrove/graded",
@@ -92,7 +102,7 @@ def build_workflow() -> TaskTroveWorkflow:
         version=PIPELINE_VERSION,
         filtered_path=filtered,
         output_path=OUT,
-        tool_ref=VERIFY_TOOL_REF,
+        tool_ref=tool_ref,
         artifact_type=Artifact,
     )
     return TaskTroveWorkflow(raw, summaries, templates, converted, filtered, release)
@@ -103,7 +113,7 @@ def build_workflow() -> TaskTroveWorkflow:
 @click.option("--run", "do_run", is_flag=True, help="Build the selected stage; the default prints its plan.")
 @click.option("--max-concurrent", type=int, default=8, show_default=True)
 def main(stage: str, do_run: bool, max_concurrent: int) -> None:
-    target = getattr(build_workflow(), stage)
+    target = getattr(build_workflow(launch_commit()), stage)
     if do_run:
         run(target, max_concurrent=max_concurrent)
     else:

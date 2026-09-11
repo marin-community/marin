@@ -20,7 +20,10 @@ defines and executes the grader contract.
 
 ## Run
 
-The release version, TaskTrove revision, and verifier commit are constants in `pipeline.py`.
+The release version and TaskTrove revision are constants in `pipeline.py`. The verifier commit
+comes from Marin launch provenance. Commit and push converter and verifier changes before starting
+a release; the pipeline rejects a dirty launch because task Dockerfiles fetch that commit from
+GitHub.
 
 ```bash
 # Print the pinned build plan.
@@ -34,8 +37,8 @@ uv run python -m experiments.post_training.tasktrove.pipeline --stage templates 
 ```
 
 Update `PIPELINE_VERSION` for a new conversion release. Update `TASKTROVE_REVISION` and
-`RAW_VERSION` together when the input revision changes. Update `VERIFY_TOOL_REF` when generated
-Dockerfiles must install a new verifier commit.
+`RAW_VERSION` together when the input revision changes. The generated Dockerfiles and release
+manifest record the clean launch commit used to build the pipeline.
 
 ## Pipeline
 
@@ -47,6 +50,31 @@ Dockerfiles must install a new verifier commit.
 | `converted` | `convert.py` | normalized task binaries, optional solution archives, metadata, and row status |
 | `filtered` | `verify.py` | within-source exact deduplication and fail-closed verifier checks |
 | `release` | `publish.py` | one task Parquet plus the ledger, manifest, and report |
+
+## Release layout
+
+The release deliberately uses one Parquet file rather than Hive-style source partitions. Each row
+is one retained task, and consumers can select a source, family, or other cohort from ordinary
+columns before reading the packed task payloads.
+
+| column | meaning |
+|---|---|
+| `path` | stable task identifier from the source dataset |
+| `source` | original TaskTrove source name |
+| `family` | broad conversion family assigned by `source_verdicts.json` |
+| `template_id` | normalized source template identity |
+| `converter` | converter that produced the task |
+| `mode` | declared `tasktrove-verify` grader mode |
+| `dockerfile_id` | normalized environment/Dockerfile identity |
+| `language` | task language when the converter can determine it |
+| `tags` | list of selection labels preserved or added during conversion |
+| `has_solution` | whether the release includes a shipped oracle solution |
+| `task_binary` | gzip-compressed Harbor task archive |
+| `solution_binary` | optional gzip-compressed oracle solution archive |
+
+The physical path is `tasks/part-00000.parquet`. Source-specific files can be materialized from
+the `source` column when needed; the canonical release stays single-shard so it has one immutable
+object, one footer, and one row-count contract.
 
 The current release is under
 `s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8/`:
