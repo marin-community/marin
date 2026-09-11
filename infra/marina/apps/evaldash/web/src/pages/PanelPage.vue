@@ -14,7 +14,7 @@ import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cellsByModel, fleetBest, isPartialCoverage } from '@/utils/panel'
+import { cellsByModel, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
   FLAG_NOTES,
@@ -135,9 +135,14 @@ const sharedTasks = computed<string[]>(() => {
 })
 
 // Carry the panel's selection into the compare route, so the comparison answers the same question
-// the panel was showing rather than falling back to every benchmark at the newest cohort.
+// the panel was showing rather than falling back to every benchmark at the newest cohort. The column
+// list travels explicitly, by exact eval name: a family's siblings are admitted results the panel
+// resolved down to one column, and Compare has to score the setting the reader was shown.
 function goCompare() {
-  router.push({ path: '/compare', query: { ...selection.value, models: selected.value.join(',') } })
+  const benchmarks = columns.value.map((column) => column.task).join(',')
+  const query: Record<string, string> = { ...selection.value, models: selected.value.join(',') }
+  if (benchmarks) query.benchmarks = benchmarks
+  router.push({ path: '/compare', query })
 }
 
 const modelCells = computed(() => cellsByModel(data.value?.rows ?? []))
@@ -242,10 +247,10 @@ const rows = computed<PanelRow[]>(() => {
 })
 
 // --- Benchmark families: several settings of one benchmark share one leaderboard column ---
-// A column shows one variant at a time: the reader's, when the column selection names a single
-// variant, and otherwise the server's default for this request — the variant with the most admitted
-// cells, which the coverage gate, the cohort and the filters in force all move. The picker offers
-// every variant the fleet has run, from meta, so a column narrowed to one can switch back.
+// The server resolves which setting each column shows and returns `panel` as that one variant per
+// family, so coverage, completeness and the aggregate are already over the columns on screen. The
+// picker offers every variant the fleet has run, from meta, so a column narrowed to one can switch
+// back to a sibling this panel is not showing.
 interface FamilyColumn {
   family: string
   task: string
@@ -262,21 +267,19 @@ const knownVariants = computed<Record<string, string[]>>(() => {
   return out
 })
 
-const columns = computed<FamilyColumn[]>(() =>
-  (data.value?.families ?? []).map((entry) => ({
+const columns = computed<FamilyColumn[]>(() => {
+  const shown = new Set(visibleTasks.value)
+  return (data.value?.families ?? []).map((entry) => ({
     family: entry.family,
-    task: entry.default,
+    task: entry.variants.find((name) => shown.has(name)) ?? entry.default,
     variants: knownVariants.value[entry.family] ?? entry.variants,
-  })),
-)
+  }))
+})
 
-// Showing a variant means asking for it: the exact eval name replaces its siblings in the column
-// selection, so `benchmarks=` carries it, the URL stays shareable, and Compare scores that setting.
 function pickVariant(column: FamilyColumn, variant: string) {
-  for (const name of column.variants) {
-    if (name === variant) selectedEvals.add(name)
-    else selectedEvals.delete(name)
-  }
+  const next = withVariant(selectedEvals, column.variants, variant)
+  selectedEvals.clear()
+  for (const name of next) selectedEvals.add(name)
   if (sortKey.value === column.task) sortKey.value = variant
   persistSelection(knownEvals.value)
 }

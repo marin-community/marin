@@ -117,12 +117,15 @@ names the flag and links the run, and `include_flagged=1` admits it, starred.
 Several settings of one benchmark share a leaderboard column. Which names belong together is declared
 once in the launcher's eval registry and written into each run's `eval.family`, so the dashboard reads
 the grouping off the records instead of keeping a table that drifts; a run that declares no family is
-a column of its own. `/panel` returns `families`, each with its variants and the variant to open on:
-the one with the most admitted cells under this request, ties broken by eval name. That default is
-computed per request rather than fixed in the registry, because the coverage gate, a pinned cohort,
-and the metadata filters all change which settings have results for the models on screen. Cells stay
-keyed by the exact eval name, which is also what `benchmarks=` carries, so a shared URL, `/compare`,
-and `/history` resolve the same setting the reader was looking at.
+a column of its own. `/panel` returns `families`, each with its variants and the variant the column
+shows: the one with the most admitted cells under this request, ties broken by eval name, or the
+single sibling a request that names one asks for. The choice is made per request rather than fixed in
+the registry, because the coverage gate, a pinned cohort, and the metadata filters all change which
+settings have results for the models on screen. `panel` is that one variant per family, and coverage,
+`complete=1`, and the aggregate protocol are all computed over it, so every number describes the
+columns a reader sees; `benchmarks` stays the full admitted list, and a cell is kept for every
+admitted variant. Cells are keyed by the exact eval name, which is also what `benchmarks=` carries, so
+a shared URL, `/compare`, and `/history` resolve the same setting the reader was looking at.
 
 The primary metric per task matches on the base metric name with lm-eval's `,<filter>` suffix
 stripped: the first present of `exact_match`, `accuracy`, `acc_norm`, `acc`, `pass@1` (falling back to

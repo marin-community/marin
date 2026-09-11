@@ -31,6 +31,7 @@ def _record(
     coverage: dict[str, TaskCoverage] | None = None,
     accelerator: str = "v6e-8",
     family: str | None = None,
+    eval_runtime: str = "i",
 ) -> EvalRunRecord:
     succeeded = value is not None
     metrics = {eval_name: {"acc,none": value, "acc_stderr,none": 0.01, "sample_len": float(ITEMS)}} if succeeded else {}
@@ -55,7 +56,7 @@ def _record(
         coverage=coverage or {},
         jobs={},
         log_tails={},
-        provenance=Provenance(git_sha="s", eval_runtime="i", launch_host="h"),
+        provenance=Provenance(git_sha="s", eval_runtime=eval_runtime, launch_host="h"),
     )
 
 
@@ -272,6 +273,55 @@ def test_a_family_opens_on_the_variant_with_results_for_the_most_models():
     assert relaxed["families"][0]["default"] == "gsm8k"
 
 
+def test_a_family_counts_once_in_the_panel_the_coverage_and_the_aggregate():
+    """The column a reader sees is one variant, so every number over the panel has to be over that
+    variant. Both settings stay admitted and keep their cells; only one of them is a column."""
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.40, family="gsm8k"),
+        _record("a", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.60),
+    ]
+
+    panel = build_panel(records, panel_request(), aggregate_policy=MissingPolicy.REQUIRE_COMPLETE)
+
+    assert panel["panel"] == ["gsm8k", "mmlu"]
+    assert panel["benchmarks"] == ["gsm8k", "gsm8k-0shot", "mmlu"]
+    (row,) = panel["rows"]
+    assert row["covered"] == 2
+    assert row["aggregate"]["panel"] == ["gsm8k", "mmlu"]
+    assert row["aggregate"]["value"] == pytest.approx(0.55)
+
+
+def test_completeness_is_judged_against_the_variant_each_column_shows():
+    """A model that ran only the setting on screen covers the panel. Judging it against every sibling
+    would drop it for missing a column the reader is not being shown."""
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.40, family="gsm8k"),
+        _record("b", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.60, family="gsm8k"),
+    ]
+
+    panel = build_panel(records, panel_request(completeness=Completeness.COMPLETE_PANEL))
+
+    assert panel["panel"] == ["gsm8k"]
+    assert [row["model"] for row in panel["rows"]] == ["a", "b"]
+
+
+def test_an_explicitly_requested_variant_is_the_one_the_column_shows():
+    """gsm8k has the cells to win the default, but a request naming gsm8k-0shot is the reader's own
+    choice of setting and the panel answers that question instead."""
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k"),
+        _record("b", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.60, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.40, family="gsm8k"),
+    ]
+
+    panel = build_panel(records, panel_request(benchmarks=("gsm8k-0shot",)))
+
+    assert panel["panel"] == ["gsm8k-0shot"]
+    assert [row["cells"].get("gsm8k-0shot", {}).get("value") for row in panel["rows"]] == [pytest.approx(0.40)]
+
+
 def test_an_eval_with_no_declared_family_is_a_column_of_one():
     """A benchmark run under a single setting, and one the registry never familied, each stand alone
     rather than needing an entry in a grouping table the dashboard maintains."""
@@ -300,16 +350,21 @@ def test_variants_with_equally_many_results_default_to_the_first_eval_name():
 
 
 def test_a_variant_in_a_family_keeps_its_own_cell_name_and_provenance():
-    """Sharing a column is a heading, not a merge. Cells stay keyed by exact eval name, each naming
-    the run and cohort behind it, so the two settings never average into one number."""
+    """Sharing a column is a heading, not a merge. Cells stay keyed by exact eval name, and each one
+    keeps the run, the cohort and the harness that defined its benchmark -- two settings scored by
+    two harness versions are not one measurement, and the cell has to be able to say so."""
     records = [
-        _record("a", "gsm8k", "v1", "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k"),
-        _record("a", "gsm8k-0shot", "v2", "2026-02-01T00:00:00+00:00", 0.40, family="gsm8k"),
+        _record("a", "gsm8k", "v1", "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k", eval_runtime="evalchemy==1"),
+        _record(
+            "a", "gsm8k-0shot", "v2", "2026-02-01T00:00:00+00:00", 0.40, family="gsm8k", eval_runtime="evalchemy==2"
+        ),
     ]
 
     (row,) = build_panel(records, panel_request())["rows"]
 
     assert sorted(row["cells"]) == ["gsm8k", "gsm8k-0shot"]
+    assert row["cells"]["gsm8k"]["eval_runtime"] == "evalchemy==1"
+    assert row["cells"]["gsm8k-0shot"]["eval_runtime"] == "evalchemy==2"
     assert row["cells"]["gsm8k"]["version"] == "v1"
     assert row["cells"]["gsm8k-0shot"]["version"] == "v2"
     assert row["cells"]["gsm8k-0shot"]["run_id"] == "a-gsm8k-0shot-2026-02-01T00:00:00+00:00"

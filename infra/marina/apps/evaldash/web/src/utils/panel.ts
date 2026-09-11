@@ -36,6 +36,16 @@ export function fleetBest(rows: PanelRow[], benchmarks: string[]): Record<string
   return out
 }
 
+// Choosing which setting of a benchmark a column shows is a change to the column selection, not a
+// display toggle: the chosen eval name replaces its siblings, so the request, the shareable URL and
+// Compare all name the setting on screen. Names outside this family are untouched.
+export function withVariant(selected: Iterable<string>, variants: string[], chosen: string): Set<string> {
+  const next = new Set(selected)
+  for (const name of variants) next.delete(name)
+  next.add(chosen)
+  return next
+}
+
 // The two fields any coverage question needs. A panel cell, a history point, and a run headline all
 // carry them, so the one predicate below serves every view instead of each hand-rolling it.
 export interface Covered {

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import replace
 
 from marin.evaluation.eval_measurements import measurement_from_record, measurements_from_records
 from marin.evaluation.eval_stats import (
@@ -118,20 +119,22 @@ def declared_families(records: Iterable[EvalRunRecord]) -> dict[str, str]:
 
 
 def _family_columns(
-    panel: Sequence[str],
+    requested: Sequence[str],
     families: Mapping[str, str],
     cells: Mapping[str, Mapping[str, Measurement]],
 ) -> list[dict]:
-    """The panel's benchmarks grouped into families, each with the variant to show by default.
+    """The requested benchmarks grouped into families, each with the variant its column shows.
 
-    The default is the variant with the most admitted cells under the request that produced ``cells``,
-    ties broken by eval name. Admission depends on the request -- a coverage gate, a pinned cohort, a
-    metadata filter -- so the variant that says the most about the models on screen is a property of
-    the question being asked and cannot be decided once at registry time.
+    The variant shown is the one with the most admitted cells under the request that produced
+    ``cells``, ties broken by eval name. Admission depends on the request -- a coverage gate, a pinned
+    cohort, a metadata filter -- so the variant that says the most about the models on screen is a
+    property of the question being asked and cannot be decided once at registry time. A request that
+    names a single sibling leaves it as its family's only candidate, which is how an explicit choice
+    of setting is honoured.
     """
     admitted = Counter(name for model_cells in cells.values() for name in model_cells)
     grouped: dict[str, list[str]] = {}
-    for name in panel:
+    for name in requested:
         grouped.setdefault(families.get(name, name), []).append(name)
     return [
         {
@@ -252,28 +255,41 @@ def build_panel(
     policy -- a panel aggregate carrying its own protocol. No aggregate is produced by default: a mean
     across benchmarks has no interpretation without a declared panel and missing-data policy.
 
-    ``families`` groups the panel's benchmarks into the columns a reader sees, one per declared
-    family, each naming its variants and the one to show by default. Cells stay keyed by exact eval
-    name, so a variant's provenance and every benchmark-named parameter are unchanged.
+    ``families`` groups the requested benchmarks into the columns a reader sees, each naming its
+    variants and the one shown. ``panel`` is that one variant per family, and it is what coverage,
+    completeness and the aggregate are all computed over, so every number describes the columns on
+    screen. ``benchmarks`` stays the full admitted list. Cells stay keyed by exact eval name, so a
+    variant's provenance and every benchmark-named parameter are unchanged.
     """
     eligible = _panel_records(records)
     metadata = run_metadata(eligible)
-    selection = select(measurements_from_records(eligible), request, metadata)
+    # Completeness is applied below rather than in the engine: it has to be judged against the columns
+    # a reader sees, which are one variant per family and are not known until the selection is in hand.
+    selection = select(measurements_from_records(eligible), replace(request, completeness=Completeness.ANY), metadata)
+    requested = list(request.panel) if request.panel is not None else list(selection.benchmarks)
+    families = _family_columns(requested, declared_families(eligible), selection.cells)
+    panel = [column["default"] for column in families]
+    # A sibling the column is not showing gets no gap entry: an explained empty cell belongs to a
+    # column on screen. Its admitted results still reach the payload as cells. A request naming
+    # exactly one variant of a family leaves that variant as the family's only candidate, so the
+    # reader's explicit choice wins here without a separate branch.
+    hidden = {name for column in families for name in column["variants"] if name != column["default"]}
+
     on_panel = [
         record
         for record in eligible
+        if record.evaluation.name not in hidden
         if request.panel is None or record.evaluation.name in request.panel
         if matches_filters(record.model.name, metadata[record.run_id], request)
     ]
     missing = _missing_cells(on_panel, selection.cells, selection.rejections)
 
-    panel = request.panel if request.panel is not None else selection.benchmarks
     protocol = AggregationProtocol(panel=tuple(panel), missing=aggregate_policy) if aggregate_policy else None
 
     rows = []
     for model in sorted(set(selection.cells) | set(missing)):
         cells = selection.cells.get(model, {})
-        if request.completeness is Completeness.COMPLETE_PANEL and model not in selection.cells:
+        if request.completeness is Completeness.COMPLETE_PANEL and not all(name in cells for name in panel):
             continue
         rows.append(
             {
@@ -287,8 +303,8 @@ def build_panel(
         )
     return {
         "benchmarks": list(selection.benchmarks),
-        "panel": list(panel),
-        "families": _family_columns(list(panel), declared_families(eligible), selection.cells),
+        "panel": panel,
+        "families": families,
         "rows": rows,
         "request": {
             "min_coverage": request.min_coverage,
