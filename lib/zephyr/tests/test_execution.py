@@ -1626,6 +1626,7 @@ def test_registration_retries_a_failed_rpc_and_waits_out_a_slow_one():
     rpc = _RegistrationRpc()
     worker = ZephyrWorker.__new__(ZephyrWorker)
     worker._coordinator = MagicMock(register_worker=rpc)
+    worker._task_id = ""
     worker._worker_id = "test-worker-0"
     worker._actor_handle = MagicMock()
     worker._memory_store = MagicMock()
