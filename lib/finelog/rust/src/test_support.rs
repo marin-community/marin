@@ -35,7 +35,9 @@ pub enum ObjectOp {
     Write,
     Read,
     LocalPath,
+    List,
     CompareAndSwap,
+    Delete,
 }
 
 /// Which object IDs a fault applies to.
@@ -289,6 +291,10 @@ impl ObjectStore for FaultInjectingObjectStore {
             .await
     }
 
+    async fn exists(&self, id: &ObjectId) -> Result<bool, StatsError> {
+        self.inner.exists(id).await
+    }
+
     /// Staging is a local write; faults model the remote, so it always runs.
     async fn stage(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
         self.inner.stage(id, bytes).await
@@ -342,11 +348,13 @@ impl ObjectStore for FaultInjectingObjectStore {
     }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
-        self.inner.delete(id).await
+        self.execute(ObjectOp::Delete, id.as_str(), || self.inner.delete(id))
+            .await
     }
 
     async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {
-        self.inner.list(prefix).await
+        self.execute(ObjectOp::List, prefix.as_str(), || self.inner.list(prefix))
+            .await
     }
 
     async fn list_tables(&self) -> Result<Vec<String>, StatsError> {

@@ -72,18 +72,31 @@ drops that column from forwarded batches, and appends the compatible fields. Req
 unknown columns and shared-column type changes remain errors. Other namespaces retain
 ordinary additive registration.
 
-Forwarding is **best-effort by construction**: the sending store holds the record,
-the hub a convenience copy. A backlog is a durable cursor into the sender's bounded
-local retention rather than a separate queue, so the forwarder drains it without an
-age or row-count cap. Non-log chunks from one read turn may wait for hub durability
-concurrently; log chunks stay serial to preserve line order. Rows are skipped after
-local eviction makes them unreadable or after the hub returns `invalid_argument` for
-permanently invalid content. A `failed_precondition` write preserves its cursor and
+Forwarding deployments are durable relays after their tables migrate to object-native
+state. A backlog is a cursor into immutable source objects rather than a separate queue.
+One settlement transaction advances the downstream cursor and removes every segment it
+fully covers. Released objects remain available through the query and rollback window.
+Relays do not compact, index, project, repartition, or rewrite their short-lived spool.
+Catalog checkpoints carry the folded release set, so collection reads the selected state,
+lists historical keys without opening them, and deletes eligible objects in provider
+batches.
+
+Non-log chunks from one read turn may wait for hub durability concurrently; log chunks
+stay serial to preserve line order. Rows are skipped after the hub returns
+`invalid_argument` for permanently invalid content. Version-0 local retention can also
+evict a sequence range; object-native relays fail closed instead of skipping it. A
+`failed_precondition` write preserves its cursor and
 invalidates the cached hub registration; the next sweep re-registers the current source
 schema and retries while other namespaces continue forwarding. Transient failures get
 three attempts before the namespace yields for the sweep, without advancing its cursor.
-A hub outage therefore cannot consume extra sender memory, but a long enough outage can
-still outlive local retention.
+
+Node-local deployments acknowledge object-backed rows only after the immutable objects,
+state document, and HEAD pointer are remotely durable. Persistent-volume deployments may
+acknowledge the same flush after its local commit while publication continues asynchronously.
+SIGTERM performs no special forwarding drain; a replacement resumes from object state and
+the durable downstream cursor. Version-0 node-local stores retain their historical eviction
+semantics until migration, so their first object-native rollout needs a cursor preflight and
+archive sync as described in `infra/finelog/README.md`.
 
 Every five minutes the sender writes delta counters to `telemetry_v1.finelog`. A later
 successful forwarding sweep can copy them to the hub. `forwarding_batches` labels accepted,

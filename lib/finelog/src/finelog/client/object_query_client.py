@@ -39,8 +39,10 @@ class CatalogPin:
 
 
 _OBJECT_CATALOG_ROOT = ("_finelog", "tables")
-# Mirrors the server's TABLE_STATE_FORMAT_VERSION.
-_SUPPORTED_CATALOG_FORMAT = 1
+_LEGACY_CATALOG_FORMAT = 1
+_CATALOG_TREE_FORMAT = 2
+_MAX_CATALOG_DELTAS = 64
+_MAX_CATALOG_DELTA_BYTES = 1024 * 1024
 _MessageT = TypeVar("_MessageT", bound=Message)
 
 
@@ -139,15 +141,84 @@ class ObjectQueryClient:
         head = self._read_message(table_root / "HEAD.json", "HEAD", stats_pb2.CatalogHead())
         if head.tombstoned:
             raise StatsError(f"namespace {namespace!r} was deleted")
-        catalog_id = _table_object_id(head.catalog.object_id, namespace, "HEAD.catalog.objectId")
-        catalog_path = self._root / catalog_id
-        catalog_bytes = self._read_bytes(catalog_path)
-        catalog = _parse_message(
-            catalog_bytes,
-            stats_pb2.NamespaceCatalog(),
-            f"catalog for namespace {namespace!r}",
-        )
+        if head.format_version == _LEGACY_CATALOG_FORMAT:
+            catalog = _parse_message(
+                self._read_catalog_object(namespace, head.catalog, "HEAD.catalog"),
+                stats_pb2.NamespaceCatalog(),
+                f"catalog for namespace {namespace!r}",
+            )
+        elif head.format_version == _CATALOG_TREE_FORMAT:
+            catalog = self._fold_catalog_tree(namespace, head.catalog)
+        else:
+            raise StatsError(
+                f"unsupported object catalog format for namespace {namespace!r}: HEAD={head.format_version}"
+            )
         return head, catalog
+
+    def _fold_catalog_tree(
+        self,
+        namespace: str,
+        tip: stats_pb2.ObjectRef,
+    ) -> stats_pb2.NamespaceCatalog:
+        nodes: list[stats_pb2.CatalogNode] = []
+        seen: set[str] = set()
+        reference = tip
+        while True:
+            if reference.byte_size <= 0:
+                raise StatsError(f"catalog reference for namespace {namespace!r} has no byte size")
+            object_id = _table_object_id(reference.object_id, namespace, "CatalogNode.objectId")
+            if object_id in seen:
+                raise StatsError(f"catalog tree for namespace {namespace!r} contains a cycle")
+            if len(nodes) > _MAX_CATALOG_DELTAS:
+                raise StatsError(f"catalog tree for namespace {namespace!r} exceeds {_MAX_CATALOG_DELTAS} deltas")
+            seen.add(object_id)
+            node = _parse_message(
+                self._read_catalog_object(namespace, reference, "CatalogNode"),
+                stats_pb2.CatalogNode(),
+                f"catalog node for namespace {namespace!r}",
+            )
+            if (
+                node.format_version != _CATALOG_TREE_FORMAT
+                or node.namespace != namespace
+                or node.catalog_generation == 0
+                or node.delta_depth > _MAX_CATALOG_DELTAS
+                or node.delta_bytes_since_checkpoint > _MAX_CATALOG_DELTA_BYTES
+            ):
+                raise StatsError(f"invalid catalog node for namespace {namespace!r}")
+            nodes.append(node)
+            if node.HasField("checkpoint"):
+                if (
+                    node.HasField("parent")
+                    or node.HasField("delta")
+                    or node.delta_depth != 0
+                    or node.delta_bytes_since_checkpoint != 0
+                ):
+                    raise StatsError(f"invalid catalog checkpoint for namespace {namespace!r}")
+                break
+            if not node.HasField("delta") or not node.HasField("parent"):
+                raise StatsError(f"catalog delta for namespace {namespace!r} has no parent")
+            reference = node.parent
+        if nodes[0].delta_depth != len(nodes) - 1:
+            raise StatsError(f"catalog tip shape does not match its chain for namespace {namespace!r}")
+        catalog = stats_pb2.NamespaceCatalog()
+        catalog.CopyFrom(nodes[-1].checkpoint)
+        for node in reversed(nodes[:-1]):
+            if node.catalog_generation <= catalog.catalog_generation:
+                raise StatsError(f"catalog generations do not increase for namespace {namespace!r}")
+            catalog = _apply_catalog_delta(namespace, catalog, node.delta)
+        return catalog
+
+    def _read_catalog_object(
+        self,
+        namespace: str,
+        reference: stats_pb2.ObjectRef,
+        field: str,
+    ) -> bytes:
+        object_id = _table_object_id(reference.object_id, namespace, f"{field}.objectId")
+        data = self._read_bytes(self._root / object_id)
+        if reference.byte_size and len(data) != reference.byte_size:
+            raise StatsError(f"{field} for namespace {namespace!r} has the wrong byte size")
+        return data
 
     def _register_namespace(self, connection: duckdb.DuckDBPyConnection, pin: CatalogPin) -> None:
         escaped_namespace = pin.namespace.replace('"', '""')
@@ -188,11 +259,13 @@ def _validated_active_spec(
     head: stats_pb2.CatalogHead,
     catalog: stats_pb2.NamespaceCatalog,
 ) -> tuple[int, stats_pb2.TableSpec]:
-    if head.format_version != _SUPPORTED_CATALOG_FORMAT or catalog.format_version != _SUPPORTED_CATALOG_FORMAT:
+    if head.format_version not in {_LEGACY_CATALOG_FORMAT, _CATALOG_TREE_FORMAT}:
         raise StatsError(
             f"unsupported object catalog format for namespace {namespace!r}: "
             f"HEAD={head.format_version}, catalog={catalog.format_version}"
         )
+    if catalog.format_version != head.format_version:
+        raise StatsError(f"HEAD/catalog format mismatch for namespace {namespace!r}")
     active_version = catalog.active_table_spec_version
     if active_version == 0:
         raise StatsError(
@@ -217,6 +290,63 @@ def _validated_active_spec(
     if spec.operating_policy.l0_mode != stats_pb2.L0_MODE_OBJECT_STORE:
         raise StatsError(f"namespace {namespace!r} active TableSpec {active_version} is not object-backed")
     return active_version, spec
+
+
+def _apply_catalog_delta(
+    namespace: str,
+    previous: stats_pb2.NamespaceCatalog,
+    delta: stats_pb2.CatalogDelta,
+) -> stats_pb2.NamespaceCatalog:
+    if not delta.HasField("metadata"):
+        raise StatsError(f"catalog delta for namespace {namespace!r} has no metadata")
+    segments = {
+        (version.table_spec_version, retired, segment.segment_id): segment
+        for version in previous.version_segments
+        for retired, values in ((False, version.live_segments), (True, version.retired_segments))
+        for segment in values
+    }
+    for removal in delta.segment_removals:
+        key = (removal.table_spec_version, removal.retired, removal.segment_id)
+        if key not in segments:
+            raise StatsError(f"catalog delta for namespace {namespace!r} removes absent segment {removal.segment_id!r}")
+        del segments[key]
+    for addition in delta.segment_additions:
+        if not addition.HasField("key") or not addition.HasField("segment"):
+            raise StatsError(f"catalog delta for namespace {namespace!r} has an incomplete segment addition")
+        key = (
+            addition.key.table_spec_version,
+            addition.key.retired,
+            addition.key.segment_id,
+        )
+        if not addition.key.segment_id or addition.segment.segment_id != addition.key.segment_id:
+            raise StatsError(f"catalog delta for namespace {namespace!r} has an invalid segment addition")
+        segments[key] = addition.segment
+
+    direct = {segment.segment_id: segment for segment in previous.direct_query_segments}
+    for segment_id in delta.direct_query_removals:
+        if segment_id not in direct:
+            raise StatsError(
+                f"catalog delta for namespace {namespace!r} removes absent direct-query segment {segment_id!r}"
+            )
+        del direct[segment_id]
+    for segment in delta.direct_query_additions:
+        if not segment.segment_id:
+            raise StatsError(f"catalog delta for namespace {namespace!r} adds an unnamed direct-query segment")
+        direct[segment.segment_id] = segment
+
+    result = stats_pb2.NamespaceCatalog()
+    result.CopyFrom(delta.metadata)
+    versions = {version.table_spec_version: version for version in result.version_segments}
+    for version_number, retired, segment_id in sorted(segments):
+        version = versions.get(version_number)
+        if version is None:
+            version = result.version_segments.add(table_spec_version=version_number)
+            versions[version_number] = version
+        destination = version.retired_segments if retired else version.live_segments
+        destination.add().CopyFrom(segments[(version_number, retired, segment_id)])
+    for segment_id in sorted(direct):
+        result.direct_query_segments.add().CopyFrom(direct[segment_id])
+    return result
 
 
 def _table_object_id(value: str, namespace: str, field: str) -> str:

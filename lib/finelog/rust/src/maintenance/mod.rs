@@ -82,6 +82,10 @@ pub struct MaintenanceLimits {
     /// backfill behind other tables' multi-minute backlog drains stretches it
     /// from hours into days.
     spec_migration: tokio::sync::Mutex<()>,
+    /// Object-backed relays perform catalog publication and object collection,
+    /// but no compaction or index construction. Keep that I/O backlog out of the
+    /// two query-serving maintenance slots.
+    relay_io: tokio::sync::Semaphore,
     /// How many tables may flush concurrently. Flushes are short and are the
     /// durability path, so this is looser than the maintenance limit.
     flushes: tokio::sync::Semaphore,
@@ -89,6 +93,10 @@ pub struct MaintenanceLimits {
 
 /// Concurrent maintenance cycles across all tables.
 const MAX_CONCURRENT_MAINTENANCE_CYCLES: usize = 2;
+// Physical relay collection is intentionally low priority. A cycle can walk a
+// large remote catalog tree; concurrent walks compete with durability flushes
+// and forwarding settlements for the same object-store budget.
+const MAX_CONCURRENT_RELAY_IO_CYCLES: usize = 1;
 
 /// Concurrent flushes across all tables.
 const MAX_CONCURRENT_FLUSHES: usize = 4;
@@ -101,6 +109,7 @@ impl MaintenanceLimits {
             encoding_rewrite: Mutex::new(()),
             maintenance_cycles: tokio::sync::Semaphore::new(MAX_CONCURRENT_MAINTENANCE_CYCLES),
             spec_migration: tokio::sync::Mutex::new(()),
+            relay_io: tokio::sync::Semaphore::new(MAX_CONCURRENT_RELAY_IO_CYCLES),
             flushes: tokio::sync::Semaphore::new(MAX_CONCURRENT_FLUSHES),
         })
     }
@@ -123,6 +132,10 @@ impl MaintenanceLimits {
 
     pub fn spec_migration(&self) -> &tokio::sync::Mutex<()> {
         &self.spec_migration
+    }
+
+    pub fn relay_io(&self) -> &tokio::sync::Semaphore {
+        &self.relay_io
     }
 
     pub fn flushes(&self) -> &tokio::sync::Semaphore {

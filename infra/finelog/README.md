@@ -34,6 +34,15 @@ writes. If the update or verification fails after changing the Deployment, the
 wrapper restores the captured ReplicaSet, verifies it, and refreshes Pulumi
 state to match the restored workload. Pass `--yes` to skip Pulumi's confirmation.
 
+ReplicaSet rollback assumes the prior binary can read every remote table state
+the candidate published. It cannot cross an object-state format change. In
+particular, current object references omit the former `sha256` field; a binary
+that requires that field fails recovery after the current server publishes a
+table revision. Before registering the first object-native table on a cluster,
+treat the candidate as roll-forward-only. If verification later fails, deploy a
+corrected descendant against the same remote root. Do not use
+`finelog rollback` to restore a SHA-validating image.
+
 The Deployment uses `Recreate` because the Finelog store permits only one
 writer. It retains ten ReplicaSets for rollback. The stack derives its rollout
 identity from the checkout's content-addressed Git tree SHA and stamps the tree
@@ -48,8 +57,42 @@ intended checkout; there is no rollout counter in Pulumi configuration.
   requests and limits ephemeral storage to `storage_gb`, and normally creates
   no PVC.
   It survives container restarts but not pod replacement. All bundled regional
-  senders use this mode because forwarding is best-effort and the hub becomes
-  the read source for rows it accepts.
+  senders use this mode because object storage is their durable spool and the
+  hub becomes the read source for rows it settles.
+
+## Forwarding relay lifecycle
+
+A deployment with `forwarding` configured runs relay maintenance. It preserves
+the table schema sent to the hub, but does not compact or build local query
+indexes, projections, placement rewrites, or encoding rewrites. Unsettled L0
+objects are the durable spool.
+
+The downstream cursor is the logical deletion boundary. Each forwarding turn
+publishes the cursor and removes whole segments at or below the minimum cursor
+for all configured targets in one table-state mutation. A retryable forwarding
+failure does not advance the cursor, so it cannot delete an unforwarded segment.
+Settled segments leave the live relay snapshot immediately; pinned queries and
+rollback-visible table states retain their immutable objects until the exact
+release deadline expires. Unknown orphan uploads use a separate grace period.
+
+The cache storage selects write acknowledgement durability. A node-local cache
+acknowledges object-backed rows only after their objects and table-state HEAD are
+published remotely, so deleting the pod cannot lose an acknowledged tail. A
+persistent-volume cache acknowledges after the local commit and publishes the
+same state asynchronously. Object uploads use a separate bounded async pool and
+do not occupy Parquet flush capacity. SIGTERM does no special forwarding drain;
+the replacement resumes from the published state and downstream cursor.
+
+The first transition from a version-0 node-local store needs an operator drain
+because version-0 tables have no object-state acknowledgement boundary. Before
+replacing it, confirm every namespace's forwarding cursor has reached its
+persisted high water. Then shorten local retention and let legacy archive
+maintenance upload `LOCAL` segments and evict only `BOTH` segments. Register
+the version-1 table specifications after the archive-only history is evicted:
+migration excludes `REMOTE` rows and rewrites only the small local tail. Wait
+for every table to reach `RETIRED` before treating object state as the recovery
+authority. The old
+flat archive objects may remain until a separate inventory-backed cleanup.
 
 With `persistent-volume`, set `deployment.k8s.cache_pvc_name` to adopt and mount
 an existing replacement claim. Enable the stack's `import` option when Pulumi

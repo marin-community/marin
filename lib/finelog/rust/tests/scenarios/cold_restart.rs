@@ -8,6 +8,7 @@ use crate::support::{
     localized_data_objects, register_v1, run_sql, seq_column, wait_for_cache_fill, write_row,
     Cluster, Invariants, TABLE,
 };
+use finelog::test_support::ObjectOp;
 
 /// A store that restarts with no local cache and no local catalog bootstraps
 /// from the object directory alone. Recovery downloads no data, the first reads
@@ -46,6 +47,16 @@ async fn a_cold_restart_scans_remotely_and_warms_only_the_live_objects() {
     let (restarted, faults) = cluster.open();
     restarted.recover_tables().await.unwrap();
     assert_metadata_only_bootstrap(&faults);
+
+    // HEAD already proves that the recovered live objects are remote. The
+    // first later publication must not list the entire data prefix before it
+    // can publish a newly staged object.
+    faults.clear_calls();
+    restarted.publish_object_catalog(TABLE).await.unwrap();
+    assert!(
+        faults.keys_for(ObjectOp::List).is_empty(),
+        "a claimed HEAD makes a cold projection's first publication list-free"
+    );
 
     // A full scan, before any maintenance cycle. The cold cache never blocks
     // the read: the scan runs against the object directory itself and the

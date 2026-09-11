@@ -66,6 +66,7 @@ def test_finelog_resource_args_reference_secret_without_secret_values() -> None:
     assert container.env_from[0].secret_ref.name == "finelog-cw-env"
     assert container.env is not None
     assert {entry.name for entry in container.env} == {
+        "FINELOG_ACK_DURABILITY",
         "FINELOG_AUTH_POLICY",
         "FINELOG_FORWARDING",
         "FINELOG_INDEX_CACHE_MB",
@@ -96,8 +97,23 @@ def test_finelog_node_local_cache_uses_bounded_ephemeral_storage() -> None:
     assert volume.persistent_volume_claim is None
 
     container = pod_spec.containers[0]
+    assert container.env is not None
+    env = {entry.name: entry.value for entry in container.env}
+    assert env["FINELOG_ACK_DURABILITY"] == "object-store"
     assert container.resources is not None
     assert container.resources.requests is not None
     assert container.resources.limits is not None
     assert container.resources.requests["ephemeral-storage"] == "250Gi"
     assert container.resources.limits["ephemeral-storage"] == "250Gi"
+
+
+def test_finelog_persistent_cache_selects_local_disk_acknowledgement() -> None:
+    resources = finelog_resource_args(_args(K8sCacheStorage.PERSISTENT_VOLUME), "image@sha256:digest")
+    assert resources.deployment.spec is not None
+    pod_spec = resources.deployment.spec.template.spec
+    assert pod_spec is not None
+    container = pod_spec.containers[0]
+    assert container.env is not None
+    env = {entry.name: entry.value for entry in container.env}
+
+    assert env["FINELOG_ACK_DURABILITY"] == "local-disk"

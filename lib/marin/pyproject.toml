@@ -46,6 +46,8 @@ dependencies = [
     "tqdm-loggable",
     "wandb>0.24.0",
     "marin-zephyr",
+    "openai-harmony>=0.0.8",
+    "tokenizers",
 ]
 
 [project.license]

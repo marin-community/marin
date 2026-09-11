@@ -110,3 +110,30 @@ def test_preempted_attempt_holds_capacity_until_worker_reports_exact_terminal_st
 
     journey.run_until_task_state(high, job_pb2.TASK_STATE_RUNNING)
     assert journey.task(high).worker_id == "worker-a"
+
+
+def test_parent_failure_keeps_preempted_child_capacity_until_worker_confirmation(worker_journey):
+    journey = worker_journey
+    daemon = journey.add_worker("worker-a", "worker-a:8080", cpu_millicores=2000)
+    parent = journey.submit("parent")
+    journey.run_until_task_state(parent, job_pb2.TASK_STATE_RUNNING)
+    child = journey.submit("child", parent=parent)
+    journey.run_until_task_state(child, job_pb2.TASK_STATE_RUNNING)
+
+    daemon.acknowledge_stops = False
+    journey.preempt(child)
+    journey.run_until_task_state(child, job_pb2.TASK_STATE_PENDING)
+    daemon.queue_observation(journey.task(parent).attempts[0].attempt_uid, job_pb2.TASK_STATE_FAILED)
+    journey.run_until_task_state(parent, job_pb2.TASK_STATE_FAILED)
+
+    assert journey.task(child).state == job_pb2.TASK_STATE_KILLED
+    assert not journey.task(child).attempts[0].HasField("finished_at")
+
+    replacement = journey.submit("replacement", cpu_millicores=2000)
+    journey.step()
+    assert journey.task(replacement).state == job_pb2.TASK_STATE_PENDING
+
+    daemon.acknowledge_stops = True
+    journey.run_until_task_state(replacement, job_pb2.TASK_STATE_RUNNING)
+    assert journey.task(child).attempts[0].HasField("finished_at")
+    assert journey.task(replacement).worker_id == "worker-a"
