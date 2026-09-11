@@ -63,6 +63,24 @@ class DenseMuonHPoint:
         return f"{self.experiment_id}-d512-{self.token_multiple}x-lr{self.lr_multiplier:g}"
 
 
+@dataclass(frozen=True)
+class DenseMuonHExperiment:
+    experiment_prefix: str
+    experiment_version: str
+    wandb_group: str
+    lr_schedule: str
+    schedule_tag: str
+
+
+CONSTANT_LR_EXPERIMENT = DenseMuonHExperiment(
+    experiment_prefix=EXPERIMENT_PREFIX,
+    experiment_version=EXPERIMENT_VERSION,
+    wandb_group=WANDB_GROUP,
+    lr_schedule="constant",
+    schedule_tag="constant-lr",
+)
+
+
 SWEEP_POINTS = tuple(
     DenseMuonHPoint(
         experiment_id=f"{EXPERIMENT_PREFIX}-{index:03d}",
@@ -81,9 +99,12 @@ SWEEP_POINTS = tuple(
 )
 
 
-def dense_muonh_optimizer(point: DenseMuonHPoint) -> GrugMoeMuonHConfig:
-    """Build the matched constant-LR MuonH optimizer for one dense sweep cell."""
-    reference = MoeHeuristic(lr_schedule="constant").build_optimizer_config(
+def dense_muonh_optimizer(
+    point: DenseMuonHPoint,
+    experiment: DenseMuonHExperiment = CONSTANT_LR_EXPERIMENT,
+) -> GrugMoeMuonHConfig:
+    """Build the matched MuonH optimizer for one dense sweep cell."""
+    reference = MoeHeuristic(lr_schedule=experiment.lr_schedule).build_optimizer_config(
         num_train_steps=point.num_train_steps,
         batch_size=D512_BATCH_SIZE,
         hidden_dim=D512_HIDDEN_DIM,
@@ -99,6 +120,7 @@ def dense_muonh_optimizer(point: DenseMuonHPoint) -> GrugMoeMuonHConfig:
 def build_dense_muonh_run(
     point: DenseMuonHPoint,
     *,
+    experiment: DenseMuonHExperiment = CONSTANT_LR_EXPERIMENT,
     version: str = EXPERIMENT_VERSION,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Build one cell of the one-layer dense MuonH sweep."""
@@ -133,14 +155,14 @@ def build_dense_muonh_run(
                     "grug",
                     "dense",
                     "issue-7856",
-                    EXPERIMENT_PREFIX,
+                    experiment.experiment_prefix,
                     "d512",
                     "one-layer",
                     "muonh",
-                    "constant-lr",
+                    experiment.schedule_tag,
                     "tpu-v4-8",
                 ],
-                group=WANDB_GROUP,
+                group=experiment.wandb_group,
                 name=point.run_id,
                 replicate_path=ctx.output_path,
             ),
@@ -162,7 +184,7 @@ def build_dense_muonh_run(
             model=dense_model_config(),
             data=data,
             resources=ctx.runtime_arg("train_resources"),
-            optimizer=dense_muonh_optimizer(point),
+            optimizer=dense_muonh_optimizer(point, experiment),
             trainer=GrugTrainerConfig(
                 trainer=trainer,
                 data_seed=None,
@@ -197,11 +219,13 @@ def build_dense_muonh_run(
 def main(version: str, max_concurrent: int) -> None:
     """Materialize the 25-cell one-layer dense MuonH LR sweep."""
     StepRunner().run(
-        [build_dense_muonh_run(point, version=version).lower() for point in SWEEP_POINTS],
+        [
+            build_dense_muonh_run(point, experiment=CONSTANT_LR_EXPERIMENT, version=version).lower()
+            for point in SWEEP_POINTS
+        ],
         max_concurrent=min(max_concurrent, len(SWEEP_POINTS)),
     )
 
 
 if __name__ == "__main__":
     main()
-

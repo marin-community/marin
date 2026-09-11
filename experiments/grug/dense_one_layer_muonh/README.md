@@ -10,3 +10,6 @@ The sweep covers 30x, 60x, 150x, 300x, and 600x token budgets at LR multipliers
 of 1792, batch size 64, sequence length 8192, seed 0, and 1% warmup followed by a
 constant learning rate.
 
+`launch_linear_decay.py` runs the matched 25-cell comparison with 1% warmup
+followed by linear decay to 5% of the peak learning rate. It uses separate
+experiment, W&B, and artifact identities from the constant-LR sweep.

@@ -56,7 +56,7 @@ goes stale on the next commit.
 - Origin: `base`
 - Introduced: bd2e753ad
 - Status: active
-- Purpose: measure constant-LR scaling for a one-layer d512 dense Transformer with raw-gradient SGD-H updates.
+- Purpose: compare constant and linear-decay LR scaling for a one-layer d512 dense Transformer with raw-gradient SGD-H updates.
 - Issue: https://github.com/marin-community/marin/issues/7856
 
 ### dense-one-layer-muonh
@@ -64,7 +64,7 @@ goes stale on the next commit.
 - Origin: `dense_one_layer_sgdh`
 - Introduced: ad5aa2928
 - Status: active
-- Purpose: measure matched constant-LR scaling for a one-layer d512 dense Transformer with MuonH updates.
+- Purpose: compare matched constant and linear-decay LR scaling for a one-layer d512 dense Transformer with MuonH updates.
 - Issue: https://github.com/marin-community/marin/issues/7856
 
 ### grugformer-vs-hackable-125m
