@@ -19,6 +19,7 @@ import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.glob import glob_with_metadata
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
@@ -296,11 +297,8 @@ def run_migration(
     if not source_globs:
         raise ValueError("source_globs must contain at least one pattern")
 
-    pipeline = Dataset.from_file_patterns(
-        source_globs,
-        empty_glob_ok=True,
-        minimum_file_size=MIN_INPUT_BYTES,
-    ).flat_map(partial(_rewrite_for_zephyr, options=options))
+    source_paths = [entry.path for entry in glob_with_metadata(source_globs) if entry.size >= MIN_INPUT_BYTES]
+    pipeline = Dataset.from_list(source_paths).flat_map(partial(_rewrite_for_zephyr, options=options))
     outcome = context.execute(pipeline, verbose=True)
     return dict(outcome.counters)
 
