@@ -115,6 +115,8 @@ export interface PanelRow {
   missing: Record<string, MissingCell>
   aggregate: PanelAggregate | null
   covered: number
+  // The newest created_at among the row's cells: its freshest result, not the age of every cell.
+  last_updated: string | null
 }
 
 export interface PanelRequest {

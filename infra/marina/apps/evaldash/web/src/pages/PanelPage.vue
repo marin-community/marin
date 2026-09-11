@@ -12,7 +12,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatCoverage, formatDelta, formatInterval, formatScore } from '@/utils/formatting'
+import { formatCoverage, formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
 import { cellsByModel, fleetBest, isPartialCoverage } from '@/utils/panel'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
@@ -217,27 +217,58 @@ const visibleTasks = computed(() => data.value?.panel ?? [])
 // --- Fleet best per benchmark (the rail caret and the column marker) ---
 const best = computed(() => fleetBest(data.value?.rows ?? [], visibleTasks.value))
 
-// --- Ordering: by a benchmark column's interval lower bound, else by panel coverage. Sorting on the
-// lower bound is the point — a partly-graded run cannot buy rank with the items it kept. ---
+// --- Ordering: by model name, panel coverage, last update, or a benchmark column's interval lower
+// bound. Sorting a benchmark on the lower bound is the point — a partly-graded run cannot buy rank
+// with the items it kept. Every column sorts both ways; clicking the active column flips it. ---
+const MODEL_SORT = 'model'
 const COVERAGE_SORT = 'coverage'
+const UPDATED_SORT = 'last_updated'
+type SortDirection = 'asc' | 'desc'
+
 const sortKey = ref<string>(COVERAGE_SORT)
-function sortBy(key: string) {
-  sortKey.value = sortKey.value === key ? COVERAGE_SORT : key
+const sortDirection = ref<SortDirection>('desc')
+
+// Names read A→Z; scores, coverage and recency read best-first.
+function defaultDirection(key: string): SortDirection {
+  return key === MODEL_SORT ? 'asc' : 'desc'
 }
+function sortBy(key: string) {
+  if (sortKey.value === key) {
+    sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
+    return
+  }
+  sortKey.value = key
+  sortDirection.value = defaultDirection(key)
+}
+function sortGlyph(key: string): string {
+  if (sortKey.value !== key) return ''
+  return sortDirection.value === 'asc' ? '▲' : '▼'
+}
+
+// What the active column ranks a row on. null means the row has nothing to rank there: no cell on
+// that benchmark, or no result at all behind its timestamp.
+function sortValue(row: PanelRow): string | number | null {
+  if (sortKey.value === MODEL_SORT) return row.model
+  if (sortKey.value === COVERAGE_SORT) return row.covered
+  if (sortKey.value === UPDATED_SORT) return row.last_updated
+  return row.cells[sortKey.value]?.low ?? null
+}
+
 const rows = computed<PanelRow[]>(() => {
   const all = [...(data.value?.rows ?? [])]
+  const direction = sortDirection.value === 'asc' ? 1 : -1
   return all.sort((a, b) => {
     if (a.archived !== b.archived) return Number(a.archived) - Number(b.archived)
-    if (sortKey.value === COVERAGE_SORT) {
-      if (a.covered !== b.covered) return b.covered - a.covered
+    const av = sortValue(a)
+    const bv = sortValue(b)
+    // Rows with nothing to rank stay at the bottom in both directions: reversing the order asks a
+    // question about the ranked rows, and answering it should not float the unranked ones to the top.
+    if (av === null || bv === null) {
+      if (av !== bv) return av === null ? 1 : -1
       return a.model.localeCompare(b.model)
     }
-    const av = a.cells[sortKey.value]?.low ?? null
-    const bv = b.cells[sortKey.value]?.low ?? null
-    if (av === null && bv === null) return a.model.localeCompare(b.model)
-    if (av === null) return 1
-    if (bv === null) return -1
-    return bv - av
+    const ordered = typeof av === 'string' ? av.localeCompare(bv as string) : av - (bv as number)
+    return ordered * direction || a.model.localeCompare(b.model)
   })
 })
 
@@ -295,7 +326,7 @@ function cellTitle(cell: PanelCell): string {
     `${cell.metric} · ${cell.n_scored} items graded`,
     `95% ${formatInterval(cell.low, cell.high)} · ${scope}`,
     ...cell.flags.filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
-    `run ${cell.run_id}`,
+    `run ${cell.run_id} · ${formatTimestamp(cell.created_at)}`,
     `cohort ${cell.version ?? 'unversioned'} · ${cell.eval_runtime}`,
     'click for history',
   ].join('\n')
@@ -488,8 +519,22 @@ function goToModel(model: string) {
                 class="border-b border-surface-border bg-surface-raised text-xs font-semibold uppercase tracking-wider text-text-secondary"
               >
                 <th class="px-3 py-2 text-left w-8"></th>
-                <th class="px-3 py-2 text-left">Model</th>
-                <th class="px-3 py-2 text-left">Coverage</th>
+                <th
+                  class="px-3 py-2 text-left cursor-pointer"
+                  :class="sortKey === MODEL_SORT ? 'text-accent' : 'text-text-secondary'"
+                  title="Sort by model name"
+                  @click="sortBy(MODEL_SORT)"
+                >
+                  Model {{ sortGlyph(MODEL_SORT) }}
+                </th>
+                <th
+                  class="px-3 py-2 text-left cursor-pointer"
+                  :class="sortKey === COVERAGE_SORT ? 'text-accent' : 'text-text-secondary'"
+                  title="Sort by panel coverage"
+                  @click="sortBy(COVERAGE_SORT)"
+                >
+                  Coverage {{ sortGlyph(COVERAGE_SORT) }}
+                </th>
                 <th v-if="aggregatePolicy" class="px-3 py-2 text-right">Panel aggregate</th>
                 <th class="px-3 py-2 text-left">Profile</th>
                 <th class="px-3 py-2 text-right"></th>
@@ -593,8 +638,8 @@ function goToModel(model: string) {
           <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
             Per-benchmark
             <span class="font-normal normal-case text-text-muted">
-              ({{ rows.length }} models × {{ visibleTasks.length }} benchmarks · click a header to sort by its lower
-              bound · a cell for history)
+              ({{ rows.length }} models × {{ visibleTasks.length }} benchmarks · click a header to sort, again to
+              reverse; a benchmark sorts on its interval's lower bound · a cell for history)
             </span>
           </h3>
         </div>
@@ -604,11 +649,11 @@ function goToModel(model: string) {
               <tr class="border-b border-surface-border bg-surface-raised">
                 <th
                   class="sticky left-0 z-10 bg-surface-raised px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer"
-                  :class="sortKey === COVERAGE_SORT ? 'text-accent' : 'text-text-secondary'"
-                  title="Sort by panel coverage"
-                  @click="sortBy(COVERAGE_SORT)"
+                  :class="sortKey === MODEL_SORT ? 'text-accent' : 'text-text-secondary'"
+                  title="Sort by model name"
+                  @click="sortBy(MODEL_SORT)"
                 >
-                  Model
+                  Model {{ sortGlyph(MODEL_SORT) }}
                 </th>
                 <th
                   v-for="task in visibleTasks"
@@ -617,13 +662,21 @@ function goToModel(model: string) {
                   :class="sortKey === task ? 'text-accent' : 'text-text-secondary'"
                   @click="sortBy(task)"
                 >
-                  {{ task }}
+                  {{ task }} {{ sortGlyph(task) }}
                   <span
                     v-if="best[task]"
                     class="block font-normal normal-case font-mono text-[10px]"
                     style="color: var(--c-best)"
                     >▲ {{ formatScore(best[task].value) }}</span
                   >
+                </th>
+                <th
+                  class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer"
+                  :class="sortKey === UPDATED_SORT ? 'text-accent' : 'text-text-secondary'"
+                  title="Newest contributing benchmark result; individual cells may be older"
+                  @click="sortBy(UPDATED_SORT)"
+                >
+                  Last updated {{ sortGlyph(UPDATED_SORT) }}
                 </th>
               </tr>
             </thead>
@@ -679,6 +732,12 @@ function goToModel(model: string) {
                   </button>
                   <span v-else class="text-text-muted" title="Never run on this benchmark">—</span>
                 </td>
+                <td
+                  class="px-3 py-2 text-right whitespace-nowrap font-mono text-[11px] tabular-nums text-text-muted"
+                  title="Newest contributing benchmark result; individual cells may be older"
+                >
+                  {{ formatTimestamp(row.last_updated) }}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -688,7 +747,9 @@ function goToModel(model: string) {
           <span class="text-status-warning">no result</span> links the run that failed the panel's admission rule, and
           — means the model never ran that benchmark. A result the engine flags as suspect is held out of the
           panel as <span class="text-status-warning">flagged</span> rather than standing as a model's newest score;
-          "Show flagged results" admits it, marked with a <span class="text-status-warning">*</span>.
+          "Show flagged results" admits it, marked with a <span class="text-status-warning">*</span>. Last updated is
+          the newest contributing benchmark result; individual cells may be older, and each cell's own timestamp is in
+          its tooltip.
         </p>
       </div>
     </div>
