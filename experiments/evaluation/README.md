@@ -173,6 +173,10 @@ uv run python -m experiments.evaluation.cli launch \
   --dry-run
 ```
 
+The checked-in `mmlu-pro`, `gpqa-diamond`, `cruxeval`, `financebench`, `ifbench`, and
+`mrcr` files preserve Marin's publication-policy defaults. Select them individually with repeatable
+`--evalchemy-config` options; the `chat` suite remains the shorter general-purpose selection.
+
 Marin decodes the `evalchemy_config.EvaluationConfig`-compatible fields without importing Evalchemy.
 The evaluation child then invokes the `evalchemy` console script from the pinned external runtime.
 A dry run checks the YAML shape and the resolved Marin launch plan; task availability is checked when
@@ -241,6 +245,12 @@ an existing directory inside the Marin workspace, and must be included in the Ir
 The launcher records the workspace-relative path so the submitted worker resolves the same directory
 under its unpacked workspace. Absolute paths, unknown fields, malformed provider kwargs, and unsupported
 file extensions fail before Iris submission.
+
+The checked-in `swebench-recovery`, `ot-tblite-recovery`, `tb2-recovery`,
+`simpleqa-recovery`, and `ds-1000-local` files preserve the Snowball evaluation campaign policies.
+They are file-backed policies rather than registry entries. `ds-1000-local` expects the generated
+Harbor task tree at `experiments/evaluation/local_datasets/ds1000`; create that tree with Harbor's
+DS-1000 adapter before launching it.
 
 Harbor and `harbor_config` are absent from Marin's environment and root lock. Both preflight and execution
 install the exact `marin.external_dependencies.HARBOR` revision in an isolated uv environment. Every

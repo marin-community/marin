@@ -1,0 +1,11 @@
+tasks: [FinanceBench]
+task_options:
+  FinanceBench:
+    num_fewshot: 0
+    task_alias: financebench
+    generation: true
+apply_chat_template: true
+batch_size: 1
+seed: 42
+max_tokens: 4096
+runtime_extras: [financebench]

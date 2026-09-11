@@ -1,0 +1,11 @@
+tasks: [IFBench]
+task_options:
+  IFBench:
+    num_fewshot: 0
+    task_alias: ifbench
+    generation: true
+apply_chat_template: true
+batch_size: 1
+seed: 42
+max_tokens: 1024
+runtime_extras: [ifbench]
