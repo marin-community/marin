@@ -8,6 +8,11 @@ import pytest
 from finestore.reader import ReadView
 from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor import driver_config, runner
+from marin.evaluation.harbor.agent_context import (
+    DEFAULT_MODEL_INFO,
+    reconciled_model_info,
+    served_model_info,
+)
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
     HarborBackendsUnavailable,
@@ -67,7 +72,52 @@ def _validated_config(
         workspace_dataset_path=workspace_dataset_path,
         agent=agent,
         environment="daytona",
+        max_input_tokens=32768,
+        max_output_tokens=8192,
     )
+
+
+def test_reconciled_model_info_takes_context_limits_from_the_served_model():
+    served = served_model_info(max_model_len=1048576, max_gen_toks=393216)
+
+    assert reconciled_model_info(served, None) == {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    }
+
+
+def test_reconciled_model_info_keeps_harbor_defaults_when_the_model_states_no_limits():
+    served = served_model_info(max_model_len=None, max_gen_toks=None)
+
+    assert reconciled_model_info(served, {"input_cost_per_token": 1.5}) == {
+        **DEFAULT_MODEL_INFO,
+        "input_cost_per_token": 1.5,
+    }
+
+
+@pytest.mark.parametrize("policy_max_input_tokens", [64512, 65536])
+def test_reconciled_model_info_keeps_a_policy_limit_within_the_served_window(policy_max_input_tokens):
+    served = served_model_info(max_model_len=65536, max_gen_toks=16384)
+
+    resolved = reconciled_model_info(served, {"max_input_tokens": policy_max_input_tokens})
+
+    assert (resolved["max_input_tokens"], resolved["max_output_tokens"]) == (policy_max_input_tokens, 16384)
+
+
+@pytest.mark.parametrize(
+    ("policy", "message"),
+    [
+        ({"max_input_tokens": 64512}, r"64512.*serve\.max_model_len is only 32768"),
+        ({"max_output_tokens": 16384}, r"16384.*generation\.max_gen_toks is only 8192"),
+    ],
+)
+def test_reconciled_model_info_rejects_a_policy_limit_above_the_served_window(policy, message):
+    served = served_model_info(max_model_len=32768, max_gen_toks=8192)
+
+    with pytest.raises(ValueError, match=message):
+        reconciled_model_info(served, policy)
 
 
 def _write_job_record(job_dir: Path, n_total_trials: int) -> None:

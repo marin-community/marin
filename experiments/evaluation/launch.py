@@ -49,6 +49,7 @@ from experiments.evaluation.evals import (
     EvalchemyDefinition,
     EvaluationDefinition,
     HarborDefinition,
+    harbor_model_agent_kwargs,
 )
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 
@@ -150,7 +151,8 @@ def _resolve_definitions(
     evalchemy_definitions = [definition for _, definition in definitions if isinstance(definition, EvalchemyDefinition)]
     evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)
     harbor_definitions = [definition for _, definition in definitions if isinstance(definition, HarborDefinition)]
-    requests = [(definition.config_path, dict(model.agent.agent_kwargs)) for definition in harbor_definitions]
+    model_agent_kwargs = harbor_model_agent_kwargs(model)
+    requests = [(definition.config_path, model_agent_kwargs) for definition in harbor_definitions]
     validated_configs = iter(preflight_harbor_configs(requests))
 
     resolved: list[tuple[str, _ResolvedDefinition]] = []

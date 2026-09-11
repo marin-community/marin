@@ -50,9 +50,9 @@ serve:                          # ServeConfig -> model-server behavior
   chat_template: null           # jinja served in place of the tokenizer's own
   auto_overrides: true          # derive remaining flags + clamp max_model_len from config.json
 
-generation:                     # GenerationConfig -> evalchemy --gen_kwargs
-  max_gen_toks: null            # per-model generation budget override
-  extra_gen_kwargs:             # forwarded verbatim, e.g. for a thinking model
+generation:                     # per-model generation behavior
+  max_gen_toks: null            # Evalchemy generation limit and Harbor agent output budget
+  extra_gen_kwargs:             # forwarded to Evalchemy, e.g. for a thinking model
     skip_special_tokens: "false"
 
 agent:                          # AgentConfig -> the Harbor/agentic agent

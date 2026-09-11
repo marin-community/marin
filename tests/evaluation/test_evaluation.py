@@ -20,7 +20,7 @@ from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunCon
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint
+from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus, TaskCoverage, read_record
 from marin.evaluation.runner import (
     Evaluation,
@@ -45,11 +45,19 @@ from experiments.evaluation.launch import (
 )
 from experiments.evaluation.models import models
 
+# Stand-in agent limits the fake driver reports back. They match neither Harbor's defaults nor any
+# model in these tests, so an assertion on them can only be satisfied by the preflight result.
+_PREFLIGHT_MAX_INPUT_TOKENS = 262144
+_PREFLIGHT_MAX_OUTPUT_TOKENS = 65536
 
-def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+
+def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> list[Mapping[str, object]]:
+    received: list[Mapping[str, object]] = []
+
     def preflight(requests):
         configs = []
-        for path, _model_agent_kwargs in requests:
+        for path, model_agent_kwargs in requests:
+            received.append(model_agent_kwargs)
             policy = json.dumps({"source": path.name}, separators=(",", ":"))
             configs.append(
                 ValidatedHarborConfig(
@@ -61,11 +69,14 @@ def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
                     workspace_dataset_path=None,
                     agent="opencode",
                     environment="daytona",
+                    max_input_tokens=_PREFLIGHT_MAX_INPUT_TOKENS,
+                    max_output_tokens=_PREFLIGHT_MAX_OUTPUT_TOKENS,
                 )
             )
         return tuple(configs)
 
     monkeypatch.setattr("experiments.evaluation.launch.preflight_harbor_configs", preflight)
+    return received
 
 
 def _write_harbor_config(path: Path) -> Path:
@@ -700,6 +711,8 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
             "env": "daytona",
             "task_limit": 2,
             "config_digest": evaluation.identity.eval_ref.harbor.config_digest,
+            "max_input_tokens": _PREFLIGHT_MAX_INPUT_TOKENS,
+            "max_output_tokens": _PREFLIGHT_MAX_OUTPUT_TOKENS,
         },
     }
     assert batch.secret_env == {
@@ -746,6 +759,63 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
     assert captured["overlay"].served_model == "served-qwen3-8b"
     assert captured["overlay"].endpoint_url == "https://iris.example/capability/v1"
     assert captured["overlay"].model_agent_kwargs["extra_body"] == ('{"chat_template_kwargs":{"enable_thinking":true}}')
+
+
+def test_build_evaluation_batch_gives_harbor_the_served_context_limits(tmp_path, monkeypatch):
+    preflight_requests = _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    config_path = _write_harbor_config(tmp_path / "aime-policy.yaml")
+    spec = LaunchSpec(
+        model=replace(
+            models()["qwen3-8b"],
+            serve=ServeConfig(max_model_len=1048576),
+            generation=GenerationConfig(max_gen_toks=393216),
+        ),
+        evals=(),
+        evalchemy_definitions=(),
+        harbor_definitions=(HarborDefinition(name="aime-policy", config_path=config_path),),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=None,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    served_limits = {"max_input_tokens": 1048576, "max_output_tokens": 393216}
+    (evaluation,) = batch.evaluations
+    assert [request["model_info"] for request in preflight_requests] == [served_limits]
+    assert evaluation.executor.model_agent_kwargs["model_info"] == served_limits
+    harbor = evaluation.identity.eval_ref.harbor
+    assert (harbor.max_input_tokens, harbor.max_output_tokens) == (
+        _PREFLIGHT_MAX_INPUT_TOKENS,
+        _PREFLIGHT_MAX_OUTPUT_TOKENS,
+    )
+
+
+def test_launch_dry_run_prints_the_resolved_harbor_agent_context(tmp_path, monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    config_path = _write_harbor_config(tmp_path / "aime-policy.yaml")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-8b",
+            "--harbor-config",
+            str(config_path),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"max_input_tokens={_PREFLIGHT_MAX_INPUT_TOKENS}" in result.output
+    assert f"max_output_tokens={_PREFLIGHT_MAX_OUTPUT_TOKENS}" in result.output
 
 
 @pytest.mark.parametrize(
