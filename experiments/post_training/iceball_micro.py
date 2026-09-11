@@ -97,6 +97,7 @@ ICEBALL_TRAIN_GPUS = 8
 ICEBALL_TRAIN_ACCELERATOR = f"{ICEBALL_TRAIN_GPUS}x{ICEBALL_GPU_VARIANT}"
 ICEBALL_EVAL_ACCELERATOR = f"{ICEBALL_GPU_VARIANT}x1"
 ICEBALL_SEQUENCE_LENGTH = 512
+ICEBALL_EVAL_CONTEXT_LENGTH = 4096
 ICEBALL_WANDB_PROJECT = f"marin-{ICEBALL_MODEL_NAME}"
 FINEWEB_ARTIFACT_NAME = f"documents/{ICEBALL_MODEL_NAME}-fineweb-edu"
 FINEWEB_TOKENIZED_ARTIFACT_NAME = f"tokenized/{ICEBALL_MODEL_NAME}-fineweb-edu-qwen3"
@@ -472,7 +473,10 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
                 resource_hint=ResourceHint(gpu={ICEBALL_GPU_VARIANT: 1}),
                 serve=ServeConfig(
                     tensor_parallel_size=1,
-                    max_model_len=ICEBALL_SEQUENCE_LENGTH,
+                    # Fit the unchanged five-shot prompts beyond the short training context.
+                    auto_overrides=False,
+                    max_model_len=ICEBALL_EVAL_CONTEXT_LENGTH,
+                    hf_overrides=json.dumps({"max_position_embeddings": ICEBALL_EVAL_CONTEXT_LENGTH}),
                     max_num_seqs=32,
                     vllm_extra_args=("--enforce-eager",),
                 ),
