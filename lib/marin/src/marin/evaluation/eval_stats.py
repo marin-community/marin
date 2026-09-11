@@ -26,7 +26,7 @@ it beside ``records.py``.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -568,6 +568,16 @@ def select(
 
     benchmarks = tuple(sorted({name for cells in chosen.values() for name in cells}))
     panel = request.panel if request.panel is not None else benchmarks
-    if request.completeness is Completeness.COMPLETE_PANEL and panel:
-        chosen = {model: cells for model, cells in chosen.items() if all(name in cells for name in panel)}
+    if request.completeness is Completeness.COMPLETE_PANEL:
+        chosen = {model: cells for model, cells in chosen.items() if covers_panel(cells, panel)}
     return Selection(cells=chosen, rejections=tuple(rejections), benchmarks=benchmarks)
+
+
+def covers_panel(cells: Mapping[str, Measurement], panel: Sequence[str]) -> bool:
+    """Whether one model's chosen cells cover every benchmark on ``panel``.
+
+    This is the rule behind :data:`Completeness.COMPLETE_PANEL`. A caller that decides its own panel
+    after selection -- a view that collapses several settings of a benchmark into one column, say --
+    applies it there instead of in :func:`select`, over the same definition rather than its own.
+    """
+    return all(name in cells for name in panel)

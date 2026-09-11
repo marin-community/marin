@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from marin.evaluation.eval_measurements import measurement_from_record, measurements_from_records
 from marin.evaluation.eval_stats import (
@@ -34,6 +34,7 @@ from marin.evaluation.eval_stats import (
     MissingPolicy,
     Rejection,
     SelectionRequest,
+    covers_panel,
     difference_interval,
     matches_filters,
     measurement_interval,
@@ -118,31 +119,44 @@ def declared_families(records: Iterable[EvalRunRecord]) -> dict[str, str]:
     return {name: family for name, (family, _) in declared.items()}
 
 
+def group_by_family(names: Iterable[str], families: Mapping[str, str]) -> dict[str, list[str]]:
+    """Eval names grouped by declared family, in first-seen order. An undeclared name is its own."""
+    grouped: dict[str, list[str]] = {}
+    for name in names:
+        grouped.setdefault(families.get(name, name), []).append(name)
+    return grouped
+
+
+@dataclass(frozen=True)
+class FamilyColumn:
+    """One leaderboard column: a benchmark family, the settings requested of it, and the one shown."""
+
+    family: str
+    variants: tuple[str, ...]
+    default: str
+
+
 def _family_columns(
     requested: Sequence[str],
     families: Mapping[str, str],
     cells: Mapping[str, Mapping[str, Measurement]],
-) -> list[dict]:
+) -> list[FamilyColumn]:
     """The requested benchmarks grouped into families, each with the variant its column shows.
 
     The variant shown is the one with the most admitted cells under the request that produced
     ``cells``, ties broken by eval name. Admission depends on the request -- a coverage gate, a pinned
     cohort, a metadata filter -- so the variant that says the most about the models on screen is a
-    property of the question being asked and cannot be decided once at registry time. A request that
-    names a single sibling leaves it as its family's only candidate, which is how an explicit choice
-    of setting is honoured.
+    property of the question being asked and cannot be decided once at registry time. Requesting a
+    single sibling pins that setting, since it is then its family's only candidate.
     """
     admitted = Counter(name for model_cells in cells.values() for name in model_cells)
-    grouped: dict[str, list[str]] = {}
-    for name in requested:
-        grouped.setdefault(families.get(name, name), []).append(name)
     return [
-        {
-            "family": family,
-            "variants": variants,
-            "default": min(variants, key=lambda name: (-admitted[name], name)),
-        }
-        for family, variants in grouped.items()
+        FamilyColumn(
+            family=family,
+            variants=tuple(variants),
+            default=min(variants, key=lambda name: (-admitted[name], name)),
+        )
+        for family, variants in group_by_family(requested, families).items()
     ]
 
 
@@ -268,12 +282,10 @@ def build_panel(
     selection = select(measurements_from_records(eligible), replace(request, completeness=Completeness.ANY), metadata)
     requested = list(request.panel) if request.panel is not None else list(selection.benchmarks)
     families = _family_columns(requested, declared_families(eligible), selection.cells)
-    panel = [column["default"] for column in families]
+    panel = [column.default for column in families]
     # A sibling the column is not showing gets no gap entry: an explained empty cell belongs to a
-    # column on screen. Its admitted results still reach the payload as cells. A request naming
-    # exactly one variant of a family leaves that variant as the family's only candidate, so the
-    # reader's explicit choice wins here without a separate branch.
-    hidden = {name for column in families for name in column["variants"] if name != column["default"]}
+    # column on screen. Its admitted results still reach the payload as cells.
+    hidden = {name for column in families for name in column.variants if name != column.default}
 
     on_panel = [
         record
@@ -289,7 +301,7 @@ def build_panel(
     rows = []
     for model in sorted(set(selection.cells) | set(missing)):
         cells = selection.cells.get(model, {})
-        if request.completeness is Completeness.COMPLETE_PANEL and not all(name in cells for name in panel):
+        if request.completeness is Completeness.COMPLETE_PANEL and not covers_panel(cells, panel):
             continue
         rows.append(
             {
@@ -304,7 +316,10 @@ def build_panel(
     return {
         "benchmarks": list(selection.benchmarks),
         "panel": panel,
-        "families": families,
+        "families": [
+            {"family": column.family, "variants": list(column.variants), "default": column.default}
+            for column in families
+        ],
         "rows": rows,
         "request": {
             "min_coverage": request.min_coverage,
@@ -380,10 +395,7 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
     must still be able to switch back to a sibling it is not currently showing.
     """
     eval_names = {r.evaluation.name for r in records}
-    families = declared_families(records)
-    by_family: dict[str, set[str]] = {}
-    for name in eval_names:
-        by_family.setdefault(families.get(name, name), set()).add(name)
+    by_family = group_by_family(sorted(eval_names), declared_families(records))
     metadata = run_metadata(records)
     facets = {
         facet: sorted({values[facet] for values in metadata.values() if values.get(facet)}) for facet in RUN_FACETS
@@ -392,7 +404,7 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
         "models": sorted({r.model.name for r in records}),
         "evals": sorted(eval_names),
         "suites": eval_suites(eval_names),
-        "families": [{"family": family, "variants": sorted(variants)} for family, variants in sorted(by_family.items())],
+        "families": [{"family": family, "variants": variants} for family, variants in sorted(by_family.items())],
         "users": sorted({r.user for r in records if r.user}),
         "statuses": sorted({r.status.value for r in records}),
         "versions": sorted({r.version for r in records if r.version}),
