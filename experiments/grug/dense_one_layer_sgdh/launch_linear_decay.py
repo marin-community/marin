@@ -18,7 +18,7 @@ from experiments.grug.dense_one_layer_sgdh.launch import (
 
 EXPERIMENT = DenseSGDHExperiment(
     experiment_prefix="AUG-LIN0-1L-DENSE-SGDH",
-    experiment_version="2026.09.11-zero-tail",
+    experiment_version="2026.09.11.1",
     wandb_group="issue-7856-d512-linear-decay-zero-tail-one-layer-dense-sgdh-tpu",
     lr_schedule="linear",
     schedule_tag="linear-decay-lr",

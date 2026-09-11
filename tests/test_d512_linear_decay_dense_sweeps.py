@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from marin.execution.artifact import validate_version
 
 from experiments.grug.dense_one_layer_muonh.launch import (
     CONSTANT_LR_EXPERIMENT as MUONH_CONSTANT_EXPERIMENT,
@@ -83,3 +84,11 @@ def test_linear_decay_dense_schedule_warms_up_then_decays_to_zero(optimizer_fact
 def test_dense_sweeps_fit_current_v4_host_memory_limit():
     assert MUONH_TRAIN_RESOURCES.ram == "190g"
     assert SGDH_TRAIN_RESOURCES.ram == "190g"
+
+
+@pytest.mark.parametrize(
+    "experiment",
+    [MUONH_LINEAR_EXPERIMENT, SGDH_LINEAR_EXPERIMENT, SGDMH_LINEAR_EXPERIMENT],
+)
+def test_linear_decay_dense_sweep_uses_valid_artifact_version(experiment):
+    validate_version(experiment.experiment_version)
