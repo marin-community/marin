@@ -28,6 +28,7 @@ DEFAULT_WORKER_LIMIT = 50
 MAX_WORKER_LIMIT = 200
 DEFAULT_METRIC_POINTS = 200
 MAX_METRIC_POINTS = 500
+SOURCE_STAGE_TYPE = "SOURCE"
 
 _BASE_ELEMENT = '<base href="/"'
 
@@ -252,7 +253,7 @@ def pipeline_plan(
             PlanNode(
                 node_id=source_node_id(prefix),
                 label=f"Source ({nested_plan.num_shards} shards)",
-                stage_type="SOURCE",
+                stage_type=SOURCE_STAGE_TYPE,
                 output_shards=nested_plan.num_shards,
                 stage_index=-1,
                 parent_node_id=parent_node_id,
