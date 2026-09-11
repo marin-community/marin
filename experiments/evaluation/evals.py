@@ -41,17 +41,27 @@ _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
     }
 )
 
+# Evals that measure the same benchmark under different settings, mapped to the benchmark they share.
+# The family travels in each run's record, so the dashboard groups a leaderboard column from what a
+# run declares rather than maintaining its own table of which name belongs with which. An eval that
+# names no family is a family of one. The capped ``-smoke`` variants stay out: they are launcher
+# validation runs, and every scoring surface already drops them by suffix.
+_EVAL_FAMILIES: Mapping[str, str] = MappingProxyType({"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"})
+
 
 @dataclass(frozen=True)
 class EvalchemyDefinition:
     name: str
     config_path: Path
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
+    family: str | None = None
+    """The benchmark this eval is one setting of, shared with its sibling settings."""
 
     def record_ref_for(self, config: EvalchemyRunConfig) -> EvalRef:
         return EvalRef(
             name=config.name,
             mechanism="evalchemy",
+            family=self.family,
             tasks=tuple(
                 EvalTaskRef(
                     name=task.name,
@@ -113,6 +123,8 @@ class HarborDefinition:
     name: str
     config_path: Path
     max_eval_instances: int | None = None
+    family: str | None = None
+    """The benchmark this eval is one setting of, shared with its sibling settings."""
 
     def secret_env_for(self, config: ValidatedHarborConfig) -> Mapping[str, SecretSpec]:
         if config.environment == _DAYTONA_ENVIRONMENT_TYPE:
@@ -123,6 +135,7 @@ class HarborDefinition:
         return EvalRef(
             name=self.name,
             mechanism="harbor",
+            family=self.family,
             harbor=HarborRef(
                 dataset=config.record_dataset,
                 version=config.record_revision,
@@ -161,6 +174,7 @@ def harbor_definition(
         name=name,
         config_path=_HARBOR_CONFIG_DIR / f"{name}.yaml",
         max_eval_instances=max_eval_instances,
+        family=_EVAL_FAMILIES.get(name),
     )
 
 
@@ -243,7 +257,11 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
 )
 
 EVALS: dict[str, EvaluationDefinition] = {
-    name: EvalchemyDefinition(name=name, config_path=_EVALCHEMY_CONFIG_DIR / f"{name}.yaml")
+    name: EvalchemyDefinition(
+        name=name,
+        config_path=_EVALCHEMY_CONFIG_DIR / f"{name}.yaml",
+        family=_EVAL_FAMILIES.get(name),
+    )
     for name in _STANDARD_EVALCHEMY_EVALS
 }
 EVALS.update(
