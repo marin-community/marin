@@ -59,16 +59,25 @@ def _model_info_mapping(value: object, source: str) -> Mapping[str, Any]:
 def reconciled_model_info(served: object, policy: object) -> dict[str, Any]:
     """The agent ``model_info`` for one run: served-model limits, policy kwargs, Harbor defaults.
 
+    A policy limit at or below the served one wins, which is how a policy keeps headroom under the
+    served window. A policy limit above the served one would let the agent run past what the server
+    accepts.
+
     Raises:
-        ValueError: the policy states a context limit the served model contradicts.
+        ValueError: a policy context limit exceeds the served model's, or is not an integer.
     """
     served_info = _model_info_mapping(served, "model")
     policy_info = _model_info_mapping(policy, "agent")
     for key, served_value in served_info.items():
-        if key in policy_info and policy_info[key] != served_value:
+        if key not in policy_info:
+            continue
+        policy_value = policy_info[key]
+        model_field = _MODEL_CONFIG_FIELD[key]
+        if not isinstance(policy_value, int):
+            raise ValueError(f"Harbor agent model_info.{key} must be an integer, got {policy_value!r}")
+        if policy_value > served_value:
             raise ValueError(
-                f"Harbor agent model_info.{key} is {policy_info[key]!r} but the served model's "
-                f"{_MODEL_CONFIG_FIELD.get(key, key)} is {served_value!r}; align the policy with the "
-                f"model configuration or drop the agent kwarg"
+                f"Harbor agent model_info.{key} is {policy_value} but the served model's "
+                f"{model_field} is only {served_value}; lower the policy limit or raise {model_field}"
             )
     return {**DEFAULT_MODEL_INFO, **served_info, **policy_info}

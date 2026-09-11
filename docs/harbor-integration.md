@@ -139,11 +139,12 @@ Temporary policy and overlay files are owner-readable and removed after each iso
 
 The agent's `model_info.max_input_tokens` comes from the model's `serve.max_model_len` and its
 `model_info.max_output_tokens` from `generation.max_gen_toks`, so the agent compacts against the
-window the server actually offers. A policy that states a limit the model contradicts fails
-preflight, before Iris opens, with both values named; repeating the served limit in the policy is
-allowed. A limit neither the model nor the policy states falls back to Harbor's own default, 32768
-input and 8192 output tokens. `--dry-run` prints the resolved pair per Harbor eval and `record.json`
-keeps it under `eval.harbor`.
+window the server actually offers. A policy may state a lower limit to keep headroom under that
+window, and the lower limit wins: `grug-opencode-id.yaml` asks for 64512 input tokens against a
+model serving 65536. A policy limit above the served one fails preflight, before Iris opens, with
+both values named. A limit neither the model nor the policy states falls back to Harbor's own
+default, 32768 input and 8192 output tokens. `--dry-run` prints the resolved pair per Harbor eval
+and `record.json` keeps it under `eval.harbor`.
 
 ## Results
 

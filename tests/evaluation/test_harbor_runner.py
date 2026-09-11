@@ -97,19 +97,28 @@ def test_reconciled_model_info_keeps_harbor_defaults_when_the_model_states_no_li
     }
 
 
-def test_reconciled_model_info_accepts_a_policy_that_repeats_the_served_limits():
-    served = served_model_info(max_model_len=64512, max_gen_toks=16384)
+@pytest.mark.parametrize("policy_max_input_tokens", [64512, 65536])
+def test_reconciled_model_info_keeps_a_policy_limit_within_the_served_window(policy_max_input_tokens):
+    """grug-opencode-id asks for 64512 against a model serving 65536, keeping 1024 tokens of headroom."""
+    served = served_model_info(max_model_len=65536, max_gen_toks=16384)
 
-    resolved = reconciled_model_info(served, {"max_input_tokens": 64512, "max_output_tokens": 16384})
+    resolved = reconciled_model_info(served, {"max_input_tokens": policy_max_input_tokens})
 
-    assert (resolved["max_input_tokens"], resolved["max_output_tokens"]) == (64512, 16384)
+    assert (resolved["max_input_tokens"], resolved["max_output_tokens"]) == (policy_max_input_tokens, 16384)
 
 
-def test_reconciled_model_info_rejects_a_policy_that_contradicts_the_served_limits():
-    served = served_model_info(max_model_len=32768, max_gen_toks=None)
+@pytest.mark.parametrize(
+    ("policy", "message"),
+    [
+        ({"max_input_tokens": 64512}, r"64512.*serve\.max_model_len is only 32768"),
+        ({"max_output_tokens": 16384}, r"16384.*generation\.max_gen_toks is only 8192"),
+    ],
+)
+def test_reconciled_model_info_rejects_a_policy_limit_above_the_served_window(policy, message):
+    served = served_model_info(max_model_len=32768, max_gen_toks=8192)
 
-    with pytest.raises(ValueError, match=r"64512.*serve\.max_model_len is 32768"):
-        reconciled_model_info(served, {"max_input_tokens": 64512})
+    with pytest.raises(ValueError, match=message):
+        reconciled_model_info(served, policy)
 
 
 def _write_job_record(job_dir: Path, n_total_trials: int) -> None:
