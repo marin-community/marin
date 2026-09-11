@@ -35,6 +35,7 @@ ZEPHYR_STAGE_STATS_NAMESPACE = "zephyr.stage"
 ZEPHYR_WORKER_STATS_NAMESPACE = "zephyr.worker"
 WORKER_STATS_INTERVAL = 5.0
 MAX_METRIC_STAGE_SERIES = 256
+METRIC_BIN_SECONDS = 15
 
 ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/item_count"
 """Counter key for items processed"""
@@ -292,14 +293,14 @@ class StatsWriter:
         escaped_execution_id = execution_id.replace("'", "''")
         sql = f"""
 WITH recent_bins AS (
-  SELECT DISTINCT date_bin(INTERVAL '15 seconds', ts) AS time_bin
+  SELECT DISTINCT date_bin(INTERVAL '{METRIC_BIN_SECONDS} seconds', ts) AS time_bin
   FROM "{ZEPHYR_WORKER_STATS_NAMESPACE}"
   WHERE execution_id = '{escaped_execution_id}'
     AND status = '{ZephyrWorkerStatStatus.RUNNING}'
   ORDER BY 1 DESC
   LIMIT {max_points}
 ), per_shard AS (
-  SELECT date_bin(INTERVAL '15 seconds', samples.ts) AS time_bin,
+  SELECT date_bin(INTERVAL '{METRIC_BIN_SECONDS} seconds', samples.ts) AS time_bin,
          samples.stage_name,
          samples.shard_idx,
          avg(samples.item_rate) AS item_rate,
@@ -308,7 +309,7 @@ WITH recent_bins AS (
          avg(samples.mem_current_bytes) AS memory_bytes
   FROM "{ZEPHYR_WORKER_STATS_NAMESPACE}" AS samples
   INNER JOIN recent_bins
-    ON date_bin(INTERVAL '15 seconds', samples.ts) = recent_bins.time_bin
+    ON date_bin(INTERVAL '{METRIC_BIN_SECONDS} seconds', samples.ts) = recent_bins.time_bin
   WHERE samples.execution_id = '{escaped_execution_id}'
     AND samples.status = '{ZephyrWorkerStatStatus.RUNNING}'
   GROUP BY 1, 2, 3

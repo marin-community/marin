@@ -24,7 +24,7 @@ from fray.types import ActorConfig, ResourceConfig
 from iris.cluster.client.job_info import get_job_info
 from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
-from rigging.timing import Duration, ExponentialBackoff, RateLimiter, log_time
+from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, log_time
 from starlette.types import ASGIApp
 
 from zephyr.dashboard import (
@@ -89,10 +89,6 @@ ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
 WORKER_GROUP_CHECK_INTERVAL = 5.0
 
 _SNAPSHOT_ATTRIBUTES = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 class ShardFailureKind(enum.StrEnum):
@@ -275,7 +271,7 @@ class _PipelineExecution:
         before dropping the execution. Callers hold the coordinator lock.
         """
         self.done = True
-        self.finished_at_ms = _now_ms()
+        self.finished_at_ms = Timestamp.now().epoch_ms()
         self.storage_cleanup_safe = storage_cleanup_safe
         self.task_queue.clear()
         self.in_flight.clear()
@@ -1518,7 +1514,7 @@ class ZephyrCoordinator:
                     reduce_cost=reduce_cost,
                     plan=plan,
                     pipeline_name=pipeline_name,
-                    started_at_ms=_now_ms(),
+                    started_at_ms=Timestamp.now().epoch_ms(),
                 )
                 self._executions[execution_id] = run
                 owns_execution = True
