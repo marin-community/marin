@@ -156,11 +156,10 @@ class HarborDefinition:
 
 
 def harbor_model_agent_kwargs(model: ModelConfig) -> dict[str, object]:
-    """Harbor agent kwargs for one model, carrying the context limits it is served with.
+    """Harbor agent kwargs for one model, with ``model_info`` set to its serving context limits.
 
-    The agent's ``model_info`` is derived from ``serve.max_model_len`` and ``generation.max_gen_toks``
-    so the agent summarizes and truncates against the window the server actually offers. The isolated
-    driver rejects a policy whose own ``model_info`` contradicts these values.
+    A limit the model catalog leaves unset is absent from ``model_info``, which leaves it to the
+    policy and then to Harbor's own default.
     """
     return {
         **model.agent.agent_kwargs,
