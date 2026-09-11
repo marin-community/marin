@@ -408,8 +408,7 @@ class ZephyrCoordinator:
         self._result_executor = ThreadPoolExecutor(
             max_workers=MAX_CONCURRENT_RESULT_READS, thread_name_prefix="zephyr-result"
         )
-        job_info = get_job_info()
-        self._coordinator_task_id = job_info.task_id.to_wire() if job_info is not None else ""
+        self._coordinator_task_id = job_info.task_id.to_wire() if (job_info := get_job_info()) is not None else ""
 
         self._web_application = create_dashboard_application(self)
 
