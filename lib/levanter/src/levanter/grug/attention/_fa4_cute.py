@@ -8,7 +8,7 @@ import equinox as eqx
 import jax
 from jax import shard_map
 from jax import numpy as jnp
-from jax.sharding import NamedSharding, PartitionSpec as P
+from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int
 
@@ -16,6 +16,7 @@ from levanter.cutlass_kernel_cache import gpu_compute_capability
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
+from levanter.grug.sharding import _spec_of
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 _CONTEXT_AXIS: str = "context"
@@ -44,12 +45,8 @@ def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: in
 
 
 def _replicate_sequence_axis(x: jax.Array) -> jax.Array:
-    """Gather a ``[B, S]`` metadata array along its sequence axis.
-
-    Segment scans need global key positions. Gather segment IDs before scanning,
-    then reshard the resulting bounds alongside Q.
-    """
-    spec = _partition_spec_of(x)
+    """Replicate a ``[B, S]`` metadata array over sequence, preserving batch sharding."""
+    spec = _spec_of(x)
     if spec is None or len(spec) < 2 or spec[1] is None:
         return x
     return reshard(x, P(spec[0], None))
@@ -219,14 +216,7 @@ def _head_axis(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> str | Non
     return "model"
 
 
-def _partition_spec_of(x: jax.Array) -> tuple | None:
-    sharding = jax.typeof(x).sharding
-    if isinstance(sharding, NamedSharding):
-        return tuple(sharding.spec)
-    return None
-
-
-def _spec_axis_names(spec: tuple) -> set[str]:
+def _spec_axis_names(spec: tuple | P) -> set[str]:
     return {axis for entry in spec if entry is not None for axis in (entry if isinstance(entry, tuple) else (entry,))}
 
 
@@ -239,10 +229,10 @@ def _query_sequence_shard_axis(q: jax.Array, mesh: jax.sharding.Mesh | jax.shard
     """
     if int(mesh.shape.get(_CONTEXT_AXIS, 1)) == 1:
         return None
-    spec = _partition_spec_of(q)
+    spec = _spec_of(q)
     if spec is None:
         return None
-    if _CONTEXT_AXIS in _spec_axis_names(spec[:1] + spec[2:]):
+    if _CONTEXT_AXIS in _spec_axis_names(tuple(spec)[:1] + tuple(spec)[2:]):
         raise ValueError(
             f"FA4/CuTe shard_map accepts {_CONTEXT_AXIS!r} only on q's sequence axis, got sharding {spec}."
         )
@@ -260,7 +250,7 @@ def _assert_kv_replicated_over_context(name: str, x: jax.Array) -> None:
 
     Each context shard holds the full key sequence and contributes partial dK/dV.
     """
-    spec = _partition_spec_of(x)
+    spec = _spec_of(x)
     if spec is None:
         return
 
