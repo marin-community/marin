@@ -17,18 +17,23 @@ Base: main at d891fba48a7d3729fdac2595df3c6ca292a53b74.
    against a dense all-expert reference.
 4. Reuse the Agent MoE Nemotron/StarCoder/ProofPile dataset catalog and v5p-8 / EP1
    hardware. Scale the hero architecture to d512/d768 (6/8 layers), 384 experts,
-   top-8, latent/expert width d/2, and two shared experts. Use paired fresh controls;
-   the historical May Recipe results differ in architecture, data defaults and hardware.
+   top-8, latent/expert width d/2, and two shared experts. Reuse the existing Agent MoE
+   May Recipe baselines as requested by the user; do not launch new control jobs.
+   Those results differ in architecture, data defaults, optimizer and hardware.
 5. Use the Agent MoE baseline budgets (3.82e17/2.81e18 non-embedding training FLOPs)
-   to derive control steps. Hold those steps, batches (32/64), seeds and schedules
-   fixed for treatment. Count the treatment's gate and reduced router FLOPs separately.
+   to derive the treatment schedule using the untrained scaled hero control's analytic
+   FLOPs and batches (32/64). Count the gate and reduced router FLOPs separately.
 6. Run a bounded accelerator startup check before full Gate 1. Each arm gets a unique
    run ID/output root. Confirm final evaluation/checkpoint writing and restart handling.
-7. Submit Gate 1, verify intended children and W&B identity, and monitor until terminal.
-   Compute effective speedup from the paired baseline loss recentering at alpha=0.0941,
-   L_inf=1.6 and measured token throughput/runtime; report actual FLOPs for each arm.
+7. Submit only the d512/d768 gated_latent cells, verify children and W&B identity,
+   and monitor until terminal. Reuse `moe_may_compute_opt_d{dim}_ep1` in
+   `marin-community/marin_moe`. Recenter the baseline loss at alpha=0.0941 and
+   L_inf=1.6. Report compute-equivalent gain and wall-clock comparison separately,
+   accounting for each run's token count and throughput. Document hardware and
+   recipe confounds rather than attributing the whole difference to gated routing.
 8. Advance only if both widths have effective speedup >1. Run d1024/d1280 at
-   1.16e19/3.46e19 baseline FLOPs, fit each arm's four-point scaling curve with
-   L_inf=1.6, project to 1e21/1e23, and report limitations of the small-scale TPU result.
+   1.16e19/3.46e19 baseline FLOPs, fit the treatment's four-point scaling curve with
+   L_inf=1.6, and compare projections to the existing guide baseline at 1e21/1e23.
+   No new baseline jobs are authorized at Gate 2 either.
 
 No production hero code or running hero job is changed.

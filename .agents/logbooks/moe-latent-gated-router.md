@@ -11,7 +11,7 @@ author: Kaiyue Wen
 
 Idea from Zihan Qiu. Follow Agent MoE Gate 1 at d512/d768 and proceed to
 Gate 2 at d1024/d1280 only if both smaller scales improve effective speedup.
-Use paired fresh controls and leave the production hero unchanged.
+Reuse the existing Agent MoE baseline runs; do not launch new baseline jobs.
 Experiment prefix: MOE-LGR. W&B group: moe-latent-gated-router-9110 in marin_moe.
 
 ## Current baseline
@@ -19,15 +19,18 @@ Experiment prefix: MOE-LGR. W&B group: moe-latent-gated-router-9110 in marin_moe
 EP hero main `d891fba48a7d3729fdac2595df3c6ca292a53b74`, scaled to small widths.
 The control is `RMSNorm(down(h))` for experts and `router(h)` for routing.
 The treatment is `z=GatedNorm(down(h))`, used by both router and experts.
-Both arms use the same TPU, token budget, data order and optimizer schedule.
+The control is retained for numerical checks and analytic budget calculation.
+Only the treatment is trained. Historical comparisons have architecture,
+optimizer, hardware, and token-count differences.
 See the [plan](../projects/moe-latent-gated-router/plan.md) and
 [variant README](../../experiments/grug/moe_latent_gated_router/README.md).
 
 ## Hypothesis queue
 
 - Active MOE-LGR-001: The shared gated latent improves loss enough to offset
-  runtime overhead at d512 and d768. Evidence is pending; fail if either
-  paired effective speedup is <=1.
+  runtime overhead at d512 and d768 versus the existing Agent MoE reference.
+  Evidence is pending; fail if either effective speedup is <=1. This reference
+  comparison cannot isolate the requested intervention.
 - Conditional MOE-LGR-002: The gain persists at d1024/d1280 and improves
   projected loss at 1e21 and 1e23 FLOPs. Run only after MOE-LGR-001 passes.
 
@@ -86,3 +89,26 @@ See the [plan](../projects/moe-latent-gated-router/plan.md) and
   and `--reserve v5p-8` availability. The controller reported no matching groups.
 - Pin the TPU child explicitly to us-central1 and retry the CPU parent without
   the accelerator availability constraint. No production job was changed.
+
+### 2026-09-11 — Smoke submission and scope correction
+
+- Source checkpoint: `da78e56d0`. The smoke parent
+  `/kaiyuew/moe-lgr-9110-d512-gated-smoke` is running and dispatched only
+  `/kaiyuew/moe-lgr-9110-d512-gated-smoke/grug-train-moe-lgr-9110-d512-gated-smoke`.
+  The child is capacity-pending, with no training progress verified yet.
+- User clarification: “我们不需要跑baseline吧”. Do not submit any new baseline
+  training. Reuse existing Agent MoE references; only two treatment cells per gate.
+  The fresh-control plan above is superseded. No baseline job was submitted.
+- The existing May Recipe references differ in architecture, optimizer, token count
+  and v4-32 hardware. Report compute-equivalent gain and measured wall-clock
+  comparison separately; this reference cannot isolate the requested intervention.
+- Monitoring ownership transfers to the current task's heartbeat
+  `follow-gated-latent-moe-ablation-9110` (10-minute cadence). The state file is
+  `scratch/20260911-1028_moe-lgr-9110_monitoring_state.json`; the durable
+  [handoff](../projects/moe-latent-gated-router/handoff.md) records commands, gates,
+  checkpoint locations, and recovery limits. Stop the heartbeat after the gate
+  decision or an unrecoverable failure. Normal capacity waits should stay quiet.
+- Verified the existing W&B references are both `finished`: d512 Paloma macro
+  3.54216671 at 1,439,170,560 tokens; d768 3.22727251 at 4,423,680,000 tokens.
+  Full config/summary snapshots are in `scratch/9110-existing-baselines.json`.
+  Retrieve their final 100 throughput samples when calculating the final comparison.

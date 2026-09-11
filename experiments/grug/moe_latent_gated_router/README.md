@@ -18,9 +18,10 @@ router parameter count; this experiment cannot isolate the two components.
 
 ## Comparison
 
-Follow the gate progression in [Agent MoE](../moe/agent.md). Use fresh paired
-latent-MoE controls at each width, because the historical table has no latent
-bottleneck and uses different hardware. Both arms use v5p-8, EP1, the ring
+Follow the gate progression in [Agent MoE](../moe/agent.md), reusing its existing
+May Recipe baseline runs. **Do not launch new baseline jobs.** The full-width
+control remains in code for numerical parity checks and budget calculation.
+The treatment uses v5p-8, EP1, the ring
 backend's dropless local path, TPU Splash attention, 4096-token sequences,
 384 experts, top-8, latent/expert width d/2, and two shared experts.
 The Nemotron/StarCoder/ProofPile mixture and llama3 tokenization come from the
@@ -35,20 +36,21 @@ Harrier data or GB200 EP64 transport/drop dynamics.
 | 2 | 1024 | 12 | 128 | 1.16e19 |
 | 2 | 1280 | 14 | 256 | 3.46e19 |
 
-The control budget fixes both arms' steps, tokens, and optimizer schedule.
+The scaled hero control's analytic FLOPs fix the treatment's steps, tokens,
+and optimizer schedule at each budget. This does not require training a control.
 Analytic FLOPs follow the existing matmul convention: the treatment adds
 `4 * latent_dim * 128` gate FLOPs and changes router FLOPs by
 `2 * num_experts * (latent_dim - hidden_dim)` per token per layer.
 Elementwise normalization/gating overhead is represented by measured throughput.
 
-Run one arm at a time by selecting an exact width and run ID:
+Run the treatment at one width at a time with an exact run ID:
 
 ```bash
 uv run python -m experiments.grug.moe_latent_gated_router.launch \
-  --dim 512 --arm full_width_rms --run-id moe-lgr-9110-d512-control \
+  --dim 512 --arm gated_latent --run-id moe-lgr-9110-d512-gated \
   --version dev
 uv run python -m experiments.grug.moe_latent_gated_router.launch \
-  --dim 512 --arm gated_latent --run-id moe-lgr-9110-d512-gated \
+  --dim 768 --arm gated_latent --run-id moe-lgr-9110-d768-gated \
   --version dev
 ```
 
@@ -59,6 +61,10 @@ and at completion under the artifact's output; restarts use the same run ID.
 
 Final comparison requires W&B state `finished`, Paloma macro loss, final total
 tokens, last-100-step mean token throughput, router entropy/counts and drop rate,
-and a complete final checkpoint. Do not compare the historical v4 throughput
-against these v5p measurements. A Gate 1 pass requires effective speedup >1 at
-both widths; only then run Gate 2 and fit the scaling projection.
+and a complete final checkpoint. The existing references are
+`marin-community/marin_moe/moe_may_compute_opt_d{dim}_ep1`. Their architecture,
+optimizer recipe, token count, and v4-32 hardware differ from this scaled hero.
+Report compute-equivalent gain separately from measured wall-clock comparison,
+using each run's own token count and throughput. This comparison does not isolate
+the gated-router intervention. A Gate 1 pass requires effective speedup >1 at both
+widths; only then run the two larger treatment cells and fit the scaling projection.
