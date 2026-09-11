@@ -74,8 +74,17 @@ _DEFAULT_SERVING = ServingParams(
 )
 
 
+# Match the launcher registry so local fixtures exercise variant selection.
+_EVAL_FAMILIES = {"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"}
+
+
 def _lm_eval_ref(eval_name: str, num_fewshot: int) -> EvalRef:
-    return EvalRef(name=eval_name, mechanism="evalchemy", tasks=(EvalTaskRef(name=eval_name, num_fewshot=num_fewshot),))
+    return EvalRef(
+        name=eval_name,
+        mechanism="evalchemy",
+        family=_EVAL_FAMILIES.get(eval_name),
+        tasks=(EvalTaskRef(name=eval_name, num_fewshot=num_fewshot),),
+    )
 
 
 def _harbor_ref(dataset: str) -> EvalRef:
@@ -310,6 +319,7 @@ def _write_broken_record(fs, dest: str) -> str:
 _HEADLINE = {
     "mmlu": ("acc,none", "acc_stderr,none"),
     "arc-challenge": ("acc_norm,none", "acc_norm_stderr,none"),
+    "gsm8k": ("exact_match,flexible-extract", "exact_match_stderr,flexible-extract"),
     "gsm8k-0shot": ("exact_match,flexible-extract", "exact_match_stderr,flexible-extract"),
     "humaneval": ("exact_match,none", "exact_match_stderr,none"),
     "math500": ("accuracy", None),
@@ -415,6 +425,31 @@ def build_fixtures(dest: str) -> list[str]:
             _generation_sample("gsm8k-0shot", "0", extracted="42", target="42"),
             _generation_sample("gsm8k-0shot", "1", extracted="17", target="18"),
             _generation_sample("gsm8k-0shot", "2", extracted="120", target="120"),
+        ],
+    )
+    r = f"{grp}-gsm8k"
+    emit(
+        _record(
+            run_id=r,
+            group_id=grp,
+            model=REFERENCE_MODEL,
+            version="2026.07.20",
+            created_at="2026-07-20T02:12:00+00:00",
+            evaluation=_lm_eval_ref("gsm8k", 8),
+            status=RunStatus.SUCCEEDED,
+            results_path=results_of(r),
+            metrics=_lm_metrics("gsm8k", 0.612, 0.017),
+            description=desc,
+        )
+    )
+    _write_samples(
+        fs,
+        results_of(r),
+        "gsm8k",
+        [
+            _generation_sample("gsm8k", "0", extracted="42", target="42"),
+            _generation_sample("gsm8k", "1", extracted="18", target="18"),
+            _generation_sample("gsm8k", "2", extracted="96", target="120"),
         ],
     )
     r = f"{grp}-humaneval"
@@ -529,6 +564,27 @@ def build_fixtures(dest: str) -> list[str]:
             _generation_sample("gsm8k-0shot", str(i), extracted=str(i), target=str(i if i % 2 else i + 1))
             for i in range(4)
         ],
+    )
+    r = f"{grp}-gsm8k"
+    emit(
+        _record(
+            run_id=r,
+            group_id=grp,
+            model="tootsie-8b",
+            version="2026.07.20",
+            created_at="2026-07-20T04:12:00+00:00",
+            evaluation=_lm_eval_ref("gsm8k", 8),
+            status=RunStatus.SUCCEEDED,
+            results_path=results_of(r),
+            metrics=_lm_metrics("gsm8k", 0.523, 0.020),
+            description=desc,
+        )
+    )
+    _write_samples(
+        fs,
+        results_of(r),
+        "gsm8k",
+        [_generation_sample("gsm8k", str(i), extracted=str(i + 1), target=str(i + 1 if i % 2 else i)) for i in range(4)],
     )
     r = f"{grp}-humaneval"
     emit(

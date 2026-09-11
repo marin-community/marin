@@ -30,6 +30,8 @@ def _record(
     *,
     coverage: dict[str, TaskCoverage] | None = None,
     accelerator: str = "v6e-8",
+    family: str | None = None,
+    eval_runtime: str = "i",
 ) -> EvalRunRecord:
     succeeded = value is not None
     metrics = {eval_name: {"acc,none": value, "acc_stderr,none": 0.01, "sample_len": float(ITEMS)}} if succeeded else {}
@@ -40,7 +42,12 @@ def _record(
         user="tester",
         version=version,
         model=ModelRef(name=model, location="loc", backend="vllm"),
-        eval=EvalRef(name=eval_name, mechanism="evalchemy", tasks=(EvalTaskRef(name=eval_name, num_fewshot=0),)),
+        eval=EvalRef(
+            name=eval_name,
+            mechanism="evalchemy",
+            family=family,
+            tasks=(EvalTaskRef(name=eval_name, num_fewshot=0),),
+        ),
         hardware=HardwareRef(platform="tpu", accelerator=accelerator, region_or_cluster="us-central2"),
         status=RunStatus.SUCCEEDED if succeeded else RunStatus.INFRA_FAILED,
         error=None,
@@ -49,7 +56,7 @@ def _record(
         coverage=coverage or {},
         jobs={},
         log_tails={},
-        provenance=Provenance(git_sha="s", eval_runtime="i", launch_host="h"),
+        provenance=Provenance(git_sha="s", eval_runtime=eval_runtime, launch_host="h"),
     )
 
 
@@ -244,6 +251,121 @@ def test_smoke_suites_stay_out_of_the_panel():
     panel = build_panel(records, panel_request())
 
     assert panel["benchmarks"] == ["mmlu"]
+
+
+def test_a_family_opens_on_the_variant_with_results_for_the_most_models():
+    half_graded = {"gsm8k": TaskCoverage(n_attempted=2 * ITEMS, n_scored=ITEMS)}
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k", coverage=half_graded),
+        _record("b", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.55, family="gsm8k", coverage=half_graded),
+        _record("c", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.60, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.40, family="gsm8k"),
+        _record("b", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.45, family="gsm8k"),
+    ]
+
+    strict = build_panel(records, panel_request())
+    relaxed = build_panel(records, panel_request(min_coverage=0.4))
+
+    assert strict["families"] == [{"family": "gsm8k", "variants": ["gsm8k", "gsm8k-0shot"], "default": "gsm8k-0shot"}]
+    assert relaxed["families"][0]["default"] == "gsm8k"
+
+
+def test_a_family_counts_once_in_the_panel_the_coverage_and_the_aggregate():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.40, family="gsm8k"),
+        _record("a", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.60),
+    ]
+
+    panel = build_panel(records, panel_request(), aggregate_policy=MissingPolicy.REQUIRE_COMPLETE)
+
+    assert panel["panel"] == ["gsm8k", "mmlu"]
+    assert panel["benchmarks"] == ["gsm8k", "gsm8k-0shot", "mmlu"]
+    (row,) = panel["rows"]
+    assert row["covered"] == 2
+    assert row["aggregate"]["panel"] == ["gsm8k", "mmlu"]
+    assert row["aggregate"]["value"] == pytest.approx(0.55)
+
+
+def test_completeness_is_judged_against_the_variant_each_column_shows():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.40, family="gsm8k"),
+        _record("b", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.60, family="gsm8k"),
+    ]
+
+    panel = build_panel(records, panel_request(completeness=Completeness.COMPLETE_PANEL))
+
+    assert panel["panel"] == ["gsm8k"]
+    assert [row["model"] for row in panel["rows"]] == ["a", "b"]
+
+
+def test_an_explicitly_requested_variant_is_the_one_the_column_shows():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k"),
+        _record("b", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.60, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.40, family="gsm8k"),
+    ]
+
+    panel = build_panel(records, panel_request(benchmarks=("gsm8k-0shot",)))
+
+    assert panel["panel"] == ["gsm8k-0shot"]
+    assert [row["cells"].get("gsm8k-0shot", {}).get("value") for row in panel["rows"]] == [pytest.approx(0.40)]
+
+
+def test_an_eval_with_no_declared_family_is_a_column_of_one():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.5, family="gsm8k"),
+        _record("a", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.6),
+    ]
+
+    panel = build_panel(records, panel_request())
+
+    assert panel["families"] == [
+        {"family": "gsm8k", "variants": ["gsm8k"], "default": "gsm8k"},
+        {"family": "mmlu", "variants": ["mmlu"], "default": "mmlu"},
+    ]
+
+
+def test_variants_with_equally_many_results_default_to_the_first_eval_name():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.5, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.4, family="gsm8k"),
+    ]
+
+    (column,) = build_panel(records, panel_request())["families"]
+
+    assert column["default"] == "gsm8k"
+
+
+def test_a_variant_in_a_family_keeps_its_own_cell_name_and_provenance():
+    records = [
+        _record("a", "gsm8k", "v1", "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k", eval_runtime="evalchemy==1"),
+        _record(
+            "a", "gsm8k-0shot", "v2", "2026-02-01T00:00:00+00:00", 0.40, family="gsm8k", eval_runtime="evalchemy==2"
+        ),
+    ]
+
+    (row,) = build_panel(records, panel_request())["rows"]
+
+    assert sorted(row["cells"]) == ["gsm8k", "gsm8k-0shot"]
+    assert row["cells"]["gsm8k"]["eval_runtime"] == "evalchemy==1"
+    assert row["cells"]["gsm8k-0shot"]["eval_runtime"] == "evalchemy==2"
+    assert row["cells"]["gsm8k"]["version"] == "v1"
+    assert row["cells"]["gsm8k-0shot"]["version"] == "v2"
+    assert row["cells"]["gsm8k-0shot"]["run_id"] == "a-gsm8k-0shot-2026-02-01T00:00:00+00:00"
+
+
+def test_meta_keeps_the_variants_a_narrowed_panel_is_not_showing():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.5, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.4, family="gsm8k"),
+    ]
+
+    panel = build_panel(records, panel_request(benchmarks=("gsm8k-0shot",)))
+
+    assert panel["families"] == [{"family": "gsm8k", "variants": ["gsm8k-0shot"], "default": "gsm8k-0shot"}]
+    assert build_meta(records)["families"] == [{"family": "gsm8k", "variants": ["gsm8k", "gsm8k-0shot"]}]
 
 
 def test_meta_reports_suites_facets_and_archived_models():

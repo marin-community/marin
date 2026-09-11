@@ -14,7 +14,7 @@ import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cellsByModel, fleetBest, isPartialCoverage } from '@/utils/panel'
+import { cellsByModel, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
   FLAG_NOTES,
@@ -134,10 +134,12 @@ const sharedTasks = computed<string[]>(() => {
   return visibleTasks.value.filter((task) => selected.value.every((model) => modelCells.value[model]?.[task]))
 })
 
-// Carry the panel's selection into the compare route, so the comparison answers the same question
-// the panel was showing rather than falling back to every benchmark at the newest cohort.
+// Pin Compare to the exact variants shown in the panel.
 function goCompare() {
-  router.push({ path: '/compare', query: { ...selection.value, models: selected.value.join(',') } })
+  const benchmarks = columns.value.map((column) => column.task).join(',')
+  const query: Record<string, string> = { ...selection.value, models: selected.value.join(',') }
+  if (benchmarks) query.benchmarks = benchmarks
+  router.push({ path: '/compare', query })
 }
 
 const modelCells = computed(() => cellsByModel(data.value?.rows ?? []))
@@ -240,6 +242,40 @@ const rows = computed<PanelRow[]>(() => {
     return bv - av
   })
 })
+
+interface FamilyColumn {
+  family: string
+  task: string
+  variants: string[]
+}
+
+// Meta includes siblings omitted by a narrowed panel, so the picker can switch back.
+const knownVariants = computed<Record<string, string[]>>(() => {
+  const known = new Set(knownEvals.value)
+  const out: Record<string, string[]> = {}
+  for (const entry of meta.value?.families ?? []) {
+    const present = entry.variants.filter((name) => known.has(name))
+    if (present.length) out[entry.family] = present
+  }
+  return out
+})
+
+const columns = computed<FamilyColumn[]>(() => {
+  const shown = new Set(visibleTasks.value)
+  return (data.value?.families ?? []).map((entry) => ({
+    family: entry.family,
+    task: entry.variants.find((name) => shown.has(name)) ?? entry.default,
+    variants: knownVariants.value[entry.family] ?? entry.variants,
+  }))
+})
+
+function pickVariant(column: FamilyColumn, variant: string) {
+  const next = withVariant(selectedEvals, column.variants, variant)
+  selectedEvals.clear()
+  for (const name of next) selectedEvals.add(name)
+  if (sortKey.value === column.task) sortKey.value = variant
+  persistSelection(knownEvals.value)
+}
 
 // Δ best is per benchmark, where a difference between two measurements of the same thing is defined.
 // There is no cross-benchmark Δ.
@@ -593,8 +629,8 @@ function goToModel(model: string) {
           <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
             Per-benchmark
             <span class="font-normal normal-case text-text-muted">
-              ({{ rows.length }} models × {{ visibleTasks.length }} benchmarks · click a header to sort by its lower
-              bound · a cell for history)
+              ({{ rows.length }} models × {{ columns.length }} benchmarks · click a header to sort by its lower bound ·
+              a cell for history)
             </span>
           </h3>
         </div>
@@ -611,18 +647,28 @@ function goToModel(model: string) {
                   Model
                 </th>
                 <th
-                  v-for="task in visibleTasks"
-                  :key="task"
+                  v-for="column in columns"
+                  :key="column.family"
                   class="px-3 py-2 text-center text-xs font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer"
-                  :class="sortKey === task ? 'text-accent' : 'text-text-secondary'"
-                  @click="sortBy(task)"
+                  :class="sortKey === column.task ? 'text-accent' : 'text-text-secondary'"
+                  @click="sortBy(column.task)"
                 >
-                  {{ task }}
+                  {{ column.family }}
+                  <select
+                    v-if="column.variants.length > 1"
+                    class="block mx-auto mt-0.5 rounded border border-surface-border bg-surface px-1 py-0 font-mono text-[10px] font-normal normal-case text-text-secondary"
+                    title="Which setting of this benchmark the column shows. Compare uses the selected setting."
+                    :value="column.task"
+                    @click.stop
+                    @change="pickVariant(column, ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option v-for="variant in column.variants" :key="variant" :value="variant">{{ variant }}</option>
+                  </select>
                   <span
-                    v-if="best[task]"
+                    v-if="best[column.task]"
                     class="block font-normal normal-case font-mono text-[10px]"
                     style="color: var(--c-best)"
-                    >▲ {{ formatScore(best[task].value) }}</span
+                    >▲ {{ formatScore(best[column.task].value) }}</span
                   >
                 </th>
               </tr>
@@ -639,7 +685,7 @@ function goToModel(model: string) {
                     {{ row.model }}
                   </button>
                 </td>
-                <td v-for="task in visibleTasks" :key="task" class="p-1 text-center align-middle">
+                <td v-for="{ task } in columns" :key="task" class="p-1 text-center align-middle">
                   <button
                     v-if="cellFor(row, task)"
                     class="w-full rounded px-2 py-1.5 leading-tight cursor-pointer hover:ring-1 hover:ring-accent-border"
@@ -689,6 +735,11 @@ function goToModel(model: string) {
           — means the model never ran that benchmark. A result the engine flags as suspect is held out of the
           panel as <span class="text-status-warning">flagged</span> rather than standing as a model's newest score;
           "Show flagged results" admits it, marked with a <span class="text-status-warning">*</span>.
+        </p>
+        <p class="text-xs text-text-muted mt-1 leading-relaxed">
+          A benchmark run under more than one setting takes one column, opened on whichever setting has results for the
+          most models here. The picker under the name switches it, and every cell, tooltip, history and comparison
+          stays on the exact eval it names.
         </p>
       </div>
     </div>

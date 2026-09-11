@@ -41,17 +41,22 @@ _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
     }
 )
 
+# Capped ``-smoke`` variants remain unfamilied because scoring surfaces exclude them.
+_EVAL_FAMILIES: Mapping[str, str] = MappingProxyType({"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"})
+
 
 @dataclass(frozen=True)
 class EvalchemyDefinition:
     name: str
     config_path: Path
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
+    family: str | None = None
 
     def record_ref_for(self, config: EvalchemyRunConfig) -> EvalRef:
         return EvalRef(
             name=config.name,
             mechanism="evalchemy",
+            family=self.family,
             tasks=tuple(
                 EvalTaskRef(
                     name=task.name,
@@ -113,6 +118,7 @@ class HarborDefinition:
     name: str
     config_path: Path
     max_eval_instances: int | None = None
+    family: str | None = None
 
     def secret_env_for(self, config: ValidatedHarborConfig) -> Mapping[str, SecretSpec]:
         if config.environment == _DAYTONA_ENVIRONMENT_TYPE:
@@ -123,6 +129,7 @@ class HarborDefinition:
         return EvalRef(
             name=self.name,
             mechanism="harbor",
+            family=self.family,
             harbor=HarborRef(
                 dataset=config.record_dataset,
                 version=config.record_revision,
@@ -161,6 +168,7 @@ def harbor_definition(
         name=name,
         config_path=_HARBOR_CONFIG_DIR / f"{name}.yaml",
         max_eval_instances=max_eval_instances,
+        family=_EVAL_FAMILIES.get(name),
     )
 
 
@@ -243,7 +251,11 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
 )
 
 EVALS: dict[str, EvaluationDefinition] = {
-    name: EvalchemyDefinition(name=name, config_path=_EVALCHEMY_CONFIG_DIR / f"{name}.yaml")
+    name: EvalchemyDefinition(
+        name=name,
+        config_path=_EVALCHEMY_CONFIG_DIR / f"{name}.yaml",
+        family=_EVAL_FAMILIES.get(name),
+    )
     for name in _STANDARD_EVALCHEMY_EVALS
 }
 EVALS.update(

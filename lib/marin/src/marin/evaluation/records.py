@@ -206,6 +206,11 @@ class EvalRef(BaseModel):
 
     name: str
     mechanism: str
+    family: str | None = Field(
+        default=None,
+        description="Benchmark this eval is a setting of, for the leaderboard column it shares",
+        exclude_if=lambda value: value is None,
+    )
     tasks: tuple[EvalTaskRef, ...] = ()
     evalchemy: EvalchemyRef | None = None
     harbor: HarborRef | None = None

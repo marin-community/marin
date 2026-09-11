@@ -179,9 +179,18 @@ class PanelRequestResponse(BaseModel):
     statuses: list[str]
 
 
+class PanelFamilyResponse(BaseModel):
+    """One leaderboard column: a benchmark, the settings it was run under, and the one to show."""
+
+    family: str
+    variants: list[str]
+    default: str
+
+
 class PanelResponse(BaseModel):
     benchmarks: list[str]
     panel: list[str]
+    families: list[PanelFamilyResponse]
     rows: list[PanelRowResponse]
     request: PanelRequestResponse
 

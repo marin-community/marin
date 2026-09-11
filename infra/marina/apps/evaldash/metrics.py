@@ -9,14 +9,17 @@ turns records into measurements, answers a :class:`~marin.evaluation.eval_stats.
 with them, and shapes the result for the API -- the statistics and the selection rules live in the
 engine, which the eval runners share, so the dashboard and the producers cannot drift.
 
-Presentation lives here: the suite grouping of columns, the smoke-suite exclusion, and the payload
-shapes. A cell the request rejected is kept as a *missing* entry with the reason, so an empty cell is
-explained rather than blank.
+Presentation lives here: the suite grouping of columns, the family grouping that collapses several
+settings of one benchmark into a single column, the smoke-suite exclusion, and the payload shapes. A
+cell the request rejected is kept as a *missing* entry with the reason, so an empty cell is explained
+rather than blank.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 
 from marin.evaluation.eval_measurements import measurement_from_record, measurements_from_records
 from marin.evaluation.eval_stats import (
@@ -31,6 +34,7 @@ from marin.evaluation.eval_stats import (
     MissingPolicy,
     Rejection,
     SelectionRequest,
+    covers_panel,
     difference_interval,
     matches_filters,
     measurement_interval,
@@ -95,6 +99,53 @@ def eval_suites(evals: set[str]) -> list[dict]:
     if other:
         result.append({"suite": "Other", "evals": other})
     return result
+
+
+def declared_families(records: Iterable[EvalRunRecord]) -> dict[str, str]:
+    """Map each eval name to its newest non-null family declaration."""
+    declared: dict[str, tuple[str, str]] = {}
+    for record in records:
+        family = record.evaluation.family
+        if family is None:
+            continue
+        current = declared.get(record.evaluation.name)
+        if current is None or (record.created_at or "") > current[1]:
+            declared[record.evaluation.name] = (family, record.created_at or "")
+    return {name: family for name, (family, _) in declared.items()}
+
+
+def group_by_family(names: Iterable[str], families: Mapping[str, str]) -> dict[str, list[str]]:
+    """Eval names grouped by declared family, in first-seen order. An undeclared name is its own."""
+    grouped: dict[str, list[str]] = {}
+    for name in names:
+        grouped.setdefault(families.get(name, name), []).append(name)
+    return grouped
+
+
+@dataclass(frozen=True)
+class FamilyColumn:
+    """One leaderboard column: a benchmark family, the settings requested of it, and the one shown."""
+
+    family: str
+    variants: tuple[str, ...]
+    default: str
+
+
+def _family_columns(
+    requested: Sequence[str],
+    families: Mapping[str, str],
+    cells: Mapping[str, Mapping[str, Measurement]],
+) -> list[FamilyColumn]:
+    """Choose each family's variant by admitted-cell count, then eval name."""
+    admitted = Counter(name for model_cells in cells.values() for name in model_cells)
+    return [
+        FamilyColumn(
+            family=family,
+            variants=tuple(variants),
+            default=min(variants, key=lambda name: (-admitted[name], name)),
+        )
+        for family, variants in group_by_family(requested, families).items()
+    ]
 
 
 def _attribute(record: EvalRunRecord, path: str) -> str:
@@ -205,25 +256,36 @@ def build_panel(
     rejections behind any empty cell, and -- only when a caller asks for one by naming an aggregation
     policy -- a panel aggregate carrying its own protocol. No aggregate is produced by default: a mean
     across benchmarks has no interpretation without a declared panel and missing-data policy.
+
+    ``families`` describes each column and its selected variant. ``panel`` contains those selected
+    variants and controls coverage, completeness, and aggregation. ``benchmarks`` and ``cells`` retain
+    every admitted variant under its exact eval name.
     """
     eligible = _panel_records(records)
     metadata = run_metadata(eligible)
-    selection = select(measurements_from_records(eligible), request, metadata)
+    # Family columns are resolved after selection, so apply completeness to the effective panel below.
+    selection = select(measurements_from_records(eligible), replace(request, completeness=Completeness.ANY), metadata)
+    requested = list(request.panel) if request.panel is not None else list(selection.benchmarks)
+    families = _family_columns(requested, declared_families(eligible), selection.cells)
+    panel = [column.default for column in families]
+    # Omit gap entries for sibling variants without a visible column; admitted cells remain in the payload.
+    hidden = {name for column in families for name in column.variants if name != column.default}
+
     on_panel = [
         record
         for record in eligible
+        if record.evaluation.name not in hidden
         if request.panel is None or record.evaluation.name in request.panel
         if matches_filters(record.model.name, metadata[record.run_id], request)
     ]
     missing = _missing_cells(on_panel, selection.cells, selection.rejections)
 
-    panel = request.panel if request.panel is not None else selection.benchmarks
     protocol = AggregationProtocol(panel=tuple(panel), missing=aggregate_policy) if aggregate_policy else None
 
     rows = []
     for model in sorted(set(selection.cells) | set(missing)):
         cells = selection.cells.get(model, {})
-        if request.completeness is Completeness.COMPLETE_PANEL and model not in selection.cells:
+        if request.completeness is Completeness.COMPLETE_PANEL and not covers_panel(cells, panel):
             continue
         rows.append(
             {
@@ -237,7 +299,11 @@ def build_panel(
         )
     return {
         "benchmarks": list(selection.benchmarks),
-        "panel": list(panel),
+        "panel": panel,
+        "families": [
+            {"family": column.family, "variants": list(column.variants), "default": column.default}
+            for column in families
+        ],
         "rows": rows,
         "request": {
             "min_coverage": request.min_coverage,
@@ -306,8 +372,9 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
 
 
 def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = frozenset()) -> dict:
-    """Distinct filter values across all records, plus the archived set and the run facets."""
+    """Return panel filter metadata and all known variants for each family."""
     eval_names = {r.evaluation.name for r in records}
+    by_family = group_by_family(sorted(eval_names), declared_families(records))
     metadata = run_metadata(records)
     facets = {
         facet: sorted({values[facet] for values in metadata.values() if values.get(facet)}) for facet in RUN_FACETS
@@ -316,6 +383,7 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
         "models": sorted({r.model.name for r in records}),
         "evals": sorted(eval_names),
         "suites": eval_suites(eval_names),
+        "families": [{"family": family, "variants": variants} for family, variants in sorted(by_family.items())],
         "users": sorted({r.user for r in records if r.user}),
         "statuses": sorted({r.status.value for r in records}),
         "versions": sorted({r.version for r in records if r.version}),
