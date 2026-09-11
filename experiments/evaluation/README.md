@@ -175,7 +175,9 @@ uv run python -m experiments.evaluation.cli launch \
 
 The checked-in `mmlu-pro`, `gpqa-diamond`, `cruxeval`, `financebench`, `ifbench`, and
 `mrcr` files preserve Marin's publication-policy defaults. Select them individually with repeatable
-`--evalchemy-config` options; the `chat` suite remains the shorter general-purpose selection.
+`--evalchemy-config` options on a compatible backend; the `chat` suite remains the shorter
+general-purpose selection. The policies were validated on H100. GPQA Diamond's seeded requests are
+not compatible with the TPU vLLM backend.
 
 Marin decodes the `evalchemy_config.EvaluationConfig`-compatible fields without importing Evalchemy.
 The evaluation child then invokes the `evalchemy` console script from the pinned external runtime.
@@ -248,9 +250,10 @@ file extensions fail before Iris submission.
 
 The checked-in `swebench-recovery`, `ot-tblite-recovery`, `tb2-recovery`,
 `simpleqa-recovery`, and `ds-1000-local` files preserve the Snowball evaluation campaign policies.
-They are file-backed policies rather than registry entries. `ds-1000-local` expects the generated
-Harbor task tree at `experiments/evaluation/local_datasets/ds1000`; create that tree with Harbor's
-DS-1000 adapter before launching it.
+They are file-backed policies rather than registry entries. A `recovery` name denotes an exact-identity
+resume policy; each benchmark retains its own retry count and exception taxonomy. `ds-1000-local`
+expects the generated Harbor task tree at `experiments/evaluation/local_datasets/ds1000`; create that
+tree with Harbor's DS-1000 adapter before launching it.
 
 Harbor and `harbor_config` are absent from Marin's environment and root lock. Both preflight and execution
 install the exact `marin.external_dependencies.HARBOR` revision in an isolated uv environment. Every
