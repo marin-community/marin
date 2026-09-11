@@ -36,6 +36,7 @@ from levanter.grug.grug_moe import (
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
 )
+from levanter.testing.cpu_devices import run_on_cpu_devices
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
@@ -116,7 +117,7 @@ def test_sequence_extension_preserves_optimizer_at_fixed_token_budget():
     assert configs[0].optimizer == configs[1].optimizer
 
 
-def _validated_trainer(step, device_count: int):
+def _validated_trainer_and_batch_axis_size(step, device_count: int):
     """Run `TrainerConfig`'s own batch validation for `step` as if `device_count` devices existed.
 
     `_validate_and_set_defaults` is what `trainer.initialize()` calls before anything is placed, and
@@ -130,7 +131,7 @@ def _validated_trainer(step, device_count: int):
         return trainer, trainer.data_axis_size
 
 
-def test_context_parallel_batch_below_the_device_count_validates():
+def test_context_batch_below_device_count_validates():
     # Batch 16 over 64 devices: with levanter's default mesh, `data` absorbs all 64, so
     # `per_device_parallelism` floors to 0 and the next line raises `ZeroDivisionError` -- on an
     # allocated 16-node gang. Naming `context` leaves grug's own 16 batch shards.
@@ -145,17 +146,17 @@ def test_context_parallel_batch_below_the_device_count_validates():
         version="dev",
     )
 
-    trainer, data_axis_size = _validated_trainer(step, device_count=64)
+    trainer, data_axis_size = _validated_trainer_and_batch_axis_size(step, device_count=64)
 
     assert data_axis_size == 16
     assert trainer.per_device_parallelism == 1
 
 
-def test_the_hero_shape_validates_exactly_as_the_levanter_default_mesh_does():
+def test_hero_batch_validation_matches_default_mesh():
     # The context axis is length 1 on the hero, so the added axis must not move a single number the
     # hero has always computed.
     step = launch.build_diagnostic_run(run_id="hero-validate", dp_racks=1, num_steps=1, version="dev")
-    trainer, data_axis_size = _validated_trainer(step, device_count=64)
+    trainer, data_axis_size = _validated_trainer_and_batch_axis_size(step, device_count=64)
 
     default_mesh_trainer = dataclasses.replace(
         step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).trainer.trainer,
@@ -286,7 +287,7 @@ def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
         launch.build_diagnostic_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
 
 
-def test_expert_bank_override_must_be_divisible_by_the_context_split_too():
+def test_expert_bank_requires_context_divisibility():
     # The bank is stored over (expert, context), so 48 experts pass the 16-way expert check but fail
     # parameter init at EP16 x CP4; the launcher must catch the product before the rack is allocated.
     with pytest.raises(ValueError, match=r"must be divisible by expert \(16\) \* context \(4\) = 64"):
@@ -610,7 +611,7 @@ def test_ep_newton_schulz_returns_to_expert_sharding():
     assert output.sharding == NamedSharding(mesh, P(None, "expert", "data", "model"))
 
 
-def test_ep_newton_schulz_follows_a_context_sharded_expert_bank():
+def test_ep_newton_schulz_preserves_context_bank_sharding():
     # Under CP the expert bank is split over ("expert", "context"). An update that came back on
     # "expert" alone would drag the parameter, its fp32 master and the momentum buffer back to a
     # context-replicated layout -- the memory this sharding exists to avoid.
@@ -697,13 +698,8 @@ def test_ep_newton_schulz_matches_replicated_path():
     assert result.returncode == 0, result.stderr
 
 
-def test_ep_newton_schulz_keeps_a_context_only_bank_split_without_gathering():
-    # On a one-node CP smoke (expert=1, context=4) the bank is split over "context" alone. The
-    # output spec is restored by the final reshape either way, so `eval_shape` cannot see the
-    # difference; only the compiled HLO shows whether the whole bank was gathered onto every device.
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+def test_ep_newton_schulz_context_bank_avoids_gather():
+    # Output placement alone cannot detect an intermediate gather of the full bank.
     script = """
         import jax
         import jax.numpy as jnp
@@ -739,15 +735,7 @@ def test_ep_newton_schulz_keeps_a_context_only_bank_split_without_gathering():
         assert "all-gather" not in hlo, "the context-split expert bank was gathered whole"
     """
 
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
+    run_on_cpu_devices(script, device_count=4)
 
 
 def test_ep_padded_newton_schulz_returns_to_parameter_sharding():
@@ -985,7 +973,7 @@ def _latent_config(latent_dim=None):
 
 
 def test_block_threads_attention_padding_into_moe_metrics():
-    mesh = _explicit_mesh(1, 1, 1, 1)
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
     cfg = _latent_config()
     hidden = jax.random.normal(jax.random.key(57), (1, 8, cfg.hidden_dim))
     segment_ids = jnp.array([[0, 0, 1, 1, -1, -1, -1, -1]], dtype=jnp.int32)
@@ -1005,7 +993,7 @@ def test_block_threads_attention_padding_into_moe_metrics():
 
 @pytest.mark.parametrize("qb_estimator", [model.QbEstimator.HIST, model.QbEstimator.TOPK])
 def test_moe_qb_estimator_ignores_padding(qb_estimator: model.QbEstimator):
-    mesh = _explicit_mesh(1, 1, 1, 1)
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
     cfg = dataclasses.replace(_latent_config(), qb_estimator=qb_estimator)
     hidden = jax.random.normal(jax.random.key(59), (1, 8, cfg.hidden_dim))
     token_valid = jnp.array([[True, False, True, True, False, False, True, False]])
