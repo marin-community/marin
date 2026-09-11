@@ -217,9 +217,7 @@ const visibleTasks = computed(() => data.value?.panel ?? [])
 // --- Fleet best per benchmark (the rail caret and the column marker) ---
 const best = computed(() => fleetBest(data.value?.rows ?? [], visibleTasks.value))
 
-// --- Ordering: by model name, panel coverage, last update, or a benchmark column's interval lower
-// bound. Sorting a benchmark on the lower bound is the point — a partly-graded run cannot buy rank
-// with the items it kept. Every column sorts both ways; clicking the active column flips it. ---
+// --- Ordering. Benchmark columns use the interval lower bound. ---
 const MODEL_SORT = 'model'
 const COVERAGE_SORT = 'coverage'
 const UPDATED_SORT = 'last_updated'
@@ -228,7 +226,6 @@ type SortDirection = 'asc' | 'desc'
 const sortKey = ref<string>(COVERAGE_SORT)
 const sortDirection = ref<SortDirection>('desc')
 
-// Names read A→Z; scores, coverage and recency read best-first.
 function defaultDirection(key: string): SortDirection {
   return key === MODEL_SORT ? 'asc' : 'desc'
 }
@@ -244,13 +241,10 @@ function sortGlyph(key: string): string {
   if (sortKey.value !== key) return ''
   return sortDirection.value === 'asc' ? '▲' : '▼'
 }
-// Every sortable header marks the active column in the accent colour.
 function headerClass(key: string): string {
   return sortKey.value === key ? 'text-accent' : 'text-text-secondary'
 }
 
-// What the active column ranks a row on. null means the row has nothing to rank there: no cell on
-// that benchmark, or no result at all behind its timestamp.
 function sortValue(row: PanelRow): string | number | null {
   if (sortKey.value === MODEL_SORT) return row.model
   if (sortKey.value === COVERAGE_SORT) return row.covered
@@ -265,8 +259,7 @@ const rows = computed<PanelRow[]>(() => {
     if (a.archived !== b.archived) return Number(a.archived) - Number(b.archived)
     const av = sortValue(a)
     const bv = sortValue(b)
-    // Rows with nothing to rank stay at the bottom in both directions: reversing the order asks a
-    // question about the ranked rows, and answering it should not float the unranked ones to the top.
+    // Missing values sort last in both directions.
     if (av === null || bv === null) {
       if (av !== bv) return av === null ? 1 : -1
       return a.model.localeCompare(b.model)
@@ -642,8 +635,8 @@ function goToModel(model: string) {
           <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
             Per-benchmark
             <span class="font-normal normal-case text-text-muted">
-              ({{ rows.length }} models × {{ visibleTasks.length }} benchmarks · click a header to sort, again to
-              reverse; a benchmark sorts on its interval's lower bound · a cell for history)
+              ({{ rows.length }} models × {{ visibleTasks.length }} benchmarks · benchmarks sort on interval lower
+              bound · click a cell for history)
             </span>
           </h3>
         </div>
@@ -677,7 +670,7 @@ function goToModel(model: string) {
                 <th
                   class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer"
                   :class="headerClass(UPDATED_SORT)"
-                  title="Newest contributing benchmark result; individual cells may be older"
+                  title="Latest result included in this row"
                   @click="sortBy(UPDATED_SORT)"
                 >
                   Last updated {{ sortGlyph(UPDATED_SORT) }}
@@ -738,7 +731,7 @@ function goToModel(model: string) {
                 </td>
                 <td
                   class="px-3 py-2 text-right whitespace-nowrap font-mono text-[11px] tabular-nums text-text-muted"
-                  title="Newest contributing benchmark result; individual cells may be older"
+                  title="Latest result included in this row"
                 >
                   {{ formatTimestamp(row.last_updated) }}
                 </td>
@@ -752,8 +745,7 @@ function goToModel(model: string) {
           — means the model never ran that benchmark. A result the engine flags as suspect is held out of the
           panel as <span class="text-status-warning">flagged</span> rather than standing as a model's newest score;
           "Show flagged results" admits it, marked with a <span class="text-status-warning">*</span>. Last updated is
-          the newest contributing benchmark result; individual cells may be older, and each cell's own timestamp is in
-          its tooltip.
+          the maximum timestamp among the row's displayed cells. Each cell's timestamp appears in its tooltip.
         </p>
       </div>
     </div>

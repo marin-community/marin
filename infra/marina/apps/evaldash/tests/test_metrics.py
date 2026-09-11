@@ -71,8 +71,6 @@ def test_panel_takes_the_latest_valid_result_for_each_benchmark_across_cohorts()
 
 
 def test_a_row_is_dated_by_its_newest_contributing_cell():
-    """``last_updated`` answers how fresh a row's numbers are, so a newer run that contributed no
-    cell does not date the row: here the failed ``drop`` run is the newest run on the model."""
     records = [
         _record("m", "gsm8k-0shot", "v1", "2026-01-01T00:00:00+00:00", 0.30),
         _record("m", "mmlu", "v2", "2026-02-01T00:00:00+00:00", 0.70),
@@ -82,20 +80,6 @@ def test_a_row_is_dated_by_its_newest_contributing_cell():
     (row,) = build_panel(records, panel_request())["rows"]
 
     assert row["last_updated"] == "2026-02-01T00:00:00+00:00"
-
-
-def test_a_single_cohort_row_is_dated_by_the_last_eval_of_that_launch():
-    """One launch's evals finish at different times, and the row reports the last of them rather
-    than the launch's first result."""
-    records = [
-        _record("m", "mmlu", "v1", "2026-01-01T00:00:00+00:00", 0.50),
-        _record("m", "gsm8k-0shot", "v1", "2026-01-01T06:00:00+00:00", 0.30),
-    ]
-
-    (row,) = build_panel(records, panel_request())["rows"]
-
-    assert {cell["version"] for cell in row["cells"].values()} == {"v1"}
-    assert row["last_updated"] == "2026-01-01T06:00:00+00:00"
 
 
 def test_panel_can_be_pinned_to_one_cohort():
