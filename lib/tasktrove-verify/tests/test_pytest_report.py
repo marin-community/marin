@@ -133,7 +133,7 @@ def test_pytest_restore_undoes_agent_edits_to_the_tests(tmp_path):
 def test_pytest_skipped_test_does_not_block_a_clean_suite(tmp_path):
     workspace = _project(tmp_path, FIXED)
     reward = pytest_report.grade(_spec(), tmp_path, workspace)
-    assert reward.detail["total"] == 2
+    assert (reward.reward, reward.detail["total"]) == (1.0, 2)
 
 
 def test_pytest_timeout_scores_zero_with_reason(tmp_path):
