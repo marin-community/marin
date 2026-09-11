@@ -152,6 +152,7 @@ class CounterValue:
 class CounterPage:
     counters: tuple[CounterValue, ...]
     total: int
+    stages: tuple[str, ...]
 
 
 @dataclass(frozen=True)

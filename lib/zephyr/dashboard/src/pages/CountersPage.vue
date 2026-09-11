@@ -26,7 +26,7 @@ const api = useDashboardApi<CounterPage>('counters', () => ({
 
 const counters = computed(() => api.data.value?.counters ?? [])
 const total = computed(() => api.data.value?.total ?? 0)
-const stages = computed(() => [...new Set(counters.value.map((counter) => counter.stage).filter(Boolean))].sort())
+const stages = computed(() => api.data.value?.stages ?? [])
 
 function sort(field: string) {
   if (sortField.value === field) sortDescending.value = !sortDescending.value
