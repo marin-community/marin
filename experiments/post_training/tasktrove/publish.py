@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Assemble TaskTrove Clean from the graded rows.
+"""Publish the retained TaskTrove rows and their rejection ledger.
 
     tasks/part-00000.parquet every surviving task with its selection columns
     ledger.parquet           one row per task that did not survive: its status and the reason
@@ -10,10 +10,10 @@
     report.md                the manifest as tables, regenerated every run
 
 The survivors are copied by a Zephyr stage that reads only converted rows; the ledger and counts
-come from one pass over the graded rows' small columns. The only binaries read are one task per
+come from one pass over the filtered rows' small columns. The only binaries read are one task per
 distinct Dockerfile, for its base image.
 
-    python -m experiments.post_training.tasktrove.publish summary <graded_path> <output_path> <tool_ref>
+    python -m experiments.post_training.tasktrove.publish summary <filtered_path> <output_path> <tool_ref>
     python -m experiments.post_training.tasktrove.publish export <tasks_dir> <path> [--dest DIR]
 
 ``summary`` rewrites the ledger, manifest and report of an existing output without touching
@@ -45,7 +45,7 @@ from experiments.post_training.tasktrove.dataset import (
     load_source_verdicts,
 )
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, read_task_binary
-from experiments.post_training.tasktrove.verify import GRADED_GLOB, VERIFIED_STATUS
+from experiments.post_training.tasktrove.verify import FILTERED_GLOB, VERIFIED_STATUS
 
 logger = logging.getLogger(__name__)
 
@@ -81,14 +81,14 @@ FINAL_SHARDS = 1
 _FROM_LINE = re.compile(r"^FROM\s+(\S+)", re.MULTILINE | re.IGNORECASE)
 
 
-def _survivors(graded_path: str, output_path: str) -> None:
+def _write_tasks(filtered_path: str, output_path: str) -> None:
     """Zephyr stage: copy the converted rows' task columns into ``tasks/``."""
-    files = Dataset.from_files(str(StoragePath(graded_path) / GRADED_GLOB))
+    files = Dataset.from_files(str(StoragePath(filtered_path) / FILTERED_GLOB))
     ds = files.load_parquet(columns=[*TASK_COLUMNS, "status"], approx_shard_bytes=APPROX_SHARD_BYTES)
     ds = ds.filter(lambda row: row["status"] == ConvertStatus.CONVERTED)
     ds = ds.map(lambda row: {name: row[name] for name in TASK_COLUMNS}).reshard(FINAL_SHARDS)
     ds = ds.write_parquet(str(StoragePath(output_path) / "tasks/part-{shard:05d}.parquet"), schema=TASKS_SCHEMA)
-    ZephyrContext(name="tasktrove-clean", resources=WORKER_RESOURCES).execute(ds)
+    ZephyrContext(name="tasktrove-publish", resources=WORKER_RESOURCES).execute(ds)
 
 
 def read_columns(glob: StoragePath, columns: tuple[str, ...]) -> pa.Table:
@@ -108,12 +108,12 @@ def read_columns(glob: StoragePath, columns: tuple[str, ...]) -> pa.Table:
     return pa.concat_tables(tables)
 
 
-def dockerfile_texts(graded: pa.Table) -> dict[str, str]:
+def dockerfile_texts(filtered: pa.Table) -> dict[str, str]:
     """One Dockerfile per distinct ``dockerfile_id`` among the converted rows, read from the first task
     that carries it."""
     first: dict[str, tuple[str, int]] = {}
     for status, dockerfile_id, file, row in zip(
-        *(graded.column(name).to_pylist() for name in ("status", "dockerfile_id", "file", "row")), strict=True
+        *(filtered.column(name).to_pylist() for name in ("status", "dockerfile_id", "file", "row")), strict=True
     ):
         if status == ConvertStatus.CONVERTED and dockerfile_id not in first:
             first[dockerfile_id] = (file, row)
@@ -133,7 +133,7 @@ def dockerfile_texts(graded: pa.Table) -> dict[str, str]:
         return dict(pair for pairs in pool.map(read, by_file) for pair in pairs)
 
 
-def build_manifest(graded: pa.Table, tool_ref: str, dockerfiles: dict[str, str]) -> dict:
+def build_manifest(filtered: pa.Table, tool_ref: str, dockerfiles: dict[str, str]) -> dict:
     """Counts per status, source, converter, mode, check and Dockerfile, plus every source's verdict."""
     verdicts = load_source_verdicts()
     by_status: Counter = Counter()
@@ -155,7 +155,7 @@ def build_manifest(graded: pa.Table, tool_ref: str, dockerfiles: dict[str, str])
         for dockerfile_id, text in dockerfiles.items()
     }
     columns = {
-        name: graded.column(name).to_pylist()
+        name: filtered.column(name).to_pylist()
         for name in ("source", "status", "converter", "mode", "dockerfile_id", "language", "tags")
     }
     for source, status, converter, mode, dockerfile_id, language, tags in zip(*columns.values(), strict=True):
@@ -181,7 +181,7 @@ def build_manifest(graded: pa.Table, tool_ref: str, dockerfiles: dict[str, str])
     return {
         "tasktrove": {"hf_id": TASKTROVE_HF_ID, "revision": TASKTROVE_REVISION},
         "verify_tool_ref": tool_ref,
-        "input_tasks": graded.num_rows,
+        "input_tasks": filtered.num_rows,
         "clean_tasks": by_status[ConvertStatus.CONVERTED],
         "by_status": dict(by_status.most_common()),
         "by_check": dict(by_check.most_common()),
@@ -207,26 +207,26 @@ def build_manifest(graded: pa.Table, tool_ref: str, dockerfiles: dict[str, str])
     }
 
 
-def build_clean(graded_path: str, output_path: str, tool_ref: str) -> None:
+def publish_release(filtered_path: str, output_path: str, tool_ref: str) -> None:
     out = StoragePath(output_path)
     for stale in ("tasks", "ledger.parquet"):
         if (out / stale).exists():
             (out / stale).rmtree()
-    _survivors(graded_path, output_path)
-    write_summary(graded_path, output_path, tool_ref)
+    _write_tasks(filtered_path, output_path)
+    write_summary(filtered_path, output_path, tool_ref)
 
 
-def write_summary(graded_path: str, output_path: str, tool_ref: str) -> None:
-    """Write ``ledger.parquet``, ``manifest.json`` and ``report.md`` from the graded rows."""
+def write_summary(filtered_path: str, output_path: str, tool_ref: str) -> None:
+    """Write ``ledger.parquet``, ``manifest.json`` and ``report.md`` from the filtered rows."""
     out = StoragePath(output_path)
-    graded = read_columns(StoragePath(graded_path) / GRADED_GLOB, SUMMARY_COLUMNS)
-    ledger = graded.filter(pa.compute.not_equal(graded.column("status"), ConvertStatus.CONVERTED.value))
+    filtered = read_columns(StoragePath(filtered_path) / FILTERED_GLOB, SUMMARY_COLUMNS)
+    ledger = filtered.filter(pa.compute.not_equal(filtered.column("status"), ConvertStatus.CONVERTED.value))
     with (out / "ledger.parquet").open("wb") as handle:
         pq.write_table(ledger.select(list(LEDGER_COLUMNS)), handle)
-    manifest = build_manifest(graded, tool_ref, dockerfile_texts(graded))
+    manifest = build_manifest(filtered, tool_ref, dockerfile_texts(filtered))
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1))
     (out / "report.md").write_text(render_report(manifest))
-    logger.info("clean: %d of %d tasks; %s", manifest["clean_tasks"], manifest["input_tasks"], manifest["by_status"])
+    logger.info("published: %d of %d tasks; %s", manifest["clean_tasks"], manifest["input_tasks"], manifest["by_status"])
 
 
 def render_report(manifest: dict) -> str:
@@ -235,7 +235,7 @@ def render_report(manifest: dict) -> str:
     kept = [s for s in manifest["by_source"] if verdicts[s]["verdict"] == "keep"]
     dropped = [s for s in manifest["by_source"] if verdicts[s]["verdict"] == "drop"]
     lines = [
-        "# TaskTrove Clean",
+        "# TaskTrove release",
         "",
         f"{manifest['clean_tasks']} of {manifest['input_tasks']} tasks from {manifest['tasktrove']['hf_id']}"
         f" @ {manifest['tasktrove']['revision']}, graded by tasktrove-verify @ {manifest['verify_tool_ref']}:"
@@ -319,7 +319,7 @@ def render_report(manifest: dict) -> str:
 
 
 def export_task(tasks_dir: str, path: str, dest: Path) -> Path:
-    """Write the task ``path`` from a clean ``tasks/`` directory as a Harbor task directory under ``dest``."""
+    """Write one release row as a Harbor task directory under ``dest``."""
     rows: list[dict] = []
     for shard in (StoragePath(tasks_dir) / "*.parquet").glob():
         with shard.open("rb") as handle:
@@ -342,7 +342,7 @@ def main() -> None:
     configure_coreweave_s3()
 
 
-@main.command(help="Export one clean task as a Harbor task directory.")
+@main.command(help="Export one release task as a Harbor task directory.")
 @click.argument("tasks_dir")
 @click.argument("path")
 @click.option("--dest", type=click.Path(path_type=Path), default=Path("."))
@@ -350,12 +350,12 @@ def export(tasks_dir: str, path: str, dest: Path) -> None:
     print(export_task(tasks_dir, path, dest))
 
 
-@main.command(help="Rewrite the ledger, manifest and report of an existing clean output.")
-@click.argument("graded_path")
+@main.command(help="Rewrite the ledger, manifest and report of an existing release.")
+@click.argument("filtered_path")
 @click.argument("output_path")
 @click.argument("tool_ref")
-def summary(graded_path: str, output_path: str, tool_ref: str) -> None:
-    write_summary(graded_path, output_path, tool_ref)
+def summary(filtered_path: str, output_path: str, tool_ref: str) -> None:
+    write_summary(filtered_path, output_path, tool_ref)
 
 
 if __name__ == "__main__":

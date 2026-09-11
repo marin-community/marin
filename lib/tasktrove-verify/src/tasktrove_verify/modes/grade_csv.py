@@ -5,8 +5,8 @@
 
 The document is read with ``csv.reader``, rows whose cells are all blank are dropped, and a header
 row plus at least one data row must remain. ``required`` names must all appear as headers;
-``any_of`` names, used where the task marks nothing required, need one hit. Cell values are not
-checked: this grades the shape of a CSV answer, not its content.
+``any_of`` names, used where the task marks nothing required, need one hit. The mode checks header
+structure and the presence of data rows. It does not inspect cell values.
 """
 
 import csv

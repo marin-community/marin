@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Convert TaskTrove tasks to the Clean layout, one converter per key.
+"""Normalize TaskTrove tasks into the Harbor task layout, one converter per key.
 
 Every task is fingerprinted again (cheap, and keeps this stage independent of the fingerprint
 shards), routed by source verdict and converter key, and either rewritten as a new task binary or
@@ -45,6 +45,7 @@ from experiments.post_training.tasktrove.task_format import (
     edit_dockerfile,
     render_task_toml,
 )
+from experiments.post_training.tasktrove.task_templates import COVERAGE_JSON, uncovered_keys
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     INSTRUCTION,
@@ -56,7 +57,6 @@ from experiments.post_training.tasktrove.taskbinary import (
     template_fingerprint,
     write_task_binary,
 )
-from experiments.post_training.tasktrove.template_coverage import COVERAGE_JSON, uncovered_keys
 
 CONVERTED_GLOB = "converted/*.parquet"
 
@@ -81,7 +81,7 @@ class ConvertedRecord:
     status: str
     error: str
     instruction_key: str
-    """Hash of the normalized instruction; the graded step's dedup reads this column instead of the binary."""
+    """Hash of the normalized instruction; the filter stage deduplicates this column."""
     task_binary: bytes | None
     solution_binary: bytes | None
 

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The graded step's checks on converted exemplars: a sound task passes, each defect is named."""
+"""The filter stage accepts a sound exemplar and names each rejected defect."""
 
 import re
 from pathlib import Path

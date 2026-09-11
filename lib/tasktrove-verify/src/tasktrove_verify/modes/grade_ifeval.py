@@ -3,9 +3,8 @@
 
 """Mode ifeval: the answer file must satisfy every IFEval constraint the spec lists.
 
-The reward is all-or-nothing, and the detail records each constraint's verdict so a failing run
-says which instruction was missed. A constraint the registry does not know is a task defect, not a
-candidate failure, so it raises ``InvalidTask`` before the candidate is read.
+The reward is all-or-nothing, and the detail records each constraint's verdict. An unknown
+constraint raises ``InvalidTask`` before the candidate is read.
 """
 
 from pathlib import Path

@@ -71,10 +71,10 @@ and manifest with 200, returned `PAR1` from both boundary range requests with 20
 real task rows in Chromium without page or console errors. The deployment incident and S3 range
 failure are recorded at https://marina.oa.dev/echo/wiki/405.
 
-The final run changes sharding and reporting, not the task conversion or verifier semantics already
-covered by the 190-task Daytona validity run, the 100-task random Docker audit, the language-specific
-golden samples, converter fixtures, and verifier tests recorded below. A new full Daytona solve run
-was not repeated after the 64-to-1 reshard because it would exercise identical task archives.
+The final run changes only sharding and reporting. Task archives are identical to those covered by
+the 190-task Daytona validity run, the 100-task random Docker audit, the language-specific golden
+samples, converter fixtures, and verifier tests recorded below. The 64-to-1 reshard did not warrant
+another full Daytona solve.
 
 ## Cleanup extension
 

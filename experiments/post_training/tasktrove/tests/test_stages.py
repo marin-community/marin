@@ -15,12 +15,12 @@ import pyarrow.parquet as pq
 
 from experiments.post_training.tasktrove.convert import convert_tasks
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
-from experiments.post_training.tasktrove.taskbinary import INSTRUCTION, TaskFiles, read_task_binary, write_task_binary
-from experiments.post_training.tasktrove.template_coverage import (
+from experiments.post_training.tasktrove.task_templates import (
     EXEMPLAR_MIN_TASKS,
     build_template_index,
     summarize_templates,
 )
+from experiments.post_training.tasktrove.taskbinary import INSTRUCTION, TaskFiles, read_task_binary, write_task_binary
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"

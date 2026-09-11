@@ -5,8 +5,8 @@
 
 The document is parsed with ElementTree, and every element tag and attribute name in it, namespace
 prefix stripped, becomes one name. ``required`` names must all be there; ``any_of`` names, used
-where the task marks nothing required, need one hit. Values, nesting and order are not checked:
-this grades the shape of an XML answer, not its content.
+where the task marks nothing required, need one hit. Values, nesting and order are ignored; the
+mode checks only the requested field names.
 """
 
 import xml.etree.ElementTree as ET

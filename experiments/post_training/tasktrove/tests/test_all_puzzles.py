@@ -102,7 +102,7 @@ def test_coords_answer_type_converts_to_math_spec_and_grades_both_components():
     spec = parse_spec(read_task_binary(record.task_binary).text(VERIFIER_TOML))
     with tempfile.TemporaryDirectory() as tmp:
         workspace = Path(tmp)
-        # A swapped candidate must not score 1: both coordinates matter, not just one.
+        # Coordinate order is significant, so a swapped candidate scores zero.
         (workspace / "answer.txt").write_text("(7.545, 5.545)")
         reward = grade(spec, tests_dir=workspace, workspace=workspace)
         assert reward.reward == 0.0

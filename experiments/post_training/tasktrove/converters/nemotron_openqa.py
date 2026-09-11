@@ -25,8 +25,6 @@ from experiments.post_training.tasktrove.converters.nemotron_data import verifie
 from experiments.post_training.tasktrove.task_format import OLD_GRADER_LINE, RESPONSE_OUTPUT, drop_dockerfile_lines
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
-"""Every task in this template tells the agent to write here, not the tool's ``answer.txt`` default."""
-
 
 def _clean(answer: str) -> str:
     """Trim the stray ``**`` the source left around some reference answers."""

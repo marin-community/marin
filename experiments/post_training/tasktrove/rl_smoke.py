@@ -1,16 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Smoke-train Qwen3-0.6B on a TaskTrove Clean sample through MarinSkyRL's terminal-bench entrypoint.
+"""Smoke-train Qwen3-0.6B on a TaskTrove release sample through MarinSkyRL's terminal-bench entrypoint.
 
-The run proves the clean dataset drives a Harbor RL loop end to end: task directories are
-materialized from the clean parquet, Daytona builds each task's Dockerfile, terminus-2 drives the
+The run proves the release drives a Harbor RL loop end to end: task directories are materialized
+from the task Parquet, Daytona builds each task's Dockerfile, terminus-2 drives the
 policy against ``instruction.md``, and ``tasktrove-verify`` inside the image produces the reward.
 
 Plan or run::
 
-    python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.2 --verify-tool-ref <sha>
-    python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.2 --verify-tool-ref <sha> --run
+    python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.2
+    python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.2 --run
 
 Submit from a CPU coordinator on the GPU cluster. Coordinator pods carry no cloud credentials,
 so the Daytona key is resolved on the submit host and forwarded::
@@ -19,7 +19,7 @@ so the Daytona key is resolved on the submit host and forwarded::
       --enable-extra-resources --cpu 4 --memory 16GB --disk 64GB --timeout 43200 --extra cpu \\
       -e HF_TOKEN "$HF_TOKEN" \\
       -e DAYTONA_API_KEY "$(gcloud secrets versions access 1 --secret=DAYTONA_RL_API_KEY --project=hai-gcp-models)" \\
-      -- python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.2 --verify-tool-ref <sha> --run
+      -- python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.2 --run
 """
 
 from __future__ import annotations
@@ -327,11 +327,10 @@ def smoke_step(sample: ArtifactStep) -> ArtifactStep[SkyRLModel]:
 
 
 @click.command(help=__doc__)
-@click.option("--verify-tool-ref", required=True, help="git ref of lib/tasktrove-verify baked into the clean run")
 @build_options
-def main(verify_tool_ref: str) -> ArtifactStep:
-    clean = build_workflow(verify_tool_ref, max_tasks_per_source=None).clean
-    return smoke_step(sample_step(clean))
+def main() -> ArtifactStep:
+    release = build_workflow().release
+    return smoke_step(sample_step(release))
 
 
 if __name__ == "__main__":

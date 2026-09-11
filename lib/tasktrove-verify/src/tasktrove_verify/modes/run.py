@@ -97,7 +97,7 @@ def run_setup(command: str, tests_dir: Path, workspace: Path, timeout: float) ->
 
 
 def split_command(command: str) -> list[str]:
-    """Split a spec's command string into argv. Commands are programs, not shell scripts."""
+    """Parse an executable command into argv without shell interpretation."""
     argv = shlex.split(command)
     if not argv:
         raise InvalidTask("command is empty")

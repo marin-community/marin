@@ -225,7 +225,7 @@ def _expected_events(data: dict) -> dict | None:
 
 def convert_agent_calendar(task: TaskFiles) -> ConvertedTask | Rejected:
     """Calendar scheduling: ``{"expected_events": {"<id>": {event_name, duration, min_time, max_time,
-    constraint}, ...}}``. Graded by a from-scratch checker script, not the old grader."""
+    constraint}, ...}}``. A checker script reconstructs and validates the requested schedule."""
     data = verifier_data(task)
     expected = _expected_events(data)
     if expected is None:

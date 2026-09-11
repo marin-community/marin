@@ -1,67 +1,71 @@
 # tasktrove-verify
 
-The grader for TaskTrove Clean tasks. Every task ships `tests/verifier.toml`, a flat table
-naming one `mode` and that mode's parameters, and a three-line `tests/test.sh` that runs
+`tasktrove-verify` executes the grader contract in a converted TaskTrove task. The task supplies a
+flat `tests/verifier.toml`; `tests/test.sh` contains this shim:
 
-```
+```sh
 exec tasktrove-verify /tests/verifier.toml
 ```
 
-The tool grades the agent's work and writes `/logs/verifier/verdict.json`:
+The command writes `/logs/verifier/verdict.json`:
 
 ```json
 {"reward": 1.0, "status": "scored", "detail": {"extracted": "C"}}
 ```
 
-`status` is `scored`, `invalid_task` (the task itself is malformed) or `infra_error` (the grader
-crashed). A scored grade also writes Harbor's `reward.json` (`{"reward": 1.0}`) and `reward.txt`
-beside it; the other two statuses leave those out, so Harbor reports a missing reward file and a
-trainer masks the trial instead of scoring it zero. The process exits 0 whenever it managed to
-write a verdict; nothing about the candidate can make it exit non-zero.
+Statuses are `scored`, `invalid_task`, and `infra_error`. A scored result also writes Harbor's
+`reward.json` and `reward.txt`. Invalid tasks and infrastructure failures omit those reward files,
+so the trial can be masked instead of recorded as a zero. Candidate output never causes a nonzero
+process exit after a verdict has been written.
 
 ## Modes
 
-| mode | candidate | compared against |
-|---|---|---|
-| `mcq` | output file | expected option letter |
-| `math` | output file, boxed or last expression | expected expression via math-verify |
-| `numeric` | output file | expected number with tolerance |
-| `exact` | output file | expected string or list after normalization |
-| `json-schema` | output file parsed as JSON, YAML or TOML | a JSON Schema under tests/ |
-| `xml-elements` | output file parsed as XML | element and attribute names the document must carry |
-| `csv-columns` | output file parsed as CSV | column headers the document must carry |
-| `ifeval` | output file | a list of IFEval constraints |
-| `reasoning-gym` | output file | the reasoning-gym scorer for the entry |
-| `stdio` | a program in the workspace, run per case | expected stdout per case |
-| `pytest` | the workspace | pytest JSON report, must_pass / must_not_break |
-| `junit` | the workspace | JUnit XML report |
-| `gotest` | the workspace | `go test -json` |
-| `judge` | output file | `reference` rubric: reference answers, model call only after the exact gate misses; `checklist` rubric: yes/no criteria scored as a fraction, optional context file and IFEval gate |
-| `script` | whatever the script reads | whatever the script decides; the fallback |
+| mode | contract |
+|---|---|
+| `mcq` | expected option letter |
+| `math` | expression equality through math-verify |
+| `numeric` | numeric equality with explicit tolerances |
+| `exact` | normalized string equality |
+| `json-schema` | JSON, YAML, or TOML checked against JSON Schema |
+| `xml-elements` | required XML elements and attributes |
+| `csv-columns` | required CSV header columns |
+| `ifeval` | deterministic instruction-following constraints |
+| `reasoning-gym` | the named reasoning-gym scorer and entry |
+| `stdio` | program stdout over hidden cases |
+| `pytest` | pytest JSON report with required and protected tests |
+| `junit` | JUnit XML report |
+| `gotest` | `go test -json` events |
+| `judge` | reference-answer or checklist rubric through a configured model endpoint |
+| `script` | legacy `test.sh` fallback with normalized reward files and fail-closed errors |
 
-`spec.py` is the contract: one frozen dataclass per mode, `parse_spec` and `render_spec`.
-Paths in a spec are relative to the directory holding `verifier.toml`.
+[`spec.py`](src/tasktrove_verify/spec.py) owns the frozen mode dataclasses plus `parse_spec` and
+`render_spec`. Spec paths are relative to the directory containing `verifier.toml`. `grade.py`
+owns dispatch, output handling, verdict writing, and the CLI. Executable graders live in
+`modes/grade_*.py`; shared parsers and process runners remain separate.
 
-## Install
+## Install and use
 
+```bash
+uv tool install --python ">=3.11" \
+  "tasktrove-verify[answer] @ git+https://github.com/marin-community/marin@<sha>#subdirectory=lib/tasktrove-verify"
 ```
-uv tool install --python ">=3.11" "tasktrove-verify[answer] @ git+https://github.com/marin-community/marin@<sha>#subdirectory=lib/tasktrove-verify"
-```
 
-Extras: `answer`, `schema`, `judge`, `reasoning-gym`, `all`. Execution modes use the task image's
-own toolchain and need no extra.
-
-## Library use
+Extras are `answer`, `schema`, `judge`, `reasoning-gym`, and `all`. Execution modes use the task
+image's toolchain.
 
 ```python
+from pathlib import Path
+
 from tasktrove_verify.grade import grade
 from tasktrove_verify.spec import parse_spec
 
-reward = grade(parse_spec(text), tests_dir=Path("/tests"), workspace=Path("/app"))
+tests_dir = Path("/tests")
+spec = parse_spec((tests_dir / "verifier.toml").read_text())
+reward = grade(spec, tests_dir=tests_dir, workspace=Path("/app"))
 ```
 
-## Tests
+Run the package tests from the repository root:
 
-```
+```bash
 uv run --group test pytest lib/tasktrove-verify/tests
 ```

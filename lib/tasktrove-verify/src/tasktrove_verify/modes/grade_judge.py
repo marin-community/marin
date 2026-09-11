@@ -12,7 +12,7 @@ IFEval checks that must all pass first.
 
 The judge is any OpenAI-compatible chat endpoint, configured through ``TASKTROVE_JUDGE_BASE_URL``,
 ``TASKTROVE_JUDGE_API_KEY`` and ``TASKTROVE_JUDGE_MODEL`` (``spec.model`` wins when set). A runner
-that never configured an endpoint is an infrastructure failure, not a malformed task.
+without a configured endpoint returns an infrastructure failure.
 """
 
 import logging

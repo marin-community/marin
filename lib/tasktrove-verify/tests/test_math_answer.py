@@ -34,7 +34,7 @@ def _answer(workspace: Path, text: str) -> None:
         # The last box wins, as a model that revises itself boxes twice.
         ("42", "\\boxed{7}\nthat was wrong, actually \\boxed{42}\n", 1.0),
         ("42", "$\\boxed{42}$", 1.0),
-        # A candidate math-verify cannot read is a wrong answer, not a crash.
+        # An unreadable candidate is a scored wrong answer.
         ("42", "\\boxed{???}", 0.0),
         ("42", "I have no idea how to do this problem.\n", 0.0),
     ],
@@ -63,7 +63,7 @@ def test_math_scalar_answers_are_compared_symbolically(tmp_path, expected, text,
         ("[1, 2, 3]", MathType.LIST, "\\boxed{\\left[1, 2, 3\\right]}", 1.0),
         ("[1, 2, 3]", MathType.LIST, "\\boxed{[1, 2]}", 0.0),
         ("[1, 2, 3]", MathType.LIST, "\\boxed{[1, 2, 3, 4]}", 0.0),
-        # Members are compared as expressions, not as text.
+        # Member comparison uses expression equality.
         ("[1/2, x+1]", MathType.LIST, "\\boxed{[0.5, 1+x]}", 1.0),
         # A comma inside a member does not split it.
         ("[(1,2), 3]", MathType.LIST, "\\boxed{[(1,2), 3]}", 1.0),

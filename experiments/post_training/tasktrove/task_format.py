@@ -31,7 +31,7 @@ TOOL_PYTHON = ">=3.11"
 UV_IMAGE = "ghcr.io/astral-sh/uv:0.8"
 INSTALL_MARKER = "# --- tasktrove-verify ---"
 OLD_GRADER_LINE = re.compile(r"rewardkit|litellm", re.IGNORECASE)
-"""A Dockerfile line installing the old judge graders; converters strip it and the graded step
+"""A Dockerfile line installing the old judge graders; converters strip it and the filter stage
 rejects a task that still carries one."""
 
 

@@ -13,8 +13,7 @@ comparison, so an expected ``(2, \infty)`` accepts a candidate ``x > 2``. A list
 comma-separated sequence compared member by member, which accepts the brackets a model does or
 does not write around it and keeps a reordered answer wrong. Everything else is one expression.
 
-Expected text that math-verify cannot turn into an expression is a defective task, not a wrong
-answer.
+Expected text that math-verify cannot parse raises ``InvalidTask``.
 """
 
 import math

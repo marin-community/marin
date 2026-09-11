@@ -69,7 +69,7 @@ from experiments.post_training.tasktrove.taskbinary import (
     read_task_binary,
 )
 
-GRADED_GLOB = "graded/*.parquet"
+FILTERED_GLOB = "graded/*.parquet"
 VERIFIED_STATUS = "verified:"
 """Status prefix of a row the grader checks rejected; the check name follows."""
 REQUIRED_FILES = (INSTRUCTION, TASK_TOML, DOCKERFILE, TEST_SH, VERIFIER_TOML)
@@ -276,8 +276,8 @@ def verify_rows(rows: Iterator[dict]) -> Iterator[dict]:
         yield row if rejection is None else dropped(row, VERIFIED_STATUS + rejection.check.value, rejection.detail)
 
 
-def grade_tasks(converted_path: str, output_path: str, max_tasks_per_source: int | None) -> None:
-    """Zephyr stage: dedup the converted rows, grade every survivor, write each row with its final status."""
+def filter_tasks(converted_path: str, output_path: str, max_tasks_per_source: int | None) -> None:
+    """Deduplicate converted rows and remove tasks that fail a verifier check."""
     files = Dataset.from_files(str(StoragePath(converted_path) / CONVERTED_GLOB))
     ds = files.load_parquet(approx_shard_bytes=APPROX_SHARD_BYTES)
     ds = ds.group_by(
@@ -295,4 +295,4 @@ def grade_tasks(converted_path: str, output_path: str, max_tasks_per_source: int
         )
     ds = ds.map_shard(lambda rows, _: verify_rows(rows))
     ds = ds.write_parquet(str(StoragePath(output_path) / "graded/part-{shard:05d}.parquet"), schema=CONVERTED_SCHEMA)
-    ZephyrContext(name="tasktrove-grade", resources=WORKER_RESOURCES).execute(ds)
+    ZephyrContext(name="tasktrove-filter", resources=WORKER_RESOURCES).execute(ds)

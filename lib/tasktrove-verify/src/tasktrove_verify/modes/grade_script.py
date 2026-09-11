@@ -8,7 +8,7 @@ runs in the agent's workspace with ``TASKTROVE_TESTS_DIR``, ``TASKTROVE_WORKSPAC
 ``TASKTROVE_LOGS_DIR`` exported, and reports its reward through one of three channels, checked in
 this order: ``$TASKTROVE_LOGS_DIR/reward.json`` holding ``{"reward": <float>, ...}``,
 ``$TASKTROVE_LOGS_DIR/reward.txt`` holding a bare float, or a float on the last non-empty line of
-stdout. A script that exits without reporting a reward is an infrastructure failure, not a zero.
+stdout. A script that exits without reporting a reward returns an infrastructure failure.
 """
 
 import json
