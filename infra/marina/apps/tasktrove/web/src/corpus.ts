@@ -1,6 +1,7 @@
 import {
   asyncBufferFromUrl,
   parquetMetadataAsync,
+  parquetQuery,
   parquetReadObjects,
   rowIndex,
   type AsyncBuffer,
@@ -145,6 +146,21 @@ export async function rowCount(): Promise<number> {
   return Number((await metadata()).num_rows)
 }
 
+function taskFilter(filters: TaskFilters | undefined, dataset: Manifest): ParquetQueryFilter | undefined {
+  const predicates: ParquetQueryFilter[] = []
+  if (filters?.source) predicates.push({ source: { $eq: filters.source } })
+  if (filters?.converter) predicates.push({ converter: { $eq: filters.converter } })
+  if (filters?.mode) predicates.push({ mode: { $eq: filters.mode } })
+  if (filters?.tag) predicates.push({ tags: { $in: [filters.tag] } })
+  if (filters?.environment) {
+    const ids = Object.entries(dataset.dockerfiles)
+      .filter(([, value]) => value.base_image === filters.environment)
+      .map(([id]) => id)
+    predicates.push({ dockerfile_id: { $in: ids } })
+  }
+  return predicates.length > 1 ? { $and: predicates } : predicates[0]
+}
+
 function asTask(value: ParquetRow, dataset: Manifest): ParquetTask {
   const position = value[rowIndex]
   if (position === undefined) throw new Error('The Parquet reader did not return a row position.')
@@ -165,23 +181,11 @@ function asTask(value: ParquetRow, dataset: Manifest): ParquetTask {
 
 export async function tasks(rowStart: number, rowEnd: number, filters?: TaskFilters): Promise<ParquetTask[]> {
   const [parquet, dataset, parquetMetadata] = await Promise.all([file(), manifest(), metadata()])
-  const predicates: ParquetQueryFilter[] = []
-  if (filters?.source) predicates.push({ source: { $eq: filters.source } })
-  if (filters?.converter) predicates.push({ converter: { $eq: filters.converter } })
-  if (filters?.mode) predicates.push({ mode: { $eq: filters.mode } })
-  if (filters?.tag) predicates.push({ tags: { $in: [filters.tag] } })
-  if (filters?.environment) {
-    const ids = Object.entries(dataset.dockerfiles)
-      .filter(([, value]) => value.base_image === filters.environment)
-      .map(([id]) => id)
-    predicates.push({ dockerfile_id: { $in: ids } })
-  }
-  const filter = predicates.length > 1 ? { $and: predicates } : predicates[0]
   const rows = await parquetReadObjects({
     file: parquet,
     metadata: parquetMetadata,
     columns: METADATA_COLUMNS,
-    filter,
+    filter: taskFilter(filters, dataset),
     rowStart,
     rowEnd,
     includeRowIndex: true,
@@ -191,6 +195,23 @@ export async function tasks(rowStart: number, rowEnd: number, filters?: TaskFilt
   return rows
     .map((value) => asTask(value, dataset))
     .filter((value) => !query || value.path.toLocaleLowerCase().includes(query))
+}
+
+export async function queryTasks(matchStart: number, matchEnd: number, filters: TaskFilters): Promise<ParquetTask[]> {
+  const [parquet, dataset, parquetMetadata] = await Promise.all([file(), manifest(), metadata()])
+  const filter = taskFilter(filters, dataset)
+  if (!filter) return tasks(matchStart, matchEnd, filters)
+  const rows = await parquetQuery({
+    file: parquet,
+    metadata: parquetMetadata,
+    columns: METADATA_COLUMNS,
+    filter,
+    rowStart: matchStart,
+    rowEnd: matchEnd,
+    includeRowIndex: true,
+    useOffsetIndex: true,
+  })
+  return rows.map((value) => asTask(value, dataset))
 }
 
 export async function task(row: number): Promise<ParquetTask> {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { count, manifest, rowCount, tasks, type Manifest, type ParquetTask, type TaskFilters } from '../corpus'
+import { count, manifest, queryTasks, rowCount, tasks, type Manifest, type ParquetTask, type TaskFilters } from '../corpus'
 import { taskPath } from '../routes'
 
 const PAGE = 50
@@ -38,6 +38,9 @@ const filters = computed<TaskFilters>(() => ({
   query: value('query'),
 }))
 const active = computed(() => Object.values(filters.value).some(Boolean))
+const predicateOnly = computed(
+  () => !filters.value.query && Object.entries(filters.value).some(([name, item]) => name !== 'query' && item),
+)
 const visible = computed(() => matches.value.slice(page.value * PAGE, (page.value + 1) * PAGE))
 const sources = computed(() =>
   Object.entries(dataset.value?.by_source ?? {})
@@ -86,6 +89,14 @@ async function fill(targetPage: number, currentGeneration: number = generation):
   try {
     const needed = (targetPage + 1) * PAGE
     while (matches.value.length < needed && !exhausted.value) {
+      if (predicateOnly.value) {
+        const start = matches.value.length
+        const found = await queryTasks(start, needed, filters.value)
+        if (currentGeneration !== generation) return
+        matches.value.push(...found)
+        exhausted.value = found.length < needed - start || (expected.value !== undefined && matches.value.length >= expected.value)
+        break
+      }
       const size = active.value ? SCAN : PAGE
       const end = Math.min(cursor.value + size, total.value)
       const found = await tasks(cursor.value, end, filters.value)
