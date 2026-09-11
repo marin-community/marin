@@ -13,8 +13,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from tasktrove_verify.modes.extract import unwrap_fence
-from tasktrove_verify.output import read_output
-from tasktrove_verify.reward import InvalidTask, Reward, scored
+from tasktrove_verify.grade import read_output
+from tasktrove_verify.grade import InvalidTask, Reward, scored
 from tasktrove_verify.spec import XmlElementsSpec
 
 MAX_REPORTED_NAMES = 8

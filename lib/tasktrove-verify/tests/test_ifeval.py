@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from tasktrove_verify.modes import ifeval
-from tasktrove_verify.reward import InvalidTask, Status
+from tasktrove_verify.grade import InvalidTask, Status
+from tasktrove_verify.modes import grade_ifeval
 from tasktrove_verify.spec import Constraint, IfevalSpec
 
 # One passing and one failing response per constraint, written the way a model would answer.
@@ -145,7 +145,7 @@ def answer(workspace, text):
 def reward_for(workspace, tests_dir, constraints, text=None):
     if text is not None:
         answer(workspace, text)
-    return ifeval.grade(IfevalSpec(constraints=constraints), tests_dir, workspace)
+    return grade_ifeval.grade(IfevalSpec(constraints=constraints), tests_dir, workspace)
 
 
 @pytest.mark.parametrize("name, params, passing, failing", CASES, ids=[case[0] for case in CASES])

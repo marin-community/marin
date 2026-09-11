@@ -7,7 +7,6 @@ import ast
 
 from tasktrove_verify.spec import PytestSpec
 
-from experiments.post_training.tasktrove.contract import TESTS_MOUNT
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
     Converter,
@@ -15,6 +14,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
+from experiments.post_training.tasktrove.task_format import TESTS_MOUNT
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, SOLVE_SH, TaskFiles
 
 TEST_FILES = (

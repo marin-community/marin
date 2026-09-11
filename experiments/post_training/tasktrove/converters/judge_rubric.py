@@ -19,7 +19,6 @@ import re
 
 from tasktrove_verify.spec import RUBRIC_CHECKLIST, JudgeSpec
 
-from experiments.post_training.tasktrove.contract import OLD_GRADER_LINE, drop_dockerfile_lines
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
     Converter,
@@ -28,9 +27,9 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     Rejected,
 )
 from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
+from experiments.post_training.tasktrove.task_format import OLD_GRADER_LINE, RESPONSE_OUTPUT, drop_dockerfile_lines
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
-RESPONSE_OUTPUT = "/app/response.txt"
 NO_REFERENCE_TAG = "no-reference"
 _NUMBERED = re.compile(r"^\s*\d+[.)]\s*")
 # The judge prompt names the source community; that name becomes the task's domain tag.

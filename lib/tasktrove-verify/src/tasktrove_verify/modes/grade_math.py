@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-r"""Mode math: the candidate's final expression against ``expected``, compared by math-verify.
+r"""Grade mathematical answers, either symbolically or as a number with tolerance.
 
 The candidate is the last ``\boxed{}`` expression, or the last non-empty line when the output has
 none. Both sides are parsed as anchored LaTeX (``$...$``) so math-verify reads a whole expression
@@ -17,15 +17,14 @@ Expected text that math-verify cannot turn into an expression is a defective tas
 answer.
 """
 
+import math
+import re
 import threading
 from pathlib import Path
 
-from math_verify import parse, verify
-
 from tasktrove_verify.modes.extract import extract_boxed, last_line, strip_math_delimiters
-from tasktrove_verify.output import read_output
-from tasktrove_verify.reward import InvalidTask, Reward, scored
-from tasktrove_verify.spec import MathSpec, MathType
+from tasktrove_verify.grade import InvalidTask, Reward, read_output, scored
+from tasktrove_verify.spec import MathSpec, MathType, NumericSpec
 
 SET_TYPES = frozenset({MathType.SET, MathType.INTERVAL})
 
@@ -34,6 +33,7 @@ SIZE_COMMANDS = ("\\left", "\\right", "\\big", "\\Big", "\\bigg", "\\Bigg")
 TIMEOUT = 5
 """Seconds math-verify may spend parsing or comparing one expression. Its timeout arms
 ``signal.alarm``, which only the main thread may do, so a worker thread runs without it."""
+NUMBER = re.compile(r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?(?:[eE][-+]?\d+)?|[-+]?\.\d+(?:[eE][-+]?\d+)?")
 
 
 def _timeout() -> int | None:
@@ -42,11 +42,15 @@ def _timeout() -> int | None:
 
 def _parse(text: str) -> list:
     """math-verify's parse of ``text`` as a LaTeX expression, else of the text as written."""
+    from math_verify import parse
+
     timeout = _timeout()
     return parse(f"${strip_math_delimiters(text)}$", parsing_timeout=timeout) or parse(text, parsing_timeout=timeout)
 
 
 def _verify(expected: object, candidate: object, allow_set_relation_comp: bool = False) -> bool:
+    from math_verify import verify
+
     return verify(expected, candidate, allow_set_relation_comp=allow_set_relation_comp, timeout_seconds=_timeout())
 
 
@@ -94,7 +98,7 @@ def _members_match(expected: list[list], candidate: list[list]) -> bool:
     )
 
 
-def grade(spec: MathSpec, tests_dir: Path, workspace: Path) -> Reward:
+def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
     is_list = spec.math_type is MathType.LIST
     expected = _parsed_members(spec.expected) if is_list else [_parse(spec.expected)]
     if not all(_is_expression(member) for member in expected):
@@ -113,3 +117,33 @@ def grade(spec: MathSpec, tests_dir: Path, workspace: Path) -> Reward:
     else:
         match = _verify(expected[0], parsed[0], allow_set_relation_comp=spec.math_type in SET_TYPES)
     return scored(float(bool(match)), extracted=candidate, expected=spec.expected)
+
+
+def _last_number(text: str) -> float | None:
+    boxed = extract_boxed(text)
+    sources = [boxed, text] if boxed else [text]
+    for source in sources:
+        matches = NUMBER.findall(source)
+        if matches:
+            return float(matches[-1].replace(",", ""))
+    return None
+
+
+def _grade_numeric(spec: NumericSpec, workspace: Path) -> Reward:
+    if not math.isfinite(spec.expected):
+        raise InvalidTask(f"numeric expected must be a finite number, got {spec.expected}")
+    text = read_output(spec, workspace)
+    if text is None:
+        return scored(0.0, reason="no_output")
+    value = _last_number(text)
+    if value is None:
+        return scored(0.0, reason="no_number", expected=spec.expected)
+    tolerance = max(spec.tolerance_abs, spec.tolerance_rel * abs(spec.expected))
+    match = abs(value - spec.expected) <= tolerance
+    return scored(float(match), extracted=value, expected=spec.expected, tolerance=tolerance)
+
+
+def grade(spec: MathSpec | NumericSpec, tests_dir: Path, workspace: Path) -> Reward:
+    if isinstance(spec, NumericSpec):
+        return _grade_numeric(spec, workspace)
+    return _grade_symbolic(spec, workspace)

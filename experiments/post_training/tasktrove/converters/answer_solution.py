@@ -5,7 +5,7 @@
 
 import shlex
 
-from tasktrove_verify.probe import positive_candidate
+from tasktrove_verify.grade import positive_candidate
 from tasktrove_verify.spec import Spec
 
 from experiments.post_training.tasktrove.taskbinary import SOLVE_SH

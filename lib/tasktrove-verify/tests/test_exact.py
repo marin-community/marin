@@ -4,9 +4,9 @@
 from pathlib import Path
 
 import pytest
+from tasktrove_verify.grade import Status
 from tasktrove_verify.grade import grade as dispatch
-from tasktrove_verify.modes import exact
-from tasktrove_verify.reward import Status
+from tasktrove_verify.modes import grade_exact
 from tasktrove_verify.spec import ExactSpec
 
 
@@ -33,7 +33,7 @@ def _answer(workspace: Path, text: str) -> None:
 )
 def test_exact_single_expected_compares_the_whole_candidate(tmp_path, spec, text, reward):
     _answer(tmp_path, text)
-    assert exact.grade(spec, tmp_path, tmp_path).reward == reward
+    assert grade_exact.grade(spec, tmp_path, tmp_path).reward == reward
 
 
 @pytest.mark.parametrize(
@@ -53,18 +53,18 @@ def test_exact_single_expected_compares_the_whole_candidate(tmp_path, spec, text
 )
 def test_exact_several_expected_compares_the_candidate_as_a_list(tmp_path, spec, text, reward):
     _answer(tmp_path, text)
-    assert exact.grade(spec, tmp_path, tmp_path).reward == reward
+    assert grade_exact.grade(spec, tmp_path, tmp_path).reward == reward
 
 
 def test_exact_empty_output_scores_zero_with_no_output(tmp_path):
     _answer(tmp_path, "\n \n")
-    result = exact.grade(ExactSpec(expected=("Paris",)), tmp_path, tmp_path)
+    result = grade_exact.grade(ExactSpec(expected=("Paris",)), tmp_path, tmp_path)
     assert (result.status, result.reward, result.detail["reason"]) == (Status.SCORED, 0.0, "no_output")
 
 
 def test_exact_reward_detail_carries_the_extracted_candidate(tmp_path):
     _answer(tmp_path, "The capital is \\boxed{Lyon}.\n")
-    detail = exact.grade(ExactSpec(expected=("Paris",)), tmp_path, tmp_path).detail
+    detail = grade_exact.grade(ExactSpec(expected=("Paris",)), tmp_path, tmp_path).detail
     assert detail == {"extracted": "Lyon", "expected": ["Paris"]}
 
 

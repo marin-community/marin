@@ -17,9 +17,8 @@ appears in the source but is handled identically to ``choice``.
 import json
 import re
 
-from tasktrove_verify.spec import ExactSpec, MathSpec, MathType, Spec
+from tasktrove_verify.spec import ExactSpec, MathSpec, MathType
 
-from experiments.post_training.tasktrove.contract import drop_dockerfile_lines
 from experiments.post_training.tasktrove.converters.answer_solution import answer_solution
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
@@ -28,6 +27,7 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
+from experiments.post_training.tasktrove.task_format import drop_dockerfile_lines
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TaskFiles
 
 GOLD_FILE = "tests/gold.json"
@@ -45,10 +45,6 @@ def _exact_spec(answer_type: str, gold: str) -> ExactSpec | None:
 
 def _math_spec(gold: str) -> MathSpec | None:
     return MathSpec(expected=gold, math_type=MathType.SCALAR) if gold else None
-
-
-def _solution_files(task: TaskFiles, spec: Spec) -> dict[str, bytes]:
-    return task.under(SOLUTION_DIR) or answer_solution(spec)
 
 
 def convert_all_puzzles(task: TaskFiles) -> ConvertedTask | Rejected:
@@ -74,7 +70,7 @@ def convert_all_puzzles(task: TaskFiles) -> ConvertedTask | Rejected:
         spec=spec,
         dockerfile=drop_dockerfile_lines(task.text(DOCKERFILE), _OLD_GRADER_INSTALL),
         tags=("puzzle", "laion", ptype),
-        solution_files=_solution_files(task, spec),
+        solution_files=task.under(SOLUTION_DIR) or answer_solution(spec),
         metadata={"ptype": ptype, "answer_type": answer_type},
     )
 

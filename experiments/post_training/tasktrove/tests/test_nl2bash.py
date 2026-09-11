@@ -12,12 +12,12 @@ from pathlib import Path
 
 from tasktrove_verify.spec import ScriptSpec, parse_spec
 
-from experiments.post_training.tasktrove.contract import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.nl2bash import CHECKER_NAME, DATA_NAME
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     TEST_SH,

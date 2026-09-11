@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from tasktrove_verify.modes import gotest
+from tasktrove_verify.modes import grade_gotest
 from tasktrove_verify.spec import GotestSpec
 
 # A real `go test -json ./...` stream: one package with a passing test, a failing test with a
@@ -68,21 +68,21 @@ def _use_fake_go(monkeypatch, tmp_path: Path, stream: str, exit_code: int = 1) -
 
 def test_gotest_required_test_passing_scores_one(tmp_path, monkeypatch):
     workspace = _use_fake_go(monkeypatch, tmp_path, EVENT_STREAM)
-    reward = gotest.grade(GotestSpec(must_pass=(ADD,)), tmp_path, workspace)
+    reward = grade_gotest.grade(GotestSpec(must_pass=(ADD,)), tmp_path, workspace)
     assert reward.reward == 1.0
     assert reward.detail["passed"] == 1
 
 
 def test_gotest_failing_subtest_fails_the_run(tmp_path, monkeypatch):
     workspace = _use_fake_go(monkeypatch, tmp_path, EVENT_STREAM)
-    reward = gotest.grade(GotestSpec(must_pass=(ADD,), must_not_break=(SUB_NEGATIVE,)), tmp_path, workspace)
+    reward = grade_gotest.grade(GotestSpec(must_pass=(ADD,), must_not_break=(SUB_NEGATIVE,)), tmp_path, workspace)
     assert reward.reward == 0.0
     assert reward.detail["first_failure"] == SUB_NEGATIVE
 
 
 def test_gotest_without_id_lists_requires_the_whole_package_to_pass(tmp_path, monkeypatch):
     workspace = _use_fake_go(monkeypatch, tmp_path, EVENT_STREAM)
-    reward = gotest.grade(GotestSpec(), tmp_path, workspace)
+    reward = grade_gotest.grade(GotestSpec(), tmp_path, workspace)
     assert reward.reward == 0.0
     # TestAdd passed, TestSub and TestSub/negative failed, TestPending was skipped and is not counted.
     assert (reward.detail["passed"], reward.detail["total"]) == (1, 3)
@@ -90,7 +90,7 @@ def test_gotest_without_id_lists_requires_the_whole_package_to_pass(tmp_path, mo
 
 def test_gotest_build_failure_reports_no_tests(tmp_path, monkeypatch):
     workspace = _use_fake_go(monkeypatch, tmp_path, BUILD_FAILURE_STREAM)
-    reward = gotest.grade(GotestSpec(), tmp_path, workspace)
+    reward = grade_gotest.grade(GotestSpec(), tmp_path, workspace)
     assert reward.reward == 0.0
     assert reward.detail["reason"] == "no_tests"
 
@@ -98,7 +98,7 @@ def test_gotest_build_failure_reports_no_tests(tmp_path, monkeypatch):
 def test_gotest_missing_test_id_counts_as_failed(tmp_path, monkeypatch):
     workspace = _use_fake_go(monkeypatch, tmp_path, EVENT_STREAM)
     missing = "example.com/m/calc.TestNeverWritten"
-    reward = gotest.grade(GotestSpec(must_pass=(missing,)), tmp_path, workspace)
+    reward = grade_gotest.grade(GotestSpec(must_pass=(missing,)), tmp_path, workspace)
     assert reward.detail["first_failure"] == missing
 
 
@@ -109,5 +109,5 @@ def test_gotest_real_go_module_passes(tmp_path):
     (workspace / "go.mod").write_text(GO_MOD)
     (workspace / "calc.go").write_text(CALC_GO)
     (workspace / "calc_test.go").write_text(CALC_TEST_GO)
-    reward = gotest.grade(GotestSpec(must_pass=("example.com/m.TestAdd",)), tmp_path, workspace)
+    reward = grade_gotest.grade(GotestSpec(must_pass=("example.com/m.TestAdd",)), tmp_path, workspace)
     assert reward.reward == 1.0

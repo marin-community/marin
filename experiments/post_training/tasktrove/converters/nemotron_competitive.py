@@ -20,9 +20,6 @@ from experiments.post_training.tasktrove.converters.stdio_cases import (
 )
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
-"""The instruction tells the agent to write its solution at this path; the old grader ran the
-same command once per case."""
-
 
 def convert_nemotron_competitive(task: TaskFiles) -> ConvertedTask | Rejected:
     """Stdin/stdout competitive programming: ``{"inputs": [...], "outputs": [...]}`` case pairs.

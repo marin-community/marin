@@ -8,16 +8,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tasktrove_verify.modes import pytest_report
+from tasktrove_verify.modes import grade_pytest
 from tasktrove_verify.spec import PytestSpec, ScriptSpec, parse_spec
 
 from experiments.post_training.tasktrove import verify
-from experiments.post_training.tasktrove.contract import VERIFIER_TOML
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.converters.swe_patched import _setup_script
-from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.converters.swe_patched import TEST_PATCH, TRUSTED_PATCH_PATHS
+from experiments.post_training.tasktrove.converters.swe_repo import TRUSTED_TEST_PATHS, restore_setup
+from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.task_format import VERIFIER_TOML
 from experiments.post_training.tasktrove.taskbinary import read_task_binary, write_task_binary
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -248,7 +249,7 @@ def _spec(base_sha: str) -> PytestSpec:
         paths=("tests/test_calc.py",),
         must_pass=_MUST_PASS,
         must_not_break=_MUST_NOT_BREAK,
-        setup=_setup_script(base_sha),
+        setup=restore_setup(base_sha, (TRUSTED_TEST_PATHS, TRUSTED_PATCH_PATHS), patch=TEST_PATCH),
         python=sys.executable,
         timeout=60.0,
     )
@@ -256,7 +257,7 @@ def _spec(base_sha: str) -> PytestSpec:
 
 def test_setup_restores_and_patches_then_buggy_product_code_scores_zero(tmp_path):
     workspace, tests_dir, base_sha = _repo_and_patch(tmp_path)
-    reward = pytest_report.grade(_spec(base_sha), tests_dir, workspace)
+    reward = grade_pytest.grade(_spec(base_sha), tests_dir, workspace)
     assert reward.reward == 0.0
     assert reward.detail["first_failure"] == _MUST_PASS[0]
 
@@ -264,7 +265,7 @@ def test_setup_restores_and_patches_then_buggy_product_code_scores_zero(tmp_path
 def test_setup_restores_and_patches_then_fixed_product_code_scores_one(tmp_path):
     workspace, tests_dir, base_sha = _repo_and_patch(tmp_path)
     (workspace / "calc.py").write_text(_FIXED_CALC)
-    reward = pytest_report.grade(_spec(base_sha), tests_dir, workspace)
+    reward = grade_pytest.grade(_spec(base_sha), tests_dir, workspace)
     assert reward.reward == 1.0
 
 
@@ -272,7 +273,7 @@ def test_setup_fails_closed_on_an_empty_workspace(tmp_path):
     _workspace, tests_dir, base_sha = _repo_and_patch(tmp_path)
     empty_workspace = tmp_path / "empty"
     empty_workspace.mkdir()
-    reward = pytest_report.grade(_spec(base_sha), tests_dir, empty_workspace)
+    reward = grade_pytest.grade(_spec(base_sha), tests_dir, empty_workspace)
     assert reward.reward == 0.0 and reward.detail["reason"] == "setup_failed"
 
 
@@ -282,6 +283,6 @@ def test_setup_discards_agent_tampering_with_the_hidden_test(tmp_path):
     (workspace / "tests" / "test_calc.py").write_text(
         "import unittest\n\n\nclass CalcTestCase(unittest.TestCase):\n    def test_add_new(self):\n        pass\n"
     )
-    reward = pytest_report.grade(_spec(base_sha), tests_dir, workspace)
+    reward = grade_pytest.grade(_spec(base_sha), tests_dir, workspace)
     assert reward.reward == 1.0
     assert (workspace / "tests" / "test_calc.py").read_text() == _PATCHED_TEST_FILE

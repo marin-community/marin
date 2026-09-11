@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-tasktrove-verify = "tasktrove_verify.cli:main"
+tasktrove-verify = "tasktrove_verify.grade:main"
 
 [project.optional-dependencies]
 answer = ["math-verify>=0.7", "sympy>=1.12"]

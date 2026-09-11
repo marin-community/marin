@@ -24,8 +24,8 @@ from zephyr.readers import load_jsonl
 
 from experiments.post_training.tasktrove.converters.converted_task import ConverterKey
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.raw_tasks import WORKER_RESOURCES, WORKING_SHARDS, raw_rows
-from experiments.post_training.tasktrove.sources import SourceVerdict, load_source_verdicts
+from experiments.post_training.tasktrove.dataset import WORKER_RESOURCES, WORKING_SHARDS, raw_rows
+from experiments.post_training.tasktrove.dataset import SourceVerdict, load_source_verdicts
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     INSTRUCTION,

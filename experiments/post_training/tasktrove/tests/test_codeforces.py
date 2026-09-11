@@ -5,11 +5,10 @@
 
 from pathlib import Path
 
-from tasktrove_verify.modes import stdio
-from tasktrove_verify.reward import Status
+from tasktrove_verify.grade import Status
+from tasktrove_verify.modes import grade_stdio
 from tasktrove_verify.spec import Compare, StdioSpec, parse_spec
 
-from experiments.post_training.tasktrove.contract import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.codeforces import (
     _BUILD,
@@ -19,7 +18,8 @@ from experiments.post_training.tasktrove.converters.codeforces import (
 )
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, TEST_SH, read_task_binary, write_task_binary
 from experiments.post_training.tasktrove.verify import verify_task
 
@@ -150,20 +150,20 @@ def _spec(**overrides) -> StdioSpec:
 def test_command_runs_a_python_solution(tmp_path):
     tests_dir, workspace = _task(tmp_path)
     (workspace / "solution.py").write_text(DOUBLE_PY)
-    reward = stdio.grade(_spec(), tests_dir, workspace)
+    reward = grade_stdio.grade(_spec(), tests_dir, workspace)
     assert (reward.reward, reward.status) == (1.0, Status.SCORED)
 
 
 def test_build_compiles_and_command_runs_a_cpp_solution(tmp_path):
     tests_dir, workspace = _task(tmp_path)
     (workspace / "solution.cpp").write_text(DOUBLE_CPP)
-    reward = stdio.grade(_spec(), tests_dir, workspace)
+    reward = grade_stdio.grade(_spec(), tests_dir, workspace)
     assert (reward.reward, reward.status) == (1.0, Status.SCORED)
 
 
 def test_empty_workspace_fails_the_build_and_scores_zero(tmp_path):
     tests_dir, workspace = _task(tmp_path)
-    reward = stdio.grade(_spec(), tests_dir, workspace)
+    reward = grade_stdio.grade(_spec(), tests_dir, workspace)
     assert (reward.reward, reward.status) == (0.0, Status.SCORED)
     assert reward.detail["reason"] == "build_failed"
 
@@ -184,13 +184,13 @@ def _judge_task(tmp_path: Path, checker_source: str) -> tuple[Path, Path]:
 
 def test_judge_py_accepts_via_a_positional_checker(tmp_path):
     tests_dir, workspace = _judge_task(tmp_path, "def main(input_path, expected_path, got_path):\n    print(1)\n")
-    reward = stdio.grade(_spec(special_judge="judge.py"), tests_dir, workspace)
+    reward = grade_stdio.grade(_spec(special_judge="judge.py"), tests_dir, workspace)
     assert reward.reward == 1.0
 
 
 def test_judge_py_rejects_via_a_positional_checker(tmp_path):
     tests_dir, workspace = _judge_task(tmp_path, "def main(input_path, expected_path, got_path):\n    print(0)\n")
-    reward = stdio.grade(_spec(special_judge="judge.py"), tests_dir, workspace)
+    reward = grade_stdio.grade(_spec(special_judge="judge.py"), tests_dir, workspace)
     assert reward.reward == 0.0
 
 
@@ -199,5 +199,5 @@ def test_judge_py_falls_back_to_normalized_match_for_an_argv_style_checker(tmp_p
     positionally raises, and the launcher falls back to the normalized match, same as upstream."""
     tests_dir, workspace = _judge_task(tmp_path, "def main():\n    pass\n")
     (tests_dir / "cases" / "output_0.txt").write_text("anything\n")
-    reward = stdio.grade(_spec(special_judge="judge.py"), tests_dir, workspace)
+    reward = grade_stdio.grade(_spec(special_judge="judge.py"), tests_dir, workspace)
     assert reward.reward == 1.0  # "anything" normalized-matches the solution's stdout

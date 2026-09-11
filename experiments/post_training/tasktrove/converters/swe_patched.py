@@ -16,7 +16,6 @@ import re
 
 from tasktrove_verify.spec import PytestSpec, ScriptSpec
 
-from experiments.post_training.tasktrove.contract import UV_IMAGE
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
     Converter,
@@ -29,11 +28,11 @@ from experiments.post_training.tasktrove.converters.swe_repo import (
     TESTBED,
     TRUSTED_TEST_PATHS,
     ensure_pytest_json_report,
-    test_file,
+    pytest_selection,
+    restore_setup,
     test_ids,
-    uncollectable,
-    uncovered_files,
 )
+from experiments.post_training.tasktrove.task_format import UV_IMAGE
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
 
 TEST_PATCH = "tests/test_patch.diff"
@@ -104,38 +103,6 @@ _PATCH_INVOCATION_RE = re.compile(
 )
 _REPO_DIR_RE = re.compile(r'REPO_DIR\s*=\s*"([^"]+)"')
 _CONDA_LINE_RE = re.compile(r"^[ \t]*(?:source\s+\S*conda\S*\S*|conda activate\s+\S+)[ \t]*$", re.MULTILINE)
-
-# Restores every entry of one manifest from the trusted commit via the agent's own clone, mirroring
-# ``install_trusted_test_paths.sh`` without shipping its code, then applies the hidden test patch.
-_SETUP_TEMPLATE = """set -euo pipefail
-cd "$TASKTROVE_WORKSPACE"
-git -c safe.directory="$TASKTROVE_WORKSPACE" cat-file -e TRUSTED_SHA^{commit}
-restore_path() {
-    path="$1"
-    git -c safe.directory="$TASKTROVE_WORKSPACE" clean -ffdx -- "$path" >/dev/null 2>&1 || true
-    rm -rf -- "$path"
-    if git -c safe.directory="$TASKTROVE_WORKSPACE" cat-file -e TRUSTED_SHA:"$path" 2>/dev/null; then
-        git -c safe.directory="$TASKTROVE_WORKSPACE" archive --format=tar TRUSTED_SHA -- "$path" \
-            | tar -xf - -C "$TASKTROVE_WORKSPACE"
-    fi
-}
-restore_manifest() {
-    while IFS= read -r path || [ -n "$path" ]; do
-        [ -z "$path" ] && continue
-        case "$path" in
-            ""|/*|.|..|../*|*/..|*/../*) exit 1 ;;
-        esac
-        restore_path "$path"
-    done < "$1"
-}
-restore_manifest "$TASKTROVE_TESTS_DIR/trusted_test_paths.txt"
-restore_manifest "$TASKTROVE_TESTS_DIR/trusted_patch_paths.txt"
-git -c safe.directory="$TASKTROVE_WORKSPACE" apply --whitespace=nowarn "$TASKTROVE_TESTS_DIR/test_patch.diff"
-"""
-
-
-def _setup_script(trusted_commit: str) -> str:
-    return _SETUP_TEMPLATE.replace("TRUSTED_SHA", trusted_commit)
 
 
 def _is_pytest_node_id(node_id: str) -> bool:
@@ -272,13 +239,14 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
 
     if not fail_to_pass:
         return Rejected(ConvertStatus.TOO_FEW_CASES, "config.json has no FAIL_TO_PASS tests")
-    foreign = [node_id for node_id in fail_to_pass if uncollectable(node_id)]
-    if foreign:
-        return Rejected(
-            ConvertStatus.UNSUPPORTED_VARIANT, f"FAIL_TO_PASS ids the pytest mode cannot collect: {foreign[:3]}"
-        )
-    pass_to_pass = [node_id for node_id in pass_to_pass if not uncollectable(node_id)]
-    node_ids = [*fail_to_pass, *pass_to_pass]
+    selection = pytest_selection(
+        fail_to_pass,
+        pass_to_pass,
+        [task.get_text(TRUSTED_TEST_PATHS), task.get_text(TRUSTED_PATCH_PATHS)],
+    )
+    if isinstance(selection, Rejected):
+        return selection
+    node_ids = [*selection.must_pass, *selection.must_not_break]
     non_pytest = [node_id for node_id in node_ids if not _is_pytest_node_id(node_id)]
     if non_pytest:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"not pytest node ids: {non_pytest[:3]}")
@@ -292,23 +260,16 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test.sh does not call install_trusted_test_patch.sh")
     trusted_commit = match["commit"]
 
-    graded_files = {test_file(node_id) for node_id in node_ids}
-    uncovered = uncovered_files(graded_files, [task.get_text(TRUSTED_TEST_PATHS), task.get_text(TRUSTED_PATCH_PATHS)])
-    if uncovered:
-        return Rejected(
-            ConvertStatus.UNSUPPORTED_VARIANT, f"graded test files missing from trusted manifest: {uncovered[:5]}"
-        )
-
     workspace_match = _REPO_DIR_RE.search(test_sh)
     workspace = workspace_match.group(1) if workspace_match else TESTBED
     conda_lines = _conda_activation(test_sh)
     python, python_setup = _python_command(conda_lines)
 
     spec = PytestSpec(
-        paths=tuple(sorted(graded_files)),
-        must_pass=tuple(fail_to_pass),
-        must_not_break=tuple(pass_to_pass),
-        setup=python_setup + _setup_script(trusted_commit),
+        paths=selection.files,
+        must_pass=selection.must_pass,
+        must_not_break=selection.must_not_break,
+        setup=python_setup + restore_setup(trusted_commit, (TRUSTED_TEST_PATHS, TRUSTED_PATCH_PATHS), patch=TEST_PATCH),
         python=python,
         workspace=workspace,
     )

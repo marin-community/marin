@@ -21,7 +21,7 @@ from pathlib import Path
 
 from tasktrove_verify.modes.extract import last_line
 from tasktrove_verify.modes.run import STDERR_TAIL, run_command
-from tasktrove_verify.reward import REWARD_JSON, REWARD_TXT, InvalidTask, Reward, scored
+from tasktrove_verify.grade import REWARD_JSON, REWARD_TXT, InvalidTask, Reward, scored
 from tasktrove_verify.spec import DEFAULT_WORKSPACE, ScriptSpec, Spec
 
 SHELL = "bash"
@@ -110,9 +110,8 @@ def _json_reward(path: Path) -> float | None:
         return None
     try:
         payload = json.loads(path.read_text(errors="replace"))
-    except ValueError:
-        logger.warning("%s is not valid JSON", path)
-        return None
+    except ValueError as error:
+        raise RuntimeError(f"{path} is not valid JSON: {error}") from error
     return _float(payload.get("reward")) if isinstance(payload, dict) else None
 
 

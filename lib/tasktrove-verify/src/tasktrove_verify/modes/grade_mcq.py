@@ -15,8 +15,8 @@ import re
 import string
 from pathlib import Path
 
-from tasktrove_verify.output import read_output
-from tasktrove_verify.reward import InvalidTask, Reward, scored
+from tasktrove_verify.grade import read_output
+from tasktrove_verify.grade import InvalidTask, Reward, scored
 from tasktrove_verify.spec import McqSpec
 
 ANSWER = re.compile(r"Answer\s*:\s*(?!Answer)\s*([A-Za-z0-9])\s*")

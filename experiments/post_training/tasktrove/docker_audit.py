@@ -3,15 +3,14 @@
 
 """Convert a sample of one source and run its graders in Docker, the way Harbor would.
 
-    uv run python -m experiments.post_training.tasktrove.sample_run \\
+    uv run python -m experiments.post_training.tasktrove.docker_audit \\
         --source laion__nemotron-gym-knowledge-mcqa-v2 --count 20 --out /tmp/sample
 
 For every converted task the empty check runs the shim in a fresh workspace and must score 0.
 When the task ships an oracle solution, the oracle check runs ``solution/solve.sh`` in the
 workspace first and must score 1. The tool is installed from the local checkout rather than the
 git ref in the Dockerfile, so a converter can be checked before its branch is pushed. Converter
-authors run this while writing a converter and commit the JSON report it prints under
-``converters/reports/``.
+Authors run this while writing a converter and store the printed report with the dataset run.
 """
 
 import collections
@@ -25,16 +24,16 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import click
-from tasktrove_verify.cli import DEFAULT_LOGS_DIR
-from tasktrove_verify.reward import VERDICT_JSON
+from tasktrove_verify.grade import DEFAULT_LOGS_DIR
+from tasktrove_verify.grade import VERDICT_JSON
 from tasktrove_verify.spec import DEFAULT_WORKSPACE
 from zephyr.readers import load_parquet
 
-from experiments.post_training.tasktrove.contract import INSTALL_MARKER, TESTS_MOUNT
+from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, TESTS_MOUNT
 from experiments.post_training.tasktrove.convert import ConvertedRecord, convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.sources import load_source_verdicts
+from experiments.post_training.tasktrove.dataset import load_source_verdicts
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, read_task_binary
 
 logger = logging.getLogger(__name__)

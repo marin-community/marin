@@ -1,26 +1,44 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The raw TaskTrove parquets as a Zephyr dataset, plus the worker size every stage uses."""
+"""TaskTrove source policy and raw Zephyr dataset."""
 
+import json
 from collections.abc import Iterator
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
 
 from fray.types import ResourceConfig
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.dataset import Dataset
 from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN
 
+TASKTROVE_HF_ID = "open-thoughts/TaskTrove"
+TASKTROVE_REVISION = "0292300"
 TASKS_GLOB = "*/tasks.parquet"
 APPROX_SHARD_BYTES = 32 << 20
-"""Parquet files split into shards of about this many uncompressed bytes, cut at row-group
-boundaries; a row group larger than this is one shard on its own."""
 WORKING_SHARDS = 64
-"""Loaded rows are shuffled by path into this many even shards before per-task work. Sixty-four
-workers are enough for this few-gigabyte corpus while still splitting sources whose input is one
-large row group. (``reshard`` alone moves whole intermediate chunks rather than individual rows.)"""
 WORKER_RESOURCES = ResourceConfig(cpu=1, ram="4g")
-"""One Zephyr worker per shard. Twenty sources store every task in a single row group, the largest
-about 400 MB uncompressed, and a worker holds one decoded row group plus its Python rows."""
+_VERDICTS_PATH = Path(__file__).with_name("source_verdicts.json")
+
+
+class SourceVerdict(StrEnum):
+    KEEP = "keep"
+    DROP = "drop"
+
+
+@dataclass(frozen=True)
+class SourceInfo:
+    source: str
+    verdict: SourceVerdict
+    family: str
+    reason: str
+
+
+def load_source_verdicts() -> dict[str, SourceInfo]:
+    raw = json.loads(_VERDICTS_PATH.read_text())
+    return {source: SourceInfo(source, SourceVerdict(row["verdict"]), row["family"], row["reason"]) for source, row in raw.items()}
 
 
 def source_name(parquet_path: str) -> str:
@@ -41,7 +59,7 @@ def _one_row(_key: tuple[str, str], rows: Iterator[dict]) -> Iterator[dict]:
 
 
 def raw_rows(input_path: str) -> Dataset[dict]:
-    """Every row under ``input_path`` as ``{source, path, task_binary}``, one shard per parquet split."""
+    """Load every source row and annotate it with the source directory name."""
     files = Dataset.from_files(str(StoragePath(input_path) / TASKS_GLOB))
     rows = files.load_parquet(
         columns=["path", "task_binary", DEFAULT_FILE_PATH_COLUMN],
@@ -52,5 +70,5 @@ def raw_rows(input_path: str) -> Dataset[dict]:
 
 
 def raw_tasks(input_path: str) -> Dataset[dict]:
-    """``raw_rows`` shuffled by path into even working shards for per-task stages."""
+    """Shuffle raw rows by task path into 64 balanced working shards."""
     return raw_rows(input_path).group_by(key=_row_key, reducer=_one_row, num_output_shards=WORKING_SHARDS)

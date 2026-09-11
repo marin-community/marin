@@ -27,8 +27,6 @@ from experiments.post_training.tasktrove.converters.json_schemas import usable_s
 from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
-SCHEMA_FILE = "schema.json"
-
 
 def convert_nemotron_if_structured(task: TaskFiles) -> ConvertedTask | Rejected:
     data = verifier_data(task)
@@ -37,12 +35,13 @@ def convert_nemotron_if_structured(task: TaskFiles) -> ConvertedTask | Rejected:
     normalized = usable_schema(data.get("schema"))
     if isinstance(normalized, Rejected):
         return normalized
+    spec = JsonSchemaSpec(format=SchemaFormat.JSON)
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
-        spec=JsonSchemaSpec(schema=SCHEMA_FILE, format=SchemaFormat.JSON),
+        spec=spec,
         dockerfile=task.text(DOCKERFILE),
         tags=("instruction-following", "structured-output", "json-schema", "nemotron"),
-        data_files={f"tests/{SCHEMA_FILE}": json.dumps(normalized, indent=2).encode()},
+        data_files={f"tests/{spec.schema}": json.dumps(normalized, indent=2).encode()},
     )
 
 

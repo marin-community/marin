@@ -7,8 +7,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-from tasktrove_verify.modes import judge
-from tasktrove_verify.reward import Status
+from tasktrove_verify.grade import Status
+from tasktrove_verify.modes import grade_judge
 from tasktrove_verify.spec import Constraint, JudgeSpec
 
 # The dataset's own reference answer, apostrophe included: the gate must fold case, spacing and
@@ -95,13 +95,13 @@ def _workspace(tmp_path: Path, response: str) -> Path:
 )
 def test_exact_gate_scores_one_without_calling_a_model(tmp_path, unconfigured_judge, response):
     spec = JudgeSpec(references=("Paris", REFERENCE), question=QUESTION)
-    reward = judge.grade(spec, tmp_path, _workspace(tmp_path, response))
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, response))
     assert (reward.reward, reward.status) == (1.0, Status.SCORED)
     assert reward.detail == {"gate": "exact"}
 
 
 def test_gate_ignores_articles_and_trailing_punctuation(tmp_path, unconfigured_judge):
-    reward = judge.grade(JudgeSpec(references=("Paris",)), tmp_path, _workspace(tmp_path, "\\boxed{The Paris.}"))
+    reward = grade_judge.grade(JudgeSpec(references=("Paris",)), tmp_path, _workspace(tmp_path, "\\boxed{The Paris.}"))
     assert reward.reward == 1.0
 
 
@@ -109,7 +109,7 @@ def test_paraphrase_falls_through_to_the_model(tmp_path, fake_judge):
     fake_judge.replies = ["The candidate omits the unwilling-or-unable condition.\nSCORE: 0.5"]
     response = "\\boxed{Only when the armed group's attack is attributable to the host state.}"
     spec = JudgeSpec(references=(REFERENCE,), question=QUESTION)
-    reward = judge.grade(spec, tmp_path, _workspace(tmp_path, response))
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, response))
     assert (reward.reward, reward.status) == (0.5, Status.SCORED)
     assert reward.detail["model"] == "fake/judge-9b"
     assert "unwilling-or-unable" in reward.detail["reasoning"]
@@ -122,7 +122,7 @@ def test_paraphrase_falls_through_to_the_model(tmp_path, fake_judge):
 def test_disabled_gate_sends_even_an_exact_match_to_the_model(tmp_path, fake_judge):
     fake_judge.replies = ["Same answer.\nSCORE: 1"]
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
-    reward = judge.grade(spec, tmp_path, _workspace(tmp_path, REFERENCE))
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, REFERENCE))
     assert reward.reward == 1.0
     assert len(fake_judge.prompts) == 1
 
@@ -130,14 +130,14 @@ def test_disabled_gate_sends_even_an_exact_match_to_the_model(tmp_path, fake_jud
 def test_spec_model_overrides_the_environment(tmp_path, fake_judge):
     fake_judge.replies = ["Wrong answer.\nSCORE: 0"]
     spec = JudgeSpec(references=(REFERENCE,), model="override/judge-70b", exact_gate=False)
-    reward = judge.grade(spec, tmp_path, _workspace(tmp_path, "The moon is made of cheese."))
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "The moon is made of cheese."))
     assert (reward.reward, reward.detail["model"]) == (0.0, "override/judge-70b")
 
 
 def test_unparseable_reply_is_retried_once_then_scores_zero(tmp_path, fake_judge):
     fake_judge.replies = ["I cannot grade this."]
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
-    reward = judge.grade(spec, tmp_path, _workspace(tmp_path, "something else"))
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "something else"))
     assert (reward.reward, reward.status) == (0.0, Status.SCORED)
     assert reward.detail["reason"] == "unparseable_judge_response"
     assert len(fake_judge.prompts) == 2
@@ -146,26 +146,26 @@ def test_unparseable_reply_is_retried_once_then_scores_zero(tmp_path, fake_judge
 def test_second_attempt_is_accepted(tmp_path, fake_judge):
     fake_judge.replies = ["I cannot grade this.", "Matches the reference.\nSCORE: 1"]
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
-    reward = judge.grade(spec, tmp_path, _workspace(tmp_path, "a paraphrase"))
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "a paraphrase"))
     assert reward.reward == 1.0
 
 
 def test_missing_endpoint_configuration_is_an_infra_error(tmp_path, unconfigured_judge):
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
     with pytest.raises(RuntimeError, match="TASKTROVE_JUDGE_BASE_URL"):
-        judge.grade(spec, tmp_path, _workspace(tmp_path, "a paraphrase"))
+        grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "a paraphrase"))
 
 
 def test_missing_model_configuration_is_an_infra_error(tmp_path, fake_judge, monkeypatch):
     monkeypatch.delenv("TASKTROVE_JUDGE_MODEL")
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
     with pytest.raises(RuntimeError, match="TASKTROVE_JUDGE_MODEL"):
-        judge.grade(spec, tmp_path, _workspace(tmp_path, "a paraphrase"))
+        grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "a paraphrase"))
 
 
 def test_no_output_scores_zero(tmp_path, unconfigured_judge):
     (tmp_path / "answer.txt").write_text("   \n")
-    reward = judge.grade(JudgeSpec(references=(REFERENCE,)), tmp_path, tmp_path)
+    reward = grade_judge.grade(JudgeSpec(references=(REFERENCE,)), tmp_path, tmp_path)
     assert (reward.reward, reward.detail) == (0.0, {"reason": "no_output"})
 
 
@@ -178,7 +178,7 @@ def _checklist(**overrides) -> JudgeSpec:
 
 def test_checklist_scores_the_fraction_of_criteria_the_judge_passes(tmp_path, fake_judge):
     fake_judge.replies = ["Three steps.\nSCORE: 1", "Casual.\nSCORE: 0", "Names her.\nSCORE: 1"]
-    reward = judge.grade(_checklist(), tmp_path, _workspace(tmp_path, "1. Ask Ada Lovelace. 2. Wait. 3. Done."))
+    reward = grade_judge.grade(_checklist(), tmp_path, _workspace(tmp_path, "1. Ask Ada Lovelace. 2. Wait. 3. Done."))
     assert (reward.reward, reward.status) == (pytest.approx(2 / 3), Status.SCORED)
     assert [c["passed"] for c in reward.detail["criteria"]] == [True, False, True]
     assert len(fake_judge.prompts) == 3
@@ -189,19 +189,19 @@ def test_checklist_shows_the_context_file_to_the_judge(tmp_path, fake_judge):
     (tmp_path / "conversation.txt").write_text("[USER]: plan my week\n[ASSISTANT]: sure")
     fake_judge.replies = ["SCORE: 1"]
     spec = JudgeSpec(rubric="checklist", criteria=(CRITERIA[0],), context="conversation.txt")
-    judge.grade(spec, tmp_path, _workspace(tmp_path, "1. 2. 3."))
+    grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "1. 2. 3."))
     assert "plan my week" in fake_judge.prompts[0]
 
 
 def test_missing_context_file_is_an_invalid_task(tmp_path, fake_judge):
     spec = JudgeSpec(rubric="checklist", criteria=CRITERIA, context="missing.txt")
-    with pytest.raises(judge.InvalidTask):
-        judge.grade(spec, tmp_path, _workspace(tmp_path, "text"))
+    with pytest.raises(grade_judge.InvalidTask):
+        grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "text"))
 
 
 def test_constraints_gate_scores_zero_without_calling_the_judge(tmp_path, unconfigured_judge):
     spec = _checklist(constraints=(Constraint("startend:end_checker", {"end_phrase": "Sincerely."}),))
-    reward = judge.grade(spec, tmp_path, _workspace(tmp_path, "1. Ask Ada Lovelace."))
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "1. Ask Ada Lovelace."))
     assert (reward.reward, reward.detail["gate"], reward.detail["failed"]) == (
         0.0,
         "constraints",
@@ -216,10 +216,10 @@ def test_constraints_that_pass_hand_over_to_the_judge(tmp_path, fake_judge):
         criteria=(CRITERIA[2],),
         constraints=(Constraint("startend:end_checker", {"end_phrase": "Sincerely."}),),
     )
-    reward = judge.grade(spec, tmp_path, _workspace(tmp_path, "Ada Lovelace was first. Sincerely."))
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "Ada Lovelace was first. Sincerely."))
     assert reward.reward == 1.0 and len(fake_judge.prompts) == 1
 
 
 def test_checklist_without_criteria_is_an_invalid_task(tmp_path, unconfigured_judge):
-    with pytest.raises(judge.InvalidTask):
-        judge.grade(JudgeSpec(rubric="checklist"), tmp_path, _workspace(tmp_path, "text"))
+    with pytest.raises(grade_judge.InvalidTask):
+        grade_judge.grade(JudgeSpec(rubric="checklist"), tmp_path, _workspace(tmp_path, "text"))

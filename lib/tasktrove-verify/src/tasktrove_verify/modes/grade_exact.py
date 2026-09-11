@@ -20,8 +20,8 @@ from collections import Counter
 from pathlib import Path
 
 from tasktrove_verify.modes.extract import collapse_whitespace, extract_boxed
-from tasktrove_verify.output import read_output
-from tasktrove_verify.reward import InvalidTask, Reward, scored
+from tasktrove_verify.grade import read_output
+from tasktrove_verify.grade import InvalidTask, Reward, scored
 from tasktrove_verify.spec import ExactSpec
 
 ITEM_SEPARATOR = re.compile(r"[\n,]")

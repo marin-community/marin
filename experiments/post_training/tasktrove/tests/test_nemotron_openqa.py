@@ -8,11 +8,11 @@ from pathlib import Path
 
 from tasktrove_verify.spec import JudgeSpec, parse_spec
 
-from experiments.post_training.tasktrove.contract import VERIFIER_TOML
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.task_format import VERIFIER_TOML
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     read_task_binary,

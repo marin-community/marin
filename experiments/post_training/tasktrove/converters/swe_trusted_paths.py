@@ -20,10 +20,9 @@ from experiments.post_training.tasktrove.converters.swe_repo import (
     TESTBED,
     TRUSTED_TEST_PATHS,
     ensure_pytest_json_report,
-    test_file,
+    pytest_selection,
+    restore_setup,
     test_ids,
-    uncollectable,
-    uncovered_files,
 )
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
 
@@ -37,32 +36,6 @@ _INVOCATION_RE = re.compile(
     r"(?:\s*\\?\s*\n?\s*(?P<fallback>[0-9a-f]{7,40}))?",
     re.MULTILINE,
 )
-
-# Restores each manifest path from the git history the agent's own environment-setup clone already
-# carries (a full, non-shallow clone per ``instruction.md``), mirroring the old
-# ``install_trusted_test_paths.sh`` for the explicit-manifest case without shipping its code.
-_RESTORE_SETUP = """set -euo pipefail
-ws="$TASKTROVE_WORKSPACE"
-cd "$ws"
-git -c safe.directory="$ws" cat-file -e TRUSTED_SHA^{commit}
-while IFS= read -r path || [ -n "$path" ]; do
-    [ -z "$path" ] && continue
-    case "$path" in
-        ""|/*|.|..|../*|*/..|*/../*) exit 1 ;;
-    esac
-    git -c safe.directory="$ws" clean -ffdx -- "$path" >/dev/null 2>&1 || true
-    rm -rf -- "$path"
-    if git -c safe.directory="$ws" cat-file -e TRUSTED_SHA:"$path" 2>/dev/null; then
-        git -c safe.directory="$ws" archive --format=tar TRUSTED_SHA -- "$path" | tar -xf - -C "$ws"
-    elif [ -n "FALLBACK_SHA" ] && git -c safe.directory="$ws" cat-file -e FALLBACK_SHA:"$path" 2>/dev/null; then
-        git -c safe.directory="$ws" archive --format=tar FALLBACK_SHA -- "$path" | tar -xf - -C "$ws"
-    fi
-done < "$TASKTROVE_TESTS_DIR/trusted_test_paths.txt"
-"""
-
-
-def _restore_setup(trusted: str, fallback: str) -> str:
-    return _RESTORE_SETUP.replace("TRUSTED_SHA", trusted).replace("FALLBACK_SHA", fallback)
 
 
 def convert_swe_trusted_paths(task: TaskFiles) -> ConvertedTask | Rejected:
@@ -93,24 +66,15 @@ def convert_swe_trusted_paths(task: TaskFiles) -> ConvertedTask | Rejected:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test.sh does not call install_trusted_test_paths.sh")
     trusted, fallback = match["trusted"], match["fallback"] or ""
 
-    foreign = [node_id for node_id in fail_to_pass if uncollectable(node_id)]
-    if foreign:
-        return Rejected(
-            ConvertStatus.UNSUPPORTED_VARIANT, f"FAIL_TO_PASS ids the pytest mode cannot collect: {foreign[:3]}"
-        )
-    pass_to_pass = [node_id for node_id in pass_to_pass if not uncollectable(node_id)]
-
-    graded_files = {test_file(node_id) for node_id in [*fail_to_pass, *pass_to_pass]}
-    uncovered = uncovered_files(graded_files, [task.get_text(TRUSTED_TEST_PATHS)])
-    if uncovered:
-        detail = f"graded test files missing from trusted manifest: {uncovered[:5]}"
-        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, detail)
+    selection = pytest_selection(fail_to_pass, pass_to_pass, [task.get_text(TRUSTED_TEST_PATHS)])
+    if isinstance(selection, Rejected):
+        return selection
 
     spec = PytestSpec(
-        paths=tuple(sorted(graded_files)),
-        must_pass=tuple(fail_to_pass),
-        must_not_break=tuple(pass_to_pass),
-        setup=_restore_setup(trusted, fallback),
+        paths=selection.files,
+        must_pass=selection.must_pass,
+        must_not_break=selection.must_not_break,
+        setup=restore_setup(trusted, (TRUSTED_TEST_PATHS,), fallback),
         workspace=TESTBED,
     )
     return ConvertedTask(

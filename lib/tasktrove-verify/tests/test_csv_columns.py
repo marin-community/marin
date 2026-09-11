@@ -4,8 +4,8 @@
 import csv
 
 import pytest
-from tasktrove_verify.modes import csv_columns
-from tasktrove_verify.reward import InvalidTask, Status
+from tasktrove_verify.grade import InvalidTask, Status
+from tasktrove_verify.modes import grade_csv
 from tasktrove_verify.spec import CsvColumnsSpec
 
 ORDERS = 'name,email,quantity\nAda,ada@example.com,3\n"Grace, C.",grace@example.com,1\n'
@@ -23,7 +23,7 @@ def answer(workspace, text):
 
 
 def grade(workspace, spec):
-    return csv_columns.grade(spec, workspace.parent / "tests", workspace)
+    return grade_csv.grade(spec, workspace.parent / "tests", workspace)
 
 
 def test_header_with_every_required_column_scores_one(workspace):

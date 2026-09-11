@@ -14,7 +14,6 @@ reproducing the gate and the tool's own judge replacing ``rewardkit``.
 
 from tasktrove_verify.spec import JudgeSpec
 
-from experiments.post_training.tasktrove.contract import OLD_GRADER_LINE, drop_dockerfile_lines
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
     Converter,
@@ -23,9 +22,9 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     Rejected,
 )
 from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
+from experiments.post_training.tasktrove.task_format import OLD_GRADER_LINE, RESPONSE_OUTPUT, drop_dockerfile_lines
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
-RESPONSE_OUTPUT = "/app/response.txt"
 """Every task in this template tells the agent to write here, not the tool's ``answer.txt`` default."""
 
 

@@ -6,7 +6,7 @@
 The checked-in exemplar is a real task pulled straight from the source template and carries a
 single stdin/stdout case that is the sample printed in the problem statement, a genuine
 ``gold_in_instruction`` rejection. The accepted-path tests add one hidden case, since ``stdio`` has
-no grading probe (:mod:`tasktrove_verify.probe` only knows output-file modes) and an extra case
+no grading probe (:mod:`tasktrove_verify.grade` only knows output-file modes) and an extra case
 does not change what :func:`verify_task` checks.
 """
 
@@ -15,11 +15,11 @@ from pathlib import Path
 
 from tasktrove_verify.spec import Compare, StdioSpec, parse_spec
 
-from experiments.post_training.tasktrove.contract import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     TEST_SH,

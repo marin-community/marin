@@ -8,9 +8,9 @@ import pytest
 
 pytest.importorskip("math_verify", reason="math mode needs the `answer` extra")
 
+from tasktrove_verify.grade import Status
 from tasktrove_verify.grade import grade as dispatch
-from tasktrove_verify.modes import math_answer
-from tasktrove_verify.reward import Status
+from tasktrove_verify.modes import grade_math
 from tasktrove_verify.spec import MathSpec, MathType
 
 
@@ -41,7 +41,7 @@ def _answer(workspace: Path, text: str) -> None:
 )
 def test_math_scalar_answers_are_compared_symbolically(tmp_path, expected, text, reward):
     _answer(tmp_path, text)
-    assert math_answer.grade(MathSpec(expected=expected), tmp_path, tmp_path).reward == reward
+    assert grade_math.grade(MathSpec(expected=expected), tmp_path, tmp_path).reward == reward
 
 
 @pytest.mark.parametrize(
@@ -73,18 +73,18 @@ def test_math_scalar_answers_are_compared_symbolically(tmp_path, expected, text,
 def test_math_typed_answers_use_their_comparison(tmp_path, expected, math_type, text, reward):
     _answer(tmp_path, text)
     spec = MathSpec(expected=expected, math_type=math_type)
-    assert math_answer.grade(spec, tmp_path, tmp_path).reward == reward
+    assert grade_math.grade(spec, tmp_path, tmp_path).reward == reward
 
 
 def test_math_empty_output_scores_zero_with_no_output(tmp_path):
     _answer(tmp_path, "\n  \n")
-    result = math_answer.grade(MathSpec(expected="42"), tmp_path, tmp_path)
+    result = grade_math.grade(MathSpec(expected="42"), tmp_path, tmp_path)
     assert (result.reward, result.detail["reason"]) == (0.0, "no_output")
 
 
 def test_math_reward_detail_carries_the_extracted_expression(tmp_path):
     _answer(tmp_path, "after simplifying, \\boxed{\\frac{3}{4}}\n")
-    detail = math_answer.grade(MathSpec(expected="0.75"), tmp_path, tmp_path).detail
+    detail = grade_math.grade(MathSpec(expected="0.75"), tmp_path, tmp_path).detail
     assert detail["extracted"] == "\\frac{3}{4}"
 
 
@@ -99,7 +99,7 @@ def test_math_grades_from_a_worker_thread(tmp_path):
     _answer(tmp_path, "\\boxed{\\frac{1}{2}}")
     results: list = []
     worker = threading.Thread(
-        target=lambda: results.append(math_answer.grade(MathSpec(expected="0.5"), tmp_path, tmp_path))
+        target=lambda: results.append(grade_math.grade(MathSpec(expected="0.5"), tmp_path, tmp_path))
     )
     worker.start()
     worker.join()

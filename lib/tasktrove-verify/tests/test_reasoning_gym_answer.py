@@ -4,8 +4,8 @@
 import json
 
 import pytest
-from tasktrove_verify.modes import reasoning_gym_answer
-from tasktrove_verify.reward import InvalidTask, Status
+from tasktrove_verify.grade import InvalidTask, Status
+from tasktrove_verify.modes import grade_reasoning_gym
 from tasktrove_verify.spec import ReasoningGymSpec
 
 NEEDLE_ENTRY = {
@@ -35,7 +35,7 @@ def answer(workspace, text):
 
 
 def grade(tests_dir, workspace, dataset="needle_haystack"):
-    return reasoning_gym_answer.grade(ReasoningGymSpec(dataset=dataset), tests_dir, workspace)
+    return grade_reasoning_gym.grade(ReasoningGymSpec(dataset=dataset), tests_dir, workspace)
 
 
 def test_correct_answer_scores_one(tests_dir, workspace):

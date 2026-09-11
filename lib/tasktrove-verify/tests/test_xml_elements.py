@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from tasktrove_verify.modes import xml_elements
-from tasktrove_verify.reward import InvalidTask, Status
+from tasktrove_verify.grade import InvalidTask, Status
+from tasktrove_verify.modes import grade_xml
 from tasktrove_verify.spec import XmlElementsSpec
 
 ORDER = """
@@ -26,7 +26,7 @@ def answer(workspace, text):
 
 
 def grade(workspace, spec):
-    return xml_elements.grade(spec, workspace.parent / "tests", workspace)
+    return grade_xml.grade(spec, workspace.parent / "tests", workspace)
 
 
 def test_document_with_every_required_name_scores_one(workspace):

@@ -27,7 +27,6 @@ import re
 
 from tasktrove_verify.spec import ExactSpec, ReasoningGymSpec, ScriptSpec
 
-from experiments.post_training.tasktrove.contract import drop_dockerfile_lines
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
     Converter,
@@ -36,14 +35,12 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     Rejected,
 )
 from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
+from experiments.post_training.tasktrove.task_format import drop_dockerfile_lines
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
 # reasoning-gym's own scorer for these two datasets compares a JSON-deserialized ``list`` (the
 # entry's ``metadata["output"]``) against ``parse_board()``'s ``tuple``-of-``tuple``s return; the
-# comparison is never equal regardless of the candidate, so even the gold answer scores 0.05
-# instead of 1.0. Confirmed against every occurrence in the local corpus: 149 ``arc_agi`` and 133
-# ``rearc`` rows out of 14259, both 100% unscorable, while every other of the 99 datasets present
-# scores its own gold answer 1.0.
+# comparison is never equal regardless of the candidate, so even the gold answer scores 0.05.
 _UNSCORABLE_REASONING_GYM_DATASETS = frozenset({"arc_agi", "rearc"})
 
 _OLD_REASONING_GYM_PIP_INSTALL = re.compile(r"^RUN pip install --no-cache-dir reasoning-gym")
@@ -151,9 +148,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-TESTS_DIR = Path(os.environ["TASKTROVE_TESTS_DIR"])
-WORKSPACE = Path(os.environ["TASKTROVE_WORKSPACE"])
-CASES = json.loads((TESTS_DIR / "cases.json").read_text())
 TIMEOUT = 30
 
 _FENCE = re.compile(r"```(?:python|py)?\\s*\\n(.*?)```", re.DOTALL | re.IGNORECASE)
@@ -185,13 +179,13 @@ def _extract_code(text: str) -> str | None:
     return None
 
 
-def _agent_code() -> str | None:
-    solution = WORKSPACE / "solution.py"
+def _agent_code(workspace: Path) -> str | None:
+    solution = workspace / "solution.py"
     if solution.is_file():
         code = _extract_code(solution.read_text(errors="replace"))
         if code is not None:
             return code
-    answer = WORKSPACE / "answer.txt"
+    answer = workspace / "answer.txt"
     if answer.is_file():
         code = _extract_code(answer.read_text(errors="replace"))
         if code is not None:
@@ -200,7 +194,10 @@ def _agent_code() -> str | None:
 
 
 def main() -> float:
-    code = _agent_code()
+    tests_dir = Path(os.environ["TASKTROVE_TESTS_DIR"])
+    workspace = Path(os.environ["TASKTROVE_WORKSPACE"])
+    cases = json.loads((tests_dir / "cases.json").read_text())
+    code = _agent_code(workspace)
     if code is None:
         print("no transform() found in solution.py or answer.txt", file=sys.stderr)
         return 0.0
@@ -209,7 +206,7 @@ def main() -> float:
         runner_path = Path(scratch) / "runner.py"
         cases_path = Path(scratch) / "cases.json"
         runner_path.write_text(runner)
-        cases_path.write_text(json.dumps(CASES))
+        cases_path.write_text(json.dumps(cases))
         try:
             result = subprocess.run(
                 [sys.executable, str(runner_path), str(cases_path)],
@@ -229,10 +226,10 @@ def main() -> float:
     except Exception as error:
         print(f"could not parse runner output: {error}", file=sys.stderr)
         return 0.0
-    if len(got) != len(CASES):
-        print(f"case count mismatch: {len(got)} vs {len(CASES)}", file=sys.stderr)
+    if len(got) != len(cases):
+        print(f"case count mismatch: {len(got)} vs {len(cases)}", file=sys.stderr)
         return 0.0
-    for actual, case in zip(got, CASES):
+    for actual, case in zip(got, cases):
         expected = [[int(v) for v in row] for row in case["output"]]
         if actual != expected:
             print("case mismatch", file=sys.stderr)

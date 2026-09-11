@@ -16,12 +16,12 @@ from pathlib import Path
 from tasktrove_verify.grade import grade
 from tasktrove_verify.spec import ExactSpec, ReasoningGymSpec, ScriptSpec, parse_spec
 
-from experiments.post_training.tasktrove.contract import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.nemotron_reasoning import CASES_FILE, TRANSFORM_SCRIPT
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     TEST_SH,
@@ -128,7 +128,7 @@ def test_grid_transform_shape_converts_to_script_mode_and_grades_the_held_out_ca
     for old_grader_file in ("tests/verifier.py", "tests/validate_verifier_data.py", "tests/verifier_data.json"):
         assert old_grader_file not in task.files, "old grader code must not ship"
 
-    # ScriptSpec has no probe in tasktrove_verify.probe, so verify_task cannot exercise the real
+    # ScriptSpec has no probe in tasktrove_verify.grade, so verify_task cannot exercise the real
     # grader; check_grading only skips it, so we run it ourselves the way check_grading would.
     assert verify_task(record.task_binary) is None
     with tempfile.TemporaryDirectory() as tmp:

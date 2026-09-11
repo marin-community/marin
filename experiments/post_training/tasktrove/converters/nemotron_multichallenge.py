@@ -14,7 +14,6 @@ import tomllib
 
 from tasktrove_verify.spec import RUBRIC_CHECKLIST, JudgeSpec
 
-from experiments.post_training.tasktrove.contract import OLD_GRADER_LINE, drop_dockerfile_lines
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
     Converter,
@@ -22,11 +21,11 @@ from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertStatus,
     Rejected,
 )
+from experiments.post_training.tasktrove.task_format import OLD_GRADER_LINE, RESPONSE_OUTPUT, drop_dockerfile_lines
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
 JUDGE_TOML = "tests/judge.toml"
 CONVERSATION = "conversation.txt"
-RESPONSE_FILE = "/app/response.txt"
 _REQUIREMENT = re.compile(r"Requirement:\s*(.+)\Z", re.DOTALL)
 _NEGATED = "Pass when the candidate clearly does not satisfy the condition queried by this requirement."
 
@@ -57,7 +56,7 @@ def convert_nemotron_multichallenge(task: TaskFiles) -> ConvertedTask | Rejected
         criteria=tuple(criteria),
         context=CONVERSATION,
         exact_gate=False,
-        output=RESPONSE_FILE,
+        output=RESPONSE_OUTPUT,
     )
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),

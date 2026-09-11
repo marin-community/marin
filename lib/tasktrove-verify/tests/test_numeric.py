@@ -4,9 +4,9 @@
 from pathlib import Path
 
 import pytest
+from tasktrove_verify.grade import Status
 from tasktrove_verify.grade import grade as dispatch
-from tasktrove_verify.modes import numeric
-from tasktrove_verify.reward import Status
+from tasktrove_verify.modes import grade_math
 from tasktrove_verify.spec import NumericSpec
 
 
@@ -32,7 +32,7 @@ def _answer(workspace: Path, text: str) -> None:
 )
 def test_numeric_reads_the_final_number(tmp_path, expected, text, reward):
     _answer(tmp_path, text)
-    assert numeric.grade(NumericSpec(expected=expected), tmp_path, tmp_path).reward == reward
+    assert grade_math.grade(NumericSpec(expected=expected), tmp_path, tmp_path).reward == reward
 
 
 @pytest.mark.parametrize(
@@ -47,7 +47,7 @@ def test_numeric_reads_the_final_number(tmp_path, expected, text, reward):
 )
 def test_numeric_tolerances_bound_the_match(tmp_path, spec, text, reward):
     _answer(tmp_path, text)
-    assert numeric.grade(spec, tmp_path, tmp_path).reward == reward
+    assert grade_math.grade(spec, tmp_path, tmp_path).reward == reward
 
 
 @pytest.mark.parametrize(
@@ -56,13 +56,13 @@ def test_numeric_tolerances_bound_the_match(tmp_path, spec, text, reward):
 )
 def test_numeric_output_without_a_number_scores_zero(tmp_path, text, reason):
     _answer(tmp_path, text)
-    result = numeric.grade(NumericSpec(expected=42.0), tmp_path, tmp_path)
+    result = grade_math.grade(NumericSpec(expected=42.0), tmp_path, tmp_path)
     assert (result.status, result.reward, result.detail["reason"]) == (Status.SCORED, 0.0, reason)
 
 
 def test_numeric_reward_detail_carries_the_extracted_value(tmp_path):
     _answer(tmp_path, "after rounding, 17.5\n")
-    detail = numeric.grade(NumericSpec(expected=42.0), tmp_path, tmp_path).detail
+    detail = grade_math.grade(NumericSpec(expected=42.0), tmp_path, tmp_path).detail
     assert detail["extracted"] == 17.5
 
 

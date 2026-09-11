@@ -3,14 +3,14 @@
 
 import sys
 
-from tasktrove_verify.modes import pytest_report
+from tasktrove_verify.modes import grade_pytest
 from tasktrove_verify.spec import PytestSpec, parse_spec
 
-from experiments.post_training.tasktrove.contract import VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.task_format import VERIFIER_TOML, VERIFY_TEST_SH
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     INSTRUCTION,
@@ -102,7 +102,7 @@ def test_pytest_mode_rejects_empty_implementation_and_accepts_oracle(tmp_path):
     spec = PytestSpec(paths=(str(test_file),), python=sys.executable)
 
     solution.write_text("")
-    assert pytest_report.grade(spec, tests, workspace).reward == 0.0
+    assert grade_pytest.grade(spec, tests, workspace).reward == 0.0
 
     solution.write_text("def add(left, right):\n    return left + right\n")
-    assert pytest_report.grade(spec, tests, workspace).reward == 1.0
+    assert grade_pytest.grade(spec, tests, workspace).reward == 1.0

@@ -19,7 +19,7 @@ raw → summaries → templates → converted → graded → clean
 1. [x] Spec in `tests/verifier.toml`, flat modes, `--verify-tool-ref` (experiments module)
 2. [x] `lib/tasktrove-verify`: 13 modes, CLI, library entry point, fixture tests
 3. [x] Converter registry keyed by (family, tests/ code files), coverage.json, tags columns
-4. [x] 18 converters (one per key, each with a fixture test and a local Docker sampling report under `converters/reports/`); every kept source is covered, every other source is dropped with a reason
+4. [x] 18 converters (one per key, each with a fixture test and a local Docker sample recorded with the dataset run); every kept source is covered, every other source is dropped with a reason
 5. [x] Dedup and cap step
 6. [x] Verified step: spec, dockerfile, gold leak, empty, expected, perturbed, shape
 7. [x] Clean step: tasks/ per source, ledger/, manifest.json, report.md, export CLI, README
@@ -31,8 +31,8 @@ raw → summaries → templates → converted → graded → clean
 13. [x] Smoke-train Qwen 0.6B on the clean dataset through marin skyrl, configured after the curriculum experiment; config and result in the smoke section below (third attempt succeeded end to end, reward 0.0)
 14. [x] Final report to the user and PR monitoring per the commit skill
 15. [x] Reinstate the rubric-only judge sources with a `judge_rubric` converter and `rubric`/`no-reference` tags; run 2026.09.10.4 (`/power/iris-run-job-20260910-164051`), then 2026.09.10.5 (`/power/iris-run-job-20260910-180939`, tool ref d28b440f) with the validity-sample fixes
-16. [x] Report and manifest: distinct Dockerfiles with base image and per-converter/source counts, tags, dropped sources by reason (`clean summary` regenerates them)
-17. [x] End-to-end validity sample (`validity.py` + `validity_daytona.py`): stratified sample, Sonnet solve scripts, empty/oracle/candidate checks in Daytona; pilot of 54 tasks and full sample of 190 in the validity section below
+16. [x] Report and manifest: distinct Dockerfiles with base image and per-converter/source counts, tags, dropped sources by reason (`publish summary` regenerates them)
+17. [x] End-to-end validity sample (`validity.py`): stratified sample, Sonnet solve scripts, empty/oracle/candidate checks in Daytona; pilot of 54 tasks and full sample of 190 in the validity section below
 18. [x] Fixes from the validity sample: pytest node ids rebased onto the workspace in the tool (a `tests/pytest.ini` rootdir made every id miss), failing pytest grades keep the output tail, truncated parametrized ids are dropped from PASS_TO_PASS and reject FAIL_TO_PASS (394 swe_rebench tasks); whole-directory uploads and per-task agent timeouts in the validity tooling
 19. [x] M1 cleanup: recover non-null TOML/XML/CSV structured-output tasks, add end-to-end converter tests, fix the root `reasoning-gym` dependency, merge current `origin/main`, and run the format-parity audit
 20. [x] M2 cleanup: leave non-letter MCQA golds, literal-newline prompt failures, and the broken `arc_agi`/`rearc` scorer rows rejected; their small recovery does not justify format-specific parsing or grading paths
@@ -44,6 +44,7 @@ raw → summaries → templates → converted → graded → clean
 26. [x] Reshard TaskTrove to 64 working shards and exactly one final clean Parquet shard
 27. [x] Final cleanup: run `2026.09.10.7` at the pushed verifier ref, validate its 64-to-1 outputs, publish the exact final Parquet and manifest, deploy Marina, and update the artifact and PR #9061
 28. [x] Route the viewer from Marina to the canonical CoreWeave S3 release with its existing credentials; fix the S3 byte-range call, remove the redundant GCS copy, and deploy revision `marina-00045-p7g`
+29. [x] Review cleanup: remove checked-in run reports, consolidate verifier and SWE helpers, group the pipeline by dataset/conversion/verification/publication, and merge the Daytona validity runner into its CLI
 
 ## Final publication
 

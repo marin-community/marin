@@ -12,24 +12,15 @@ binary the agent sees.
 
 import hashlib
 import json
-import logging
-import re
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 
-import pyarrow as pa
+from finestore.schema import arrow_schema
 from rigging.filesystem.storage_path import StoragePath
+from tasktrove_verify.modes.extract import collapse_whitespace
 from tasktrove_verify.spec import mode_of, render_spec
 from zephyr.context import ZephyrContext
 
-from experiments.post_training.tasktrove.contract import (
-    MODE_EXTRAS,
-    VERIFIER_TOML,
-    VERIFY_TEST_SH,
-    dockerfile_id,
-    edit_dockerfile,
-    render_task_toml,
-)
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
     Converter,
@@ -39,9 +30,21 @@ from experiments.post_training.tasktrove.converters.converted_task import (
 )
 from experiments.post_training.tasktrove.converters.nemotron_data import metadata as template_metadata
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.fingerprint import COVERAGE_JSON, uncovered_keys
-from experiments.post_training.tasktrove.raw_tasks import WORKER_RESOURCES, raw_tasks
-from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict, load_source_verdicts
+from experiments.post_training.tasktrove.dataset import (
+    WORKER_RESOURCES,
+    SourceInfo,
+    SourceVerdict,
+    load_source_verdicts,
+    raw_tasks,
+)
+from experiments.post_training.tasktrove.task_format import (
+    MODE_EXTRAS,
+    VERIFIER_TOML,
+    VERIFY_TEST_SH,
+    dockerfile_id,
+    edit_dockerfile,
+    render_task_toml,
+)
 from experiments.post_training.tasktrove.taskbinary import (
     DOCKERFILE,
     INSTRUCTION,
@@ -53,16 +56,14 @@ from experiments.post_training.tasktrove.taskbinary import (
     template_fingerprint,
     write_task_binary,
 )
-
-logger = logging.getLogger(__name__)
+from experiments.post_training.tasktrove.template_coverage import COVERAGE_JSON, uncovered_keys
 
 CONVERTED_GLOB = "converted/*.parquet"
-_WHITESPACE = re.compile(r"\s+")
 
 
 def instruction_key(instruction: str) -> str:
     """Two tasks are duplicates when their instructions match after lowercasing and whitespace collapsing."""
-    return hashlib.sha256(_WHITESPACE.sub(" ", instruction).strip().lower().encode()).hexdigest()
+    return hashlib.sha256(collapse_whitespace(instruction).lower().encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -85,25 +86,7 @@ class ConvertedRecord:
     solution_binary: bytes | None
 
 
-CONVERTED_SCHEMA = pa.schema(
-    [
-        ("source", pa.string()),
-        ("path", pa.string()),
-        ("family", pa.string()),
-        ("template_id", pa.string()),
-        ("converter", pa.string()),
-        ("mode", pa.string()),
-        ("dockerfile_id", pa.string()),
-        ("language", pa.string()),
-        ("tags", pa.list_(pa.string())),
-        ("has_solution", pa.bool_()),
-        ("status", pa.string()),
-        ("error", pa.string()),
-        ("instruction_key", pa.string()),
-        ("task_binary", pa.binary()),
-        ("solution_binary", pa.binary()),
-    ]
-)
+CONVERTED_SCHEMA = arrow_schema(ConvertedRecord)
 
 
 def build_task_files(converted: ConvertedTask, tool_ref: str, metadata: dict) -> TaskFiles:

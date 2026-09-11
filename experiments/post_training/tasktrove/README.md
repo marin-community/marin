@@ -5,7 +5,7 @@ tasks graded by one tool, [`tasktrove-verify`](../../../lib/tasktrove-verify/REA
 declared mode each. A converted task keeps TaskTrove's gzip-tar layout: `instruction.md`,
 `task.toml` (Harbor timeouts plus selection metadata), its own `environment/Dockerfile` with the
 tool install appended, a three-line `tests/test.sh`, and `tests/verifier.toml` holding the mode
-and its parameters. `contract.py` is the on-disk contract; the spec itself lives in the tool.
+and its parameters. `task_format.py` owns that on-disk format; the spec itself lives in the tool.
 
 ```
 python -m experiments.post_training.tasktrove.pipeline --version 2026.09.09 --verify-tool-ref <sha> --run
@@ -19,11 +19,11 @@ is part of every task's identity.
 | step | module | what it does |
 |---|---|---|
 | `raw` | `pipeline.py` | `hf_download` of every `*/tasks.parquet` at the pinned revision |
-| `summaries` | `fingerprint.py` | fingerprint every task and `group_by` template id (normalized `tests/` and `environment/` code) |
-| `templates` | `fingerprint.py` | `templates.json`, one exemplar per template with 20+ tasks, `coverage.json` per converter key |
+| `summaries` | `template_coverage.py` | fingerprint every task and `group_by` template id (normalized `tests/` and `environment/` code) |
+| `templates` | `template_coverage.py` | `templates.json`, one exemplar per template with 20+ tasks, `coverage.json` per converter key |
 | `converted` | `convert.py` | route by `source_verdicts.json` and converter key; emit the new binary and selection columns |
 | `graded` | `verify.py` | `group_by` instruction within a source (lowest path wins; optional `--max-tasks-per-source`), then throw away tasks whose grader does not hold up; every row leaves with its final status |
-| `clean` | `clean.py` | one `tasks/part-00000.parquet` (survivors only), `ledger.parquet`, `manifest.json`, `report.md` |
+| `clean` | `publish.py` | one `tasks/part-00000.parquet` (survivors only), `ledger.parquet`, `manifest.json`, `report.md` |
 
 The Zephyr stages load the source parquets with `load_parquet`, shuffle the rows into 64 even
 working shards before any per-task work (twenty sources store every task in a single row group), and use
@@ -39,8 +39,8 @@ converter's selection labels, counted in `manifest.json` and `report.md` under `
 tasks carry `judge` plus `reference` (an exact gate over gold answers, then the judge) or
 `rubric` and `no-reference` (a checklist with no gold answer anywhere; the reward is the judge's
 reading of the rubric), so a mix can include or exclude the rubric-only tasks by tag.
-`python -m experiments.post_training.tasktrove.clean export <tasks-dir> <path>` writes one task
-back out as a Harbor task directory; `clean summary` rewrites the ledger, manifest and report of
+`python -m experiments.post_training.tasktrove.publish export <tasks-dir> <path>` writes one task
+back out as a Harbor task directory; `publish summary` rewrites the ledger, manifest and report of
 an existing output.
 
 ## Converters
@@ -62,11 +62,10 @@ To write one:
    `ConvertStatus` for a task the template cannot grade soundly.
 3. Register a `Converter(name, keys, convert)` in the module and add it to `registry.py`.
 4. Check in the exemplar as `fixtures/<name>.tar.gz` and add a test under `tests/`.
-5. Run the sample harness against the local parquet and commit its report under
-   `converters/reports/<name>.json`:
+5. Run the sample harness against the local parquet and store its report with the dataset run:
 
    ```
-   uv run python -m experiments.post_training.tasktrove.sample_run --source <source> --count 20 --out /tmp/sample
+   uv run python -m experiments.post_training.tasktrove.docker_audit --source <source> --count 20 --out /tmp/sample
    ```
 
    It builds each distinct Dockerfile with the local tool checkout, runs the shim on an empty
@@ -94,10 +93,10 @@ in-process on an empty output (0), the expected value (1), and a perturbation (0
 out as a broken environment rather than a hard one. `validity sample` draws a stratified sample
 (per converter, mode or source) from the clean parquet as task directories; `validity solve` sends
 each instruction and Dockerfile to a headless agent (`claude -p --model sonnet` by default) and
-keeps the one bash script it replies with as `candidate/solve.sh`; `validity_daytona.py` grades the
+keeps the one bash script it replies with as `candidate/solve.sh`; `validity.py grade` grades the
 empty workspace, the oracle and the candidate in fresh Daytona sandboxes, one snapshot per distinct
-Dockerfile; `validity report` tabulates the verdicts per group. The Daytona runner is a standalone
-script (`uv run --no-project --isolated --prerelease=allow --with "daytona>=0.182,<1"`) because the
-Daytona SDK does not resolve against this project's lock. Judge-graded tasks need
+Dockerfile; `validity report` tabulates the verdicts per group. Judge-graded tasks need
 `TASKTROVE_JUDGE_*` forwarded with `--env`; without an endpoint their candidate check is an
-infrastructure error, not a score.
+infrastructure error, not a score. Run the grade step outside the project lock with
+`uv run --no-project --isolated --prerelease=allow --with click --with "daytona>=0.182,<1" python -m
+experiments.post_training.tasktrove.validity grade DIR`.

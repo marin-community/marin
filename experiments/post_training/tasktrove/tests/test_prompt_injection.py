@@ -11,12 +11,12 @@ from pathlib import Path
 import pytest
 from tasktrove_verify.spec import ScriptSpec, parse_spec
 
-from experiments.post_training.tasktrove.contract import VERIFIER_TOML
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.prompt_injection import CHECKER_NAME, DATA_NAME, SOLVE_SH
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.task_format import VERIFIER_TOML
 from experiments.post_training.tasktrove.taskbinary import read_task_binary
 from experiments.post_training.tasktrove.verify import verify_task
 

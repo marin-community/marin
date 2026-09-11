@@ -18,6 +18,7 @@ from tasktrove_verify.spec import Mode
 
 VERIFIER_TOML = "tests/verifier.toml"
 TESTS_MOUNT = "/tests"
+RESPONSE_OUTPUT = "/app/response.txt"
 """Where Harbor mounts the task's ``tests/`` directory at grading time."""
 
 VERIFY_TEST_SH = f"""#!/bin/bash

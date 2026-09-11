@@ -24,11 +24,10 @@ from marin.execution.remote import remote
 from marin.experiment.cli import build_options
 from marin.experiment.data import hf_download
 
-from experiments.post_training.tasktrove.clean import build_clean
 from experiments.post_training.tasktrove.convert import convert_tasks
-from experiments.post_training.tasktrove.fingerprint import build_template_index, summarize_templates
-from experiments.post_training.tasktrove.raw_tasks import TASKS_GLOB
-from experiments.post_training.tasktrove.sources import TASKTROVE_HF_ID, TASKTROVE_REVISION
+from experiments.post_training.tasktrove.dataset import TASKS_GLOB, TASKTROVE_HF_ID, TASKTROVE_REVISION
+from experiments.post_training.tasktrove.publish import build_clean
+from experiments.post_training.tasktrove.template_coverage import build_template_index, summarize_templates
 from experiments.post_training.tasktrove.verify import grade_tasks
 
 STAGES = ("raw", "summaries", "templates", "converted", "graded", "clean")

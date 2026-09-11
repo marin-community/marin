@@ -329,6 +329,40 @@ def clean_relative_path(path: str) -> str | None:
     return normalized
 
 
+def requested_byte_range(header: str, size: int) -> tuple[int, int] | None:
+    """Return the requested half-open byte range, or None for an invalid range."""
+    match = BYTE_RANGE.fullmatch(header)
+    if match is None or not any(match.groups()):
+        return None
+    first, last = match.groups()
+    if first:
+        start = int(first)
+        end = min(int(last) + 1, size) if last else size
+    else:
+        length = min(int(last), size)
+        start, end = size - length, size
+    return (start, end) if start < size and start < end else None
+
+
+async def storage_file_response(fs, target: str, request: Request, media_type: str, headers: dict[str, str]) -> Response:
+    """Serve one existing object, honoring HTTP byte ranges and HEAD requests."""
+    size = await run_in_threadpool(fs.size, target)
+    headers["Accept-Ranges"] = "bytes"
+    range_header = request.headers.get("range")
+    if range_header is None:
+        headers["Content-Length"] = str(size)
+        body = b"" if request.method == "HEAD" else await run_in_threadpool(fs.cat_file, target)
+        return Response(body, media_type=media_type, headers=headers)
+
+    byte_range = requested_byte_range(range_header, size)
+    if byte_range is None:
+        return Response(status_code=416, headers={**headers, "Content-Range": f"bytes */{size}"})
+    start, end = byte_range
+    headers.update({"Content-Length": str(end - start), "Content-Range": f"bytes {start}-{end - 1}/{size}"})
+    body = b"" if request.method == "HEAD" else await run_in_threadpool(fs.cat_file, target, start=start, end=end)
+    return Response(body, status_code=206, media_type=media_type, headers=headers)
+
+
 async def serve_data_file(
     app: AppManifest,
     data_root: str,
@@ -348,34 +382,7 @@ async def serve_data_file(
     }
     media_type = mimetypes.guess_type(relative)[0] or "application/octet-stream"
     if await run_in_threadpool(fs.isfile, target):
-        size = await run_in_threadpool(fs.size, target)
-        headers["Accept-Ranges"] = "bytes"
-        range_header = request.headers.get("range")
-        if range_header is None:
-            headers["Content-Length"] = str(size)
-            body = b"" if request.method == "HEAD" else await run_in_threadpool(fs.cat_file, target)
-            return Response(body, media_type=media_type, headers=headers)
-
-        match = BYTE_RANGE.fullmatch(range_header)
-        if match is None or not any(match.groups()):
-            return Response(status_code=416, headers={**headers, "Content-Range": f"bytes */{size}"})
-        first, last = match.groups()
-        if first:
-            start = int(first)
-            end = min(int(last) + 1, size) if last else size
-        else:
-            length = min(int(last), size)
-            start, end = size - length, size
-        if start >= size or start >= end:
-            return Response(status_code=416, headers={**headers, "Content-Range": f"bytes */{size}"})
-        headers.update(
-            {
-                "Content-Length": str(end - start),
-                "Content-Range": f"bytes {start}-{end - 1}/{size}",
-            }
-        )
-        body = b"" if request.method == "HEAD" else await run_in_threadpool(fs.cat_file, target, start=start, end=end)
-        return Response(body, status_code=206, media_type=media_type, headers=headers)
+        return await storage_file_response(fs, target, request, media_type, headers)
     if await run_in_threadpool(fs.isfile, target + PRECOMPRESSED_SUFFIX):
         body = await run_in_threadpool(fs.cat_file, target + PRECOMPRESSED_SUFFIX)
         return Response(body, media_type=media_type, headers={**headers, "Content-Encoding": "gzip"})

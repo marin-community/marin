@@ -6,11 +6,11 @@
 ``tests/verifier_data.json`` carries ``instruction_id_list`` (IFEval instruction ids such as
 ``keywords:letter_frequency``) and a parallel ``kwargs`` list of per-instruction parameters. The
 old grader re-implemented the IFEval checks inline; the tool's own registry
-(``tasktrove_verify.modes.ifeval_constraints.CONSTRAINTS``) already covers every id this source
+(``tasktrove_verify.modes.ifeval.CONSTRAINTS``) already covers every id this source
 uses, so the task maps straight onto ``IfevalSpec.constraints``.
 """
 
-from tasktrove_verify.modes.ifeval_constraints import CONSTRAINTS
+from tasktrove_verify.modes.ifeval import CONSTRAINTS
 from tasktrove_verify.spec import Constraint, IfevalSpec
 
 from experiments.post_training.tasktrove.converters.converted_task import (

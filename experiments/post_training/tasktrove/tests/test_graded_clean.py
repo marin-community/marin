@@ -11,16 +11,14 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from experiments.post_training.tasktrove.clean import TASK_COLUMNS, build_clean, export_task
-from experiments.post_training.tasktrove.contract import VERIFIER_TOML
 from experiments.post_training.tasktrove.convert import ConvertedRecord, convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
-from experiments.post_training.tasktrove.dedup import DedupStatus
-from experiments.post_training.tasktrove.raw_tasks import WORKING_SHARDS
-from experiments.post_training.tasktrove.sources import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.publish import TASK_COLUMNS, build_clean, export_task
+from experiments.post_training.tasktrove.task_format import VERIFIER_TOML
 from experiments.post_training.tasktrove.taskbinary import INSTRUCTION, TaskFiles, read_task_binary, write_task_binary
-from experiments.post_training.tasktrove.verify import grade_tasks
+from experiments.post_training.tasktrove.verify import DedupStatus, grade_tasks
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 # Real source names: the clean summary looks every source up in source_verdicts.json.
@@ -101,7 +99,6 @@ def test_clean_keeps_survivors_and_ledgers_the_rest(tmp_path):
     grade_tasks(str(converted), graded, max_tasks_per_source=None)
     build_clean(graded, clean, tool_ref="ref")
 
-    assert WORKING_SHARDS == 64
     assert [path.name for path in (tmp_path / "clean" / "tasks").glob("*.parquet")] == ["part-00000.parquet"]
     tasks = _rows(tmp_path / "clean" / "tasks")
     assert set(tasks) == {"good.tar.gz"}

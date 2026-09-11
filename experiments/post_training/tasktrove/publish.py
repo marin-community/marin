@@ -13,8 +13,8 @@ The survivors are copied by a Zephyr stage that reads only converted rows; the l
 come from one pass over the graded rows' small columns. The only binaries read are one task per
 distinct Dockerfile, for its base image.
 
-    python -m experiments.post_training.tasktrove.clean summary <graded_path> <output_path> <tool_ref>
-    python -m experiments.post_training.tasktrove.clean export <tasks_dir> <path> [--dest DIR]
+    python -m experiments.post_training.tasktrove.publish summary <graded_path> <output_path> <tool_ref>
+    python -m experiments.post_training.tasktrove.publish export <tasks_dir> <path> [--dest DIR]
 
 ``summary`` rewrites the ledger, manifest and report of an existing output without touching
 ``tasks/``; ``export`` writes one row back out as a Harbor task directory for hand inspection.
@@ -37,8 +37,8 @@ from zephyr.dataset import Dataset
 
 from experiments.post_training.tasktrove.convert import CONVERTED_SCHEMA
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
-from experiments.post_training.tasktrove.raw_tasks import APPROX_SHARD_BYTES, WORKER_RESOURCES
-from experiments.post_training.tasktrove.sources import TASKTROVE_HF_ID, TASKTROVE_REVISION, load_source_verdicts
+from experiments.post_training.tasktrove.dataset import APPROX_SHARD_BYTES, WORKER_RESOURCES
+from experiments.post_training.tasktrove.dataset import TASKTROVE_HF_ID, TASKTROVE_REVISION, load_source_verdicts
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, read_task_binary
 from experiments.post_training.tasktrove.verify import GRADED_GLOB, VERIFIED_STATUS
 

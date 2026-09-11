@@ -5,8 +5,7 @@ import json
 from pathlib import Path
 
 from tasktrove_verify import grade as grade_module
-from tasktrove_verify.cli import main
-from tasktrove_verify.reward import Status, scored
+from tasktrove_verify.grade import Status, main, scored
 from tasktrove_verify.spec import Mode
 
 
