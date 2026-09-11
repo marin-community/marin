@@ -125,7 +125,9 @@ settings have results for the models on screen. `panel` is that one variant per 
 `complete=1`, and the aggregate protocol are all computed over it, so every number describes the
 columns a reader sees; `benchmarks` stays the full admitted list, and a cell is kept for every
 admitted variant. Cells are keyed by the exact eval name, which is also what `benchmarks=` carries, so
-a shared URL, `/compare`, and `/history` resolve the same setting the reader was looking at.
+a `/panel` or `/compare` link and `/history` all resolve the same setting the reader was looking at.
+The SPA's own panel view keeps its column selection in local storage rather than in its route, as it
+does every other panel filter; the Compare route is the one that carries the selection in its URL.
 
 The primary metric per task matches on the base metric name with lm-eval's `,<filter>` suffix
 stripped: the first present of `exact_match`, `accuracy`, `acc_norm`, `acc`, `pass@1` (falling back to
