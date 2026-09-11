@@ -76,3 +76,13 @@ See the [plan](../projects/moe-latent-gated-router/plan.md) and
   d1280 14,473 / 15,176,040,448. Both arms use these same schedules.
 - A scratch dense-reference test initially had ambiguous explicit sharding.
   The reference now uses NumPy dense expert evaluation; no tolerance was relaxed.
+
+### 2026-09-11 — Placement preflight
+
+- All 32 pinned dependencies report SUCCESS in us-central1: nine training,
+  sixteen Paloma and seven Uncheatable caches. This check read status metadata only.
+- The first smoke submission was rejected before creating a job: the CPU parent
+  combined a us-central1 region constraint, inferred non-preemptible placement,
+  and `--reserve v5p-8` availability. The controller reported no matching groups.
+- Pin the TPU child explicitly to us-central1 and retry the CPU parent without
+  the accelerator availability constraint. No production job was changed.

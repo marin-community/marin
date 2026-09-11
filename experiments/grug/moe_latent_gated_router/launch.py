@@ -190,7 +190,7 @@ def trial(
         run=run_grug,
         build_config=build_config,
         deps=(*train, *validation),
-        runtime_args={"train_resources": ResourceConfig.with_tpu("v5p-8")},
+        runtime_args={"train_resources": ResourceConfig.with_tpu("v5p-8", regions=["us-central1"])},
     )
 
 
