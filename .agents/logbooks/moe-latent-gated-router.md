@@ -161,3 +161,20 @@ See the [plan](../projects/moe-latent-gated-router/plan.md) and
 - The same heartbeat is ACTIVE again with the corrected architecture and run IDs.
   Current state: `scratch/20260911-1105_moe-lgr-9110-rmsgated_monitoring_state.json`.
   It will verify this smoke before submitting the two corrected Gate 1 cells.
+
+### 2026-09-11 — Direct full Gate 1 launch
+
+- User instruction: “别smoke浪费卡了，直接跑”. Cancelled the corrected smoke parent
+  and descendants while its TPU child was still pending with no allocated attempt.
+  No further smoke runs are authorized or required for this experiment.
+- Submitted the two full variants from `edf9b2871`: d512 parent
+  `/kaiyuew/moe-lgr-9110-d512-rmsgated` at 18:53:16 UTC (13,642 steps), and d768
+  `/kaiyuew/moe-lgr-9110-d768-rmsgated` at 18:53:58 UTC (19,378 steps).
+- Both use `down -> RMSNorm -> gate -> router + experts`, v5p-8 in us-central1,
+  the existing schedule, and fresh corrected output roots. No baseline submitted.
+- The active heartbeat now monitors full Gate 1 directly, without a smoke prerequisite.
+  Each full-run identity, expected checkpoint and sanitized recovery command is in
+  the existing monitoring state file's `gate1` list.
+- At 18:58 UTC, both expected training children were confirmed pending for v5p-8
+  capacity, with no allocated attempts; both CPU parents were running. The corrected
+  smoke parent and child were both confirmed killed. No duplicate jobs were submitted.

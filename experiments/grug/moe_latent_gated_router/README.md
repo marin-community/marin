@@ -55,8 +55,8 @@ uv run python -m experiments.grug.moe_latent_gated_router.launch \
 ```
 
 These commands print the plan. Add `--run` inside an Iris CPU parent to submit
-its TPU child. `--stop-after-steps` supports a separately named bounded smoke
-while retaining the full schedule. Checkpoints are written every 15 minutes
+its TPU child. Per the user, launch full runs directly without standalone smokes.
+Checkpoints are written every 15 minutes
 and at completion under the artifact's output; restarts use the same run ID.
 The `rmsgated` IDs identify the user-confirmed RMSNorm-then-gate architecture.
 Earlier `gated` IDs used a superseded gate-only interpretation; do not resume those

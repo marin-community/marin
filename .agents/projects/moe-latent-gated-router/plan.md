@@ -23,10 +23,10 @@ Base: main at d891fba48a7d3729fdac2595df3c6ca292a53b74.
 5. Use the Agent MoE baseline budgets (3.82e17/2.81e18 non-embedding training FLOPs)
    to derive the treatment schedule using the untrained scaled hero control's analytic
    FLOPs and batches (32/64). Count the gate and reduced router FLOPs separately.
-6. Run a bounded accelerator startup check before full Gate 1. Each arm gets a unique
-   run ID/output root. Confirm final evaluation/checkpoint writing and restart handling.
-   Use `moe-lgr-9110-d{dim}-rmsgated` IDs and a separate `-smoke` suffix.
-   The earlier gate-only smoke and cancelled `gated` full run are superseded.
+6. Launch full Gate 1 directly after local validation, as requested by the user.
+   Do not launch any smoke. The pending corrected smoke was cancelled before allocation.
+   Use `moe-lgr-9110-d{dim}-rmsgated` IDs and fresh output roots; never restore the
+   superseded gate-only checkpoint.
 7. Submit only the d512/d768 gated_latent cells, verify children and W&B identity,
    and monitor until terminal. Reuse `moe_may_compute_opt_d{dim}_ep1` in
    `marin-community/marin_moe`. Recenter the baseline loss at alpha=0.0941 and

@@ -16,12 +16,18 @@ The control in code exists only for numerical tests and schedule calculation.
 The treatment computes `z = GatedNorm(RMSNorm(h @ latent_down))`; both router and
 routed experts consume z. Shared experts and outer norms retain hero behavior.
 
-The corrected smoke is `moe-lgr-9110-d512-rmsgated-smoke`. Its parent is
-`/kaiyuew/moe-lgr-9110-d512-rmsgated-smoke` and its only child is
-`<parent>/grug-train-moe-lgr-9110-d512-rmsgated-smoke`. Read the state file for the
-current submission and progress status. W&B uses the same run ID in
-`marin-community/marin_moe`. Its final checkpoint is
-`gs://marin-us-central1/users/kaiyuew/grug/moe-lgr-9110-d512-rmsgated-smoke/dev/checkpoints/step-5`.
+Latest user instruction: “别smoke浪费卡了，直接跑”. **Skip all smoke runs.**
+The pending corrected smoke was cancelled before any attempt was allocated.
+The two full Gate 1 parents were submitted from `edf9b2871`:
+
+- `/kaiyuew/moe-lgr-9110-d512-rmsgated` at 18:53:16 UTC.
+- `/kaiyuew/moe-lgr-9110-d768-rmsgated` at 18:53:58 UTC.
+
+Each expected child is `<parent>/grug-train-<run-id>`. Read the `gate1` records in
+state for exact source, current status, checkpoint paths and recovery commands.
+At 18:58 UTC, both training children were verified pending for v5p-8 capacity,
+with no allocated attempts; both CPU parents were running.
+Do not duplicate these submissions or restart either cancelled smoke.
 
 Old `gated` identities are superseded: the gate-only smoke finished, and the
 full d512 parent plus child were cancelled. Old d768 was never submitted.
@@ -39,11 +45,9 @@ Pending for capacity is not a failure and must not cause a duplicate submission.
 The first smoke submit was rejected because `--reserve v5p-8` conflicted with the
 CPU-parent placement; removing `--reserve` resolved it. Keep the parent CPU-only.
 
-After a successful five-step smoke, verify finite training/evaluation, terminal
-successful Iris state, W&B `finished`, and final checkpoint `metadata.json`.
-Then submit exactly two full Gate 1 cells, `dim=512` and `dim=768`, with run IDs
-`moe-lgr-9110-d512-rmsgated` and `moe-lgr-9110-d768-rmsgated`. Before each submission,
-check that its parent and child do not already exist in a pending/running state.
+Verify the two full Gate 1 cells directly: intended child, correct configuration,
+fresh checkpoint start or intended resume, and advancing finite W&B metrics.
+Before a recovery, check that its parent and child are not already pending/running.
 Use the existing launcher; do not create a separate training implementation.
 
 ```bash
@@ -65,7 +69,7 @@ Time-based checkpoints use separate region-local temporary storage; resume via
 the exact same trainer ID and artifact path. Record identities immediately.
 No secret values belong in state files, logs, or issue comments.
 
-The exact smoke resubmit command is stored in the JSON state file. If code changes,
+Exact full-run recovery commands are stored in the JSON state file. If code changes,
 run appropriate checks, commit/push, and record the new source commit before recovery.
 Bundles do not contain `.git`; all corrected jobs explicitly receive `GIT_COMMIT`
 so W&B can log their source. At most two manual recoveries per cell; diagnose
