@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -8,11 +8,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh, PartitionSpec as P
+from absl import flags as absl_flags
 
 
 def main() -> None:
-    from absl import flags as absl_flags
-    from tokamax._src.ops.linear_softmax_cross_entropy_loss.api import (
+    from tokamax._src.ops.linear_softmax_cross_entropy_loss.api import (  # noqa: PLC0415  # optional dep: tokamax
         linear_softmax_cross_entropy_loss,
     )
 

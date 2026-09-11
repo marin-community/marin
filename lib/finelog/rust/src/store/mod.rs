@@ -1,0 +1,32 @@
+//! Storage engine for the Rust Finelog server.
+//!
+//! Provides the metadata layer (schema types + conversions, namespace name
+//! validation, storage policy, the rusqlite catalog sidecar), the data path
+//! (RAM buffer, parquet segments, query), and the `Store` orchestration the
+//! RPC handlers sit on.
+
+pub mod adopt;
+pub mod catalog;
+pub mod compaction;
+pub mod ipc;
+pub mod legacy;
+pub mod log_read;
+pub mod namespace_name;
+pub mod object_store;
+pub mod policy;
+pub mod ram_buffer;
+pub mod schema;
+pub mod segment;
+pub mod state_store;
+pub(crate) mod string_column;
+pub mod table;
+pub mod table_spec;
+pub mod table_state;
+// The orchestration module is named `store`; the re-export below gives callers
+// `finelog::store::Store` without the extra path.
+#[allow(clippy::module_inception)]
+pub mod store;
+pub mod types;
+
+pub use crate::telemetry_policy::TelemetryRootWriteMode;
+pub use store::{ServeMode, Store};

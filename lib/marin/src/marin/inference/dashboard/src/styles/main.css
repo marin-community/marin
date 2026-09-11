@@ -1,0 +1,129 @@
+@import 'tailwindcss';
+
+@config '../../tailwind.config.ts';
+
+/* Design tokens — light default, overridden under .dark. Referenced by the
+   Tailwind color aliases in tailwind.config.ts and directly in components. */
+:root {
+  --c-surface: #ffffff;
+  --c-surface-raised: #f7f7f9;
+  --c-surface-sunken: #eef0f3;
+  --c-surface-border: #e0e2e7;
+  --c-text: #1b1c1f;
+  --c-text-secondary: #45474d;
+  --c-text-muted: #797c85;
+  --c-accent: #e8940c;
+  --c-accent-hover: #cc810a;
+  --c-accent-subtle: #fdf3e2;
+  --c-status-success: #1f9d63;
+  --c-status-danger: #d0463f;
+}
+
+.dark {
+  --c-surface: #131417;
+  --c-surface-raised: #1c1e22;
+  --c-surface-sunken: #0d0e10;
+  --c-surface-border: #2b2e34;
+  --c-text: #e9eaec;
+  --c-text-secondary: #b6b8be;
+  --c-text-muted: #888b93;
+  --c-accent: #f2b544;
+  --c-accent-hover: #ffc55a;
+  --c-accent-subtle: #2a2110;
+  --c-status-success: #35c987;
+  --c-status-danger: #f0716b;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+/* Markdown rendered inside assistant bubbles (v-html, so unscoped). */
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.4rem 0;
+}
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.25rem;
+}
+.markdown-body ul {
+  list-style: disc;
+}
+.markdown-body ol {
+  list-style: decimal;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  font-weight: 600;
+  margin: 0.7rem 0 0.3rem;
+}
+.markdown-body h1 {
+  font-size: 1.15em;
+}
+.markdown-body h2 {
+  font-size: 1.1em;
+}
+.markdown-body h3,
+.markdown-body h4 {
+  font-size: 1.05em;
+}
+.markdown-body code {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  background: var(--c-surface-sunken);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.markdown-body pre {
+  background: var(--c-surface-sunken);
+  border: 1px solid var(--c-surface-border);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.markdown-body blockquote {
+  border-left: 3px solid var(--c-surface-border);
+  margin: 0.4rem 0;
+  padding-left: 0.75rem;
+  color: var(--c-text-secondary);
+}
+.markdown-body table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 0.9em;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--c-surface-border);
+  padding: 0.25rem 0.6rem;
+}
+.markdown-body a {
+  color: var(--c-accent-hover);
+  text-decoration: underline;
+}
+.markdown-body strong {
+  font-weight: 600;
+}

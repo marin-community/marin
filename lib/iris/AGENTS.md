@@ -1,259 +1,174 @@
-# Agent Tips
+# Iris Agent Notes
 
-* Use the connect/RPC abstractions to implement and perform RPC calls. DO NOT use httpx or raw HTTP.
-* Use scripts/generate_protos.py to regenerate files after changing the `.proto` files.
-* Prefer _shallow_, _functional_ code which returns control quickly to the user, vs callbacks or inheritance.
+Distributed job orchestration for Marin. Start with the shared instructions in `/AGENTS.md`; only Iris-specific conventions are below.
 
+## Key Docs
+
+- `README.md` — overview + quick start
+- `OPS.md` — operating / troubleshooting a live cluster (also used by skills: `debug`, `use-iris`)
+- Echo — durable incident and debugging records; use `write-ops-log` after an
+  infrastructure investigation and link the canonical Echo URL
+- `TESTING.md` — testing policy, markers, and commands
+- `docs/task-states.md` — task state machine + retry semantics
+- `docs/coreweave.md` — CoreWeave platform + `runtime=kubernetes` behavior
+- `docs/federation.md` — peer routing, root-job-only handoff, and cross-cluster storage
+- `docs/image-push.md` — multi-region image push/pull architecture
+
+Archived design docs (implemented, read code instead): `.agents/projects/2026*_iris_*.md`
+
+## Source Layout
+
+- `src/iris/cli/` — CLI entry point (`main.py` has all commands including `login`, `submit`, `status`)
+- `src/iris/cluster/controller/` — controller server: `service.py` (RPC handlers), `controller.py` (main loop), `backend.py` (the `TaskBackend` contract), `scheduling/` (`scheduler.py` + `policy.py`), `autoscaler/` (capacity), `auth_setup.py` (auth config), `dashboard.py` (dashboard serving), `db.py` (SQLite), `migrations/` (schema)
+- `src/iris/cluster/backends/` — `TaskBackend` implementations (`rpc/backend.py` = `RpcTaskBackend`, `k8s/tasks.py` = `K8sTaskProvider`)
+- `src/iris/cluster/platforms/` — machine-lifecycle providers (`gcp`, `k8s`, `local`, `manual`) behind `protocols.py` (`ControllerProvider`, `WorkerInfraProvider`) with shared handle/status types in `types.py`
+- `src/iris/cluster/worker/` — worker agent
+- `src/iris/rpc/` — protobuf definitions (`.proto`), generated code (`_pb2.py`), and RPC client helpers (`cluster_connect.py`, `auth.py`)
+- `dashboard/` — Vue 3 frontend (Vite + Tailwind)
+
+## Development
+
+```bash
+# Full safe Iris unit suite
+uv run --package marin-iris --group test pytest --tb=short lib/iris/tests/
 ```
-class Scheduler:
-  def add_job():
-  def add_worker():
-  def compute_schedule() -> ScheduledJobs:
 
-class Runner:
-  def run_jobs(ScheduledJobs)
+See `TESTING.md` for the complete testing policy, E2E test commands, and markers.
+
+### Dashboard
+
+The Vue 3 dashboard lives in `dashboard/`. To type-check and build:
+
+```bash
+cd lib/iris/dashboard && npm run build:check   # vue-tsc + rsbuild
 ```
 
-is preferable to:
+Or use the Iris CLI which handles `npm ci` automatically:
 
-```
-class Scheduler:
-  def __init__(self, job_creator: JobCreator):
-    self.job_creator = job_creator
-  def run(self):
-    ... self.job_creator.create_job()
+```bash
+uv run iris build dashboard
 ```
 
-* Tests should test stable behavior, not implementation details.
+Always run `build:check` after editing `.vue` or `.ts` files to catch type errors before committing.
 
-ABSOLUTELY DO NOT test things that are trivially caught by the type checker.
-Explicitly that means:
+## Data Layer
 
-- No tests for "constant = constant"
-- No tests for "method exists"
-- No tests for "create an object(x, y, z) and attributes are x, y, z"
+The controller store uses SQLAlchemy Core. Read the code, not historical
+design notes:
 
-These tests have negative value - they make our code more brittle.
+- `controller/schema.py` — table definitions and indexes.
+- `controller/migrations/` — on-disk schema changes. Add a migration whenever
+  changing persisted schema. A migration only ever runs against a DB created
+  before it: a fresh DB is materialized from `schema.py` and records every
+  migration as already applied. So write each one to carry the *previous* schema
+  forward, and to be re-runnable after a mid-migration crash — never to depend on
+  the current `schema.py`, which will keep moving.
+- `controller/db.py` — engine setup, transaction wrappers, and `Tx.execute`.
+- `controller/reads.py` / `controller/writes.py` — shared read/write helpers.
+- `controller/projections/` — write-through caches; do not write projection
+  tables from outside their owning projection.
 
-Test _stable behavior_ instead. You can use mocks as needed to isolate
-environments (e.g.  mock around a remote API), but prefer "fakes" -- e.g. create
-a real database but with fake data -- when reasonable.
+Prefer existing `reads.py`/`writes.py` helpers before adding new query code.
+Use SQLAlchemy result APIs directly (`.first()`, `.all()`, `.scalar()`); do
+not add wrapper methods that duplicate SQLAlchemy. Define row protocols or
+dataclasses at the usage boundary when a caller needs a typed shape.
 
-## Documentation
+## Code Conventions
 
-ALWAYS read the docs for the appropriate area.
-IF they disagree with the code, ALWAYS add a task to update them.
+- Use Connect/RPC for APIs and dashboards. Do not use `httpx` or raw HTTP.
+- After changing `.proto` files, regenerate from the repo root with `uv run python lib/iris/scripts/generate_protos.py`.
+- Prefer shallow, functional code that returns control quickly; avoid callback-heavy or inheritance-driven designs.
+- Dashboards must be a thin UI over the RPC API, not a second implementation path.
+- Use `rigging.timing` for all time-related operations (`Timestamp`, `Duration`, `Deadline`, `Timer`, `ExponentialBackoff`) instead of raw `datetime` or `time`.
+- Use `concurrent.futures.ThreadPoolExecutor` (not asyncio) for concurrent platform operations, with hard timeouts.
+- Avoid `TYPE_CHECKING`. Use real imports. If you hit a cycle, prefer refactoring or use a `Protocol` at the boundary.
+- Prefer spiral plans: each stage should be independently testable (proto → server stub → client wiring → end-to-end test).
 
-Documentation should be kept up-to-date as code changes. When implementing new features or making significant changes, update the relevant documentation files:
+### Decisions vs measurements
 
-@README.md - Main overview, CLI reference, and quick start
+The controller SQLite DB stores the *registry and decisions*: worker liveness verdict, task↔worker assignments, scheduling state. Time-series *measurements* (per-tick utilization, per-attempt resource snapshots, profile captures) live in the finelog stats namespaces (`iris.worker`, `iris.task`, `iris.profile`) and are queried via the controller-bundled StatsService. New columns that record measurements should be added as stats namespaces, not controller tables.
 
-## Protocols and Testing
+Profiles in particular: the worker drives a 10-minute periodic CPU capture loop and writes rows to `iris.profile`. On-demand captures (cpu/memory/thread) flow through the same RPC path the dashboard's "Profile now" buttons use: controller → `TaskBackend.profile_task` (`RpcTaskBackend` forwards to the worker daemon; `K8sTaskProvider` runs `kubectl exec`) → finelog. The controller writes its own row for `/system/controller` self-captures only. See `lib/iris/OPS.md` for retention and example queries.
 
-Non-trivial public classes should define a protocol which represents their
-_important_ interface characteristics. Use this protocol in type hints for
-when the class is used instead of the concrete class.
+## Environment Variables
 
-Test to this protocol, not the concrete class: the protocol should describe the
-interesting behavior of the class, but not betray the implementation details.
+Never use `os.environ` to pass env vars to Iris jobs. Tasks run in Docker containers — the submitter's process environment is not available inside the container.
 
-(You may of course _instantiate_ the concrete class for testing.)
+Use Iris's built-in mechanisms instead:
 
-## Imports
+- **CLI**: `iris job run -e KEY VALUE -- python script.py`
+- **SDK**: `EnvironmentSpec(env_vars={"KEY": "value"})` passed to `client.submit(environment=...)`
+- **Cluster-wide literals**: `defaults.task_env` in the cluster config — injected into every task container.
+- **Cluster-wide from operator shell**: `defaults.inject_env` — a list of env var *names* captured from the operator's shell at `iris cluster start` and injected into every task (and the controller). A missing name aborts the launch. On Kubernetes the values go to the `iris-task-env` Secret and are projected via `envFrom` (they never enter the ConfigMap); on GCP/VM clusters they are folded into `task_env` in the bootstrap config. See `iris.cluster.inject_env`.
 
-Don't use TYPE_CHECKING. Use the real import. If there is a circular dependency:
+Key behaviors:
+- `HF_TOKEN`, `WANDB_API_KEY`, `HF_DATASETS_TRUST_REMOTE_CODE`, and `TOKENIZERS_PARALLELISM` are auto-injected from the submitter's env by `EnvironmentSpec.to_proto()`.
+- `defaults.inject_env` values are *defaults*: a literal `defaults.task_env` entry of the same name and a per-job `-e`/`env_vars` both override them.
+- Child jobs inherit parent env vars automatically (child values take precedence).
+- The CLI also loads env vars from `.marin.yaml`'s `env:` section.
+- The submitting user for top-level jobs resolves as: explicit `user`/`--user` → `IRIS_USER` env var → the enclosing job's user → OS user → `root` (`resolve_job_user`). Export `IRIS_USER` when your OS username is uninformative (e.g. a shared `marin` account). Submissions from inside a job become child jobs of the enclosing job and skip this resolution entirely.
 
-* Prefer to resolve it with refactoring when sensible
-* Otherwise use a protocol if you simply need the type information
+See https://github.com/marin-community/marin/issues/3859 for context.
 
-## RPC/API Accessibility
+## Task Setup
 
-Any functionality exposed by the worker or controller dashboards must also be
-available via RPC. The dashboards should be a friendly interface on top of the
-machine accessible RPC API, and should not use internal APIs (except for
-efficiency). For example, if we wanted to show the scheduling status for a task,
-we should define a new RPC endpoint `/TestSchedule(task_id)` and use that from
-the dashboard, rather than creating a scheduler and running it manually.
+Before the command runs, the worker executes a list of setup scripts to prepare
+the environment. The default is `uv sync --all-packages --no-dev`;
+`sync_packages`/`--sync-package` scopes it to named workspace members. The
+worker is pure mechanism; the list is resolved client-side from
+`EnvironmentSpec.setup_scripts` — `None` for the default, `[]` to skip setup
+(bring-your-own image), or a verbatim list — and iris always appends its own
+runtime-deps step. The script builders, the `IRIS_*` env scripts parameterize
+against (notably `$IRIS_VENV`, the venv the run phase activates), child
+inheritance, and the Docker gotcha (setup runs in a separate container, so
+`export` does not reach the command — use `env_vars`) all live in
+`iris.cluster.setup_scripts`. See https://github.com/marin-community/marin/issues/6595.
 
 ## Architecture Notes
 
-### Concurrency Model
+### The TaskBackend contract
 
-Platform operations (`terminate`, `create_slice`, etc.) shell out to `gcloud`
-via `subprocess.run` and are thread-safe. When multiple independent platform
-operations need to run (e.g. tearing down N slices), use
-`concurrent.futures.ThreadPoolExecutor` — not asyncio. Always apply a hard
-timeout so the CLI doesn't hang on a stuck gcloud call.
+A `TaskBackend` (`controller/backend.py`) is the control-plane driver for ONE
+cluster. It implements explicit phase methods: `initialize`, `schedule`,
+`reconcile`, `observe`, `autoscale`, and `remove_capacity`, plus exact on-demand
+I/O (`get_process_status`, `profile_task`, `exec_in_container`). Composition
+creates an empty controller and calls `controller.register_backend(backend)`
+exactly once before `start()`. A second registration is invalid; federation
+composes distinct clusters. `BackendDescriptor` is the source for backend ID,
+kind, capabilities, advertised attributes, and scale groups.
 
-## Planning
+The controller owns Iris persistence and in-memory worker liveness. It builds
+complete phase requests from controller snapshots: scheduling facts, exact
+desired attempts and worker addresses, status/capacity facts, residual demand,
+and recovery checkpoints. Backends never receive a database, transaction,
+transition reader, or liveness tracker. `schedule` is a pure decision;
+`reconcile`, `initialize`, `observe`, `autoscale`, and `remove_capacity` perform
+bounded provider work and return observations or effects for the controller to
+fold and persist.
 
-Prefer _spiral_ plans over _linear_ plans. e.g. when implementing a new feature, make a plan which has step 1 as:
+The descriptor declares one reconciliation mechanism: `WORKER_FLEET` or
+`DIRECT_DISPATCH`; `AUTOSCALER` is an optional capability for worker fleets.
+The controller uses capabilities only to choose the complete request variant.
+Kubernetes reconcile receives the dispatch queue drain; worker reconcile
+receives a target list pairing each exact plan with its address. Dashboard
+capability strings are derived presentation data.
 
-Step 1:
-* Add the minimal changes to the `.proto` file
-* Add the server stub code
-* Add a client wiring
-* Add an end-to-end test
+Backends return one neutral `ReconcileObservation`: exact task updates and
+optional worker-health events, never controller effects. After backend I/O,
+`ops/reconcile.py` reloads current state, fences exact Attempt UIDs, runs one
+lifecycle-policy path, and applies liveness events. The controller then commits
+the effects. There is no ping loop: reconcile RPC outcomes are the worker
+liveness signal. Kubernetes backends report exact Pod observations and no worker
+liveness events.
 
-Step 2:
-* Extend proto with additional field
-* Update server code
-* Update client code
-* Update tests
+Two implementations satisfy it: `RpcTaskBackend` (`backends/rpc/backend.py`,
+kind `WORKER`, owns the `Scheduler` and optional `Autoscaler`) for
+GCP/TPU, CoreWeave bare-metal, manual, and local; and `K8sTaskProvider`
+(`backends/k8s/tasks.py`, kind `KUBERNETES`) for Kubernetes (Kueue schedules, the
+cluster autoscaler provisions, so its `schedule`/`autoscale` are no-ops). The
+contract type lives in `controller/backend.py`; see `docs/architecture.md` "The
+TaskBackend contract".
 
-...
+Resource model: CPU demand is fungible and can route to any group; GPU/TPU demand is non-fungible and must match device type (and optionally variant).
 
-That is _each stage of the plan_ should be a independently testable,
-self-contained unit of work. THis is preferable to plans which attempt to make
-all of the changes for one area (e.g. all proto changes, then all server
-changes, etc.)
-
-When adding new modules or significant features:
-1. Update the README with a brief overview and usage examples
-2. Add detailed documentation to the appropriate docs/ file
-3. Reference the documentation from this AGENTS.md file
-
-**Key documentation areas:**
-
-| Area | File | Description |
-|------|------|-------------|
-| Architecture | README.md | High-level architecture, CLI reference, quick start |
-| Autoscaler Design | docs/autoscaler-v0-design.md | Technical specification, threading model |
-| Thread Safety | docs/thread-safety.md | Thread management, test synchronization best practices |
-| Original Design | docs/fray-zero.md | Rationale and design decisions |
-
-## Key Modules
-
-### Time Utilities
-
-Use `iris.time_utils` for all time-related operations instead of raw `datetime` or `time`:
-
-| Class | Purpose |
-|-------|---------|
-| `Timestamp` | Point in time (epoch-based). Use for created_at, timestamps in logs, etc. |
-| `Duration` | Time interval. Use for timeouts, intervals, configuration values. |
-| `Deadline` | Monotonic deadline for timeout checks. Use in polling loops. |
-| `Timer` | Elapsed time measurement. Use for performance tracking. |
-| `ExponentialBackoff` | Retry/polling with backoff. Use `wait_until()` for condition polling. |
-
-Example:
-```python
-from iris.time_utils import Timestamp, Duration, Deadline
-
-created_at = Timestamp.now()
-timeout = Duration.from_seconds(30.0)
-deadline = Deadline.from_now(timeout)
-deadline.wait_for(condition)
-
-while not deadline.expired():
-    if condition():
-        break
-    time.sleep(0.1)
-```
-
-### Architecture Layers
-
-Iris follows a clean layering architecture:
-
-**Controller layer** (`cluster/controller/`): Task scheduling, autoscaling, and demand routing
-- Depends on Platform layer for VM abstractions (Platform, SliceHandle, VmHandle)
-- Owns autoscaling logic and scaling group state
-
-**Platform layer** (`cluster/platform/`): Platform abstractions for managing VMs
-- Provides VM lifecycle management (GCP, manual, local, CoreWeave)
-- Does NOT depend on controller layer
-
-**Cluster layer** (`cluster/`): High-level orchestration
-- `connect_cluster()` and `stop_all()` free functions for cluster lifecycle
-- `stop_all()` terminates controller + all slices in parallel via ThreadPoolExecutor
-  with a 60s hard timeout. Timed-out operations are logged at WARNING and abandoned.
-- Configuration and platform abstractions
-
-Key files:
-
-```
-src/iris/
-├── cli/                         # CLI package (cluster, build, run, debug commands)
-│   ├── main.py                  # Top-level iris group
-│   ├── cluster.py               # Cluster lifecycle, controller, VM ops, dashboard
-│   ├── build.py                 # Image build commands
-│   ├── debug.py                 # Debugging & validation
-│   ├── run.py                   # Command passthrough job submission
-│   └── rpc.py                   # Dynamic RPC CLI
-├── cluster/
-│   ├── config.py                # General Iris configuration (load_config, IrisConfig)
-│   ├── manager.py               # connect_cluster() + stop_all() free functions
-│   ├── controller/
-│   │   ├── controller.py        # Controller with integrated autoscaler
-│   │   ├── main.py              # Controller daemon CLI (serve command)
-│   │   ├── autoscaler.py        # Core autoscaling logic and demand routing
-│   │   ├── scaling_group.py     # Per-group state tracking and lifecycle
-│   │   ├── config.py            # Autoscaler factory functions
-│   │   ├── local.py             # LocalController for in-process testing
-│   │   └── lifecycle.py         # Controller lifecycle (start/stop/reload via Platform)
-│   └── platform/
-│       ├── base.py              # Platform protocol and SliceHandle/VmHandle
-│       ├── gcp.py               # GCP TPU platform
-│       ├── manual.py            # Pre-existing host platform
-│       ├── local.py             # Local development platform
-│       ├── coreweave.py         # CoreWeave stub
-│       ├── bootstrap.py         # Worker bootstrap script generation
-│       ├── ssh.py               # SSH connection management
-│       ├── factory.py           # Platform factory from config
-│       └── debug.py             # Platform debugging utilities
-```
-
-See [README.md](README.md) for CLI usage and configuration examples.
-
-### Dashboard Frontend
-
-The controller and worker dashboards are client-side SPAs using Preact + HTM.
-
-**Directory structure:**
-```
-src/iris/cluster/static/
-├── controller/          # Controller dashboard
-│   ├── app.js           # Main app (tabs, state, data fetching)
-│   ├── jobs-tab.js      # Jobs table with pagination/sorting/tree view
-│   ├── job-detail.js    # Job detail page with task list
-│   ├── workers-tab.js   # Workers table
-│   └── vms-tab.js       # VM management table
-├── shared/              # Shared utilities
-│   ├── rpc.js           # Connect RPC client wrapper
-│   ├── utils.js         # Formatting (dates, durations)
-│   └── styles.css       # Consolidated CSS
-├── vendor/              # Third-party ES modules
-│   ├── preact.mjs       # UI framework
-│   └── htm.mjs          # HTML template literals
-└── worker/              # Worker dashboard components
-```
-
-**Key patterns:**
-- All data fetched via Connect RPC (e.g., `ListJobs`, `GetJobStatus`)
-- No REST endpoints - RPC only
-- State management with Preact hooks (`useState`, `useEffect`)
-- HTML templates via `htm.bind(h)` tagged template literals
-- Jobs displayed as a hierarchical tree based on name structure
-
-**When modifying the dashboard:**
-1. Test locally with `uv run lib/iris/scripts/screenshot-dashboard.py --stay-open`
-2. Ensure any new UI features have corresponding RPC endpoints
-3. Follow existing component patterns (functional components, hooks)
-
-## Debugging Container Failures
-
-**Exit code 137** = 128 + 9 = SIGKILL, typically OOM. Check:
-- `ContainerStatus.oom_killed` field (from `docker inspect .State.OOMKilled`)
-- Job's `resources.memory_bytes` vs what was requested
-- Resource flow: `JobRequest.resources` → Iris protobuf → `ContainerConfig` → `docker --memory`
-
-**Resource propagation path:**
-```
-fray.v2.ResourceConfig → iris.cluster.types.ResourceSpec.to_proto()
-  → cluster_pb2.ResourceSpecProto → docker.py _docker_create() --memory/--cpus
-```
-
-**Key files for container debugging:**
-- `cluster/runtime/docker.py`: Docker CLI wrapper, resource limits at lines 396-403
-- `cluster/runtime/types.py`: ContainerStatus with oom_killed field
-- `cluster/worker/task_attempt.py`: _format_exit_error() interprets signals
+The controller is a plain GCE VM (or K8s Deployment on CoreWeave) with no zone affinity to workers. See `docs/coreweave.md` for CoreWeave-specific deployment topology and `docs/image-push.md` for the GHCR → AR remote repo image pipeline.

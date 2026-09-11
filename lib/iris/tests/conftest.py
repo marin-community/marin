@@ -1,8 +1,9 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # Test configuration for iris
 
+import json
 import logging
 import os
 import subprocess
@@ -11,11 +12,105 @@ import threading
 import time
 import traceback
 import warnings
+from dataclasses import asdict
 
 import pytest
-from iris.cluster.types import DEFAULT_BASE_IMAGE
+from finelog.client import LogClient
+from finelog.embedded import is_available as finelog_native_available
+from finelog.embedded import require_embedded_server
+from finelog.rpc.logging_connect import LogServiceClientSync
+from iris.client.local_client import make_local_client
+from iris.cluster.controller.auth import NativeProxyAuthConfig, NativeProxyAuthMode
+from iris.cluster.types import JobName
+from iris.managed_thread import thread_container_scope
 from iris.test_util import SentinelFile
-from iris.time_utils import Deadline, Duration
+from iris.testing.config import make_controller_only_config
+from rigging.timing import Duration, ExponentialBackoff
+
+
+@pytest.fixture
+def recorded_job_submissions(monkeypatch):
+    """Record submissions made by the public ``iris job run`` command."""
+    submissions: list[dict[str, object]] = []
+
+    class FakeJob:
+        job_id = JobName.from_wire("/test-user/test-job")
+
+    class FakeClient:
+        def submit(self, **kwargs):
+            submissions.append(kwargs)
+            return FakeJob()
+
+    monkeypatch.setattr("iris.cli.job.IrisClient.remote", lambda *args, **kwargs: FakeClient())
+    return submissions
+
+
+@pytest.fixture
+def permissive_native_proxy_auth_json() -> str:
+    """Serialized no-auth policy for standalone native-proxy tests."""
+    return json.dumps(
+        asdict(
+            NativeProxyAuthConfig(
+                mode=NativeProxyAuthMode.PERMISSIVE,
+                issuers=(),
+                jwks={"keys": []},
+                leeway_seconds=0,
+                cache_capacity=16,
+                cache_ttl_seconds=60,
+                trusted_cidrs=(),
+            )
+        )
+    )
+
+
+@pytest.fixture
+def embedded_log_server(tmp_path):
+    """A fresh in-process native finelog server for tests that exercise logs/stats.
+
+    Boots the same engine the ``finelog-server`` binary runs over a per-test
+    on-disk ``log_dir``. (In-memory mode spawns no maintenance task, so its RAM
+    buffer never flushes to a readable segment — written logs would never be
+    queryable; a disk-backed store serves reads.) Function-scoped so every test
+    gets an isolated store. Tests talk to it over the normal RPC contract via
+    ``finelog.client.LogClient`` or the generated ``LogServiceClientSync``
+    against ``embedded_log_server.address``. Skips when the native extension is
+    unavailable (e.g. a pure-Python install).
+    """
+    if not finelog_native_available():
+        pytest.skip("finelog native server extension (finelog_server) not available")
+    server = require_embedded_server()(log_dir=str(tmp_path / "log-server"))
+    try:
+        yield server
+    finally:
+        server.stop()
+
+
+@pytest.fixture
+def log_client(embedded_log_server):
+    """A ``finelog.client.LogClient`` connected to the per-test embedded server."""
+    client = LogClient.connect(embedded_log_server.address)
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+@pytest.fixture
+def log_service(embedded_log_server) -> LogServiceClientSync:
+    """A LogService RPC client against the per-test embedded server.
+
+    ``push_logs`` returns only once the batch is sealed into a segment, which is
+    what a read scans, so push→fetch is synchronously visible within a test
+    without any manual flush. The sync client exposes ``push_logs(request)`` /
+    ``fetch_logs(request)``.
+    """
+    return LogServiceClientSync(address=embedded_log_server.address)
+
+
+@pytest.fixture
+def controller_only_config():
+    """Null-auth local config with no auto-scaled workers."""
+    return make_controller_only_config()
 
 
 def _docker_image_exists(tag: str) -> bool:
@@ -38,12 +133,12 @@ def pytest_collection_modifyitems(config, items):
     """Skip docker-marked tests if the task image isn't available."""
     global _task_image_available
     if _task_image_available is None:
-        _task_image_available = _docker_image_exists(DEFAULT_BASE_IMAGE)
+        _task_image_available = _docker_image_exists("iris-task:latest")
 
     if _task_image_available:
         return
 
-    skip = pytest.mark.skip(reason=f"Docker image {DEFAULT_BASE_IMAGE} not built")
+    skip = pytest.mark.skip(reason="Docker image iris-task:latest not built")
     for item in items:
         if "docker" in item.keywords:
             item.add_marker(skip)
@@ -59,14 +154,11 @@ def _ensure_logging_health():
     """
     # Before test: remove any closed handlers from previous tests
     for handler in logging.root.handlers[:]:
-        if hasattr(handler, "stream"):
+        if isinstance(handler, logging.StreamHandler):
             try:
-                # Test if stream is writable
-                handler.stream.closed  # noqa: B018
                 if handler.stream.closed:
                     logging.root.removeHandler(handler)
-            except (AttributeError, ValueError):
-                # Handler doesn't have a stream or stream is invalid
+            except ValueError:
                 pass
 
     yield
@@ -86,30 +178,68 @@ def sentinel(tmp_path) -> SentinelFile:
     return SentinelFile(str(tmp_path / "sentinel"))
 
 
+@pytest.fixture
+def local_iris_client():
+    """Boot an in-process LocalCluster and yield an IrisClient connected to it.
+
+    Cluster is torn down on teardown even if the test raises. For module-scoped
+    reuse, override this fixture in your test file with ``scope="module"`` and
+    the same body — ``make_local_client`` does not depend on per-test state.
+    """
+
+    client = make_local_client()
+    try:
+        yield client
+    finally:
+        client.shutdown()
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_iris_user():
+    """Shield the suite from the developer's IRIS_USER.
+
+    resolve_job_user consults it when naming submitted jobs; without this, a
+    developer's exported IRIS_USER changes job names across the whole suite.
+    Session-scoped so module-scoped fixtures that submit jobs are covered too.
+    """
+    mp = pytest.MonkeyPatch()
+    mp.delenv("IRIS_USER", raising=False)
+    yield
+    mp.undo()
+
+
 @pytest.fixture(autouse=True)
-def _thread_cleanup():
-    """Ensure no new non-daemon threads leak from each test.
+def _thread_cleanup(request):
+    """Isolate each test's managed threads and warn on leaks.
 
-    Takes a snapshot of threads before the test and checks that no new
-    non-daemon threads remain after teardown. Waits briefly for threads
-    that are in the process of shutting down.
+    Installs a fresh ThreadContainer via thread_container_scope() so every
+    component that calls get_thread_container() registers its threads into a
+    per-test container that is stopped on teardown. This ensures log-server
+    uvicorn threads and other managed threads are joined even when a test
+    constructs a Controller without calling stop().
 
-    This fixture helps catch tests that don't properly clean up their threads,
-    which can cause tests to hang or interfere with each other.
+    As a safety net, takes a snapshot of threads before the test and warns
+    about any non-daemon threads created outside any container that survive
+    teardown.
     """
     before = {t.ident for t in threading.enumerate()}
-    yield
+    with thread_container_scope(name=f"test:{request.node.name}"):
+        yield
 
-    deadline = Deadline.from_now(Duration.from_seconds(5.0))
-    while not deadline.expired():
-        leaked = [
-            t
+    def _no_leaked_threads() -> bool:
+        return not any(
+            t.is_alive() and not t.daemon and t.name != "MainThread" and t.ident not in before
             for t in threading.enumerate()
-            if t.is_alive() and not t.daemon and t.name != "MainThread" and t.ident not in before
-        ]
-        if not leaked:
-            return
-        time.sleep(0.1)
+        )
+
+    if ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(_no_leaked_threads, timeout=Duration.from_seconds(5.0)):
+        return
+
+    leaked = [
+        t
+        for t in threading.enumerate()
+        if t.is_alive() and not t.daemon and t.name != "MainThread" and t.ident not in before
+    ]
 
     # Generate detailed warning about leaked threads
     thread_info = []
@@ -125,25 +255,43 @@ def _thread_cleanup():
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Hook to debug pytest exit status - dump any non-daemon threads still alive.
+    """Dump any non-daemon threads still alive at session end.
 
-    Uses os._exit() to force-terminate if orphaned non-daemon threads would
-    otherwise prevent process exit.
+    Groups threads by stack trace so identical stacks are shown once with all
+    thread names listed, rather than repeating the same trace for each thread.
+
+    Registers an atexit handler so the force-exit happens only after pytest has
+    finished printing the FAILURES section and test summary.
     """
     alive = [t for t in threading.enumerate() if t.is_alive() and not t.daemon and t.name != "MainThread"]
-    if alive:
-        tty = os.fdopen(os.dup(2), "w")
-        tty.write(f"\n⚠ {len(alive)} non-daemon threads still alive at session end:\n")
-        frames = sys._current_frames()
-        for t in alive:
-            tty.write(f"\n  Thread: {t.name} (daemon={t.daemon}, ident={t.ident})\n")
-            frame = frames.get(t.ident)
-            if frame:
-                for line in traceback.format_stack(frame):
-                    tty.write(f"    {line.rstrip()}\n")
-        tty.flush()
-        tty.close()
-        # Force exit to prevent orphaned non-daemon threads from blocking
-        # Only force-exit on failure to avoid skipping atexit handlers on clean runs
-        if exitstatus != 0:
+    if not alive:
+        return
+
+    tty = os.fdopen(os.dup(2), "w")
+    tty.write(f"\n⚠ {len(alive)} non-daemon threads still alive at session end:\n")
+    frames = sys._current_frames()
+
+    # Group threads by stack trace so duplicate stacks are shown only once.
+    groups: dict[str, list[str]] = {}
+    for t in alive:
+        frame = frames.get(t.ident)
+        stack_key = "".join(traceback.format_stack(frame)) if frame else "<no stack>"
+        groups.setdefault(stack_key, []).append(t.name)
+
+    for stack, names in groups.items():
+        tty.write(f"\n  Threads: {', '.join(names)}\n")
+        for line in stack.splitlines():
+            tty.write(f"    {line}\n")
+
+    tty.flush()
+    tty.close()
+
+    if exitstatus != 0:
+        # Spawn a daemon thread to force-exit after pytest prints its summary.
+        # atexit won't work here: Python joins non-daemon threads before running
+        # atexit handlers, so leaked controller threads would deadlock shutdown.
+        def _force_exit():
+            time.sleep(5)
             os._exit(exitstatus)
+
+        threading.Thread(target=_force_exit, daemon=True).start()

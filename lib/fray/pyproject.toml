@@ -3,42 +3,32 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "fray"
-version = "0.1.0"
-requires-python = ">=3.11,<3.13"
+name = "marin-fray"
+version = "0.2.0"
+requires-python = ">=3.12,<3.14"
 dependencies = [
-    "click>=8.0",
     "cloudpickle>=3.1.2",
-    "fastapi>=0.100.0",
-    "flask",
-    "fsspec>=2024.0.0",
-    "httpx>=0.28.1",
     "humanfriendly>=10.0",
-    "iris",
-    "mergedeep",
-    "pyyaml>=6.0",
-    "typing-extensions>=4.0",
-    "uvicorn[standard]>=0.23.0",
-    "zstandard>=0.22.0",
+    "marin-rigging",
 ]
-
-[project.scripts]
-fray = "fray.cli:main"
 
 [project.optional-dependencies]
-ray = ["ray==2.53.0"]
+iris = ["marin-iris"]
 
 [dependency-groups]
-fray_test = [
-    "numpy",
-    "pip", # ray requires pip to be installed
+test = [
+    "marin-iris",
     "pytest-timeout",
     "pytest>=8.3.2",
-    "ray[default]"
+    "pytest-xdist",
 ]
-fray_tpu_test = ["jax[tpu]", { include-group = "fray_test" }]
+fray_tpu_test = ["jax==0.11.1", "jaxlib==0.11.1", "libtpu==0.0.46.*", { include-group = "test" }]
 
-dev = [{ include-group = "fray_test" }]
+dev = [{ include-group = "test" }]
+
+[tool.pytest.ini_options]
+addopts = "-m 'not slow' --import-mode=importlib"
+pythonpath = ["src", "tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fray"]

@@ -1,0 +1,40 @@
+//! Native finelog HTTP server wiring.
+//!
+//! [`app::build_app`] registers BOTH services on one connect `Router` (so
+//! `ctx.spec()`/`ctx.path()` are populated for the interceptors), wraps it in a
+//! `ConnectRpcService` with raised 64 MB limits + zstd/gzip + the SlowRpc /
+//! Concurrency interceptors, mounts `/health`, authenticated `/v1/telemetry`,
+//! the SPA, and (optionally) the `--debug-admin` routes, then layers the
+//! legacy-path and forwarded-prefix transport rewrites. The connect service
+//! stays the fallback so RPC POSTs reach it while `/health`, `/debug/*`,
+//! `/static`, and the SPA GET routes take precedence.
+
+pub mod app;
+pub mod auth;
+pub mod debug;
+pub mod diagnostics;
+pub mod forwarded_prefix;
+pub mod forwarding;
+pub mod ingest_health;
+pub mod interceptors;
+pub mod introspection;
+pub mod legacy_path;
+pub mod log_service;
+pub mod spa;
+pub mod stats_service;
+pub mod telemetry;
+#[cfg(test)]
+mod telemetry_tests;
+#[cfg(test)]
+pub mod test_support;
+
+pub use app::build_app as build_app_with_config;
+pub use app::ServerConfig;
+pub use auth::AuthPolicy;
+pub use forwarding::{spawn as spawn_forwarder, Forwarder, ForwardingConfig};
+
+/// 256 MiB transport limit (default is 4 MB) for large WriteRows requests.
+pub(crate) const MAX_MESSAGE_BYTES: usize = 256 << 20;
+
+/// Keep query responses within the existing client and memory envelope.
+pub(crate) const MAX_QUERY_RESULT_BYTES: usize = 64 << 20;

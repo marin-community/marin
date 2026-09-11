@@ -1,7 +1,7 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any
+from typing import Any, cast
 
 import jax
 import optax
@@ -10,8 +10,38 @@ import haliax.nn
 from haliax import NamedArray, is_named_array
 from haliax.jax_utils import is_jax_array_like
 
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import SummaryStats
 from levanter.utils import jax_utils
+
+_SplitScanContainer = (haliax.nn.Stacked, haliax.nn.ArrayStacked)
+
+
+def _array_stacked_layer_in_axes(stacked: Any, num_layers: int) -> Any:
+    """`jax.vmap` in_axes tree that maps over the leading layer axis of layer-batched leaves.
+
+    ``ArrayStacked`` stores per-layer arrays with a leading ``num_layers`` axis and shares any
+    other leaf across layers, so mapped leaves get axis 0 and shared leaves get ``None``.
+    """
+    return jax.tree.map(
+        lambda x: 0 if (is_jax_array_like(x) and getattr(x, "ndim", 0) > 0 and x.shape[0] == num_layers) else None,
+        stacked,
+    )
+
+
+def _stacked_leaves(stacked: Any) -> list[tuple[str, Any]]:
+    """(key path, leaf) for each array leaf of a scan module's stacked body.
+
+    Keyed as the non-split path keys them so the whole-stack norm, taken over each original leaf,
+    stays comparable to non-split logging (and is correct for leaves shared across layers).
+    """
+    key_paths = jax_utils.leaf_key_paths(stacked, is_leaf=is_named_array)
+    return list(
+        zip(
+            jax.tree.leaves(key_paths, is_leaf=is_named_array),
+            jax.tree.leaves(stacked, is_leaf=is_named_array),
+            strict=True,
+        )
+    )
 
 
 def summary_statistics_for_tree(
@@ -22,7 +52,7 @@ def summary_statistics_for_tree(
     include_histogram: bool = False,
     include_norms: bool = True,
     include_per_parameter_norms: bool = True,
-) -> dict[str, jax.Array | Histogram]:
+) -> dict[str, jax.Array | SummaryStats]:
     """
     Computes the summary statistics for a tree of (named) arrays.
 
@@ -43,7 +73,7 @@ def summary_statistics_for_tree(
 
     """
     if split_scan_layers:
-        is_leaf = lambda n: isinstance(n, haliax.nn.Stacked) or is_named_array(n)  # noqa: E731
+        is_leaf = lambda n: isinstance(n, _SplitScanContainer) or is_named_array(n)  # noqa: E731
     else:
         is_leaf = is_named_array
 
@@ -66,11 +96,34 @@ def summary_statistics_for_tree(
                     for i in range(g.Block.size):
                         hists[f"{key_path}.{i}.{k}"] = jax.tree.map(lambda x: x[i] if is_jax_array_like(x) else x, v)
 
+                if include_norms:
+                    for sub_key, leaf in _stacked_leaves(g.stacked):
+                        norms[f"{key_path}.stacked.{sub_key}"] = optax.global_norm(leaf)
+
+            elif split_scan_layers and isinstance(g, haliax.nn.ArrayStacked):
+                num_layers = g.num_layers
+                in_axes = _array_stacked_layer_in_axes(g.stacked, num_layers)
+                vmapped_norms, vmapped_hists = jax.vmap(_rec_log_magnitudes, in_axes=(None, None, None, in_axes))(
+                    {}, {}, "", g.stacked
+                )
+
+                for k, v in vmapped_norms.items():
+                    for i in range(num_layers):
+                        norms[f"{key_path}.{i}.{k}"] = v[i]
+
+                for k, v in vmapped_hists.items():
+                    for i in range(num_layers):
+                        hists[f"{key_path}.{i}.{k}"] = jax.tree.map(lambda x: x[i] if is_jax_array_like(x) else x, v)
+
+                if include_norms:
+                    for sub_key, leaf in _stacked_leaves(g.stacked):
+                        norms[f"{key_path}.stacked.{sub_key}"] = optax.global_norm(leaf)
+
             elif isinstance(g, NamedArray):
                 if include_norms:
                     norms[key_path] = optax.global_norm(g)
                 if include_histogram:
-                    hist = Histogram.from_named_array(g)
+                    hist = SummaryStats.from_named_array(g, include_histogram=include_histogram)
                     hists[key_path] = hist
             elif is_jax_array_like(g):
                 if include_norms:
@@ -78,23 +131,23 @@ def summary_statistics_for_tree(
 
                 if include_histogram:
                     with jax.named_scope(f"histogram({prefix}/{key_path})"):
-                        hist = Histogram.from_array(g)
+                        hist = SummaryStats.from_array(g, include_histogram=include_histogram)
                         hists[key_path] = hist
 
         return norms, hists
 
     norms_to_log: dict[str, jax.Array] = {}
-    hists_to_log: dict[str, Histogram] = {}
+    hists_to_log: dict[str, SummaryStats] = {}
 
     _rec_log_magnitudes(norms_to_log, hists_to_log, None, tree)
 
-    to_log: dict[str, jax.Array | Histogram] = {}
+    to_log: dict[str, jax.Array | SummaryStats] = {}
 
     for key, value in norms_to_log.items():
         if include_per_parameter_norms:
             to_log[f"{prefix}/norm/{key}"] = value
 
-    to_log[f"{prefix}/norm/total"] = optax.global_norm(tree)
+    to_log[f"{prefix}/norm/total"] = cast(jax.Array, optax.global_norm(tree))
 
     for key, hist in hists_to_log.items():
         to_log[f"{prefix}/hist/{key}"] = hist

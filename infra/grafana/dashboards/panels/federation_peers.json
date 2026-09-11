@@ -1,0 +1,104 @@
+{
+  "type": "table",
+  "title": "Federation peer reachability",
+  "description": "Production-path heartbeat from the Marin controller through each peer's public Traefik ingress.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "iris-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "align": "auto",
+        "filterable": true
+      }
+    },
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "state"
+        },
+        "properties": [
+          {
+            "id": "mappings",
+            "value": [
+              {
+                "type": "value",
+                "options": {
+                  "reachable": {
+                    "text": "reachable",
+                    "color": "green",
+                    "index": 0
+                  },
+                  "unreachable": {
+                    "text": "unreachable",
+                    "color": "red",
+                    "index": 1
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "id": "custom.cellOptions",
+            "value": {
+              "type": "color-text"
+            }
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "last_contact_age_seconds"
+        },
+        "properties": [
+          {
+            "id": "unit",
+            "value": "s"
+          }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/peers",
+      "url_options": {
+        "method": "GET"
+      },
+      "columns": [
+        {
+          "selector": "peer",
+          "text": "peer",
+          "type": "string"
+        },
+        {
+          "selector": "state",
+          "text": "state",
+          "type": "string"
+        },
+        {
+          "selector": "last_contact_age_seconds",
+          "text": "last_contact_age_seconds",
+          "type": "number"
+        },
+        {
+          "selector": "controller_address",
+          "text": "controller_address",
+          "type": "string"
+        }
+      ]
+    }
+  ]
+}

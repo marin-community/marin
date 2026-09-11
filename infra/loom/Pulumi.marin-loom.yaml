@@ -1,0 +1,242 @@
+config:
+  gcp:project: hai-gcp-models
+  marin-loom:region: us-central1
+  marin-loom:zone: us-central1-a
+  marin-loom:domain: loom.oa.dev
+  marin-loom:operatorCidr: 51.81.155.107/32
+  marin-loom:dnsZoneId: 169959d6aafcbfd77764b8efafa3a509
+  marin-loom:network: default
+  marin-loom:instanceName: loom
+  marin-loom:vmServiceAccountName: loom-vm
+  marin-loom:machineType: c4d-highmem-4
+  marin-loom:bootDiskName: loom-hyperdisk
+  marin-loom:bootDiskType: hyperdisk-balanced
+  marin-loom:bootDiskGb: "1000"
+  marin-loom:bootDiskIops: "3000"
+  marin-loom:bootDiskThroughput: "140"
+  marin-loom:bootDiskSnapshot: loom-pre-c4d-hyperdisk-20260816
+  marin-loom:dotenvSecretVersion: "4"
+  marin-loom:pruneDeployment: "true"
+  marin-loom:settings:
+    auth.github_organizations: "Open-Athena:188075292"
+    browser.allowed_origins: https://marina.oa.dev
+    github.profile: github
+    slack.effort: agent-default
+    slack.profile: slack
+  marin-loom:remoteMcps:
+    - identity: /marina/api
+      label: Marina API
+      description: Search and call checked-in Marina application APIs
+      url: https://marina.oa.dev/api/marina/mcp/
+      auth:
+        type: iap
+        # Public client ID for rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT in hai-gcp-models.
+        audience: 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
+      enabled: true
+    - identity: /marina-read/api
+      label: Marina read-only API
+      description: Search and call read-only checked-in Marina application APIs
+      url: https://marina.oa.dev/api/marina/mcp/read/
+      auth:
+        type: iap
+        # Public client ID for rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT in hai-gcp-models.
+        audience: 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
+      enabled: true
+  marin-loom:profiles:
+    default:
+      agent: codex
+      description: Interactive Marin work with repository-owned workflow instructions
+      model: gpt-5.6-sol
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: interactive
+      prelude: weaver
+      instructionsFile: profiles/user/AGENTS.md
+      env: &loomIrisUser
+        IRIS_USER:
+          value: loom
+      githubRepositories: &interactiveGithubRepositories
+        - Open-Athena/*
+        - marin-community/*
+      mcpAccess: &builtinMcpAccess
+        mode: groups
+        groups:
+          - artifact
+          - channel
+          - context
+          - github
+          - issue
+          - messaging
+          - permissions
+          - session
+    marina:
+      agent: codex
+      description: Interactive questions over read-only Marina application APIs
+      model: gpt-5.6-sol
+      effort: low
+      protocol: acp
+      mode: auto
+      class: interactive
+      idleArchiveSeconds: 3000
+      prelude: weaver
+      instructionsFile: profiles/marina/AGENTS.md
+      env: *loomIrisUser
+      githubRepositories: *interactiveGithubRepositories
+      mcpAccess:
+        mode: groups
+        groups:
+          - marina-read
+    github:
+      agent: codex
+      description: GitHub-triggered Marin issue and pull-request sessions
+      model: gpt-5.6-sol
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: interactive
+      prelude: weaver
+      instructionsFile: profiles/github/AGENTS.md
+      env: *loomIrisUser
+      githubRepositories: *interactiveGithubRepositories
+      mcpAccess: *builtinMcpAccess
+    fork-ferry:
+      agent: codex
+      description: Refresh Marin forks and validate their pinned revisions
+      model: gpt-5.6-sol
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 3600
+      maxConcurrent: 4
+      turnBudget: 100
+      prelude: weaver
+      instructionsFile: profiles/fork-ferry/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/evalchemy
+        - marin-community/harbor
+        - marin-community/marin
+        - marin-community/tpu-inference
+        - marin-community/vllm
+        - marin-community/xla
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
+    pr-review:
+      agent: codex
+      description: Review trusted Marin pull requests from immutable head commits
+      model: gpt-5.6-sol
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 900
+      maxConcurrent: 4
+      turnBudget: 200
+      prelude: weaver
+      instructionsFile: profiles/pr-review/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
+    codehealth-refinement:
+      agent: codex
+      description: Refine agentic-lint from persisted review and lint activity
+      model: gpt-5.6-sol
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 3600
+      maxConcurrent: 1
+      turnBudget: 400
+      prelude: weaver
+      instructionsFile: profiles/codehealth-refinement/AGENTS.md
+      env:
+        CLOUDSQL_CONNECTION:
+          value: hai-gcp-models:us-central1:marin-metadata
+        PGDATABASE:
+          value: context
+        PGUSER:
+          value: loom-vm@hai-gcp-models.iam
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
+    ops:
+      agent: codex
+      description: Coordinate Grafana alerts and delegate incident triage for Marin
+      model: gpt-5.6-sol
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 3600
+      maxConcurrent: 4
+      turnBudget: 100
+      prelude: weaver
+      instructionsFile: profiles/ops/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
+    slack:
+      agent: codex
+      description: Slack-triggered Marin conversations and repository work
+      model: gpt-5.6-sol
+      effort: medium
+      protocol: acp
+      mode: auto
+      class: interactive
+      prelude: weaver
+      instructionsFile: profiles/slack/AGENTS.md
+      env: *loomIrisUser
+      githubRepositories: *interactiveGithubRepositories
+      mcpAccess: *builtinMcpAccess
+  marin-loom:workloads:
+    - name: grafana-alerts
+      profile: ops
+      serviceTag: grafana
+      serviceAccountId: marin-grafana
+      createServiceAccount: false
+  marin-loom:githubFederations:
+    - name: fork-ferry
+      repositoryId: &marinRepositoryId "775839592"
+      workflowRef: marin-community/marin/.github/workflows/ops-fork-ferry.yaml@refs/heads/main
+      profile: fork-ferry
+      serviceTag: fork-ferry
+      ref: refs/heads/main
+    - name: pr-review
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-loom-review.yaml@refs/heads/main
+      profile: pr-review
+      serviceTag: pr-review
+      event: pull_request_target
+      ref: refs/heads/main
+    - name: codehealth-refinement
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-codehealth-refinement.yaml@refs/heads/main
+      profile: codehealth-refinement
+      serviceTag: codehealth-refinement
+      ref: refs/heads/main
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6Qz1jQpqEr5LUAHWIXJ1B28qzqFuiJjtH5MdH2gce7ASSQCdtF6iKzVxOIFfT2S6vbjMsFHA0EBoefdLu86Qy6HXIN3WI1ybrmlHggGITXPSMgzZ7SWRrVR2iNAzI2PoriKx7a5plvnC6r8=

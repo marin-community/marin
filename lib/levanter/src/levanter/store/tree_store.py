@@ -1,9 +1,9 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
 import os
-from typing import Generic, List, Sequence, TypeVar
+from typing import Any, Generic, List, Sequence, TypeVar
 
 import jax
 import jax.numpy as jnp
@@ -11,10 +11,20 @@ import jax.tree_util as jtu
 import numpy as np
 from haliax.jax_utils import is_jax_array_like
 from jaxtyping import PyTree
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
-from .jagged_array import JaggedArrayStore, PreparedBatch
+from .jagged_array import JaggedArrayStore, charge_store_read_budget
 
 T = TypeVar("T", bound=PyTree)
+
+
+def _materialized_read_path(path: str) -> str:
+    storage_path = StoragePath(path)
+    if storage_path.scheme != "mirror":
+        return path
+    mirror_fs, mirror_path = url_to_fs(path, skip_instance_cache=True)
+    return mirror_fs.materialize(mirror_path)
 
 
 # TODO at some point if we turn this into a real library, it would be nice to store the schema
@@ -50,16 +60,27 @@ class TreeStore(Generic[T]):
         self.mode = mode
         self.tree = tree
 
-    @property
-    def batch_preparer(self):
-        return TreeBatchPreparer(jtu.tree_map(lambda writer: 9, self.tree, is_leaf=heuristic_is_leaf))
-
     @staticmethod
     def open(exemplar: T, path: str, *, mode="a", cache_metadata: bool = False) -> "TreeStore":
         """
         Open a TreeStoreBuilder from a file.
         """
+        if mode == "r":
+            charge_store_read_budget(path)
+            path = _materialized_read_path(path)
         tree = _construct_builder_tree(exemplar, path, mode, cache_metadata)
+        return TreeStore(tree, path, mode)
+
+    @staticmethod
+    async def open_async(exemplar: T, path: str, *, mode="a", cache_metadata: bool = False) -> "TreeStore":
+        """
+        Open a TreeStoreBuilder from a file asynchronously.
+        """
+        if mode == "r":
+            charge_store_read_budget(path)
+            if StoragePath(path).scheme == "mirror":
+                path = await asyncio.to_thread(_materialized_read_path, path)
+        tree = await _construct_builder_tree_async(exemplar, path, mode, cache_metadata)
         return TreeStore(tree, path, mode)
 
     def append(self, ex: T):
@@ -70,7 +91,7 @@ class TreeStore(Generic[T]):
         Append a batch of data to the store.
         """
         jtu.tree_map(
-            lambda writer, *xs: writer.extend([np.asarray(x) for x in xs]),
+            lambda writer, *xs: writer.extend(xs),
             self.tree,
             *batch,
             is_leaf=heuristic_is_leaf,
@@ -84,29 +105,11 @@ class TreeStore(Generic[T]):
         For instance, HF's BatchEncoding is a dict of lists of numpy arrays.
         """
         jtu.tree_map(
-            lambda writer, xs: writer.extend(xs if isinstance(xs, PreparedBatch) else [np.asarray(x) for x in xs]),
+            lambda writer, xs: writer.extend(xs),
             self.tree,
             batch,
             is_leaf=heuristic_is_leaf_batched,
         )
-
-    async def extend_with_batch_async(self, batch: T):
-        """
-        Append a batch of data (as a pytree with batched leaves) to the store.
-
-        This method works only when the "leaves" are lists of numpy arrays or scalars.
-        For instance, HF's BatchEncoding is a dict of lists of numpy arrays.
-        """
-        futures = jtu.tree_map(
-            lambda writer, xs: writer.extend_async(
-                xs if isinstance(xs, PreparedBatch) else [np.asarray(x) for x in xs]
-            ),
-            self.tree,
-            batch,
-            is_leaf=heuristic_is_leaf_batched,
-        )
-
-        await asyncio.gather(*jax.tree.leaves(futures))
 
     def trim_to_size(self, size: int):
         """
@@ -181,9 +184,9 @@ def _construct_builder_tree(exemplar, path, mode, cache_metadata):
     def open_builder(tree_path, item):
         item = np.asarray(item)
         rank = item.ndim
-        render_tree_path = "/".join(_render_path_elem(x) for x in tree_path)
+        field = render_tree_path(tree_path)
         return JaggedArrayStore.open(
-            os.path.join(path, render_tree_path),
+            os.path.join(path, field),
             mode=mode,
             item_rank=rank,
             dtype=item.dtype,
@@ -193,28 +196,41 @@ def _construct_builder_tree(exemplar, path, mode, cache_metadata):
     return jtu.tree_map_with_path(open_builder, exemplar, is_leaf=heuristic_is_leaf)
 
 
-def _render_path_elem(x):
-    match x:
-        case jtu.DictKey(key):
-            return f"{key}"
-        case jtu.GetAttrKey(key):
-            return f"{key}"
-        case jtu.SequenceKey(i):
-            return f"{i}"
-        case jtu.FlattenedIndexKey(i):
-            return f"{i}"
-        case _:
-            return str(x)
-
-
-class TreeBatchPreparer(Generic[T]):
-    def __init__(self, exemplar: T):
-        self.exemplar = exemplar
-
-    def __call__(self, batch: List[T]) -> PyTree:
-        return jtu.tree_map(
-            lambda _, *xs: PreparedBatch.from_batch([np.asarray(x) for x in xs]),
-            self.exemplar,
-            *batch,
-            is_leaf=heuristic_is_leaf,
+async def _construct_builder_tree_async(exemplar, path, mode, cache_metadata):
+    def open_builder(tree_path, item):
+        item = np.asarray(item)
+        rank = item.ndim
+        field = render_tree_path(tree_path)
+        return JaggedArrayStore.open_async(
+            os.path.join(path, field),
+            mode=mode,
+            item_rank=rank,
+            dtype=item.dtype,
+            cache_metadata=cache_metadata,
         )
+
+    tree_futures = jtu.tree_map_with_path(open_builder, exemplar, is_leaf=heuristic_is_leaf)
+    leaves, treedef = jtu.tree_flatten(tree_futures)
+    opened_leaves = await asyncio.gather(*leaves)
+    return jtu.tree_unflatten(treedef, opened_leaves)
+
+
+def render_tree_path(tree_path: Sequence[Any]) -> str:
+    """Render a JAX key path as the field name used for that leaf's store directory.
+
+    This is the canonical mapping from an exemplar's tree structure to on-disk layout: the
+    `TreeStore` opens each leaf under this path, and `CacheLedger.field_counts` is keyed by it.
+    """
+    return "/".join(_render_path_elem(part) for part in tree_path)
+
+
+def _render_path_elem(path_elem: Any) -> str:
+    if isinstance(path_elem, jtu.DictKey):
+        return str(path_elem.key)
+    if isinstance(path_elem, jtu.GetAttrKey):
+        return str(path_elem.name)
+    if isinstance(path_elem, jtu.SequenceKey):
+        return str(path_elem.idx)
+    if isinstance(path_elem, jtu.FlattenedIndexKey):
+        return str(path_elem.key)
+    return str(path_elem)

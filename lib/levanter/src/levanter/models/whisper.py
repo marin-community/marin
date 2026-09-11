@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -46,6 +46,10 @@ class WhisperConfig(HFCompatConfig, ASRConfig):
 
     max_source_positions: int = 1500
     max_length: int = 448
+    # Decoder sequence length for the generic LmConfig interface. WhisperConfig overrides
+    # max_Pos to derive the position axis from max_length, so this value only feeds code
+    # that reads LmConfig.max_seq_len directly; keep it in sync with max_length.
+    max_seq_len: int = 448
 
     activation_function: ActivationFunctionEnum = ActivationFunctionEnum.gelu
     layer_norm_epsilon: float = 1e-5
@@ -60,8 +64,9 @@ class WhisperConfig(HFCompatConfig, ASRConfig):
     attn_backend: Optional[AttentionBackend] = None
     flash_attention_block_size: Optional[int] = None
 
+    # config narrows the base's model_type to its own concrete model class (LSP narrowing; pyrefly flags the same)
     @property
-    def model_type(self) -> Type["WhisperModel"]:
+    def model_type(self) -> Type["WhisperModel"]:  # pyrefly: ignore[bad-override]
         return WhisperModel
 
     @property
@@ -237,7 +242,7 @@ class WhisperLayer(ModuleWithStateDictSerialization, eqx.Module):
 
         if has_cross:
             encoder_attn_ln = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_epsilon, use_bias=config.use_bias)
-            encoder_attn = WhisperAttention.init(Heads, HeadSize, config, key=k_attn)
+            encoder_attn = WhisperAttention.init(Heads, HeadSize, config, key=k_cross)
         else:
             encoder_attn_ln = None
             encoder_attn = None
@@ -352,7 +357,7 @@ class WhisperEncoder(ModuleWithStateDictSerialization):
         x = self.transformer(x, key=k_transformer)
         return x
 
-    def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "WhisperDecoder":
+    def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "WhisperEncoder":
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=key)
         return dataclasses.replace(self, embeddings=new_embeddings)
 
@@ -371,12 +376,10 @@ class WhisperDecoderEmbeddings(eqx.Module):
     def init(Vocab: Axis, config: WhisperConfig, *, key) -> "WhisperDecoderEmbeddings":
         k_wte, k_wpe, k_out = haliax.jax_utils.maybe_rng_split(key, 3)
 
-        token_embeddings = hnn.Embedding.init(
-            Vocab, config.Embed, key=k_wte, initializer_range=config.initializer_range
-        )
+        token_embeddings = hnn.Embedding.init(Vocab, config.Embed, key=k_wte, init_scale=config.initializer_range)
 
         # Whisper Initializes the Positional Embeddings as Empty
-        position_embeddings = hnn.Embedding.init(config.max_Pos, config.Embed, key=k_wpe, initializer_range=0)
+        position_embeddings = hnn.Embedding.init(config.max_Pos, config.Embed, key=k_wpe, init_scale=0)
 
         return WhisperDecoderEmbeddings(Vocab, config, token_embeddings, position_embeddings)
 
@@ -503,7 +506,9 @@ class WhisperModel(eqx.Module, ModelWithHfSerializationMixin[WhisperConfig]):
         return lm_logits
 
 
-class WhisperASRModel(WhisperModel, ASRMixin):
+# WhisperModel.resize_vocab returns WhisperModel; ASRMixin declares -> ASRMixin. The concrete
+# implementation is inherited from WhisperModel; aligning would require restructuring the mixin.
+class WhisperASRModel(WhisperModel, ASRMixin):  # pyrefly: ignore[inconsistent-inheritance]
     pass
 
 

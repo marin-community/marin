@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,10 +11,10 @@ from jaxtyping import PRNGKeyArray
 import haliax as hax
 
 from .mup import AbstractEmbeddingReparam, ReparamEnabled, EmbeddingStandardParam
-from ..axis import Axis, AxisSpec, concat_axes
-from ..core import NamedArray
-from ..jax_utils import named_call
-from ..tree_util import resize_axis
+from haliax.axis import Axis, AxisSpec, concat_axes
+from haliax.core import NamedArray
+from haliax.jax_utils import named_call
+from haliax.tree_util import resize_axis
 
 
 class Embedding(eqx.Module, ReparamEnabled):
@@ -56,7 +56,7 @@ class Embedding(eqx.Module, ReparamEnabled):
         """
         if initializer_range is not None:
             warnings.warn(
-                "initializer_range is deprecated. Use init_std instead.",
+                "initializer_range is deprecated. Use init_scale instead.",
                 DeprecationWarning,
             )
             init_scale = initializer_range

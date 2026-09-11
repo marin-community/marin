@@ -1,5 +1,22 @@
 # Contributing to Marin
 
+We welcome contributions that add missing features or fix serious issues. If you
+are unsure whether a change is wanted, open an issue or ask in the
+[Marin Discord](https://discord.gg/J9CTk7pqcM) before sending a PR. We are
+unlikely to merge typo fixes, stylistic rewrites, or speculative refactors that
+are not tied to an issue.
+
+## AI-generated contributions
+
+We use coding agents ourselves and accept contributions made with them. We do
+not accept drive-by PRs that an agent produced in one shot.
+
+The rule of thumb: if your agent can do it in one shot, so can ours, so please
+do not burden us with the PR. A throwaway agent-generated change costs us more to
+review than it cost you to file. If you do contribute agent-assisted work, hold
+it to the same bar as the rest of this guide: confirm the change is needed, that
+it is correct, and that you can explain why it matters.
+
 ## Setup
 
 1. Clone the repository
@@ -10,46 +27,53 @@
 ```bash
 git clone https://github.com/marin-community/marin.git
 cd marin
-uv venv --python 3.11
+uv venv --python 3.12
 source .venv/bin/activate
-uv sync --package marin --group dev
-cat <<'EOF' > .git/hooks/pre-commit
-#!/bin/sh
-set -e
-cd "$(git rev-parse --show-toplevel)"
-./infra/pre-commit.py --fix
-EOF
-chmod +x .git/hooks/pre-commit
+uv sync --package marin-core --group dev
+make setup_pre_commit
 ```
 
-Alternatively, you can install all the core dependencies and build `marin` as a Python
+Alternatively, you can install all the core dependencies and build the `marin-core`
 package with `make init`.
 
 ### Linting
 
 The Git hook configured above runs `./infra/pre-commit.py` before each commit so that the repo-standard lint/format checks pass.
-You can also run them manually with `./infra/pre-commit.py --all-files` or via `make lint`.
+You can also run them manually with `./infra/pre-commit.py --all-files --fix` or via `make lint`.
 
 ### Testing
 
-You can run the tests with `make test`.
+Run a narrow test while editing, then run all safe tests affected by the branch
+and working tree:
 
-*Note* that to run the unit tests, you must not have set `RAY_ADDRESS`. You can unset it with `unset RAY_ADDRESS` or `export RAY_ADDRESS=""`.
+```bash
+uv run pytest <relevant test paths>
+uv run --no-project infra/ci/run_tests.py
+```
+
+`pyproject.toml` already excludes the slow, integration, data-integration,
+live-cluster, Docker, and manual markers by default. Do not pass `-m 'not slow'`:
+`-m` replaces the whole default expression, so it re-selects the cluster and
+Docker tests it looks like it is narrowing.
+
+The root pytest configuration loads `marin.pytest_timeout_guard`. Keep that package
+importable in any selected test environment. The guard dumps thread state and starts a
+delayed hard-kill timer when a signal-based timeout cannot stop a test; an import failure
+is a test-environment error, not a product-test failure.
+
+### Opening a pull request
+
+Before opening a pull request:
+
+1. Run `./infra/pre-commit.py --all-files --fix`.
+2. Run `uv run --no-project infra/ci/run_tests.py`.
+3. If your change adds, removes, renames, or rewires docs pages or docs-owned links, run `uv run python infra/check_docs_source_links.py`.
+4. If your change is docs-heavy, run `uv run mkdocs build --strict`.
+5. If your change adds or rewrites substantial prose, do a final prose-only review using `./.agents/skills/writing-style/SKILL.md`. Remove generic significance framing, stock AI-writing templates, and polished filler that does not add information.
+6. Follow `./.agents/skills/writing-style/pull-requests.md` for the PR title and body. The body becomes the squash-merge commit message: lead with what changes, then why, and retain the evidence and caveats a future reader needs.
+7. If the work came from an issue, end the PR body with `Fixes #NNNN` or `Part of #NNNN`.
+8. After pushing, verify the relevant GitHub CI checks pass before considering the PR ready for review.
 
 ## Guidelines
 
 Please see the [guidelines](../explanations/guidelines.md) for principles and practices for Marin.
-
-
-# Data browser
-
-Marin comes with a [data browser](https://github.com/marin-community/marin/tree/main/data_browser) that makes it easy to
-view datasets (in various formats) and experiments produced by the executor.
-After installing the necessary dependencies, run:
-
-```bash
-cd data_browser
-python server.py --config conf/local.conf
-```
-
-For more information, see the [data browser](https://github.com/marin-community/marin/tree/main/data_browser).

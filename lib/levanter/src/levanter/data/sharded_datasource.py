@@ -1,31 +1,35 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
 import io
 import json
+import logging
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from functools import cached_property
 from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, Sized, Tuple, TypeVar
 
 import datasets
-import fsspec
 import numpy as np
 import pyarrow.parquet as pq
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
 
-from levanter.utils import fsspec_utils
-
-from ..data import AsyncDataset
-from ..utils.fsspec_utils import expand_glob
 from ._preprocessor import (
     BatchResult,
     _BatchMapTransform,
-    _construct_composite_batch_processor,
-    _DatasetTransform,
     _MapTransform,
+    _TransformedDataset,
 )
 from .utils import batched
+
+logger = logging.getLogger(__name__)
+
+# Threads used to probe shard existence. Each probe is a single object-store round trip,
+# so the useful width is set by latency, not CPU.
+SHARD_EXISTENCE_WORKERS = 32
 
 T = TypeVar("T")
 T_contra = TypeVar("T_contra", contravariant=True)
@@ -65,35 +69,6 @@ class ShardedDataSource(Generic[T_co]):
             for doc in self.open_shard(shard_name):
                 yield doc
 
-    def build_or_load_cache(
-        self,
-        path: str,
-    ) -> AsyncDataset[T]:
-        """
-        Constructs a shard cache version of this dataset using Ray.
-
-        Levanter's preprocessing pipeline offers the following features/guarantees:
-        * distributed, sharded preprocessing using Ray
-        * deterministic ordering of data
-        * interruptible and resumable
-        * streaming results (no need to wait for everything to finish)
-
-        Note that this is an experimental API and is subject to change.
-
-        Returns:
-            A new AsyncDataset that is backed by the cache.
-        """
-
-        source, processor = _construct_composite_batch_processor(self)
-        from ..store.cache import build_or_load_cache
-
-        cache = build_or_load_cache(
-            path,
-            source,
-            processor,
-        )
-        return cache
-
     def map(self, fn: Callable[[T_co], U]) -> "ShardedDataSource[U]":
         return _MappedShardedDataSource(self, fn)
 
@@ -116,9 +91,9 @@ class ShardedDataSource(Generic[T_co]):
         Args:
             fn:  A function that takes a list of data and returns an iterable of results
             batch_size: The batch size to use
-            num_cpus: passed to ray
-            num_gpus: passed to ray
-            **resources: Resources to pass to Ray
+            num_cpus: CPU resources to request for each batch-map worker
+            num_gpus: GPU resources to request for each batch-map worker
+            **resources: Extra resource hints forwarded to the preprocessing executor
 
         Returns:
             A new ShardedDataset.
@@ -126,6 +101,36 @@ class ShardedDataSource(Generic[T_co]):
         return _BatchMappedShardedDataSource(
             self, fn, batch_size, num_cpus=num_cpus, num_gpus=num_gpus, output_exemplar=output_exemplar, **resources
         )
+
+
+class FirstRowsShardedDataSource(ShardedDataSource[T]):
+    """A single-shard view over the first rows of another sharded source."""
+
+    def __init__(self, source: ShardedDataSource[T], max_rows: int):
+        if max_rows <= 0:
+            raise ValueError("max_rows must be positive")
+        self.source = source
+        self.max_rows = max_rows
+
+    @property
+    def shard_names(self) -> Sequence[str]:
+        return ["data"]
+
+    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[T]:
+        if shard_name != "data":
+            raise ValueError(f"Unknown shard {shard_name!r}")
+        if row >= self.max_rows:
+            return
+
+        emitted = 0
+        for item in self.source:
+            if emitted >= row:
+                emitted += 1
+                yield item
+                if emitted >= self.max_rows:
+                    return
+            else:
+                emitted += 1
 
 
 class UrlBackedShardedDataSource(ShardedDataSource[T_co], abc.ABC):
@@ -157,12 +162,24 @@ def datasource_from_hf(id: str, *, split, **kwargs) -> ShardedDataSource[dict]:
     return WrappedHFDataSource(id, split=split, **kwargs)
 
 
-def datasource_from_jsonl(urls_or_paths: Sequence[str]) -> ShardedDataSource[dict]:
-    return JsonlDataSource(urls_or_paths)
+def datasource_from_hf_or_none(id: str, *, split, **kwargs) -> ShardedDataSource[dict] | None:
+    """
+    Like `datasource_from_hf`, but returns None when the requested split is missing or empty.
 
+    HuggingFace raises a ``ValueError`` whose message starts with "Bad split" when the split does
+    not exist; we treat that (and a source with no shards) as an absent dataset rather than an error.
+    """
+    try:
+        source = datasource_from_hf(id, split=split, **kwargs)
+    except ValueError as e:
+        if str(e).startswith("Bad split"):
+            logger.warning("Split %s not found for HF dataset %s %s", split, id, kwargs.get("name"))
+            return None
+        raise
 
-def datasource_from_json(urls_or_paths: Sequence[str]) -> ShardedDataSource[dict]:
-    return JsonDataSource(urls_or_paths)
+    if len(source.shard_names) == 0:
+        return None
+    return source
 
 
 class WrappedHFDataSource(ShardedDataSource[dict]):
@@ -213,8 +230,8 @@ class WrappedHFDataSource(ShardedDataSource[dict]):
             idx += 1
 
     def _load_dataset(self):
-        # obnoxiously, the dataset loading stuff doesn't work with ray because of multiprocessing
-        # so we have to do this hacky thing where we load the dataset in the worker
+        # HF dataset loading has historically not been multiprocessing-safe, so we load
+        # lazily in the worker rather than sharing a dataset handle across processes.
         return datasets.load_dataset(self.id, split=self.split, streaming=self.streaming, **self.kwargs)
 
 
@@ -242,7 +259,7 @@ class TextUrlDataSource(ShardedDataSource[str]):
 
         # special case for txt files
         if format == ".txt":
-            with fsspec.open(url, "r", compression=compression) as f:
+            with open_url(url, "r", compression=compression) as f:
                 for line in f:
                     if i >= row:
                         yield line
@@ -263,7 +280,6 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]
-        i = 0
         compression = "infer"
         if url.endswith(".zstd"):  # hacky way to detect zstd
             compression = "zstd"
@@ -271,19 +287,14 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
         format = _sniff_format_for_dataset(url)
         match format:
             case ".jsonl":
-                with fsspec.open(url, "r", compression=compression) as f:
-                    # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
-                    # which is not nothing, but not ideal.
-                    for line in f:
-                        if i >= row:
-                            obj = json.loads(line)
-                            if self.columns:
-                                yield {col: obj[col] for col in self.columns}
-                            else:
-                                yield obj
-                        i += 1
+                with open_url(url, "r", compression=compression) as f:
+                    for obj in _iter_jsonl_from_row(f, row):
+                        if self.columns:
+                            yield {col: obj[col] for col in self.columns}
+                        else:
+                            yield obj
             case ".json":
-                with fsspec.open(url, "r", compression=compression) as f:
+                with open_url(url, "r", compression=compression) as f:
                     data = json.load(f)
                     for doc in data[row:]:
                         if self.columns:
@@ -291,34 +302,9 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
                         else:
                             yield doc
             case ".parquet":
-                # TODO: fix this duplication
-                with fsspec.open(url, "rb", compression=compression) as f:
+                with open_url(url, "rb", compression=compression) as f:
                     parquet_file = pq.ParquetFile(f)
-                    total_rows = parquet_file.metadata.num_rows
-                    if row >= total_rows:
-                        return
-
-                    num_row_groups = parquet_file.metadata.num_row_groups
-
-                    # Compute cumulative row counts
-                    row_counts = [parquet_file.metadata.row_group(i).num_rows for i in range(num_row_groups)]
-                    cumulative_rows = [0]
-                    for count in row_counts:
-                        cumulative_rows.append(cumulative_rows[-1] + count)
-
-                    # Find the starting row group and row within it
-                    for idx, cum_row in enumerate(cumulative_rows):
-                        if cum_row > row:
-                            row_group_index = idx - 1
-                            start_row_in_group = row - cumulative_rows[row_group_index]
-                            break
-
-                    # Read from the starting row group onwards
-                    for rg_idx in range(row_group_index, parquet_file.num_row_groups):
-                        table = parquet_file.read_row_group(rg_idx, columns=self.columns)
-                        if rg_idx == row_group_index:
-                            table = table.slice(start_row_in_group)
-                        yield from table.to_pylist()
+                    yield from _iter_parquet_from_row(parquet_file, row, columns=self.columns)
             case _:
                 raise ValueError(f"Unknown format {format}")
 
@@ -339,7 +325,7 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
         import librosa  # noqa F401
 
         def _load_audio_file(file_name, sampling_rate):
-            with fsspec.open(audio_pointer, "rb", compression="infer") as f:
+            with open_url(file_name, "rb", compression="infer") as f:
                 array, sr = librosa.load(f, sr=sampling_rate)
             return {"array": array, "sampling_rate": sr}
 
@@ -364,20 +350,14 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[Tuple[np.ndarray, int, str]]:
         url = self._shard_name_to_url_mapping[shard_name]
-        i = 0
-        with fsspec.open(url, "r", compression="infer") as f:
+        with open_url(url, "r", compression="infer") as f:
             format = _sniff_format_for_dataset(url)
             match format:
                 case ".jsonl":
-                    # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
-                    # which is not nothing, but not ideal.
-                    for line in f:
-                        if i >= row:
-                            mat_json = json.loads(line)
-                            audio_pointer = mat_json[self.audio_key]
-                            audio = AudioTextUrlDataSource.resolve_audio_pointer(audio_pointer, self.sampling_rate)
-                            yield (audio["array"], audio["sampling_rate"], mat_json[self.text_key])
-                        i += 1
+                    for mat_json in _iter_jsonl_from_row(f, row):
+                        audio_pointer = mat_json[self.audio_key]
+                        audio = AudioTextUrlDataSource.resolve_audio_pointer(audio_pointer, self.sampling_rate)
+                        yield (audio["array"], audio["sampling_rate"], mat_json[self.text_key])
                 case ".json":
                     data = json.load(f)
                     for doc in data[row:]:
@@ -412,7 +392,7 @@ def _sniff_format_for_dataset(url):
         # (You can't actually distinguish between jsonl and json in a file with one line,
         #  which we'll just declare to be json and not jsonl, since that seems more likely)
         # (1) is cheating a bit, but it's fast and works in most cases we care about. (2) is more robust, but slower.
-        with fsspec.open(url, "r", compression="infer") as f:
+        with open_url(url, "r", compression="infer") as f:
             first_two = f.read(2)
 
             if first_two[0] == "[" or first_two == "{\n" or first_two == "{\r":
@@ -436,36 +416,47 @@ def _sniff_format_for_dataset(url):
     return format_from_url
 
 
-class JsonlDataSource(UrlBackedShardedDataSource[dict]):
-    def __init__(self, urls):
-        super().__init__(urls)
+def _iter_jsonl_from_row(f: Iterable[str], row: int) -> Iterator[Any]:
+    """Yield parsed JSON objects from a JSONL stream, skipping the first ``row`` lines.
 
-    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
-        url = self._shard_name_to_url_mapping[shard_name]
-        i = 0
-        with fsspec.open(url, "r", compression="infer") as f:
-            # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
-            # which is not nothing, but not ideal.
-            for line in f:
-                if i >= row:
-                    yield json.loads(line)
-                i += 1
+    TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
+    which is not nothing, but not ideal.
+    """
+    for i, line in enumerate(f):
+        if i >= row:
+            yield json.loads(line)
 
 
-class JsonDataSource(UrlBackedShardedDataSource[dict]):
-    def __init__(self, urls):
-        super().__init__(urls)
+def _iter_parquet_from_row(parquet_file: pq.ParquetFile, row: int, columns=None) -> Iterator[dict]:
+    """Iterate over rows in a ParquetFile starting from a given row offset.
 
-    @property
-    def shard_names(self) -> Sequence[str]:
-        return list(self._shard_name_to_url_mapping.keys())
+    Seeks to the correct row group and yields dicts for each row from ``row`` onward.
+    """
+    total_rows = parquet_file.metadata.num_rows
+    if row >= total_rows:
+        return
 
-    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
-        url = self._shard_name_to_url_mapping[shard_name]
-        with fsspec.open(url, "r", compression="infer") as f:
-            # TODO: would be nice if we could seek faster than this. Can't even skip json parsing
-            data = json.load(f)
-            return iter(data[row:])
+    num_row_groups = parquet_file.metadata.num_row_groups
+
+    # Compute cumulative row counts to find the starting row group
+    row_counts = [parquet_file.metadata.row_group(i).num_rows for i in range(num_row_groups)]
+    cumulative_rows = [0]
+    for count in row_counts:
+        cumulative_rows.append(cumulative_rows[-1] + count)
+
+    row_group_index = 0
+    start_row_in_group = row
+    for idx, cum_row in enumerate(cumulative_rows):
+        if cum_row > row:
+            row_group_index = idx - 1
+            start_row_in_group = row - cumulative_rows[row_group_index]
+            break
+
+    for rg_idx in range(row_group_index, num_row_groups):
+        table = parquet_file.read_row_group(rg_idx, columns=columns)
+        if rg_idx == row_group_index:
+            table = table.slice(start_row_in_group)
+        yield from table.to_pylist()
 
 
 class ParquetDataSource(UrlBackedShardedDataSource[dict]):
@@ -475,46 +466,23 @@ class ParquetDataSource(UrlBackedShardedDataSource[dict]):
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]
-        with fsspec.open(url, "rb", compression="infer") as f:
+        with open_url(url, "rb", compression="infer") as f:
             parquet_file = pq.ParquetFile(f)
-            total_rows = parquet_file.metadata.num_rows
-            if row >= total_rows:
-                return
-
-            num_row_groups = parquet_file.metadata.num_row_groups
-
-            # Compute cumulative row counts
-            row_counts = [parquet_file.metadata.row_group(i).num_rows for i in range(num_row_groups)]
-            cumulative_rows = [0]
-            for count in row_counts:
-                cumulative_rows.append(cumulative_rows[-1] + count)
-
-            # find starting row group and also find the row within it
-            for idx, cum_row in enumerate(cumulative_rows):
-                if cum_row > row:
-                    row_group_index = idx - 1
-                    start_row_in_group = row - cumulative_rows[row_group_index]
-                    break
-
-            # read from the starting row group onwards
-            for rg_idx in range(row_group_index, parquet_file.num_row_groups):
-                table = parquet_file.read_row_group(rg_idx, columns=self.columns)
-
-                # if we're in the row group we want, slice the table at/from the row we want
-                if rg_idx == row_group_index:
-                    table = table.slice(start_row_in_group)
-
-                yield from table.to_pylist()
+            yield from _iter_parquet_from_row(parquet_file, row, columns=self.columns)
 
 
 def _mk_shard_name_mapping(urls):
     missing_urls: List[str] = []
 
     def _expand_or_placeholder(url):
-        expanded = list(expand_glob(url))
+        # expand_glob keeps a named-but-absent literal (so it warns/fails below rather
+        # than vanishing); the fallback keeps an all-glob spec that matched nothing.
+        expanded = [str(m) for m in StoragePath(url).expand_glob()]
         return expanded if expanded else [url]
 
     urls = [globbed for url in urls for globbed in _expand_or_placeholder(url)]
+    if not urls:
+        return {}
 
     _shard_name_to_url_mapping = {}
 
@@ -524,8 +492,14 @@ def _mk_shard_name_mapping(urls):
     else:
         common_prefix = os.path.commonprefix(urls)
 
-    for url in urls:
-        exists = fsspec_utils.exists(url)
+    # A component can name thousands of object-store shards, and each probe is a full
+    # round trip, so probe them concurrently instead of once per shard in series.
+    with ThreadPoolExecutor(
+        max_workers=min(SHARD_EXISTENCE_WORKERS, len(urls)), thread_name_prefix="shard_exists"
+    ) as pool:
+        url_exists = list(pool.map(lambda u: StoragePath(u).exists(), urls))
+
+    for url, exists in zip(urls, url_exists):
         # escape the url for the shard name
         shard_name = url
         if common_prefix:
@@ -548,15 +522,10 @@ def _mk_shard_name_mapping(urls):
     return _shard_name_to_url_mapping
 
 
-class _TransformedDataset:
-    source: ShardedDataSource
-    _transform: _DatasetTransform
-
-
 class _MappedShardedDataSource(ShardedDataSource[T], _TransformedDataset):
     def __init__(self, source: ShardedDataSource[T_co], fn: Callable[[T_co], T]):
         self.source = source
-        self.fn = fn
+        self.fn: Callable[..., T] = fn
         self._transform = _MapTransform(fn)
 
     @property

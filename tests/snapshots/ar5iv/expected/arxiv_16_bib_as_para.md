@@ -117,30 +117,30 @@ By using the approach of this paper weak billiard solutions can be obtained for 
 
 ## Bibliography.
 
-R. Camassa and D. Holm, An integrable shallow water equation with peaked solitons, Phys. Rev. Lett. 71 1661-1664 (1993).
+:   R. Camassa and D. Holm, An integrable shallow water equation with peaked solitons, Phys. Rev. Lett. 71 1661-1664 (1993).
 
-F. Calogero, An integrable Hamiltonian system, Phys. Lett. A. 201 306-310 (1995).
+:   F. Calogero, An integrable Hamiltonian system, Phys. Lett. A. 201 306-310 (1995).
 
-F. Calogero and J. Francoise, Solvable quantum version of an integrable Hamiltonian system, J. Math. Phys. 37 (6) 2863-2871 (1996).
+:   F. Calogero and J. Francoise, Solvable quantum version of an integrable Hamiltonian system, J. Math. Phys. 37 (6) 2863-2871 (1996).
 
-M. Ablowitz and H. Segur, Solitons and the Inverse Scattering Transform, SIAM, Philadelphia (1981).
+:   M. Ablowitz and H. Segur, Solitons and the Inverse Scattering Transform, SIAM, Philadelphia (1981).
 
-M. Alber, R. Camassa, D. Holm and J. Marsden, The geometry of peaked solitons and billiard solutions of a class of integrable PDE’s, Lett. Math. Phys. 32 137-151 (1994).
+:   M. Alber, R. Camassa, D. Holm and J. Marsden, The geometry of peaked solitons and billiard solutions of a class of integrable PDE’s, Lett. Math. Phys. 32 137-151 (1994).
 
-M. Alber, R. Camassa, D. Holm, and J. Marsden, On the link between umbilic geodesics and soliton solutions of nonlinear PDE’s, Proc. Roy. Soc 450 677-692 (1995).
+:   M. Alber, R. Camassa, D. Holm, and J. Marsden, On the link between umbilic geodesics and soliton solutions of nonlinear PDE’s, Proc. Roy. Soc 450 677-692 (1995).
 
-M. Alber and Y. Fedorov, Wave Solutions of Evolution Equations and Hamiltonian Flows on Nonlinear Subvarieties of Generalized Jacobians, (subm.) (1999).
+:   M. Alber and Y. Fedorov, Wave Solutions of Evolution Equations and Hamiltonian Flows on Nonlinear Subvarieties of Generalized Jacobians, (subm.) (1999).
 
-E. Belokolos, A. Bobenko, V. Enol’sii, A. Its, and V. Matveev, Algebro-Geometric Approach to Nonlinear Integrable Equations., Springer-Verlag, Berlin;New York (1994).
+:   E. Belokolos, A. Bobenko, V. Enol’sii, A. Its, and V. Matveev, Algebro-Geometric Approach to Nonlinear Integrable Equations., Springer-Verlag, Berlin;New York (1994).
 
-M. Alber, R. Camassa, Y. Fedorov, D. Holm, and J. Marsden, The geometry of new classes of weak billiard solutions of nonlinear PDE’s. (subm.) (1999).
+:   M. Alber, R. Camassa, Y. Fedorov, D. Holm, and J. Marsden, The geometry of new classes of weak billiard solutions of nonlinear PDE’s. (subm.) (1999).
 
-M. Alber, R. Camassa, Y. Fedorov, D. Holm and J. Marsden, On Billiard Solutions of Nonlinear PDE’s, Phys. Lett. A (to appear) (1999).
+:   M. Alber, R. Camassa, Y. Fedorov, D. Holm and J. Marsden, On Billiard Solutions of Nonlinear PDE’s, Phys. Lett. A (to appear) (1999).
 
-Y. Fedorov, Classical integrable systems and billiards related to generalized Jacobians, Acta Appl. Math., 55 (3) 151–201 (1999).
+:   Y. Fedorov, Classical integrable systems and billiards related to generalized Jacobians, Acta Appl. Math., 55 (3) 151–201 (1999).
 
-R. Camassa, D. Holm, and J. Hyman, A new integrable shallow water equation, Adv. Appl. Mech., 31 1–33 (1994).
+:   R. Camassa, D. Holm, and J. Hyman, A new integrable shallow water equation, Adv. Appl. Mech., 31 1–33 (1994).
 
-R. Beals, D. Sattinger, J. Szmigielski, Multipeakons and a theorem of Stieltjes, Inverse Problems, 15 L1–L4 (1999).
+:   R. Beals, D. Sattinger, J. Szmigielski, Multipeakons and a theorem of Stieltjes, Inverse Problems, 15 L1–L4 (1999).
 
-Y. Li and P. Olver, Convergence of solitary-wave solutions in a perturbed bi-Hamiltonian dynamical system, Discrete and continuous dynamical systems, 4, 159–191 (1998).
+:   Y. Li and P. Olver, Convergence of solitary-wave solutions in a perturbed bi-Hamiltonian dynamical system, Discrete and continuous dynamical systems, 4, 159–191 (1998).

@@ -1,8 +1,9 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import fsspec
 from fsspec import AbstractFileSystem
+from marin.evaluation.utils import discover_hf_checkpoints
 
 
 def test_discover_latest_hf_checkpoints():
@@ -17,7 +18,6 @@ def test_discover_latest_hf_checkpoints():
     temp_fs.touch("checkpoints/hf/step-9999/tokenizer_config.json")
 
     # Test the function
-    from marin.evaluation.utils import discover_hf_checkpoints
 
     checkpoints = discover_hf_checkpoints("memory:///")
 

@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -12,10 +12,14 @@ import optax
 from optax import tree_utils as otu
 
 import haliax
-from haliax.nn import Linear
 
 from levanter.optim.config import OptimizerConfig
-from levanter.optim.util import CoefficientType, map_flattened_linear_layers, zeropower_via_newtonschulz5
+from levanter.optim.util import (
+    CoefficientType,
+    label_linear_like_module,
+    map_flattened_linear_layers,
+    zeropower_via_newtonschulz5,
+)
 from levanter.utils.jax_utils import leaf_key_paths
 
 
@@ -105,16 +109,16 @@ class MuonConfig(OptimizerConfig):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             if "Embedding" in path_str or "lm_head" in path_str:
                 return "adamw"
-            elif isinstance(param, Linear):
+            elif isinstance(param, haliax.nn.Linear):
                 # muon for linear layers
                 assert (
                     param._out_first or use_kimi_scaling
                 )  # if we don't use kimi's version of scaling, then we need to assume out_first to ensure we are scaling like Out/In
-                return dataclasses.replace(param, weight="muon", bias="adamw" if param.bias is not None else None)
+                return label_linear_like_module(param, weight_label="muon", bias_label="adamw")
             else:
                 return "adamw"
 
-        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
+        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, haliax.nn.Linear))
 
 
 class ScaleByMuonState(NamedTuple):

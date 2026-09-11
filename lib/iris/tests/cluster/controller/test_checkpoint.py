@@ -1,0 +1,244 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Tests for controller checkpoint: remote-only write and download-before-create restore."""
+
+from iris.cluster.controller.checkpoint import (
+    download_checkpoint_to_local,
+    latest_checkpoint_epoch_ms,
+    parse_checkpoint_epoch_ms,
+    probe_database_dir,
+    prune_old_checkpoints,
+    write_checkpoint,
+)
+from iris.cluster.controller.db import ControllerDB
+from rigging.timing import Duration, ExponentialBackoff
+
+
+def test_write_checkpoint_uploads_compressed(tmp_path):
+    """write_checkpoint creates a timestamped directory with .zst files."""
+    remote_dir = f"file://{tmp_path}/remote"
+    db = ControllerDB(db_dir=tmp_path / "source")
+
+    path, result = write_checkpoint(db, remote_dir)
+
+    assert path.startswith(f"file://{tmp_path}/remote/controller-state/")
+    remote_state = tmp_path / "remote" / "controller-state"
+    timestamped_dirs = [d for d in remote_state.iterdir() if d.is_dir()]
+    assert len(timestamped_dirs) == 1
+    assert (timestamped_dirs[0] / "controller.sqlite3.zst").exists()
+    # Uncompressed file should NOT exist
+    assert not (timestamped_dirs[0] / "controller.sqlite3").exists()
+
+    assert result.job_count == 0
+    assert result.task_count == 0
+    assert result.worker_count == 0
+    assert probe_database_dir(db.db_path.parent).checkpoint_epoch_ms == parse_checkpoint_epoch_ms(path)
+    db.close()
+
+
+def test_begin_checkpoint_returns_remote_path(tmp_path, make_controller):
+    """begin_checkpoint returns a remote path string."""
+    remote_dir = f"file://{tmp_path}/remote"
+    controller = make_controller(remote_state_dir=remote_dir)
+
+    path, result = controller.begin_checkpoint()
+
+    assert path.startswith(f"file://{tmp_path}/remote/controller-state/")
+    assert result.job_count == 0
+
+
+def test_download_checkpoint_to_local(tmp_path):
+    """download_checkpoint_to_local copies remote DB to local path."""
+    remote_dir = f"file://{tmp_path}/remote"
+    source_db = ControllerDB(db_dir=tmp_path / "source")
+    write_checkpoint(source_db, remote_dir)
+    source_db.close()
+
+    local_db_dir = tmp_path / "local"
+    result = download_checkpoint_to_local(remote_dir, local_db_dir)
+    assert result is True
+    assert (local_db_dir / "controller.sqlite3").exists()
+    assert probe_database_dir(local_db_dir).checkpoint_epoch_ms == latest_checkpoint_epoch_ms(remote_dir)
+
+
+def test_probe_database_dir_rejects_corrupt_sqlite(tmp_path):
+    db_dir = tmp_path / "db"
+    db = ControllerDB(db_dir=db_dir)
+    db.close()
+    (db_dir / ControllerDB.DB_FILENAME).write_bytes(b"not a sqlite database")
+
+    probe = probe_database_dir(db_dir)
+
+    assert probe.exists
+    assert not probe.healthy
+    assert probe.checkpoint_epoch_ms is None
+
+
+def test_download_checkpoint_returns_false_when_missing(tmp_path):
+    """Returns False when no remote checkpoint exists."""
+    local_db_dir = tmp_path / "local"
+    result = download_checkpoint_to_local(f"file://{tmp_path}/nonexistent", local_db_dir)
+    assert result is False
+    assert not (local_db_dir / "controller.sqlite3").exists()
+
+
+def test_latest_checkpoint_epoch_ms_none_when_missing(tmp_path):
+    assert latest_checkpoint_epoch_ms(f"file://{tmp_path}/nonexistent") is None
+
+
+def test_latest_checkpoint_epoch_ms_matches_written_checkpoint(tmp_path):
+    remote_dir = f"file://{tmp_path}/remote"
+    db = ControllerDB(db_dir=tmp_path / "source")
+
+    path, _ = write_checkpoint(db, remote_dir)
+
+    epoch_ms = latest_checkpoint_epoch_ms(remote_dir)
+    assert epoch_ms is not None
+    assert path == f"file://{tmp_path}/remote/controller-state/{epoch_ms}"
+    db.close()
+
+
+def test_download_from_explicit_path(tmp_path):
+    """download_checkpoint_to_local can restore from an explicit checkpoint directory."""
+    remote_dir = f"file://{tmp_path}/remote"
+    source_db = ControllerDB(db_dir=tmp_path / "source")
+    path, _ = write_checkpoint(source_db, remote_dir)
+    source_db.close()
+
+    local_db_dir = tmp_path / "local"
+    result = download_checkpoint_to_local(remote_dir, local_db_dir, checkpoint_dir=path)
+    assert result is True
+    assert (local_db_dir / "controller.sqlite3").exists()
+
+
+def test_write_checkpoint_roundtrip(tmp_path):
+    """Write then download produces a valid DB."""
+    remote_dir = f"file://{tmp_path}/remote"
+    source_db = ControllerDB(db_dir=tmp_path / "source")
+    write_checkpoint(source_db, remote_dir)
+    source_db.close()
+
+    local_db_dir = tmp_path / "restored"
+    download_checkpoint_to_local(remote_dir, local_db_dir)
+    assert probe_database_dir(local_db_dir).healthy
+
+
+def test_write_checkpoint_cleans_up_temp_file(tmp_path):
+    """write_checkpoint does not leave temp files in the DB directory."""
+    remote_dir = f"file://{tmp_path}/remote"
+    db = ControllerDB(db_dir=tmp_path / "source")
+    db_dir = db.db_path.parent
+
+    files_before = set(db_dir.iterdir())
+    write_checkpoint(db, remote_dir)
+    files_after = set(db_dir.iterdir())
+
+    new_files = files_after - files_before
+    sqlite_temps = [f for f in new_files if ".sqlite3" in f.name and f.name != ControllerDB.DB_FILENAME]
+    assert len(sqlite_temps) == 0
+    db.close()
+
+
+def test_download_checkpoint_restores_when_local_missing(tmp_path):
+    """When no local DB exists, download_checkpoint_to_local fetches from remote."""
+    remote_dir = f"file://{tmp_path}/remote"
+
+    source_db = ControllerDB(db_dir=tmp_path / "source")
+    write_checkpoint(source_db, remote_dir)
+    source_db.close()
+
+    local_db_dir = tmp_path / "local"
+    assert not local_db_dir.exists() or not (local_db_dir / "controller.sqlite3").exists()
+
+    restored = download_checkpoint_to_local(remote_dir, local_db_dir)
+    assert restored is True
+    assert (local_db_dir / "controller.sqlite3").exists()
+
+    db = ControllerDB(db_dir=local_db_dir)
+    db.close()
+
+
+def test_download_from_explicit_path_pairs_auth_db(tmp_path):
+    """When restoring from an explicit checkpoint path, the auth DB is derived as a sibling."""
+    remote_dir = f"file://{tmp_path}/remote"
+    source_db = ControllerDB(db_dir=tmp_path / "source")
+    path, _ = write_checkpoint(source_db, remote_dir)
+    source_db.close()
+
+    local_db_dir = tmp_path / "local"
+    result = download_checkpoint_to_local(remote_dir, local_db_dir, checkpoint_dir=path)
+    assert result is True
+    assert (local_db_dir / "controller.sqlite3").exists()
+
+    assert (local_db_dir / "auth.sqlite3").exists(), "auth DB should be downloaded into local_db_dir"
+
+
+def test_periodic_checkpoint_after_controller_start_writes_remote(tmp_path, make_controller):
+    remote_dir = f"file://{tmp_path}/remote"
+    controller = make_controller(
+        remote_state_dir=remote_dir,
+        checkpoint_interval=Duration.from_ms(50),
+    )
+    controller.start()
+
+    remote_state = tmp_path / "remote" / "controller-state"
+    ExponentialBackoff(initial=0.01, maximum=0.05).wait_until(
+        lambda: remote_state.exists() and any(remote_state.iterdir()),
+        timeout=Duration.from_seconds(5),
+    )
+    timestamped_dirs = [d for d in remote_state.iterdir() if d.is_dir()]
+    assert len(timestamped_dirs) >= 1
+    assert (timestamped_dirs[0] / "controller.sqlite3.zst").exists()
+
+
+def test_download_uncompressed_fallback(tmp_path):
+    """download_checkpoint_to_local falls back to uncompressed files from old checkpoints."""
+    remote_dir = f"file://{tmp_path}/remote"
+    prefix = tmp_path / "remote" / "controller-state" / "1000000000000"
+    prefix.mkdir(parents=True)
+
+    # Write a plain (uncompressed) sqlite3 file to simulate an old checkpoint
+    source_db = ControllerDB(db_dir=tmp_path / "source")
+    source_db.backup_to(prefix / "controller.sqlite3")
+    source_db.close()
+
+    local_db_dir = tmp_path / "local"
+    result = download_checkpoint_to_local(remote_dir, local_db_dir)
+    assert result is True
+    assert (local_db_dir / "controller.sqlite3").exists()
+
+    db = ControllerDB(db_dir=local_db_dir)
+    db.close()
+
+
+def test_prune_old_checkpoints(tmp_path):
+    """prune_old_checkpoints removes directories older than max_age."""
+    remote_dir = f"file://{tmp_path}/remote"
+    prefix = tmp_path / "remote" / "controller-state"
+    prefix.mkdir(parents=True)
+
+    # Create two "old" checkpoint directories (very old epoch_ms values)
+    old_dir_1 = prefix / "1000"
+    old_dir_1.mkdir()
+    (old_dir_1 / "controller.sqlite3.zst").write_bytes(b"fake")
+
+    old_dir_2 = prefix / "2000"
+    old_dir_2.mkdir()
+    (old_dir_2 / "controller.sqlite3.zst").write_bytes(b"fake")
+
+    pruned = prune_old_checkpoints(remote_dir, max_age=Duration.from_seconds(1))
+    assert pruned == 2
+    assert not old_dir_1.exists()
+    assert not old_dir_2.exists()
+
+
+def test_prune_keeps_recent_checkpoints(tmp_path):
+    """prune_old_checkpoints keeps checkpoints within max_age."""
+    remote_dir = f"file://{tmp_path}/remote"
+    source_db = ControllerDB(db_dir=tmp_path / "source")
+    write_checkpoint(source_db, remote_dir)
+    source_db.close()
+
+    pruned = prune_old_checkpoints(remote_dir, max_age=Duration.from_hours(24))
+    assert pruned == 0

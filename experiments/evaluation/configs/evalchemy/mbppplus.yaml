@@ -1,0 +1,9 @@
+tasks: [MBPPPlus]
+task_options:
+  MBPPPlus:
+    num_fewshot: 0
+    task_alias: mbppplus
+    generation: true
+    unsafe_code: true
+max_tokens: 1024
+runtime_extras: [mbppplus]

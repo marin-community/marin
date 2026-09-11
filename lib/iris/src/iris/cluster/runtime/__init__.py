@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Container runtime abstraction layer.
@@ -9,21 +9,22 @@ Provides ContainerRuntime protocol and implementations:
 """
 
 from iris.cluster.runtime.docker import DockerImageBuilder, DockerRuntime
-from iris.cluster.runtime.entrypoint import build_runtime_entrypoint, runtime_entrypoint_to_bash_script
+from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerHandle,
+    ContainerPhase,
     ContainerResult,
     ContainerRuntime,
     ContainerStats,
     ContainerStatus,
     ImageBuilder,
-    ImageInfo,
 )
 
 __all__ = [
     "ContainerConfig",
     "ContainerHandle",
+    "ContainerPhase",
     "ContainerResult",
     "ContainerRuntime",
     "ContainerStats",
@@ -31,7 +32,5 @@ __all__ = [
     "DockerImageBuilder",
     "DockerRuntime",
     "ImageBuilder",
-    "ImageInfo",
     "build_runtime_entrypoint",
-    "runtime_entrypoint_to_bash_script",
 ]

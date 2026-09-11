@@ -1,0 +1,173 @@
+---
+name: manage-hero-run
+description: Launch, resume, monitor, hand off, or seal an explicitly requested production-critical Marin run, normally at least 1e22 FLOPs.
+---
+
+# Manage Hero Run
+
+Use this skill only when the request names a hero or production-critical run, or
+another selected workflow explicitly delegates its management here. Within this
+workflow, about 1e22 model FLOPs (using a 6ND estimate) is the normal threshold
+for classifying a run as production rather than bounded diagnostic work; it is
+not an activation trigger by itself.
+
+## Operating Model
+
+- If the user asks to launch a run, arrange babysitting unless they explicitly decline.
+- Use a 15 minute default check cadence for babysitting unless the run's failure mode requires tighter monitoring.
+- Never stop, restart, or bounce an Iris cluster without explicit user permission.
+- If something needs human judgment or authorization, attempt to contact the DRI, usually the user in the chat, through available channels such as GitHub issue comments, Discord, email, or Slack.
+
+Classify the run before loading supporting workflows:
+
+- A **production run** is long-lived, has a durable output contract, or is expected to exceed the
+  1e22 FLOP guideline. It requires the full run record below.
+- A **bounded diagnostic** has a small fixed step or time limit, lifecycle-managed output, no
+  canonical export, and one monitoring owner. Record its launch contract in the originating
+  conversation or durable session channel. Do not create an issue or logbook solely to submit it.
+
+Do not load `run-research`, `task-logbook`, `task-snapshot`, `file-issue`, or their writing guides
+for a bounded diagnostic. Load them only when the run requires the artifact they govern.
+
+## Launch
+
+Start from the user's reference command or the nearest existing launcher. Read that launcher's
+README and `--help`, then apply only the requested differences. Do not reconstruct the experiment
+from implementation internals or add a launcher when existing flags express the run.
+
+Resolve the launch blockers first:
+
+1. Confirm the requested source commit is present with a direct ancestry check.
+2. Inspect the reference job read-only for the fields that the new run must preserve.
+3. Choose unique job, run, output, checkpoint, and rendezvous identities.
+4. Print the dry plan and exact submit command.
+5. Submit once the checks below are resolved. Issue setup, prose polishing, broad repository tests,
+   and prior-work searches do not block a bounded diagnostic.
+
+Before launching, print and validate:
+
+- Exact command line, with secrets scrubbed.
+- Source git SHA for this launched instance. Avoid dirty trees unless the user explicitly wants one; if dirty is approved, log the diff or patch identity.
+- Pinned durable output root. Mutable and development runs must use a caller-owned
+  `users/<username>/...` path below `MARIN_PREFIX`; do not write run data below a cluster's
+  `iris/` prefix.
+- Tracker mode. When W&B is enabled, record its id/name and resume policy. Bounded diagnostics may
+  disable W&B when logs and checkpoints provide the required evidence.
+- Checkpoint retention policy. Put rolling resume checkpoints under a region-local
+  `marin_temp_bucket(ttl_days=30, ..., source_prefix=<output root>)` path. Keep one by default and at
+  most two unless the DRI approves and records a deeper rollback window. Keep one durable canonical
+  export under the user-owned output root; add sparse durable milestones only when the run contract names them.
+- Checkpoint size estimate, resume retention count, and projected resume bytes. Use the expected
+  optimizer-inclusive checkpoint size; label an estimate when no completed checkpoint exists.
+- Raw trace and session destinations. Use a lifecycle-managed temp prefix for raw trajectories,
+  failed-attempt markers, rendezvous state, and Ray session/debug uploads. Keep compact metrics,
+  references, the resolved config, and the canonical export under the durable output root.
+- Ray spill destination. Use `/tmp/skyrl-ray-spill` or another explicit node-local path. Block a
+  launch that resolves spill, rendezvous, raw traces, resume checkpoints, or session data to a
+  durable `iris/` prefix.
+- Dataset locations. Use immutable Marin artifacts or caller-owned `users/<username>/...` paths;
+  block mutable run data under a shared `iris/` prefix.
+- `initialize_from`, parsed numeric checkpoint step, and `metadata.json` presence when starting from a checkpoint.
+- Final training step resolved from the launched config/code, not from progress-bar display text.
+- Runtime package, source bundle, or container identity when it differs from the local git SHA.
+- A DRI. Assume the user is the DRI unless they explicitly say otherwise; if the user is not the DRI, identify and contact the DRI before launch.
+
+If any value is inferred, label it as inferred. If code lineage, checkpoint policy, or output identity is unclear, pause before launching.
+
+## Run Record
+
+For a production run, create or use a dedicated experiment issue and an append-only logbook at
+`.agents/logbooks/<run>.md`. Follow `task-logbook` for their format and publication rules. Bootstrap
+and push both links before launch.
+
+Record each production instance's command, source SHA and bundle, dirty-tree status, DRI,
+hardware/topology, tracker identity, output and checkpoint roots, retention and projected bytes,
+`initialize_from`, final step, and monitoring owner. Update the logbook at material events. Post
+concise issue updates for launches, failures, relaunches, retention changes, milestones, and final
+seal; post a routine status at least every 24 hours.
+
+For a bounded diagnostic, record the same applicable fields in the durable session channel or
+originating conversation. Add an issue or logbook when the diagnostic needs a handoff, lasts more
+than one day, changes production lineage, or produces an artifact that must remain discoverable.
+
+## Babysitting
+
+- Check at the agreed cadence from the operating model.
+- Use the babysitting workflow for job health, monitor freshness, W&B progress, checkpoint completion, loss/metric sanity, and completion checks.
+- When W&B is enabled, validate the active run id, display name, state, `_timestamp`, `global_step`,
+  and key losses against the launch record. Do not rely only on a saved W&B URL.
+- Prefer narrow Iris/orchestrator status queries, SQL checks, and targeted job inspection over broad blocking status calls.
+- Classify stale diagnostic jobs separately from the current production child job.
+- Escalate to the DRI when the next action requires judgment, spend/capacity tradeoffs, lineage choice, cluster intervention, or accepting a dirty/unverified state.
+
+## What Can Go Wrong
+
+- **Midrun crash from hardware, preemption, controller failure, or other low-level issue:** relaunch directly with the same run id/output root and see whether it makes progress past the failure. Notify the DRI immediately; escalate if the same problem repeats or progress remains blocked.
+- **Code bug.** Code bugs that do not impact the training trajectory in a substantive way should just be fixed. Alert the DRI and relaunch the run. Await input if code change is likely to lead to "interesting" differences.
+For instance, it's ok to fix a logging bug or misconfiguration of evaluation callbacks that led to a crash. Ask for input if the bug was in the model definition, training loop, optimizer, or data pipeline, since those could lead to a different training trajectory and require a new run with a new W&B id (using initialize_from)
+- **Wrong checkpoint selected:** incomplete checkpoint, lexicographic sort bug, newer rejected lineage, wrong temporary/permanent root, or wrong region. Block launch if checkpoint step, metadata, output lineage, or source run do not match the run record.
+- **Wrong code lineage:** stale worktree, dirty tree, wrong branch, unpushed commit, source bundle mismatch, or container built from a different SHA. Block launch unless explicitly approved and logged. Files that won't impact the training run (e.g. log files, markdown files, test files, unrelated experiment files) should not block a launch.
+- **Wrong output path:** old output root, auto-derived path drift, wrong region, or output path mismatch between launcher and babysitter. Block launch if output root is not pinned and printed before launch.
+- **W&B identity drift:** active run id differs from intended run, display name is reused ambiguously, resume policy is wrong, or state files contain a stale URL. Alert immediately because metrics can look plausible while attached to the wrong lineage.
+- **Silent monitor failure:** job may be healthy while the monitor is dead, local disk is full, or screen/process is alive without fresh state updates. Report `monitor stale` separately from `run unhealthy`.
+- **Throughput collapse:** run is alive but tokens/sec drops materially due to degraded hardware, input stalls, checkpoint stalls, compile churn, or retry loops. Alert if sustained throughput is more than `20-30%` (relative) below baseline for multiple cadences. Periodic dips are expected so check for sustained collapse, not single dips.
+- **Checkpoint not advancing:** training steps move but complete checkpoints do not appear, `metadata.json` is missing, writes are stuck, or cleanup threatens rollback coverage. Alert before the rollback window collapses.
+- **Capacity or scheduling wedge:** job remains pending for more than 30 min, partially allocated, wrong TPU type/slice count is requested, or workers never co-schedule. Notify, but do not mutate clusters without approval.
+- **Repeated recoverable failures:** one crash may be preemption; repeated same-step or same-window failures suggest a deterministic bug. Escalate instead of blindly relaunching.
+- **Numerical instability:** NaNs/Infs, grad norm explosion, router collapse, sudden z-loss/router metric changes, or optimizer instability. Alert immediately; do not relaunch as if it were infrastructure. Fast changes are expected during warmup, but sustained instability after warmup is a concern.
+- **Config drift on relaunch:** batch size, max steps, optimizer, checkpoint interval, seed, mesh, precision, data config, or code flags differ unintentionally. Diff launched config against the prior instance before relaunch.
+- **Resume loss mismatch:** Levanter is generally bitwise identical on TPU. Resumes and GPU runs can sometimes differ slightly, but should stay very close. During catch-up, alert if loss differs from the pre-resume lineage by more than `0.002`; after post-resume warmup, alert if loss differs by more than `1%`.
+- **Sustained loss spike:** alert if loss is more than `50%` above the expected trend for roughly 10 or more consecutive steps.
+- **Final-step misunderstanding:** progress bars may round or display a nominal max while config has extra steps. Compute final step from config/code and use that for ETA and completion.
+- **Benign-looking success with missing artifacts:** orchestrator says success but final checkpoint, W&B summary, logbook update, or seal tag is missing. Do not seal until final artifacts are verified.
+
+## Resume And Recovery
+
+Many failures can be recoverable just by relaunching using the same id. These include hardware failures, preemptions, transient cloud issues, and some classes of code bugs. Use the launch workflow for relaunches, but with special attention to checkpoint lineage and resume policy. If the lineage is intact and the resume policy is `allow`, prefer direct relaunch with the same W&B id and output root. If the lineage is compromised or the resume policy is `never`, use a new W&B id and output root, and treat it as a new run for record-keeping purposes.
+
+- Default to direct relaunch with the same run id, W&B identity, and pinned output root. Use this for controller job crashes, preemptions, hardware/low-level failures, and ordinary recoverable interruptions so the existing recovery mechanism keeps the run going.
+
+### Launching with a new run id
+
+- Use a new run id and W&B id only when the old lineage is unsafe or semantically different, such as W&B corruption or a nontrivial code change. Nontrivial code changes should have a new W&B id. Document the reason, old and new identities, source checkpoint, output root, and code SHA in the issue and logbook.
+- Use `initialize_from` to have training pick up from a specific prior checkpoint.
+- If the user does not specify a checkpoint to use for a resume, select the newest "complete" one. Complete checkpoints have `metadata.json`. If no complete checkpoints are available, escalate to the DRI instead of guessing. If the user specifies a checkpoint that does not have `metadata.json`, block the launch and escalate instead of guessing. Do not use incomplete checkpoints for resume or relaunch.
+- Sort by parsed numeric step, not lexicographic path order.
+- Do not advance to a checkpoint from a rejected or unvalidated lineage just because it is newer.
+- Relaunch only on terminal recoverable failure, and record why the failure was recoverable.
+
+## Retention
+
+- Ordinary runs should use rolling temporary checkpoint behavior for preemption recovery and keep only the final checkpoint permanently.
+- Hero runs must explicitly choose retention and rollback depth before launch. Keep one temporary
+  resume checkpoint by default and never keep more than five. Record the rationale for a rollback depth above two.
+- Resume checkpoints belong in a lifecycle-managed region-local temp prefix. Canonical exports and
+  named milestones belong in the caller's durable `users/<username>/...` prefix.
+- Never rely on permanent retention alone to protect an explicit rollback source; treat launch lineage as state.
+- For any checkpoint cleanup, list deletion candidates first and get explicit user confirmation. Preserve the latest requested N, the final checkpoint, the launch checkpoint, any recovery source, and requested milestone anchors.
+
+## Seal
+
+When a hero run finishes or reaches a handoff milestone:
+
+- Verify terminal orchestrator status is successful.
+- When W&B is enabled, verify it is finished or has the expected final state and metrics.
+- When the run writes checkpoints, verify the final checkpoint has `metadata.json`.
+- Verify terminal cleanup or lifecycle coverage for resume checkpoints, raw traces, failed-launch
+  markers, rendezvous state, and Ray session/debug uploads.
+- Capture final metrics, final step, output root, final checkpoint path, and any caveats. Include the
+  W&B run id/display name when enabled.
+- Stop or delete heartbeat/monitor automations that are no longer needed.
+- If approved dirty-tree changes were used, create a seal commit and tag immediately so the actual operational state is recoverable.
+- For a production run, create and push a seal tag. Update its GitHub issue and logbook with the
+  tracker, checkpoint, commit/tag, final metrics, launch command, and caveats.
+- For a bounded diagnostic, post the final result in the originating conversation or durable
+  session channel. Include the command, source SHA, terminal status, final step and metrics, output
+  and checkpoint paths, tracker identity when enabled, and caveats.
+
+
+## References
+
+- change-grug skill
+- run-research skill
+- use-iris skill

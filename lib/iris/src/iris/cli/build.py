@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Image build commands."""
@@ -7,11 +7,95 @@ import subprocess
 from pathlib import Path
 
 import click
+from rigging.provenance import Provenance
+
+from iris.cluster.provenance import provenance_to_env
+from iris.version import REVISION_DATE_ENV, iris_tree_date
+
+GHCR_DEFAULT_ORG = "marin-community"
+DEFAULT_CARGO_PROFILE = "fast"
+CARGO_PROFILES = (DEFAULT_CARGO_PROFILE, "release")
+
+# Compression for pushed images and their registry cache. The two must match: a
+# mismatch forces BuildKit to recompress every layer when exporting the cache
+# (the dominant cost of "exporting cache to registry"), whereas aligned settings
+# let it reuse the already-built blobs and let GHCR cross-repo blob-mount them.
+PUSH_COMPRESSION = "compression=zstd,compression-level=3"
 
 
-def _find_marin_root() -> Path:
+def _is_verbose(ctx: click.Context) -> bool:
+    """Walk up the Click context chain to find the top-level --verbose flag."""
+    while ctx:
+        if "verbose" in (ctx.params or {}):
+            return ctx.params["verbose"]
+        ctx = ctx.parent  # type: ignore[assignment]
+    return False
+
+
+def get_git_provenance() -> Provenance:
+    """Get the provenance of the current working tree.
+
+    The tree hash includes staged and unstaged tracked changes. The dirty flag
+    also includes untracked files.
+    """
+    try:
+        return Provenance.from_git()
+    except RuntimeError as e:
+        raise click.ClickException(f"Failed to get git provenance. Are you in a git repository? ({e})") from e
+
+
+def get_git_sha() -> str:
+    """Get the short hash of the current tracked worktree."""
+    return get_git_provenance().dedup_key
+
+
+def _versioned_tag(image_base: str, provenance: Provenance, platform: str) -> str:
+    version = provenance.dedup_key
+    if "," not in platform:
+        architecture = platform.rsplit("/", 1)[-1]
+        version = f"{version}-{architecture}"
+    if provenance.dirty:
+        version = f"{version}-dirty"
+    return f"{image_base}:{version}"
+
+
+def _split_image_tag(image: str) -> tuple[str, str | None]:
+    """Split an image reference into its repository and optional tag."""
+    if "@" in image:
+        raise click.ClickException(f"Cannot build directly to a digest reference: {image}")
+    final_component_start = image.rfind("/") + 1
+    tag_separator = image.rfind(":")
+    if tag_separator < final_component_start:
+        return image, None
+    return image[:tag_separator], image[tag_separator + 1 :]
+
+
+def _image_repository(image: str) -> str:
+    """Remove an optional tag or digest from an image reference."""
+    repository, _ = _split_image_tag(image.split("@", 1)[0])
+    return repository
+
+
+def _ghcr_image_reference(image: str, ghcr_org: str) -> str:
+    """Return the fully qualified GHCR reference for ``image``."""
+    registry, separator, _ = image.partition("/")
+    if separator and registry == "ghcr.io":
+        return image
+    return f"ghcr.io/{ghcr_org}/{image}"
+
+
+def _cache_export_ref(cache_ref: str, platform: str) -> str:
+    """Keep single-platform cache exports from replacing the multiarch cache."""
+    platforms = platform.split(",")
+    if len(platforms) > 1:
+        return cache_ref
+    architecture = platforms[0].rsplit("/", 1)[-1]
+    return f"{cache_ref}-{architecture}"
+
+
+def find_marin_root() -> Path:
     """Find the marin monorepo root (contains pyproject.toml + lib/iris)."""
-    iris_root = _find_iris_root()
+    iris_root = find_iris_root()
     # iris root is lib/iris, marin root is two levels up
     marin_root = iris_root.parent.parent
     if (marin_root / "pyproject.toml").exists() and (marin_root / "lib" / "iris").is_dir():
@@ -19,228 +103,422 @@ def _find_marin_root() -> Path:
     raise click.ClickException("Cannot find marin repo root. Expected lib/iris to be inside a marin workspace.")
 
 
-def _find_iris_root() -> Path:
-    """Find the iris package root directory containing Dockerfiles.
+def find_iris_root() -> Path:
+    """Find the iris package root directory containing the unified Dockerfile.
 
     Searches in order:
     1. Relative to this file (cli/build.py -> iris root is 4 levels up from src/iris/cli/build.py)
     2. Current working directory
-    3. Walking up from cwd until Dockerfile.worker is found
+    3. Walking up from cwd until Dockerfile is found
     """
     build_path = Path(__file__).resolve()
     # build.py is at src/iris/cli/build.py, so iris root is 4 levels up
     iris_root = build_path.parent.parent.parent.parent
-    if (iris_root / "Dockerfile.worker").exists() and (iris_root / "Dockerfile.controller").exists():
+    if (iris_root / "Dockerfile").exists():
         return iris_root
 
     cwd = Path.cwd()
-    if (cwd / "Dockerfile.worker").exists():
+    if (cwd / "Dockerfile").exists():
         return cwd
 
     for parent in cwd.parents:
-        if (parent / "Dockerfile.worker").exists():
+        if (parent / "Dockerfile").exists():
             return parent
 
-    raise click.ClickException(
-        "Cannot find Dockerfile.worker. Run from the iris directory or specify --dockerfile and --context."
-    )
+    raise click.ClickException("Cannot find Dockerfile. Run from the iris directory.")
 
 
-def _push_to_registries(
+def _resolve_image_name_and_version(
     source_tag: str,
-    regions: tuple[str, ...],
-    project: str,
     image_name: str | None = None,
     version: str | None = None,
+) -> tuple[str, str]:
+    """Extract image name and version from a source tag, using overrides if provided."""
+    parts = source_tag.split(":")
+    if not image_name:
+        image_name = parts[0].split("/")[-1]
+    if not version:
+        version = parts[1] if len(parts) > 1 else "latest"
+    return image_name, version
+
+
+def push_to_ghcr(
+    source_tag: str,
+    ghcr_org: str = GHCR_DEFAULT_ORG,
+    image_name: str | None = None,
+    version: str | None = None,
+    verbose: bool = False,
 ) -> None:
-    """Push a local Docker image to multiple GCP Artifact Registry regions."""
-    if not image_name or not version:
-        parts = source_tag.split(":")
-        if not image_name:
-            image_name = parts[0].split("/")[-1]
-        if not version:
-            version = parts[1] if len(parts) > 1 else "latest"
+    """Push a local Docker image to GitHub Container Registry (ghcr.io)."""
+    image_name, version = _resolve_image_name_and_version(source_tag, image_name, version)
+    if version == "latest":
+        raise click.ClickException("Refusing to publish a mutable :latest image; set --version to a SHA")
+    dest_tag = f"ghcr.io/{ghcr_org}/{image_name}:{version}"
 
-    click.echo(f"Pushing {source_tag} to {len(regions)} region(s)...")
+    click.echo(f"Pushing {source_tag} to ghcr.io/{ghcr_org}...")
 
-    for r in regions:
-        dest_tag = f"{r}-docker.pkg.dev/{project}/marin/{image_name}:{version}"
+    result = subprocess.run(["docker", "tag", source_tag, dest_tag], check=False)
+    if result.returncode != 0:
+        click.echo(f"Failed to tag image as {dest_tag}", err=True)
+        raise SystemExit(1)
 
-        click.echo(f"\nConfiguring {r}-docker.pkg.dev...")
-        result = subprocess.run(
-            ["gcloud", "auth", "configure-docker", f"{r}-docker.pkg.dev", "-q"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            click.echo(
-                f"Warning: Failed to configure docker auth for {r}-docker.pkg.dev: {result.stderr.strip()}", err=True
-            )
+    click.echo(f"Pushing to {dest_tag}...")
+    push_cmd = ["docker", "push", dest_tag]
+    if not verbose:
+        push_cmd.insert(2, "--quiet")
+    if verbose:
+        result = subprocess.run(push_cmd)
+    else:
+        result = subprocess.run(push_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        click.echo(f"Failed to push to {dest_tag}", err=True)
+        if not verbose:
+            if result.stdout:
+                click.echo(result.stdout, err=True)
+            if result.stderr:
+                click.echo(result.stderr, err=True)
+        raise SystemExit(1)
 
-        click.echo(f"Tagging as {dest_tag}")
-        result = subprocess.run(["docker", "tag", source_tag, dest_tag], check=False)
-        if result.returncode != 0:
-            click.echo(f"Failed to tag image for {r}", err=True)
-            continue
-
-        click.echo(f"Pushing to {r}...")
-        result = subprocess.run(["docker", "push", dest_tag], check=False)
-        if result.returncode != 0:
-            click.echo(f"Failed to push to {r}", err=True)
-            continue
-
-        click.echo(f"Successfully pushed to {dest_tag}")
-
+    click.echo(f"Successfully pushed to {dest_tag}")
     click.echo("\nDone!")
 
 
-def _build_image(
+def _ensure_protos() -> None:
+    """Regenerate protobuf Python bindings from .proto sources.
+
+    Called before ``docker build`` so that COPY always picks up fresh bindings.
+    The hatch build hook handles staleness for normal ``uv sync`` / ``uv run``,
+    but Docker has no ``npx`` so it cannot regenerate inside the image.
+    """
+    iris_root = find_iris_root()
+    generate_script = iris_root / "scripts" / "generate_protos.py"
+    if not generate_script.exists():
+        raise click.ClickException(f"Proto generation script not found: {generate_script}")
+    click.echo("Regenerating protobuf bindings...")
+    result = subprocess.run(
+        ["python", str(generate_script)],
+        cwd=iris_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        click.echo(result.stderr, err=True)
+        raise click.ClickException("Protobuf generation failed")
+    click.echo("Protobuf bindings regenerated.")
+
+
+def build_image(
     image_type: str,
     tag: str,
     push: bool,
-    dockerfile: str | None,
     context: str | None,
     platform: str,
-    region: tuple[str, ...],
-    project: str,
+    provenance: Provenance,
+    ghcr_org: str = GHCR_DEFAULT_ORG,
+    verbose: bool = False,
+    cargo_profile: str = DEFAULT_CARGO_PROFILE,
 ) -> None:
-    """Build a Docker image for Iris (worker or controller)."""
-    dockerfile_name = f"Dockerfile.{image_type}"
+    """Build a Docker image for Iris using the unified multi-stage Dockerfile.
 
-    iris_root = _find_iris_root()
-    dockerfile_path = Path(dockerfile) if dockerfile else iris_root / dockerfile_name
-    context_path = Path(context) if context else iris_root
+    Registry pushes use the requested tag and reject ``latest``. Local builds
+    also receive a ``latest`` convenience tag.
+
+    When ``push=True``, images are pushed directly via ``docker buildx build --push``
+    and the registry cache is updated in the same operation. The images are NOT
+    loaded into the local Docker daemon (buildx cannot do both simultaneously).
+    """
+    iris_root = find_iris_root()
+    dockerfile_path = iris_root / "Dockerfile"
+    # Controller/worker Dockerfiles expect the marin repo root as build context
+    # so that lib/rigging (a workspace-local dep) can be COPY'd in.
+    if context:
+        context_path = Path(context)
+    elif image_type in ("controller", "worker"):
+        context_path = find_marin_root()
+    else:
+        context_path = iris_root
 
     if not dockerfile_path.exists():
         raise click.ClickException(f"Dockerfile not found: {dockerfile_path}")
 
+    image_base, image_version = _split_image_tag(tag)
+    sha_tag = _versioned_tag(image_base, provenance, platform)
+    latest_tag = f"{image_base}:latest"
+
     click.echo(f"Using Dockerfile: {dockerfile_path}")
 
+    if push:
+        if image_version in {None, "latest"}:
+            raise click.ClickException("Refusing to publish without an explicit immutable image tag")
+        all_tags = {_ghcr_image_reference(tag, ghcr_org): None}
+    else:
+        all_tags = dict.fromkeys([tag, sha_tag, latest_tag])
+
+    if "," in platform:
+        subprocess.run(
+            ["docker", "run", "--privileged", "--rm", "tonistiigi/binfmt", "--install", "all"],
+            check=True,
+            capture_output=not verbose,
+        )
+
     cmd = ["docker", "buildx", "build", "--platform", platform]
-    cmd.extend(["-t", tag])
+    cmd.extend(["--target", image_type])
+    cmd.extend(["--build-arg", f"CARGO_PROFILE={cargo_profile}"])
+    # The image carries no `.git`, so the date the controller reports for itself
+    # has to be resolved here, against the tree being built.
+    cmd.extend(["--build-arg", f"{REVISION_DATE_ENV}={iris_tree_date(iris_root)}"])
+    for key, value in provenance_to_env(provenance).items():
+        cmd.extend(["--build-arg", f"{key}={value}"])
+    for t in all_tags:
+        cmd.extend(["-t", t])
     cmd.extend(["-f", str(dockerfile_path)])
-    cmd.extend(["--output", f"type=docker,compression=zstd,compression-level=1,name={tag}"])
-    cmd.append(str(context_path))
 
-    click.echo(f"Building image: {tag}")
-    click.echo(f"Platform: {platform}")
-    click.echo(f"Context: {context_path}")
-    click.echo()
-
-    result = subprocess.run(cmd, check=False)
-    if result.returncode != 0:
-        click.echo("Build failed", err=True)
-        raise SystemExit(1)
-
-    click.echo()
-    click.echo("Build successful!")
-    click.echo(f"Image available locally as: {tag}")
+    cache_ref = f"ghcr.io/{ghcr_org}/iris-cache:{image_type}"
+    cmd.extend(["--cache-from", f"type=registry,ref={cache_ref}"])
+    for target_platform in platform.split(","):
+        architecture = target_platform.rsplit("/", 1)[-1]
+        cmd.extend(["--cache-from", f"type=registry,ref={cache_ref}-{architecture}"])
 
     if push:
-        _push_to_registries(tag, region, project)
-    elif region:
+        # oci-mediatypes/image-manifest store the cache as a single OCI image,
+        # required for non-gzip (zstd) cache on registries. See PUSH_COMPRESSION
+        # for why the cache and image compression are kept in lockstep.
+        cmd.extend(
+            [
+                "--cache-to",
+                "type=registry,"
+                f"ref={_cache_export_ref(cache_ref, platform)},"
+                f"mode=max,{PUSH_COMPRESSION},oci-mediatypes=true,image-manifest=true",
+            ]
+        )
+        cmd.extend(["--output", f"type=image,{PUSH_COMPRESSION},push=true"])
+        cmd.append("--provenance=false")
+    else:
+        cmd.extend(["--output", f"type=docker,compression=zstd,compression-level=1,name={tag}"])
+
+    cmd.append(str(context_path))
+
+    primary_tag = _ghcr_image_reference(tag, ghcr_org) if push else tag
+    extra = [t for t in all_tags if t != primary_tag]
+    extra_msg = f" (also tagged as {', '.join(extra)})" if extra else ""
+    click.echo(f"Building image: {primary_tag}{extra_msg}")
+    click.echo(f"Platform: {platform}")
+    click.echo(f"Context: {context_path}")
+    if push:
+        click.echo("Push: enabled (images will be pushed to registry)")
+    click.echo()
+
+    if verbose:
+        cmd.extend(["--progress", "plain"])
+        result = subprocess.run(cmd)
+    elif push:
+        cmd.extend(["--progress", "plain"])
+        result = subprocess.run(cmd)
+    else:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        click.echo("Build failed", err=True)
+        if not verbose:
+            if result.stdout:
+                click.echo(result.stdout, err=True)
+            if result.stderr:
+                click.echo(result.stderr, err=True)
+        raise SystemExit(1)
+
+    if not push:
+        # buildx --output=docker only loads one name; tag the rest manually
+        for t in extra:
+            subprocess.run(["docker", "tag", tag, t], check=True)
+
+    click.echo("Build successful!")
+    if push:
+        click.echo(f"Images pushed to: {', '.join(all_tags)}")
+    else:
+        click.echo(f"Image available locally as: {', '.join(all_tags)}")
+
+
+def _build_all(
+    push: bool,
+    platform: str,
+    ghcr_org: str,
+    verbose: bool = False,
+) -> None:
+    """Build all Iris images (worker, controller, task).
+
+    Registry tags are derived from the git SHA.
+    """
+    provenance = get_git_provenance()
+    marin_root = find_marin_root()
+
+    _ensure_protos()
+
+    for image_type in ("worker", "controller"):
+        tag = _versioned_tag(f"iris-{image_type}", provenance, platform)
+        build_image(image_type, tag, push, None, platform, provenance, ghcr_org, verbose)
         click.echo()
-        click.echo("To push to registries, run again with --push flag")
+
+    # Task target uses the same Dockerfile but needs marin root as context
+    build_image(
+        "task",
+        _versioned_tag("iris-task", provenance, platform),
+        push,
+        str(marin_root),
+        platform,
+        provenance,
+        ghcr_org,
+        verbose,
+    )
 
 
-@click.group()
-def build():
-    """Image build commands."""
+@click.group(invoke_without_command=True)
+@click.option("--push", is_flag=True, help="Push images to registry after building")
+@click.option("--platform", default="linux/amd64", help="Target platform")
+@click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization")
+@click.pass_context
+def build(ctx, push: bool, platform: str, ghcr_org: str):
+    """Image build commands.
+
+    When invoked without a subcommand, builds all images (worker, controller, task).
+    """
+    if ctx.invoked_subcommand is None:
+        _build_all(push, platform, ghcr_org, verbose=_is_verbose(ctx))
+
+
+@build.command("all")
+@click.option("--push", is_flag=True, help="Push images to registry after building")
+@click.option("--platform", default="linux/amd64", help="Target platform")
+@click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization")
+@click.pass_context
+def build_all(
+    ctx: click.Context,
+    push: bool,
+    platform: str,
+    ghcr_org: str,
+):
+    """Build all Iris images (worker, controller, task)."""
+    _build_all(push, platform, ghcr_org, verbose=_is_verbose(ctx))
 
 
 @build.command("worker-image")
-@click.option("--tag", "-t", default="iris-worker:latest", help="Image tag")
+@click.option("--tag", "-t", default=None, help="Image tag (default: <git-short-sha>)")
 @click.option("--push", is_flag=True, help="Push image to registry after building")
-@click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
 @click.option("--context", type=click.Path(exists=True), help="Build context directory")
 @click.option("--platform", default="linux/amd64", help="Target platform")
-@click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to")
-@click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
+@click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization")
+@click.pass_context
 def build_worker_image(
+    ctx,
     tag: str,
     push: bool,
-    dockerfile: str | None,
     context: str | None,
     platform: str,
-    region: tuple[str, ...],
-    project: str,
+    ghcr_org: str,
 ):
     """Build Docker image for Iris worker."""
-    _build_image("worker", tag, push, dockerfile, context, platform, region, project)
+    verbose = _is_verbose(ctx)
+    provenance = get_git_provenance()
+    _ensure_protos()
+    tag = tag or _versioned_tag("iris-worker", provenance, platform)
+    build_image("worker", tag, push, context, platform, provenance, ghcr_org, verbose=verbose)
 
 
 @build.command("controller-image")
-@click.option("--tag", "-t", default="iris-controller:latest", help="Image tag")
+@click.option("--tag", "-t", default=None, help="Image tag (default: <git-short-sha>)")
 @click.option("--push", is_flag=True, help="Push image to registry after building")
-@click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
 @click.option("--context", type=click.Path(exists=True), help="Build context directory")
 @click.option("--platform", default="linux/amd64", help="Target platform")
-@click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to")
-@click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
+@click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization")
+@click.pass_context
 def build_controller_image(
+    ctx,
     tag: str,
     push: bool,
-    dockerfile: str | None,
     context: str | None,
     platform: str,
-    region: tuple[str, ...],
-    project: str,
+    ghcr_org: str,
 ):
     """Build Docker image for Iris controller."""
-    _build_image("controller", tag, push, dockerfile, context, platform, region, project)
+    verbose = _is_verbose(ctx)
+    provenance = get_git_provenance()
+    _ensure_protos()
+    tag = tag or _versioned_tag("iris-controller", provenance, platform)
+    build_image("controller", tag, push, context, platform, provenance, ghcr_org, verbose=verbose)
 
 
 @build.command("task-image")
-@click.option("--tag", "-t", default="iris-task:latest", help="Image tag")
+@click.option("--tag", "-t", default=None, help="Image tag (default: <git-short-sha>)")
 @click.option("--push", is_flag=True, help="Push image to registry after building")
-@click.option("--dockerfile", type=click.Path(exists=True), help="Custom Dockerfile path")
 @click.option("--platform", default="linux/amd64", help="Target platform")
-@click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to")
-@click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
+@click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization")
+@click.pass_context
 def build_task_image(
+    ctx,
     tag: str,
     push: bool,
-    dockerfile: str | None,
     platform: str,
-    region: tuple[str, ...],
-    project: str,
+    ghcr_org: str,
 ):
     """Build base task image with system deps and pre-synced marin core deps.
 
     The build context is the marin repo root so that pyproject.toml and uv.lock
-    are available for COPY. The Dockerfile lives at lib/iris/Dockerfile.task.
+    are available for COPY. Uses the ``task`` target in ``lib/iris/Dockerfile``.
     """
-    marin_root = _find_marin_root()
-    iris_root = _find_iris_root()
-    dockerfile_path = Path(dockerfile) if dockerfile else iris_root / "Dockerfile.task"
+    marin_root = find_marin_root()
 
-    if not dockerfile_path.exists():
-        raise click.ClickException(f"Dockerfile not found: {dockerfile_path}")
+    verbose = _is_verbose(ctx)
+    provenance = get_git_provenance()
+    _ensure_protos()
+    resolved_tag = tag or _versioned_tag("iris-task", provenance, platform)
 
-    _build_image(
+    build_image(
         "task",
-        tag,
+        resolved_tag,
         push,
-        str(dockerfile_path),
         str(marin_root),
         platform,
-        region,
-        project,
+        provenance,
+        ghcr_org,
+        verbose=verbose,
     )
+
+
+@build.command("dashboard")
+def build_dashboard():
+    """Build Vue dashboard assets via Rsbuild."""
+    dashboard_dir = find_iris_root() / "dashboard"
+    if not (dashboard_dir / "package.json").exists():
+        raise click.ClickException(f"Dashboard source not found at {dashboard_dir}")
+    if not (dashboard_dir / "node_modules").exists():
+        click.echo("Installing dashboard dependencies...")
+        subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True)
+    click.echo("Building dashboard...")
+    result = subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, capture_output=True, text=True)
+    if result.returncode != 0:
+        click.echo(result.stderr, err=True)
+        raise click.ClickException("Dashboard build failed")
+    click.echo("Dashboard built successfully.")
 
 
 @build.command("push")
 @click.argument("source_tag")
-@click.option("--region", "-r", multiple=True, required=True, help="GCP Artifact Registry region")
-@click.option("--project", default="hai-gcp-models", help="GCP project ID")
-@click.option("--image-name", default="iris-worker", help="Image name in registry")
-@click.option("--version", default="latest", help="Version tag")
-def build_push(source_tag: str, region: tuple[str, ...], project: str, image_name: str, version: str):
-    """Push a local Docker image to GCP Artifact Registry."""
-    _push_to_registries(
-        source_tag,
-        region,
-        project,
-        image_name=image_name,
-        version=version,
-    )
+@click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization")
+@click.option("--image-name", help="Image name in registry (default: derived from source tag)")
+@click.option("--version", help="Version tag (default: derived from source tag)")
+@click.pass_context
+def build_push(
+    ctx: click.Context,
+    source_tag: str,
+    ghcr_org: str,
+    image_name: str | None,
+    version: str | None,
+):
+    """Push a local Docker image to GHCR.
+
+    Examples:
+
+        iris build push iris-worker:local --image-name iris-worker --version <git-sha>-amd64
+
+        iris build push iris-task:v1.0 --ghcr-org my-org
+    """
+    verbose = _is_verbose(ctx)
+    push_to_ghcr(source_tag, ghcr_org=ghcr_org, image_name=image_name, version=version, verbose=verbose)

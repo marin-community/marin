@@ -1,34 +1,27 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import glob
-import os
-from collections.abc import Callable
-from dataclasses import dataclass
+from pathlib import Path
 
 import draccus
 import pytest
-from marin.utils import asdict_excluding
 
 
-def parameterize_with_configs(pattern: str, config_path: str | None = None) -> Callable:
+def _tpu_is_available() -> bool:
+    """Whether a Cloud TPU is present, via its numbered VFIO IOMMU groups (/dev/vfio/0, ...).
+
+    Match only a numbered group, not any /dev/vfio entry: the bare /dev/vfio/vfio control device is
+    present wherever the vfio module is loaded (e.g. GitHub ubuntu-latest runners) with no TPU bound,
+    so ``any(iterdir())`` false-positives there. Numbered groups are the real-TPU signal the iris
+    worker and the GrugMoE e2e key off.
     """
-    A decorator to parameterize a test function with configuration files.
+    vfio = Path("/dev/vfio")
+    return vfio.is_dir() and any(p.name.isdigit() for p in vfio.iterdir())
 
-    Args:
-        pattern (str): A glob pattern to match configuration files.
-        config_path (Optional[str]): The base path to look for config files.
-                                    If None, uses "../config" relative to the test file.
 
-    Returns:
-        Callable: A pytest.mark.parametrize decorator that provides config files to the test function.
-
-    """
-    test_path = os.path.dirname(os.path.abspath(__file__))
-    if config_path is None:
-        config_path = os.path.join(test_path, "..", "config")
-    configs = glob.glob(os.path.join(config_path, "**", pattern), recursive=True)
-    return pytest.mark.parametrize("config_file", configs, ids=lambda x: f"{os.path.basename(x)}")
+# Skip a test that needs a real TPU when none is present, so pointing pytest at the file on a
+# TPU host runs it while a CPU run reports a clean skip.
+skip_if_no_tpu = pytest.mark.skipif(not _tpu_is_available(), reason="no TPU available")
 
 
 def check_load_config(config_class: type, config_file: str) -> None:
@@ -58,35 +51,3 @@ def skip_if_module_missing(module: str):
             return True
 
     return pytest.mark.skipif(not try_import_module(module), reason=f"{module} not installed")
-
-
-def skip_in_ci(fn_or_msg):
-    if isinstance(fn_or_msg, str):
-
-        def decorator(fn):
-            return pytest.mark.skipif("CI" in os.environ, reason=fn_or_msg)(fn)
-
-        return decorator
-
-    return pytest.mark.skipif("CI" in os.environ, reason="skipped in CI")(fn_or_msg)
-
-
-@dataclass
-class NestedConfig:
-    name: str
-    value: int
-    runtime_env: str = "test"
-
-
-def test_asdict_excluding_simple():
-    """Test asdict_excluding with a simple dataclass."""
-    config = NestedConfig(name="test", value=42)
-    result = asdict_excluding(config, exclude={"runtime_env"})
-    assert result == {"name": "test", "value": 42}
-    assert "runtime_env" not in result
-
-
-def test_asdict_excluding_invalid():
-    """Test asdict_excluding with non-dataclass input."""
-    with pytest.raises(ValueError, match="Only dataclasses are supported"):
-        asdict_excluding({"key": "value"}, exclude=set())

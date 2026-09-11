@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,13 +11,15 @@ from typing import Any, Callable, Sequence
 import equinox as eqx
 import jax
 import numpy as np
+import opt_einsum
 from jax import Array
 from jax import numpy as jnp
 from jax import random as jrandom
-from jax.experimental.multihost_utils import host_local_array_to_global_array
-from jax.sharding import PartitionSpec
+from jax._src import core as jax_core
 from jax._src.state.indexing import Slice
 from jax.ad_checkpoint import checkpoint_name
+from jax.experimental.multihost_utils import host_local_array_to_global_array
+from jax.sharding import PartitionSpec
 from jax.typing import DTypeLike
 from jaxtyping import PRNGKeyArray
 
@@ -31,7 +33,9 @@ try:
     )
 except ImportError:
     # jax v0.5.0 or older
-    from jax._src.numpy import lax_numpy as jax_einsum  # pylint: disable=g-import-not-at-top
+    from jax._src.numpy import (
+        lax_numpy as jax_einsum,  # pylint: disable=g-import-not-at-top
+    )
 
 
 F = typing.TypeVar("F", bound=Callable[..., Any])
@@ -135,8 +139,6 @@ def maybe_rng_split(key: PRNGKeyArray | None, num: int = 2):
 
 @ft.wraps(eqx.filter_eval_shape)
 def filter_eval_shape(*args, **kwargs):
-    import warnings
-
     warnings.warn(
         "filter_eval_shape is deprecated, use eqx.filter_eval_shape instead",
         DeprecationWarning,
@@ -178,8 +180,6 @@ def broadcast_prefix(prefix_tree: Any, full_tree: Any, is_leaf: Callable[[Any], 
 
 @ft.wraps(eqx.combine)
 def combine(*args, **kwargs):
-    import warnings
-
     warnings.warn("combine is deprecated, use eqx.combine instead", DeprecationWarning)
     return eqx.combine(*args, **kwargs)
 
@@ -271,11 +271,9 @@ def _jittable_dg_einsum(
     spec = operands[0] if isinstance(operands[0], str) else None
     optimize = "optimal" if optimize is True else optimize
 
-    import opt_einsum
-
     # Allow handling of shape polymorphism
     non_constant_dim_types = {
-        type(d) for op in operands if not isinstance(op, str) for d in np.shape(op) if not jax.core.is_constant_dim(d)
+        type(d) for op in operands if not isinstance(op, str) for d in np.shape(op) if not jax_core.is_constant_dim(d)
     }
     if not non_constant_dim_types:
         contract_path = opt_einsum.contract_path
@@ -287,7 +285,8 @@ def _jittable_dg_einsum(
 
     contractions = tuple((a, frozenset(b), c) for a, b, c, *_ in contractions)
 
-    einsum = eqx.filter_jit(jax_einsum._einsum, inline=True)
+    # filter_jit forwards **jitkwargs (here `inline`) to jax.jit; the equinox stub omits **kwargs.
+    einsum = eqx.filter_jit(jax_einsum._einsum, inline=True)  # pyrefly: ignore[unexpected-keyword]
     if spec is not None:
         einsum = jax.named_call(einsum, name=spec)
     return einsum(operands, contractions, precision, preferred_element_type, _dot_general, out_sharding=out_sharding)  # type: ignore[operator]
@@ -354,10 +353,3 @@ def multilevel_scan(f, carry, xs, outer_size, length, reverse=False, unroll=1):
             return x
 
     return carry, jax.tree.map(_deshape, scanned)
-
-
-def to_jax_shape(shape):
-    from haliax.core import Axis, ensure_tuple
-
-    shape = ensure_tuple(shape)
-    return tuple(axis.size if isinstance(axis, Axis) else axis for axis in shape)

@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional
@@ -6,6 +6,55 @@ from typing import Optional
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
+
+
+def _tpu_exp(x: jax.Array) -> jax.Array:
+    return jax.lax.exp(x, accuracy=jax.lax.AccuracyMode.HIGHEST)
+
+
+def _cross_entropy_exp(x: jax.Array) -> jax.Array:
+    return jax.lax.platform_dependent(x, tpu=_tpu_exp, default=jnp.exp)
+
+
+def _tpu_logsumexp(logits: jax.Array) -> jax.Array:
+    # Default TPU logarithms can introduce ~1e-4 errors in FP32 cross-entropy.
+    maximum = jnp.max(logits, axis=-1)
+    maximum = jax.lax.stop_gradient(jnp.where(jnp.isfinite(maximum), maximum, 0))
+    total = jnp.sum(_tpu_exp(logits - maximum[..., None]), axis=-1)
+    return maximum + jax.lax.log(total, accuracy=jax.lax.AccuracyMode.HIGHEST)
+
+
+def _default_logsumexp(logits: jax.Array) -> jax.Array:
+    return jax.nn.logsumexp(logits, axis=-1)
+
+
+def _cross_entropy_logsumexp(logits: jax.Array) -> jax.Array:
+    return jax.lax.platform_dependent(logits, tpu=_tpu_logsumexp, default=_default_logsumexp)
+
+
+@jax.custom_jvp
+def _tpu_logaddexp(left: jax.Array, right: jax.Array) -> jax.Array:
+    maximum = jnp.maximum(left, right)
+    delta = left - right
+    correction = jax.lax.log1p(_tpu_exp(-jnp.abs(delta)), accuracy=jax.lax.AccuracyMode.HIGHEST)
+    return jnp.where(jnp.isnan(delta), left + right, maximum + correction)
+
+
+@_tpu_logaddexp.defjvp
+def _tpu_logaddexp_jvp(primals, tangents):
+    left, right = primals
+    left_dot, right_dot = tangents
+    result = _tpu_logaddexp(left, right)
+    # Preserve JAX logaddexp's derivative convention at positive infinity.
+    left = jnp.where(jnp.isposinf(left), 0, left)
+    right = jnp.where(jnp.isposinf(right), 0, right)
+    finite_result = jnp.where(jnp.isposinf(result), 0, result)
+    tangent = left_dot * _tpu_exp(left - finite_result) + right_dot * _tpu_exp(right - finite_result)
+    return result, tangent
+
+
+def _cross_entropy_logaddexp(left: jax.Array, right: jax.Array) -> jax.Array:
+    return jax.lax.platform_dependent(left, right, tpu=_tpu_logaddexp, default=jnp.logaddexp)
 
 
 def _apply_logit_soft_cap(logits: Float[Array, "B V"], logit_soft_cap: Optional[float]) -> Float[Array, "B V"]:
@@ -23,7 +72,8 @@ def linear_softmax_cross_entropy_loss_reference(
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     block_sizes: Optional[object] = None,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+    return_argmax: bool = False,
+) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Reference loss + logsumexp for linear softmax cross-entropy.
 
     Args:
@@ -45,14 +95,18 @@ def linear_softmax_cross_entropy_loss_reference(
         w,
         (((1,), (0,)), ((), ())),
         precision=precision,
+        preferred_element_type=jnp.float32,
     )
     if dtype is not None:
         logits = logits.astype(dtype)
 
     logits = _apply_logit_soft_cap(logits, logit_soft_cap)
-    lse = jax.nn.logsumexp(logits, axis=-1)
+    lse = _cross_entropy_logsumexp(logits)
     label_logits = logits[jnp.arange(logits.shape[0]), labels]
     loss = lse - label_logits
+    if return_argmax:
+        argmax = jnp.argmax(logits, axis=-1).astype(jnp.int32)
+        return loss, lse, argmax
     return loss, lse
 
 
@@ -65,7 +119,8 @@ def linear_softmax_cross_entropy_loss_streaming(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+    return_argmax: bool = False,
+) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Streaming reference loss + logsumexp without materializing logits."""
 
     if block_size <= 0:
@@ -73,7 +128,7 @@ def linear_softmax_cross_entropy_loss_streaming(
 
     b_dim = x.shape[0]
     v_dim = w.shape[1]
-    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
+    out_dtype = jnp.dtype(dtype) if dtype is not None else jnp.float32
 
     pad = (-v_dim) % block_size
     if pad:
@@ -87,7 +142,10 @@ def linear_softmax_cross_entropy_loss_streaming(
     label_logit_init = jnp.full_like(x.sum(-1), -jnp.inf, dtype=out_dtype)
 
     def body(block_idx, state):
-        logsumexp, label_logit = state
+        if return_argmax:
+            logsumexp, label_logit, best_logits, best_ids = state
+        else:
+            logsumexp, label_logit = state
         start = block_idx * block_size
 
         w_block = jax.lax.dynamic_slice(w, (0, start), (w.shape[0], block_size))
@@ -105,16 +163,32 @@ def linear_softmax_cross_entropy_loss_streaming(
         valid = (start + jnp.arange(block_size)) < v_dim
         logits = jnp.where(valid, logits, -jnp.inf)
 
-        block_lse = jax.nn.logsumexp(logits, axis=-1)
-        logsumexp = jnp.logaddexp(logsumexp, block_lse)
+        block_lse = _cross_entropy_logsumexp(logits)
+        logsumexp = _cross_entropy_logaddexp(logsumexp, block_lse)
 
         in_block = (labels >= start) & (labels < start + block_size)
         label_idx = labels - start
         safe_idx = jnp.where(in_block, label_idx, 0)
         block_label_logit = logits[jnp.arange(b_dim), safe_idx]
         label_logit = jnp.where(in_block, block_label_logit, label_logit)
+        if return_argmax:
+            block_best_logits = jnp.max(logits, axis=-1)
+            block_best_ids = jnp.argmax(logits, axis=-1).astype(jnp.int32) + start
+            better = block_best_logits > best_logits
+            best_logits = jnp.where(better, block_best_logits, best_logits)
+            best_ids = jnp.where(better, block_best_ids, best_ids)
+            return logsumexp, label_logit, best_logits, best_ids
         return logsumexp, label_logit
 
-    logsumexp, label_logit = jax.lax.fori_loop(0, num_blocks, body, (logsumexp_init, label_logit_init))
+    if return_argmax:
+        best_logits_init = jnp.full((b_dim,), -jnp.inf, dtype=out_dtype)
+        best_ids_init = jnp.zeros((b_dim,), dtype=jnp.int32)
+        logsumexp, label_logit, _, argmax = jax.lax.fori_loop(
+            0, num_blocks, body, (logsumexp_init, label_logit_init, best_logits_init, best_ids_init)
+        )
+    else:
+        logsumexp, label_logit = jax.lax.fori_loop(0, num_blocks, body, (logsumexp_init, label_logit_init))
     loss = logsumexp - label_logit
+    if return_argmax:
+        return loss, logsumexp, argmax
     return loss, logsumexp

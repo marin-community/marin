@@ -6,7 +6,10 @@ This tutorial walks through setting up a Google Cloud Storage (GCS) bucket that 
 ## When You Need This
 
 - Running local GPU or TPU experiments that write checkpoints to `gs://...` paths.
-- Launching TPU jobs with [`scripts/ray/cluster.py`](https://github.com/marin-community/marin/blob/main/scripts/ray/cluster.py) or Ray clusters, where every worker streams artifacts to a shared prefix.
+- Launching TPU jobs on the shared
+  [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
+  cluster. CoreWeave GPU jobs use the object storage described in [Training on
+  Cloud GPUs](cloud-gpu.md).
 - Hosting tokenized datasets or compilation caches that multiple jobs should reuse.
 
 If you only run experiments locally with `local_store/` you can skip this, but migrating to GCS early prevents churn later.
@@ -67,9 +70,32 @@ gcloud storage buckets describe "$BUCKET" \
 
 Clearing the policy ensures that once a training job deletes temporary files they disappear immediately, preventing runaway storage bills. You can still enable backups via lifecycle rules or replication if you need recovery.
 
-## Step 4: Configure Lifecycle Rules (Optional but Helpful)
+## Step 4: TTL Scratch Prefixes (`tmp/ttl=Nd/`)
 
-Large experimentation buckets benefit from automatic cleanup. For example, delete files under `tmp/` after seven days and move old checkpoints to colder storage:
+For intermediate checkpoints and other short-lived data, Marin reserves a `tmp/` prefix on each managed data bucket with lifecycle rules that delete objects based on a `tmp/ttl=Nd/` path prefix — for example, objects under `gs://marin-us-central2/tmp/ttl=3d/my-job/` are deleted three days after they are written.
+
+Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days. The canonical list lives in `config/marin.yaml` (`data.temp.ttl_days`). Use `marin_temp_bucket` for lifecycle-managed scratch co-located with an input or output prefix. A cluster can set `MARIN_TEMP_PREFIX` to override that routing for every temporary write.
+
+The shared data buckets on GCS, CoreWeave, and R2 are declared by `DataBuckets` in
+[`infra/buckets`](https://github.com/marin-community/marin/blob/main/infra/buckets/README.md).
+Their names and regions come from `config/marin.yaml` and `config/coreweave.yaml`; Pulumi owns
+the complete lifecycle policy on every backend and GCS soft-delete disablement.
+To add a region or specialized bucket, add its entry to the reviewed `data.region_buckets` map and preview
+the manually operated `marin-buckets` stack:
+
+```bash
+uv sync --package marin-buckets
+export COREWEAVE_API_TOKEN=...
+export CLOUDFLARE_API_TOKEN=...  # account token with Workers R2 Storage Write
+pulumi -C infra/buckets preview --stack marin-buckets
+```
+
+If the bucket already exists, import it into `marin-buckets` before running `pulumi up`. A new
+bucket is created by the normal update.
+
+### Custom lifecycle rules for your own buckets
+
+For non-scratch buckets, you can still set up lifecycle rules manually. For example, delete files under a prefix after seven days:
 
 ```json
 {
@@ -85,7 +111,7 @@ Large experimentation buckets benefit from automatic cleanup. For example, delet
 Save this as `lifecycle.json` and apply it:
 
 ```bash
-gsutil lifecycle set lifecycle.json "$BUCKET"
+gcloud storage buckets update "$BUCKET" --lifecycle-file=lifecycle.json
 ```
 
 Adjust prefixes to match how your experiments organize outputs.
@@ -108,7 +134,21 @@ trainer:
     base_path: "$BUCKET/your-run"
 ```
 
-Commit these defaults in `.levanter.yaml` or `.envrc` so every launch script uses the same location.
+For `iris job run`, put personal launch values in the gitignored `.marin.yaml`
+at the checkout root:
+
+```yaml
+env:
+  MARIN_PREFIX: "gs://your-bucket"
+  WANDB_PROJECT: marin
+  WANDB_ENTITY: your-entity
+```
+
+The Iris CLI loads this `env` section when run from that directory. Direct SDK
+submissions and commands run from another directory do not load it. A GCS
+`MARIN_PREFIX` in this file also overrides the CoreWeave storage default. Omit
+it from checkouts that submit CoreWeave jobs, or set it only on the GCP job that
+needs it.
 
 ## Ongoing Hygiene Checklist
 

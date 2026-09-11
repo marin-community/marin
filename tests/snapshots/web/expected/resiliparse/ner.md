@@ -131,7 +131,7 @@ p<sub>O</sub>(B-LOC | “UK”) = e<sup>SUM(λ<sub>a</sub>f<sub>a</sub>)</sup> /
 
 ### Results
 
-Most Informative Features when Previous State is 
+Most Informative Features when Previous State is
 
 | Current Word Feature | Current State | Weight |
 | --- | --- | --- |
@@ -248,7 +248,8 @@ p(1, 1, 1, 0, 0, 0)
 ### Conditional Form
 
 $$p(yx)=\frac{1}{Z(x)}\underset{c\text{}\text{}C}{}{\varphi}_{c}({y}_{c},{x}_{c})\text{where Z is a normalization factor}\text{and C is the set of cliques in the}\text{graph }\mathcal{G}\text{ representing the labels }yp(y|x) = \frac{1}{Z(x)}\prod_{c\,{\scriptscriptstyle \in}\,C}{\phi_c(y_c, x_c)} \\ \footnotesize\textrm{where Z is a normalization factor} \\ \footnotesize\textrm{and C is the set of cliques in the} \\ \footnotesize\textrm{graph $\mathcal{G}$ representing the labels $y$}$$
-Linear-chain CRF where the hidden layer depends on the current, previous, and future observations. 
+
+Linear-chain CRF where the hidden layer depends on the current, previous, and future observations.
 
 ### Exponential Factors
 

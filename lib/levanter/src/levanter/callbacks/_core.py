@@ -1,10 +1,13 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
+import inspect
 from abc import ABC
-from dataclasses import dataclass
-from typing import Any, Callable, Generic, TypeVar
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any, Callable, Generic, Iterator, TypeVar
 
 from jaxtyping import PyTree
 
@@ -15,6 +18,37 @@ M = TypeVar("M")  # Model
 M_con = TypeVar("M_con", bound=PyTree, contravariant=True)
 S = TypeVar("S", bound=TrainerState)
 CBInfo = TypeVar("CBInfo")
+
+
+class ProgressEvent(StrEnum):
+    """Lifecycle events that represent forward progress through training."""
+
+    PROCESS_STARTED = "process_started"
+    TRAIN_STEP_STARTED = "train_step_started"
+    TRAIN_STEP_FINISHED = "train_step_finished"
+    EVALUATION_STARTED = "evaluation_started"
+    EVALUATION_FINISHED = "evaluation_finished"
+    CHECKPOINT_STARTED = "checkpoint_started"
+    CHECKPOINT_FINISHED = "checkpoint_finished"
+    TRAINING_FINISHED = "training_finished"
+
+
+def _ignore_progress_event(event: ProgressEvent) -> None:
+    del event
+
+
+@contextmanager
+def progress_event_scope(
+    emit_event: Callable[[ProgressEvent], None],
+    started: ProgressEvent,
+    finished: ProgressEvent,
+) -> Iterator[None]:
+    """Emit paired lifecycle events around a block, including when it raises."""
+    emit_event(started)
+    try:
+        yield
+    finally:
+        emit_event(finished)
 
 
 @dataclass
@@ -29,6 +63,11 @@ class StepInfo(Generic[S]):
     state: S
     loss: float
     step_duration: float
+    _event_handler: Callable[[ProgressEvent], None] = field(
+        default=_ignore_progress_event,
+        repr=False,
+        compare=False,
+    )
 
     model = property(lambda self: self.state.model)
     opt_state = property(lambda self: self.state.opt_state)
@@ -41,6 +80,10 @@ class StepInfo(Generic[S]):
 
     next_step = property(lambda self: int(self.state.step))
 
+    def emit_event(self, event: ProgressEvent) -> None:
+        """Notify event-aware callbacks about progress inside a step callback."""
+        self._event_handler(event)
+
 
 class Callback(ABC, Generic[S]):
     """
@@ -50,13 +93,36 @@ class Callback(ABC, Generic[S]):
     @abc.abstractmethod
     def on_step(self, info: StepInfo[S], force: bool = False): ...
 
+    def on_event(self, event: ProgressEvent) -> None:
+        del event
+
 
 class LambdaCallback(Callback[S]):
-    def __init__(self, fn: Callable[[StepInfo[S]], Any]):
+    def __init__(self, fn: Callable[..., Any]):
         self.fn = fn
+        self._supports_force = self._callable_accepts_force(fn)
 
     def on_step(self, info: StepInfo[S], force: bool = False):
-        self.fn(info)
+        if self._supports_force:
+            self.fn(info, force=force)
+        else:
+            self.fn(info)
+
+    @staticmethod
+    def _callable_accepts_force(fn: Callable[..., Any]) -> bool:
+        try:
+            sig = inspect.signature(fn)
+        except (TypeError, ValueError):
+            return False
+
+        params = sig.parameters
+        if "force" in params and params["force"].kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            return True
+
+        return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 class JitCallback(ABC, Generic[S, M, CBInfo]):

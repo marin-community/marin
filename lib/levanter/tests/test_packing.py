@@ -1,14 +1,14 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import tempfile
 from typing import Generator
 
+import haliax as hax
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-
-import haliax as hax
 
 from levanter.data.packing import (
     GreedyPrepackedDataset,
@@ -25,8 +25,6 @@ from levanter.store.jagged_array import JaggedArrayStore
 
 
 def test_per_segment_loss():
-    import jax
-
     Pos = hax.Axis("pos", size=10)
     packer = SequencePacker(Pos=Pos, max_pack_size=10, pad_token=0)
 
@@ -707,7 +705,7 @@ def test_slicing_strategies():
             GreedyPrepackedDataset(dataset, max_length, slice_strategy="raise")
 
         # Test invalid strategy
-        with pytest.raises(ValueError, match="slice_strategy must be one of 'left', 'right', or 'raise'"):
+        with pytest.raises(ValueError, match="slice_strategy must be one of 'left', 'right', 'raise', or 'drop'"):
             GreedyPrepackedDataset(dataset, max_length, slice_strategy="invalid")
 
 

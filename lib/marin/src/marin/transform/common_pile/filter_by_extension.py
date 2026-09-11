@@ -1,24 +1,18 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Utilities for filtering Common Pile datasets by metadata extensions.
-
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
-    lib/marin/src/marin/transform/common_pile/filter_by_extension.py \
-    --input_path gs://marin-data/raw/common-pile/ \
-    --output_path gs://marin-data/processed/common-pile/filtered/ \
-    --allowed_extensions .txt .md
-"""
+"""Utilities for filtering Common Pile datasets by metadata extensions."""
 
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.readers import load_jsonl
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _normalize_extension(value: object, *, casefold: bool) -> str | None:
@@ -67,7 +61,6 @@ class FilterByMetadataExtensionConfig:
     extension_key: str = "extension"
     input_glob: str = "*.json*"
     casefold: bool = True
-    drop_missing_extensions: bool = True
 
     @cached_property
     def normalised_allowed_extensions(self) -> set[str]:
@@ -77,27 +70,18 @@ class FilterByMetadataExtensionConfig:
 def _filter_record_by_metadata_extension(record: dict, config: FilterByMetadataExtensionConfig):
     """Filter a single record and return it if it has an allowed extension.
 
-    Args:
-        record: Record from JSONL file
-        config: Filter configuration
-
-    Returns:
-        The record if it matches allowed extensions, None otherwise
+    Records whose metadata column is missing, malformed, or lacks the configured
+    extension key are dropped.
     """
-    allowed_extensions = config.normalised_allowed_extensions
-
     metadata = record.get(config.metadata_column)
     if not isinstance(metadata, dict):
-        if config.drop_missing_extensions:
-            return None
-        metadata = {}
+        return None
 
     extension_value = metadata.get(config.extension_key)
     normalised_extension = _normalize_extension(extension_value, casefold=config.casefold)
     if normalised_extension is None:
-        if config.drop_missing_extensions:
-            return None
-    if normalised_extension not in allowed_extensions:
+        return None
+    if normalised_extension not in config.normalised_allowed_extensions:
         return None
 
     return record
@@ -121,5 +105,5 @@ def filter_dataset_by_metadata_extension(config: FilterByMetadataExtensionConfig
         .filter(lambda record: record is not None)
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    with ZephyrContext(name="filter-by-extension") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="filter-by-extension")
+    ctx.execute(pipeline)

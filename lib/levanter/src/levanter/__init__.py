@@ -1,41 +1,12 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-__all__ = [
-    "analysis",
-    "callbacks",
-    "checkpoint",
-    "config",
-    "data",
-    "distributed",
-    "eval",
-    "eval_harness",
-    "models",
-    "optim",
-    "tracker",
-    "trainer",
-    "visualization",
-    "grug",
-    "current_tracker",
-    "initialize",
-]
+"""Levanter: a JAX library for training foundation models.
 
-import levanter.analysis as analysis
-import levanter.callbacks as callbacks
-import levanter.checkpoint as checkpoint
-import levanter.config as config
-import levanter.data as data
-import levanter.distributed as distributed
-import levanter.eval as eval
-import levanter.eval_harness as eval_harness
-import levanter.models as models
-import levanter.optim as optim
-import levanter.tracker as tracker
-import levanter.trainer as trainer
-import levanter.visualization as visualization
-import levanter.grug as grug
-from levanter.tracker import current_tracker
-from levanter.trainer import initialize
-
+Import from the defining submodule (``levanter.trainer``, ``levanter.models``,
+``levanter.optim``, ``levanter.data``, ``levanter.tracker``, ...) rather than the package. This
+module deliberately imports nothing: eagerly importing the submodules here made ``import
+levanter`` pull in the whole library, so a change to any one module selected nearly every test.
+"""
 
 __version__ = "1.2"

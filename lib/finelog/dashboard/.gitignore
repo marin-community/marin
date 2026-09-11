@@ -1,0 +1,6 @@
+node_modules
+dist
+.rsbuild
+*.log
+test-results
+playwright-report

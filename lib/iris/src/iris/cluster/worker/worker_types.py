@@ -1,16 +1,17 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Internal worker types for task tracking."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Protocol
 
+from finelog.rpc import logging_pb2
 from pydantic import BaseModel
+from rigging.timing import Timestamp
 
-from iris.rpc import cluster_pb2
-from iris.rpc.cluster_pb2 import TaskState
-from iris.time_utils import Timestamp
+from iris.rpc import job_pb2
+from iris.rpc.job_pb2 import TaskState
 
 
 class LogLine(BaseModel):
@@ -20,23 +21,24 @@ class LogLine(BaseModel):
 
     @classmethod
     def now(cls, source: str, data: str) -> "LogLine":
-        return cls(timestamp=datetime.now(timezone.utc), source=source, data=data)
+        return cls(timestamp=datetime.now(UTC), source=source, data=data)
 
     @classmethod
     def at(cls, timestamp: Timestamp, source: str, data: str) -> "LogLine":
         """Create a log line with an explicit timestamp."""
         return cls(
-            timestamp=datetime.fromtimestamp(timestamp.epoch_seconds(), tz=timezone.utc),
+            timestamp=datetime.fromtimestamp(timestamp.epoch_seconds(), tz=UTC),
             source=source,
             data=data,
         )
 
-    def to_proto(self) -> cluster_pb2.Worker.LogEntry:
-        proto = cluster_pb2.Worker.LogEntry(
+    def to_proto(self) -> logging_pb2.LogEntry:
+        proto = logging_pb2.LogEntry(
             source=self.source,
             data=self.data,
         )
-        proto.timestamp.CopyFrom(Timestamp.from_seconds(self.timestamp.timestamp()).to_proto())
+        # finelog.logging.LogEntry uses finelog.logging.Timestamp; assign directly.
+        proto.timestamp.epoch_ms = Timestamp.from_seconds(self.timestamp.timestamp()).epoch_ms()
         return proto
 
 
@@ -51,11 +53,12 @@ class TaskLogs(BaseModel):
 
 
 class TaskInfo(Protocol):
-    """Read-only view of task state for RPC handlers.
+    """Read-only view of task state used by RPC handlers and the reconcile path.
 
-    This protocol decouples the service layer from TaskAttempt's execution internals
-    (thread, runtime, providers, etc.) while providing access to state needed for
-    RPC responses.
+    Decouples the service layer from TaskAttempt's execution internals (thread,
+    runtime, providers, etc.) while exposing the state the worker needs to
+    report back to the controller (status, exit_code, error,
+    platform_container_id, finished_at).
     """
 
     @property
@@ -64,10 +67,25 @@ class TaskInfo(Protocol):
         ...
 
     @property
-    def result(self) -> bytes | None:
-        """Serialized task result (cloudpickle), if available."""
+    def exit_code(self) -> int | None:
+        """Process exit code once the container has stopped, else ``None``."""
         ...
 
-    def to_proto(self) -> cluster_pb2.TaskStatus:
+    @property
+    def error(self) -> str | None:
+        """Human-readable error string for failed/worker-failed attempts."""
+        ...
+
+    @property
+    def platform_container_id(self) -> str | None:
+        """Platform-specific container ID (docker hash, k8s pod name, etc.)."""
+        ...
+
+    @property
+    def finished_at(self) -> Timestamp | None:
+        """Terminal-state timestamp; ``None`` while the attempt is still active."""
+        ...
+
+    def to_proto(self) -> job_pb2.TaskStatus:
         """Convert to protobuf TaskStatus message."""
         ...

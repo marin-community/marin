@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -195,7 +195,7 @@ def concat_axes(a1: AxisSelection, a2: AxisSelection) -> AxisSelection:
     pass
 
 
-def concat_axes(a1, a2):
+def concat_axes(a1: AxisSelection, a2: AxisSelection) -> AxisSelection:
     """Concatenates two AxisSpecs. Raises ValueError if any axis is present in both specs"""
 
     if isinstance(a1, Axis) and isinstance(a2, Axis):

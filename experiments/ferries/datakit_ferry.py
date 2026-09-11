@@ -1,0 +1,185 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Datakit smoke ferry: end-to-end download → normalize → dedup → consolidate → tokenize.
+
+Runs against the FineWeb-Edu ``sample/10BT`` subset using the StepSpec DAG runner.
+Output paths are placed under a region-local one-day temp prefix.
+"""
+
+import logging
+import os
+
+from fray.types import ResourceConfig
+from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import NormalizedData, normalize_step
+from marin.execution.artifact import read_artifact
+from marin.execution.step_runner import StepRunner
+from marin.execution.step_spec import StepSpec
+from marin.processing.classification.consolidate import (
+    FilterConfig,
+    FilterType,
+    consolidate,
+)
+from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_ATTR_DATA_VERSION,
+    FuzzyDupsAttrData,
+    compute_fuzzy_dups_attrs,
+)
+from marin.processing.classification.deduplication.fuzzy_minhash import (
+    MinHashAttrData,
+    compute_minhash_attrs,
+)
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+    FuzzyVerificationStoreConfig,
+    VerifiedFuzzyDupsAttrData,
+    verify_fuzzy_dups,
+)
+from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.log_setup import configure_logging
+from rigging.timing import log_time
+
+from infra.ci.run_status import run_status
+
+logger = logging.getLogger(__name__)
+
+FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
+    recovery_timeout=1_800,
+    ready_timeout=1_800,
+    lookup_batch_size=128,
+)
+
+
+def build_steps(base: str) -> list[StepSpec]:
+    base_path = StoragePath(base)
+
+    # Filtered download — restrict to the sample/10BT subset so we don't pull
+    # the entire fineweb-edu repo (TBs). Per-run isolated under $base/download.
+    downloaded = download_hf_step(
+        "datakit-smoke/download",
+        hf_dataset_id="HuggingFaceFW/fineweb-edu",
+        revision="87f0914",
+        hf_urls_glob=["sample/10BT/*.parquet"],
+        zephyr_max_parallelism=14,  # fineweb-edu sample/10BT has 14 parquet shards
+        override_output_path=str(base_path / "download"),
+    )
+
+    # Normalize peaked at ~10 GB mem, 17 GB disk on 10BT; bump disk from default 10g.
+    normalized = normalize_step(
+        name="datakit-smoke/normalize",
+        download=downloaded,
+        relative_input_path="sample/10BT",
+        worker_resources=ResourceConfig(cpu=2, ram="16g", disk="20g"),
+        override_output_path=str(base_path / "normalize"),
+    )
+
+    # MinHash attrs: per-shard 1:1 from the normalized dataset. MinHash is
+    # single-core per shard, so the stage packs five subprocess slots here.
+    minhash = StepSpec(
+        name="datakit-smoke/minhash",
+        deps=[normalized],
+        fn=lambda output_path: compute_minhash_attrs(
+            source=read_artifact(normalized.output_path, NormalizedData),
+            output_path=output_path,
+            worker_resources=ResourceConfig(cpu=5, ram="16g", disk="10g"),
+        ),
+        override_output_path=str(base_path / "minhash"),
+    )
+
+    # Fuzzy dups: connected components over the MinHash bucket graph.
+    # max_parallelism=128 mirrors the old dedup tuning for 10BT (~106 shards).
+    candidates = StepSpec(
+        name="datakit-smoke/fuzzy_dups",
+        deps=[minhash],
+        hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": 3},
+        fn=lambda output_path: compute_fuzzy_dups_attrs(
+            inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
+            output_path=output_path,
+            max_parallelism=128,
+            cc_max_iterations=3,
+            worker_resources=ResourceConfig(cpu=1, ram="16g", disk="30g"),
+        ),
+        override_output_path=str(base_path / "fuzzy_dups"),
+    )
+
+    verification_params = FuzzyVerificationParams()
+    verified = StepSpec(
+        name="datakit-smoke/verify_fuzzy_dups",
+        deps=[normalized, minhash, candidates],
+        hash_attrs={
+            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+            "verification": verification_params.model_dump(mode="json"),
+            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
+        },
+        fn=lambda output_path: verify_fuzzy_dups(
+            normalized_sources={"source": read_artifact(normalized.output_path, NormalizedData)},
+            minhash_sources={"source": read_artifact(minhash.output_path, MinHashAttrData)},
+            candidates=read_artifact(candidates.output_path, FuzzyDupsAttrData),
+            output_path=output_path,
+            verification_params=verification_params,
+            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+            store_config=FUZZY_VERIFICATION_STORE_CONFIG,
+            worker_resources=ResourceConfig(cpu=2, ram="16g", disk="30g"),
+        ),
+        override_output_path=prefix_join(base, "verify_fuzzy_dups"),
+    )
+
+    consolidated = StepSpec(
+        name="datakit-smoke/consolidate",
+        deps=[normalized, verified],
+        fn=lambda output_path: consolidate(
+            input_path=read_artifact(normalized.output_path, NormalizedData).main_output_dir,
+            output_path=output_path,
+            filetype="parquet",
+            filters=[
+                FilterConfig(
+                    type=FilterType.REMOVE_DOC,
+                    attribute_path=read_artifact(verified.output_path, VerifiedFuzzyDupsAttrData).attr_dir_for_source(
+                        read_artifact(normalized.output_path, NormalizedData).main_output_dir
+                    ),
+                    name="dup_doc",
+                    attribute_filetype="parquet",
+                    keep_if_missing=True,
+                ),
+            ],
+            worker_resources=ResourceConfig(cpu=1, ram="8g"),
+        ),
+        override_output_path=str(base_path / "consolidate"),
+    )
+
+    tokenized = StepSpec(
+        name="datakit-smoke/tokenize",
+        deps=[consolidated],
+        hash_attrs={"tokenizer": "gpt2"},
+        fn=lambda output_path: tokenize(
+            TokenizeConfig(
+                train_paths=[consolidated.output_path],
+                validation_paths=[],
+                cache_path=output_path,
+                tokenizer="gpt2",
+            )
+        ),
+        override_output_path=str(base_path / "tokens"),
+    )
+
+    return [downloaded, normalized, minhash, candidates, verified, consolidated, tokenized]
+
+
+def main() -> None:
+    configure_logging()
+    run_id = os.environ["SMOKE_RUN_ID"]
+    output_prefix = marin_temp_bucket(ttl_days=1, prefix=f"datakit-smoke/{run_id}")
+    logger.info("Output prefix: %s", output_prefix)
+
+    with run_status(os.environ.get("FERRY_STATUS_PATH"), marin_prefix=output_prefix):
+        with log_time("Datakit ferry total wall time"):
+            StepRunner().run(build_steps(output_prefix))
+
+
+if __name__ == "__main__":
+    main()

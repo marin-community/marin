@@ -1,6 +1,6 @@
 # Duality relations for 𝑀 coupled Potts models
 
-(January 2000)  
+(January 2000)
 
 ## Abstract
 
@@ -38,7 +38,8 @@ By means of a generalised Kasteleyn-Fortuin transformation the local Boltzmann w
 
 $$\\exp(-{\\cal H}\_{ij})=\\prod\_{m=1}^{M}\\prod\_{\\mu\_{1}\\neq\\mu\_{2}\\neq\\cdots\\mu\_{m}}^{\\prime}\\left\[1+\\left({\\rm e}^{K\_{m}}-1\\right)\\prod\_{l=1}^{m}\\delta(\\sigma^{(\\mu\_{l})}\_{i},\\sigma^{(\\mu\_{l})}\_{j})\\right\].$$  
 
-(3)   
+(3)
+
 In analogy with the case of $M=1$, the products can now be expanded so as to transform the original Potts model into its associated random cluster model. To this end we note that Eq. (3) can be rewritten in the form
 
 $$\\exp(-{\\cal H}\_{ij})=b\_{0}+\\sum\_{m=1}^{M}b\_{m}\\sum\_{\\mu\_{1}\\neq\\mu\_{2}\\neq\\cdots\\mu\_{m}}^{\\prime}\\prod\_{l=1}^{m}\\delta(\\sigma^{(\\mu\_{l})}\_{i},\\sigma^{(\\mu\_{l})}\_{j}),$$  
@@ -53,7 +54,8 @@ for $m\\geq 1$, and we set $J\_{0}=K\_{0}=0$. On the other hand, we find from Eq
 
 $$b\_{k}=\\sum\_{m=0}^{k}(-1)^{m+k}{k\\choose m}{\\rm e}^{J\_{m}}.$$  
 
-(6)   
+(6)
+
 The partition function in the spin representation
 
 $$Z=\\sum\_{\\\{\\sigma\\\}}\\prod\_{\\langle ij\\rangle}\\exp(-{\\cal H}\_{ij})$$  
@@ -98,7 +100,8 @@ $${\\rm e}^{K\_{2}}=\\frac{2{\\rm e}^{K\_{1}}+(q-1)}{{\\rm e}^{2K\_{1}}},$$
 in accordance with Ref.. Similarly, for $M=3$ one has $b\_{1}=qb\_{2}/b\_{3}=b\_{2}/\\sqrt{q}$ with $b\_{1}={\\rm e}^{K\_{1}}-1$, $b\_{2}$ as before, and $b\_{3}={\\rm e}^{3K\_{1}+3K\_{2}+K\_{3}}-3{\\rm e}^{2K\_{1}+K\_{2}}+3{\\rm e}^{K\_{1}}-1$. This immediately leads to the result given in Ref.:
 
 $\\displaystyle{\\rm e}^{K\_{2}}$ $\\displaystyle=$ $\\displaystyle\\frac{(2+\\sqrt{q}){\\rm e}^{K\_{1}}-(1+\\sqrt{q})}{{\\rm e}^{2K\_{1}}},$ (12)   
-$\\displaystyle{\\rm e}^{K\_{3}}$ $\\displaystyle=$ $\\displaystyle\\frac{3({\\rm e}^{K\_{1}}-1)(1+\\sqrt{q})+q^{3/2}+1}{\\left\[(2+\\sqrt{q}){\\rm e}^{K\_{1}}-(1+\\sqrt{q})\\right\]^{3}}\\\,{\\rm e}^{3K\_{1}}.$   
+$\\displaystyle{\\rm e}^{K\_{3}}$ $\\displaystyle=$ $\\displaystyle\\frac{3({\\rm e}^{K\_{1}}-1)(1+\\sqrt{q})+q^{3/2}+1}{\\left\[(2+\\sqrt{q}){\\rm e}^{K\_{1}}-(1+\\sqrt{q})\\right\]^{3}}\\\,{\\rm e}^{3K\_{1}}.$
+
 Returning now to the general case, we notice that the selfdual manifold always contains two special points for which the behaviour of the $M$ coupled models can be related to that of a single Potts model. At the first such point,
 
 $$b\_{m}=q^{m/2}\\ \\ \\ \\ \\mbox{ for }m=0,1,\\ldots,\\left\[\\frac{M}{2}\\right\],$$  
@@ -117,7 +120,8 @@ To get an indication whether such results can be expected to generalise also to 
 
 $$f\_{0}(L)=f\_{0}(\\infty)-\\frac{\\pi c}{6L^{2}}+\\cdots.$$  
 
-(15)   
+(15)
+
 A contour plot of $c(6,8)$, based on a grid of $21\\times 21$ parameter values for $(b\_{1},b\_{2})$, is shown in Fig. 1. The data for $c(4,6)$ look qualitatively similar, but are less accurate due to finite-size effects. We should stress that even though the absolute values of $c(6,8)$ are some 4 % below what one would expect in the $L\\to\\infty$ limit, the variations in $c$ are supposed to be reproduced much more accurately. On the figure $q=3$, but other values of $q$ in the range $2\\\<q\\leq 4$ lead to similar results.
 
 According to Zamolodchikov’s $c$-theorem, a system initially in the vicinity of the decoupled fixed point $(b\_{1},b\_{2})=(\\sqrt{q},q)$, shown as an asterisk on the figure, will start flowing downhill in this central charge landscape. Fig. 1 very clearly indicates that the decoupled fixed point acts as a saddle point, and there are thus only two possibilities for the direction of the initial flow.

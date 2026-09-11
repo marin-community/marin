@@ -30,8 +30,6 @@ trainer:
   per_device_parallelism: -1
   train_batch_size: 256
   num_train_steps: 10000
-  ray:
-    auto_start_cluster: false
 optimizer:
   learning_rate: 1E-3
   weight_decay: 0.1

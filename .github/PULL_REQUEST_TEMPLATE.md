@@ -1,23 +1,17 @@
-Include a summary of the changes and the related issue if any.
+<!--
+See .agents/skills/writing-style/pull-requests.md for the prose rules.
 
-A good description is a paragraph or so describing the changes you made and the
-motivation. You may follow this with a few bullets for specific changes, but
-try to keep it concise.
+Lead with what changes, then why. Keep the measured results, constraints, and
+caveats a future reader needs; length follows useful content rather than a fixed
+limit. Do not add Summary/Changes/Testing headings, an implementation inventory,
+checkboxes, attribution, or validation narration. If an issue exists, end with
+"Fixes #NNNN" or "Part of #NNNN".
 
-e.g.
+Example:
 
-Title: [RL] Fix loss: use global token normalization instead of per-example
+Normalize DAPO loss over all response tokens instead of normalizing each
+example separately. Per-example normalization over-weights short responses,
+hurting math tasks where correct answers need longer derivations.
 
-"""
-This fixes a regression in the DAPO loss computation by switching
-from per-example normalization (/ n_i) back to global token
-normalization (/ N). Per-example normalization gives shorter responses
-disproportionately more gradient weight, which hurts math reasoning
-tasks where correct answers often require detailed, longer derivations.
-Global normalization weights all examples equally regardless of response
-length.
-"""
-
-<!-- If this PR addresses an existing issue, include "Fixes #XXXX" below. -->
-<!-- For ongoing work, PRs should reference an existing issue. Delete this comment when done. -->
-Fixes #
+Fixes #1234
+-->

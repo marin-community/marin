@@ -1,20 +1,34 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from fray.v2 import ResourceConfig
+from fray.types import ResourceConfig
+from levanter.adaptor import LoraAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.distributed import RayConfig
+from levanter.data.text.datasets import DatasetComponent
+from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceLmDataConfig
+from levanter.infra.cli_helpers import CliConfig
 from levanter.main import train_lm
+from levanter.main.train_dpo import TrainDpoConfig
 from levanter.trainer import TrainerConfig
-
+from marin.processing.tokenize import tokenized_cache_stats_path
 from marin.training.training import (
+    GPU_NCCL_TERMINATION_TIMEOUT_FLAG,
+    TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
-    _doublecheck_paths,
+    _maybe_auto_resolve_dpo_schedule,
+    _resolve_run_id,
+    apply_output_path,
+    data_local_temporary_checkpoint_base_path,
+    doublecheck_paths,
+    resolve_training_env,
+    temporary_checkpoint_base_path,
 )
 
 
@@ -24,7 +38,6 @@ def trainer_config():
     return TrainerConfig(
         id="test-run",
         checkpointer=CheckpointerConfig(),
-        ray=RayConfig(),
     )
 
 
@@ -50,186 +63,300 @@ class MockNestedConfig:
     path: str
 
 
-@pytest.mark.parametrize("tpu_type", [None, "v3-8"])
-def test_lm_config_with_local_paths(trainer_config, tpu_type):
-    """Test that local paths are allowed when running locally."""
+def test_lm_config_with_train_urls_allowed_out_of_region(trainer_config):
+    """train/validation source URLs are exempt from region checks."""
     with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
+        patch("rigging.filesystem.cluster_config.marin_region", return_value="us-central1"),
+        patch("rigging.filesystem.cluster_config.get_bucket_location", return_value="us-east1"),
     ):
-
-        # Set up mocks
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-central1"
-
-        # Create a config with local paths
-        resources = ResourceConfig.with_tpu(tpu_type) if tpu_type else ResourceConfig.with_cpu()
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
-                data=MockDataConfig(cache_dir="local/path"),
+                data={"train_urls": ["gs://bucket/path"]},  # type: ignore[arg-type]
                 trainer=trainer_config,
             ),
-            resources=resources,
+            resources=ResourceConfig.with_tpu("v4-8"),
         )
-
-        # This should not raise an exception
-        _doublecheck_paths(config)
+        doublecheck_paths(config)
 
 
-def test_lm_config_with_gcs_paths_same_region(trainer_config):
-    """Test that GCS paths in the same region are allowed."""
-    with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
+def test_temporary_checkpoint_base_path_uses_cluster_local_scratch():
+    with patch.dict(
+        os.environ,
+        {
+            "MARIN_PREFIX": "s3://marin-us-east-02a/marin",
+            "MARIN_TEMP_PREFIX": "s3://hero-checkpoints",
+        },
     ):
-
-        # Set up mocks
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-central1"
-
-        # Create a config with GCS paths in the same region
-        config = TrainLmOnPodConfig(
-            train_config=train_lm.TrainLmConfig(
-                data=MockDataConfig(cache_dir="gs://bucket/path"),
-                trainer=trainer_config,
-            ),
-            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
+        assert temporary_checkpoint_base_path("s3://marin-us-east-02a/experiments/grug/base-trial") == (
+            "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/"
+            "marin-us-east-02a/experiments/grug/base-trial/checkpoints"
+        )
+        assert data_local_temporary_checkpoint_base_path("s3://marin-us-east-02a/experiments/grug/base-trial") == (
+            "s3://marin-us-east-02a/tmp/ttl=14d/checkpoints-temp/"
+            "marin-us-east-02a/experiments/grug/base-trial/checkpoints"
         )
 
-        # This should not raise an exception
-        _doublecheck_paths(config)
 
-
-def test_lm_config_with_gcs_paths_different_region(trainer_config):
-    """Test that GCS paths in a different region raise an exception."""
+def test_apply_output_path_sets_run_specific_temp_checkpoints(trainer_config):
     with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
+        patch("rigging.filesystem.cluster_config.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
     ):
-
-        # Set up mocks
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-east1"
-
-        # Create a config with GCS paths in a different region
-        config = TrainLmOnPodConfig(
-            train_config=train_lm.TrainLmConfig(
-                data=MockDataConfig(cache_dir="gs://bucket/path"),
-                trainer=trainer_config,
-            ),
-            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
+        updated = apply_output_path(
+            train_lm.TrainLmConfig(trainer=trainer_config),
+            "gs://marin-us-east5/experiments/grug/base-trial",
         )
 
-        # This should raise an exception
-        with pytest.raises(ValueError) as excinfo:
-            _doublecheck_paths(config)
+    checkpointer = updated.trainer.checkpointer
+    assert checkpointer.base_path == "gs://marin-us-east5/experiments/grug/base-trial/checkpoints"
+    assert checkpointer.temporary_base_path == (
+        "gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
+    )
+    assert checkpointer.append_run_id_to_base_path is False
+    assert updated.hf_save_path == "gs://marin-us-east5/experiments/grug/base-trial/hf"
 
-        assert "not in the same region" in str(excinfo.value)
 
-
-def test_lm_config_with_allowed_out_of_region_paths(trainer_config):
-    """Test that paths in allow_out_of_region are allowed to be in different regions."""
-    with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
+def test_apply_output_path_does_not_enable_adapter_hf_export_without_steps(trainer_config):
+    with patch(
+        "marin.training.training.marin_temp_bucket",
+        return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run",
     ):
-
-        # Set up mocks
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-east1"
-
-        # Create a config with GCS paths in a different region but allowed
-        config = TrainLmOnPodConfig(
-            train_config=train_lm.TrainLmConfig(
-                data=MockDataConfig(cache_dir="gs://bucket/path"),
-                trainer=trainer_config,
+        updated = apply_output_path(
+            TrainDpoConfig(
+                trainer=dataclasses.replace(trainer_config, num_train_steps=1),
+                adapter=LoraAdaptorConfig(),
+                hf_save_steps=None,
             ),
-            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
-            allow_out_of_region=("data.cache_dir",),
+            "gs://bucket/checkpoints/dpo/example-run",
         )
 
-        # This should not raise an exception
-        _doublecheck_paths(config)
+    assert updated.hf_save_path is None
+    assert updated.merged_hf_save_path is None
+
+
+def test_apply_output_path_routes_adapter_hf_export_to_peft(trainer_config):
+    with patch(
+        "marin.training.training.marin_temp_bucket",
+        return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run",
+    ):
+        updated = apply_output_path(
+            TrainDpoConfig(
+                trainer=dataclasses.replace(trainer_config, num_train_steps=1),
+                adapter=LoraAdaptorConfig(),
+                hf_save_steps=10,
+            ),
+            "gs://bucket/checkpoints/dpo/example-run",
+        )
+
+    assert updated.hf_save_path is None
+    assert updated.peft_save_path == "gs://bucket/checkpoints/dpo/example-run/hf"
+    assert updated.merged_hf_save_path is None
 
 
 def test_recursive_path_checking(trainer_config):
-    """Test that paths are checked recursively in nested structures."""
+    """Paths are checked recursively in nested structures."""
     with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
+        patch("rigging.filesystem.cluster_config.marin_region", return_value="us-central1"),
+        patch("rigging.filesystem.cluster_config.get_bucket_location", return_value="us-east1"),
     ):
-
-        # Set up mocks
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-east1"
-
-        # Create a config with nested GCS paths in a different region
         nested_data = MockNestedDataConfig(
             cache_dir="gs://bucket/path", subdir={"file": "gs://bucket/other/path", "list": ["gs://bucket/another/path"]}
         )
-
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
                 data=nested_data,
                 trainer=trainer_config,
             ),
-            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
+            resources=ResourceConfig.with_tpu("v4-8"),
         )
-
-        # This should raise an exception
-        with pytest.raises(ValueError) as excinfo:
-            _doublecheck_paths(config)
-
-        assert "not in the same region" in str(excinfo.value)
+        with pytest.raises(ValueError, match="not in the same region"):
+            doublecheck_paths(config)
 
 
 def test_dataclass_recursive_checking(trainer_config):
-    """Test that paths are checked recursively in dataclass objects."""
+    """Paths are checked recursively in dataclass objects."""
     with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
+        patch("rigging.filesystem.cluster_config.marin_region", return_value="us-central1"),
+        patch("rigging.filesystem.cluster_config.get_bucket_location", return_value="us-east1"),
     ):
-
-        # Set up mocks
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-east1"
-
-        # Create a config with a dataclass containing a GCS path
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
                 data=MockDataConfig(cache_dir=MockNestedConfig(path="gs://bucket/path")),  # type: ignore
                 trainer=trainer_config,
             ),
-            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
+            resources=ResourceConfig.with_tpu("v4-8"),
         )
-
-        # This should raise an exception
-        with pytest.raises(ValueError) as excinfo:
-            _doublecheck_paths(config)
-
-        assert "not in the same region" in str(excinfo.value)
+        with pytest.raises(ValueError, match="not in the same region"):
+            doublecheck_paths(config)
 
 
 def test_pathlib_path_handling(trainer_config):
-    """Test that pathlib.Path objects are handled correctly."""
-
+    """pathlib.Path objects that represent GCS URIs are handled correctly."""
     with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
+        patch("rigging.filesystem.cluster_config.marin_region", return_value="us-central1"),
+        patch("rigging.filesystem.cluster_config.get_bucket_location", return_value="us-east1"),
     ):
-
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-east1"
-
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
                 data=MockDataConfig(cache_dir=Path("gs://bucket/path")),
                 trainer=trainer_config,
             ),
-            resources=ResourceConfig.with_tpu("v3-8"),
+            resources=ResourceConfig.with_tpu("v4-8"),
         )
+        with pytest.raises(ValueError, match="not in the same region"):
+            doublecheck_paths(config)
 
-        with pytest.raises(ValueError) as excinfo:
-            _doublecheck_paths(config)
 
-        assert "not in the same region" in str(excinfo.value)
+def test_tokenized_cache_stats_path_handles_local_and_gcs_paths():
+    assert tokenized_cache_stats_path("/tmp/cache", "train") == "/tmp/cache/train/.stats.json"
+    assert (
+        tokenized_cache_stats_path("gs://bucket/cache_root", "validation")
+        == "gs://bucket/cache_root/validation/.stats.json"
+    )
+
+
+def test_resolve_run_id_imputes_basename_of_output_path(trainer_config):
+    config = train_lm.TrainLmConfig(trainer=dataclasses.replace(trainer_config, id=None))
+    updated, run_id = _resolve_run_id(config, output_path="gs://bucket/checkpoints/dpo/example-run", env_run_id=None)
+    assert run_id == "example-run"
+    assert updated.trainer.id == "example-run"
+
+
+def test_resolve_run_id_prefers_explicit_id_over_output_path(trainer_config):
+    config = train_lm.TrainLmConfig(trainer=dataclasses.replace(trainer_config, id="explicit-run"))
+    updated, run_id = _resolve_run_id(
+        config, output_path="gs://bucket/checkpoints/dpo/example-run", env_run_id="from-env"
+    )
+    assert run_id == "explicit-run"
+    assert updated.trainer.id == "explicit-run"
+
+
+def test_auto_resolve_dpo_schedule_from_stats(trainer_config, tmp_path):
+    train_dir = tmp_path / "train"
+    train_dir.mkdir(parents=True)
+    (train_dir / ".stats.json").write_text(json.dumps({"total_tokens": 0, "total_elements": 108765}))
+
+    data = PreferenceLmDataConfig(
+        components={
+            "prefs": DatasetComponent(
+                cache_dir=str(tmp_path),
+                format=PreferenceChatLmDatasetFormat(),
+            )
+        },
+        train_weights={"prefs": 1.0},
+    )
+    train_config = TrainDpoConfig(
+        data=data,
+        trainer=dataclasses.replace(trainer_config, train_batch_size=64, num_train_steps=1, steps_per_eval=1),
+        validation_split_fraction=None,
+    )
+    config = TrainDpoOnPodConfig(
+        train_config=train_config,
+        resources=ResourceConfig.with_tpu("v4-8"),
+        auto_num_epochs=1.0,
+        auto_validation_runs=5,
+    )
+
+    resolved = _maybe_auto_resolve_dpo_schedule(config)
+
+    assert resolved.train_config.trainer.num_train_steps == 1700
+    assert resolved.train_config.run_initial_eval is True
+    assert resolved.train_config.scheduled_eval_steps == [425, 850, 1275]
+
+
+def test_auto_resolve_dpo_schedule_applies_validation_split(trainer_config, tmp_path):
+    train_dir = tmp_path / "train"
+    train_dir.mkdir(parents=True)
+    (train_dir / ".stats.json").write_text(json.dumps({"total_tokens": 0, "total_elements": 250}))
+
+    data = PreferenceLmDataConfig(
+        components={
+            "prefs": DatasetComponent(
+                cache_dir=str(tmp_path),
+                format=PreferenceChatLmDatasetFormat(),
+            )
+        },
+        train_weights={"prefs": 1.0},
+    )
+    train_config = TrainDpoConfig(
+        data=data,
+        trainer=dataclasses.replace(trainer_config, train_batch_size=128, num_train_steps=1, steps_per_eval=1),
+        validation_split_fraction=0.1,
+    )
+    config = TrainDpoOnPodConfig(
+        train_config=train_config,
+        resources=ResourceConfig.with_tpu("v4-8"),
+        auto_num_epochs=1.0,
+    )
+
+    resolved = _maybe_auto_resolve_dpo_schedule(config)
+
+    assert resolved.train_config.trainer.num_train_steps == 2
+
+
+def test_auto_resolve_dpo_schedule_does_not_require_stats_for_eval_only(trainer_config, tmp_path):
+    data = PreferenceLmDataConfig(
+        components={
+            "prefs": DatasetComponent(
+                cache_dir=str(tmp_path),
+                format=PreferenceChatLmDatasetFormat(),
+            )
+        },
+        train_weights={"prefs": 1.0},
+    )
+    train_config = TrainDpoConfig(
+        data=data,
+        trainer=dataclasses.replace(trainer_config, train_batch_size=64, num_train_steps=100, steps_per_eval=1),
+        validation_split_fraction=None,
+    )
+    config = TrainDpoOnPodConfig(
+        train_config=train_config,
+        resources=ResourceConfig.with_tpu("v4-8"),
+        auto_validation_runs=5,
+    )
+
+    resolved = _maybe_auto_resolve_dpo_schedule(config)
+
+    assert resolved.train_config.trainer.num_train_steps == 100
+    assert resolved.train_config.run_initial_eval is True
+    assert resolved.train_config.scheduled_eval_steps == [25, 50, 75]
+
+
+def test_resolve_training_env_adds_collective_watchdog_for_gpu():
+    """A GPU run appends the collective-watchdog flag without dropping operator XLA_FLAGS; CPU is untouched."""
+    base = {
+        "JAX_COMPILATION_CACHE_DIR": "/tmp/cache",  # preset skips the temp-bucket lookup
+        "XLA_FLAGS": "--xla_gpu_enable_latency_hiding_scheduler=true",
+    }
+    with patch("marin.training.training._cli_helpers_module") as mod:
+        mod.return_value.load_config.return_value = CliConfig()
+        gpu_flags = resolve_training_env(dict(base), ResourceConfig.with_gpu("H100", count=8))["XLA_FLAGS"]
+        cpu_flags = resolve_training_env(dict(base), ResourceConfig.with_cpu())["XLA_FLAGS"]
+
+    assert "--xla_gpu_enable_latency_hiding_scheduler=true" in gpu_flags
+    assert GPU_NCCL_TERMINATION_TIMEOUT_FLAG in gpu_flags
+    assert cpu_flags == base["XLA_FLAGS"]
+
+
+@pytest.mark.parametrize(
+    "overrides, expected_time, expected_limit",
+    [
+        ({}, "60", "125000"),
+        (
+            {
+                "TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS": "300",
+                "TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES": "1",
+            },
+            "300",
+            "1",
+        ),
+    ],
+)
+def test_resolve_training_env_bounds_stalled_tensorstore_requests(overrides, expected_time, expected_limit):
+    base = {"JAX_COMPILATION_CACHE_DIR": "/tmp/cache", **overrides}
+    with patch("marin.training.training._cli_helpers_module") as mod:
+        mod.return_value.load_config.return_value = CliConfig()
+        env = resolve_training_env(base, ResourceConfig.with_gpu("H100", count=8))
+
+    assert env["TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS"] == expected_time
+    assert env["TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES"] == expected_limit

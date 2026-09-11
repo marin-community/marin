@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """TPU hardware utilities for memory estimation and slice selection.
@@ -8,38 +8,69 @@ selecting appropriate TPU slice sizes for training runs.
 """
 
 import math
+from dataclasses import dataclass
 
-# ---------------- TPU v5p Hardware Constants ----------------
-# These constants are specific to TPU v5p pods.
-
-HBM_PER_CHIP_GIB = 95
-"""High-bandwidth memory per TPU v5p chip in GiB."""
-
-CORES_PER_CHIP = 2
-"""Number of cores per TPU v5p chip."""
-
-V5P_CORE_OPTIONS = [8, 16, 32, 64, 128, 256, 512, 1024, 2048]
-"""Available TPU v5p core configurations (slice sizes)."""
+from fray.types import tpu_hbm_bytes_per_chip
 
 
-def pick_v5p_type(estimated_memory_bytes: int) -> str:
-    """Select the smallest TPU v5p slice that fits the estimated memory.
+@dataclass(frozen=True)
+class TpuSpec:
+    """Hardware specification for a TPU generation."""
+
+    prefix: str
+    """TPU generation prefix, e.g. "v5p" or "v4"."""
+
+    cores_per_chip: int
+    """Number of cores per chip."""
+
+    core_options: tuple[int, ...]
+    """Available core configurations (slice sizes), sorted ascending."""
+
+
+# ---------------- TPU Hardware Specs ----------------
+
+V5P_SPEC = TpuSpec(
+    prefix="v5p",
+    cores_per_chip=2,
+    core_options=(8, 16, 32, 64, 128, 256, 512, 1024, 2048),
+)
+
+V4_SPEC = TpuSpec(
+    prefix="v4",
+    cores_per_chip=2,
+    core_options=(8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096),
+)
+
+
+def pick_tpu_type(estimated_memory_bytes: int, spec: TpuSpec) -> str:
+    """Select the smallest TPU slice that fits the estimated memory.
 
     Args:
         estimated_memory_bytes: Estimated memory requirement in bytes.
+        spec: Hardware specification for the target TPU generation.
 
     Returns:
-        TPU slice name, e.g., "v5p-8" or "v5p-32".
+        TPU slice name, e.g., "v5p-8" or "v4-32".
 
     Raises:
-        ValueError: If the model is too large for available v5p slices.
+        ValueError: If the model is too large for available slices.
     """
-    chip_bytes = HBM_PER_CHIP_GIB * 1024**3
+    chip_bytes = tpu_hbm_bytes_per_chip(spec.prefix)
     chips = math.ceil(estimated_memory_bytes / chip_bytes)
-    cores_req = chips * CORES_PER_CHIP
+    cores_req = chips * spec.cores_per_chip
 
-    valid = [c for c in V5P_CORE_OPTIONS if c >= cores_req]
+    valid = [c for c in spec.core_options if c >= cores_req]
     if not valid:
-        raise ValueError(f"Model too large for available v5p slices (need {cores_req} cores).")
+        raise ValueError(f"Model too large for available {spec.prefix} slices (need {cores_req} cores).")
 
-    return f"v5p-{min(valid)}"
+    return f"{spec.prefix}-{min(valid)}"
+
+
+def pick_v5p_type(estimated_memory_bytes: int) -> str:
+    """Select the smallest TPU v5p slice that fits the estimated memory."""
+    return pick_tpu_type(estimated_memory_bytes, V5P_SPEC)
+
+
+def pick_v4_type(estimated_memory_bytes: int) -> str:
+    """Select the smallest TPU v4 slice that fits the estimated memory."""
+    return pick_tpu_type(estimated_memory_bytes, V4_SPEC)

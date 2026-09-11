@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -9,7 +9,6 @@ import jax
 import jaxtyping
 from haliax import NamedArray
 from haliax import haxtyping as ht
-from haliax.jax_utils import ensure_scalar
 from jax import numpy as jnp
 
 from levanter.inference.page_table import PageBatchInfo, PageTable
@@ -37,17 +36,6 @@ class PackedSequence(eqx.Module):
     pos_ids: ht.i32[NamedArray, "position"]  # position ids for each token
     num_tokens: jax.Array  # number of tokens in the packed sequence
 
-    def token_counts_per_slot(self, max_slots: int) -> ht.i32[NamedArray, "seq"]:  # type: ignore[name-defined]
-        """
-        Returns the number of tokens per slot in the packed sequence.
-        The result is a vector of size `max_slots`, where each entry corresponds to a slot ID.
-        """
-        raw_slot_ids = self.slot_ids.array
-        weights = jnp.where(jnp.arange(len(raw_slot_ids)) < self.num_tokens, 1, 0)
-        counts = jnp.bincount(raw_slot_ids, weights=weights, length=max_slots)
-
-        return hax.named(counts, axis=("seq",))
-
 
 class SeqDecodingParams(eqx.Module):
     """Per-sequence decoding parameters."""
@@ -55,6 +43,7 @@ class SeqDecodingParams(eqx.Module):
     max_num_tokens: jnp.ndarray
     stop_tokens: ht.i32[NamedArray, "stop_seq position"] | None
     temperature: jnp.ndarray
+    top_p: jnp.ndarray
     key: jaxtyping.PRNGKeyArray
 
     @staticmethod
@@ -67,6 +56,7 @@ class SeqDecodingParams(eqx.Module):
             max_num_tokens=jnp.array(max_int_jnp - 100000, dtype=jnp.int32),
             stop_tokens=None,
             temperature=jnp.array(0.0, dtype=jnp.float32),
+            top_p=jnp.array(1.0, dtype=jnp.float32),
             key=jax.random.PRNGKey(0),
         )
 
@@ -122,7 +112,7 @@ class SequenceTable(eqx.Module):
         return self._reserve_slot(slot_id)
 
     @eqx.filter_jit(donate="all")
-    def _reserve_slot(self, slot_id: jnp.ndarray | None = None) -> tuple["SequenceTable", int]:
+    def _reserve_slot(self, slot_id: jnp.ndarray | int | None = None) -> tuple["SequenceTable", int]:
         if slot_id is None:
             slot_id = INVALID
 
@@ -576,6 +566,8 @@ class DecodeState(eqx.Module):
     """Stop sequences for each sequence. If None, no stop sequences are used. **Left padded** with pad_token_id."""
     temperature: ht.Float[NamedArray, "seq"]
     """temperature for sampling. 0 means greedy sampling"""
+    top_p: ht.Float[NamedArray, "seq"]
+    """Nucleus-sampling threshold. 1 means sampling over the full distribution."""
     prng_keys: jaxtyping.PRNGKeyArray
     """one per sequence, used for sampling. This is a JAX PRNG key, so it can be split to get new keys."""
 
@@ -630,6 +622,7 @@ class DecodeState(eqx.Module):
                 else None
             ),
             temperature=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
+            top_p=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
             prng_keys=jax.vmap(jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0),
             tqueue=TokenQueue.init(max_queued_tokens),
             finished=hax.zeros({"seq": max_seqs}, dtype=bool),
@@ -649,27 +642,6 @@ class DecodeState(eqx.Module):
     def kv_pages(self) -> ht.i32[NamedArray, "seq page"]:  # type: ignore[name-defined]
         """KV page assignments per sequence."""
         return self.sequences.kv_pages
-
-    @eqx.filter_jit(donate="all")
-    def invalidate_finished(self) -> "DecodeState":
-        """Invalidate metadata for sequences marked finished by ``finished_mask``.
-
-        - Sets ``seq_lens`` to INVALID for finished slots
-        - Resets ``clone_sources`` to INVALID
-        - Clears ``kv_pages`` rows for finished slots to INVALID
-        """
-        mask = self.finished
-        finished = hax.zeros_like(self.finished)
-        new_sequences = self.sequences.clear_slots(mask)
-        return dataclasses.replace(self, sequences=new_sequences, finished=finished)
-
-    def prng_key_for(self, slot_id: int, pos_id: int) -> jaxtyping.PRNGKeyArray:
-        """
-        Get the PRNG key for the given slot ID and position.
-        This is used to sample new tokens for the given slot ID and position.
-        """
-        per_pos_key = self.prng_keys[ensure_scalar(slot_id)]
-        return jax.random.fold_in(per_pos_key, ensure_scalar(pos_id))
 
     def reserve_slot(self, slot_id: int | jnp.ndarray | None = None) -> tuple["DecodeState", int]:
         sequences, slot = self.sequences.reserve_slot(slot_id)
@@ -790,13 +762,6 @@ class DecodeState(eqx.Module):
         """Maximum number of tokens that can be generated for each sequence, including any prefix tokens."""
         return self.tokens.axis_size("position")
 
-    @property
-    def max_stop_seq_len(self) -> int:
-        """Maximum number of stop sequences for each sequence."""
-        if self.stop_tokens is None:
-            return 0
-        return self.stop_tokens.axis_size("position")
-
     @eqx.filter_jit
     def assign_seq(
         self,
@@ -840,6 +805,7 @@ class DecodeState(eqx.Module):
                 new_state,
                 max_num_tokens=new_state.max_num_tokens.at["seq", local_slot_id].set(seq_params.max_num_tokens),
                 temperature=new_state.temperature.at["seq", local_slot_id].set(seq_params.temperature),
+                top_p=new_state.top_p.at["seq", local_slot_id].set(seq_params.top_p),
                 prng_keys=self.prng_keys.at[local_slot_id].set(seq_params.key),  # type: ignore[name-defined]
             )
             match (new_state.stop_tokens, seq_params.stop_tokens):
@@ -849,14 +815,14 @@ class DecodeState(eqx.Module):
                     raise ValueError("DecodeState was initialized without stop token storage")
                 case (stops, None):
                     # this is fine, just fill this sequence with the pad token
-                    assert stops is not None  # make mypy happy
+                    assert stops is not None  # make pyrefly happy
                     new_stop_tokens = stops.at["seq", local_slot_id].set(INVALID)
                     new_state = dataclasses.replace(new_state, stop_tokens=new_stop_tokens)
                 case (stops, seq_stops):
                     # too fancy, but we allow for different stop sequences per sequence etc.
                     # Probably better to do this in python outside of the jit loop
-                    assert stops is not None  # make mypy happy
-                    assert seq_stops is not None  # make mypy happy
+                    assert stops is not None  # make pyrefly happy
+                    assert seq_stops is not None  # make pyrefly happy
                     seq_num_stops = seq_stops.axis_size("stop_seq")
                     seq_stop_len = seq_stops.axis_size("position")
                     this_row_full = hax.full_like(stops["seq", local_slot_id], INVALID)

@@ -1,0 +1,752 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Google Cloud implementation of the GCP service interface."""
+
+import json
+import logging
+import threading
+import time
+from datetime import datetime
+
+import google.api_core.exceptions
+import google.auth
+import google.auth.credentials
+import google.auth.transport.requests
+import httpx
+from google.cloud import tpu_v2alpha1
+from rigging.timing import ExponentialBackoff, Timestamp, retry_with_backoff
+
+from iris.cluster.config import SliceConfig, WorkerConfig
+from iris.cluster.platforms.gcp.service import (
+    KNOWN_GCP_ZONES,
+    KNOWN_TPU_TYPES,
+    OperationStatus,
+    QueuedResourceInfo,
+    TpuCreateRequest,
+    TpuInfo,
+    VmCreateRequest,
+    VmInfo,
+    validate_labels,
+    validate_tpu_create,
+    validate_vm_create,
+)
+from iris.cluster.platforms.types import (
+    InfraError,
+    InfraUnavailableError,
+    QuotaExhaustedError,
+    ResourceNotFoundError,
+    SliceHandle,
+)
+from iris.cluster.service_mode import ServiceMode
+from iris.cluster.types import CapacityType
+
+logger = logging.getLogger(__name__)
+
+# REST API base URLs
+_TPU_BASE = "https://tpu.googleapis.com/v2"
+_COMPUTE_BASE = "https://compute.googleapis.com/compute/v1"
+_LOGGING_BASE = "https://logging.googleapis.com/v2"
+
+# HTTP/auth constants
+_REFRESH_MARGIN = 300  # seconds before expiry to refresh token
+_DEFAULT_TIMEOUT = 120  # seconds
+_OPERATION_TIMEOUT = 600  # seconds to wait for an operation to complete
+
+# GCP occasionally returns 503 "Internal error. Please try again" (and other 5xx)
+# on otherwise-valid reads; these are explicitly retryable. Bounded so a sustained
+# outage still surfaces as InfraUnavailableError rather than hanging forever.
+_TRANSIENT_GET_ATTEMPTS = 5
+
+# ============================================================================
+# CloudGcpService — REST API implementation
+# ============================================================================
+
+
+def _build_label_filter(labels: dict[str, str]) -> str:
+    parts = [f"labels.{k}={v}" for k, v in labels.items()]
+    return " AND ".join(parts)
+
+
+def _labels_match(resource_labels: dict[str, str], required: dict[str, str]) -> bool:
+    return all(resource_labels.get(k) == v for k, v in required.items())
+
+
+def _extract_node_name(resource_name: str) -> str:
+    if "/" in resource_name:
+        return resource_name.split("/")[-1]
+    return resource_name
+
+
+def _parse_gcp_created_at(create_time: str) -> Timestamp:
+    """Parse a GCP RFC3339 creation timestamp, falling back to now() when absent or invalid.
+
+    TPU nodes expose this as ``createTime`` while Compute VMs use ``creationTimestamp``.
+    """
+    if not create_time:
+        return Timestamp.now()
+    try:
+        dt = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
+        return Timestamp.from_ms(int(dt.timestamp() * 1000))
+    except (ValueError, AttributeError):
+        return Timestamp.now()
+
+
+def _parse_tpu_info(tpu_data: dict, zone: str) -> TpuInfo:
+    """Parse raw GCP TPU JSON into a TpuInfo dataclass."""
+    name = _extract_node_name(tpu_data.get("name", ""))
+
+    accelerator_type = tpu_data.get("acceleratorType", "")
+    if "/" in accelerator_type:
+        accelerator_type = accelerator_type.split("/")[-1]
+
+    endpoints = tpu_data.get("networkEndpoints", [])
+    ips = [ep.get("ipAddress", "") for ep in endpoints if ep.get("ipAddress")]
+    external_ips = [(ep.get("accessConfig") or {}).get("externalIp") for ep in endpoints]
+
+    return TpuInfo(
+        name=name,
+        state=tpu_data.get("state", "UNKNOWN"),
+        accelerator_type=accelerator_type,
+        zone=zone,
+        labels=tpu_data.get("labels", {}),
+        metadata=tpu_data.get("metadata", {}),
+        service_account=(tpu_data.get("serviceAccount", {}) or {}).get("email"),
+        network_endpoints=ips,
+        external_network_endpoints=external_ips,
+        created_at=_parse_gcp_created_at(tpu_data.get("createTime", "")),
+    )
+
+
+def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
+    """Parse raw GCP VM JSON into a VmInfo dataclass."""
+    zone_url = vm_data.get("zone", "")
+    zone = zone_url.split("/")[-1] if zone_url else fallback_zone
+
+    network_interfaces = vm_data.get("networkInterfaces", [])
+    internal_ip = ""
+    external_ip = None
+    if network_interfaces:
+        internal_ip = network_interfaces[0].get("networkIP", "")
+        access_configs = network_interfaces[0].get("accessConfigs", [])
+        if access_configs:
+            external_ip = access_configs[0].get("natIP")
+
+    # Metadata in GCP JSON is {"items": [{"key": ..., "value": ...}]}
+    raw_metadata = vm_data.get("metadata", {})
+    metadata: dict[str, str] = {}
+    if isinstance(raw_metadata, dict):
+        for item in raw_metadata.get("items", []):
+            metadata[item["key"]] = item.get("value", "")
+
+    service_accounts = vm_data.get("serviceAccounts") or []
+    first_service_account = service_accounts[0] if service_accounts else None
+    service_account_email = first_service_account.get("email") if isinstance(first_service_account, dict) else None
+
+    return VmInfo(
+        name=vm_data.get("name", ""),
+        status=vm_data.get("status", "UNKNOWN"),
+        zone=zone,
+        internal_ip=internal_ip,
+        external_ip=external_ip,
+        labels=vm_data.get("labels", {}),
+        metadata=metadata,
+        service_account=service_account_email,
+        created_at=_parse_gcp_created_at(vm_data.get("creationTimestamp", "")),
+    )
+
+
+class CloudGcpService:
+    """GcpService backed by GCP REST APIs. Used in CLOUD mode."""
+
+    def __init__(self, project_id: str, http_client: httpx.Client | None = None) -> None:
+        self._project_id = project_id
+        self._client = http_client if http_client is not None else httpx.Client(timeout=_DEFAULT_TIMEOUT)
+        self._creds: google.auth.credentials.Credentials | None = None
+        self._token: str | None = None
+        self._expires_at: float = 0.0
+        self._token_lock = threading.Lock()
+        self._valid_zones: set[str] = set(KNOWN_GCP_ZONES)
+        self._valid_accelerator_types: set[str] = set(KNOWN_TPU_TYPES)
+        self._tpu_alpha_client_cached: tpu_v2alpha1.TpuClient | None = None
+        self._tpu_alpha_client_lock = threading.Lock()
+
+    @property
+    def _tpu_alpha_client(self) -> tpu_v2alpha1.TpuClient:
+        # Double-checked under a lock: the describe/create/terminate fan-outs reach
+        # the queued-resource path concurrently, so an unguarded check-then-set
+        # could build (and leak the channel of) a redundant TpuClient per thread.
+        if self._tpu_alpha_client_cached is None:
+            with self._tpu_alpha_client_lock:
+                if self._tpu_alpha_client_cached is None:
+                    self._tpu_alpha_client_cached = tpu_v2alpha1.TpuClient()
+        return self._tpu_alpha_client_cached
+
+    @property
+    def mode(self) -> ServiceMode:
+        return ServiceMode.CLOUD
+
+    @property
+    def project_id(self) -> str:
+        return self._project_id
+
+    # ========================================================================
+    # HTTP helpers (auth, errors, pagination, operation polling)
+    # ========================================================================
+
+    def _headers(self) -> dict[str, str]:
+        if self._token is None or time.monotonic() >= self._expires_at:
+            with self._token_lock:
+                # Re-check under the lock: another thread may have refreshed already.
+                if self._token is None or time.monotonic() >= self._expires_at:
+                    self._refresh_token()
+        return {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json",
+        }
+
+    def _refresh_token(self) -> None:
+        if self._creds is None:
+            self._creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        self._creds.refresh(google.auth.transport.requests.Request())
+        self._token = self._creds.token
+        now = time.monotonic()
+        if self._creds.expiry is not None:
+            self._expires_at = now + (self._creds.expiry.timestamp() - time.time()) - _REFRESH_MARGIN
+        else:
+            self._expires_at = now + _REFRESH_MARGIN
+
+    def _classify_response(self, resp: httpx.Response) -> None:
+        if resp.status_code < 400:
+            return
+        try:
+            body = resp.json()
+            error = body.get("error", {})
+            message = error.get("message", resp.text)
+            status = error.get("status", "")
+            code = error.get("code", resp.status_code)
+        except (json.JSONDecodeError, AttributeError):
+            message = resp.text
+            status = ""
+            code = resp.status_code
+
+        if code == 404 or status == "NOT_FOUND":
+            raise ResourceNotFoundError(message)
+        if code == 429 or status in ("RESOURCE_EXHAUSTED", "QUOTA_EXCEEDED"):
+            raise QuotaExhaustedError(message)
+        if code >= 500:
+            raise InfraUnavailableError(f"GCP API error {code}: {message}")
+        raise InfraError(f"GCP API error {code}: {message}")
+
+    def _get_retrying(self, url: str, params: dict[str, str] | None = None) -> dict:
+        """GET + classify, retrying only transient (5xx) GCP errors with backoff."""
+
+        def fetch() -> dict:
+            resp = self._client.get(url, headers=self._headers(), params=params)
+            self._classify_response(resp)
+            return resp.json()
+
+        return retry_with_backoff(
+            fetch,
+            retryable=lambda e: isinstance(e, InfraUnavailableError),
+            max_attempts=_TRANSIENT_GET_ATTEMPTS,
+            backoff=ExponentialBackoff(initial=1.0, maximum=15.0, factor=2.0),
+            operation=f"GET {url}",
+        )
+
+    def _paginate(self, url: str, items_key: str, params: dict[str, str] | None = None) -> list[dict]:
+        results: list[dict] = []
+        for page in self._paginate_raw(url, params):
+            results.extend(page.get(items_key, []))
+        return results
+
+    def _paginate_raw(self, url: str, params: dict[str, str] | None = None) -> list[dict]:
+        pages: list[dict] = []
+        p = dict(params or {})
+        while True:
+            data = self._get_retrying(url, p)
+            pages.append(data)
+            token = data.get("nextPageToken")
+            if not token:
+                break
+            p["pageToken"] = token
+        return pages
+
+    def _wait_zone_operation(self, zone: str, operation_name: str, timeout: float = _OPERATION_TIMEOUT) -> dict:
+        url = f"{_COMPUTE_BASE}/projects/{self._project_id}/zones/{zone}/operations/{operation_name}"
+        deadline = time.monotonic() + timeout
+        backoff = ExponentialBackoff(initial=1.0, maximum=30.0, factor=1.5)
+        while True:
+            resp = self._client.get(url, headers=self._headers())
+            self._classify_response(resp)
+            data = resp.json()
+            if data.get("status") == "DONE":
+                if "error" in data:
+                    errors = data["error"].get("errors", [])
+                    msg = "; ".join(e.get("message", str(e)) for e in errors)
+                    raise InfraError(f"Operation {operation_name} failed: {msg}")
+                return data
+            if time.monotonic() >= deadline:
+                raise InfraError(f"Operation {operation_name} timed out after {timeout}s")
+            time.sleep(backoff.next_interval())
+
+    def tpu_operation_status(self, operation_name: str) -> OperationStatus:
+        """Fetch the current status of a TPU create/delete LRO (single GET).
+
+        A still-running operation returns done=False. A completed operation
+        returns done=True with error_code/error_message set when it failed.
+        Zone stockouts come back here as RESOURCE_EXHAUSTED rather than on the
+        initial create response; callers use operation_error() to classify.
+        """
+        if not operation_name or "/operations/" not in operation_name:
+            return OperationStatus(done=True)
+        resp = self._client.get(f"{_TPU_BASE}/{operation_name}", headers=self._headers())
+        self._classify_response(resp)
+        data = resp.json()
+        if not data.get("done"):
+            return OperationStatus(done=False)
+        error = data.get("error")
+        if error:
+            return OperationStatus(
+                done=True,
+                error_code=error.get("code"),
+                error_message=error.get("message", str(error)),
+            )
+        return OperationStatus(done=True)
+
+    # ========================================================================
+    # Low-level REST helpers
+    # ========================================================================
+
+    def _tpu_parent(self, zone: str) -> str:
+        return f"projects/{self._project_id}/locations/{zone}"
+
+    def _instance_url(self, zone: str, name: str = "") -> str:
+        path = f"{_COMPUTE_BASE}/projects/{self._project_id}/zones/{zone}/instances"
+        if name:
+            path += f"/{name}"
+        return path
+
+    # ========================================================================
+    # TPU operations
+    # ========================================================================
+
+    def tpu_create(self, request: TpuCreateRequest) -> TpuInfo:
+        validate_tpu_create(request, self._valid_zones, self._valid_accelerator_types)
+
+        body: dict = {
+            "acceleratorType": request.accelerator_type,
+            "runtimeVersion": request.runtime_version,
+        }
+        if request.labels:
+            body["labels"] = request.labels
+        if request.metadata:
+            body["metadata"] = request.metadata
+        if request.capacity_type == CapacityType.PREEMPTIBLE:
+            body["schedulingConfig"] = {"preemptible": True}
+        if request.service_account:
+            body["serviceAccount"] = {"email": request.service_account}
+        network_config: dict = {"enableExternalIps": request.enable_external_ip}
+        if request.network:
+            network_config["network"] = request.network
+        if request.subnetwork:
+            network_config["subnetwork"] = request.subnetwork
+        body["networkConfig"] = network_config
+
+        logger.info("Creating TPU: %s (type=%s, zone=%s)", request.name, request.accelerator_type, request.zone)
+
+        # POST to submit the create LRO and return immediately, reporting the node
+        # as CREATING. We do NOT wait for the operation to report done: GCP can
+        # leave a create LRO unfinished long after the node has booted and
+        # registered workers, and blocking here used to tear down live slices on a
+        # spurious timeout. The bootstrap loop polls this operation (via
+        # tpu_operation_status) only to fail fast on quota/stockout; readiness is
+        # decided by worker health, and node details are read later via describe.
+        url = f"{_TPU_BASE}/{self._tpu_parent(request.zone)}/nodes"
+        resp = self._client.post(url, params={"nodeId": request.name}, headers=self._headers(), json=body)
+        self._classify_response(resp)
+        op_name = resp.json().get("name", "")
+
+        return TpuInfo(
+            name=request.name,
+            state="CREATING",
+            accelerator_type=request.accelerator_type,
+            zone=request.zone,
+            labels=dict(request.labels),
+            metadata=dict(request.metadata),
+            service_account=request.service_account,
+            network_endpoints=[],
+            external_network_endpoints=[],
+            created_at=Timestamp.now(),
+            operation_name=op_name,
+        )
+
+    def tpu_delete(self, name: str, zone: str) -> None:
+        logger.info("Deleting TPU (async): %s", name)
+        url = f"{_TPU_BASE}/{self._tpu_parent(zone)}/nodes/{name}"
+        resp = self._client.delete(url, headers=self._headers())
+        if resp.status_code != 404:
+            self._classify_response(resp)
+
+    def _tpu_get(self, name: str, zone: str) -> dict:
+        url = f"{_TPU_BASE}/{self._tpu_parent(zone)}/nodes/{name}"
+        resp = self._client.get(url, headers=self._headers())
+        self._classify_response(resp)
+        return resp.json()
+
+    def tpu_describe(self, name: str, zone: str) -> TpuInfo | None:
+        try:
+            tpu_data = self._tpu_get(name, zone)
+        except ResourceNotFoundError:
+            return None
+        except InfraError:
+            logger.warning("Failed to describe TPU %s", name, exc_info=True)
+            return None
+        return _parse_tpu_info(tpu_data, zone)
+
+    def tpu_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[TpuInfo]:
+        results: list[TpuInfo] = []
+        # Use locations/- for project-wide listing (matches gcloud --zone=-).
+        zone_list = zones if zones else ["-"]
+
+        for zone in zone_list:
+            items = self._paginate(f"{_TPU_BASE}/{self._tpu_parent(zone)}/nodes", "nodes")
+            for tpu_data in items:
+                if labels and not _labels_match(tpu_data.get("labels", {}), labels):
+                    continue
+                tpu_zone = zone
+                raw_name = tpu_data.get("name", "")
+                if "/" in raw_name:
+                    parts = raw_name.split("/")
+                    if len(parts) >= 4:
+                        tpu_zone = parts[3]
+                results.append(_parse_tpu_info(tpu_data, tpu_zone))
+
+        return results
+
+    # ========================================================================
+    # Queued resource operations (for reserved TPUs via typed v2alpha1 client)
+    # ========================================================================
+
+    def _qr_api_error(self, exc: google.api_core.exceptions.GoogleAPICallError) -> InfraError:
+        """Map google-cloud-tpu exceptions to the GcpService error hierarchy."""
+        if isinstance(exc, google.api_core.exceptions.NotFound):
+            return ResourceNotFoundError(str(exc))
+        if isinstance(exc, google.api_core.exceptions.ResourceExhausted):
+            return QuotaExhaustedError(str(exc))
+        return InfraError(str(exc))
+
+    def queued_resource_create(self, request: TpuCreateRequest) -> None:
+        validate_tpu_create(request, self._valid_zones, self._valid_accelerator_types)
+
+        node = tpu_v2alpha1.Node(
+            accelerator_type=request.accelerator_type,
+            runtime_version=request.runtime_version,
+            labels=request.labels or {},
+            metadata=request.metadata or {},
+            network_config=tpu_v2alpha1.NetworkConfig(
+                enable_external_ips=request.enable_external_ip,
+                network=request.network or "",
+                subnetwork=request.subnetwork or "",
+            ),
+        )
+        if request.service_account:
+            node.service_account = tpu_v2alpha1.ServiceAccount(email=request.service_account)
+
+        queued_resource = tpu_v2alpha1.QueuedResource(
+            tpu=tpu_v2alpha1.QueuedResource.Tpu(
+                node_spec=[
+                    tpu_v2alpha1.QueuedResource.Tpu.NodeSpec(
+                        parent=f"projects/{self._project_id}/locations/{request.zone}",
+                        node_id=request.name,
+                        node=node,
+                    )
+                ]
+            ),
+            guaranteed=tpu_v2alpha1.QueuedResource.Guaranteed(reserved=True),
+        )
+
+        parent = f"projects/{self._project_id}/locations/{request.zone}"
+        logger.info(
+            "Creating queued resource: %s (type=%s, zone=%s)",
+            request.name,
+            request.accelerator_type,
+            request.zone,
+        )
+        try:
+            self._tpu_alpha_client.create_queued_resource(
+                parent=parent,
+                queued_resource=queued_resource,
+                queued_resource_id=request.name,
+            )
+        except google.api_core.exceptions.GoogleAPICallError as exc:
+            raise self._qr_api_error(exc) from exc
+
+    def queued_resource_describe(self, name: str, zone: str) -> QueuedResourceInfo | None:
+        qr_name = f"projects/{self._project_id}/locations/{zone}/queuedResources/{name}"
+        try:
+            qr = self._tpu_alpha_client.get_queued_resource(name=qr_name)
+        except google.api_core.exceptions.NotFound:
+            return None
+        except google.api_core.exceptions.GoogleAPICallError as exc:
+            raise self._qr_api_error(exc) from exc
+        state = qr.state.state.name if qr.state else "UNKNOWN"
+        return QueuedResourceInfo(name=name, state=state, zone=zone)
+
+    def queued_resource_delete(self, name: str, zone: str) -> None:
+        logger.info("Deleting queued resource (force): %s", name)
+        qr_name = f"projects/{self._project_id}/locations/{zone}/queuedResources/{name}"
+        try:
+            self._tpu_alpha_client.delete_queued_resource(
+                request=tpu_v2alpha1.DeleteQueuedResourceRequest(name=qr_name, force=True)
+            )
+        except google.api_core.exceptions.NotFound:
+            pass
+        except google.api_core.exceptions.GoogleAPICallError as exc:
+            raise self._qr_api_error(exc) from exc
+
+    def queued_resource_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[QueuedResourceInfo]:
+        zone_list = zones if zones else ["-"]
+        results: list[QueuedResourceInfo] = []
+        for zone in zone_list:
+            parent = f"projects/{self._project_id}/locations/{zone}"
+            try:
+                for qr in self._tpu_alpha_client.list_queued_resources(parent=parent):
+                    qr_short_name = qr.name.rsplit("/", 1)[-1]
+                    state = qr.state.state.name if qr.state else "UNKNOWN"
+                    node_specs = list(qr.tpu.node_spec) if qr.tpu else []
+                    item_labels = dict(node_specs[0].node.labels) if node_specs and node_specs[0].node else {}
+                    if labels and not all(item_labels.get(k) == v for k, v in labels.items()):
+                        continue
+                    # When listing with a wildcard zone ("-"), extract the actual zone
+                    # from the full resource name so handles don't get zone="-".
+                    actual_zone = zone
+                    if zone == "-":
+                        parts = qr.name.split("/")
+                        loc_idx = next((i for i, p in enumerate(parts) if p == "locations"), -1)
+                        if loc_idx >= 0 and loc_idx + 1 < len(parts):
+                            actual_zone = parts[loc_idx + 1]
+                    results.append(
+                        QueuedResourceInfo(name=qr_short_name, state=state, zone=actual_zone, labels=item_labels)
+                    )
+            except google.api_core.exceptions.GoogleAPICallError:
+                logger.warning("Failed to list queued resources in %s", zone, exc_info=True)
+                continue
+        return results
+
+    # ========================================================================
+    # VM operations
+    # ========================================================================
+
+    def vm_create(self, request: VmCreateRequest, *, wait: bool = False) -> VmInfo:
+        """POST the instance insert and return.
+
+        With wait=False (the default): returns a synthesized VmInfo in PROVISIONING
+        state immediately after the insert is accepted.  internal_ip is empty; callers
+        that need the instance running before proceeding must pass wait=True.
+
+        With wait=True: blocks until the insert zone operation completes, then describes
+        the instance so the returned VmInfo reflects the live state including internal_ip.
+        """
+        validate_vm_create(request, self._valid_zones)
+
+        all_metadata = dict(request.metadata)
+        if request.startup_script:
+            all_metadata["startup-script"] = request.startup_script
+
+        body: dict = {
+            "name": request.name,
+            "machineType": f"zones/{request.zone}/machineTypes/{request.machine_type}",
+            "disks": [
+                {
+                    "boot": True,
+                    "autoDelete": True,
+                    "initializeParams": {
+                        "diskSizeGb": str(request.disk_size_gb),
+                        "diskType": f"zones/{request.zone}/diskTypes/{request.boot_disk_type}",
+                        "sourceImage": f"projects/{request.image_project}/global/images/family/{request.image_family}",
+                    },
+                }
+            ],
+            "networkInterfaces": [{"accessConfigs": [{"type": "ONE_TO_ONE_NAT"}]}],
+            "serviceAccounts": [
+                {
+                    "email": request.service_account or "default",
+                    "scopes": ["https://www.googleapis.com/auth/cloud-platform"],
+                }
+            ],
+        }
+        if request.labels:
+            body["labels"] = request.labels
+        if request.network_tags:
+            body["tags"] = {"items": list(request.network_tags)}
+        if all_metadata:
+            body["metadata"] = {"items": [{"key": k, "value": v} for k, v in all_metadata.items()]}
+
+        logger.info("Creating VM: %s (zone=%s, type=%s)", request.name, request.zone, request.machine_type)
+        try:
+            url = self._instance_url(request.zone)
+            resp = self._client.post(url, headers=self._headers(), json=body)
+            self._classify_response(resp)
+            data = resp.json()
+            op_name = data.get("name", "")
+            if wait and op_name:
+                self._wait_zone_operation(request.zone, op_name)
+        except InfraError as e:
+            if "already exists" not in str(e).lower():
+                raise
+
+        if wait:
+            info = self.vm_describe(request.name, request.zone)
+            if info is None:
+                raise InfraError(f"VM {request.name} created but could not be described")
+            return info
+
+        # Non-blocking path: synthesize a VmInfo in PROVISIONING state so the
+        # caller has the name and zone available immediately.  internal_ip is
+        # empty; the refresh loop's vm_describe() calls will supply it once the
+        # VM reaches RUNNING.
+        return VmInfo(
+            name=request.name,
+            status="PROVISIONING",
+            zone=request.zone,
+            internal_ip="",
+            external_ip=None,
+            labels=dict(request.labels),
+            metadata=dict(request.metadata),
+            service_account=request.service_account,
+            created_at=Timestamp.now(),
+        )
+
+    def vm_delete(self, name: str, zone: str, *, wait: bool = False) -> None:
+        logger.info("Deleting VM: %s", name)
+        url = self._instance_url(zone, name)
+        resp = self._client.delete(url, headers=self._headers())
+        if resp.status_code == 404:
+            return
+        self._classify_response(resp)
+        if wait:
+            op_name = resp.json().get("name", "")
+            if op_name:
+                self._wait_zone_operation(zone, op_name)
+
+    def _instance_get(self, name: str, zone: str) -> dict:
+        url = self._instance_url(zone, name)
+        resp = self._client.get(url, headers=self._headers())
+        self._classify_response(resp)
+        return resp.json()
+
+    def vm_describe(self, name: str, zone: str) -> VmInfo | None:
+        try:
+            data = self._instance_get(name, zone)
+        except ResourceNotFoundError:
+            return None
+        except InfraError:
+            logger.warning("Failed to describe VM %s", name, exc_info=True)
+            return None
+        return _parse_vm_info(data, fallback_zone=zone)
+
+    def vm_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[VmInfo]:
+        results: list[VmInfo] = []
+        filter_str = _build_label_filter(labels) if labels else ""
+
+        if not zones:
+            # Project-wide: aggregatedList, flatten across zones
+            url = f"{_COMPUTE_BASE}/projects/{self._project_id}/aggregated/instances"
+            params: dict[str, str] = {}
+            if filter_str:
+                params["filter"] = filter_str
+            for page in self._paginate_raw(url, params):
+                for scope in page.get("items", {}).values():
+                    for vm_data in scope.get("instances", []):
+                        results.append(_parse_vm_info(vm_data))
+            return results
+
+        for zone in zones:
+            params = {}
+            if filter_str:
+                params["filter"] = filter_str
+            for vm_data in self._paginate(self._instance_url(zone), "items", params):
+                results.append(_parse_vm_info(vm_data, fallback_zone=zone))
+
+        return results
+
+    def vm_update_labels(self, name: str, zone: str, labels: dict[str, str]) -> None:
+        validate_labels(labels)
+        logger.info("Updating labels on VM %s", name)
+        data = self._instance_get(name, zone)
+        current_labels = data.get("labels", {})
+        current_labels.update(labels)
+        fingerprint = data.get("labelFingerprint", "")
+        url = self._instance_url(zone, name) + "/setLabels"
+        resp = self._client.post(
+            url,
+            headers=self._headers(),
+            json={"labels": current_labels, "labelFingerprint": fingerprint},
+        )
+        self._classify_response(resp)
+        op_name = resp.json().get("name", "")
+        if op_name:
+            self._wait_zone_operation(zone, op_name)
+
+    def vm_set_metadata(self, name: str, zone: str, metadata: dict[str, str]) -> None:
+        logger.info("Setting metadata on VM %s", name)
+        data = self._instance_get(name, zone)
+        raw_metadata = data.get("metadata", {})
+        fingerprint = raw_metadata.get("fingerprint", "")
+        existing_items: dict[str, str] = {}
+        for item in raw_metadata.get("items", []):
+            existing_items[item["key"]] = item.get("value", "")
+        existing_items.update(metadata)
+        body = {
+            "fingerprint": fingerprint,
+            "items": [{"key": k, "value": v} for k, v in existing_items.items()],
+        }
+        url = self._instance_url(zone, name) + "/setMetadata"
+        resp = self._client.post(url, headers=self._headers(), json=body)
+        self._classify_response(resp)
+        op_name = resp.json().get("name", "")
+        if op_name:
+            self._wait_zone_operation(zone, op_name)
+
+    def vm_get_serial_port_output(self, name: str, zone: str, start: int = 0) -> str:
+        try:
+            url = self._instance_url(zone, name) + "/serialPort"
+            resp = self._client.get(url, headers=self._headers(), params={"start": str(start)})
+            self._classify_response(resp)
+            data = resp.json()
+        except InfraError:
+            logger.warning("Failed to get serial port output for %s", name, exc_info=True)
+            return ""
+        return data.get("contents", "")
+
+    def logging_read(self, filter_str: str, limit: int = 200) -> list[str]:
+        try:
+            url = f"{_LOGGING_BASE}/entries:list"
+            body = {
+                "resourceNames": [f"projects/{self._project_id}"],
+                "filter": filter_str,
+                "pageSize": min(limit, 1000),
+                "orderBy": "timestamp desc",
+            }
+            resp = self._client.post(url, headers=self._headers(), json=body, timeout=30)
+            self._classify_response(resp)
+            entries = resp.json().get("entries", [])
+        except InfraError:
+            logger.warning("Cloud Logging query failed", exc_info=True)
+            return []
+        return [e.get("textPayload", "") for e in entries if e.get("textPayload")]
+
+    def create_local_slice(
+        self,
+        slice_id: str,
+        config: SliceConfig,
+        worker_config: WorkerConfig | None = None,
+    ) -> SliceHandle:
+        raise RuntimeError("create_local_slice is not supported in CLOUD mode")
+
+    def get_local_slices(self, labels: dict[str, str] | None = None) -> list[SliceHandle]:
+        raise RuntimeError("get_local_slices is not supported in CLOUD mode")
+
+    def shutdown(self) -> None:
+        self._client.close()

@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@ import haliax as hax
 from haliax import Axis, NamedArray
 from haliax.nn.normalization import softmax
 from haliax.partitioning import axis_mapping, pspec_for_axis, set_mesh
-from test_utils import skip_if_not_enough_devices
+from haliax.testing import skip_if_not_enough_devices
 
 SeqQ = Axis("seq_q", 4)
 SeqK = Axis("seq_k", 4)
@@ -75,7 +75,6 @@ def _tiny_transformer(params: TinyTransformerParams, x: NamedArray) -> NamedArra
 def test_transformer_block_explicit_sharding():
     devices = jax.devices()
     if len(devices) % 2 != 0:
-        import pytest
 
         pytest.skip("Need even number of devices to build (data, model) mesh")
 

@@ -1,18 +1,39 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Click-based CLI for the Iris worker daemon."""
 
 import logging
 import shutil
+import subprocess
 from pathlib import Path
 
 import click
+from rigging.log_setup import configure_logging
 
-from iris.cluster.config import load_config
-from iris.cluster.platform.factory import create_platform
-from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.logging import configure_logging
+from iris.cluster.config import SshConfig
+from iris.cluster.config import WorkerConfig as WorkerWireConfig
+from iris.cluster.platforms.factory import create_provider_bundle
+from iris.cluster.provenance import provenance_from_env
+from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.worker.env_probe import detect_gcp_zone
+from iris.cluster.worker.worker import Worker, worker_config_from_wire
+
+
+def _configure_docker_ar_auth(ar_host: str) -> None:
+    """Configure Docker to authenticate with the given Artifact Registry host."""
+    logger = logging.getLogger(__name__)
+    logger.info("Configuring Docker auth for %s", ar_host)
+    result = subprocess.run(
+        ["gcloud", "auth", "configure-docker", ar_host, "-q"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        logger.warning("gcloud auth configure-docker failed: %s", result.stderr)
+    else:
+        logger.info("Docker AR auth configured for %s", ar_host)
 
 
 @click.group()
@@ -22,54 +43,43 @@ def cli():
 
 
 @cli.command()
-@click.option("--host", default="0.0.0.0", help="Bind host")
-@click.option("--port", default=8080, type=int, help="Bind port")
-@click.option("--cache-dir", required=True, help="Cache directory (must be a host-visible path for Docker mounts)")
-@click.option("--port-range", default="30000-40000", help="Port range for job ports (start-end)")
-@click.option("--worker-id", default=None, help="Worker ID (auto-generated if not provided)")
-@click.option(
-    "--config",
-    "config_file",
-    type=click.Path(exists=True),
-    required=True,
-    help="Cluster config for platform-based controller discovery",
-)
-def serve(
-    host: str,
-    port: int,
-    cache_dir: str,
-    port_range: str,
-    worker_id: str | None,
-    config_file: str,
-):
+@click.option("--worker-config", type=click.Path(exists=True), required=True, help="Path to WorkerConfig JSON file")
+def serve(worker_config: str):
     """Start the Iris worker service."""
     configure_logging(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    logger.info("Iris worker starting (%s)", provenance_from_env())
 
-    cluster_config = load_config(Path(config_file))
-    platform = create_platform(
-        platform_config=cluster_config.platform,
-        ssh_config=cluster_config.defaults.ssh,
+    with open(worker_config) as f:
+        wire = WorkerWireConfig.model_validate_json(f.read())
+
+    bundle = create_provider_bundle(
+        platform_config=wire.platform,
+        worker_port=wire.port,
+        ssh_config=SshConfig(),
     )
-    controller_address = f"http://{platform.discover_controller(cluster_config.controller)}"
+    zone = detect_gcp_zone()
 
-    port_start, port_end = map(int, port_range.split("-"))
+    def resolve_image(image: str) -> str:
+        return bundle.controller.resolve_image(image, zone=zone)
 
-    config = WorkerConfig(
-        host=host,
-        port=port,
-        cache_dir=Path(cache_dir).expanduser(),
-        port_range=(port_start, port_end),
-        controller_address=controller_address,
-        worker_id=worker_id,
-    )
+    if wire.default_task_image:
+        resolved = resolve_image(wire.default_task_image)
+        if resolved != wire.default_task_image and "-docker.pkg.dev/" in resolved:
+            _configure_docker_ar_auth(resolved.split("/")[0])
 
-    worker = Worker(config)
+    config = worker_config_from_wire(wire, resolve_image=resolve_image)
 
-    click.echo(f"Starting Iris worker on {host}:{port}")
+    container_runtime = DockerRuntime(cache_dir=config.cache_dir, capacity_type=config.capacity_type)
+
+    worker = Worker(config, container_runtime=container_runtime)
+
+    click.echo(f"Starting Iris worker on {config.host}:{config.port}")
     click.echo(f"  Cache dir: {config.cache_dir}")
-    click.echo(f"  Controller: {controller_address}")
+    click.echo(f"  Controller: {config.controller_address}")
+    click.echo("  Runtime: docker")
     worker.start()
-    worker.wait()  # Block until worker is stopped
+    worker.wait()
 
 
 @cli.command()

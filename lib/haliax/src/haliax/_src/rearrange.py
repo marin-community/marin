@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,9 +11,9 @@ from typing import Mapping, Sequence
 import jax.lax
 import jax.numpy as jnp
 
-from ..axis import Axis, AxisSelector, PartialAxisSpec, axis_name, rearrange_for_partial_order
-from ..core import NamedArray
-from ..partitioning import auto_sharded
+from haliax.axis import Axis, AxisSelector, PartialAxisSpec, axis_name, rearrange_for_partial_order
+from haliax.core import NamedArray
+from haliax.partitioning import auto_sharded
 from .parsing import AliasTable, Expression, _resolve_bindings, parse_rearrangement, raise_parse_error
 
 

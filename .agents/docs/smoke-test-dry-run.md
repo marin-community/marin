@@ -651,7 +651,7 @@ The `run-local` command becomes a thin wrapper around `ClusterManager` with
 
 **Files changed:**
 - `src/iris/rpc/config.proto` — add `LocalProvider`, `LocalControllerConfig`
-- `scripts/generate-protos.py` — run
+- `uv run python lib/iris/scripts/generate_protos.py` — run from the repo root
 - `src/iris/cluster/vm/controller.py` — add `LocalController`
 - `src/iris/cluster/vm/config.py` — add local provider branch
 - `src/iris/cluster/vm/local_platform.py` — add `_create_local_autoscaler()`
@@ -671,9 +671,9 @@ Submit and complete a job through it.
 ### Step 4: Smoke test integration
 
 **Files changed:**
-- `scripts/smoke-test.py` — use `ClusterManager`, add `--local` flag
+- `lib/iris/scripts/smoke-test.py` — use `ClusterManager`, add `--local` flag
 
-**Test:** `uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --local`
+**Test:** `uv run python lib/iris/scripts/smoke-test.py --config examples/eu-west4.yaml --local`
 passes all three test jobs locally.
 
 ### Step 5: Simplify `demo_cluster.py`

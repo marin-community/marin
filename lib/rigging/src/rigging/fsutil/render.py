@@ -1,0 +1,129 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Human-facing rendering: sizes, listings, and file previews.
+
+Marin's object stores are full of JSON and JSONL — task records, metrics, manifests —
+so a preview that dumps raw bytes wastes the trip. :func:`file_lines` renders tabular
+JSON as a table and falls back to text, then to a byte count for binary data. The
+plain-line renderers are shared by the curses TUI and the command-line tables.
+"""
+
+import json
+from datetime import datetime
+
+from rigging.fsutil.compression import uncompressed_name
+
+_SIZE_UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
+
+# Longest single-cell value rendered from a JSON object before truncation.
+_MAX_CELL = 120
+
+
+def format_size(size: int | None) -> str:
+    """A byte count in the largest unit that keeps it under 1024, or ``-`` for ``None``."""
+    if size is None:
+        return "-"
+    value = float(size)
+    for unit in _SIZE_UNITS:
+        if value < 1024 or unit == _SIZE_UNITS[-1]:
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} {_SIZE_UNITS[-1]}"
+
+
+def format_time(when: datetime | None) -> str:
+    return "-" if when is None else when.strftime("%Y-%m-%d %H:%M")
+
+
+def file_lines(name: str, raw: bytes) -> list[str]:
+    """Render *raw* as display lines, using *name*'s extension to pick a JSON reader.
+
+    A tabular ``.json`` or ``.jsonl`` file renders as a table. The renderer ignores one
+    supported compression suffix. Other files render as text or a byte count.
+    """
+    name = uncompressed_name(name)
+    if name.endswith((".json", ".jsonl")):
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return [f"[binary file, {len(raw)} bytes]"]
+        return _json_lines(name, text)
+
+    try:
+        return raw.decode("utf-8").splitlines() or ["(empty file)"]
+    except UnicodeDecodeError:
+        return [f"[binary file, {len(raw)} bytes]"]
+
+
+def _json_lines(name: str, text: str) -> list[str]:
+    if name.endswith(".jsonl"):
+        records = []
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                return text.splitlines()
+        if not records:
+            return ["(empty file)"]
+        return _json_table_lines(records)
+
+    try:
+        return _json_table_lines(json.loads(text))
+    except json.JSONDecodeError:
+        return text.splitlines()
+
+
+def record_lines(records: list[dict]) -> list[str]:
+    """Render records as a table with a column per key, truncating oversized cells."""
+    headers = list({key: None for row in records for key in row})
+    rows = [[cell(row.get(header)) for header in headers] for row in records]
+    return table_lines(headers, rows)
+
+
+def _json_table_lines(data: object) -> list[str]:
+    """Render parsed JSON as an aligned table when it is tabular, else as indented JSON."""
+    if isinstance(data, list) and data and all(isinstance(row, dict) for row in data):
+        return record_lines(data)
+    if isinstance(data, dict):
+        return table_lines(["key", "value"], [[key, cell(value)] for key, value in data.items()])
+    return json.dumps(data, indent=2, default=str).splitlines()
+
+
+def cell(value: object) -> str:
+    """Render one value as a single table cell, truncating oversized text."""
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    return text if len(text) <= _MAX_CELL else text[: _MAX_CELL - 3] + "..."
+
+
+def column_widths(headers: list[str], rows: list[list[str]]) -> list[int]:
+    """The width of each column when *rows* render under *headers*."""
+    return [
+        max(len(header), *(len(row[i]) for row in rows)) if rows else len(header) for i, header in enumerate(headers)
+    ]
+
+
+def header_lines(headers: list[str], widths: list[int]) -> list[str]:
+    """The header row and its separator, padded to *widths*."""
+    return [row_line(headers, widths), row_line(["-" * width for width in widths], widths)]
+
+
+def row_line(cells: list[str], widths: list[int]) -> str:
+    """One table row padded to *widths*; a longer cell overflows its column."""
+    return "  ".join(text.ljust(width) for text, width in zip(cells, widths, strict=True)).rstrip()
+
+
+def table_lines(headers: list[str], rows: list[list[str]]) -> list[str]:
+    """Render rows as a plain-text table with a header separator."""
+    widths = column_widths(headers, rows)
+    return [*header_lines(headers, widths), *(row_line(row, widths) for row in rows)]
+
+
+def aligned_lines(rows: list[list[str]]) -> list[str]:
+    """Align rows as plain text without adding a header."""
+    if not rows:
+        return []
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    return [row_line(row, widths) for row in rows]

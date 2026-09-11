@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@ except Exception:
 import haliax as hax
 from haliax import Axis
 from haliax.partitioning import axis_mapping, set_mesh
-from test_utils import skip_if_not_enough_devices
+from haliax.testing import skip_if_not_enough_devices
 
 
 def _build_explicit_mesh():
@@ -78,7 +78,6 @@ def test_einsum_accepts_out_sharding():
 def test_out_sharding_on_nontrivial_mesh():
     devices = jax.devices()
     if len(devices) % 2 != 0:
-        import pytest
 
         pytest.skip("Need an even number of devices to form (n,2) mesh")
 

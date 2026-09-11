@@ -1,0 +1,11 @@
+[project]
+name = "marin-external-evalchemy"
+version = "0"
+requires-python = "==3.12.*"
+dependencies = ["evalchemy"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+evalchemy = { git = "https://github.com/marin-community/evalchemy.git", branch = "main" }

@@ -6,7 +6,7 @@ This guide explains how to build, test, and maintain the Marin documentation.
 
 Before you begin, ensure you have the following installed:
 
-- Python 3.11 or higher
+- Python 3.12 or higher
 - uv (Python package manager)
 - Git
 
@@ -14,8 +14,10 @@ Before you begin, ensure you have the following installed:
 
 1. Install the documentation dependencies:
    ```bash
-   uv sync --group docs
+   uv sync --package marin-core --group dev
    ```
+   The `marin-core` `dev` group includes the docs tooling, and this is the same install
+   command used by the docs CI workflow and the general contributor setup.
 
 ## Building Documentation
 
@@ -23,13 +25,13 @@ Before you begin, ensure you have the following installed:
 
 1. Start the local development server:
    ```bash
-   mkdocs serve
+   uv run mkdocs serve
    ```
    This will start a local server at `http://127.0.0.1:8000` where you can preview your changes in real-time.
 
 2. Build the documentation:
    ```bash
-   mkdocs build
+   uv run mkdocs build
    ```
    This will create a `site` directory containing the built documentation.
 
@@ -37,30 +39,40 @@ Before you begin, ensure you have the following installed:
 
 For production builds, use:
 ```bash
-mkdocs build --clean
+uv run mkdocs build --clean
 ```
 
 ## Documentation Structure
 
-The documentation follows the [Diátaxis](https://diataxis.fr/) framework with four main sections:
+The documentation follows the [Diátaxis](https://diataxis.fr/) framework. The `nav` in
+`mkdocs.yml` publishes six sections:
 
 1. **Tutorials** (`docs/tutorials/`)
    - Step-by-step guides
    - Getting started guides
    - Learning-oriented content
 
-2. **Technical References** (`docs/references/`)
-   - API documentation
-   - Configuration options
-   - Technical specifications
-
-3. **Explanations** (`docs/explanations/`)
+2. **Explanations** (`docs/explanations/`)
    - Background information
    - Design decisions
    - Best practices
 
+3. **Experiments** (`docs/experiments/`, `docs/reports/`)
+   - Experiment reports and digests
 
-We deviate slightly, adding design docs as a fifth section.
+4. **Reproducibility** (`docs/reproducibility/`)
+   - Data and experiment reconstruction guides
+
+5. **Developer Guide** (`docs/dev-guide/`)
+   - Contributing, releasing, and repository workflow
+
+6. **Technical Reference** (`docs/references/`)
+   - API documentation
+   - Configuration options
+   - Technical specifications
+
+Pages outside those directories — `docs/design/`, `docs/ops/`, `docs/recipes/`, `docs/model-cards/` —
+build but are not in the `nav`, so link to them from a page that is.
 
 ## Writing Documentation
 
@@ -112,12 +124,17 @@ def process_data(data: List[str]) -> Dict[str, int]:
 
 1. Check for broken links:
    ```bash
-   mkdocs build --strict
+   uv run mkdocs build --strict
    ```
 
-2. Validate markdown:
+2. Check GitHub source links after moving, deleting, or relinking docs pages:
    ```bash
-   mkdocs build --strict --verbose
+   uv run python infra/check_docs_source_links.py
+   ```
+
+3. Validate markdown:
+   ```bash
+   uv run mkdocs build --strict --verbose
    ```
 
 ## Deployment
@@ -132,15 +149,21 @@ The documentation is automatically deployed when changes are pushed to the main 
 
 1. Create a new branch for your changes
 2. Make your changes
-3. Test locally using `mkdocs serve`
-4. Submit a pull request
+3. Preview the docs locally with `uv run mkdocs serve`
+4. Run `./infra/pre-commit.py --all-files --fix`
+5. Run `uv run mkdocs build --strict`
+6. Submit a pull request whose body references an issue with `Fixes #NNNN` or `Part of #NNNN`
+
+For the full contributor workflow, including targeted test guidance, see
+[Contributing to Marin](contributing.md).
 
 ## Common Issues
 
 ### Broken Links
 - Use relative links for internal documentation
 - Use absolute URLs for external links
-- Test links after making changes
+- Run `uv run python infra/check_docs_source_links.py` after moving, deleting, or relinking docs pages that reference GitHub paths
+- Run `uv run mkdocs build --strict` after docs edits to catch navigation and Markdown link failures
 
 ### Build Errors
 - Check for syntax errors in markdown

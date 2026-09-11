@@ -1,0 +1,65 @@
+/**
+ * Decode Arrow IPC payloads returned by finelog.stats.StatsService.Query.
+ *
+ * Connect-JSON encodes `bytes` fields as base64. We decode to a Uint8Array,
+ * hand it to apache-arrow's `tableFromIPC`, and convert to plain JS rows so
+ * the rest of the dashboard can render via DataTable without arrow-aware code.
+ */
+import { tableFromIPC, type Table } from 'apache-arrow'
+
+export interface ArrowResult {
+  columns: string[]
+  types: Record<string, string>
+  rows: Record<string, unknown>[]
+}
+
+function base64ToUint8(b64: string): Uint8Array {
+  const bin = atob(b64)
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
+}
+
+export function decodeArrowIpc(arrowIpc: string | undefined | null): ArrowResult {
+  if (!arrowIpc) return { columns: [], types: {}, rows: [] }
+  const bytes = base64ToUint8(arrowIpc)
+  const table: Table = tableFromIPC(bytes)
+  const columns = table.schema.fields.map((f) => f.name)
+  const types = Object.fromEntries(table.schema.fields.map((field) => [field.name, String(field.type)]))
+  const rows: Record<string, unknown>[] = []
+  for (let i = 0; i < table.numRows; i++) {
+    const row: Record<string, unknown> = {}
+    for (const name of columns) {
+      const col = table.getChild(name)
+      const v = col?.get(i)
+      row[name] = normalize(v)
+    }
+    rows.push(row)
+  }
+  return { columns, types, rows }
+}
+
+function normalize(v: unknown): unknown {
+  if (v === null || v === undefined) return null
+  if (typeof v === 'bigint') return Number(v)
+  if (v instanceof Uint8Array) return `<bytes ${v.byteLength}>`
+  // Instants stay epoch milliseconds so rendering can honour the viewer's
+  // timezone. Formatting one to a UTC string here would freeze that choice
+  // before any component sees the value.
+  if (v instanceof Date) return v.getTime()
+  // Nested columns (a native Map<Utf8,Utf8> `labels`, a struct, a list) arrive
+  // as arrow MapRow/StructRow/sub-Vector objects. DataTable renders cells as
+  // text, so flatten them to compact JSON — coercing any nested bigint the way
+  // scalar cells are — rather than handing it an arrow object it can't stringify.
+  if (typeof v === 'object') {
+    // A cell decoded as a JS Map (rather than an arrow MapRow) stringifies to
+    // "{}" unless entries are lifted out first.
+    const plain = v instanceof Map ? Object.fromEntries(v) : v
+    try {
+      return JSON.stringify(plain, (_key, val) => (typeof val === 'bigint' ? Number(val) : val))
+    } catch {
+      return String(v)
+    }
+  }
+  return v
+}

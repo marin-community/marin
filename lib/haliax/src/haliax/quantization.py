@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,9 +7,10 @@
 # https://github.com/google/flax/blob/main/flax/linen/fp8_ops.py
 import dataclasses
 import functools
+import re
 import warnings
 from dataclasses import dataclass
-from typing import Protocol, TypeVar
+from typing import Protocol, Self, TypeVar
 
 import aqt.jax.v2.config as aqt_config
 import equinox as eqx
@@ -24,25 +25,27 @@ import haliax.nn as hnn
 from haliax.state_dict import StateDict
 from haliax.types import PrecisionLike
 
-from ._src.fp8 import dot_general_with_precision, in_qdq, out_qdq
+from ._src.fp8 import fp8_scaled_dot_general
 from .axis import Axis
+from .core import NamedArray
 from .hof import vmap
 
 T = TypeVar("T")
 
 
-class OverwriteWithGradient(eqx.Module):
-    """
-    Sometimes there is state that must be computed in the backward pass which we want to
-    persist for subsequent passes. Typically, we see this with quantization, particularly
-    FP8. This module is a marker that indicates to [haliax.quantization.apply_updates][] that the
-    gradient should be used to overwrite the state rather than added to it.
+class CustomGradientAccumulation(eqx.Module):
+    """State carried through gradients with a custom microbatch reduction.
 
-    Typically this is used in conjunction with [haliax.quantization.partition_for_grad_overwrite][]
-    and the types are kinds of DotGeneralOp.
+    Subclasses must implement an associative
+    [accumulate][haliax.quantization.CustomGradientAccumulation.accumulate] operation. These objects
+    bypass the optimizer and overwrite the corresponding model state when passed through
+    [haliax.quantization.apply_updates][]. The first call receives a zero-like ``self``, which the
+    implementation must treat as an identity.
     """
 
-    pass
+    def accumulate(self, other: Self) -> Self:
+        """Combines state produced by two gradient evaluations."""
+        raise NotImplementedError
 
 
 def partition_for_grad_overwrite(grad: T) -> tuple[T, T]:
@@ -62,11 +65,39 @@ def partition_for_grad_overwrite(grad: T) -> tuple[T, T]:
 
     """
 
-    def is_overwrite_with_gradient(v):
-        return isinstance(v, OverwriteWithGradient)
+    def is_custom_gradient_accumulation(v):
+        return isinstance(v, CustomGradientAccumulation)
 
-    x, y = eqx.partition(grad, is_overwrite_with_gradient, is_leaf=is_overwrite_with_gradient)
+    def is_leaf(v):
+        return isinstance(v, (CustomGradientAccumulation, NamedArray))
+
+    x, y = eqx.partition(grad, is_custom_gradient_accumulation, is_leaf=is_leaf)
     return x, y
+
+
+def accumulate_gradients(accumulated: T, gradient: T) -> T:
+    """Accumulates additive gradients and custom gradient-carried state."""
+
+    def _accumulate(accumulated_leaf, gradient_leaf):
+        if isinstance(accumulated_leaf, CustomGradientAccumulation):
+            if not isinstance(gradient_leaf, CustomGradientAccumulation) or type(accumulated_leaf) is not type(
+                gradient_leaf
+            ):
+                raise ValueError(
+                    "Custom gradient accumulation requires matching types, got "
+                    f"{type(accumulated_leaf).__name__} and {type(gradient_leaf).__name__}"
+                )
+            return accumulated_leaf.accumulate(gradient_leaf)
+        if accumulated_leaf is None:
+            return gradient_leaf
+        if gradient_leaf is None:
+            return accumulated_leaf
+        return accumulated_leaf + gradient_leaf
+
+    def is_leaf(value):
+        return value is None or isinstance(value, (CustomGradientAccumulation, NamedArray))
+
+    return jax.tree_util.tree_map(_accumulate, accumulated, gradient, is_leaf=is_leaf)
 
 
 def apply_updates(tree, updates, overwrites):
@@ -84,11 +115,12 @@ def apply_updates(tree, updates, overwrites):
     def _apply_update(tree, update, overwrite):
         if overwrite is not None:
             return overwrite
-
+        if update is None:
+            return tree
         return eqx.apply_updates(tree, update)
 
     def is_leaf(x):
-        return x is None or isinstance(x, OverwriteWithGradient)
+        return x is None or isinstance(x, CustomGradientAccumulation) or isinstance(x, NamedArray)
 
     return jax.tree_util.tree_map(_apply_update, tree, updates, overwrites, is_leaf=is_leaf)
 
@@ -145,7 +177,24 @@ class DefaultDotGeneralOp(eqx.Module):
         return DefaultDotGeneralOp._instance
 
 
-class Fp8DotGeneralOp(OverwriteWithGradient):
+class Fp8DotGeneralOp(CustomGradientAccumulation):
+    """Direct-quantization FP8 ``dot_general`` op for [haliax.nn.Linear][].
+
+    Casts both operands to FP8 and contracts them, then dequantizes the result,
+    so FP8 tensor cores are used directly instead of relying on XLA's
+    GemmRewriter to recover an FP8 kernel from a quantize/dequantize pattern.
+    Output gradients are quantized to FP8 in the custom VJP of
+    [fp8_scaled_dot_general][], which also carries the delayed-scaling state
+    (per-tensor scale + amax history for the input, kernel and output gradient)
+    updated as a [CustomGradientAccumulation][].
+
+    The forward-operand (``fwd_dtype``) and output-gradient (``rev_dtype``)
+    quantization dtypes default to E4M3 and E5M2.
+
+    Faithfully vendored from Flax's ``Fp8DirectDotGeneralOp``
+    (``flax/linen/fp8_ops.py``; see https://github.com/google/flax/pull/3922).
+    """
+
     input_scale: jnp.ndarray
     output_grad_scale: jnp.ndarray
     kernel_scale: jnp.ndarray
@@ -153,9 +202,17 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
     output_grad_amax_history: jnp.ndarray
     kernel_amax_history: jnp.ndarray
     compute_dtype: DTypeLike | None = eqx.field(static=True)
+    fwd_dtype: DTypeLike = eqx.field(static=True)
+    rev_dtype: DTypeLike = eqx.field(static=True)
 
     @classmethod
-    def init(cls, amax_history_length: int = 1024, compute_dtype: DTypeLike = None):
+    def init(
+        cls,
+        amax_history_length: int = 1024,
+        compute_dtype: DTypeLike | None = None,
+        fwd_dtype: DTypeLike = jnp.float8_e4m3fn,
+        rev_dtype: DTypeLike = jnp.float8_e5m2,
+    ):
         return cls(
             input_scale=jnp.ones(1, dtype=jnp.float32),
             output_grad_scale=jnp.ones(1, dtype=jnp.float32),
@@ -164,9 +221,10 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
             output_grad_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
             kernel_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
             compute_dtype=compute_dtype,
+            fwd_dtype=fwd_dtype,
+            rev_dtype=rev_dtype,
         )
 
-    # copied from flax
     def __call__(
         self,
         lhs,
@@ -176,25 +234,43 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
         preferred_element_type: DTypeLike | None = None,
         **kwargs,
     ):
-        # Use the `k.dtype` since it aligns with the `dtype` of its layers,
-        # namely, the computation data type.
+        # Use the kernel (`rhs`) dtype as the compute dtype since it aligns with
+        # the layer's dtype, matching Flax.
         if self.compute_dtype is None:
             comp_dtype = rhs.dtype
         else:
             comp_dtype = self.compute_dtype
         lhs = jnp.asarray(lhs, comp_dtype)
 
-        x_qdq = in_qdq(comp_dtype, lhs, self.input_scale, self.input_amax_history)
-        k_qdq = in_qdq(comp_dtype, rhs, self.kernel_scale, self.kernel_amax_history)
-        y_qdq = dot_general_with_precision(
-            x_qdq, k_qdq, dimension_numbers, precision, preferred_element_type, **kwargs
+        return fp8_scaled_dot_general(
+            lhs,
+            rhs,
+            dimension_numbers,
+            precision=precision,
+            preferred_element_type=comp_dtype,
+            lhs_scale=self.input_scale,
+            rhs_scale=self.kernel_scale,
+            grad_scale=self.output_grad_scale,
+            lhs_amax_history=self.input_amax_history,
+            rhs_amax_history=self.kernel_amax_history,
+            grad_amax_history=self.output_grad_amax_history,
+            quantize_compute_type=comp_dtype,
+            fwd_dtype=self.fwd_dtype,
+            rev_dtype=self.rev_dtype,
         )
-        y = out_qdq(comp_dtype, y_qdq, self.output_grad_scale, self.output_grad_amax_history)
 
-        return y
+    def accumulate(self, other: Self) -> Self:
+        # Every microbatch starts from the same persisted state, so its scale values and the rolled
+        # history tail match. Keep the latest copy and reduce the new amax entry across microbatches.
+        return dataclasses.replace(
+            other,
+            input_amax_history=jnp.maximum(self.input_amax_history, other.input_amax_history),
+            output_grad_amax_history=jnp.maximum(self.output_grad_amax_history, other.output_grad_amax_history),
+            kernel_amax_history=jnp.maximum(self.kernel_amax_history, other.kernel_amax_history),
+        )
 
 
-class Int8DotGeneralOp(OverwriteWithGradient):
+class Int8DotGeneralOp(CustomGradientAccumulation):
 
     cfg: DotGeneral
 
@@ -215,6 +291,9 @@ class Int8DotGeneralOp(OverwriteWithGradient):
         cfg = aqt_config.set_context(self.cfg, jrandom.PRNGKey(42), train_step=None)
         return cfg(lhs, rhs, dimension_numbers, precision, preferred_element_type)
 
+    def accumulate(self, other: Self) -> Self:
+        return other
+
     def to_state_dict(tree: PyTree, prefix: str | None = None) -> StateDict:
         warnings.warn("Ignore all int8 states (if any) for now.")
         return {}
@@ -228,7 +307,7 @@ class QuantizationConfig:
     """
 
     amax_history_length: int = 1024
-    compute_dtype: DTypeLike = None
+    compute_dtype: DTypeLike | None = None
 
     fp8: bool = False
     int8: bool = False
@@ -299,8 +378,6 @@ def _matches_target(key_path, config: QuantizationConfig) -> bool:
         return True
     if isinstance(config.targets, list):
         return key in config.targets
-
-    import re
 
     key_path_str = _key_path_to_str(key_path)
     return re.match(config.targets, key_path_str) is not None

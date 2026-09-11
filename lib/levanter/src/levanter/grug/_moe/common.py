@@ -1,0 +1,257 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Shared types, routing helpers, and layout utilities for Grug MoE."""
+
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Literal, NamedTuple, TypeAlias, cast, get_args
+
+import jax
+import jax.numpy as jnp
+from haliax.jax_utils import named_call
+from jax.sharding import PartitionSpec as P
+from jaxtyping import Array, Float, Int, Key
+
+from levanter.utils.activation import ActivationFunctionEnum
+
+_DEFAULT_EP_CAPACITY_FACTOR = 1.25
+# #2710 used 1.25 as the practical EP ring default to avoid over/under-packing.
+
+
+def _pack_pairs_u32(a: jax.Array, b: jax.Array) -> jax.Array:
+    """Interleave two 16-bit ``[..., F]`` arrays as ``[..., 2F]``."""
+    ai = jax.lax.bitcast_convert_type(a, jnp.uint16).astype(jnp.uint32)
+    bi = jax.lax.bitcast_convert_type(b, jnp.uint16).astype(jnp.uint32)
+    packed = ai | (bi << jnp.uint32(16))
+    # A uint32 -> 16-bit bitcast appends an axis of 2, little end first, so `a` leads.
+    return jax.lax.bitcast_convert_type(packed, a.dtype).reshape(*a.shape[:-1], 2 * a.shape[-1])
+
+
+def _unpack_pairs_u32(x: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """``[..., 2F]`` of a 16-bit dtype -> ``([..., F], [..., F])``, undoing ``_pack_pairs_u32``."""
+    pairs = x.reshape(*x.shape[:-1], x.shape[-1] // 2, 2)
+    packed = jax.lax.bitcast_convert_type(pairs, jnp.uint32)
+    lo = (packed & jnp.uint32(0xFFFF)).astype(jnp.uint16)
+    hi = (packed >> jnp.uint32(16)).astype(jnp.uint16)
+    return (
+        jax.lax.bitcast_convert_type(lo, x.dtype),
+        jax.lax.bitcast_convert_type(hi, x.dtype),
+    )
+
+
+# `bitcast_convert_type` has no AD rule, so the interleave carries its own transpose.
+@jax.custom_vjp
+def _interleave_halves(gate: jax.Array, up: jax.Array) -> jax.Array:
+    return _pack_pairs_u32(gate, up)
+
+
+def _interleave_halves_fwd(gate, up):
+    return _pack_pairs_u32(gate, up), None
+
+
+def _interleave_halves_bwd(_, ct):
+    return _unpack_pairs_u32(ct)
+
+
+_interleave_halves.defvjp(_interleave_halves_fwd, _interleave_halves_bwd)
+
+
+def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
+    """grug w13 [E,H,2I] gate=[:I], up=[I:] -> interleaved [g0,u0,g1,u1,...] (QuACK layout)."""
+    # The split's width check matters here: the packed path would broadcast mismatched halves
+    # against each other and return a wrong-width array instead of raising.
+    gate, up = split_moe_w13_output(moe_w13, intermediate_dim=moe_dim, interleaved=False)
+    if moe_w13.dtype.itemsize != 2:
+        return jnp.stack([gate, up], axis=-1).reshape(moe_w13.shape)
+    return _interleave_halves(gate, up)
+
+
+def _swiglu_gate_up_backward(gu: jax.Array, dh: jax.Array) -> jax.Array:
+    """Cotangent of the interleaved gate/up pre-activations, given the SwiGLU output's."""
+    if gu.dtype.itemsize == 2:
+        gate, up = _unpack_pairs_u32(gu)
+    else:
+        gate, up = gu[..., 0::2], gu[..., 1::2]
+    sg = jax.nn.sigmoid(gate)
+    silu = gate * sg
+    dgate = dh * up * (sg + silu * (1.0 - sg))
+    dup = dh * silu
+    if gu.dtype.itemsize == 2:
+        return _pack_pairs_u32(dgate.astype(gu.dtype), dup.astype(gu.dtype))
+    return jnp.stack([dgate, dup], axis=-1).reshape(gu.shape)
+
+
+PspecAxis: TypeAlias = str | tuple[str, ...] | None
+MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
+MoeImplementation: TypeAlias = Literal[
+    "ring",  # Expert-parallel all-gather + psum-scatter backend.
+    "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
+    "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
+    "fixed_pooled_wave_all_to_all",  # Destination-pooled static waves with fixed receiver buffers.
+    "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
+    "scatter",  # Single-process grouped GMM with scatter-add combine.
+    "sonic",  # Single-process raw Sonic Triton gather/combine backend.
+    "sonic_cute",  # Single-process QuACK SM100 (Blackwell/B200) grouped-GEMM backend.
+]
+_VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
+_EP_MOE_IMPLEMENTATIONS = (
+    "ring",
+    "ragged_all_to_all",
+    "fixed_all_to_all",
+    "fixed_pooled_wave_all_to_all",
+    "deepep",
+)
+# Local means no collectives over an expert axis. These backends can still run
+# under ordinary data/model sharding through the no-EP shard_map path.
+_LOCAL_MOE_IMPLEMENTATIONS = (
+    "scatter",
+    "sonic",
+    "sonic_cute",
+)
+
+_CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"
+_CHECKPOINT_EXPERT_HIDDEN = "grug_moe_expert_hidden"
+_CHECKPOINT_DISPATCH_OUTPUT = "grug_moe_dispatch_output"
+_CHECKPOINT_MOE_OUTPUT = "grug_moe_output"
+
+# Checkpoint names every MoE backend tags on its dispatch tensors. A remat
+# policy of jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+# keeps these alive for backward instead of re-running expert dispatch —
+# including the EP collectives — during the recompute.
+MOE_REMAT_SAVE_NAMES = (
+    _CHECKPOINT_DISPATCH_INPUT,
+    _CHECKPOINT_EXPERT_HIDDEN,
+    _CHECKPOINT_DISPATCH_OUTPUT,
+    _CHECKPOINT_MOE_OUTPUT,
+)
+
+
+class CapacityOverflow(NamedTuple):
+    """Expert assignments dropped before and after transport."""
+
+    sender: Int[Array, ""]
+    receiver: Int[Array, ""]
+
+    @property
+    def total(self) -> Int[Array, ""]:
+        return self.sender + self.receiver
+
+
+@dataclass(frozen=True)
+class MoEExpertMlpPspecs:
+    """Logical sharding axes for local MoE expert MLP weights."""
+
+    expert: PspecAxis = "expert"
+    hidden: PspecAxis = "data"
+    intermediate: PspecAxis = "model"
+
+    @property
+    def w_gate_up(self) -> P:
+        return P(self.expert, self.hidden, self.intermediate)
+
+    @property
+    def w_down(self) -> P:
+        return P(self.expert, self.intermediate, self.hidden)
+
+
+def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:
+    if implementation is None:
+        return "ring"
+    if implementation not in _VALID_MOE_IMPLEMENTATIONS:
+        valid = ", ".join(repr(choice) for choice in _VALID_MOE_IMPLEMENTATIONS)
+        raise ValueError(f"implementation must be one of {valid} or None, got {implementation!r}")
+    return cast(MoeImplementation, implementation)
+
+
+def split_moe_w13_output(
+    w13_out: Float[Array, "... I2"], *, intermediate_dim: int, interleaved: bool
+) -> tuple[Float[Array, "... I"], Float[Array, "... I"]]:
+    expected = 2 * intermediate_dim
+    if w13_out.shape[-1] != expected:
+        raise ValueError(f"w13 output last dimension must be {expected}, got shape={w13_out.shape}")
+    if interleaved:
+        return w13_out[..., 0::2], w13_out[..., 1::2]
+    gate, up = jnp.split(w13_out, [intermediate_dim], axis=-1)
+    return gate, up
+
+
+def _init_weight(key: Key[Array, ""], shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
+    return std * jax.random.truncated_normal(key, -3, 3, shape)
+
+
+@named_call
+def _prepare_moe_dispatch(
+    x: Float[Array, "T H"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    *,
+    num_experts: int,
+) -> tuple[
+    Float[Array, "TK H"],
+    Float[Array, "TK"],
+    Int[Array, "TK"],
+    Int[Array, "E"],
+]:
+    """Flatten + argsort by expert into grouped layout for GMM."""
+    # #2704: keep argsort-grouped dispatch as the canonical compact routing
+    # strategy, matching the behavior carried forward from 89318a910.
+    tokens, topk = selected_experts.shape
+    expert_ids = selected_experts.reshape(tokens * topk)
+    dispatch_weights = combine_weights.reshape(tokens * topk)
+
+    sort_idx = jnp.argsort(expert_ids, axis=0)
+    token_ids = jnp.arange(tokens * topk, dtype=jnp.int32) // topk
+    token_ids_sort = token_ids[sort_idx]
+    x_sort = x[token_ids_sort]
+    w_sort = dispatch_weights[sort_idx].astype(x.dtype)
+    group_sizes = jnp.bincount(expert_ids, length=num_experts).astype(jnp.int32)
+    return x_sort, w_sort, token_ids_sort, group_sizes
+
+
+@named_call
+def _prepare_moe_dispatch_indices_with_assignment_ids(
+    selected_experts: Int[Array, "T K"],
+    *,
+    num_experts: int,
+) -> tuple[
+    Int[Array, "TK"],
+    Int[Array, "T K"],
+    Int[Array, "E"],
+    Int[Array, "TK"],
+]:
+    """Prepare expert-sorted token ids plus reverse positions without gathering x."""
+    tokens, topk = selected_experts.shape
+    assignments = tokens * topk
+    expert_ids = selected_experts.reshape(assignments)
+
+    sort_idx = jnp.argsort(expert_ids, axis=0)
+    assignment_ids = jnp.arange(assignments, dtype=jnp.int32)
+    sorted_assignment_ids = assignment_ids[sort_idx]
+    token_ids_sort = sorted_assignment_ids // topk
+
+    sorted_positions = jnp.arange(assignments, dtype=jnp.int32)
+    dispatch_positions = jnp.zeros((assignments,), dtype=jnp.int32).at[sort_idx].set(sorted_positions)
+    dispatch_positions = dispatch_positions.reshape(tokens, topk)
+
+    group_sizes = jnp.bincount(expert_ids, length=num_experts).astype(jnp.int32)
+    return token_ids_sort, dispatch_positions, group_sizes, sorted_assignment_ids
+
+
+def _zero_dropped_assignments() -> Int[Array, ""]:
+    return jnp.array(0, dtype=jnp.int32)
+
+
+def _chunk_capacity_drops(cu: Int[Array, "E1"], bounds: Sequence[int], caps: Sequence[int]) -> Int[Array, ""]:
+    """Count assignments lost to per-chunk static capacity."""
+    total = jnp.zeros((), jnp.int32)
+    for chunk, cap in enumerate(caps):
+        count = cu[bounds[chunk + 1]] - cu[bounds[chunk]]
+        total = total + jnp.maximum(count - cap, 0).astype(jnp.int32)
+    return total
+
+
+def _zero_inactive_grouped_rows(values: jax.Array, cumulative_group_sizes: jax.Array) -> jax.Array:
+    """Zero the rows past the last expert group, which the grouped kernels never write."""
+    active_rows = cumulative_group_sizes[-1]
+    return jnp.where(jnp.arange(values.shape[0])[:, None] < active_rows, values, jnp.zeros((), values.dtype))

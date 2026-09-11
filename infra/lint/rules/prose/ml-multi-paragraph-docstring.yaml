@@ -1,0 +1,24 @@
+schema_version: 1
+code: ml-multi-paragraph-docstring
+lane: prose
+title: Multi-paragraph docstring on a trivial body
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Internal docstrings should be one short line max.
+  Multi-paragraph docstrings on three-line bodies are an LLM-generated pitfall
+  and bury the real public-API docs they should have lived alongside.
+
+  **When allowed:** Genuinely complex public APIs where Google-style sections
+  (`Args:`, `Returns:`, `Raises:`) document non-obvious contracts.
+
+  **Bad example:**
+  ```python
+  def normalize(s: str) -> str:
+      """
+      Normalize a string.
+
+      This function takes a string and returns its normalized form.
+      The normalization process consists of stripping whitespace ...
+      """
+      return s.strip().lower()
+  ```

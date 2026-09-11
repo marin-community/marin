@@ -1,0 +1,29 @@
+schema_version: 1
+code: ml-shotgun-surgery
+lane: meta
+title: One concept smeared across many edit sites
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** The canonical signal of a missing abstraction, and the PR itself
+  is the evidence: you edited N places to teach the codebase one fact, and the N+1th
+  place will be missed next time and silently diverge. The author holds the full
+  model right now and the centralizing move (decorator, dispatch table, dataclass
+  field, registry) is cheapest before merge. Invisible hunk-by-hunk — each edit looks
+  trivially correct.
+
+  Fire only when the SAME conceptual edit *adds new per-site logic* (a guard, a
+  branch, a registration call) at ≥4 distinct sites in this diff AND you can name the
+  concept and the concrete seam that absorbs the change at ZERO call sites. Suppress
+  mandatory fan-out: a rename, or a new required field on a dataclass that every
+  construction site must pass — that breadth is correct, not a smell. The proposed
+  seam must not be a re-export/alias (that would be `ml-compat-shim-not-migration`).
+  Anchor on the first edited site; list the others in the message.
+
+  **When allowed:** Mechanical fan-out that already routes through one source; edits
+  that merely rhyme without one shared concept; renames and required-param additions.
+
+  **Bad example:**
+  ```python
+  # this PR prepends `if not ctx.authed: raise PermissionError` to 11 RPC handlers
+  # → one @require_auth decorator (or one check in the dispatch loop): 11 edits → 1.
+  ```

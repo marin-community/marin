@@ -1,23 +1,21 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """WorkerService RPC implementation using Connect RPC."""
 
 import logging
-import re
-import time
 from typing import Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
+from rigging.timing import Timer
 
-from iris.chaos import chaos
+from iris.cluster.process_status import get_process_status
+from iris.cluster.stats.tables import ProfileTrigger
 from iris.cluster.worker.worker_types import TaskInfo
-from iris.logging import LogBuffer
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import rpc_error_handler
-from iris.time_utils import Timer
 
 logger = logging.getLogger(__name__)
 
@@ -28,144 +26,122 @@ class TaskProvider(Protocol):
     Returns TaskInfo (read-only view) to decouple service layer from TaskAttempt internals.
     """
 
-    def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str: ...
+    def submit_task(self, request: job_pb2.RunTaskRequest) -> str: ...
     def get_task(self, task_id: str, attempt_id: int = -1) -> TaskInfo | None: ...
     def list_tasks(self) -> list[TaskInfo]: ...
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
-    def get_logs(self, task_id: str, start_line: int = 0, attempt_id: int = -1) -> list[cluster_pb2.Worker.LogEntry]: ...
-    def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse: ...
+    def handle_reconcile(self, request: worker_pb2.Worker.ReconcileRequest) -> worker_pb2.Worker.ReconcileResponse: ...
+    def capture_and_log_profile(
+        self,
+        *,
+        target: str,
+        request: job_pb2.ProfileTaskRequest,
+        trigger: ProfileTrigger,
+    ) -> bytes: ...
+    def exec_in_container(
+        self, task_id: str, command: list[str], timeout_seconds: int = 60
+    ) -> worker_pb2.Worker.ExecInContainerResponse: ...
 
 
 class WorkerServiceImpl:
     """Implementation of WorkerService RPC interface."""
 
-    def __init__(self, provider: TaskProvider, log_buffer: LogBuffer | None = None):
+    def __init__(
+        self,
+        provider: TaskProvider,
+    ):
         self._provider = provider
-        self._log_buffer = log_buffer
         self._timer = Timer()
 
     def get_task_status(
         self,
-        request: cluster_pb2.Worker.GetTaskStatusRequest,
+        request: worker_pb2.Worker.GetTaskStatusRequest,
         _ctx: RequestContext,
-    ) -> cluster_pb2.TaskStatus:
+    ) -> job_pb2.TaskStatus:
         """Get status of a task."""
         task = self._provider.get_task(request.task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
 
-        status = task.to_proto()
-        if request.include_result and task.result:
-            # TaskStatus doesn't have serialized_result field, but we could add it
-            # For now, result is available via the task object
-            pass
-        return status
+        return task.to_proto()
 
     def list_tasks(
         self,
-        _request: cluster_pb2.Worker.ListTasksRequest,
+        _request: worker_pb2.Worker.ListTasksRequest,
         _ctx: RequestContext,
-    ) -> cluster_pb2.Worker.ListTasksResponse:
+    ) -> worker_pb2.Worker.ListTasksResponse:
         """List all tasks on this worker."""
         tasks = self._provider.list_tasks()
-        return cluster_pb2.Worker.ListTasksResponse(
+        return worker_pb2.Worker.ListTasksResponse(
             tasks=[task.to_proto() for task in tasks],
         )
 
-    def fetch_task_logs(
-        self,
-        request: cluster_pb2.Worker.FetchTaskLogsRequest,
-        _ctx: RequestContext,
-    ) -> cluster_pb2.Worker.FetchTaskLogsResponse:
-        """Fetch logs for a task, optionally filtered by attempt."""
-        start_line = request.filter.start_line if request.filter.start_line else 0
-        # attempt_id=0 is valid (first attempt), so use the value directly
-        # Convention: -1 means "all attempts", caller sets explicitly
-        attempt_id = request.attempt_id
-        logs = self._provider.get_logs(request.task_id, start_line=start_line, attempt_id=attempt_id)
-
-        # Apply additional filters
-        result = []
-        for entry in logs:
-            # Time range filter (start_ms is exclusive for incremental polling)
-            if request.filter.start_ms and entry.timestamp.epoch_ms <= request.filter.start_ms:
-                continue
-            if request.filter.end_ms and entry.timestamp.epoch_ms > request.filter.end_ms:
-                continue
-            # TODO: Regex filter is vulnerable to DoS via catastrophic backtracking.
-            # Malicious regex like (a+)+ can cause minutes of CPU time. Consider using
-            # the re2 library or adding timeout/complexity limits.
-            # Regex filter
-            if request.filter.regex:
-                if not re.search(request.filter.regex, entry.data):
-                    continue
-
-            result.append(entry)
-
-            # Max lines limit
-            if request.filter.max_lines and len(result) >= request.filter.max_lines:
-                break
-
-        return cluster_pb2.Worker.FetchTaskLogsResponse(logs=result)
-
     def health_check(
         self,
-        _request: cluster_pb2.Empty,
+        _request: job_pb2.Empty,
         _ctx: RequestContext,
-    ) -> cluster_pb2.Worker.HealthResponse:
+    ) -> worker_pb2.Worker.HealthResponse:
         """Report worker health."""
         tasks = self._provider.list_tasks()
-        running = sum(1 for t in tasks if t.status == cluster_pb2.TASK_STATE_RUNNING)
+        running = sum(1 for t in tasks if t.status == job_pb2.TASK_STATE_RUNNING)
 
-        response = cluster_pb2.Worker.HealthResponse(
+        response = worker_pb2.Worker.HealthResponse(
             healthy=True,
             running_tasks=running,
         )
         response.uptime.milliseconds = self._timer.elapsed_ms()
         return response
 
-    def get_process_logs(
+    def get_process_status(
         self,
-        request: cluster_pb2.Worker.GetProcessLogsRequest,
+        request: job_pb2.GetProcessStatusRequest,
         _ctx: RequestContext,
-    ) -> cluster_pb2.Worker.GetProcessLogsResponse:
-        """Get worker process logs from the in-memory ring buffer."""
-        if not self._log_buffer:
-            return cluster_pb2.Worker.GetProcessLogsResponse(records=[])
-        prefix = request.prefix or None
-        limit = request.limit if request.limit > 0 else 200
-        records = self._log_buffer.query(prefix=prefix, limit=limit)
-        return cluster_pb2.Worker.GetProcessLogsResponse(
-            records=[
-                cluster_pb2.ProcessLogRecord(
-                    timestamp=r.timestamp,
-                    level=r.level,
-                    logger_name=r.logger_name,
-                    message=r.message,
-                )
-                for r in records
-            ]
-        )
+    ) -> job_pb2.GetProcessStatusResponse:
+        """Return local process info (logs are in the central LogService)."""
+        return get_process_status(self._timer)
 
-    def heartbeat(
+    def profile_task(
         self,
-        request: cluster_pb2.HeartbeatRequest,
+        request: job_pb2.ProfileTaskRequest,
         _ctx: RequestContext,
-    ) -> cluster_pb2.HeartbeatResponse:
-        """Handle controller-initiated heartbeat.
+    ) -> job_pb2.ProfileTaskResponse:
+        """Profile a running task or the worker process itself.
 
-        Processes tasks_to_run and tasks_to_kill, then returns current state.
+        The target field determines what to profile:
+        - ``/system/process``: the worker process itself. The persisted row's
+          ``source`` is rewritten to ``/system/worker/<id>``.
+        - ``/job/.../task/N[:attempt_id]``: a specific task attempt.
+
+        All captures (CPU, memory, threads) persist to ``iris.profile`` with
+        ``trigger="on_demand"`` and the bytes are returned inline.
         """
-        with rpc_error_handler("heartbeat"):
-            # Chaos injection for testing heartbeat failures and delays
-            if rule := chaos("worker.heartbeat"):
-                if rule.delay_seconds > 0:
-                    time.sleep(rule.delay_seconds)
-                if rule.error:
-                    raise rule.error
-                # If no error specified, raise generic RuntimeError
-                if not rule.delay_seconds:
-                    raise RuntimeError("chaos: worker.heartbeat")
+        with rpc_error_handler("profile_task"):
+            try:
+                if not request.HasField("profile_type"):
+                    raise ValueError("profile_type is required")
+                data = self._provider.capture_and_log_profile(
+                    target=request.target,
+                    request=request,
+                    trigger=ProfileTrigger.ON_DEMAND,
+                )
+                return job_pb2.ProfileTaskResponse(profile_data=data)
+            except Exception as e:
+                return job_pb2.ProfileTaskResponse(error=str(e))
 
-            # Delegate to worker for reconciliation
-            return self._provider.handle_heartbeat(request)
+    def exec_in_container(
+        self,
+        request: worker_pb2.Worker.ExecInContainerRequest,
+        _ctx: RequestContext,
+    ) -> worker_pb2.Worker.ExecInContainerResponse:
+        """Execute a command in a running task's container."""
+        with rpc_error_handler("exec_in_container"):
+            if not request.command:
+                raise ConnectError(Code.INVALID_ARGUMENT, "command is required")
+            timeout_seconds = request.timeout_seconds if request.timeout_seconds != 0 else 60
+            return self._provider.exec_in_container(request.task_id, list(request.command), timeout_seconds)
+
+    def reconcile(
+        self, request: worker_pb2.Worker.ReconcileRequest, _ctx: RequestContext
+    ) -> worker_pb2.Worker.ReconcileResponse:
+        with rpc_error_handler("reconcile"):
+            return self._provider.handle_reconcile(request)

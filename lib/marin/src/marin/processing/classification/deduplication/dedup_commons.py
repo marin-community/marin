@@ -1,28 +1,26 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Iterator
-from dataclasses import dataclass, field
-from enum import StrEnum, auto
-from functools import partial
 import logging
 import os
-from typing import TypedDict
-import humanfriendly
-from marin.utilities.time_logger import log_time
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
+from enum import StrEnum, auto
+
 import pyarrow as pa
 import pyarrow.json as pa_json
-
-from fray.v2.local_backend import LocalClient
-from marin.utilities.wandb_utils import init_wandb
-from marin.execution.executor import THIS_OUTPUT_PATH
-from marin.utils import fsspec_glob
-from zephyr import ZephyrContext
-from zephyr.dataset import Dataset
-from zephyr.expr import col
+import pyarrow.parquet as pq
+import wandb
+from rigging.filesystem.storage_path import StoragePath, rebase_file_path
+from zephyr import counters
 from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
+from zephyr.writers import write_parquet_file
+
+from marin.utilities.wandb_utils import init_wandb
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_FILETYPES: list[str] = ["jsonl", "jsonl.gz", "jsonl.zst", "parquet"]
 
 
 class DedupMode(StrEnum):
@@ -42,126 +40,46 @@ class DedupMode(StrEnum):
     """
 
 
-@dataclass(frozen=True)
-class DedupConfig:
-    """
-    Configuration class for running deduplication on docs using Zephyr.
-
-    Attributes:
-        input_paths: Path(s) of files to apply deduplication to. This could be across multiple directories/datasets.
-        filetypes: File extensions to consider when collecting input files.
-        output_path: Path for storing results of deduplication (char spans in docs that are duplicate)
-        processes: number of processes to use for deduplication
-        mode: switch between decontamination (build filter) and regular deduplication
-        text_field: field to use for text content in Parquet files
-        fuzzy_minhash_num_perms: Number of permutations for MinHash signature.
-            Must be divisible by fuzzy_minhash_num_bands. Defaults are from OLMo 3: 26 bands x 11 rows = 286.
-        fuzzy_minhash_num_bands: Number of bands for LSH. More bands = higher recall, lower precision.
-        fuzzy_minhash_ngram_size: Size of character n-grams/shingles to extract from text.
-        fuzzy_minhash_seed: Random seed for MinHash permutation generation.
-    """
-
-    input_paths: str | list[str]
-    filetypes: list[str] = field(default_factory=lambda: ["jsonl", "jsonl.gz", "jsonl.zst", "parquet"])
-    output_path: str = THIS_OUTPUT_PATH
-    processes: int = 1
-    mode: DedupMode = DedupMode.EXACT_PARAGRAPH
-    # field to use for text content in Parquet files
-    text_field: str = "text"
-    ray_num_cpus: int = 2
-    ray_memory: int = humanfriendly.parse_size("64GB", binary=True)
-    # MinHash LSH parameters (only used for FUZZY_DOCUMENT mode)
-    fuzzy_minhash_num_perms: int = 286
-    fuzzy_minhash_num_bands: int = 26
-    fuzzy_minhash_ngram_size: int = 5
-    fuzzy_minhash_seed: int = 42
-
-
-def deduplicate(config: DedupConfig):
-    """Main entry point for deduplication"""
-    if config.mode == DedupMode.EXACT_PARAGRAPH:
-        from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
-
-        return dedup_exact_paragraph(config)
-    elif config.mode == DedupMode.EXACT_DOCUMENT:
-        from marin.processing.classification.deduplication.exact import dedup_exact_document
-
-        return dedup_exact_document(config)
-    elif config.mode == DedupMode.FUZZY_DOCUMENT:
-        from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
-
-        return dedup_fuzzy_document(config)
-    else:
-        raise ValueError(f"Unknown mode {config.mode}")
-
-
-@dataclass
-class DupCounters:
-    # TODO (rav): make both method and level Enums
-    method: str
-    level: str
-    total: int = 0
-    dups: int = 0
-    unique: int = 0
-    dup_clusters: int = 0
-
-    def __add__(self, other: "DupCounters") -> "DupCounters":
-        assert isinstance(other, DupCounters)
-
-        return DupCounters(
-            method=self.method,
-            level=self.level,
-            total=self.total + other.total,
-            dups=self.dups + other.dups,
-            unique=self.unique + other.unique,
-            dup_clusters=self.dup_clusters + other.dup_clusters,
-        )
-
-    def __str__(self) -> str:
-        if self.total == 0:
-            return f"{self.level} total: 0"
-        return (
-            f"{self.method.capitalize()} {self.level.lower()} total: {self.total:,}, "
-            f"dups: {self.dups:,} ({self.dups / self.total:.2%}), unique: {self.unique:,}, "
-            f"dup_clusters: {self.dup_clusters:,}"
-        )
-
-    def to_dict(self):
-        return {
-            f"dedup/{self.method}/{self.level}/total": self.total,
-            f"dedup/{self.method}/{self.level}/dups": self.dups,
-            f"dedup/{self.method}/{self.level}/unique": self.unique,
-            f"dedup/{self.method}/{self.level}/dup_clusters": self.dup_clusters,
-        }
+def _aggregate_shard_counters(shard_results: list[dict], method: str, level: str) -> dict[str, int]:
+    """Aggregate per-shard counter dicts into a single counter dict."""
+    total = sum(r["total"] for r in shard_results)
+    dups = sum(r["dups"] for r in shard_results)
+    unique = sum(r["unique"] for r in shard_results)
+    return {
+        f"dedup/{method}/{level}/total": total,
+        f"dedup/{method}/{level}/dups": dups,
+        f"dedup/{method}/{level}/unique": unique,
+    }
 
 
 def _collect_input_files(*, input_paths: str | list[str], filetypes: list[str]) -> list[str]:
-    """Given an input path or list of paths, collect all matching files"""
+    """Given an input path or list of paths, collect all matching files and return them sorted."""
     input_paths = input_paths if isinstance(input_paths, list) else [input_paths]
     all_files = []
-    ext_glob = ",".join(set(filetypes))
     for path in input_paths:
         logger.info(f"Collecting files from path: {path}")
-        files = fsspec_glob(f"{path.rstrip('/')}/**/*.{{{ext_glob}}}")
-        if files:
-            all_files.extend(files)
+        path_files: list[str] = []
+        for ext in filetypes:
+            path_files.extend(str(m) for m in StoragePath(f"{path.rstrip('/')}/**/*.{ext}").glob())
+        if path_files:
+            all_files.extend(path_files)
         else:
             if not any(path.endswith(ext) for ext in filetypes):
                 raise FileNotFoundError(f"No files found in path: {path}")
             all_files.append(path)  # Assume it's a single file
     assert all_files, "No input files found for deduplication."
-    return all_files
+    return sorted(all_files)
 
 
-def _init_wandb(config: DedupConfig):
+def _init_wandb(*, mode: DedupMode, input_paths: str | list[str], processes: int = 1):
     """Initialize wandb for deduplication tracking."""
     init_wandb(
-        run_name=f"{config.mode}",
-        tags=[str(config.mode)],
+        run_name=f"{mode}",
+        tags=[str(mode)],
         config={
-            "mode": str(config.mode),
-            "input_path": config.input_paths,
-            "processes": config.processes,
+            "mode": str(mode),
+            "input_path": input_paths,
+            "processes": processes,
         },
     )
 
@@ -191,85 +109,118 @@ def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kw
         raise ValueError(f"Unsupported extension: {file_path}.")
     with open_file(file_path, "rb") as f:
         if file_path.endswith(".parquet"):
-            import pyarrow.parquet as pq
-
             if columns is not None:
                 parquet_kwargs = {**parquet_kwargs, "columns": columns}
 
             parquet_file = pq.ParquetFile(f)
             yield from parquet_file.iter_batches(**parquet_kwargs)
         else:
-            yield from pa_json.read_json(f).to_batches()
-
-
-def _load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
-    shard_dup_map = {}
-
-    def add_to_dup_map(record: dict):
-        shard_dup_map[record["hash"]] = {"canonical": record["canonical"]}
-
-    with log_time(f"Load duplicate map from {len(shards)} shards"):
-        with ZephyrContext(client=LocalClient(), name="dedup-commons-map") as ctx:
-            ctx.execute(
-                Dataset.from_list(shards)
-                .load_parquet()
-                .select("hash", "canonical")
-                .filter(col("hash").is_not_null())
-                .map(add_to_dup_map),
-            )
-
-    return shard_dup_map
+            # block_size must be >= the largest single JSON line in the file
+            read_options = pa_json.ReadOptions(block_size=64 * 1024 * 1024)  # 64 MB
+            yield from pa_json.open_json(f, read_options=read_options)
 
 
 def _find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
     # Determine base path for rebasing
-    base_path = input_path[0] if isinstance(input_path, list) else input_path
+    if isinstance(input_path, list):
+        # Use common ancestor so rebase_file_path never generates ".." segments in GCS paths.
+        # os.path.commonpath works on GCS paths since it operates on string prefixes.
+        base_path = os.path.commonpath(input_path) if len(input_path) > 1 else input_path[0]
+    else:
+        base_path = input_path
     if base_path in input_files:
         # NOTE: if the base_path is in the input_files, means it's a specific file, so rebase to its directory
         base_path = os.path.dirname(base_path)
     return base_path
 
 
-def _compute_dedup_stats(shards: list[str], method: str, level: str) -> DupCounters:
-    with log_time(f"Compute deduplication stats from {len(shards)} shards"):
-        with ZephyrContext(client=LocalClient(), name="dedup-commons-counts") as ctx:
-            result: DupCounters = ctx.execute(  # type: ignore[bad-assignment]
-                Dataset.from_list(shards)
-                .load_parquet()
-                .select("cnt")
-                .map(
-                    lambda c: DupCounters(
-                        method=method,
-                        level=level,
-                        total=c["cnt"],
-                        dups=c["cnt"] if c["cnt"] > 1 else 0,
-                        unique=int(c["cnt"] == 1),
-                        dup_clusters=int(c["cnt"] > 1),
-                    )
-                )
-                .reduce(partial(sum, start=DupCounters(method=method, level=level))),
-            )[0]
-    return result
+@dataclass
+class _DupTally:
+    """Streams dedup-annotated records while emitting per-record dup/unique counters.
+
+    Wrap the record iterator with :meth:`tally` inside a group_by reducer; the running
+    ``total``/``dups``/``unique`` counts are available on the instance once the wrapped
+    iterator is exhausted (i.e. after the downstream writer has consumed it).
+    """
+
+    counter_prefix: str
+    total: int = 0
+    dups: int = 0
+
+    @property
+    def unique(self) -> int:
+        return self.total - self.dups
+
+    def tally(self, records: Iterator[dict]) -> Iterator[dict]:
+        for record in records:
+            self.total += 1
+            counters.pipeline.update_counter(f"{self.counter_prefix}/total", 1)
+            if record["is_dup"]:
+                self.dups += 1
+                counters.pipeline.update_counter(f"{self.counter_prefix}/dups", 1)
+            else:
+                counters.pipeline.update_counter(f"{self.counter_prefix}/unique", 1)
+            yield record
+
+    def as_result(self, base: dict) -> dict:
+        return {**base, "total": self.total, "dups": self.dups, "unique": self.unique}
 
 
-class DupeReduceResult(TypedDict):
-    hash: str | None
-    cnt: int
-    canonical: str | None
+def make_document_dedup_aggregator(
+    *,
+    idx_to_path: dict[int, str],
+    input_paths: str | list[str],
+    output_path: str,
+    counter_prefix: str,
+) -> Callable[[int, Iterator[dict]], dict]:
+    """Return a group_by reducer that counts dedup stats and writes parquet output.
+
+    The returned callable maps ``(file_idx, records) -> dict`` with keys
+    ``total``, ``dups``, ``unique`` plus whatever ``write_parquet_file`` returns.
+
+    Used identically by both exact-document and fuzzy-document dedup.
+    """
+
+    def aggregate(file_idx: int, records: Iterator[dict]) -> dict:
+        input_path = idx_to_path[file_idx]
+        output_file = rebase_file_path(
+            _find_base_path(input_paths, [input_path]),
+            input_path,
+            f"{output_path}/data/",
+            old_extension=_get_extension(input_path),
+            new_extension=".parquet",
+        )
+
+        tally = _DupTally(counter_prefix)
+
+        def only_dups(records: Iterator[dict]) -> Iterator[dict]:
+            for record in records:
+                if record["is_dup"]:
+                    yield {"id": record["id"], "dup_doc": True}
+
+        result = write_parquet_file(only_dups(tally.tally(records)), output_file)
+        return tally.as_result(result)
+
+    return aggregate
 
 
-def _count_reduce(key: str, items: Iterator[pa.StructScalar], *, canonical_id: str) -> DupeReduceResult:
-    head = next(items)
-    doc_cnt = sum(map(lambda _: 1, items)) + 1
-    if doc_cnt == 1:
-        return {
-            "hash": None,
-            "cnt": 1,
-            "canonical": None,
-        }
+def finalize_dedup(shard_results: list[dict], mode: DedupMode, method: str, level: str) -> dict:
+    """Aggregate shard counters, log summary, finish wandb, and return result dict.
 
-    return {
-        "hash": key,
-        "cnt": doc_cnt,
-        "canonical": head[canonical_id],
-    }
+    Shared epilogue for all three dedup entry points.
+    """
+    counter_dict = _aggregate_shard_counters(shard_results, method=method, level=level)
+    logger.info(
+        "%s %s total: %s, dups: %s, unique: %s",
+        method.capitalize(),
+        level,
+        counter_dict[f"dedup/{method}/{level}/total"],
+        counter_dict[f"dedup/{method}/{level}/dups"],
+        counter_dict[f"dedup/{method}/{level}/unique"],
+    )
+
+    if wandb.run:
+        wandb.log(counter_dict)
+        wandb.finish()
+
+    return {"success": True, "mode": str(mode)} | counter_dict

@@ -1,0 +1,66 @@
+{
+  "type": "stat",
+  "title": "Crashloops",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "k8s"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "min": 0,
+      "noValue": "0",
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "green",
+            "value": null
+          },
+          {
+            "color": "yellow",
+            "value": 1
+          },
+          {
+            "color": "red",
+            "value": 5
+          }
+        ]
+      }
+    },
+    "overrides": []
+  },
+  "options": {
+    "reduceOptions": {
+      "calcs": [
+        "lastNotNull"
+      ],
+      "fields": "",
+      "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "auto",
+    "orientation": "auto"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/overview",
+      "url_options": {
+        "method": "GET",
+        "params": []
+      },
+      "columns": [
+        {
+          "selector": "crashlooping_containers",
+          "text": "crashlooping_containers",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

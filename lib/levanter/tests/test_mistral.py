@@ -1,29 +1,33 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import tempfile
 
 import equinox as eqx
+import haliax as hax
 import jax
 import numpy as np
 import pytest
 import transformers
 from jax import random
-
-import haliax as hax
-
-from levanter.layers.attention import AttentionMask
-from levanter.models.mistral import MistralConfig, MistralLMHeadModel
-from test_utils import (
+from levanter.testing.helpers import (
     check_load_config,
     check_model_works_with_seqlen,
     parameterize_with_configs,
+    skip_if_hf_model_not_accessible,
     skip_if_no_torch,
     use_test_mesh,
 )
 
+from levanter.layers.attention import AttentionMask
+from levanter.main.train_lm import TrainLmConfig
+from levanter.models.mistral import MistralConfig, MistralLMHeadModel
+from levanter.utils.flop_utils import lm_flops_per_token
+
 
 @skip_if_no_torch
+@skip_if_hf_model_not_accessible("mistralai/Mistral-7B-v0.1")
 def test_mistral_config():
     # load HF config and convert to levanter config
     hf_config = transformers.MistralConfig.from_pretrained("mistralai/Mistral-7B-v0.1")
@@ -86,16 +90,20 @@ def test_mistral_lm_head_model_bwd(use_flash, num_kv_heads):
 
 @skip_if_no_torch
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
-def test_mistral_roundtrip(num_kv_heads):
-    import torch
-    from transformers import AutoModelForCausalLM, MistralForCausalLM
+def test_mistral_roundtrip(num_kv_heads, local_gpt2_tokenizer_path):
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers import AutoModelForCausalLM, MistralForCausalLM  # noqa: PLC0415  # optional dep: torch
 
+    # Local tokenizer + no remote reference keeps the roundtrip off the Hub; the
+    # tokenizer is incidental (random inputs, logit-equivalence only).
     config = MistralConfig(
         max_seq_len=128,
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=num_kv_heads,
         gradient_checkpointing=False,
+        reference_checkpoint=None,
+        tokenizer=local_gpt2_tokenizer_path,
     )
     converter = config.hf_checkpoint_converter()
 
@@ -120,7 +128,7 @@ def test_mistral_roundtrip(num_kv_heads):
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
         model = converter.load_pretrained(
-            converter.default_config.model_type, ref=f"{tmpdir}/torch_model", resize_vocab_to_match_tokenizer=False
+            MistralLMHeadModel, ref=f"{tmpdir}/torch_model", resize_vocab_to_match_tokenizer=False
         )
 
         def compute(input):
@@ -133,7 +141,7 @@ def test_mistral_roundtrip(num_kv_heads):
         assert torch_out.shape == jax_out.shape, f"{torch_out.shape} != {jax_out.shape}"
         assert np.isclose(torch_out, np.array(jax_out), rtol=1e-4, atol=1e-4).all(), f"{torch_out} != {jax_out}"
 
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
 
@@ -157,10 +165,41 @@ def _get_mistral_config(use_flash=False, num_kv_heads=4) -> MistralConfig:
     )
 
 
+def test_mistral_flops_per_token_matches_gated_gqa():
+    # Mistral uses grouped-query attention (num_kv_heads < num_heads) and a gated (SwiGLU)
+    # MLP, so its FLOP estimate must count KV projections by num_kv_heads and the MLP with a
+    # gating factor. It inherits LlamaConfig.flops_per_token; this guards against a regression
+    # to an override that used num_heads for the KV projection and glu=False.
+    config = MistralConfig(
+        num_layers=3,
+        max_seq_len=128,
+        hidden_dim=64,
+        intermediate_dim=256,
+        num_heads=8,
+        num_kv_heads=2,
+    )
+    vocab_size = 1000
+    expected = lm_flops_per_token(
+        hidden_dim=config.hidden_dim,
+        intermediate_dim=config.intermediate_dim,
+        num_layers=config.num_layers,
+        num_kv_heads=config.num_kv_heads,
+        num_heads=config.num_heads,
+        seq_len=config.max_seq_len,
+        vocab_size=vocab_size,
+        glu=True,
+    )
+    assert config.flops_per_token(vocab_size, config.max_seq_len) == expected
+
+    # Reducing the number of KV heads must reduce the FLOP count; the buggy override ignored it.
+    mha_config = dataclasses.replace(config, num_kv_heads=config.num_heads)
+    assert config.flops_per_token(vocab_size, config.max_seq_len) < mha_config.flops_per_token(
+        vocab_size, config.max_seq_len
+    )
+
+
 @parameterize_with_configs("mistral*.yaml")
 def test_mistral_configs(config_file):
-    from levanter.main.train_lm import TrainLmConfig
-
     config_class = TrainLmConfig
 
     check_load_config(config_class, config_file)

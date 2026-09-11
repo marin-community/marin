@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for environment variable propagation from parent jobs to child jobs.
@@ -7,16 +7,16 @@ Env inheritance uses JobInfo.env (populated from IRIS_JOB_ENV) which contains
 only the explicit vars from the parent's EnvironmentConfig — not infrastructure
 vars like TPU_NAME or PATH that happen to be in os.environ.
 
-Extras and pip_packages are inherited via IRIS_JOB_EXTRAS and IRIS_JOB_PIP_PACKAGES.
+The parent's resolved setup is inherited via IRIS_JOB_SETUP_SCRIPTS.
 """
 
-import json
+from dataclasses import dataclass, field
 from unittest.mock import patch
 
 import pytest
-
-from iris.client import IrisClient, IrisContext, LocalClientConfig, iris_ctx_scope
-from iris.cluster.client.job_info import JobInfo
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.cluster.client.job_info import JobInfo, set_job_info
+from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 
 
@@ -24,223 +24,198 @@ def dummy_entrypoint():
     pass
 
 
-@pytest.fixture
-def local_client():
-    config = LocalClientConfig(max_workers=2)
-    with IrisClient.local(config) as client:
-        yield client
+@dataclass
+class _RecordingClusterClient:
+    """Records submit_job kwargs without running anything."""
+
+    captured_env: dict = field(default_factory=dict)
+    captured_constraints: list = field(default_factory=list)
+
+    def submit_job(self, *, job_id=None, environment=None, constraints=None, **kwargs) -> JobName:
+        if environment:
+            self.captured_env = dict(environment.env_vars)
+        if constraints:
+            self.captured_constraints = list(constraints)
+        return job_id or JobName.root("test", "dummy")
+
+    def shutdown(self, wait: bool = True) -> None:
+        pass
 
 
 @pytest.fixture
-def parent_context(local_client):
+def capturing_client():
+    """IrisClient wired to a recording stub — no cluster boots."""
+    stub = _RecordingClusterClient()
+    client = IrisClient(cluster=stub)
+    return client, stub
+
+
+@pytest.fixture
+def parent_context(capturing_client):
     """Simulate running inside a parent Iris job."""
+    client, _ = capturing_client
     return IrisContext(
-        job_id=JobName.root("parent-job"),
-        client=local_client,
+        job_id=JobName.root("test-user", "parent-job"),
+        client=client,
     )
 
 
-def _parent_job_info(env: dict[str, str]) -> JobInfo:
+def _parent_job_info(
+    env: dict[str, str],
+    constraints: list[Constraint] | None = None,
+) -> JobInfo:
     return JobInfo(
         task_id=JobName.from_wire("/parent-job/0"),
         env=env,
+        constraints=constraints or [],
     )
 
 
-def test_child_job_inherits_parent_env(local_client, parent_context):
-    """Child jobs inherit the parent's explicit env vars from JobInfo.env."""
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-    parent_env = {"MY_CUSTOM_VAR": "hello", "WANDB_API_KEY": "secret"}
-
-    with (
-        iris_ctx_scope(parent_context),
-        patch("iris.client.client.get_job_info", return_value=_parent_job_info(parent_env)),
-    ):
-        job = local_client.submit(entrypoint, "child-job", resources)
-
-    job.wait(timeout=30)
-    assert job.job_id == JobName.root("parent-job").child("child-job")
-
-
-def test_child_job_does_not_inherit_os_environ(local_client, parent_context):
+def test_child_job_does_not_inherit_os_environ(capturing_client, parent_context):
     """Infrastructure vars in os.environ (TPU_NAME, PATH, etc.) should NOT
     be inherited — only the explicit vars from JobInfo.env."""
+    client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
-
     parent_env = {"MY_VAR": "keep"}
-
-    captured_env = {}
-    original_submit = local_client._cluster_client.submit_job
-
-    def capturing_submit(*, environment=None, **kwargs):
-        if environment:
-            captured_env.update(dict(environment.env_vars))
-        return original_submit(environment=environment, **kwargs)
 
     with (
         iris_ctx_scope(parent_context),
         patch("iris.client.client.get_job_info", return_value=_parent_job_info(parent_env)),
     ):
-        local_client._cluster_client.submit_job = capturing_submit
-        try:
-            local_client.submit(entrypoint, "infra-test", resources)
-        finally:
-            local_client._cluster_client.submit_job = original_submit
+        client.submit(entrypoint, "infra-test", resources)
 
-    assert captured_env["MY_VAR"] == "keep"
-    assert "PATH" not in captured_env
-    assert "HOME" not in captured_env
+    assert stub.captured_env["MY_VAR"] == "keep"
+    assert "PATH" not in stub.captured_env
+    assert "HOME" not in stub.captured_env
 
 
-def test_child_explicit_env_overrides_inherited(local_client, parent_context):
+def test_child_explicit_env_overrides_inherited(capturing_client, parent_context):
     """Explicit env_vars in EnvironmentSpec override inherited parent env vars."""
+    client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
     env = EnvironmentSpec(env_vars={"MY_VAR": "child_override", "CHILD_ONLY": "yes"})
-
     parent_env = {"MY_VAR": "parent_value", "PARENT_ONLY": "yes"}
-
-    captured_env = {}
-    original_submit = local_client._cluster_client.submit_job
-
-    def capturing_submit(*, environment=None, **kwargs):
-        if environment:
-            captured_env.update(dict(environment.env_vars))
-        return original_submit(environment=environment, **kwargs)
 
     with (
         iris_ctx_scope(parent_context),
         patch("iris.client.client.get_job_info", return_value=_parent_job_info(parent_env)),
     ):
-        local_client._cluster_client.submit_job = capturing_submit
-        try:
-            local_client.submit(entrypoint, "override-test", resources, environment=env)
-        finally:
-            local_client._cluster_client.submit_job = original_submit
+        client.submit(entrypoint, "override-test", resources, environment=env)
 
-    assert captured_env["MY_VAR"] == "child_override"
-    assert captured_env["CHILD_ONLY"] == "yes"
-    assert captured_env["PARENT_ONLY"] == "yes"
+    assert stub.captured_env["MY_VAR"] == "child_override"
+    assert stub.captured_env["CHILD_ONLY"] == "yes"
+    assert stub.captured_env["PARENT_ONLY"] == "yes"
 
 
-def test_no_env_inheritance_without_parent_context(local_client):
+def test_no_env_inheritance_without_parent_context(capturing_client):
     """Without a parent job context, no env inheritance should occur."""
+    client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
-    captured_env = {}
-    original_submit = local_client._cluster_client.submit_job
+    client.submit(entrypoint, "no-parent-test", resources)
 
-    def capturing_submit(*, environment=None, **kwargs):
-        if environment:
-            captured_env.update(dict(environment.env_vars))
-        return original_submit(environment=environment, **kwargs)
+    assert stub.captured_env == {}
 
-    local_client._cluster_client.submit_job = capturing_submit
+
+def test_child_job_inherits_parent_constraints(capturing_client, parent_context):
+    client, stub = capturing_client
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+    parent_constraints = [
+        Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4"),
+        Constraint.create(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value="true"),
+    ]
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, constraints=parent_constraints)),
+    ):
+        client.submit(entrypoint, "child-inherit-constraints", resources)
+
+    assert any(
+        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-west4" for c in stub.captured_constraints
+    )
+    assert any(
+        c.key == WellKnownAttribute.PREEMPTIBLE and c.value.string_value == "true" for c in stub.captured_constraints
+    )
+
+
+def test_child_explicit_constraints_override_parent(capturing_client, parent_context):
+    client, stub = capturing_client
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+    parent_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4")]
+    child_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, constraints=parent_constraints)),
+    ):
+        client.submit(entrypoint, "child-override-constraints", resources, constraints=child_constraints)
+
+    assert any(
+        c.key == WellKnownAttribute.REGION and c.value.string_value == "europe-west4" for c in stub.captured_constraints
+    )
+    assert not any(
+        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-west4" for c in stub.captured_constraints
+    )
+
+
+@pytest.mark.parametrize(
+    ("child_constraints", "expected_regions"),
+    [
+        (None, ["us-central2"]),
+        (
+            [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")],
+            ["europe-west4"],
+        ),
+        ([any_region_constraint()], []),
+    ],
+    ids=("inherit-worker", "explicit-child", "any-region"),
+)
+def test_child_region_placement_uses_parent_worker_region(
+    capturing_client,
+    parent_context,
+    monkeypatch,
+    child_constraints,
+    expected_regions,
+):
+    client, stub = capturing_client
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+    monkeypatch.setenv("IRIS_TASK_ID", "/test-user/parent-job/0:0")
+    monkeypatch.setenv("IRIS_WORKER_REGION", "us-central2")
+
+    set_job_info(None)
     try:
-        local_client.submit(entrypoint, "no-parent-test", resources)
+        with iris_ctx_scope(parent_context):
+            client.submit(entrypoint, "child-region", resources, constraints=child_constraints)
     finally:
-        local_client._cluster_client.submit_job = original_submit
+        set_job_info(None)
 
-    assert captured_env == {}
-
-
-# ---------------------------------------------------------------------------
-# E2E chain test: A → B → C
-# ---------------------------------------------------------------------------
+    region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
+    assert [constraint.value.string_value for constraint in region_constraints] == expected_regions
 
 
-def _chain_job(output_file: str, child_spec: dict | None = None):
-    """Job that dumps its JobInfo state and optionally submits a child.
+def test_child_any_region_marker_clears_inherited_region_constraint(capturing_client, parent_context):
+    """A child carrying the ANY marker submits with no region constraint, even when the
+    parent job is pinned to a region."""
+    client, stub = capturing_client
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+    parent_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4")]
 
-    Args:
-        output_file: Path to write JSON with {"env": ..., "dockerfile": ...}
-        child_spec: If not None, submit a child job with keys:
-            - output_file: str — child's output path
-            - extras: list[str] | None — extras for the child's EnvironmentSpec
-            - child_spec: dict | None — recursive spec for the grandchild
-    """
-    import json
+    with (
+        iris_ctx_scope(parent_context),
+        patch(
+            "iris.client.client.get_job_info",
+            return_value=_parent_job_info({}, constraints=parent_constraints),
+        ),
+    ):
+        client.submit(entrypoint, "child-any-clears-pin", resources, constraints=[any_region_constraint()])
 
-    from iris.client.client import iris_ctx
-    from iris.cluster.client.job_info import get_job_info
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-
-    info = get_job_info()
-    state = {
-        "env": dict(info.env) if info else {},
-        "extras": list(info.extras) if info else [],
-        "pip_packages": list(info.pip_packages) if info else [],
-    }
-    with open(output_file, "w") as f:
-        json.dump(state, f)
-
-    if child_spec is not None:
-        ctx = iris_ctx()
-        env_spec = EnvironmentSpec(extras=child_spec["extras"]) if child_spec.get("extras") else None
-        entrypoint = Entrypoint.from_callable(
-            _chain_job,
-            child_spec["output_file"],
-            child_spec.get("child_spec"),
-        )
-        resources = ResourceSpec(cpu=1, memory="1g")
-        job = ctx.client.submit(entrypoint, "child", resources, environment=env_spec)
-        job.wait(timeout=60, raise_on_failure=True)
-
-
-@pytest.mark.timeout(120)
-def test_env_propagates_through_job_chain(tmp_path):
-    """E2E: env vars and extras propagate A → B → C; child overrides parent."""
-    out_a = str(tmp_path / "a.json")
-    out_b = str(tmp_path / "b.json")
-    out_c = str(tmp_path / "c.json")
-
-    # Chain: A → B → C
-    # C: leaf job, no children (inherits B's extras)
-    # B: submits C with extras=["extra-from-b"] (overrides parent extras)
-    # A: submits B with no explicit extras (B inherits A's extras)
-    chain_spec = {
-        "output_file": out_b,
-        "extras": None,
-        "child_spec": {
-            "output_file": out_c,
-            "extras": ["extra-from-b"],
-            "child_spec": None,
-        },
-    }
-
-    config = LocalClientConfig(max_workers=4)
-    with IrisClient.local(config) as client:
-        entrypoint = Entrypoint.from_callable(_chain_job, out_a, chain_spec)
-        resources = ResourceSpec(cpu=1, memory="1g")
-        environment = EnvironmentSpec(
-            env_vars={"TEST_PROPAGATION_KEY": "hello_chain"},
-            extras=["extra-from-a"],
-        )
-        job = client.submit(entrypoint, "job-a", resources, environment=environment)
-        job.wait(timeout=120, raise_on_failure=True, stream_logs=True)
-
-    state_a = json.loads(open(out_a).read())
-    state_b = json.loads(open(out_b).read())
-    state_c = json.loads(open(out_c).read())
-
-    # env_vars propagate through the full chain
-    assert state_a["env"]["TEST_PROPAGATION_KEY"] == "hello_chain"
-    assert state_b["env"]["TEST_PROPAGATION_KEY"] == "hello_chain"
-    assert state_c["env"]["TEST_PROPAGATION_KEY"] == "hello_chain"
-
-    # Infrastructure vars from os.environ are NOT in JobInfo.env
-    for state in [state_a, state_b, state_c]:
-        assert "PATH" not in state["env"]
-        assert "HOME" not in state["env"]
-
-    # A was launched with extras=["extra-from-a"]
-    assert state_a["extras"] == ["extra-from-a"]
-
-    # B was launched without explicit extras, so it inherits A's extras
-    assert state_b["extras"] == ["extra-from-a"]
-
-    # C was launched by B with extras=["extra-from-b"], which overrides parent extras
-    assert state_c["extras"] == ["extra-from-b"]
+    region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
+    assert region_constraints == []

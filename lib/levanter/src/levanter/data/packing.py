@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -11,6 +11,7 @@ yielding the packed examples when they are full.
 This achieves about a 90% "real token" rate, compared to like 10% without packing.
 """
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Iterable, Iterator, Literal, Sequence, TypeVar
 
@@ -21,7 +22,7 @@ import numpy as np
 import tensorstore as ts
 from jaxtyping import PyTree
 
-from levanter.data import AsyncDataset
+from levanter.data.dataset import AsyncDataset
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
 from levanter.store.jagged_array import JaggedArrayStore
@@ -32,19 +33,6 @@ from levanter.utils.jax_utils import leaf_key_paths, local_cpu_mesh, tree_broadc
 # todo should we use something like this: https://arxiv.org/pdf/2107.02027?
 
 T = TypeVar("T", bound=PyTree)
-L = TypeVar("L")
-
-
-# Python 3.10 can't handle this
-# @dataclass(frozen=True)
-# class LeafType:
-#     leaf_type: type
-#
-#     def __class_getitem__(cls, item):
-#         return cls(item)
-#
-#
-# WithLeaf: TypeAlias = Annotated[T, LeafType[L]]
 
 
 class SequencePacker:
@@ -174,29 +162,14 @@ def per_segment_loss(
     This code is designed to run in a jit-compiled function, meaning we have to careful of shapes
     """
 
-    assert packed_example.attn_mask.segment_ids is not None, "segment_ids must be set in the AttentionMask"
-
-    segment_ids = packed_example.attn_mask.segment_ids
-    if isinstance(segment_ids, tuple):
-        segment_ids = segment_ids[0]
-
-    assert (
-        segment_ids.ndim == 1
-    ), f"Expected segment_ids to be 1D, got {segment_ids.ndim}. Use vmap if you have multiple examples"
     Pos = packed_example.tokens.axes[0]
 
     # mask out padding etc
     masked_losses = losses * packed_example.loss_weight
 
-    # sum the losses for each segment
-    unique_segment_ids = _unique_segment_ids(max_Segments, segment_ids)
+    unique_segment_ids, segment_mask = _segment_membership(packed_example, max_Segments)
 
-    # Create a mask matrix where each row corresponds to a unique segment
-    segment_mask = unique_segment_ids == segment_ids.broadcast_axis(max_Segments)
-
-    segment_mask = segment_mask.astype(masked_losses.dtype)
-
-    segment_losses = hax.dot(segment_mask, masked_losses, axis=Pos)
+    segment_losses = hax.dot(segment_mask.astype(masked_losses.dtype), masked_losses, axis=Pos)
 
     return unique_segment_ids, segment_losses
 
@@ -207,6 +180,27 @@ def _unique_segment_ids(max_Segments, segment_ids):
     unique_segment_ids = jnp.unique(segment_ids.array, size=max_Segments.size, fill_value=-1)
     unique_segment_ids = hax.named(unique_segment_ids, max_Segments)
     return unique_segment_ids
+
+
+def _segment_membership(packed_example: LmExample, max_Segments: hax.Axis) -> tuple[hax.NamedArray, hax.NamedArray]:
+    """Return the unique segment ids and a boolean ``(max_Segments, Pos)`` membership mask.
+
+    ``segment_mask[s, p]`` is True iff position ``p`` belongs to the ``s``-th unique segment id.
+    Expects ``segment_ids`` to be 1-D; wrap callers in ``hax.vmap`` for batched examples.
+    """
+    assert packed_example.attn_mask.segment_ids is not None, "segment_ids must be set in the AttentionMask"
+
+    segment_ids = packed_example.attn_mask.segment_ids
+    if isinstance(segment_ids, tuple):
+        segment_ids = segment_ids[0]
+
+    assert (
+        segment_ids.ndim == 1
+    ), f"Expected segment_ids to be 1D, got {segment_ids.ndim}. Use vmap if you have multiple examples"
+
+    unique_segment_ids = _unique_segment_ids(max_Segments, segment_ids)
+    segment_mask = unique_segment_ids == segment_ids.broadcast_axis(max_Segments)
+    return unique_segment_ids, segment_mask
 
 
 def per_segment_correct(
@@ -223,30 +217,13 @@ def per_segment_correct(
     correct is a boolean array of the same shape as the losses array indicating whether the token was correct
     """
 
-    assert packed_example.attn_mask.segment_ids is not None, "segment_ids must be set in the AttentionMask"
-
-    segment_ids = packed_example.attn_mask.segment_ids
-    if isinstance(segment_ids, tuple):
-        segment_ids = segment_ids[0]
-
-    assert (
-        segment_ids.ndim == 1
-    ), f"Expected segment_ids to be 1D, got {segment_ids.ndim}. Use vmap if you have multiple examples"
-
     Pos = packed_example.tokens.axes[0]
 
     # mask out padding etc
     valid_positions = packed_example.loss_weight > 0
     masked_correct = hax.logical_or(correct, hax.logical_not(valid_positions))
 
-    # sum the losses for each segment
-    # Extract unique segment IDs with padding
-    unique_segment_ids = _unique_segment_ids(max_Segments, segment_ids)
-
-    # Create a mask matrix where each row corresponds to a unique segment
-    segment_mask = unique_segment_ids == segment_ids.broadcast_axis(max_Segments)
-
-    segment_mask = segment_mask.astype(masked_correct.dtype)
+    unique_segment_ids, segment_mask = _segment_membership(packed_example, max_Segments)
 
     segment_correct = hax.all(hax.where(segment_mask, masked_correct, True), axis=Pos)
 
@@ -277,7 +254,7 @@ def greedy_pack_prompt_completions(
         lengths=np.array([len(token_ids) for token_ids in ids]),
         max_length=Pos.size,
         max_segments_per_example=max_segments_per_example,
-        slice_too_long_examples=True,
+        slice_strategy="right",
     )
 
     out = []
@@ -328,7 +305,7 @@ def pack_documents(
     lengths: PyTree[np.ndarray],
     max_length: PyTree[int],
     max_segments_per_example: int | None = None,
-    slice_too_long_examples: bool = False,
+    slice_strategy: Literal["left", "right", "raise", "drop"] = "raise",
 ) -> list[range]:
     """
     Greedily pack documents into contiguous groups without storing full token ranges.
@@ -339,7 +316,7 @@ def pack_documents(
             The i-th document has length lengths[i].
         max_length: A PyTree of integers, each specifying the maximum number of tokens allowed per pack for that leaf
         max_segments_per_example: Optional maximum number of documents per pack
-        slice_too_long_examples: If True, slice documents that exceed max_length instead of raising an error
+        slice_strategy: One of "left", "right", "raise", or "drop".
 
     Returns:
         A list of ranges, where each range represents the document indices in a pack
@@ -371,49 +348,71 @@ def pack_documents(
     if n_docs is None:
         raise ValueError("Could not determine the number of documents from lengths.")
 
+    if slice_strategy not in ["left", "right", "raise", "drop"]:
+        raise ValueError(f"slice_strategy must be one of 'left', 'right', 'raise', or 'drop', got {slice_strategy}")
+
     # Validate document lengths
+    drop_mask = np.ones(n_docs, dtype=bool) if slice_strategy == "drop" else None
     for lens, allowed, leaf_name in zip(lengths_leaves, max_length_leaves, leaf_names):
         for i in range(n_docs):
-            if lens[i] > allowed and not slice_too_long_examples:
-                raise ValueError(
-                    f"Document {i} in leaf '{leaf_name}' has length {lens[i]} which exceeds "
-                    f"maximum allowed length {allowed}. Consider setting slice_too_long_examples=True "
-                    "or increasing max_length."
-                )
+            if lens[i] > allowed:
+                if drop_mask is not None:
+                    drop_mask[i] = False
+                    continue
+                if slice_strategy == "raise":
+                    raise ValueError(
+                        f"Document {i} in leaf '{leaf_name}' has length {lens[i]} which exceeds "
+                        f"maximum allowed length {allowed}. Consider setting slice_strategy to 'left', 'right', "
+                        "'drop', or increasing max_length."
+                    )
 
     pack_doc_ranges = []
     i = 0
     while i < n_docs:
+        if drop_mask is not None and not drop_mask[i]:
+            i += 1
+            continue
         start = i
         total_segments = 0
         # Accumulate documents while for each leaf the token span remains within the allowed max.
         while i < n_docs:
+            if drop_mask is not None and not drop_mask[i]:
+                break
             # Check optional segment constraint: if adding one more document would exceed max_segments_per_example.
             if max_segments_per_example is not None and (total_segments + 1) > max_segments_per_example:
                 break
             # For each leaf, check if adding document i would keep the token count within allowed capacity.
             valid = True
+            end_pack_after_this = False
             for lens, allowed, leaf_name in zip(lengths_leaves, max_length_leaves, leaf_names, strict=True):
                 # Compute token count from document start to document i+1.
                 token_sum = sum(lens[start : i + 1])
                 if token_sum > allowed:
+                    if i == start:
+                        if slice_strategy == "raise":
+                            raise ValueError(
+                                f"Document {i} in leaf '{leaf_name}' has length {lens[i]} which exceeds "
+                                f"maximum allowed length {allowed}. Consider setting slice_strategy to 'left', "
+                                "'right', 'drop', or increasing max_length."
+                            )
+                        if slice_strategy == "drop":
+                            valid = False
+                            break
+                        valid = True
+                        end_pack_after_this = True
+                        break
                     valid = False
-                    if not slice_too_long_examples and i == start:
-                        # If this is the first document in a new pack and it's too long, raise an error
-                        raise ValueError(
-                            f"Document {i} in leaf '{leaf_name}' has length {lens[i]} which exceeds "
-                            f"maximum allowed length {allowed}. Consider setting slice_too_long_examples=True "
-                            "or increasing max_length."
-                        )
                     break
             if not valid:
                 break
             total_segments += 1
             i += 1
+            if end_pack_after_this:
+                break
 
         # If no document could be added (i.e. a single document exceeds capacity)
         if i == start:
-            if not slice_too_long_examples:
+            if slice_strategy != "left" and slice_strategy != "right":
                 raise ValueError(f"Document {start} exceeds allowed capacity.")
             else:
                 i = start + 1
@@ -433,10 +432,11 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         max_length: A PyTree of integers, each representing the maximum number of tokens allowed per leaf.
         max_segments_per_example: Maximum number of documents that can be packed into a single example.
         pad_with_zeros: If True, pad examples to max_length with zeros. If False, return examples as-is.
-        slice_strategy: One of "left", "right", or "raise". Determines how to handle examples that exceed max_length:
+        slice_strategy: One of "left", "right", "raise", or "drop". Determines how to handle examples that exceed max_length:
             - "left": Slice from the beginning of the example
             - "right": Slice from the end of the example
             - "raise": Raise an error when an example exceeds max_length
+            - "drop": Drop examples that exceed max_length
     """
 
     def __init__(
@@ -445,7 +445,7 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         max_length: int | T,  # PyTree[int],
         max_segments_per_example: int | None = None,
         pad_with_zeros: bool = True,
-        slice_strategy: Literal["left", "right", "raise"] = "raise",
+        slice_strategy: Literal["left", "right", "raise", "drop"] = "raise",
     ):
         """
         Args:
@@ -453,12 +453,14 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
             max_length: A PyTree of integers, each representing the maximum number of tokens allowed per leaf.
             max_segments_per_example: Maximum number of documents that can be packed into a single example.
             pad_with_zeros: If True, pad examples to max_length with zeros. If False, return examples as-is.
-            slice_strategy: One of "left", "right", or "raise". Determines how to handle examples that exceed max_length.
+            slice_strategy: One of "left", "right", "raise", or "drop". Determines how to handle examples that exceed max_length.
         """
         super().__init__()
 
-        if slice_strategy not in ["left", "right", "raise"]:
-            raise ValueError(f"slice_strategy must be one of 'left', 'right', or 'raise', got {slice_strategy}")
+        if slice_strategy not in ["left", "right", "raise", "drop"]:
+            raise ValueError(
+                f"slice_strategy must be one of 'left', 'right', 'raise', or 'drop', got {slice_strategy}"
+            )
 
         self.dataset = dataset
         self.max_length = max_length
@@ -479,8 +481,11 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         self._lengths = jax.tree.map(diff_offsets, self._offsets)
 
         # Build pack indices
-        self._pack_indices: list[range] = pack_documents(
-            self._lengths, max_length, max_segments_per_example, slice_strategy != "raise"
+        self._pack_indices = pack_documents(
+            self._lengths,
+            max_length,
+            max_segments_per_example,
+            slice_strategy=slice_strategy,
         )
 
     def is_finite(self) -> bool:
@@ -525,7 +530,8 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
                         else:
                             raise ValueError(
                                 f"Token count {token_count} exceeds allowed maximum {allowed} for documents "
-                                f"{list(dr)}. Consider using a different slice_strategy or increasing max_length."
+                                f"{list(dr)}. Consider using slice_strategy='left', 'right', or 'drop', or "
+                                "increasing max_length."
                             )
                     # Read the slice from the underlying data.
                     out_data.append(store.data[token_start:token_end].read())
@@ -584,10 +590,6 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
 
 if __name__ == "__main__":
     # demo the GreedyPrepackedDataset
-    import time
-
-    import numpy as np
-
     path = "gs://marin-us-central2/tokenized/tulu_sft_v3_llama3_tokenizer-f88fdb/input_ids/"
 
     store = JaggedArrayStore.open(path, mode="r", dtype=np.uint32, cache_metadata=True)

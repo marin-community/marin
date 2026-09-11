@@ -1,0 +1,86 @@
+# DeepEP for Grug MoE on NVIDIA GPUs
+
+Levanter has an experimental JAX FFI integration for DeepEP intranode expert-parallel dispatch and combine. The
+integration is optional: ordinary installs keep using the built-in Grug MoE backends, and DeepEP is only loaded when a
+DeepEP-backed backend or benchmark path is selected.
+
+## Install
+
+DeepEP is treated as an external source checkout rather than a vendored package. Install the Levanter GPU and DeepEP
+extras so the JAX runtime and packaged FFI shim sources are available:
+
+```bash
+pip install "marin-levanter[gpu,deepep]"
+```
+
+For a source checkout, the equivalent is:
+
+```bash
+uv sync --extra gpu --extra deepep --package marin-levanter
+```
+
+Then point Levanter at the external DeepEP source tree:
+
+```bash
+git clone https://github.com/deepseek-ai/DeepEP.git /path/to/DeepEP
+git -C /path/to/DeepEP checkout 7febc6e25660af0f54d95dd781ecdcd62265ecca
+export DEEPEP_SRC_ROOT=/path/to/DeepEP
+export DEEPEP_CUDA_ARCH=sm_100  # B200/GB200. Use sm_90 or sm_90a for H100-class systems.
+```
+
+That DeepEP revision is the version validated with Levanter's JAX FFI shim. The shim compiles DeepEP's current
+intranode/layout sources directly, so newer DeepEP revisions, including the newer V2 paths, should be treated as a
+separate compatibility and performance validation task. The preflight warns, but does not fail, when `DEEPEP_SRC_ROOT`
+points at a different git revision so newer DeepEP checkouts can still be tested deliberately.
+
+The raw FFI build path needs `nvcc` on `PATH`. The compiled objects are cached under `~/.cache/marin` by default. To
+put the cache somewhere else:
+
+```bash
+export MARIN_DEEPEP_CACHE_DIR=/path/to/cache
+```
+
+For environments where raw `nvcc` linking does not find the CUDA/PyTorch runtime libraries cleanly, the transport FFI
+also supports a Torch extension build if PyTorch is already installed in the environment:
+
+```bash
+export DEEPEP_BUILD_WITH_TORCH_EXTENSION=1
+```
+
+Keep `DEEPEP_LOAD_AS_PYTHON_MODULE=0` with the Torch extension build path. The Python-module loader is for the raw FFI
+artifact path.
+
+## Preflight
+
+Run the preflight before launching a GPU job:
+
+```bash
+uv run python -m levanter.kernels.deepep.preflight
+```
+
+The preflight checks:
+
+- `DEEPEP_SRC_ROOT` is set and contains the DeepEP transport sources.
+- `DEEPEP_SRC_ROOT` is at the validated DeepEP revision, when it is a git checkout.
+- `nvcc` is available.
+- `DEEPEP_CUDA_ARCH` is one of `sm_90`, `sm_90a`, or `sm_100`.
+- incompatible FFI loader/build flags are not set together.
+
+The first real use compiles the layout and transport FFI libraries into the cache. On B200, use `DEEPEP_CUDA_ARCH=sm_100`
+so the cached object targets the right device.
+
+## Backend Selection
+
+For a Grug MoE block with an expert mesh axis, set the config object field:
+
+```python
+config = dataclasses.replace(config, implementation="deepep")
+```
+
+The backend currently targets intranode expert parallelism: the expert group must span all visible local GPUs in the
+process, and the hidden dimension must be divisible by 8. If those constraints do not hold, use `implementation="ring"`
+as the built-in fallback.
+
+The benchmark harness also contains capped DeepEP variants that precompute tighter receive capacities for comparing
+transport performance. The production backend uses conservative static capacities for correctness and integration
+simplicity; capacity tightening is the next optimization once the runtime config path settles.

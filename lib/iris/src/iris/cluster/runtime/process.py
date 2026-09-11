@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Subprocess-based container runtime for local execution.
@@ -14,28 +14,43 @@ Lifecycle management includes:
 - Process group termination on Unix platforms
 """
 
-from __future__ import annotations
-
 import atexit
-import ctypes
-import ctypes.util
 import logging
 import os
 import select
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import uuid
 import weakref
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus
+from iris.cluster.bundle import BundleStore
+from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
+from iris.cluster.runtime.env import cache_host_dirname, write_workdir_files
+from iris.cluster.runtime.profile import (
+    LocalProfileDispatch,
+    capture_cpu,
+    capture_memory_attach,
+    capture_threads,
+)
+from iris.cluster.runtime.types import (
+    ContainerConfig,
+    ContainerPhase,
+    ContainerStats,
+    ContainerStatus,
+    DiscoveredContainer,
+    MountKind,
+    RuntimeLogReader,
+)
 from iris.cluster.worker.worker_types import LogLine
-from iris.managed_thread import ManagedThread, get_thread_container
-from iris.time_utils import Timestamp
+from iris.managed_thread import get_thread_container
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +64,7 @@ logger = logging.getLogger(__name__)
 # Python interpreter shuts down (normal exit, sys.exit, unhandled exceptions).
 # This does NOT cover SIGKILL of the parent.
 
-_active_runtimes: weakref.WeakSet[ProcessRuntime] = weakref.WeakSet()
+_active_runtimes: "weakref.WeakSet[ProcessRuntime]" = weakref.WeakSet()
 
 
 def _cleanup_all_runtimes() -> None:
@@ -65,22 +80,16 @@ atexit.register(_cleanup_all_runtimes)
 # =============================================================================
 
 
-def set_pdeathsig_preexec():
-    """Use prctl(PR_SET_PDEATHSIG, SIGKILL) to kill subprocess if parent dies.
-
-    This is a Linux-specific feature that ensures container processes are
-    automatically killed if the worker process dies unexpectedly. On other
-    platforms, this is a no-op.
-    """
-    if sys.platform == "linux":
-        PR_SET_PDEATHSIG = 1
-        try:
-            libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-            if libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL) != 0:
-                errno = ctypes.get_errno()
-                logger.warning(f"Failed to set parent death signal: errno {errno}")
-        except Exception as e:
-            logger.debug(f"Could not set parent death signal: {e}")
+# Set PR_SET_PDEATHSIG in a tiny launcher then exec the real command.
+# ``preexec_fn`` would force CPython onto fork()+exec, which trips Linux's
+# overcommit heuristic on workers with large VMS; this path keeps
+# vfork()/posix_spawn. PDEATHSIG survives execve.
+_PDEATHSIG_LAUNCHER_CODE = (
+    "import ctypes,ctypes.util,os,signal,sys;"
+    "ctypes.CDLL(ctypes.util.find_library('c'),use_errno=True)"
+    ".prctl(1,signal.SIGKILL,0,0,0);"
+    "os.execvp(sys.argv[1],sys.argv[1:])"
+)
 
 
 # =============================================================================
@@ -100,7 +109,6 @@ class ProcessContainer:
     config: ContainerConfig
     command: list[str]  # Pre-computed command with remapped paths
     _process: subprocess.Popen | None = field(default=None, repr=False)
-    _log_thread: ManagedThread | None = field(default=None, repr=False)
     _running: bool = False
     _exit_code: int | None = None
     _error: str | None = None
@@ -129,8 +137,6 @@ class ProcessContainer:
             prefix = os.pathsep.join(p for p in extra_paths if p not in existing.split(os.pathsep))
             env["PYTHONPATH"] = f"{prefix}{os.pathsep}{existing}" if existing else prefix
 
-            # Use process groups on Unix for clean termination
-            # Set PR_SET_PDEATHSIG on Linux for automatic cleanup if parent dies
             popen_kwargs: dict[str, object] = {
                 "stdout": subprocess.PIPE,
                 "stderr": subprocess.PIPE,
@@ -140,16 +146,21 @@ class ProcessContainer:
             }
 
             if sys.platform != "win32":
-                # Create new process group for clean termination
+                # New session/process group for clean termination.
                 popen_kwargs["start_new_session"] = True
-                # Set up automatic termination if parent dies (Linux only)
-                popen_kwargs["preexec_fn"] = set_pdeathsig_preexec
+
+            # On Linux, wrap the command in a tiny Python launcher that sets
+            # PR_SET_PDEATHSIG before exec'ing the user command. We avoid
+            # preexec_fn because that forces fork()+exec, which fails with
+            # ENOMEM on workers with large VMS under default overcommit.
+            if sys.platform == "linux":
+                cmd = [sys.executable, "-c", _PDEATHSIG_LAUNCHER_CODE, *cmd]
 
             self._process = subprocess.Popen(cmd, **popen_kwargs)
 
             # Spawn thread to stream logs asynchronously
             name_suffix = self.config.task_id or self.config.job_id or "unnamed"
-            self._log_thread = get_thread_container().spawn(
+            get_thread_container().spawn(
                 target=self._stream_logs,
                 name=f"logs-{name_suffix}",
             )
@@ -168,47 +179,30 @@ class ProcessContainer:
         if not self._process:
             return
 
+        assert self._process.stdout is not None
+        assert self._process.stderr is not None
+        stdout, stderr = self._process.stdout, self._process.stderr
+
+        def emit(source: str, line: str) -> None:
+            self._logs.append(LogLine.now(source, line.rstrip()))
+
         try:
             while self._process.poll() is None:
                 if stop_event.is_set():
                     break
 
                 # Non-blocking read with timeout
-                assert self._process.stdout is not None
-                assert self._process.stderr is not None
-                ready, _, _ = select.select([self._process.stdout, self._process.stderr], [], [], 0.1)
-
+                ready, _, _ = select.select([stdout, stderr], [], [], 0.1)
                 for stream in ready:
                     line = stream.readline()
                     if line:
-                        source = "stdout" if stream == self._process.stdout else "stderr"
-                        self._logs.append(
-                            LogLine(
-                                timestamp=datetime.now(timezone.utc),
-                                source=source,
-                                data=line.rstrip(),
-                            )
-                        )
+                        emit(STDOUT_SOURCE if stream is stdout else STDERR_SOURCE, line)
 
             # Process exited - drain remaining output
-            if self._process.stdout:
-                for line in self._process.stdout:
-                    self._logs.append(
-                        LogLine(
-                            timestamp=datetime.now(timezone.utc),
-                            source="stdout",
-                            data=line.rstrip(),
-                        )
-                    )
-            if self._process.stderr:
-                for line in self._process.stderr:
-                    self._logs.append(
-                        LogLine(
-                            timestamp=datetime.now(timezone.utc),
-                            source="stderr",
-                            data=line.rstrip(),
-                        )
-                    )
+            for line in stdout:
+                emit(STDOUT_SOURCE, line)
+            for line in stderr:
+                emit(STDERR_SOURCE, line)
 
             self._exit_code = self._process.returncode
             self._running = False
@@ -251,6 +245,161 @@ class ProcessContainer:
             self._exit_code = 137  # 128 + SIGKILL
 
 
+def _read_proc_memory_mb(pid: int) -> int | None:
+    """Read RSS memory in MB for a process.
+
+    On Linux reads /proc/{pid}/statm directly. On macOS shells out to ps.
+    Returns None if the process doesn't exist or the read fails.
+    """
+    if sys.platform == "linux":
+        try:
+            with open(f"/proc/{pid}/statm") as f:
+                parts = f.read().split()
+            resident_pages = int(parts[1])
+            return (resident_pages * os.sysconf("SC_PAGE_SIZE")) // (1024 * 1024)
+        except (FileNotFoundError, ProcessLookupError, IndexError, ValueError):
+            return None
+    else:
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "rss=", "-p", str(pid)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode != 0:
+                return None
+            rss_kb = int(result.stdout.strip())
+            return rss_kb // 1024
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            return None
+
+
+def _read_proc_cpu_millicores(
+    pid: int,
+    prev_total: float,
+    prev_utime: float,
+) -> tuple[int, float, float]:
+    """Compute delta CPU usage in millicores between calls.
+
+    On Linux reads /proc/{pid}/stat and /proc/stat. On other platforms returns 0.
+    Returns (cpu_millicores, new_total, new_utime).
+    """
+    if sys.platform != "linux":
+        return (0, prev_total, prev_utime)
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            fields = f.read().split()
+        utime = int(fields[13]) + int(fields[14])
+
+        with open("/proc/stat") as f:
+            cpu_line = f.readline()
+        total = sum(int(x) for x in cpu_line.split()[1:])
+
+        delta_total = total - prev_total
+        delta_utime = utime - prev_utime
+        if delta_total <= 0 or prev_total == 0:
+            return (0, total, utime)
+        cpu_count = os.cpu_count() or 1
+        millicores = int((delta_utime / delta_total) * cpu_count * 1000)
+        return (millicores, total, utime)
+    except (FileNotFoundError, ProcessLookupError, IndexError, ValueError):
+        return (0, prev_total, prev_utime)
+
+
+def _cpu_profile_stub(cpu_format: int) -> bytes:
+    """Return a minimal stub CPU profile for when py-spy is unavailable."""
+    if cpu_format == job_pb2.CpuProfile.FLAMEGRAPH:
+        return (
+            b'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="50">'
+            b'<text x="10" y="30" font-size="14">py-spy unavailable in local mode</text></svg>'
+        )
+    elif cpu_format == job_pb2.CpuProfile.SPEEDSCOPE:
+        return (
+            b'{"version":"0.1.0","$schema":"https://www.speedscope.app/file-format-schema.json",'
+            b'"profiles":[],"shared":{"frames":[]}}'
+        )
+    else:  # RAW
+        return b"py-spy unavailable in local mode\n"
+
+
+def _memory_profile_stub(memory_format: int) -> bytes:
+    """Return a minimal stub memory profile for when memray is unavailable."""
+    if memory_format == job_pb2.MemoryProfile.FLAMEGRAPH:
+        return (
+            b"<!DOCTYPE html><html><head><title>Memory Profile</title></head><body>"
+            b"<p>memray unavailable in local mode</p></body></html>"
+        )
+    elif memory_format == job_pb2.MemoryProfile.TABLE:
+        return b"memray unavailable in local mode\n"
+    elif memory_format == job_pb2.MemoryProfile.RAW:
+        return b""
+    else:  # STATS
+        return b'{"error": "memray unavailable in local mode"}'
+
+
+class ProcessLogReader:
+    """Index-based incremental log reader for ProcessContainer._logs."""
+
+    def __init__(self, logs: list[LogLine]) -> None:
+        self._logs = logs
+        self._index: int = 0
+
+    def read(self) -> list[LogLine]:
+        new_lines = self._logs[self._index :]
+        self._index = len(self._logs)
+        return new_lines
+
+    def read_all(self) -> list[LogLine]:
+        return list(self._logs)
+
+
+def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -> dict[str, str]:
+    """Build container_path -> host_path mapping for process runtime.
+
+    WORKDIR mounts resolve to config.workdir_host_path (set by task_attempt).
+    OUTPUT mounts resolve to config.output_host_path.
+    CACHE mounts resolve to shared subdirectories under cache_dir.
+    TMPFS mounts resolve to per-task temp directories under cache_dir for isolation.
+    """
+    result: dict[str, str] = {}
+    for mount in config.mounts:
+        if mount.kind == MountKind.WORKDIR:
+            if config.workdir_host_path:
+                result[mount.container_path] = str(config.workdir_host_path)
+        elif mount.kind == MountKind.OUTPUT:
+            if config.output_host_path:
+                config.output_host_path.mkdir(parents=True, exist_ok=True)
+                result[mount.container_path] = str(config.output_host_path)
+        elif mount.kind == MountKind.CACHE:
+            if cache_dir:
+                host_dir = cache_dir / cache_host_dirname(mount.container_path)
+                host_dir.mkdir(parents=True, exist_ok=True)
+                result[mount.container_path] = str(host_dir)
+        elif mount.kind == MountKind.TMPFS:
+            if cache_dir:
+                prefix = cache_host_dirname(mount.container_path) + "-"
+                host_dir = Path(tempfile.mkdtemp(prefix=prefix, dir=cache_dir))
+                result[mount.container_path] = str(host_dir)
+    return result
+
+
+def _remap_container_path(value: str, mount_map: dict[str, str]) -> str:
+    """Rewrite a container path to its host equivalent, or return it unchanged.
+
+    Sub-paths of a mount are rewritten too: a task's caches sit under their mount
+    (CARGO_TARGET_DIR under CARGO_HOME, UV_PYTHON_INSTALL_DIR under UV_CACHE_DIR),
+    and with no container to bind them, the process runtime must land those on the
+    host as well. Longest mount first, so a nested mount wins over its parent.
+    """
+    for container_path in sorted(mount_map, key=len, reverse=True):
+        if value == container_path:
+            return mount_map[container_path]
+        if value.startswith(f"{container_path}/"):
+            return mount_map[container_path] + value[len(container_path) :]
+    return value
+
+
 @dataclass
 class ProcessContainerHandle:
     """Process implementation of ContainerHandle.
@@ -260,16 +409,19 @@ class ProcessContainerHandle:
     """
 
     config: ContainerConfig
-    runtime: ProcessRuntime
+    runtime: "ProcessRuntime"
     _container: ProcessContainer | None = field(default=None, repr=False)
     _container_id: str | None = field(default=None, repr=False)
+    _prev_cpu_total: float = field(default=0.0, repr=False)
+    _prev_cpu_utime: float = field(default=0.0, repr=False)
+    _tmpfs_dirs: list[Path] = field(default_factory=list, repr=False)
 
     @property
     def container_id(self) -> str | None:
         """Return the container ID, if any."""
         return self._container_id
 
-    def build(self) -> list[LogLine]:
+    def build(self, on_logs: Callable[[list[LogLine]], None] | None = None) -> list[LogLine]:
         """No-op for local execution - host is already configured.
 
         In local/test mode, the environment is already set up with the
@@ -285,11 +437,16 @@ class ProcessContainerHandle:
         config = self.config
 
         # Remap container paths to host paths in env vars
-        mount_map = {container_path: host_path for host_path, container_path, _ in config.mounts}
-        env = dict(config.env)
-        for key, value in env.items():
-            if value in mount_map:
-                env[key] = mount_map[value]
+        mount_map = _resolve_mount_map(config, cache_dir=self.runtime._cache_dir)
+        env = {key: _remap_container_path(value, mount_map) for key, value in config.env.items()}
+
+        # Track TMPFS dirs for cleanup and set TMPDIR so tempfile uses the mapped path
+        for mount in config.mounts:
+            if mount.kind == MountKind.TMPFS and mount.container_path in mount_map:
+                host_path = mount_map[mount.container_path]
+                self._tmpfs_dirs.append(Path(host_path))
+                if mount.container_path == "/tmp":
+                    env["TMPDIR"] = host_path
 
         # In local mode, resolve IRIS_PYTHON to the current interpreter so that
         # bash -c "exec $IRIS_PYTHON ..." works even when "python" isn't on PATH.
@@ -299,16 +456,7 @@ class ProcessContainerHandle:
         cmd = list(config.entrypoint.run_command.argv)
 
         # Remap container mount paths in command args to host paths
-        remapped_cmd = []
-        for arg in cmd:
-            for container_path, host_path in mount_map.items():
-                if arg.startswith(container_path):
-                    arg = host_path + arg[len(container_path) :]
-                    break
-            remapped_cmd.append(arg)
-
-        # Create container with remapped environment and command
-        from dataclasses import replace
+        remapped_cmd = [_remap_container_path(arg, mount_map) for arg in cmd]
 
         updated_config = replace(config, env=env)
 
@@ -334,25 +482,88 @@ class ProcessContainerHandle:
     def status(self) -> ContainerStatus:
         """Check container status (running, exit code, error)."""
         if not self._container:
-            return ContainerStatus(running=False, error="Container not started")
+            return ContainerStatus(phase=ContainerPhase.STOPPED, error="Container not started")
         return ContainerStatus(
-            running=self._container._running,
+            phase=ContainerPhase.RUNNING if self._container._running else ContainerPhase.STOPPED,
             exit_code=self._container._exit_code,
             error=self._container._error,
         )
 
-    def logs(self, since: Timestamp | None = None) -> list[LogLine]:
-        """Get container logs since timestamp."""
-        if not self._container:
-            return []
-        if since:
-            since_dt = datetime.fromtimestamp(since.epoch_seconds(), tz=timezone.utc)
-            return [log for log in self._container._logs if log.timestamp > since_dt]
-        return self._container._logs
+    def log_reader(self) -> RuntimeLogReader:
+        """Create an incremental log reader for this container."""
+        return ProcessLogReader(self._container._logs if self._container else [])
 
     def stats(self) -> ContainerStats:
-        """Get resource usage statistics."""
-        return ContainerStats(memory_mb=100, cpu_percent=10, process_count=1, available=True)
+        """Get resource usage statistics from the underlying subprocess."""
+        if not self._container or not self._container._process or self._container._process.poll() is not None:
+            return ContainerStats(memory_mb=0, cpu_millicores=0, process_count=0, available=False)
+
+        pid = self._container._process.pid
+        memory_mb = _read_proc_memory_mb(pid)
+        cpu_millicores, self._prev_cpu_total, self._prev_cpu_utime = _read_proc_cpu_millicores(
+            pid, self._prev_cpu_total, self._prev_cpu_utime
+        )
+        return ContainerStats(
+            memory_mb=memory_mb or 0,
+            cpu_millicores=cpu_millicores,
+            process_count=1,
+            available=memory_mb is not None,
+        )
+
+    def disk_usage_mb(self) -> int:
+        """Return used space in MB on the filesystem containing the workdir."""
+        if self.config.workdir_host_path and self.config.workdir_host_path.exists():
+            return int(shutil.disk_usage(self.config.workdir_host_path).used / (1024 * 1024))
+        return 0
+
+    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump.
+
+        Runs profilers as host subprocesses sharing this worker's PID namespace.
+        Python's own subprocess timeout reaps a hung profiler, and the profiled
+        child's process group is SIGCONT'd afterward to clear a py-spy group-stop
+        (see ``LocalProfileDispatch``). CPU/memory fall back to a stub when the
+        profiler tool is missing; thread dumps propagate errors.
+        """
+        if not self._container or not self._container._process:
+            raise RuntimeError("Cannot profile: no running process")
+
+        pid = self._container._process.pid
+        dispatch = LocalProfileDispatch(resume_pid=pid)
+
+        if profile_type.HasField("threads"):
+            return capture_threads(
+                dispatch,
+                pid=str(pid),
+                include_locals=profile_type.threads.locals,
+                include_native=profile_type.threads.native,
+            )
+        elif profile_type.HasField("cpu"):
+            return self._profile_cpu(dispatch, pid, duration_seconds, profile_type.cpu)
+        elif profile_type.HasField("memory"):
+            return self._profile_memory(dispatch, pid, duration_seconds, profile_type.memory)
+        else:
+            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
+
+    def _profile_cpu(
+        self, dispatch: LocalProfileDispatch, pid: int, duration_seconds: int, cpu_config: job_pb2.CpuProfile
+    ) -> bytes:
+        """Profile CPU using py-spy, falling back to a stub when py-spy is unavailable."""
+        try:
+            return capture_cpu(dispatch, cpu_config, duration_seconds, pid=str(pid))
+        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, RuntimeError) as e:
+            logger.warning("py-spy CPU profile failed for PID %s (%s); falling back to stub", pid, e)
+            return _cpu_profile_stub(cpu_config.format)
+
+    def _profile_memory(
+        self, dispatch: LocalProfileDispatch, pid: int, duration_seconds: int, memory_config: job_pb2.MemoryProfile
+    ) -> bytes:
+        """Profile memory using memray, falling back to a stub when memray is unavailable."""
+        try:
+            return capture_memory_attach(dispatch, memory_config, duration_seconds, pid=str(pid))
+        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, RuntimeError) as e:
+            logger.warning("memray memory profile failed for PID %s (%s); falling back to stub", pid, e)
+            return _memory_profile_stub(memory_config.format)
 
     def cleanup(self) -> None:
         """Kill the subprocess and clean up resources."""
@@ -360,6 +571,9 @@ class ProcessContainerHandle:
             self._container.kill()
         self._container = None
         self._container_id = None
+        for tmpfs_dir in self._tmpfs_dirs:
+            shutil.rmtree(tmpfs_dir, ignore_errors=True)
+        self._tmpfs_dirs.clear()
 
 
 class ProcessRuntime:
@@ -369,7 +583,8 @@ class ProcessRuntime:
     Creates ProcessContainerHandle instances with the build/run lifecycle.
     """
 
-    def __init__(self):
+    def __init__(self, cache_dir: Path):
+        self._cache_dir = cache_dir
         self._handles: list[ProcessContainerHandle] = []
         _active_runtimes.add(self)
 
@@ -383,14 +598,45 @@ class ProcessRuntime:
         self._handles.append(handle)
         return handle
 
-    def list_containers(self) -> list[ProcessContainerHandle]:
-        """List all managed container handles."""
-        return list(self._handles)
+    def stage_bundle(
+        self,
+        *,
+        bundle_id: str,
+        workdir: Path,
+        workdir_files: dict[str, bytes],
+        bundle_store: BundleStore,
+    ) -> None:
+        """Stage bundle and workdir files on worker-local filesystem."""
+        if bundle_id:
+            bundle_store.extract_bundle_to(bundle_id, workdir)
+        write_workdir_files(workdir, workdir_files)
 
     def list_iris_containers(self, all_states: bool = True) -> list[str]:
         """List all container IDs."""
         del all_states
         return [h.container_id for h in self._handles if h.container_id]
+
+    def discover_containers(self) -> list[DiscoveredContainer]:
+        """Processes don't survive parent death — nothing to discover."""
+        return []
+
+    def adopt_container(self, container_id: str) -> ProcessContainerHandle:
+        """Not supported for process runtime — processes don't survive restart."""
+        raise NotImplementedError("Process runtime does not support container adoption")
+
+    def remove_containers(self, container_ids: list[str]) -> int:
+        """Remove specific containers by ID."""
+        ids = set(container_ids)
+        removed = 0
+        remaining = []
+        for handle in self._handles:
+            if handle.container_id in ids:
+                handle.cleanup()
+                removed += 1
+            else:
+                remaining.append(handle)
+        self._handles = remaining
+        return removed
 
     def remove_all_iris_containers(self) -> int:
         """Stop all containers. Returns count."""

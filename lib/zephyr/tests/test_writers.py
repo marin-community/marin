@@ -1,28 +1,30 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for writers module."""
 
-import json
 import tempfile
+import uuid
 from pathlib import Path
 
 import fsspec
+import fsspec.config
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import vortex
+from pyarrow import fs as pa_fs
+from zephyr.writers import (
+    _pyarrow_filesystem,
+    _s3_filesystem_kwargs,
+    infer_arrow_schema,
+    write_jsonl_file,
+    write_parquet_file,
+    write_vortex_file,
+)
 
-from zephyr.writers import write_levanter_cache, write_parquet_file, write_vortex_file
-
-
-def _make_levanter_records(n: int) -> list[dict[str, list[int]]]:
-    return [{"input_ids": [i, i + 100], "attention_mask": [1, 1]} for i in range(n)]
-
-
-def _require_levanter():
-    cache_mod = pytest.importorskip("levanter.store.cache")
-    tree_store_mod = pytest.importorskip("levanter.store.tree_store")
-    return cache_mod.CacheMetadata, cache_mod.SerialCacheWriter, tree_store_mod.TreeStore
+# zstandard frame magic number: the first four bytes of any zstd-compressed stream.
+_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 
 def test_write_vortex_file_basic():
@@ -87,6 +89,23 @@ def test_write_vortex_file_single_record():
         assert table.column("name").to_pylist() == ["Alice"]
 
 
+@pytest.mark.parametrize("ext", [".jsonl.zst", ".jsonl.zstd"])
+def test_write_jsonl_file_zstd_compresses(tmp_path, ext):
+    """Both ``.zst`` and ``.zstd`` must produce a genuinely zstd-compressed file.
+
+    Asserting the on-disk magic bytes (rather than only a round-trip) catches the
+    silent case where the extension is unrecognized and records are written raw.
+    """
+    output_path = str(Path(tmp_path) / f"data{ext}")
+    records = [{"id": i, "name": f"row{i}"} for i in range(5)]
+
+    result = write_jsonl_file(records, output_path)
+
+    assert result["count"] == 5
+    with open(output_path, "rb") as f:
+        assert f.read(4) == _ZSTD_MAGIC
+
+
 def test_write_parquet_file_basic():
     """Test basic parquet file writing."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -107,6 +126,104 @@ def test_write_parquet_file_basic():
         assert len(table) == 2
 
 
+def test_write_parquet_file_accepts_record_batches(tmp_path):
+    schema = pa.schema([pa.field("id", pa.int64()), pa.field("name", pa.string())])
+    batches = [
+        pa.RecordBatch.from_pylist([{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}], schema=schema),
+        pa.RecordBatch.from_pylist([{"id": 3, "name": "Charlie"}], schema=schema),
+    ]
+    output_path = str(tmp_path / "batches.parquet")
+
+    result = write_parquet_file(batches, output_path, target_buffer_bytes=1)
+
+    assert result == {"path": output_path, "count": 3}
+    assert pq.read_table(output_path).equals(pa.Table.from_batches(batches))
+
+
+def test_write_parquet_file_preserves_typed_empty_record_batch(tmp_path):
+    schema = pa.schema([pa.field("id", pa.int64()), pa.field("name", pa.string())])
+    empty_batch = pa.RecordBatch.from_arrays(
+        [pa.array([], type=pa.int64()), pa.array([], type=pa.string())],
+        schema=schema,
+    )
+    output_path = str(tmp_path / "empty-batch.parquet")
+
+    result = write_parquet_file([empty_batch], output_path)
+
+    table = pq.read_table(output_path)
+    assert result == {"path": output_path, "count": 0}
+    assert table.schema.equals(schema, check_metadata=True)
+    assert len(table) == 0
+
+
+def test_write_parquet_file_rejects_record_batch_schema_drift(tmp_path):
+    integer_batch = pa.RecordBatch.from_pylist([{"value": 1}])
+    string_batch = pa.RecordBatch.from_pylist([{"value": "one"}])
+
+    with pytest.raises(pa.ArrowInvalid, match="RecordBatch schema mismatch"):
+        write_parquet_file([integer_batch, string_batch], str(tmp_path / "schema-drift.parquet"))
+
+
+@pytest.mark.parametrize(
+    "records",
+    [
+        [pa.RecordBatch.from_pylist([{"value": 1}]), {"value": 2}],
+        [{"value": 1}, pa.RecordBatch.from_pylist([{"value": 2}])],
+    ],
+)
+def test_write_parquet_file_rejects_mixed_rows_and_record_batches(tmp_path, records):
+    with pytest.raises(TypeError, match="cannot mix"):
+        write_parquet_file(records, str(tmp_path / "mixed.parquet"))
+
+
+def test_write_parquet_file_widens_null_to_concrete_type():
+    """First batch pins a field as null; a later batch with a concrete type widens cleanly.
+
+    This is the stackv2 failure mode: the first ``_MICRO_BATCH_SIZE`` (=8)
+    records all had ``None`` for a field, pinning it to ``pa.null()`` —
+    later records with real values would fail without schema widening.
+    Behavior must: (a) succeed, (b) land the widened schema on disk, (c)
+    preserve all values from both batches.
+    """
+    records = [{"x": None}] * 8 + [{"x": "hello"}]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = str(Path(tmpdir) / "test.parquet")
+        result = write_parquet_file(records, output_path)
+        assert result["count"] == 9
+
+        table = pq.read_table(output_path)
+        assert len(table) == 9
+        assert pa.types.is_string(table.schema.field("x").type)
+        xs = table.column("x").to_pylist()
+        assert xs[:8] == [None] * 8
+        assert xs[8] == "hello"
+
+
+def test_write_parquet_file_captures_fields_appearing_in_later_batches():
+    """A field absent from the first batch but present later must not be silently dropped."""
+    records = [{"x": "a"}] * 8 + [{"x": "b", "z": 42}]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = str(Path(tmpdir) / "test.parquet")
+        result = write_parquet_file(records, output_path)
+        assert result["count"] == 9
+
+        table = pq.read_table(output_path)
+        assert "z" in table.schema.names, "field `z` must survive to disk, not be dropped"
+        assert table.column("z").to_pylist() == [None] * 8 + [42]
+
+
+def test_write_parquet_file_raises_on_incompatible_type_conflict():
+    """Genuine type conflicts (e.g. int vs string) must still raise a clear error."""
+    records = [{"x": i} for i in range(8)] + [{"x": "stringy"}]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = str(Path(tmpdir) / "test.parquet")
+        with pytest.raises((pa.ArrowInvalid, pa.ArrowTypeError)) as excinfo:
+            write_parquet_file(records, output_path)
+    msg = str(excinfo.value)
+    assert "int" in msg.lower() or "int64" in msg.lower()
+    assert "string" in msg.lower()
+
+
 def test_write_parquet_file_empty():
     """Test writing an empty parquet file."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -123,108 +240,135 @@ def test_write_parquet_file_empty():
         assert len(table) == 0
 
 
-def test_write_levanter_cache_resumes_from_partial_tmp_end_to_end():
-    """A rerun should resume from an interrupted .tmp cache directory."""
-    CacheMetadata, SerialCacheWriter, TreeStore = _require_levanter()
+def test_write_parquet_file_unaddressable_protocol_falls_back_to_fsspec():
+    """Protocols pyarrow cannot address still round-trip via the fsspec handle."""
+    bucket = f"zephyr-writers-{uuid.uuid4().hex}"
+    output_path = f"memory://{bucket}/out.parquet"
+    records = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = str(Path(tmpdir) / "cache")
-        tmp_output_path = f"{output_path}.tmp"
-        records = _make_levanter_records(8)
-        expected_token_count = sum(len(record["input_ids"]) for record in records)
+    result = write_parquet_file(iter(records), output_path)
 
-        with SerialCacheWriter(
-            tmp_output_path, records[0], shard_name=output_path, metadata=CacheMetadata({}), mode="w"
-        ) as writer:
-            writer.write_batch(records[:3])
-
-        result = write_levanter_cache(iter(records), output_path, metadata={})
-
-        assert result["path"] == output_path
-        assert result["count"] == len(records)
-        assert result["token_count"] == expected_token_count
-        assert Path(output_path, ".success").exists()
-
-        stats = json.loads(Path(output_path, ".stats.json").read_text())
-        assert stats["count"] == len(records)
-        assert stats["token_count"] == expected_token_count
-
-        store = TreeStore.open(records[0], output_path, mode="r", cache_metadata=False)
-        assert len(store) == len(records)
-        assert store[0]["input_ids"].tolist() == records[0]["input_ids"]
-        assert store[len(records) - 1]["input_ids"].tolist() == records[len(records) - 1]["input_ids"]
+    assert result["count"] == 2
+    with fsspec.filesystem("memory").open(f"/{bucket}/out.parquet", "rb") as f:
+        table = pq.read_table(f)
+    assert table.to_pylist() == records
 
 
-def test_write_levanter_cache_ignores_stale_tmp_when_output_exists():
-    """A stale tmp directory must not override an already-published output."""
-    CacheMetadata, SerialCacheWriter, TreeStore = _require_levanter()
+def test_pyarrow_filesystem_selection():
+    """Local paths get a native LocalFileSystem; unknown protocols return None."""
+    fs, path = _pyarrow_filesystem("/tmp/out.parquet")
+    assert isinstance(fs, pa_fs.LocalFileSystem)
+    assert path == "/tmp/out.parquet"
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = str(Path(tmpdir) / "cache")
-        old_records = _make_levanter_records(6)
-        new_records = _make_levanter_records(3)
+    fs, path = _pyarrow_filesystem("file:///tmp/out.parquet")
+    assert isinstance(fs, pa_fs.LocalFileSystem)
+    assert path == "/tmp/out.parquet"
 
-        write_levanter_cache(iter(old_records), output_path, metadata={})
-
-        tmp_output_path = f"{output_path}.tmp"
-        with SerialCacheWriter(
-            tmp_output_path, old_records[0], shard_name=output_path, metadata=CacheMetadata({}), mode="w"
-        ) as writer:
-            writer.write_batch(old_records[:5])
-
-        result = write_levanter_cache(iter(new_records), output_path, metadata={})
-        assert result["count"] == len(new_records)
-
-        store = TreeStore.open(new_records[0], output_path, mode="r", cache_metadata=False)
-        assert len(store) == len(new_records)
-        assert store[len(new_records) - 1]["input_ids"].tolist() == new_records[len(new_records) - 1]["input_ids"]
+    assert _pyarrow_filesystem("memory://bucket/out.parquet") is None
 
 
-def test_write_levanter_cache_fails_if_partial_tmp_exceeds_input():
-    """If tmp data is ahead of the input stream, fail instead of publishing stale data."""
-    CacheMetadata, SerialCacheWriter, _ = _require_levanter()
+def test_pyarrow_filesystem_cached_per_config(monkeypatch):
+    """One S3 filesystem per process, not one per file (#8402).
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = str(Path(tmpdir) / "cache")
-        stale_records = _make_levanter_records(5)
-        new_records = _make_levanter_records(2)
+    Each filesystem owns a connection pool that dies with the object, so a
+    per-file client parks a local port in TIME_WAIT for every file a task
+    writes. A changed endpoint must still build a new filesystem.
+    """
+    monkeypatch.setitem(
+        fsspec.config.conf,
+        "s3",
+        {"endpoint_url": "https://object.example.com", "client_kwargs": {"region_name": "auto"}},
+    )
+    first, path = _pyarrow_filesystem("s3://bucket/a.parquet")
+    second, _ = _pyarrow_filesystem("s3://bucket/b.parquet")
+    assert path == "bucket/a.parquet"
+    assert first is second
 
-        tmp_output_path = f"{output_path}.tmp"
-        with SerialCacheWriter(
-            tmp_output_path, stale_records[0], shard_name=output_path, metadata=CacheMetadata({}), mode="w"
-        ) as writer:
-            writer.write_batch(stale_records)
-
-        with pytest.raises(ValueError, match="Temporary cache"):
-            write_levanter_cache(iter(new_records), output_path, metadata={})
+    monkeypatch.setitem(
+        fsspec.config.conf,
+        "s3",
+        {"endpoint_url": "https://other.example.com", "client_kwargs": {"region_name": "auto"}},
+    )
+    assert _pyarrow_filesystem("s3://bucket/a.parquet")[0] is not first
 
 
-def test_write_levanter_cache_restores_previous_output_if_publish_fails(monkeypatch):
-    """If final publish fails, the previously published output should be restored."""
-    _, _, TreeStore = _require_levanter()
+def test_s3_filesystem_kwargs_from_fsspec_conf(monkeypatch):
+    """The iris-exported FSSPEC_S3 block maps onto native S3FileSystem kwargs.
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = str(Path(tmpdir) / "cache")
-        original_records = _make_levanter_records(5)
-        replacement_records = _make_levanter_records(2)
+    CoreWeave object storage rejects path-style requests with HTTP 400, so
+    the virtual addressing style configured for s3fs must translate to
+    ``force_virtual_addressing`` on the native filesystem.
+    """
+    monkeypatch.setitem(
+        fsspec.config.conf,
+        "s3",
+        {
+            "endpoint_url": "https://object.example.coreweave.com",
+            "client_kwargs": {"region_name": "auto"},
+            "config_kwargs": {"s3": {"addressing_style": "virtual"}},
+        },
+    )
+    kwargs = _s3_filesystem_kwargs()
+    assert kwargs["endpoint_override"] == "https://object.example.coreweave.com"
+    assert kwargs["region"] == "auto"
+    assert kwargs["force_virtual_addressing"] is True
+    assert kwargs["connect_timeout"] > 0
+    assert kwargs["request_timeout"] > 0
 
-        write_levanter_cache(iter(original_records), output_path, metadata={})
+    monkeypatch.setitem(fsspec.config.conf, "s3", {})
+    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    assert "endpoint_override" not in _s3_filesystem_kwargs()
+    assert "force_virtual_addressing" not in _s3_filesystem_kwargs()
 
-        original_mv = fsspec.implementations.local.LocalFileSystem.mv
-        target_tmp_path = f"{output_path}.tmp"
-        failed_once = False
 
-        def flaky_mv(self, path1, path2, **kwargs):
-            nonlocal failed_once
-            if path1 == target_tmp_path and path2 == output_path and not failed_once:
-                failed_once = True
-                raise RuntimeError("simulated publish failure")
-            return original_mv(self, path1, path2, **kwargs)
+def test_infer_arrow_schema_basic():
+    """Test schema inference with basic Python types."""
+    records = [{"id": 1, "name": "Alice", "score": 95.5, "active": True}]
+    schema = infer_arrow_schema(records)
+    assert schema.field("id").type == pa.int64()
+    assert schema.field("score").type == pa.float64()
+    assert schema.field("active").type == pa.bool_()
+    assert len(schema) == 4
 
-        monkeypatch.setattr(fsspec.implementations.local.LocalFileSystem, "mv", flaky_mv)
 
-        with pytest.raises(RuntimeError, match="simulated publish failure"):
-            write_levanter_cache(iter(replacement_records), output_path, metadata={})
+def test_infer_arrow_schema_none_in_first_row():
+    """Schema inference resolves None from non-None values in later rows."""
+    records = [
+        {"id": 1, "name": "Alice", "score": None},
+        {"id": 2, "name": "Bob", "score": 95.5},
+    ]
+    schema = infer_arrow_schema(records)
+    assert schema.field("score").type == pa.float64()
 
-        restored_store = TreeStore.open(original_records[0], output_path, mode="r", cache_metadata=False)
-        assert len(restored_store) == len(original_records)
+
+def test_infer_arrow_schema_all_none():
+    """When all values for a field are None, the type is null."""
+    records = [
+        {"id": 1, "value": None},
+        {"id": 2, "value": None},
+    ]
+    schema = infer_arrow_schema(records)
+    assert schema.field("value").type == pa.null()
+
+
+def test_infer_arrow_schema_nested_dict():
+    """Schema inference handles nested dicts."""
+    records = [{"id": 1, "meta": {"key": "val", "count": 3}}]
+    schema = infer_arrow_schema(records)
+    meta_type = schema.field("meta").type
+    assert isinstance(meta_type, pa.StructType)
+    assert meta_type.get_field_index("key") >= 0
+    assert meta_type.get_field_index("count") >= 0
+
+
+def test_infer_arrow_schema_mixed_types_fails():
+    """Schema inference fails when a column has incompatible types (float then string)."""
+    records = [
+        {"id": 1, "foo": None},
+        {"id": 2, "foo": 1.5},
+        {"id": 3, "foo": 2.5},
+        {"id": 4, "foo": "bar"},
+    ]
+    with pytest.raises(pa.lib.ArrowInvalid):
+        infer_arrow_schema(records)

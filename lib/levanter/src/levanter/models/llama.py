@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -14,20 +14,20 @@ import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
-from haliax.nn.scan import ScanCheckpointPolicy, Stacked
+from haliax.nn.scan import BlockFoldable, BlockSeq, ScanCheckpointPolicy, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.layers import LayerNormConfigBase, RmsNormConfig
 from levanter.layers.attention import Attention, AttentionBackend, AttentionConfig, AttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmHeadModel, resize_embeddings_and_lm_head
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
-from levanter.utils.types import BlockFoldable
 
 silence_transformer_nag()
 from transformers import LlamaConfig as HfLlamaConfig  # noqa: E402
@@ -115,8 +115,8 @@ class LlamaConfig(HFCompatConfig):
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig):
-        rope_theta = hf_config.rope_theta
-        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, getattr(hf_config, "rope_scaling", None))
+        rope_theta, rope_scaling = hf_rope_config(hf_config)
+        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, rope_scaling)
         return LlamaConfig(
             max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
@@ -161,7 +161,8 @@ class LlamaConfig(HFCompatConfig):
             rope_theta = None
             rope_scaling = None
 
-        return HfLlamaConfig(
+        return hf_config_from_kwargs(
+            HfLlamaConfig,
             max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
@@ -182,7 +183,7 @@ class LlamaConfig(HFCompatConfig):
         )
 
     @property
-    def model_type(self) -> Type["LlamaLMHeadModel"]:
+    def model_type(self) -> Type["LlamaLMHeadModel"]:  # pyrefly: ignore[bad-override]
         return LlamaLMHeadModel
 
     @property
@@ -392,8 +393,6 @@ class LlamaTransformer(eqx.Module):
     def init(config: LlamaConfig, *, key) -> "LlamaTransformer":
         S = Stacked
         if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
             S = BlockSeq
 
         layers = S.init(config.Layers, LlamaDecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(
@@ -602,15 +601,10 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
             return self.lm_head.weight
 
     def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[LlamaConfig]":
-        new_Vocab = self.Vocab.resize(new_size)
-        k1, k2 = maybe_rng_split(key, 2)
-        new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
-        if self.lm_head is not None:
-            new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
-            return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
-        else:
-            return dataclasses.replace(self, embeddings=new_embeddings)
+        new_embeddings, new_lm_head = resize_embeddings_and_lm_head(
+            self.Vocab, self.embeddings, self.lm_head, new_size, key
+        )
+        return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         return {"transformer": "model", "embeddings": None}

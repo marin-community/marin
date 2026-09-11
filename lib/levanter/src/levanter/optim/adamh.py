@@ -1,7 +1,6 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 from dataclasses import dataclass
 from typing import NamedTuple, Optional, Any
 
@@ -12,9 +11,9 @@ import optax
 from optax import tree_utils as otu
 
 import haliax
-from haliax.nn import Linear
 
 from levanter.optim.config import OptimizerConfig
+from levanter.optim.util import is_linear_like_module, label_linear_like_module, norm_preserving_update
 from levanter.utils.jax_utils import leaf_key_paths
 
 
@@ -40,7 +39,6 @@ class AdamHConfig(OptimizerConfig):
     beta2: float = 0.95
     epsilon: float = 1e-8
     max_grad_norm: Optional[float] = 1.0
-    nesterov: bool = False
     adam_lr: float = 6e-4  # learning rate used for weight without weight decay
 
     def build(self, num_train_steps):
@@ -88,12 +86,12 @@ class AdamHConfig(OptimizerConfig):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             if "Embedding" in path_str:
                 return "adam"
-            elif isinstance(param, Linear):
-                return dataclasses.replace(param, weight="adamh", bias="adam" if param.bias is not None else None)
+            elif is_linear_like_module(param):
+                return label_linear_like_module(param, weight_label="adamh", bias_label="adam")
             else:
                 return "adam"
 
-        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
+        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
 
 
 class ScaleByAdamHState(NamedTuple):
@@ -151,23 +149,8 @@ def scale_by_adamh(
         mu = otu.tree_cast(mu, mu_dtype)
 
         # projected training for linear weight
-        def scale_invariant_update(p, u):
-            if p is None:
-                return None
-            if p.ndim == 2:
-                # this is the case for no layer stacking
-                new_p = p - learning_rate * u * jnp.linalg.norm(p) / jnp.maximum(jnp.linalg.norm(u), 1e-10)
-                return new_p / jnp.linalg.norm(new_p) * jnp.linalg.norm(p) - p
-            else:
-                axes = tuple(range(1, p.ndim))
-                p_norm = jnp.sqrt(jnp.sum(jnp.square(p), axis=axes, keepdims=True))
-                u_norm = jnp.sqrt(jnp.sum(jnp.square(u), axis=axes, keepdims=True))
-                new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
-                new_p_norm = jnp.sqrt(jnp.sum(jnp.square(new_p), axis=axes, keepdims=True))
-                return new_p / jnp.maximum(new_p_norm, 1e-10) * p_norm - p
-
         adamh_updates = jax.tree_util.tree_map(
-            scale_invariant_update,
+            lambda p, u: norm_preserving_update(p, u, learning_rate),
             params,
             adam_updates,
             is_leaf=lambda x: x is None,

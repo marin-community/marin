@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
@@ -6,15 +6,20 @@ import os
 import sys
 import time
 import traceback
-from typing import Literal
 from urllib.parse import urlparse
 
 import requests
-from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.current_client import current_client
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
-from marin.utils import remove_tpu_lockfile_on_exit
+from marin.inference.config import (
+    InferenceModelConfig,
+    VllmCompilationCacheMode,
+    VllmEngineConfig,
+    VllmLauncherType,
+)
+from marin.inference.vllm_backend import vllm_launcher
+from marin.inference.vllm_server import VllmEnvironment
 
 
 def run_one_query(
@@ -23,10 +28,9 @@ def run_one_query(
     prompt: str,
     load_format: str | None,
     max_model_len: int | None,
-    mode: Literal["docker", "native"] | None,
-    docker_image: str | None,
     port: int | None,
     use_completions: bool,
+    compilation_cache_mode: VllmCompilationCacheMode,
 ) -> str:
     parsed = urlparse(model_name_or_path)
     is_object_store = parsed.scheme in {"gs", "s3"}
@@ -37,17 +41,17 @@ def run_one_query(
         engine_kwargs["max_model_len"] = max_model_len
 
     if is_object_store:
-        model = ModelConfig(name="smoke-test-model", path=model_name_or_path, engine_kwargs=engine_kwargs)
+        model = InferenceModelConfig(name="smoke-test-model", path=model_name_or_path, engine_kwargs=engine_kwargs)
     else:
-        model = ModelConfig(name=model_name_or_path, path=None, engine_kwargs=engine_kwargs)
+        model = InferenceModelConfig(name=model_name_or_path, path=None, engine_kwargs=engine_kwargs)
 
     env = VllmEnvironment(
         model=model,
         host="127.0.0.1",
         port=port,
         timeout_seconds=3600,
-        mode=mode,
-        docker_image=docker_image,
+        launcher=vllm_launcher(VllmEngineConfig(launcher=VllmLauncherType.TPU)),
+        compilation_cache_mode=compilation_cache_mode,
     )
     try:
         with env:
@@ -100,7 +104,7 @@ def run_one_query(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Smoke-test vLLM TPU Docker sidecar via OpenAI-compatible HTTP API.")
+    parser = argparse.ArgumentParser(description="Smoke-test a vLLM TPU server via OpenAI-compatible HTTP API.")
     parser.add_argument(
         "--model",
         required=True,
@@ -129,21 +133,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Optional stable local compilation cache dir (e.g. /tmp/marin-jax-compilation-cache). "
-            "When set, exports JAX_COMPILATION_CACHE_DIR and VLLM_XLA_CACHE_PATH."
+            "When set, disables Marin's managed archive and exports JAX_COMPILATION_CACHE_DIR "
+            "and VLLM_XLA_CACHE_PATH."
         ),
     )
     parser.add_argument("--prompt", default="Write a short haiku about TPUs.", help="Prompt to send.")
-    parser.add_argument(
-        "--mode",
-        choices=["docker", "native"],
-        default=None,
-        help="Override MARIN_VLLM_MODE (default: use env; docker if unset).",
-    )
-    parser.add_argument(
-        "--docker-image",
-        default=None,
-        help="Override MARIN_VLLM_DOCKER_IMAGE (required in docker mode if env var unset).",
-    )
     parser.add_argument(
         "--port",
         type=int,
@@ -158,22 +152,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--tpu-type",
         default="v5p-8",
-        help="TPU type to request when launching via Ray/Fray (default: v5p-8).",
+        help="TPU type to request when launching via Fray (default: v5p-8).",
     )
     parser.add_argument(
         "--local",
         action="store_true",
-        help="Run in the current process instead of launching a Ray/Fray job.",
+        help="Run in the current process instead of launching a Fray job.",
     )
     args = parser.parse_args(argv)
 
     if args.repeat < 1:
         raise ValueError("--repeat must be >= 1")
 
+    dependency_groups = ["tpu"]
+    resources = ResourceConfig.with_tpu(args.tpu_type)
+    env_vars: dict[str, str] = {}
+    if args.local_cache_dir is not None:
+        env_vars["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
+        env_vars["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
+        env_vars["JAX_ENABLE_COMPILATION_CACHE"] = "1"
+    compilation_cache_mode = (
+        VllmCompilationCacheMode.CALLER_MANAGED if args.local_cache_dir is not None else VllmCompilationCacheMode.MANAGED
+    )
+
     if args.local:
-        if args.local_cache_dir is not None:
-            os.environ["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
-            os.environ["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
+        os.environ.update(env_vars)
 
         for i in range(args.repeat):
             start = time.time()
@@ -182,63 +185,48 @@ def main(argv: list[str] | None = None) -> int:
                 prompt=args.prompt,
                 load_format=args.load_format,
                 max_model_len=args.max_model_len,
-                mode=args.mode,
-                docker_image=args.docker_image,
                 port=args.port,
                 use_completions=args.use_completions,
+                compilation_cache_mode=compilation_cache_mode,
             )
             elapsed = time.time() - start
             print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
             print(output)
         return 0
 
-    mode_str = resolve_vllm_mode(args.mode)
-
-    env_vars: dict[str, str] = {}
-    if args.mode is not None:
-        env_vars["MARIN_VLLM_MODE"] = args.mode
-    if args.docker_image is not None:
-        env_vars["MARIN_VLLM_DOCKER_IMAGE"] = args.docker_image
-    if args.local_cache_dir is not None:
-        env_vars["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
-        env_vars["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
-
     def _run() -> None:
-        with remove_tpu_lockfile_on_exit():
-            for i in range(args.repeat):
-                start = time.time()
-                try:
-                    output = run_one_query(
-                        model_name_or_path=args.model,
-                        prompt=args.prompt,
-                        load_format=args.load_format,
-                        max_model_len=args.max_model_len,
-                        mode=args.mode,
-                        docker_image=args.docker_image,
-                        port=args.port,
-                        use_completions=args.use_completions,
-                    )
-                except Exception:
-                    traceback.print_exc()
-                    raise
-                elapsed = time.time() - start
-                print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
-                print(output)
+        for i in range(args.repeat):
+            start = time.time()
+            try:
+                output = run_one_query(
+                    model_name_or_path=args.model,
+                    prompt=args.prompt,
+                    load_format=args.load_format,
+                    max_model_len=args.max_model_len,
+                    port=args.port,
+                    use_completions=args.use_completions,
+                    compilation_cache_mode=compilation_cache_mode,
+                )
+            except Exception:
+                traceback.print_exc()
+                raise
+            elapsed = time.time() - start
+            print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
+            print(output)
 
-    cluster = current_cluster()
-    resources = ResourceConfig.with_tpu(args.tpu_type)
+    client = current_client()
     job_request = JobRequest(
         name=f"vllm-smoke:{args.tpu_type}",
         entrypoint=Entrypoint.from_callable(_run),
         resources=resources,
-        environment=EnvironmentConfig.create(
-            extras=["eval", "tpu"],
-            pip_packages=VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else (),
-            env_vars=env_vars or None,
+        environment=create_environment(
+            extras=dependency_groups,
+            pip_packages=(),
+            env_vars=env_vars,
         ),
     )
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
+    job = client.submit(job_request)
+    job.wait(raise_on_failure=True)
     return 0
 
 

@@ -217,7 +217,6 @@ We use [JAX Distributed](https://jax.readthedocs.io/en/latest/multi_process.html
 ```bash
 NCCL_DEBUG=INFO python src/levanter/main/train_lm.py \
   --config_path config/gpt2_7b.yaml \
-  --trainer.ray.auto_start_cluster false \
   --trainer.per_device_parallelism -1 \
   --trainer.distributed.num_processes 4 \
   --trainer.distributed.local_device_ids "[0,1,2,3,4,5,6,7]" \
@@ -251,7 +250,7 @@ Here is an updated Slurm script example where we've added `#SBATCH --nodes=2`.
 export PATH=$(echo $PATH | sed 's|:/usr/local/cuda/bin||')
 
 CONTAINER_PATH="ghcr.io/nvidia/jax:levanter"
-TRAINING_COMMAND="python -m levanter.main.train_lm --config_path config/gpt2_7b.yaml --trainer.ray.auto_start_cluster false --trainer.per_device_parallelism -1"
+TRAINING_COMMAND="python -m levanter.main.train_lm --config_path config/gpt2_7b.yaml --trainer.per_device_parallelism -1"
 
 srun docker run --gpus=all --shm-size=16g --rm $CONTAINER_PATH $TRAINING_COMMAND
 ```

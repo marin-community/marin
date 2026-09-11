@@ -1,0 +1,297 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Lightweight inference serving configuration.
+
+These dataclasses are safe to construct in CPU coordinators and CLI processes.
+Accelerator-heavy serving implementations translate them inside worker jobs.
+"""
+
+import tomllib
+from dataclasses import dataclass, field
+from enum import StrEnum
+from pathlib import Path
+from typing import Any
+
+from fray.types import CpuConfig, EnvironmentConfig, ResourceConfig, TpuConfig
+from rigging.filesystem.storage_path import StoragePath
+
+# Worker and isolated vLLM environments use one Python version so cloudpickle
+# and the launched callable stay compatible.
+WORKER_PYTHON_VERSION = "3.12"
+# Stock CUDA vLLM runs in an isolated uv-tool environment and does not
+# participate in Marin's workspace dependency resolution.
+DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
+VLLM_METRIC_PREFIX = "vllm:"
+
+# This standard set includes families consumed by Marin's inference dashboards or needed for
+# basic serving diagnosis: request volume, latency, scheduler pressure, KV-cache use, and
+# preemption. Selection is made per complete Prometheus family and was sized against Marin's
+# pinned GPU and TPU vLLM definitions using representative label cardinalities. Add a family
+# only for a concrete consumer, and recheck that the complete selected scrape fits the limit.
+STANDARD_VLLM_METRIC_FAMILIES = frozenset(
+    {
+        "vllm:e2e_request_latency_seconds",
+        "vllm:generation_tokens",
+        "vllm:inter_token_latency_seconds",
+        "vllm:kv_cache_usage_perc",
+        "vllm:num_preemptions",
+        "vllm:num_requests_running",
+        "vllm:num_requests_waiting",
+        "vllm:prompt_tokens",
+        "vllm:request_queue_time_seconds",
+        "vllm:request_success",
+        "vllm:request_time_per_output_token_seconds",
+        "vllm:time_to_first_token_seconds",
+    }
+)
+
+
+def _normalize_vllm_metric_families(families: object, *, source: str) -> frozenset[str]:
+    if not isinstance(families, (list, tuple, frozenset)) or not all(isinstance(family, str) for family in families):
+        raise ValueError(f"Invalid vLLM metrics config {source}: every family must be a string")
+    invalid = [family for family in families if not family.startswith(VLLM_METRIC_PREFIX)]
+    if invalid:
+        raise ValueError(f"Invalid vLLM metrics config {source}: every family must start with 'vllm:'")
+    return frozenset(families)
+
+
+def _parse_vllm_metric_families(contents: bytes, *, source: str) -> frozenset[str]:
+    try:
+        document = tomllib.loads(contents.decode())
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError(f"Invalid vLLM metrics config {source}: {exc}") from exc
+    if set(document) != {"families"} or not isinstance(document["families"], list):
+        raise ValueError(f"Invalid vLLM metrics config {source}: expected one 'families' array")
+    return _normalize_vllm_metric_families(document["families"], source=source)
+
+
+def load_vllm_metric_family_additions(path: Path | None) -> frozenset[str]:
+    """Load optional additions for the standard contract."""
+    if path is None:
+        return frozenset()
+    return _parse_vllm_metric_families(StoragePath(str(path)).read_bytes(), source=str(path))
+
+
+class VllmLauncherType(StrEnum):
+    PREINSTALLED = "preinstalled"
+    CUDA = "cuda"
+    TPU = "tpu"
+
+
+class VllmSource(StrEnum):
+    UPSTREAM = "upstream"
+    MARIN_FORK = "marin_fork"
+
+
+class VllmCompilationCacheMode(StrEnum):
+    MANAGED = "managed"
+    CALLER_MANAGED = "caller_managed"
+
+
+@dataclass(frozen=True)
+class ServedModelConfig:
+    weights: str
+    revision: str | None = None
+    api_model: str | None = None
+    tokenizer: str | None = None
+    dtype: str = "bfloat16"
+    max_model_len: int | None = None
+    tensor_parallel_size: int | None = None
+    chat_template_content: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.weights:
+            raise ValueError("weights must not be empty")
+        if self.api_model == "":
+            raise ValueError("api_model must not be empty")
+        if self.max_model_len is not None and self.max_model_len <= 0:
+            raise ValueError("max_model_len must be positive")
+        if self.tensor_parallel_size is not None and self.tensor_parallel_size <= 0:
+            raise ValueError("tensor_parallel_size must be positive")
+
+    @property
+    def model_id(self) -> str:
+        """Model identifier accepted by the served OpenAI endpoint."""
+        return self.api_model or self.weights
+
+
+@dataclass
+class InferenceModelConfig:
+    """Model and engine arguments consumed by an in-process vLLM server."""
+
+    name: str
+    path: str | None
+    engine_kwargs: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class VllmEngineConfig:
+    launcher: VllmLauncherType = VllmLauncherType.PREINSTALLED
+    source: VllmSource = VllmSource.UPSTREAM
+    version: str | None = None
+    compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED
+    startup_timeout_seconds: int = 1800
+    max_num_batched_tokens: int | None = None
+    max_num_seqs: int | None = None
+    extra_args: tuple[str, ...] = ()
+    extra_metric_families: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        if self.startup_timeout_seconds <= 0:
+            raise ValueError("startup_timeout_seconds must be positive")
+        if self.max_num_batched_tokens is not None and self.max_num_batched_tokens <= 0:
+            raise ValueError("max_num_batched_tokens must be positive")
+        if self.max_num_seqs is not None and self.max_num_seqs <= 0:
+            raise ValueError("max_num_seqs must be positive")
+        if self.source is VllmSource.MARIN_FORK and self.launcher is not VllmLauncherType.CUDA:
+            raise ValueError("the Marin vLLM fork source requires the CUDA launcher")
+        extra_metric_families = _normalize_vllm_metric_families(
+            self.extra_metric_families,
+            source="VllmEngineConfig.extra_metric_families",
+        )
+        object.__setattr__(self, "extra_metric_families", extra_metric_families)
+
+
+@dataclass(frozen=True)
+class LevanterEngineConfig:
+    max_seqs: int = 16
+    page_size: int = 128
+    hbm_utilization: float = 0.8
+
+    def __post_init__(self) -> None:
+        if self.max_seqs <= 0:
+            raise ValueError("max_seqs must be positive")
+        if self.page_size <= 0:
+            raise ValueError("page_size must be positive")
+        if not 0 < self.hbm_utilization <= 1:
+            raise ValueError("hbm_utilization must be in (0, 1]")
+
+
+InferenceEngineConfig = VllmEngineConfig | LevanterEngineConfig
+
+
+@dataclass(frozen=True)
+class InferenceProxyConfig:
+    port: int = 0
+    request_timeout_seconds: float = 300.0
+    readiness_timeout_seconds: float = 300.0
+    max_pending_requests: int = 256
+    response_fetch_batch_size: int = 64
+    ignored_request_fields: tuple[str, ...] = ()
+    server_start_timeout_seconds: float = 10.0
+
+    def __post_init__(self) -> None:
+        if self.port < 0:
+            raise ValueError("port must not be negative")
+        if self.request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be positive")
+        if self.readiness_timeout_seconds <= 0:
+            raise ValueError("readiness_timeout_seconds must be positive")
+        if self.max_pending_requests <= 0:
+            raise ValueError("max_pending_requests must be positive")
+        if self.response_fetch_batch_size <= 0:
+            raise ValueError("response_fetch_batch_size must be positive")
+        if self.server_start_timeout_seconds <= 0:
+            raise ValueError("server_start_timeout_seconds must be positive")
+
+
+@dataclass(frozen=True)
+class InferenceWorkerConfig:
+    max_in_flight: int = 16
+    request_timeout_seconds: float = 180.0
+
+    def __post_init__(self) -> None:
+        if self.max_in_flight <= 0:
+            raise ValueError("max_in_flight must be positive")
+        if self.request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be positive")
+
+
+@dataclass(frozen=True)
+class BrokerConfig:
+    worker: InferenceWorkerConfig = field(default_factory=InferenceWorkerConfig)
+    proxy: InferenceProxyConfig = field(default_factory=InferenceProxyConfig)
+    request_lease_timeout_seconds: float = 240.0
+    broker_resources: ResourceConfig = field(
+        default_factory=lambda: ResourceConfig.with_cpu(
+            cpu=2,
+            ram="8g",
+            disk="20g",
+            preemptible=False,
+        )
+    )
+    broker_ready_timeout_seconds: float = 900.0
+    max_retries_failure: int = 1
+    max_retries_preemption: int = 10
+
+    def __post_init__(self) -> None:
+        worker_timeout = self.worker.request_timeout_seconds
+        lease_timeout = self.request_lease_timeout_seconds
+        proxy_timeout = self.proxy.request_timeout_seconds
+        if not 0 < worker_timeout < lease_timeout < proxy_timeout:
+            raise ValueError(
+                "Brokered inference timeouts must satisfy "
+                "0 < worker.request_timeout_seconds < request_lease_timeout_seconds "
+                "< proxy.request_timeout_seconds; "
+                f"got worker={worker_timeout:.1f}s lease={lease_timeout:.1f}s proxy={proxy_timeout:.1f}s."
+            )
+        if self.proxy.readiness_timeout_seconds <= 0:
+            raise ValueError("proxy.readiness_timeout_seconds must be positive")
+        if self.broker_ready_timeout_seconds <= 0:
+            raise ValueError("broker_ready_timeout_seconds must be positive")
+        if self.broker_resources.preemptible:
+            raise ValueError("broker_resources must be non-preemptible")
+        if self.max_retries_failure < 0 or self.max_retries_preemption < 0:
+            raise ValueError("broker retry counts must not be negative")
+
+
+@dataclass(frozen=True)
+class IrisConfig:
+    """Iris placement and environment for one remote inference instance."""
+
+    worker_resources: ResourceConfig
+    worker_environment: EnvironmentConfig
+    cache_ttl_days: int = 14
+    endpoint_ready_timeout_seconds: float = 1800.0
+    endpoint_health_timeout_seconds: float = 1800.0
+    priority: int = 0
+    max_retries_failure: int = 1
+    max_retries_preemption: int = 10
+
+    def __post_init__(self) -> None:
+        if self.cache_ttl_days < 0:
+            raise ValueError("cache_ttl_days must not be negative")
+        if self.endpoint_ready_timeout_seconds <= 0:
+            raise ValueError("endpoint_ready_timeout_seconds must be positive")
+        if self.endpoint_health_timeout_seconds <= 0:
+            raise ValueError("endpoint_health_timeout_seconds must be positive")
+        if self.max_retries_failure < 0 or self.max_retries_preemption < 0:
+            raise ValueError("worker retry counts must not be negative")
+        # Lazy artifact fingerprinting substitutes a symbolic runtime-resource
+        # marker before concrete resources are restored at execution time.
+        if not isinstance(self.worker_resources, ResourceConfig):
+            return
+        if self.worker_resources.replicas != 1:
+            raise ValueError("Each inference instance must use exactly one Iris task")
+        device = self.worker_resources.device
+        if isinstance(device, CpuConfig):
+            raise ValueError("Inference workers require an accelerator")
+        if isinstance(device, TpuConfig) and device.vm_count() != 1:
+            raise ValueError(f"Inference instances require a single-host TPU; got {device.variant}")
+
+
+@dataclass(frozen=True)
+class RemoteInferenceConfig:
+    """Model, engine, and Iris inputs for one remote inference context."""
+
+    model: ServedModelConfig
+    engine: InferenceEngineConfig
+    iris: IrisConfig
+    instances: int = 1
+    broker: BrokerConfig | None = None
+    capability_origin: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.instances <= 0:
+            raise ValueError("instances must be positive")

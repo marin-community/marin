@@ -1,10 +1,10 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-import yaml
-
 from pathlib import Path
+
+import yaml
 from levanter.utils.flop_utils import lm_flops_per_token
 
 

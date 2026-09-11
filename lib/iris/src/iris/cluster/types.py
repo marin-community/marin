@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Core types for the iris cluster layer.
@@ -12,39 +12,148 @@ This module provides Python types for the Iris cluster API:
 Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.proto.
 """
 
+import functools
+import hashlib
 import os
 import sys
+import urllib.parse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from enum import Enum, IntEnum
+from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any, NewType
 
 import cloudpickle
 import humanfriendly
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
+from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
+from rigging.timing import Timestamp
 
-from iris.rpc import cluster_pb2
+from iris.cluster.setup_scripts import (
+    cuda_toolchain_setup_script,
+    default_setup_script,
+    wants_gpu_extra,
+)
+from iris.cluster.tpu_topology import get_tpu_topology
+from iris.resources.state import (
+    TERMINAL_JOB_STATES as NATIVE_TERMINAL_JOB_STATES,
+)
+from iris.resources.state import (
+    TERMINAL_TASK_STATES as NATIVE_TERMINAL_TASK_STATES,
+)
+from iris.rpc import controller_pb2, job_pb2
+
+
+class AcceleratorType(StrEnum):
+    """Device/accelerator type for scale groups."""
+
+    CPU = "cpu"
+    GPU = "gpu"
+    TPU = "tpu"
+
+
+class CapacityType(StrEnum):
+    """Capacity type for provisioning — controls which cloud API is used."""
+
+    PREEMPTIBLE = "preemptible"
+    ON_DEMAND = "on_demand"
+    RESERVED = "reserved"
+
+
+class GcpSliceMode(StrEnum):
+    """Provisioning mode for GCP slices: a TPU pod or a plain CPU VM."""
+
+    TPU = "tpu"
+    VM = "vm"
+
+
+DEFAULT_BACKEND_ID = "default"
+"""Backend id of the implicit single backend synthesized from top-level config.
+
+Shared by controller composition and the backend-ID migration backfill. The
+migration has only a raw DB connection, so both must agree on this literal.
+"""
+
+
+class BackendStatus(IntEnum):
+    """Lifecycle state of a task backend, stored as an INTEGER in ``backends``."""
+
+    ACTIVE = 0
+    DRAINING = 1
+    REMOVED = 2
+
+
+class WellKnownAttribute(StrEnum):
+    """Canonical attribute keys for constraint-based scheduling."""
+
+    DEVICE_TYPE = "device-type"
+    DEVICE_VARIANT = "device-variant"
+    PREEMPTIBLE = "preemptible"
+    REGION = "region"
+    ZONE = "zone"
+    TPU_NAME = "tpu-name"
+    TPU_WORKER_ID = "tpu-worker-id"
+    TPU_TOPOLOGY = "tpu-topology"
+    TPU_VM_COUNT = "tpu-vm-count"
+    GPU_VARIANT = "gpu-variant"
+    GPU_COUNT = "gpu-count"
+
+
+AUTO_DEVICE_VARIANT = "auto"
+"""Device-variant sentinel meaning "unspecified — let the platform pick a variant".
+
+A resource spec or scale group carrying this variant emits no ``device-variant``
+routing constraint or advertised attribute, so the job matches any variant.
+"""
+
+
+# The reserved cluster name for work this controller owns and runs itself. Every
+# ``jobs``/``tasks`` row carries a ``cluster`` column that defaults to
+# ``LOCAL_CLUSTER`` and holds a peer's id once the job is handed off, so the
+# control plane folds on ``cluster == LOCAL_CLUSTER`` instead of special-casing a
+# local-vs-federated boolean. It is a reserved name — a real cluster id may not be
+# ``"local"`` (enforced in config validation) — so the sentinel and the global
+# cluster-id namespace stay disjoint.
+LOCAL_CLUSTER = "local"
+
+LOCAL_ADMIN_SUBMITTER = "local_admin"
+"""``submitting_user`` for a job admitted without an authenticated email.
+
+A CIDR/loopback (null-auth) submitter authenticates as the anonymous admin rather
+than a person, so its jobs are attributed to this well-known principal. Per-cluster
+federation allowlists key on ``submitting_user``, so ``local_admin`` is admitted to
+a peer only if that peer's policy names it explicitly."""
+
+
+def is_federated(cluster: str) -> bool:
+    """Whether a job/task ``cluster`` value denotes a peer this controller handed off to.
+
+    Its complement — a locally-owned job — is ``cluster == LOCAL_CLUSTER``; call sites
+    that need the fold predicate compare against ``LOCAL_CLUSTER`` directly.
+    """
+    return cluster != LOCAL_CLUSTER
 
 
 @dataclass(frozen=True, slots=True)
 class JobName:
     """Structured hierarchical job name.
 
-    Canonical form: /namespace/parent/child
-    Tasks are job names with numeric suffix: /namespace/parent/child/0
+    Canonical form: /user/root-job/child
+    Tasks are job names with numeric suffix: /user/root-job/child/0
 
-    Job names form a tree rooted at the namespace:
-        /root-job
-        /root-job/child-1
-        /root-job/child-1/grandchild
-        /root-job/0
+    The first path component identifies the submitting user. Job hierarchy starts
+    at the second component:
+        /alice/root-job
+        /alice/root-job/child-1
+        /alice/root-job/child-1/grandchild
+        /alice/root-job/0
     """
 
     _parts: tuple[str, ...]
 
     def __post_init__(self):
-        if not self._parts:
-            raise ValueError("JobName cannot be empty")
+        if len(self._parts) < 2:
+            raise ValueError("JobName must use canonical '/<user>/<job>[...]' format")
         for part in self._parts:
             if "/" in part:
                 raise ValueError(f"JobName component cannot contain '/': {part}")
@@ -53,26 +162,23 @@ class JobName:
 
     @classmethod
     def from_string(cls, s: str) -> "JobName":
-        """Parse a job name string like '/root/child/grandchild'.
+        """Parse a job name string like '/user/root/child/grandchild'.
+
+        Parsed names are interned in a process-wide LRU cache (names are
+        immutable) so repeated decodes — the TypeDecorator path that fires
+        once per row read — collapse to a dict lookup.
 
         Examples:
-            JobName.from_string("/my-job") -> JobName(("my-job",))
-            JobName.from_string("/parent/child") -> JobName(("parent", "child"))
-            JobName.from_string("/job/0") -> JobName(("job", "0"))
+            JobName.from_string("/alice/my-job") -> JobName(("alice", "my-job"))
+            JobName.from_string("/alice/parent/child") -> JobName(("alice", "parent", "child"))
+            JobName.from_string("/alice/job/0") -> JobName(("alice", "job", "0"))
         """
-        if not s:
-            raise ValueError("Job name cannot be empty")
-        if not s.startswith("/"):
-            raise ValueError(f"Job name must start with '/': {s}")
-        parts = tuple(s[1:].split("/"))
-        if any(not part or not part.strip() for part in parts):
-            raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
-        return cls(parts)
+        return _parse_job_name(s)
 
     @classmethod
-    def root(cls, name: str) -> "JobName":
+    def root(cls, user: str, name: str) -> "JobName":
         """Create a root job name (no parent)."""
-        return cls((name,))
+        return cls((user, name))
 
     def child(self, name: str) -> "JobName":
         """Create a child job name."""
@@ -84,21 +190,31 @@ class JobName:
         Tasks are job names with a numeric suffix.
 
         Example:
-            JobName.from_string("/my-job").task(0) -> JobName(("my-job", "0"))
+            JobName.from_string("/alice/my-job").task(0) -> JobName(("alice", "my-job", "0"))
         """
         return JobName((*self._parts, str(index)))
 
     @property
     def parent(self) -> "JobName | None":
         """Get parent job name, or None if this is a root job."""
-        if len(self._parts) == 1:
+        if self.is_root:
             return None
         return JobName(self._parts[:-1])
 
     @property
-    def namespace(self) -> str:
-        """Get the namespace (root component) for actor isolation."""
+    def user(self) -> str:
+        """Get the submitting user."""
         return self._parts[0]
+
+    @property
+    def root_job(self) -> "JobName":
+        """Get the root job for this hierarchy."""
+        return JobName(self._parts[:2])
+
+    @property
+    def namespace(self) -> str:
+        """Get the actor namespace (user/root job) for actor isolation."""
+        return "/" + "/".join(self.root_job._parts)
 
     @property
     def name(self) -> str:
@@ -108,11 +224,13 @@ class JobName:
     @property
     def is_root(self) -> bool:
         """True if this is a root job (no parent)."""
-        return len(self._parts) == 1
+        return len(self._parts) == 2
 
     @property
     def task_index(self) -> int | None:
         """If this is a task (last component is numeric), return the index."""
+        if len(self._parts) < 3:
+            return None
         try:
             return int(self._parts[-1])
         except ValueError:
@@ -123,6 +241,24 @@ class JobName:
         """True if this is a task (last component is numeric)."""
         return self.task_index is not None
 
+    @property
+    def depth(self) -> int:
+        """Depth in the job hierarchy. Root jobs have depth 1.
+
+        Tasks inherit their parent job's depth (the task index
+        is not counted as a depth level).
+
+        Examples:
+            /alice/root -> 1
+            /alice/root/child -> 2
+            /alice/root/child/grandchild -> 3
+            /alice/root/0 (task) -> 1
+            /alice/root/child/0 (task) -> 2
+        """
+        if self.is_task:
+            return len(self._parts) - 2
+        return len(self._parts) - 1
+
     def is_ancestor_of(self, other: "JobName", *, include_self: bool = True) -> bool:
         """True if this job name is an ancestor of another job name."""
         if include_self and self == other:
@@ -132,8 +268,14 @@ class JobName:
         return other._parts[: len(self._parts)] == self._parts
 
     def to_safe_token(self) -> str:
-        """Return a filesystem/tag-safe token derived from this name."""
-        return "job__" + "__".join(self._parts)
+        """Return a filesystem/tag-safe token derived from this name.
+
+        Uses ``<user>-<sha256-hex>`` so the token stays short even for deeply
+        nested job hierarchies (avoids ``ENAMETOOLONG`` on workdir creation).
+        The full canonical name is hashed to preserve uniqueness.
+        """
+        digest = hashlib.sha256(str(self).encode()).hexdigest()
+        return f"{self.user}-{digest}"
 
     def require_task(self) -> tuple["JobName", int]:
         """Return (parent_job, task_index) for task names.
@@ -149,7 +291,7 @@ class JobName:
         return (self.parent, task_index)
 
     def __str__(self) -> str:
-        """Canonical wire format: '/root/child/grandchild'."""
+        """Canonical wire format: '/user/root/child/grandchild'."""
         return "/" + "/".join(self._parts)
 
     def __repr__(self) -> str:
@@ -159,57 +301,128 @@ class JobName:
         """Serialize to wire format for RPC/env vars."""
         return str(self)
 
+    def dashboard_url(self, base_url: str) -> str:
+        """Public dashboard URL for this job under ``base_url``.
+
+        ``base_url`` is the deployment's dashboard origin (e.g.
+        ``https://iris.oa.dev``). The Vue dashboard routes jobs through a hash
+        fragment whose path is the percent-encoded wire name, so
+        ``/rav/job`` becomes ``…/#/job/%2Frav%2Fjob``. Inverse of
+        ``scripts/job_profile_summary.parse_job_id``.
+        """
+        encoded = urllib.parse.quote(self.to_wire(), safe="")
+        return f"{base_url.rstrip('/')}/#/job/{encoded}"
+
     @classmethod
     def from_wire(cls, s: str) -> "JobName":
         """Parse from wire format. Alias for from_string."""
         return cls.from_string(s)
 
 
-class DeviceType(Enum):
-    """Device type for demand routing."""
+@functools.lru_cache(maxsize=2**18)
+def _parse_job_name(s: str) -> JobName:
+    """Cached parser backing JobName.from_string / from_wire.
 
-    CPU = "cpu"
-    GPU = "gpu"
-    TPU = "tpu"
-
-
-def get_device_type_enum(device: cluster_pb2.DeviceConfig) -> DeviceType:
-    """Extract device type as enum from DeviceConfig."""
-    if device.HasField("gpu"):
-        return DeviceType.GPU
-    if device.HasField("tpu"):
-        return DeviceType.TPU
-    return DeviceType.CPU
-
-
-def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
-    """Extract device type from DeviceConfig."""
-    if device.HasField("cpu"):
-        return "cpu"
-    if device.HasField("gpu"):
-        return "gpu"
-    if device.HasField("tpu"):
-        return "tpu"
-    return "cpu"
+    Hot SA Core read paths decode the same job_id / task_id strings on every
+    row; this collapses repeated decodes to a dict lookup. ``JobName`` is
+    frozen+slots so cached instances can be shared without aliasing risk.
+    """
+    if not s:
+        raise ValueError("Job name must use canonical '/<user>/<job>[...]' format")
+    if not s.startswith("/"):
+        raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
+    parts = tuple(s[1:].split("/"))
+    if len(parts) < 2:
+        raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
+    if any(not part or not part.strip() for part in parts):
+        raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
+    return JobName(parts)
 
 
-def get_device_variant(device: cluster_pb2.DeviceConfig) -> str | None:
-    """Extract device variant (e.g., GPU model) from DeviceConfig."""
-    if device.HasField("gpu"):
-        return device.gpu.variant if device.gpu.variant else None
-    if device.HasField("tpu"):
-        return device.tpu.variant if device.tpu.variant else None
-    return None
+@dataclass(frozen=True, slots=True)
+class TaskAttempt:
+    """A task identity combining a task-level JobName with an optional attempt qualifier.
+
+    Canonical wire format: /user/job/0:attempt_id
+    When attempt_id is None, the wire format omits the suffix: /user/job/0
+
+    The task_id must be a task-level JobName (last component numeric).
+    attempt_id is optional — when absent, semantics are per-operation but
+    typically "use the latest active attempt" is implied.
+
+    Examples:
+        TaskAttempt.from_wire("/alice/job/0")     -> TaskAttempt(task_id=/alice/job/0, attempt_id=None)
+        TaskAttempt.from_wire("/alice/job/0:3")   -> TaskAttempt(task_id=/alice/job/0, attempt_id=3)
+    """
+
+    task_id: JobName
+    attempt_id: int | None = None
+
+    @classmethod
+    def from_wire(cls, s: str) -> "TaskAttempt":
+        """Parse a wire-format string like '/user/job/0' or '/user/job/0:3'."""
+        if not s:
+            raise ValueError("TaskAttempt wire format must not be empty")
+        colon = s.rfind(":")
+        if colon >= 0:
+            task_part = s[:colon]
+            attempt_str = s[colon + 1 :]
+            try:
+                attempt_id = int(attempt_str)
+            except ValueError as exc:
+                raise ValueError(f"Invalid attempt ID in TaskAttempt '{s}': '{attempt_str}' is not an integer") from exc
+            return cls(task_id=JobName.from_wire(task_part), attempt_id=attempt_id)
+        return cls(task_id=JobName.from_wire(s))
+
+    def to_wire(self) -> str:
+        """Serialize to wire format: '/user/job/0' or '/user/job/0:3'."""
+        base = self.task_id.to_wire()
+        if self.attempt_id is not None:
+            return f"{base}:{self.attempt_id}"
+        return base
+
+    def require_attempt(self) -> int:
+        """Return attempt_id or raise if absent."""
+        if self.attempt_id is None:
+            raise ValueError(f"TaskAttempt has no attempt_id: {self}")
+        return self.attempt_id
+
+    @property
+    def job_id(self) -> JobName:
+        """Get the parent job name (task_id without the task index)."""
+        parent = self.task_id.parent
+        if parent is None:
+            raise ValueError(f"TaskAttempt task_id has no parent job: {self.task_id}")
+        return parent
+
+    @property
+    def task_index(self) -> int:
+        """Get the task index from the task_id."""
+        return self.task_id.require_task()[1]
+
+    def with_attempt(self, attempt_id: int) -> "TaskAttempt":
+        """Return a new TaskAttempt with the given attempt_id."""
+        return TaskAttempt(task_id=self.task_id, attempt_id=attempt_id)
+
+    def without_attempt(self) -> "TaskAttempt":
+        """Return a new TaskAttempt with attempt_id=None."""
+        return TaskAttempt(task_id=self.task_id)
+
+    def __str__(self) -> str:
+        return self.to_wire()
+
+    def __repr__(self) -> str:
+        return f"TaskAttempt({self.to_wire()!r})"
 
 
-def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
+def get_gpu_count(device: job_pb2.DeviceConfig) -> int:
     """Extract GPU count from DeviceConfig."""
     if device.HasField("gpu"):
         return device.gpu.count or 1
     return 0
 
 
-def get_tpu_count(device: cluster_pb2.DeviceConfig) -> int:
+def get_tpu_count(device: job_pb2.DeviceConfig) -> int:
     """Extract TPU count from DeviceConfig."""
     if device.HasField("tpu"):
         return device.tpu.count or 0
@@ -218,130 +431,105 @@ def get_tpu_count(device: cluster_pb2.DeviceConfig) -> int:
 
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
+AttemptUid = NewType("AttemptUid", str)
+
+
+@dataclass(frozen=True, slots=True)
+class PendingTask:
+    """Controller-side scheduling input projected from task, job, and config rows."""
+
+    task_id: JobName
+    job_id: JobName
+    submitting_user: str
+    backend_id: str
+    state: int
+    current_attempt_id: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    submitted_at_ms: Timestamp
+    priority_band: int
+    priority_neg_depth: int
+    priority_root_submitted_ms: int
+    priority_insertion: int
+    job_state: int
+    scheduling_deadline_epoch_ms: int | None
+    scheduling_timeout_ms: int | None
+    has_coscheduling: bool
+    coscheduling_group_by: str | None
+    constraints_json: str | None
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
+
+
+DEFAULT_USER_BUDGET_LIMIT = 1000
+DEFAULT_USER_BUDGET_MAX_BAND = job_pb2.PRIORITY_BAND_INTERACTIVE
+
+
+@dataclass
+class UserBudgetDefaults:
+    """Budget settings applied when a user has no override row in ``user_budgets``.
+
+    ``budget_limit=0`` means unlimited; positive values cap spend before
+    ``compute_effective_band`` downgrades INTERACTIVE work to BATCH.
+    """
+
+    budget_limit: int = DEFAULT_USER_BUDGET_LIMIT
+    max_band: int = DEFAULT_USER_BUDGET_MAX_BAND
+
+
+class WorkerUsability(StrEnum):
+    """How the control loop may use a worker, derived from its liveness.
+
+    Consumers project this verdict rather than re-deriving it from the raw
+    ``healthy``/``active``/``consecutive_failures`` fields:
+
+    - scheduling placement targets ``HEALTHY`` only;
+    - the reconcile pass targets ``HEALTHY | DEGRADED`` (it keeps probing a
+      mid-failure worker so it can recover or cross the teardown threshold);
+    - autoscaler idle-spare accounting counts ``HEALTHY`` only, so a ``DEGRADED``
+      idle worker is never reclaimed as free capacity.
+    """
+
+    HEALTHY = "healthy"
+    """Active, healthy, no consecutive failures — a placement target."""
+
+    DEGRADED = "degraded"
+    """Active and healthy but accumulating failures — reconciled, NOT placeable,
+    and NOT counted as idle spare. Torn down by the health threshold path, not
+    by capacity scale-down."""
+
+    DEAD = "dead"
+    """Not active or not healthy — excluded from reconcile, scheduling, and
+    idle tracking."""
 
 
 @dataclass(frozen=True)
-class VmWorkerStatus:
-    """Worker status keyed by VM address for autoscaler.
+class WorkerStatus:
+    """Worker status keyed by worker_id for autoscaler idle tracking."""
 
-    The VM address is the worker's identity. This enables the autoscaler
-    to look up worker status directly by VM address without needing
-    to correlate separate worker_id to VM.
-    """
-
-    vm_address: str
+    worker_id: str
     running_task_ids: frozenset[str]
+    usability: WorkerUsability = WorkerUsability.HEALTHY
 
     @property
     def is_idle(self) -> bool:
         return len(self.running_task_ids) == 0
 
+    @property
+    def is_idle_spare(self) -> bool:
+        """Idle AND schedulable — safe to reclaim via scale-down.
 
-# Map of VM address -> worker status, used by autoscaler for idle tracking
-VmWorkerStatusMap = dict[str, VmWorkerStatus]
-
-
-@dataclass(frozen=True)
-class AttributeValue:
-    """Typed attribute value for worker attributes and constraint matching.
-
-    Used for coscheduling and constraint-based worker filtering.
-    Values can be strings, integers, or floats.
-    """
-
-    value: str | int | float
-
-    def to_proto(self) -> cluster_pb2.AttributeValue:
-        """Convert to protobuf representation."""
-        proto = cluster_pb2.AttributeValue()
-        if isinstance(self.value, str):
-            proto.string_value = self.value
-        elif isinstance(self.value, int):
-            proto.int_value = self.value
-        elif isinstance(self.value, float):
-            proto.float_value = self.value
-        return proto
-
-    @staticmethod
-    def from_proto(proto: cluster_pb2.AttributeValue) -> "AttributeValue":
-        """Convert from protobuf representation."""
-        if proto.HasField("string_value"):
-            return AttributeValue(proto.string_value)
-        elif proto.HasField("int_value"):
-            return AttributeValue(proto.int_value)
-        elif proto.HasField("float_value"):
-            return AttributeValue(proto.float_value)
-        # Default to empty string if no value set
-        return AttributeValue("")
+        A ``DEGRADED`` idle worker is not a spare: counting it as reclaimable
+        headroom is exactly what let the autoscaler call an unschedulable slice
+        "idle — eligible for scale-down" while the scheduler was still waiting
+        for that pool.
+        """
+        return self.is_idle and self.usability is WorkerUsability.HEALTHY
 
 
-class ConstraintOp(IntEnum):
-    """Constraint operators for worker attribute matching.
-
-    Used to define constraints that filter which workers can run a job.
-    Each operator compares a worker attribute against a constraint value.
-
-    Example:
-        >>> # Match workers where region equals "us-central1"
-        >>> Constraint(key="region", op=ConstraintOp.EQ, value="us-central1")
-        >>> # Match workers with memory > 32GB
-        >>> Constraint(key="memory_gb", op=ConstraintOp.GT, value=32)
-        >>> # Match workers that have the "gpu" attribute set
-        >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
-    """
-
-    EQ = 0
-    NE = 1
-    EXISTS = 2
-    NOT_EXISTS = 3
-    GT = 4
-    GE = 5
-    LT = 6
-    LE = 7
-
-    def to_proto(self) -> cluster_pb2.ConstraintOp:
-        """Convert to protobuf ConstraintOp enum value."""
-        mapping = {
-            ConstraintOp.EQ: cluster_pb2.CONSTRAINT_OP_EQ,
-            ConstraintOp.NE: cluster_pb2.CONSTRAINT_OP_NE,
-            ConstraintOp.EXISTS: cluster_pb2.CONSTRAINT_OP_EXISTS,
-            ConstraintOp.NOT_EXISTS: cluster_pb2.CONSTRAINT_OP_NOT_EXISTS,
-            ConstraintOp.GT: cluster_pb2.CONSTRAINT_OP_GT,
-            ConstraintOp.GE: cluster_pb2.CONSTRAINT_OP_GE,
-            ConstraintOp.LT: cluster_pb2.CONSTRAINT_OP_LT,
-            ConstraintOp.LE: cluster_pb2.CONSTRAINT_OP_LE,
-        }
-        return mapping[self]
-
-
-@dataclass(frozen=True)
-class Constraint:
-    """Worker constraint for job scheduling.
-
-    Constraints filter which workers are eligible to run a job based on
-    worker attributes. Workers must satisfy all constraints to be considered.
-
-    Example:
-        >>> # Require a specific TPU pod
-        >>> Constraint(key="tpu-name", op=ConstraintOp.EQ, value="my-tpu-pod")
-        >>> # Require workers in a specific zone
-        >>> Constraint(key="zone", op=ConstraintOp.EQ, value="us-central1-a")
-        >>> # Require workers with at least 64GB memory
-        >>> Constraint(key="memory_gb", op=ConstraintOp.GE, value=64)
-        >>> # Require workers that have a GPU
-        >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
-    """
-
-    key: str
-    op: ConstraintOp
-    value: str | int | float | None = None
-
-    def to_proto(self) -> cluster_pb2.Constraint:
-        """Convert to protobuf representation."""
-        proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto())
-        if self.value is not None:
-            proto.value.CopyFrom(AttributeValue(self.value).to_proto())
-        return proto
+WorkerStatusMap = dict[str, WorkerStatus]
 
 
 @dataclass(frozen=True)
@@ -359,12 +547,12 @@ class CoschedulingConfig:
 
     group_by: str
 
-    def to_proto(self) -> cluster_pb2.CoschedulingConfig:
+    def to_proto(self) -> job_pb2.CoschedulingConfig:
         """Convert to protobuf representation."""
-        return cluster_pb2.CoschedulingConfig(group_by=self.group_by)
+        return job_pb2.CoschedulingConfig(group_by=self.group_by)
 
 
-def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConfig:
+def tpu_device(variant: str, count: int | None = None) -> job_pb2.DeviceConfig:
     """Create a DeviceConfig for a TPU device.
 
     Args:
@@ -388,10 +576,33 @@ def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConf
             chip_count = topo.chips_per_vm
         except ValueError:
             chip_count = 0
-    return cluster_pb2.DeviceConfig(
-        tpu=cluster_pb2.TpuDevice(
+    return job_pb2.DeviceConfig(
+        tpu=job_pb2.TpuDevice(
             variant=variant,
             count=chip_count,
+        )
+    )
+
+
+def gpu_device(variant: str, count: int = 1) -> job_pb2.DeviceConfig:
+    """Create a DeviceConfig for a GPU device.
+
+    Args:
+        variant: GPU variant string (e.g., "H100", "A100").
+        count: Number of GPUs per node.
+
+    Returns:
+        DeviceConfig with the gpu field set.
+
+    Raises:
+        ValueError: if count is not a positive integer.
+    """
+    if count < 1:
+        raise ValueError(f"GPU count must be a positive integer, got {count}")
+    return job_pb2.DeviceConfig(
+        gpu=job_pb2.GpuDevice(
+            variant=variant,
+            count=count,
         )
     )
 
@@ -432,57 +643,82 @@ class ResourceSpec:
     """Resource specification for jobs.
 
     Accepts human-readable memory/disk values (e.g., "8g", "512m").
+    Memory is the container limit for anonymous memory and ``/dev/shm`` combined.
     """
 
-    cpu: int = 0
+    cpu: float = 0.0
     memory: str | int = 0  # "8g" or bytes
     disk: str | int = 0
-    device: cluster_pb2.DeviceConfig | None = None
-    regions: Sequence[str] | None = None
+    device: job_pb2.DeviceConfig | None = None
 
-    def to_proto(self) -> cluster_pb2.ResourceSpecProto:
+    # Accelerator tasks default to enough CPU to avoid bottlenecking on data
+    # loading, but explicit CPU requests are preserved for quota-constrained
+    # queues and diagnostic runs.
+    MIN_ACCELERATOR_CPU_MILLICORES = 4_000
+
+    def to_proto(self) -> job_pb2.ResourceSpecProto:
         """Convert to wire format."""
         memory_bytes = self.memory if isinstance(self.memory, int) else parse_memory_string(self.memory)
         disk_bytes = self.disk if isinstance(self.disk, int) else parse_memory_string(self.disk)
-        spec = cluster_pb2.ResourceSpecProto(
-            cpu=self.cpu,
+        cpu_mc = int(self.cpu * 1000)
+        if self.device is not None and cpu_mc < self.MIN_ACCELERATOR_CPU_MILLICORES:
+            cpu_mc = self.MIN_ACCELERATOR_CPU_MILLICORES
+        spec = job_pb2.ResourceSpecProto(
+            cpu_millicores=cpu_mc,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
-            regions=list(self.regions or []),
         )
         if self.device is not None:
             spec.device.CopyFrom(self.device)
         return spec
 
 
-DEFAULT_BASE_IMAGE = "iris-task:latest"
-
-
 CALLABLE_RUNNER = """\
 import cloudpickle
 import os
 import sys
-import traceback
 import logging
 
+# Reinitialize logging with the unified Iris format.
+# Uses single-letter level prefix: I=INFO, W=WARNING, E=ERROR, D=DEBUG, C=CRITICAL.
+# NOTE: This duplicates LevelPrefixFormatter and _LEVEL_PREFIX from rigging.log_setup
+# because CALLABLE_RUNNER executes inside an isolated task container that may not
+# have the rigging package installed (e.g. user-provided Docker images).
+_LEVEL_PREFIX = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
+
+class _LevelPrefixFormatter(logging.Formatter):
+    def format(self, record):
+        record.levelprefix = _LEVEL_PREFIX.get(record.levelname, "?")
+        return super().format(record)
+
+_root = logging.getLogger()
+_root.handlers.clear()
+_handler = logging.StreamHandler(sys.stderr)
+_handler.setFormatter(_LevelPrefixFormatter(
+    fmt="%(levelprefix)s%(asctime)s %(name)s %(message)s",
+    datefmt="%Y%m%d %H:%M:%S",
+))
+_root.addHandler(_handler)
+_root.setLevel(logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s %(message)s",
-)
+# botocore/aiobotocore log credential discovery + retry chatter at INFO once per
+# fresh S3 session; pure noise on S3-backed tasks (mirror of rigging.log_setup).
+logging.getLogger("botocore").setLevel(logging.WARNING)
+logging.getLogger("aiobotocore").setLevel(logging.WARNING)
 
 workdir = os.environ["IRIS_WORKDIR"]
 
 try:
     with open(os.path.join(workdir, "_callable.pkl"), "rb") as f:
         fn, args, kwargs = cloudpickle.loads(f.read())
-    result = fn(*args, **kwargs)
-    with open(os.path.join(workdir, "_result.pkl"), "wb") as f:
-        f.write(cloudpickle.dumps(result))
-except Exception:
-    traceback.print_exc()
-    sys.exit(1)
+    fn(*args, **kwargs)
+except BaseException as exc:
+    if not isinstance(exc, SystemExit) or exc.code not in (None, 0):
+        # The callable runner is an exception boundary. Retain the failure for
+        # atexit hooks before re-raising it with its original exit semantics.
+        sys.last_exc = exc
+    raise
 """
 
 
@@ -495,6 +731,21 @@ class EnvironmentSpec:
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
     - HF_TOKEN: from os.environ (if set)
     - WANDB_API_KEY: from os.environ (if set)
+    - MARIN_PROVENANCE: the launch's ``rigging.provenance.Provenance`` as JSON, captured
+      at submission (or forwarded from this process's own env when re-submitting inside
+      a task), so tasks stamp artifacts with the submitter's git identity
+
+    Setup:
+    - ``setup_scripts=None`` builds the default uv-sync script. ``sync_packages``
+      scopes that sync to specific workspace members (default: all members).
+    - ``setup_scripts`` set to a list runs those scripts verbatim before the
+      command, with the task's ``IRIS_*`` env available; ``[]`` means no setup (the
+      image is used as-is). Build the default and tweak it via
+      ``iris.cluster.setup_scripts.default_setup_script``.
+
+    Whenever any setup runs (default or custom), iris appends its own
+    ``iris_runtime_setup_script`` so cloudpickle/profiler support is always
+    present; it is skipped only for the no-setup (``[]``) case.
 
     Note: To specify workspace for bundle creation, use IrisClient.remote(workspace=...).
     """
@@ -502,26 +753,57 @@ class EnvironmentSpec:
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
+    setup_scripts: Sequence[str] | None = None
+    sync_packages: Sequence[str] | None = None
 
-    def to_proto(self) -> cluster_pb2.EnvironmentConfig:
-        """Convert to wire format with sensible defaults applied."""
+    def to_proto(self) -> job_pb2.EnvironmentConfig:
+        """Convert to wire format, resolving the user setup scripts.
+
+        ``setup_scripts=None`` builds the default uv-sync script from
+        extras/pip/sync_packages; a list is used verbatim; ``[]`` is no setup. The
+        wire carries only this user list.
+        """
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
             "HF_TOKEN": os.getenv("HF_TOKEN"),
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
+            # Launch provenance: a task running from a git-less bundle inherits the
+            # submitter's identity via Provenance.capture(); transitive, since a task
+            # re-submitting captures this same env value.
+            LAUNCH_PROVENANCE_ENV: launch_provenance().to_json(),
         }
+        if wants_gpu_extra(self.extras or ()):
+            default_env_vars.update(
+                {
+                    NCCL_RAS_ENABLE_ENV: "1",
+                    "NCCL_DEBUG": "INFO",
+                    "NCCL_DEBUG_SUBSYS": "INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS",
+                    "NCCL_DEBUG_TIMESTAMP": "[%F %T.%3f]",
+                }
+            )
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
-        py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        if self.setup_scripts is None:
+            py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            extras = list(self.extras or [])
+            setup_scripts = [
+                default_setup_script(
+                    extras=extras,
+                    pip_packages=list(self.pip_packages or []),
+                    python_version=py_version,
+                    packages=list(self.sync_packages or []) or None,
+                )
+            ]
+            # GPU jobs need the venv's CUDA toolchain (ptxas/nvlink/libdevice)
+            # exposed for JAX/Pallas Mosaic; the script no-ops without it.
+            if wants_gpu_extra(extras):
+                setup_scripts.append(cuda_toolchain_setup_script())
+        else:
+            setup_scripts = [s for s in self.setup_scripts if s.strip()]
 
-        return cluster_pb2.EnvironmentConfig(
-            pip_packages=list(self.pip_packages or []),
-            env_vars=merged_env_vars,
-            extras=list(self.extras or []),
-            python_version=py_version,
-        )
+        return job_pb2.EnvironmentConfig(env_vars=merged_env_vars, setup_scripts=setup_scripts)
 
 
 class Namespace(str):
@@ -530,9 +812,9 @@ class Namespace(str):
     Namespaces provide isolation between different jobs/environments.
     Actors in one namespace cannot discover actors in another namespace.
 
-    The namespace is derived from the root job ID: all jobs in a hierarchy
-    share the same namespace. This ensures automatic isolation without
-    explicit configuration.
+    The namespace is derived from the user/root job pair: all jobs in a hierarchy
+    share the same namespace. This preserves actor isolation between unrelated
+    jobs from the same user.
     """
 
     def __repr__(self) -> str:
@@ -544,7 +826,7 @@ class Namespace(str):
 
         The namespace is the first component of the job ID hierarchy.
         For example:
-            JobName.from_string("/abc123/worker-0") -> Namespace("abc123")
+            JobName.from_string("/alice/abc123/worker-0") -> Namespace("alice/abc123")
 
         Args:
             job_id: Hierarchical job ID
@@ -558,22 +840,17 @@ class Namespace(str):
         return cls(job_id.namespace)
 
 
-PREEMPTIBLE_ATTRIBUTE_KEY = "preemptible"
+TERMINAL_JOB_STATES: frozenset[int] = frozenset(
+    job_pb2.JobState.Value(f"JOB_STATE_{state.name}") for state in NATIVE_TERMINAL_JOB_STATES
+)
 
-
-def preemptible_constraint(preemptible: bool = True) -> Constraint:
-    """Constraint requiring workers to be preemptible (or not)."""
-    return Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=str(preemptible).lower())
+TERMINAL_TASK_STATES: frozenset[int] = frozenset(
+    job_pb2.TaskState.Value(f"TASK_STATE_{state.name}") for state in NATIVE_TERMINAL_TASK_STATES
+)
 
 
 def is_job_finished(state: int) -> bool:
-    return state in (
-        cluster_pb2.JOB_STATE_SUCCEEDED,
-        cluster_pb2.JOB_STATE_FAILED,
-        cluster_pb2.JOB_STATE_KILLED,
-        cluster_pb2.JOB_STATE_WORKER_FAILED,
-        cluster_pb2.JOB_STATE_UNSCHEDULABLE,
-    )
+    return state in TERMINAL_JOB_STATES
 
 
 def is_task_finished(state: int) -> bool:
@@ -582,87 +859,64 @@ def is_task_finished(state: int) -> bool:
     This is a simple check for whether the state is a terminal state.
     For ControllerTask, use task.is_finished() which also considers retry budgets.
     """
-    # Avoid circular import - define inline since this is a stable set
-    terminal_states = frozenset(
-        {
-            cluster_pb2.TASK_STATE_SUCCEEDED,
-            cluster_pb2.TASK_STATE_FAILED,
-            cluster_pb2.TASK_STATE_KILLED,
-            cluster_pb2.TASK_STATE_WORKER_FAILED,
-            cluster_pb2.TASK_STATE_UNSCHEDULABLE,
-        }
-    )
-    return state in terminal_states
+    return state in TERMINAL_TASK_STATES
 
 
-JobState = cluster_pb2.JobState
-TaskState = cluster_pb2.TaskState
+JobState = job_pb2.JobState
+TaskState = job_pb2.TaskState
+EndpointAccess = controller_pb2.Controller.EndpointAccess
+
+# Endpoint-metadata key a registrant sets (as a stringified number of seconds) to
+# override the controller proxy's per-request upstream timeout for that endpoint —
+# e.g. ``marin-serve`` sizing it to long model generations. In the shared types
+# module so registry client and controller proxy agree on the key with no client
+# dependency on controller code.
+PROXY_TIMEOUT_METADATA_KEY = "proxy_timeout_seconds"
 
 
-@dataclass(frozen=True)
-class TpuTopologyInfo:
-    """TPU topology configuration."""
-
-    name: str
-    chip_count: int
-    host_count: int
-    vm_count: int
-    chips_per_vm: int
+# TPU topology table and lookup helpers live in iris.cluster.tpu_topology so
+# both this module and iris.cluster.constraints can reference them without an
+# import cycle. Re-exported via the top-level import above.
 
 
-TPU_TOPOLOGIES: list[TpuTopologyInfo] = [
-    # https://cloud.google.com/tpu/docs/v4
-    TpuTopologyInfo("v4-8", 4, 1, 1, 4),
-    TpuTopologyInfo("v4-16", 8, 2, 2, 4),
-    TpuTopologyInfo("v4-32", 16, 4, 4, 4),
-    TpuTopologyInfo("v4-64", 32, 8, 8, 4),
-    TpuTopologyInfo("v4-128", 64, 16, 16, 4),
-    TpuTopologyInfo("v4-256", 128, 32, 32, 4),
-    TpuTopologyInfo("v4-512", 256, 64, 64, 4),
-    TpuTopologyInfo("v4-1024", 512, 128, 128, 4),
-    TpuTopologyInfo("v4-2048", 1024, 256, 256, 4),
-    TpuTopologyInfo("v4-4096", 2048, 512, 512, 4),
-    # https://cloud.google.com/tpu/docs/v5e
-    TpuTopologyInfo("v5litepod-1", 1, 1, 1, 1),
-    TpuTopologyInfo("v5litepod-2", 2, 1, 1, 2),
-    TpuTopologyInfo("v5litepod-4", 4, 1, 1, 4),
-    TpuTopologyInfo("v5litepod-8", 8, 1, 1, 8),
-    TpuTopologyInfo("v5litepod-16", 16, 2, 4, 4),
-    TpuTopologyInfo("v5litepod-32", 32, 4, 8, 4),
-    TpuTopologyInfo("v5litepod-64", 64, 8, 16, 4),
-    TpuTopologyInfo("v5litepod-128", 128, 16, 32, 4),
-    TpuTopologyInfo("v5litepod-256", 256, 32, 64, 4),
-    # https://cloud.google.com/tpu/docs/v5p
-    TpuTopologyInfo("v5p-8", 4, 1, 1, 4),
-    TpuTopologyInfo("v5p-16", 8, 2, 2, 4),
-    TpuTopologyInfo("v5p-32", 16, 4, 4, 4),
-    TpuTopologyInfo("v5p-64", 32, 8, 8, 4),
-    TpuTopologyInfo("v5p-128", 64, 16, 16, 4),
-    TpuTopologyInfo("v5p-256", 128, 32, 32, 4),
-    TpuTopologyInfo("v5p-512", 256, 64, 64, 4),
-    TpuTopologyInfo("v5p-1024", 512, 128, 128, 4),
-    TpuTopologyInfo("v5p-2048", 1024, 256, 256, 4),
-    TpuTopologyInfo("v5p-4096", 2048, 512, 512, 4),
-    TpuTopologyInfo("v5p-8192", 4096, 1024, 1024, 4),
-    TpuTopologyInfo("v5p-12288", 6144, 1536, 1536, 4),
-    # https://cloud.google.com/tpu/docs/v6e
-    TpuTopologyInfo("v6e-1", 1, 1, 1, 1),
-    TpuTopologyInfo("v6e-4", 4, 1, 1, 4),
-    TpuTopologyInfo("v6e-8", 8, 1, 1, 8),
-    TpuTopologyInfo("v6e-16", 16, 4, 4, 4),
-    TpuTopologyInfo("v6e-32", 32, 8, 8, 4),
-    TpuTopologyInfo("v6e-64", 64, 16, 16, 4),
-    TpuTopologyInfo("v6e-128", 128, 32, 32, 4),
-    TpuTopologyInfo("v6e-256", 256, 64, 64, 4),
-]
+def adjust_tpu_replicas(device: "job_pb2.DeviceConfig | None", replicas: int) -> int:
+    """Adjust replicas for multi-host TPU topologies.
 
+    Multi-host TPU topologies (e.g. v6e-32 with vm_count=8) require one task
+    per VM. When ``replicas`` is 1 (the default), this auto-scales to
+    ``vm_count`` so callers don't need to know the topology. For explicitly
+    set replicas (>1) that don't align, raises ``ValueError``.
 
-def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
-    """Get TPU topology by type name."""
-    for config in TPU_TOPOLOGIES:
-        if config.name == tpu_type:
-            return config
-    raise ValueError(f"Unknown TPU type: {tpu_type}")
+    Returns:
+        The (possibly adjusted) replica count.
+    """
+    if device is None or not device.HasField("tpu"):
+        return replicas
+
+    variant = device.tpu.variant
+    if not variant:
+        return replicas
+
+    try:
+        topo = get_tpu_topology(variant)
+    except ValueError:
+        return replicas
+
+    if topo.vm_count <= 1:
+        return replicas
+
+    if replicas == 1:
+        return topo.vm_count
+
+    if replicas % topo.vm_count != 0:
+        raise ValueError(
+            f"TPU type '{variant}' requires {topo.vm_count} VMs per slice, "
+            f"so replicas must be a multiple of {topo.vm_count} (got replicas={replicas}). "
+            f"For a single slice, use replicas={topo.vm_count}. "
+            f"For N slices, use replicas=N*{topo.vm_count}."
+        )
+
+    return replicas
 
 
 class Entrypoint:
@@ -681,11 +935,13 @@ class Entrypoint:
         *,
         command: list[str],
         workdir_files: dict[str, bytes] | None = None,
+        workdir_file_refs: dict[str, str] | None = None,
     ):
         if not command:
             raise ValueError("Command must have at least one argument")
         self.command = command
         self.workdir_files: dict[str, bytes] = workdir_files or {}
+        self.workdir_file_refs: dict[str, str] = workdir_file_refs or {}
 
     def resolve(self) -> tuple[Callable[..., Any], tuple, dict[str, Any]]:
         """Deserialize the callable, args, kwargs from pickle bytes.
@@ -733,21 +989,24 @@ class Entrypoint:
             raise ValueError("Command must have at least one argument")
         return cls(command=list(argv), workdir_files={})
 
-    def to_proto(self) -> cluster_pb2.RuntimeEntrypoint:
+    def to_proto(self) -> job_pb2.RuntimeEntrypoint:
         """Convert to protobuf representation.
 
         Produces a RuntimeEntrypoint with no setup_commands (those are added
         by build_runtime_entrypoint when submitting to the cluster).
         """
-        proto = cluster_pb2.RuntimeEntrypoint()
+        proto = job_pb2.RuntimeEntrypoint()
         proto.run_command.argv[:] = self.command
         for name, data in self.workdir_files.items():
             proto.workdir_files[name] = data
+        for name, blob_id in self.workdir_file_refs.items():
+            proto.workdir_file_refs[name] = blob_id
         return proto
 
     @classmethod
-    def from_proto(cls, proto: cluster_pb2.RuntimeEntrypoint) -> "Entrypoint":
+    def from_proto(cls, proto: job_pb2.RuntimeEntrypoint) -> "Entrypoint":
         """Create from protobuf representation."""
         command = list(proto.run_command.argv)
         workdir_files = dict(proto.workdir_files) if proto.workdir_files else None
-        return cls(command=command, workdir_files=workdir_files)
+        workdir_file_refs = dict(proto.workdir_file_refs) if proto.workdir_file_refs else None
+        return cls(command=command, workdir_files=workdir_files, workdir_file_refs=workdir_file_refs)

@@ -1,11 +1,12 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """ManagedThread and ThreadContainer for structured thread lifecycle management.
 
-ManagedThread wraps threading.Thread with an integrated stop event, ensuring
-threads are non-daemon and can be cleanly shut down. ThreadContainer provides
-component-scoped thread groups with hierarchical composition.
+ManagedThread wraps threading.Thread with an integrated stop event so threads
+can be cleanly shut down. Threads are non-daemon by default; pass daemon=True for
+a fire-and-forget helper that must never block process exit. ThreadContainer
+provides component-scoped thread groups with hierarchical composition.
 
 A contextvar-based default container is available via get_thread_container()
 for components that don't want to pass containers explicitly. Use
@@ -44,19 +45,20 @@ NEVER write loops that ignore stop_event:
 
 import contextlib
 import logging
+import socket
 import threading
 from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from typing import Any
 
-from iris.time_utils import Deadline, Duration
+from rigging.timing import Deadline, Duration
 
 logger = logging.getLogger(__name__)
 
 
 class ManagedThread:
-    """Non-daemon thread with integrated shutdown event.
+    """Thread with an integrated shutdown event; non-daemon by default.
 
     Target callable must accept threading.Event as its first argument.
     The event is set when stop() is called, signaling the thread to exit.
@@ -67,6 +69,9 @@ class ManagedThread:
 
     Threads automatically remove themselves from their owning container on
     completion to prevent accumulation of completed threads.
+
+    Pass ``daemon=True`` for a fire-and-forget helper whose container may never
+    be stop()ed, so it does not block process exit via ``threading._shutdown()``.
     """
 
     def __init__(
@@ -76,6 +81,7 @@ class ManagedThread:
         name: str | None = None,
         args: tuple = (),
         on_stop: Callable[[], None] | None = None,
+        daemon: bool = False,
         _container: "ThreadContainer | None" = None,
     ):
         self._stop_event = threading.Event()
@@ -110,7 +116,14 @@ class ManagedThread:
                 raise
             finally:
                 if watcher:
-                    watcher.join(timeout=1.0)
+                    # Wake the watcher regardless of how the target exited so
+                    # on_stop runs on the natural-completion path too. Otherwise
+                    # cleanup (e.g. docker kill+rm for task containers) is
+                    # silently skipped whenever the target returns without an
+                    # explicit stop() — leaving wedged containers that keep
+                    # holding TPU vfio/iommu groups and break subsequent tasks.
+                    self._stop_event.set()
+                    watcher.join(timeout=5.0)
                     if watcher.is_alive():
                         logger.warning("on_stop callback for %s did not complete", name)
 
@@ -121,7 +134,7 @@ class ManagedThread:
         self._thread = threading.Thread(
             target=_safe_target,
             args=(self._stop_event, *args),
-            daemon=False,
+            daemon=daemon,
             name=name,
         )
 
@@ -139,10 +152,6 @@ class ManagedThread:
 
     def join(self, timeout: Duration | None = None) -> None:
         self._thread.join(timeout=timeout.to_seconds() if timeout is not None else None)
-
-    @property
-    def stop_event(self) -> threading.Event:
-        return self._stop_event
 
     @property
     def is_alive(self) -> bool:
@@ -175,14 +184,22 @@ class ThreadContainer:
         name: str | None = None,
         args: tuple = (),
         on_stop: Callable[[], None] | None = None,
+        daemon: bool = False,
     ) -> ManagedThread:
-        thread = ManagedThread(target=target, name=name, args=args, on_stop=on_stop, _container=self)
+        thread = ManagedThread(target=target, name=name, args=args, on_stop=on_stop, daemon=daemon, _container=self)
         with self._lock:
             self._threads.append(thread)
         thread.start()
         return thread
 
-    def spawn_server(self, server: Any, *, name: str) -> ManagedThread:
+    def spawn_server(
+        self,
+        server: Any,
+        *,
+        name: str,
+        daemon: bool = False,
+        sockets: list[socket.socket] | None = None,
+    ) -> ManagedThread:
         """Spawn a server (like uvicorn.Server) with automatic stop_event bridging.
 
         When stop() is called, server.should_exit is set to True, causing server.run()
@@ -191,18 +208,25 @@ class ThreadContainer:
         Args:
             server: Server instance with should_exit attribute and run() method
             name: Name for the managed thread
+            daemon: Run on a daemon thread so it never blocks process exit. Use for a
+                fire-and-forget server whose container may never be stop()ed.
+            sockets: Bound sockets to transfer to the server. When omitted, the
+                server binds from its own configuration.
         """
 
         def _run(stop_event: threading.Event) -> None:
             logger.debug("Running server %s (%s)", name, server)
-            server.run()
+            if sockets is None:
+                server.run()
+            else:
+                server.run(sockets=sockets)
             logger.debug("Server %s exited", name)
 
         def _stop_server() -> None:
             logger.debug("Signaling server %s to exit", name)
             server.should_exit = True
 
-        return self.spawn(target=_run, name=name, on_stop=_stop_server)
+        return self.spawn(target=_run, name=name, on_stop=_stop_server, daemon=daemon)
 
     def spawn_executor(self, max_workers: int, prefix: str) -> ThreadPoolExecutor:
         """Create a ThreadPoolExecutor that will be shut down when this container stops."""
@@ -218,6 +242,21 @@ class ThreadContainer:
             self._children.append(child)
         return child
 
+    def detach_child(self, child: "ThreadContainer") -> bool:
+        """Remove a child container from this parent's hierarchy.
+
+        After detaching, the child's threads will NOT be stopped when this
+        parent is stopped. The caller takes ownership of the child's lifecycle.
+
+        Returns True if the child was found and removed.
+        """
+        with self._lock:
+            try:
+                self._children.remove(child)
+                return True
+            except ValueError:
+                return False
+
     def remove(self, thread: ManagedThread) -> None:
         """Remove a thread from this container.
 
@@ -230,35 +269,25 @@ class ThreadContainer:
                 # Already removed, that's fine
                 pass
 
-    @property
-    def is_alive(self) -> bool:
-        """True if any thread in this container or its children is still running."""
-        with self._lock:
-            threads = list(self._threads)
-            children = list(self._children)
-        return any(t.is_alive for t in threads) or any(c.is_alive for c in children)
-
-    def alive_threads(self) -> list[ManagedThread]:
-        """Return threads that are still alive, including those in child containers."""
-        with self._lock:
-            threads = list(self._threads)
-            children = list(self._children)
-
-        alive = [t for t in threads if t.is_alive]
-        for child in children:
-            alive.extend(child.alive_threads())
-        return alive
-
     def wait(self) -> None:
-        """Block until all threads have exited."""
-        with self._lock:
-            children = list(self._children)
-            threads = list(self._threads)
+        """Block until all threads have exited.
 
-        for child in children:
-            child.wait()
-        for thread in threads:
-            thread.join()
+        Re-snapshots after each join round to catch threads spawned by
+        threads that were already running (e.g. a scale-up thread that
+        spawns a bootstrap thread).
+        """
+        while True:
+            with self._lock:
+                children = list(self._children)
+                threads = list(self._threads)
+
+            if not children and not threads:
+                break
+
+            for child in children:
+                child.wait()
+            for thread in threads:
+                thread.join()
 
     def stop(self, timeout: Duration = Duration.from_seconds(5.0)) -> None:
         """Stop children first, then own threads, then executors.

@@ -1,10 +1,10 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for ActorPool round-robin and broadcast functionality."""
 
-from iris.actor.resolver import FixedResolver
 from iris.actor.pool import ActorPool
+from iris.actor.resolver import FixedResolver
 from iris.actor.server import ActorServer
 
 
@@ -43,8 +43,7 @@ def test_pool_round_robin():
 
         # Round-robin should cycle through servers
         results = [pool.call().get() for _ in range(6)]
-        # Should see values from all three servers (0, 100, 200, 0, 100, 200)
-        assert set(results) == {0, 100, 200}
+        assert results == [0, 100, 200, 0, 100, 200]
     finally:
         for server in servers:
             server.stop()

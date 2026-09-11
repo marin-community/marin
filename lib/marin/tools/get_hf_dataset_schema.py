@@ -1,11 +1,11 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
 Hugging Face Dataset Schema Inspection Tool
 
 For usage instructions and examples, see:
-https://github.com/marin-community/marin/blob/main/docs/recipes/add_dataset.md
+https://github.com/marin-community/marin/blob/main/.agents/skills/add-dataset/SKILL.md
 """
 
 import argparse
@@ -14,7 +14,7 @@ import os
 import warnings
 
 import requests
-from datasets import load_dataset, get_dataset_split_names, get_dataset_config_names
+from datasets import get_dataset_config_names, get_dataset_split_names, load_dataset
 from datasets.utils.info_utils import VerificationMode
 
 HF_DATASET_SIZE_URL = "https://datasets-server.huggingface.co/size"

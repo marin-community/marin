@@ -1,8 +1,8 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-from typing import Callable, Literal, TypeVar
+from typing import Any, Callable, Literal, TypeVar
 
 import chex
 import equinox as eqx
@@ -15,35 +15,32 @@ from optax import GradientTransformation, GradientTransformationExtraArgs
 from optax._src.base import init_empty_state
 
 import haliax as hax
+from haliax.nn import Linear
 from haliax.tree_util import scan_aware_tree_map
 
+from levanter.models.linear import has_linear_like_marker
 import levanter.tracker
-from levanter.utils.jax_utils import is_inexact_arrayish
 
 
 T = TypeVar("T")
 
 
-def hvp(f, x, v):
-    """Compute the Hessian-vector product of a function."""
-    return eqx.filter_jvp(eqx.filter_grad(f), (x,), (v,))[1]
-    # grad_f = eqx.filter_grad(f)
-    # _, vjp_fn = eqx.filter_vjp(grad_f, x)
-    # return vjp_fn(v)[0]
+def is_linear_like_module(node: Any) -> bool:
+    """Return True for linear-like modules used by optimizer mask routing."""
+    return isinstance(node, (hax.nn.Linear, eqx.nn.Linear)) or has_linear_like_marker(node)
 
 
-def tree_gaussian_like(key, tree):
-    """
-    Samples a tree of gaussian noise with the same structure as `tree`, except for leaves which are not inexact arrays,
-    for which it returns None
-    """
-    leaves, structure = jax.tree_util.tree_flatten(tree)
-    keys = jax.random.split(key, len(leaves))
-    rand_n = lambda x, key: jax.random.normal(key, x.shape) if is_inexact_arrayish(x) else None
-    g = jax.tree_util.tree_map(rand_n, leaves, list(keys))
-    g = jax.tree_util.tree_unflatten(structure, g)
-
-    return g
+def label_linear_like_module(module: Any, *, weight_label: str, bias_label: str) -> Any:
+    """Label a linear-like module leaf for optax multi_transform masks."""
+    if not hasattr(module, "weight"):
+        raise TypeError(f"Expected a linear-like module with a weight field, got {type(module)}")
+    bias = getattr(module, "bias", None)
+    masked_bias = bias_label if bias is not None else None
+    if isinstance(module, eqx.nn.Linear):
+        return eqx.tree_at(lambda m: (m.weight, m.bias), module, (weight_label, masked_bias))
+    if not dataclasses.is_dataclass(module):
+        raise TypeError(f"Expected a dataclass module for mask labeling, got {type(module)}")
+    return dataclasses.replace(module, weight=weight_label, bias=masked_bias)
 
 
 def log_norm_passthrough(desc: str) -> GradientTransformation:
@@ -91,7 +88,6 @@ def flatten_linear_layers(tree: T) -> T:
 
     :param tree:
     """
-    from haliax.nn import Linear
 
     def _flatten_linear(layer):
         if not isinstance(layer, Linear):
@@ -133,8 +129,6 @@ def unflatten_linear_layers(template: T, tree_with_flattened_linears: T) -> T:
         The same tree as `tree_with_flattened_linears`, but with the linear layers unflattened to match
         the structure of `template`.
     """
-
-    from haliax.nn import Linear
 
     def _unflatten_linear(template, flattened):
         assert isinstance(template, Linear) == isinstance(flattened, Linear)
@@ -302,3 +296,27 @@ def zeropower_via_newtonschulz5(X, steps: int = 5, eps: float = 1e-7, coefficien
         X = X.T
 
     return X
+
+
+_NORM_FLOOR = 1e-10
+
+
+def norm_preserving_update(param, update, learning_rate: jax.Array | float):
+    """Return an Optax update that preserves matrix parameter norms.
+
+    Rank-2 parameters use one Frobenius norm. Higher-rank parameters are treated
+    as a stack along axis 0, preserving each stacked matrix's norm independently.
+    """
+    if param is None:
+        return None
+    if param.ndim == 2:
+        param_norm = jnp.linalg.norm(param)
+        new_param = param - learning_rate * update * param_norm / jnp.maximum(jnp.linalg.norm(update), _NORM_FLOOR)
+        return new_param / jnp.linalg.norm(new_param) * param_norm - param
+
+    axes = tuple(range(1, param.ndim))
+    param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
+    update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
+    new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, _NORM_FLOOR)
+    new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
+    return new_param / jnp.maximum(new_param_norm, _NORM_FLOOR) * param_norm - param

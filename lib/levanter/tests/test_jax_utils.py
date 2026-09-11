@@ -1,14 +1,23 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import jax
+import equinox as eqx
 import haliax as hax
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-
 from haliax.partitioning import ResourceAxis
-from levanter.utils.jax_utils import best_effort_sharding, sharded_tree_size
+
+import levanter.utils.jax_utils as jax_utils
+from levanter.utils.jax_utils import (
+    axis_resource_is_explicit,
+    barrier_sync,
+    best_effort_sharding,
+    move_tree_to_memory_kind,
+    sharded_tree_size,
+    tree_broadcast_to,
+)
 from levanter.utils.mesh import create_mesh_from_axis_specs
 
 
@@ -140,7 +149,6 @@ def test_best_effort_sharding_with_mesh(fsdp_size):
 
 
 def test_tree_broadcast_to_simple():
-    from levanter.utils.jax_utils import tree_broadcast_to
 
     # Test with simple nested dicts
     prefix = {"a": 1, "b": 2}
@@ -165,7 +173,6 @@ def test_tree_broadcast_to_simple():
 
 
 def test_tree_broadcast_to_mixed_types():
-    from levanter.utils.jax_utils import tree_broadcast_to
 
     # Test with mixed types
     prefix = {"a": 1, "b": 2}
@@ -176,11 +183,6 @@ def test_tree_broadcast_to_mixed_types():
 
 
 def test_tree_broadcast_to_with_equinox():
-    import equinox as eqx
-    import jax.numpy as jnp
-
-    from levanter.utils.jax_utils import tree_broadcast_to
-
     class SimpleModule(eqx.Module):
         weight: jnp.ndarray
         bias: jnp.ndarray
@@ -214,7 +216,6 @@ def test_tree_broadcast_to_with_equinox():
 
 
 def test_tree_broadcast_to_edge_cases():
-    from levanter.utils.jax_utils import tree_broadcast_to
 
     # Test with empty trees
     prefix = None
@@ -236,3 +237,65 @@ def test_tree_broadcast_to_edge_cases():
     target = {"a": [10, 20], "b": [30, 40]}
     result = tree_broadcast_to(prefix, target, is_leaf=is_leaf)
     assert result == {"a": [1, 2], "b": [1, 2]}
+
+
+def test_axis_resource_is_explicit():
+    mesh = jax.sharding.AbstractMesh(
+        (2, 2),
+        ("data", "model"),
+        axis_types=(jax.sharding.AxisType.Explicit, jax.sharding.AxisType.Auto),
+    )
+
+    assert axis_resource_is_explicit(mesh, "data")
+    assert not axis_resource_is_explicit(mesh, "model")
+    assert not axis_resource_is_explicit(mesh, ("data", "model"))
+    assert not axis_resource_is_explicit(mesh, None)
+    assert not axis_resource_is_explicit(mesh, "unknown")
+
+
+def test_move_tree_to_memory_kind():
+    x = jnp.arange(4)
+    tree = {"a": x, "b": 3}
+
+    moved = move_tree_to_memory_kind(tree, memory_kind="pinned_host")
+    assert moved["a"].sharding.memory_kind == "pinned_host"
+    assert moved["b"] == 3
+
+    moved_again = move_tree_to_memory_kind(moved, memory_kind="pinned_host")
+    assert moved_again["a"] is moved["a"]
+
+
+def test_move_tree_to_memory_kind_is_noop_inside_jit():
+    @jax.jit
+    def move_inside_jit(x):
+        return move_tree_to_memory_kind(x, memory_kind="pinned_host")
+
+    x = jnp.arange(4)
+    y = move_inside_jit(x)
+    np.testing.assert_array_equal(np.asarray(y), np.asarray(x))
+    assert y.sharding.memory_kind == x.sharding.memory_kind
+
+
+class _RecordingClient:
+    def __init__(self):
+        self.calls = []
+
+    def wait_at_barrier(self, barrier_id, timeout_in_ms):
+        self.calls.append((barrier_id, timeout_in_ms))
+
+
+@pytest.fixture
+def multiprocess_client(monkeypatch):
+    client = _RecordingClient()
+    monkeypatch.setattr(jax, "process_count", lambda: 2)
+    monkeypatch.setattr(jax_utils.jax_distributed.global_state, "client", client, raising=False)
+    return client
+
+
+def test_barrier_sync_does_not_reuse_a_barrier_id(multiprocess_client):
+    """Barriers are one-shot, so repeated calls must not collide on an id."""
+    barrier_sync(timeout=1.0)
+    barrier_sync(timeout=1.0)
+
+    first, second = (barrier_id for barrier_id, _ in multiprocess_client.calls)
+    assert first != second

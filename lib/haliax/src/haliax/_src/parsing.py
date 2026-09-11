@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -315,11 +315,6 @@ def parse_einsum(expression: str) -> tuple[Sequence[Expression], Expression]:
             raise_parse_error("Expected , or ->", expression, pos)
 
     rhs, pos = _parse_expression(expression, pos)
-
-    if any(x is None for x in lhses):
-        if len(lhses) > 1:
-            raise_parse_error("If there are multiple lhs expressions, they must all be ordered", expression, pos)
-        lhses = None  # type: ignore
 
     if pos != len(expression):
         raise_parse_error("Unexpected character", expression, pos)

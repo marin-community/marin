@@ -1,0 +1,658 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Finelog deployment and operational commands."""
+
+import csv
+import json
+import logging
+import re
+import sys
+from collections.abc import Generator
+from contextlib import contextmanager
+from datetime import datetime
+from enum import StrEnum
+
+import click
+import duckdb
+import fsspec
+import pyarrow as pa
+from rigging.auth import IapLoginRequired
+from rigging.log_setup import configure_logging
+
+from finelog.client.log_client import LogClient, NamespaceInfo
+from finelog.deploy import _gcp, _k8s
+from finelog.deploy.build import DEFAULT_PLATFORM
+from finelog.deploy.build import build_image as build_finelog_image
+from finelog.deploy.config import FinelogConfig, load_finelog_config
+from finelog.deploy.connect import DEFAULT_REQUEST_TIMEOUT, DEFAULT_TUNNEL_TIMEOUT, open_client
+from finelog.errors import StatsError
+from finelog.policy import StoragePolicy
+from finelog.rpc import finelog_stats_pb2 as stats_pb2
+from finelog.schema import IMPLICIT_SEQ_COLUMN, Column, GroupedExtrema, Schema
+
+_SEGMENT_FILENAME_RE = re.compile(r"seg_L\d+_\d+\.parquet$")
+
+
+@contextmanager
+def _open_cli_client(name: str, tunnel_timeout: float, request_timeout: float) -> Generator[LogClient, None, None]:
+    """Open a configured client and present expected connection/query failures as CLI errors."""
+    configure_logging(level=logging.INFO)
+    cfg = load_finelog_config(name)
+    try:
+        with open_client(cfg, name, tunnel_timeout=tunnel_timeout, request_timeout=request_timeout) as client:
+            yield client
+    except (IapLoginRequired, StatsError, ConnectionError, OSError, TimeoutError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _require_gcp_mutation(cfg: FinelogConfig) -> None:
+    if cfg.deployment.gcp is None:
+        raise click.ClickException(
+            "Kubernetes workload resources are managed by the infra/finelog Pulumi project; "
+            "use `pulumi preview` and `pulumi up` from that directory"
+        )
+
+
+def _dispatch_status(cfg: FinelogConfig) -> None:
+    if cfg.deployment.gcp is not None:
+        _gcp.gcp_status(cfg)
+    else:
+        _k8s.k8s_status(cfg)
+
+
+def _dispatch_logs(cfg: FinelogConfig, *, tail: int, follow: bool) -> None:
+    if cfg.deployment.gcp is not None:
+        _gcp.gcp_logs(cfg, tail=tail, follow=follow)
+    else:
+        _k8s.k8s_logs(cfg, tail=tail, follow=follow)
+
+
+@click.group()
+def cli() -> None:
+    """Manage finelog deployments."""
+
+
+@cli.command("build-image")
+@click.option("--image", "images", multiple=True, required=True, help="Image tag to publish. Repeat for aliases.")
+@click.option("--platform", default=DEFAULT_PLATFORM, show_default=True)
+@click.option("--cargo-profile", type=click.Choice(["release", "fast"]), default="release", show_default=True)
+@click.option("--cache-image", help="Registry image used for BuildKit cache import and export.")
+def build_image_cmd(
+    images: tuple[str, ...],
+    platform: str,
+    cargo_profile: str,
+    cache_image: str | None,
+) -> None:
+    """Build and publish a finelog image."""
+    build_finelog_image(
+        image=images[0],
+        additional_tags=images[1:],
+        platform=platform,
+        cargo_profile=cargo_profile,
+        cache_image=cache_image,
+    )
+
+
+@cli.group("deploy")
+def deploy() -> None:
+    """Provision and manage a finelog deployment from a config file."""
+
+
+@deploy.command("up")
+@click.argument("name")
+@click.option(
+    "--build/--no-build",
+    "build",
+    default=True,
+    show_default=True,
+    help="Build and push the finelog image (using cfg.image as the tag) before provisioning.",
+)
+@click.option(
+    "--fast",
+    is_flag=True,
+    default=False,
+    help="Build with the Rust `fast` profile (no LTO, parallel codegen) for a quicker build.",
+)
+def up_cmd(name: str, build: bool, fast: bool) -> None:
+    """Provision the GCE deployment described by `<name>` (idempotent)."""
+    cfg = load_finelog_config(name)
+    _require_gcp_mutation(cfg)
+    if build:
+        build_finelog_image(image=cfg.image, cargo_profile="fast" if fast else "release")
+    _gcp.gcp_up(cfg)
+
+
+@deploy.command("down")
+@click.argument("name")
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation.")
+def down_cmd(name: str, yes: bool) -> None:
+    """Tear down the GCE deployment described by `<name>`."""
+    cfg = load_finelog_config(name)
+    _require_gcp_mutation(cfg)
+    _gcp.gcp_down(cfg, yes=yes)
+
+
+@deploy.command("restart")
+@click.argument("name")
+@click.option(
+    "--build/--no-build",
+    "build",
+    default=True,
+    show_default=True,
+    help="Build and push the finelog image (using cfg.image as the tag) before restarting.",
+)
+@click.option(
+    "--fast",
+    is_flag=True,
+    default=False,
+    help="Build with the Rust `fast` profile (no LTO, parallel codegen) for a quicker build.",
+)
+def restart_cmd(name: str, build: bool, fast: bool) -> None:
+    """Restart a GCE deployment in place (refresh the container/image)."""
+    cfg = load_finelog_config(name)
+    _require_gcp_mutation(cfg)
+    if build:
+        build_finelog_image(image=cfg.image, cargo_profile="fast" if fast else "release")
+    _gcp.gcp_restart(cfg)
+
+
+@deploy.command("sync-secret")
+@click.argument("name")
+def sync_secret_cmd(name: str) -> None:
+    """Create or rotate a Kubernetes deployment's environment Secret."""
+    cfg = load_finelog_config(name)
+    if cfg.deployment.k8s is None:
+        raise click.ClickException("sync-secret requires a Kubernetes deployment config")
+    _k8s.k8s_sync_secret(cfg)
+
+
+@deploy.command("verify")
+@click.argument("name")
+def verify_cmd(name: str) -> None:
+    """Verify that a Kubernetes deployment is accepting writes."""
+    cfg = load_finelog_config(name)
+    if cfg.deployment.k8s is None:
+        raise click.ClickException("verify requires a Kubernetes deployment config")
+    _k8s.k8s_verify_ingest_ready(cfg)
+
+
+@deploy.command("status")
+@click.argument("name")
+def status_cmd(name: str) -> None:
+    """Show status of the finelog deployment."""
+    cfg = load_finelog_config(name)
+    _dispatch_status(cfg)
+
+
+class OutputFormat(StrEnum):
+    TABLE = "table"
+    JSON = "json"
+    JSONL = "jsonl"
+    CSV = "csv"
+
+
+def _print_table(table: pa.Table) -> None:
+    """Render an Arrow table as fixed-width columns to stdout."""
+    if table.num_rows == 0:
+        click.echo(f"(0 rows; columns: {', '.join(table.schema.names)})")
+        return
+    rows = [[_format_cell(v) for v in row.values()] for row in table.to_pylist()]
+    headers = list(table.schema.names)
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+    sep = " | "
+    click.echo(sep.join(h.ljust(widths[i]) for i, h in enumerate(headers)))
+    click.echo("-+-".join("-" * w for w in widths))
+    for row in rows:
+        click.echo(sep.join(row[i].ljust(widths[i]) for i in range(len(headers))))
+    click.echo(f"({table.num_rows} rows)")
+
+
+def _format_cell(v: object) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, bytes):
+        return v.hex()
+    return str(v)
+
+
+def _print_json(table: pa.Table) -> None:
+    json.dump(table.to_pylist(), sys.stdout, default=str, indent=2)
+    sys.stdout.write("\n")
+
+
+def _print_jsonl(table: pa.Table) -> None:
+    for row in table.to_pylist():
+        json.dump(row, sys.stdout, default=str)
+        sys.stdout.write("\n")
+
+
+def _print_csv(table: pa.Table) -> None:
+    writer = csv.writer(sys.stdout)
+    writer.writerow(table.schema.names)
+    for row in table.to_pylist():
+        writer.writerow([_format_cell(v) for v in row.values()])
+
+
+_PRINTERS = {
+    OutputFormat.TABLE: _print_table,
+    OutputFormat.JSON: _print_json,
+    OutputFormat.JSONL: _print_jsonl,
+    OutputFormat.CSV: _print_csv,
+}
+
+
+def _read_sql_argument(sql: str | None) -> str:
+    if sql not in (None, "-"):
+        return sql
+    if sys.stdin.isatty():
+        raise click.UsageError("pass SQL as an argument, pipe it on stdin, or use '-' to read stdin")
+    value = sys.stdin.read()
+    if not value.strip():
+        raise click.UsageError("SQL input is empty")
+    return value
+
+
+def _column_record(column: Column) -> dict[str, object]:
+    column_type = stats_pb2.ColumnType.Name(column.type).removeprefix("COLUMN_TYPE_").lower()
+    return {
+        "name": column.name,
+        "type": column_type,
+        "nullable": column.nullable,
+        "trigram_index": column.trigram_index,
+        "exact_values": list(column.exact_values),
+        "value_counts": column.value_counts,
+    }
+
+
+def _grouped_extrema_record(config: GroupedExtrema) -> dict[str, str]:
+    return {
+        "filter_column": config.filter_column,
+        "group_json_column": config.group_json_column,
+        "group_json_key": config.group_json_key,
+        "extrema_column": config.extrema_column,
+    }
+
+
+def _schema_record(schema: Schema) -> dict[str, object]:
+    return {
+        "columns": [_column_record(column) for column in schema.columns],
+        "implicit_columns": [
+            {
+                "name": IMPLICIT_SEQ_COLUMN,
+                "type": "int64",
+                "nullable": False,
+                "server_assigned": True,
+            }
+        ],
+        "key_column": schema.key_column,
+        "sort_columns": list(schema.sort_columns),
+        "max_row_group_rows": schema.max_row_group_rows,
+        "projections": [
+            {
+                "name": projection.name,
+                "predicate_column": projection.predicate_column,
+                "predicate_values": list(projection.predicate_values),
+                "columns": list(projection.columns),
+            }
+            for projection in schema.projections
+        ],
+        "grouped_extrema": [_grouped_extrema_record(config) for config in schema.grouped_extrema],
+    }
+
+
+def _storage_policy_record(policy: StoragePolicy) -> dict[str, int | None]:
+    return {
+        "max_segments": policy.max_segments,
+        "max_bytes": policy.max_bytes,
+        "max_age_seconds": policy.max_age_seconds,
+    }
+
+
+def _namespace_record(info: NamespaceInfo) -> dict[str, object]:
+    return {
+        "namespace": info.namespace,
+        "row_count": info.row_count,
+        "byte_size": info.byte_size,
+        "min_seq": info.min_seq,
+        "max_seq": info.max_seq,
+        "segment_count": info.segment_count,
+        "storage_policy": _storage_policy_record(info.storage_policy),
+        "schema": _schema_record(info.schema),
+    }
+
+
+def _print_record(record: dict[str, object], *, indent: int | None = None) -> None:
+    json.dump(record, sys.stdout, indent=indent)
+    sys.stdout.write("\n")
+
+
+@cli.command("query")
+@click.argument("name")
+@click.argument("sql", required=False)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice([f.value for f in OutputFormat]),
+    default=OutputFormat.JSONL.value,
+    show_default=True,
+    help="Output format for the result.",
+)
+@click.option(
+    "--max-rows",
+    type=int,
+    default=100_000,
+    show_default=True,
+    help="Reject results larger than this (use LIMIT or raise this cap).",
+)
+@click.option(
+    "--tunnel-timeout",
+    type=float,
+    default=DEFAULT_TUNNEL_TIMEOUT,
+    show_default=True,
+    help="Seconds to wait for the local tunnel to become reachable.",
+)
+@click.option(
+    "--timeout",
+    "request_timeout",
+    type=float,
+    default=DEFAULT_REQUEST_TIMEOUT,
+    show_default=True,
+    help="Seconds to wait for the query result. The server applies its own 10s deadline.",
+)
+def query_cmd(
+    name: str,
+    sql: str | None,
+    output_format: str,
+    max_rows: int,
+    tunnel_timeout: float,
+    request_timeout: float,
+) -> None:
+    """Run SQL against the deployed finelog `<name>`.
+
+    Connects via the controller IAP proxy when ``client_url`` is configured in
+    the finelog config, otherwise opens an SSH (GCP) or ``kubectl port-forward``
+    (k8s) tunnel to the configured finelog server. Runs ``<sql>`` through
+    ``StatsService.Query`` and prints results in ``--format``. Omit ``<sql>``
+    or pass ``-`` to read SQL from stdin, which is safest for multiline queries
+    and quoted namespace names.
+    """
+    query = _read_sql_argument(sql)
+    with _open_cli_client(name, tunnel_timeout, request_timeout) as client:
+        table = client.query(query, max_rows=max_rows)
+    _PRINTERS[OutputFormat(output_format)](table)
+
+
+@cli.command("namespaces")
+@click.argument("name")
+@click.option("--tunnel-timeout", type=float, default=DEFAULT_TUNNEL_TIMEOUT, show_default=True)
+@click.option("--timeout", "request_timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT, show_default=True)
+def namespaces_cmd(name: str, tunnel_timeout: float, request_timeout: float) -> None:
+    """List queryable namespaces, schemas, indexes, and storage statistics as JSONL."""
+    with _open_cli_client(name, tunnel_timeout, request_timeout) as client:
+        namespaces = client.list_namespaces()
+    for namespace in namespaces:
+        _print_record(_namespace_record(namespace))
+
+
+@cli.command("schema")
+@click.argument("name")
+@click.argument("namespace")
+@click.option("--tunnel-timeout", type=float, default=DEFAULT_TUNNEL_TIMEOUT, show_default=True)
+@click.option("--timeout", "request_timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT, show_default=True)
+def schema_cmd(name: str, namespace: str, tunnel_timeout: float, request_timeout: float) -> None:
+    """Print one registered namespace schema as JSON."""
+    with _open_cli_client(name, tunnel_timeout, request_timeout) as client:
+        schema = client.get_table_schema(namespace)
+    _print_record({"namespace": namespace, "schema": _schema_record(schema)}, indent=2)
+
+
+def _list_namespace_dirs(remote_log_dir: str, fs: fsspec.AbstractFileSystem) -> list[str]:
+    """Return namespace names under ``remote_log_dir`` that hold parquet segments.
+
+    A namespace directory is "real" if at least one ``seg_L*.parquet`` lives
+    under it — finelog never writes other parquet shapes into a namespace dir,
+    so this check filters out stray top-level files without descending deeper.
+    """
+    base = remote_log_dir.rstrip("/")
+    listing = fs.ls(base, detail=True)
+    found: list[str] = []
+    for entry in listing:
+        if entry.get("type") != "directory":
+            continue
+        ns = entry["name"].rstrip("/").rsplit("/", 1)[-1]
+        if fs.glob(f"{base}/{ns}/seg_L*.parquet"):
+            found.append(ns)
+    return sorted(found)
+
+
+def _info_time_created_ms(info: dict[str, object]) -> int | None:
+    """Best-effort extraction of an object's creation time in epoch_ms.
+
+    Different fsspec backends expose this under different keys: gcsfs uses
+    ``timeCreated`` (ISO 8601 string); ``LocalFileSystem`` uses ``created``
+    (float seconds). Returns ``None`` when no usable timestamp is present.
+    """
+    raw = info.get("timeCreated") or info.get("created") or info.get("ctime")
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return int(raw.timestamp() * 1000)
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        return int(raw * 1000)
+    if isinstance(raw, str):
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return int(dt.timestamp() * 1000)
+    return None
+
+
+def _list_namespace_segments(
+    remote_log_dir: str,
+    namespace: str,
+    fs: fsspec.AbstractFileSystem,
+    *,
+    created_since_ms: int | None,
+    created_until_ms: int | None,
+) -> list[str]:
+    """Enumerate ``seg_L*.parquet`` URIs under one namespace, filtered by mtime.
+
+    Pre-filtering by object ``timeCreated`` is conservative for the canonical
+    ``epoch_ms`` predicate: a segment's data is ingested *before* upload, so
+    ``time_created`` is an upper bound on row ``epoch_ms`` in that file —
+    files with ``time_created < epoch_floor`` cannot satisfy the query. Pad
+    ``--created-until-ms`` by enough to cover L0→L1 compaction lag (a few
+    hours is usually sufficient).
+    """
+    ns_dir = f"{remote_log_dir.rstrip('/')}/{namespace}"
+    listing = fs.ls(ns_dir, detail=True)
+    has_window = created_since_ms is not None or created_until_ms is not None
+    out: list[str] = []
+    for entry in listing:
+        name = str(entry.get("name", ""))
+        if not _SEGMENT_FILENAME_RE.search(name):
+            continue
+        if has_window:
+            tc = _info_time_created_ms(entry)
+            # Skip entries with unknown timestamps when a window is set —
+            # safer to drop than to include a file we can't reason about.
+            if tc is None:
+                continue
+            if created_since_ms is not None and tc < created_since_ms:
+                continue
+            if created_until_ms is not None and tc > created_until_ms:
+                continue
+        out.append(fs.unstrip_protocol(name))
+    return sorted(out)
+
+
+def _register_namespace_views(
+    conn: duckdb.DuckDBPyConnection,
+    remote_log_dir: str,
+    namespaces: list[str],
+    *,
+    fs: fsspec.AbstractFileSystem | None = None,
+    created_since_ms: int | None = None,
+    created_until_ms: int | None = None,
+) -> None:
+    """Create one ``CREATE VIEW <ns>`` per namespace.
+
+    Without a time window, the view body is
+    ``SELECT * FROM read_parquet('<remote_log_dir>/<ns>/seg_L*.parquet')`` —
+    DuckDB defers globbing and schema inference until the view is queried.
+
+    With a time window, the glob is replaced by an explicit file list
+    filtered by GCS object ``time_created``; this skips the parquet-footer
+    fetch for segments that cannot contain matching rows. For namespaces
+    with thousands of segments the footer prune is the only practical way
+    to keep egress bounded. When the filter drops every file the view is
+    not created at all, so referencing SQL fails fast.
+
+    Namespace names with dots (e.g. ``iris.worker``) require double-quoted
+    identifiers in user SQL.
+    """
+    base = remote_log_dir.rstrip("/")
+    has_window = created_since_ms is not None or created_until_ms is not None
+    if has_window and fs is None:
+        raise ValueError("fs is required when a time window is set")
+    for ns in namespaces:
+        # CREATE VIEW does not accept prepared parameters, so paths are
+        # inlined. Single-quote escaping guards against unusual paths;
+        # the double-quoted identifier guards the view name.
+        if has_window:
+            assert fs is not None
+            files = _list_namespace_segments(
+                base,
+                ns,
+                fs,
+                created_since_ms=created_since_ms,
+                created_until_ms=created_until_ms,
+            )
+            if not files:
+                continue
+            list_literal = "[" + ", ".join(f"'{f.replace(chr(39), chr(39) * 2)}'" for f in files) + "]"
+            conn.execute(f'CREATE OR REPLACE VIEW "{ns}" AS SELECT * FROM read_parquet({list_literal})')
+        else:
+            glob = f"{base}/{ns}/seg_L*.parquet".replace("'", "''")
+            conn.execute(f"CREATE OR REPLACE VIEW \"{ns}\" AS SELECT * FROM read_parquet('{glob}')")
+
+
+@cli.command("gcs-query")
+@click.argument("name")
+@click.argument("sql")
+@click.option(
+    "--namespace",
+    "namespaces",
+    multiple=True,
+    help="Restrict views to these namespaces (default: every namespace discovered under remote_log_dir).",
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice([f.value for f in OutputFormat]),
+    default=OutputFormat.JSONL.value,
+    show_default=True,
+    help="Output format for the result.",
+)
+@click.option(
+    "--max-rows",
+    type=int,
+    default=100_000,
+    show_default=True,
+    help="Reject results larger than this (use LIMIT or raise this cap).",
+)
+@click.option(
+    "--created-since-ms",
+    type=int,
+    default=None,
+    help=(
+        "Only include parquet files whose GCS time_created is >= this epoch_ms. "
+        "Use to skip the parquet-footer fetch for clearly-too-old segments; safe to set to "
+        "the same lower bound you use for epoch_ms in the WHERE clause."
+    ),
+)
+@click.option(
+    "--created-until-ms",
+    type=int,
+    default=None,
+    help=(
+        "Only include parquet files whose GCS time_created is <= this epoch_ms. "
+        "Pad above your epoch_ms upper bound by L0->L1 compaction lag (a few hours typically)."
+    ),
+)
+def gcs_query_cmd(
+    name: str,
+    sql: str,
+    namespaces: tuple[str, ...],
+    output_format: str,
+    max_rows: int,
+    created_since_ms: int | None,
+    created_until_ms: int | None,
+) -> None:
+    """Run SQL against the GCS-archived parquet for finelog ``<name>``.
+
+    Use when ``FetchLogs`` returns empty because the live deque has already
+    evicted segments to ``REMOTE`` — the parquet still lives in
+    ``cfg.remote_log_dir`` and this command queries it directly. Each
+    namespace directory under ``remote_log_dir`` is registered as a DuckDB
+    view named after the namespace; reference it in the FROM clause, e.g.
+    ``select * from log where key like '/ryan/%'`` (use double-quotes for
+    names with dots: ``from "iris.worker"``).
+    """
+    configure_logging(level=logging.INFO)
+    cfg = load_finelog_config(name)
+    if not cfg.remote_log_dir:
+        raise click.UsageError(f"finelog config {name!r} has no remote_log_dir; nothing to query")
+
+    fs, _ = fsspec.url_to_fs(cfg.remote_log_dir)
+    discovered = _list_namespace_dirs(cfg.remote_log_dir, fs)
+    if not discovered:
+        raise click.UsageError(f"no namespaces with parquet segments found under {cfg.remote_log_dir}")
+
+    selected = list(namespaces) if namespaces else discovered
+    unknown = sorted(set(selected) - set(discovered))
+    if unknown:
+        raise click.UsageError(f"namespace(s) not found: {unknown} (available: {discovered})")
+
+    conn = duckdb.connect()
+    conn.register_filesystem(fs)
+    _register_namespace_views(
+        conn,
+        cfg.remote_log_dir,
+        selected,
+        fs=fs,
+        created_since_ms=created_since_ms,
+        created_until_ms=created_until_ms,
+    )
+
+    # ``.arrow()`` returns a streaming RecordBatchReader in duckdb >= 1.4;
+    # ``.fetch_arrow_table()`` materializes a pa.Table so we can size-check.
+    table = conn.execute(sql).fetch_arrow_table()
+    if table.num_rows > max_rows:
+        raise click.UsageError(
+            f"query returned {table.num_rows} rows, exceeds --max-rows={max_rows} " f"(add a LIMIT or raise the cap)"
+        )
+    _PRINTERS[OutputFormat(output_format)](table)
+
+
+@deploy.command("logs")
+@click.argument("name")
+@click.option("--tail", type=int, default=200, show_default=True)
+@click.option("-f", "--follow", is_flag=True, help="Stream logs")
+def logs_cmd(name: str, tail: int, follow: bool) -> None:
+    """Tail logs from the finelog deployment."""
+    cfg = load_finelog_config(name)
+    _dispatch_logs(cfg, tail=tail, follow=follow)
+
+
+if __name__ == "__main__":
+    cli()

@@ -130,4 +130,4 @@ The helper integrates with slice refs, so you can swap just a subset of the buff
 prev = hax.swap(cache_ref, {"layer": slice(0, 2)}, hax.ones((Cache.resize(2), Head)))
 ```
 
-See [`tests/test_named_ref.py`](tests/test_named_ref.py) for runnable examples that exercise the API.
+See [`tests/test_named_ref.py`](../tests/test_named_ref.py) for runnable examples that exercise the API.

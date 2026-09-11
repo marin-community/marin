@@ -1,8 +1,6 @@
-# How to Add a New Optimizer for Speedruns
+# How to Add a New Optimizer
 
 Marin builds on [Levanter](https://levanter.readthedocs.io/) for training code, meaning any training changes made in Levanter are automatically available in Marin. However, you can also add new optimizers **directly in Marin**- thanks to Levanter’s support for [Optax](https://optax.readthedocs.io/)-- without needing to merge a pull request upstream.
-
-This makes it easy to experiment with new optimizers (especially for speedruns) before integrating them into Levanter.
 
 In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs.io/en/latest/api/optimizers.html#optax.adamax) optimizer as an example.
 
@@ -13,13 +11,22 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
 1. Import Optax and OptimizerConfig:
 
     ```python
+    from dataclasses import dataclass
+
     import optax
-    from levanter.optim import OptimizerConfig
+    from levanter.optim.config import OptimizerConfig
     ```
 
-2. Define a new optimizer by subclassing `OptimizerConfig` and add optimizer-specific parameters as class variables:
+    Import `OptimizerConfig` from `levanter.optim.config`, not from the `levanter.optim`
+    package: the package body is a docstring so that draccus discovers each optimizer
+    submodule lazily, and it re-exports nothing.
+
+2. Define a new optimizer by subclassing `OptimizerConfig`, add optimizer-specific parameters as
+   fields, and register the class under an identifier. `OptimizerConfig` is a frozen dataclass, so
+   the subclass must be frozen too:
     ```python
-    @dataclass
+    @OptimizerConfig.register_subclass("adamax")
+    @dataclass(frozen=True)
     class AdamaxConfig(OptimizerConfig):
         beta1: float = 0.9
         beta2: float = 0.95
@@ -33,14 +40,6 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
 
     ```python
     def build(self, num_train_steps):
-        print(f"Building optimizer: {self.__class__.__name__}")
-
-        # Register the optimizer class if not already registered
-        try:
-            OptimizerConfig.register_subclass("adamax")(AdamaxConfig)
-        except ValueError:
-            pass
-
         def _optimizer(learning_rate):
             components = []
 
@@ -81,10 +80,6 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
 
     Note that `optax.inject_hyperparams` is a wrapper in Optax that can be used to pass schedules (or stateful hyperparameters) into the optimizer. This also allows us to log the learning rate in the tracker.
 
-    !!! note
-
-        You should also register your optimizer class with an identifier, as shown above.
-
 4. Use the optimizer in your training script. You can instantiate and pass it directly into your training config:
 
     ```python
@@ -94,14 +89,26 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
         epsilon=1e-8,
         max_grad_norm=1.0,
         weight_decay=0.1,
-        lr=1e-4
+        learning_rate=1e-4,
     )
     ```
 
-    and use it in `TrainLmConfig`:
+    In a Marin experiment, pass it as `train_lm`'s `optimizer` argument:
 
     ```python
-    from levanter.trainer import TrainLmConfig
+    from marin.experiment.train import train_lm
+
+    checkpoint = train_lm(
+        ...
+        optimizer=optimizer,
+        ...
+    )
+    ```
+
+    To drive Levanter directly instead, use `TrainLmConfig`:
+
+    ```python
+    from levanter.main.train_lm import TrainLmConfig
 
     trainer_config = TrainLmConfig(
         ...
@@ -110,57 +117,7 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
     )
     ```
 
-    Or inside a `SimpleTrainConfig`:
-
-    ```python
-    train_config = SimpleTrainConfig(
-        ...
-        optimizer_config=AdamaxConfig(
-            beta1=0.9,
-            beta2=0.95,
-            epsilon=1e-8,
-            max_grad_norm=1.0,
-            weight_decay=0.1,
-            lr=1e-4
-        ),
-        ...
-    )
-    ```
-
-    Then pass it into `default_train`, which will set the optimizer config correctly in the training step.
-
-### Sample usage in a speedrun script
-
-Here's an example of a speedrun configuration that leverages `AdamaxConfig`:
-
-```python
-speedrun_config = SpeedrunConfig(
-    author=Author(
-        name="...",
-        affiliation="...",
-        url="...",
-    ),
-    description="75M parameter model with Adamax optimizer",
-    model_config=llama_75m,
-    train_config=SimpleTrainConfig(
-        TpuPodConfig(tpu_type="v4-128"),
-        train_batch_size=512,
-        num_train_steps=6000,
-        learning_rate=3e-3,
-        weight_decay=0.0,
-        steps_per_eval=2000,
-        optimizer_config=AdamaxConfig(),
-    ),
-)
-
-speedrun_config.print_run_info()
-
-if __name__ == "__main__":
-    executor_main(steps=default_speedrun("llama_75m_adamax", speedrun_config))
-```
-
-🎉 That’s it! You can now define new optimizers in this manner and train models using them, all within Marin. For optimizers that are widely useful or “standard,” consider submitting a pull request to Levanter.
-See a full working example [in this GitHub link](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_adamax/llama_75m_adamax.py).
+That’s it! You can now define new optimizers in this manner and train models using them, all within Marin. For optimizers that are widely useful or “standard,” consider submitting a pull request to Levanter.
 
 Further reading:
 

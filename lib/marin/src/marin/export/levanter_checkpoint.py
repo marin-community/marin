@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -7,33 +7,33 @@ from dataclasses import dataclass
 from typing import Any
 
 import levanter.infra.cli_helpers
-from fray.v1.cluster import (
+from fray.current_client import current_client
+from fray.types import (
     CpuConfig,
     Entrypoint,
-    EnvironmentConfig,
     JobRequest,
     ResourceConfig,
     TpuConfig,
-    current_cluster,
+    create_environment,
 )
 from levanter.checkpoint import discover_latest_checkpoint
-from levanter.compat.hf_checkpoints import RepoRef
+from levanter.compat.hf_checkpoints import DEFAULT_MAX_SHARD_SIZE, RepoRef
 from levanter.main import export_lm_to_hf
 from levanter.main.export_lm_to_hf import ConvertLmConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.executor import (
-    ExecutorStep,
-    InputName,
-    VersionedValue,
-    ensure_versioned,
-    this_output_path,
-)
-from marin.training.training import _add_default_env_variables, _add_run_env_variables
-from marin.utils import remove_tpu_lockfile_on_exit
+from marin.training.run_environment import add_run_env_variables, extras_for_resources
+from marin.training.training import _add_default_env_variables
 
 logger = logging.getLogger(__name__)
+
+
+# Default CPU resources for checkpoint export. The HF conversion streams one weight tensor
+# at a time, so a moderate RAM/disk budget is sufficient; `ResourceConfig.with_cpu()`'s
+# 128m/1g defaults are too small though.
+def _default_export_resources() -> ResourceConfig:
+    return ResourceConfig.with_cpu(cpu=8, ram="64g", disk="64g")
 
 
 @dataclass(frozen=True)
@@ -42,11 +42,13 @@ class ConvertCheckpointStepConfig:
     Configuration for converting a single Levanter checkpoint into HuggingFace format.
     """
 
-    checkpoint_path: str | InputName | VersionedValue[str]
+    checkpoint_path: str
     trainer: TrainerConfig
     model: LmConfig
-    resources: ResourceConfig = dataclasses.field(default_factory=ResourceConfig.with_cpu)
-    output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore[arg-type]
+    checkpoint_subpath: str = "model"
+    max_shard_size: int = DEFAULT_MAX_SHARD_SIZE
+    resources: ResourceConfig = dataclasses.field(default_factory=_default_export_resources)
+    output_path: str = ""
     upload_to_hf: bool | str | RepoRef = False
     tokenizer: str | None = None
     override_vocab_size: int | None = None
@@ -63,7 +65,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
 
     default_launch_config = levanter.infra.cli_helpers.load_config()
 
-    checkpoint_path = config.checkpoint_path  # type: ignore[assignment]
+    checkpoint_path = config.checkpoint_path
     if config.discover_latest:
         discovered = discover_latest_checkpoint(checkpoint_path)
         if not discovered:
@@ -77,6 +79,8 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
         checkpoint_path=checkpoint_path,  # type: ignore[arg-type]
         output_dir=config.output_path,
         upload_to_hf=config.upload_to_hf,
+        checkpoint_subpath=config.checkpoint_subpath,
+        max_shard_size=config.max_shard_size,
         model=config.model,
         save_tokenizer=config.save_tokenizer,
         tokenizer=config.tokenizer,
@@ -89,93 +93,22 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
         {},
         default_launch_config.env_for_accel(config.resources.device.variant),
     )
-    env = _add_run_env_variables(env)
+    env = add_run_env_variables(env)
 
     def convert_task():
         export_lm_to_hf.main(convert_config)
 
-    def _run_with_lockfile():
-        with remove_tpu_lockfile_on_exit():
-            convert_task()
-
     if isinstance(config.resources.device, TpuConfig):
         assert config.resources.replicas == 1, "Export currently works on single slices at present."
 
+    extras = extras_for_resources(config.resources)
+
+    client = current_client()
     job_request = JobRequest(
         name="convert-checkpoint-to-hf",
-        entrypoint=Entrypoint.from_callable(_run_with_lockfile),
+        entrypoint=Entrypoint.from_callable(convert_task),
         resources=config.resources,
-        environment=EnvironmentConfig.create(env_vars=env),
+        environment=create_environment(env_vars=env, extras=extras),
     )
-
-    cluster = current_cluster()
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
-
-
-def convert_checkpoint_to_hf_step(
-    name: str,
-    checkpoint_path: InputName | str,
-    *,
-    trainer: TrainerConfig,
-    model: LmConfig,
-    resources: ResourceConfig | None = None,
-    upload_to_hf: bool | str | RepoRef = False,
-    tokenizer: str | None = None,
-    override_vocab_size: int | None = None,
-    config_overrides: dict[str, Any] | None = None,
-    save_tokenizer: bool = True,
-    use_cpu: bool = False,
-    override_output_path: str | None = None,
-    pip_dependency_groups: list[str] | None = None,
-    discover_latest: bool = False,
-) -> ExecutorStep:
-    """
-    Creates an ExecutorStep that materializes a HuggingFace checkpoint from a saved Levanter checkpoint.
-
-    Args:
-        name: Step name. Commonly prefixed with ``hf/`` to keep outputs organized.
-        checkpoint_path: Path (or InputName) pointing to a Levanter checkpoint directory, e.g.
-            ``train_step.cd("checkpoints/ckpt-210388")``.
-        trainer: TrainerConfig that matches the topology the checkpoint was saved with.
-        model: Model configuration that produced the checkpoint.
-        resources: Hardware resources to use when running the conversion. Defaults to CPU-only execution.
-        upload_to_hf: Optional HuggingFace repo reference (bool, repo-id string, or RepoRef).
-        tokenizer: Optional tokenizer override. Defaults to the tokenizer specified by ``model``.
-        override_vocab_size: If provided, resizes the vocabulary before exporting.
-        config_overrides: Optional dict merged into the HF config prior to saving.
-        save_tokenizer: Whether to emit tokenizer files alongside the model weights.
-        use_cpu: Force conversion to run on CPU instead of the configured device mesh. When False, CPU mode is enabled
-            automatically if the provided resources do not expose an accelerator.
-        override_output_path: Explicit output path override. Useful when aligning with pre-existing directories.
-        pip_dependency_groups: Optional executor dependency groups.
-        discover_latest: If True, resolves ``checkpoint_path`` to the most recent checkpoint in that directory.
-    """
-
-    checkpoint_value: InputName | VersionedValue[str]
-    if isinstance(checkpoint_path, InputName):
-        checkpoint_value = checkpoint_path
-    else:
-        checkpoint_value = ensure_versioned(checkpoint_path)
-
-    config = ConvertCheckpointStepConfig(
-        checkpoint_path=checkpoint_value,
-        trainer=trainer,
-        model=model,
-        resources=resources or ResourceConfig.with_cpu(),
-        upload_to_hf=upload_to_hf,
-        tokenizer=tokenizer,
-        override_vocab_size=override_vocab_size,
-        config_overrides=config_overrides,
-        save_tokenizer=save_tokenizer,
-        use_cpu=use_cpu,
-        discover_latest=discover_latest,
-    )
-
-    return ExecutorStep(
-        name=name,
-        fn=convert_checkpoint_to_hf,
-        config=config,
-        override_output_path=override_output_path,
-        pip_dependency_groups=pip_dependency_groups,
-    )
+    job = client.submit(job_request)
+    job.wait(raise_on_failure=True)

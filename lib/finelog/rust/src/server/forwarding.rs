@@ -1,0 +1,1417 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//! Native cross-cluster forwarding: replicate this store's locally-written rows,
+//! table by table, into a shared hub finelog.
+//!
+//! A federated cluster keeps its own finelog and also ships every table it holds —
+//! the `log` namespace and the `iris.*` stats tables alike — to one global store, so
+//! `iris --cluster=<hub>` reads back a job that ran anywhere. The forwarder lives in
+//! the server, which already owns the segment layout and the durability watermark: it
+//! scans straight out of the sealed segments and ships each table's rows through the
+//! generic [`WriteRows`] path, one Arrow batch per round trip.
+//!
+//! After waiting [`FORWARD_INTERVAL`], it lists the live namespaces and gives each one
+//! batch-sized forwarding turn. It immediately repeats while any namespace has more
+//! settled rows, so a busy stats table cannot delay the next `log` turn while the
+//! forwarder still drains at full speed. A per-`(target, namespace)` cursor records
+//! progress, and a namespace the hub lacks is created there first with [`RegisterTable`].
+//!
+//! # Credential
+//!
+//! The forwarder authenticates with a short-lived `aud="finelog"` EdDSA bearer minted
+//! from *this server's own* Ed25519 key, which the hub pins in its `jwt` auth layer.
+//! That key is distinct from the iris controller's signing key: a compromise of the
+//! log-ingest path grants log-plane authority only.
+//!
+//! # Relay durability
+//!
+//! A forwarding deployment is a durable relay spool. Retryable hub failures never
+//! advance its cursor, and object-native maintenance retains every unsettled segment.
+//! Once the hub settles a whole segment, maintenance may retire it from the current
+//! state; normal snapshot, rollback, and orphan windows delay physical collection.
+//!
+//! - A new legacy cursor seeds at its current tip, preserving the historical behavior
+//!   used when a node-local version-0 store is rebuilt from its archive. A new
+//!   object-native cursor starts at the beginning of the live object state.
+//! - It materializes at most [`FORWARD_BATCH_ROWS`] rows per read, and packs them into
+//!   requests of at most [`FORWARD_BATCH_BYTES`] unless one row alone exceeds the limit.
+//! - It advances a namespace's cursor after the hub acks the batch or permanently
+//!   rejects malformed content. A crash or retryable rejection re-forwards it
+//!   (at-least-once; tolerable for logs and append-only stats).
+//! - A backlog is only a cursor into durable table segments, not a separate in-memory
+//!   queue. The forwarder drains it without an age or row-count cap. It also skips a
+//!   batch the hub identifies as permanently invalid, so one poison row cannot wedge
+//!   every later row in that namespace.
+//! - Node-local deployments acknowledge writes after object-state publication. A
+//!   replacement resumes the periodic loop from that state and the durable cursor;
+//!   shutdown does not run a separate forwarding drain.
+//!
+//! A retryable push failure leaves the cursor in place and yields to the next namespace;
+//! nothing here can take the store down.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use arrow::array::{ArrayRef, AsArray, Int64Array, RecordBatch, StringArray};
+use arrow::compute::concat_batches;
+use arrow::datatypes::{Field, Int64Type, Schema as ArrowSchema};
+use connectrpc::client::{CallOptions, ClientConfig, ServiceTransport};
+use connectrpc::compression::{CompressionRegistry, GzipProvider, ZstdProvider};
+use futures::StreamExt;
+use hyper_util::client::legacy::Client as HyperClient;
+use hyper_util::rt::TokioExecutor;
+use jsonwebtoken::{Algorithm, EncodingKey, Header};
+use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
+
+use crate::errors::StatsError;
+use crate::policies::storage_policy_for;
+use crate::proto::finelog::stats::{RegisterTableRequest, StatsServiceClient, WriteRowsRequest};
+use crate::query::{
+    make_ctx, run_query_over, run_within_query_timeout, QueryResult, RegisteredProvider,
+};
+use crate::server::auth::FINELOG_AUDIENCE;
+use crate::server::telemetry::{counter_batch, telemetry_schema, CounterSample};
+use crate::server::MAX_MESSAGE_BYTES;
+use crate::store::ipc::encode_ipc;
+use crate::store::schema::{
+    schema_to_proto_owned, Schema, IMPLICIT_CLUSTER_COLUMN, IMPLICIT_SEQ_COLUMN,
+    MAX_WRITE_ROWS_BYTES,
+};
+use crate::store::store::LOG_NAMESPACE_NAME;
+use crate::store::Store;
+use crate::telemetry_policy::{FINELOG_NAMESPACE, TELEMETRY_NAMESPACE};
+
+/// How long the forwarder waits after every namespace is caught up or unable to make
+/// progress. Backlogged namespaces trigger another round immediately, so throughput
+/// does not depend on this cadence.
+const FORWARD_INTERVAL: Duration = Duration::from_secs(5);
+
+/// A relay's bounded internal scan may need to open a cold set of remote L0s.
+/// Keep its recovery budget independent of the public Query RPC deadline.
+const FORWARD_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Rows read from one namespace per batch. The hub durably acknowledges each outbound
+/// request, so a small row cap turns its one-second flush-coalescing interval into a
+/// throughput cap. A live telemetry scan showed that reading 200,000 rows was faster
+/// than reading 50,000 because provider construction and planning dominate the bounded
+/// scan. Byte chunking still bounds each request, and this stays below the store's
+/// million-row write limit.
+const FORWARD_BATCH_ROWS: i64 = 200_000;
+
+/// Maximum number of ordered segment ranges one forwarding scan intentionally spans.
+/// Sparse relay tables can seal thousands of tiny L0s while the hub is unavailable;
+/// bounding by rows alone still makes recovery localize all of them before LIMIT runs.
+const FORWARD_BATCH_SEGMENTS: usize = 128;
+
+/// Encoded bytes per outbound request. Keep ten MiB below the receiving store's hard
+/// Arrow IPC limit. [`chunk_by_bytes`] verifies the resulting size and adjusts each
+/// chunk toward this budget.
+const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (10 << 20);
+
+const FORWARD_REQUEST_COMPRESSION: &str = "zstd";
+const FINELOG_ZSTD_LEVEL: i32 = 1;
+
+/// Non-log chunks from one read turn may wait for durability concurrently. The hub
+/// coalesces writes that arrive within its one-second flush window, so a telemetry-sized
+/// turn split across several Arrow messages needs one durable flush instead of one per
+/// message. Log chunks stay serial to preserve line order at the hub.
+const FORWARD_CHUNK_CONCURRENCY: usize = 8;
+
+/// Emit one warning when a namespace's cursor trails this far behind. This is an
+/// observability threshold only: the backlog is still drained in full while its source
+/// segments remain locally retained.
+///
+/// Measured in `seq` positions, not rows: `seq` is a namespace's own dense counter, so
+/// the two coincide only when no earlier gap exists.
+const FORWARD_LAG_WARNING_SEQS: i64 = 2_000_000;
+
+/// Bearer lifetime, and how early to re-mint. Short-lived because the hub checks only
+/// signature + audience + expiry — it cannot reach a revocation list, so a leaked
+/// bearer's blast radius is bounded by its TTL.
+const TOKEN_TTL: Duration = Duration::from_secs(3600);
+const TOKEN_REFRESH_MARGIN: Duration = Duration::from_secs(300);
+
+/// Deadline for one outbound request. Transient failures receive a few local retries
+/// before the namespace yields, bounding how long one broken target can delay others.
+const PUSH_TIMEOUT: Duration = Duration::from_secs(60);
+const PUSH_ATTEMPTS_PER_TURN: usize = 3;
+const PUSH_RETRY_BACKOFF: Duration = Duration::from_secs(1);
+
+/// Emit a progress line at most this often, so a healthy forwarder is observable
+/// without flooding the logs it forwards.
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(300);
+const SLOW_FORWARD_TURN: Duration = Duration::from_secs(5);
+
+const OUTCOME_ACCEPTED: &str = "accepted";
+const OUTCOME_PERMANENT_REJECTION: &str = "permanent_rejection";
+const OUTCOME_RETENTION_EVICTION: &str = "retention_eviction";
+const OUTCOME_RETRYABLE_FAILURE: &str = "retryable_failure";
+const OUTCOME_SCHEMA_CONFLICT: &str = "schema_conflict";
+const ATTRIBUTE_NAMESPACE: &str = "namespace";
+const ATTRIBUTE_OUTCOME: &str = "outcome";
+
+/// Where this store forwards, and as whom. Parsed from the `FINELOG_FORWARDING` JSON;
+/// the Ed25519 private key arrives separately (`FINELOG_SIGNING_KEY`) so it never rides
+/// in an inline env value.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ForwardingConfig {
+    /// The hub finelog's base URL. `https://` only: the bearer is a credential.
+    pub target: String,
+    /// This store's cluster. Stamped on every forwarded row that has an origin column,
+    /// and carried as the bearer's `iss`/`sub`.
+    pub cluster: String,
+}
+
+impl ForwardingConfig {
+    /// Parse the `FINELOG_FORWARDING` JSON, rejecting a config that could only fail
+    /// later: an empty cluster has no identity to forward as, and a non-TLS target would
+    /// put the bearer on the wire in the clear.
+    pub fn parse(json: &str) -> Result<Self, String> {
+        let config: ForwardingConfig =
+            serde_json::from_str(json).map_err(|e| format!("invalid forwarding JSON: {e}"))?;
+        if config.cluster.is_empty() {
+            return Err("forwarding config has an empty cluster".to_string());
+        }
+        if !config.target.starts_with("https://") {
+            return Err(format!(
+                "forwarding target {:?} is not https:// (the bearer must not travel in the clear)",
+                config.target
+            ));
+        }
+        Ok(config)
+    }
+}
+
+/// The bearer claims. `iss`/`sub`/`aud`/`exp` are exactly the set the hub's verifier
+/// requires; `iat` records when the token was minted.
+#[derive(Serialize)]
+struct Claims<'a> {
+    iss: &'a str,
+    sub: &'a str,
+    aud: &'a str,
+    iat: u64,
+    exp: u64,
+}
+
+/// Mints and caches this server's `aud="finelog"` bearer, re-minting once the live one
+/// is within [`TOKEN_REFRESH_MARGIN`] of expiry.
+pub struct TokenMinter {
+    key: EncodingKey,
+    cluster: String,
+    /// The live bearer and the instant it stops being usable.
+    cached: std::sync::Mutex<Option<(String, Instant)>>,
+}
+
+impl TokenMinter {
+    /// Load the Ed25519 private key (PKCS#8 PEM). Fails on anything else, so a
+    /// misconfigured secret stops the server at startup rather than at the first push.
+    pub fn new(private_pem: &str, cluster: String) -> Result<Self, String> {
+        let key = EncodingKey::from_ed_pem(private_pem.as_bytes())
+            .map_err(|e| format!("signing key is not a valid Ed25519 private PEM: {e}"))?;
+        Ok(Self {
+            key,
+            cluster,
+            cached: std::sync::Mutex::new(None),
+        })
+    }
+
+    /// The current bearer, minting a fresh one when none is cached or the cached one is
+    /// close enough to expiry that the hub might reject it in flight.
+    fn bearer(&self) -> Result<String, String> {
+        let mut cached = self.cached.lock().unwrap();
+        let now = Instant::now();
+        if let Some((token, usable_until)) = cached.as_ref() {
+            if now < *usable_until {
+                return Ok(token.clone());
+            }
+        }
+        let issued_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| format!("system clock is before the unix epoch: {e}"))?
+            .as_secs();
+        let claims = Claims {
+            iss: &self.cluster,
+            sub: &self.cluster,
+            aud: FINELOG_AUDIENCE,
+            iat: issued_at,
+            exp: issued_at + TOKEN_TTL.as_secs(),
+        };
+        let token = jsonwebtoken::encode(&Header::new(Algorithm::EdDSA), &claims, &self.key)
+            .map_err(|e| format!("minting the finelog bearer failed: {e}"))?;
+        *cached = Some((token.clone(), now + TOKEN_TTL - TOKEN_REFRESH_MARGIN));
+        Ok(token)
+    }
+}
+
+type ClientBody = connectrpc::client::ClientBody;
+type HttpsConnector =
+    hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
+
+/// The forwarder's production transport: pooled HTTPS over hyper + rustls.
+pub type HttpsTransport = ServiceTransport<HyperClient<HttpsConnector, ClientBody>>;
+
+/// An HTTPS Connect client for the hub's `StatsService`. Errors if `target` is not a URI.
+fn build_client(target: &str) -> Result<StatsServiceClient<HttpsTransport>, String> {
+    let uri: http::Uri = target
+        .parse()
+        .map_err(|e| format!("forwarding target {target:?} is not a URI: {e}"))?;
+
+    let roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let tls = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| format!("building the forwarder's TLS config failed: {e}"))?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+
+    let mut http = hyper_util::client::legacy::connect::HttpConnector::new();
+    http.enforce_http(false);
+    http.set_nodelay(true);
+    http.set_connect_timeout(Some(Duration::from_secs(10)));
+
+    let https = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_tls_config(tls)
+        .https_only()
+        .enable_all_versions()
+        .wrap_connector(http);
+
+    let transport = ServiceTransport::new(HyperClient::builder(TokioExecutor::new()).build(https));
+    let config = forward_client_config(uri);
+    Ok(StatsServiceClient::new(transport, config))
+}
+
+pub(super) fn forward_client_config(uri: http::Uri) -> ClientConfig {
+    let compression = CompressionRegistry::new()
+        .register(GzipProvider::default())
+        .register(ZstdProvider::with_level(FINELOG_ZSTD_LEVEL));
+    ClientConfig::new(uri)
+        .proto()
+        .with_compression(compression)
+        .compress_requests(FORWARD_REQUEST_COMPRESSION)
+        .with_default_max_message_size(MAX_MESSAGE_BYTES)
+}
+
+/// Everything the forward loop needs, resolved once at startup.
+///
+/// Generic over the Connect transport so the same loop runs against the production
+/// HTTPS client and, in tests, against a plaintext one pointed at an in-process hub.
+pub struct Forwarder<T = HttpsTransport> {
+    store: Arc<Store>,
+    client: StatsServiceClient<T>,
+    minter: TokenMinter,
+    config: ForwardingConfig,
+    /// Backlog size that emits a warning. It never changes the cursor.
+    lag_warning_seqs: i64,
+    warned_lag: Mutex<HashSet<String>>,
+    /// The last source schema registered for each namespace. A local additive schema
+    /// change must be sent to the hub before rows using its new columns are written.
+    registered: Mutex<HashMap<String, Schema>>,
+}
+
+impl Forwarder<HttpsTransport> {
+    pub fn new(
+        store: Arc<Store>,
+        config: ForwardingConfig,
+        signing_key_pem: &str,
+    ) -> Result<Self, String> {
+        let minter = TokenMinter::new(signing_key_pem, config.cluster.clone())?;
+        let client = build_client(&config.target)?;
+        Ok(Self::with_client(store, config, minter, client))
+    }
+}
+
+impl<T> Forwarder<T>
+where
+    T: connectrpc::client::ClientTransport,
+    <T::ResponseBody as http_body::Body>::Error: std::fmt::Display,
+{
+    fn with_client(
+        store: Arc<Store>,
+        config: ForwardingConfig,
+        minter: TokenMinter,
+        client: StatsServiceClient<T>,
+    ) -> Self {
+        Self {
+            store,
+            client,
+            minter,
+            config,
+            lag_warning_seqs: FORWARD_LAG_WARNING_SEQS,
+            warned_lag: Mutex::new(HashSet::new()),
+            registered: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Run until `stop` latches. Errors are logged and retried on the next tick; this
+    /// never returns an error, because a store whose forwarding is broken must keep
+    /// serving.
+    pub async fn run(&self, mut stop: watch::Receiver<bool>) {
+        tracing::info!(
+            target = %self.config.target,
+            cluster = %self.config.cluster,
+            "finelog forwarder: started"
+        );
+        if let Err(error) = self.ensure_progress_namespace().await {
+            tracing::warn!(error = %error, "finelog forwarder: registering progress telemetry failed");
+        }
+        let mut progress = Progress::new();
+        loop {
+            if *stop.borrow() {
+                break;
+            }
+            let turn = self.forward_round(&mut progress, &mut stop).await;
+
+            // A drain's own `wait_or_stop` marks the value seen when it returns, so the
+            // select below would wait for a second change that never comes. Read the
+            // latched value first, which no `changed()` clears.
+            if *stop.borrow() {
+                break;
+            }
+            if turn == ForwardTurn::MoreRows {
+                continue;
+            }
+            tokio::select! {
+                _ = stop.changed() => break,
+                _ = tokio::time::sleep(FORWARD_INTERVAL) => {}
+            }
+        }
+        tracing::info!("finelog forwarder: stopped");
+    }
+
+    /// Give every live namespace one batch-sized turn. [`ForwardTurn::MoreRows`] means
+    /// at least one namespace advanced successfully but remains behind its captured
+    /// watermark; caught-up, failed, or interrupted rounds return [`ForwardTurn::Wait`].
+    async fn forward_round(
+        &self,
+        progress: &mut Progress,
+        stop: &mut watch::Receiver<bool>,
+    ) -> ForwardTurn {
+        let namespaces = match self.store.list_namespaces_with_stats() {
+            Ok(namespaces) => namespaces,
+            Err(e) => {
+                tracing::warn!(error = %e, "finelog forwarder: cannot list namespaces; retrying");
+                return ForwardTurn::Wait;
+            }
+        };
+        let mut turn = ForwardTurn::Wait;
+        for (name, schema, _stats, _policy) in namespaces {
+            if *stop.borrow() {
+                break;
+            }
+            if self.forward_namespace(&name, &schema, progress, stop).await == ForwardTurn::MoreRows
+            {
+                turn = ForwardTurn::MoreRows;
+            }
+        }
+        if let Some(deltas) = progress.take_report() {
+            if let Err(error) = self.emit_progress(&deltas).await {
+                progress.restore(deltas);
+                tracing::warn!(error = %error, "finelog forwarder: writing progress telemetry failed");
+            }
+        }
+        turn
+    }
+
+    /// Forward at most one read batch settled in `name` since its cursor. A read,
+    /// register, or persist failure waits for the next timed sweep; remaining rows after
+    /// a successful batch ask the caller to start another round immediately.
+    async fn forward_namespace(
+        &self,
+        name: &str,
+        schema: &Schema,
+        progress: &mut Progress,
+        stop: &mut watch::Receiver<bool>,
+    ) -> ForwardTurn {
+        let persisted = match self.store.namespace_persisted_seq(name) {
+            Ok(persisted) => persisted,
+            Err(e) => {
+                tracing::warn!(namespace = name, error = %e, "finelog forwarder: no watermark; skipping");
+                return ForwardTurn::Wait;
+            }
+        };
+        let mut cursor = match self.seed(name, persisted).await {
+            Ok(cursor) => cursor,
+            Err(e) => {
+                tracing::warn!(namespace = name, error = %e, "finelog forwarder: cannot seed; skipping");
+                return ForwardTurn::Wait;
+            }
+        };
+        let starting_cursor = cursor;
+        let object_native = match self.store.namespace_uses_object_state(name) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(namespace = name, %error, "finelog forwarder: cannot resolve storage state; skipping");
+                return ForwardTurn::Wait;
+            }
+        };
+        let turn_started = Instant::now();
+        self.observe_lag(name, cursor, persisted);
+        // The forwarder stamps this column with its own cluster on the way out and
+        // forwards only rows that do not already carry a foreign origin, so a hub's
+        // own relayed rows never loop back. A registered table always has it (added
+        // implicitly at registration); a legacy namespace adopted from disk before
+        // the column existed does not, and forwards unstamped until it is
+        // re-registered.
+        let has_origin = schema.column(IMPLICIT_CLUSTER_COLUMN).is_some();
+
+        if cursor >= persisted || *stop.borrow() {
+            return ForwardTurn::Wait;
+        }
+        let batch = match self.read_batch(name, cursor, persisted, has_origin).await {
+            Ok(batch) => batch,
+            Err(e) => {
+                tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: read failed; retrying next tick");
+                return ForwardTurn::Wait;
+            }
+        };
+        // The scan reported its oldest locally-readable row. Legacy retention
+        // may require a cursor jump; object-native relays fail closed because
+        // their live spool must retain every unsettled row.
+        if let Some(resume_at) = batch.resume_at {
+            if object_native {
+                tracing::error!(
+                    namespace = name,
+                    cursor,
+                    resume_at,
+                    persisted,
+                    "finelog forwarder: object-native cursor precedes the live spool; refusing to skip rows"
+                );
+                return ForwardTurn::Wait;
+            }
+            let skipped = resume_at - cursor;
+            progress.skipped_seqs += skipped;
+            progress.record_seq_positions(name, OUTCOME_RETENTION_EVICTION, skipped);
+            tracing::warn!(
+                namespace = name,
+                cursor,
+                skipped,
+                resume_at,
+                "finelog forwarder: rows evicted before they were forwarded; skipping ahead"
+            );
+            cursor = resume_at;
+            if !self
+                .persist_cursor(name, starting_cursor, cursor, turn_started)
+                .await
+            {
+                return ForwardTurn::Wait;
+            }
+        }
+        let Some((ship, seqs)) = batch.rows else {
+            // Every row up to `scanned_through` was filtered out by the scan (rows already
+            // carrying a foreign origin cluster). Advance the cursor to `scanned_through`,
+            // or the loop rereads them forever. Safe against a concurrent writer:
+            // `scanned_through` is a captured bound, and later rows arrive with a later
+            // watermark.
+            if !self
+                .persist_cursor(name, starting_cursor, batch.scanned_through, turn_started)
+                .await
+            {
+                return ForwardTurn::Wait;
+            }
+            return if batch.scanned_through < persisted {
+                ForwardTurn::MoreRows
+            } else {
+                ForwardTurn::Wait
+            };
+        };
+        // The hub must hold the namespace before it can take rows for it.
+        if !self.ensure_registered(name, schema).await {
+            tracing::warn!(
+                namespace = name,
+                "finelog forwarder: hub not ready for namespace; retrying next tick"
+            );
+            return ForwardTurn::Wait;
+        }
+
+        let chunks = match chunk_by_bytes(&ship, &seqs, FORWARD_BATCH_BYTES) {
+            Ok(chunks) => chunks,
+            Err(e) => {
+                tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: encoding a batch failed; retrying next tick");
+                return ForwardTurn::Wait;
+            }
+        };
+        let concurrency = if name == LOG_NAMESPACE_NAME {
+            1
+        } else {
+            FORWARD_CHUNK_CONCURRENCY
+        };
+        let pushes = chunks.into_iter().map(|(ipc, last_seq)| {
+            let chunk_stop = (*stop).clone();
+            async move { (last_seq, self.push(name, ipc, chunk_stop).await) }
+        });
+        // `buffered` polls several pushes at once but yields their results in input
+        // order. The durable cursor therefore never advances past an earlier chunk that
+        // is still retrying, even when a later chunk reaches the hub first.
+        let mut pushes = futures::stream::iter(pushes).buffered(concurrency);
+        while let Some((last_seq, result)) = pushes.next().await {
+            let advanced = last_seq - cursor;
+            match result {
+                Ok(()) => {
+                    progress.batches += 1;
+                    progress.record_batch(name, OUTCOME_ACCEPTED);
+                    progress.record_seq_positions(name, OUTCOME_ACCEPTED, advanced);
+                }
+                Err(PushError::Stopping(e)) => {
+                    tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: push interrupted");
+                    self.persist_accepted_prefix(name, starting_cursor, cursor, turn_started)
+                        .await;
+                    return ForwardTurn::Wait;
+                }
+                Err(PushError::Retryable(e)) => {
+                    progress.record_batch(name, OUTCOME_RETRYABLE_FAILURE);
+                    tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: push failed; retrying next sweep");
+                    self.persist_accepted_prefix(name, starting_cursor, cursor, turn_started)
+                        .await;
+                    return ForwardTurn::Wait;
+                }
+                Err(PushError::SchemaConflict(e)) => {
+                    // The same bytes may become valid after the hub's registration is
+                    // refreshed or its binary is upgraded. Keep the rows owed.
+                    progress.record_batch(name, OUTCOME_SCHEMA_CONFLICT);
+                    self.registered.lock().unwrap().remove(name);
+                    tracing::warn!(
+                        namespace = name,
+                        cursor,
+                        error = %e,
+                        "finelog forwarder: batch conflicts with the hub schema; preserving the cursor and refreshing registration next sweep"
+                    );
+                    self.persist_accepted_prefix(name, starting_cursor, cursor, turn_started)
+                        .await;
+                    return ForwardTurn::Wait;
+                }
+                Err(PushError::Permanent(e)) => {
+                    let skipped = advanced;
+                    progress.skipped_seqs += skipped;
+                    progress.record_batch(name, OUTCOME_PERMANENT_REJECTION);
+                    progress.record_seq_positions(name, OUTCOME_PERMANENT_REJECTION, skipped);
+                    tracing::warn!(
+                        namespace = name,
+                        cursor,
+                        skipped,
+                        resume_at = last_seq,
+                        error = %e,
+                        "finelog forwarder: hub permanently rejected the batch; dropping it"
+                    );
+                }
+            }
+            cursor = last_seq;
+        }
+        // Fewer than LIMIT matching rows means the scan examined the complete bounded
+        // sequence window. Advance over any trailing foreign-origin rows after every
+        // outbound chunk is settled; doing this earlier could skip a failed chunk.
+        if batch.complete_window && cursor < batch.scanned_through {
+            cursor = batch.scanned_through;
+        }
+        if !self
+            .persist_cursor(name, starting_cursor, cursor, turn_started)
+            .await
+        {
+            return ForwardTurn::Wait;
+        }
+        if cursor < persisted {
+            ForwardTurn::MoreRows
+        } else {
+            ForwardTurn::Wait
+        }
+    }
+
+    /// The cursor to start `name` from.
+    ///
+    /// A stored watermark wins when it remains in range. A watermark beyond
+    /// `persisted` resets to the current tip. Without a watermark, an
+    /// object-native relay starts immediately before its oldest live sequence;
+    /// a legacy table starts at the current tip.
+    async fn seed(&self, name: &str, persisted: i64) -> Result<i64, StatsError> {
+        match self.store.forward_cursor(&self.config.target, name)? {
+            Some(cursor) if cursor <= persisted => Ok(cursor),
+            Some(cursor) if self.store.namespace_uses_object_state(name)? => {
+                Err(StatsError::Internal(format!(
+                    "object-native forwarding cursor {cursor} is ahead of durable high-water {persisted} for {name:?}"
+                )))
+            }
+            Some(cursor) => {
+                tracing::warn!(
+                    namespace = name,
+                    cursor,
+                    persisted,
+                    "finelog forwarder: watermark is ahead of the store; reseeding at the tip"
+                );
+                self.persist(name, persisted).await?;
+                Ok(persisted)
+            }
+            None => {
+                if self.store.namespace_uses_object_state(name)? {
+                    let cursor = self
+                        .store
+                        .query_snapshot(name)?
+                        .min_seq
+                        .map(|minimum| minimum.saturating_sub(1))
+                        .unwrap_or(persisted);
+                    tracing::info!(
+                        namespace = name,
+                        persisted,
+                        cursor,
+                        "finelog forwarder: no watermark for object-native relay; starting at the beginning"
+                    );
+                    self.persist(name, cursor).await?;
+                    return Ok(cursor);
+                }
+                tracing::info!(
+                    namespace = name,
+                    persisted,
+                    "finelog forwarder: no watermark for this target; seeding at the tip (new rows only)"
+                );
+                self.persist(name, persisted).await?;
+                Ok(persisted)
+            }
+        }
+    }
+
+    /// Persist one interval of delta counters locally. The ordinary forwarder carries
+    /// `telemetry_v1.finelog` to the hub on a later sweep.
+    async fn emit_progress(&self, deltas: &ForwardingDeltas) -> Result<(), StatsError> {
+        self.ensure_progress_namespace().await?;
+        let timestamp_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| {
+                StatsError::Internal(format!("system clock is before the unix epoch: {error}"))
+            })?
+            .as_millis() as i64;
+        let batch = counter_batch("finelog", timestamp_ms, deltas.samples())?;
+        let ipc = encode_ipc(&batch.schema(), &[batch]).map_err(|error| {
+            StatsError::Internal(format!("encoding forwarding telemetry: {error}"))
+        })?;
+        let outcome = self
+            .store
+            .write_ingestion_rows(TELEMETRY_NAMESPACE, &ipc, None)?;
+        for (namespace, last_seq) in outcome.persisted_targets {
+            self.store
+                .await_persisted(&namespace, last_seq, PUSH_TIMEOUT)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn ensure_progress_namespace(&self) -> Result<(), StatsError> {
+        let store = Arc::clone(&self.store);
+        tokio::task::spawn_blocking(move || {
+            store.register_managed_table(
+                FINELOG_NAMESPACE,
+                telemetry_schema(),
+                storage_policy_for(FINELOG_NAMESPACE)?,
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|error| StatsError::Internal(format!("progress namespace task failed: {error}")))?
+    }
+
+    async fn persist(&self, name: &str, cursor: i64) -> Result<(), StatsError> {
+        self.store
+            .set_forward_cursor(&self.config.target, name, cursor)
+            .await
+    }
+
+    /// Commit `cursor` and retire object-native relay segments it covers.
+    ///
+    /// `false` leaves the previous durable cursor selected, so the next sweep
+    /// retries the same unsettled prefix.
+    async fn persist_cursor(
+        &self,
+        name: &str,
+        previous_cursor: i64,
+        cursor: i64,
+        turn_started: Instant,
+    ) -> bool {
+        let settlement_started = Instant::now();
+        let settlement = match self
+            .store
+            .settle_forwarding(&self.config.target, name, cursor)
+            .await
+        {
+            Ok(settlement) => settlement,
+            Err(e) => {
+                tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: persisting the watermark failed");
+                return false;
+            }
+        };
+        let total = turn_started.elapsed();
+        let settlement_elapsed = settlement_started.elapsed();
+        tracing::debug!(
+            namespace = name,
+            previous_cursor,
+            cursor = settlement.cursor,
+            advanced_seqs = settlement.cursor.saturating_sub(previous_cursor),
+            retired_segments = settlement.removed_paths.len(),
+            retired_rows = settlement.removed_rows,
+            retired_bytes = settlement.removed_bytes,
+            settle_ms = settlement_elapsed.as_millis() as u64,
+            total_ms = total.as_millis() as u64,
+            "finelog forwarder: settled namespace turn"
+        );
+        if total >= SLOW_FORWARD_TURN {
+            tracing::info!(
+                namespace = name,
+                previous_cursor,
+                cursor = settlement.cursor,
+                persisted = self.store.namespace_persisted_seq(name).unwrap_or(cursor),
+                advanced_seqs = settlement.cursor.saturating_sub(previous_cursor),
+                retired_segments = settlement.removed_paths.len(),
+                retired_rows = settlement.removed_rows,
+                retired_bytes = settlement.removed_bytes,
+                settle_ms = settlement_elapsed.as_millis() as u64,
+                total_ms = total.as_millis() as u64,
+                "finelog forwarder: slow namespace turn completed"
+            );
+        }
+        true
+    }
+
+    async fn persist_accepted_prefix(
+        &self,
+        name: &str,
+        starting_cursor: i64,
+        cursor: i64,
+        turn_started: Instant,
+    ) {
+        if cursor > starting_cursor {
+            self.persist_cursor(name, starting_cursor, cursor, turn_started)
+                .await;
+        }
+    }
+
+    /// Report a growing backlog once without changing its cursor. Clear the latch after
+    /// catch-up so a later independent incident is visible too.
+    fn observe_lag(&self, name: &str, cursor: i64, persisted: i64) {
+        let lag = persisted - cursor;
+        let mut warned = self.warned_lag.lock().unwrap();
+        if lag > self.lag_warning_seqs {
+            if warned.insert(name.to_string()) {
+                tracing::warn!(
+                    namespace = name,
+                    cursor,
+                    persisted,
+                    lag,
+                    "finelog forwarder: backlog exceeds the warning threshold; draining without skipping"
+                );
+            }
+        } else {
+            warned.remove(name);
+        }
+    }
+
+    /// Up to [`FORWARD_BATCH_ROWS`] locally-written rows of `name` in `(cursor, persisted]`
+    /// as a batch ready to ship (its `seq` column dropped, its origin column stamped),
+    /// alongside the seqs those rows carry. When eviction has already archived the rows
+    /// just above `cursor`, `resume_at` names the seq to resume from instead.
+    async fn read_batch(
+        &self,
+        name: &str,
+        cursor: i64,
+        persisted: i64,
+        has_origin: bool,
+    ) -> Result<Batch, StatsError> {
+        let read_started = Instant::now();
+        // One guard across both the snapshot and the scan: eviction takes the write side
+        // before unlinking, so no segment can vanish between the two.
+        let visibility_started = Instant::now();
+        let _read_guard = self.store.query_visibility().read().await;
+        let visibility_wait = visibility_started.elapsed();
+
+        let snapshot_started = Instant::now();
+        let store = Arc::clone(&self.store);
+        let owned = name.to_string();
+        let snapshot = tokio::task::spawn_blocking(move || store.query_snapshot(&owned))
+            .await
+            .map_err(|e| StatsError::Internal(format!("snapshot task panicked: {e}")))??;
+        let snapshot_elapsed = snapshot_started.elapsed();
+
+        let resume_at = resume_after_eviction(cursor, snapshot.min_seq);
+        let read_from = resume_at.unwrap_or(cursor);
+
+        let scanned_through = bounded_forward_read_through(
+            &snapshot.paths,
+            &snapshot.seq_bounds,
+            read_from,
+            persisted,
+            FORWARD_BATCH_SEGMENTS,
+        );
+        let candidate_segments = snapshot
+            .seq_bounds
+            .values()
+            .filter(|(minimum, maximum)| *maximum > read_from && *minimum <= scanned_through)
+            .count();
+        let live_segments = snapshot.paths.len();
+        let planning_started = Instant::now();
+        let provider = self.store.namespace_provider(name, snapshot)?;
+
+        let table = quote_ident(name);
+        let mut sql =
+            format!("SELECT * FROM {table} WHERE seq > {read_from} AND seq <= {scanned_through}");
+        if has_origin {
+            // Only rows this store's own writers produced. A row that already carries an
+            // origin cluster arrived here by forwarding, and re-forwarding it would loop.
+            // Segments predating the column store NULL, which is a local row.
+            sql.push_str(" AND (cluster IS NULL OR cluster = '')");
+        }
+        sql.push_str(&format!(" ORDER BY seq LIMIT {FORWARD_BATCH_ROWS}"));
+
+        let providers = vec![RegisteredProvider {
+            name: name.to_string(),
+            provider,
+        }];
+        let planning_elapsed = planning_started.elapsed();
+        // Honor the table's query lifetime and the tighter forwarder deadline.
+        let query_ctx = make_ctx();
+        let read = run_query_over(&query_ctx, providers, &sql);
+        let timeout = self
+            .store
+            .object_query_bound()
+            .map_or(FORWARD_READ_TIMEOUT, |bound| {
+                bound.min(FORWARD_READ_TIMEOUT)
+            });
+        let scan_started = Instant::now();
+        let result = run_within_query_timeout(
+            Some(timeout),
+            read,
+            |timeout| {
+                StatsError::DeadlineExceeded(format!(
+                    "forward read of {name:?} exceeded deadline of {} ms",
+                    timeout.as_millis()
+                ))
+            },
+            |e| StatsError::Internal(format!("read {name:?} failed: {e}")),
+        )
+        .await?;
+        let scan_elapsed = scan_started.elapsed();
+
+        let encode_started = Instant::now();
+        let rows = self.ship_batch(result)?;
+        let encode_elapsed = encode_started.elapsed();
+        let row_count = rows.as_ref().map_or(0, |(batch, _)| batch.num_rows());
+        let complete_window = rows
+            .as_ref()
+            .is_none_or(|(batch, _)| batch.num_rows() < FORWARD_BATCH_ROWS as usize);
+        let total = read_started.elapsed();
+        let log_read = || {
+            tracing::info!(
+                namespace = name,
+                cursor,
+                persisted,
+                scanned_through,
+                live_segments,
+                candidate_segments,
+                rows = row_count,
+                visibility_wait_ms = visibility_wait.as_millis() as u64,
+                snapshot_ms = snapshot_elapsed.as_millis() as u64,
+                planning_ms = planning_elapsed.as_millis() as u64,
+                scan_ms = scan_elapsed.as_millis() as u64,
+                encode_ms = encode_elapsed.as_millis() as u64,
+                total_ms = total.as_millis() as u64,
+                "finelog forwarder: slow read completed"
+            );
+        };
+        if total >= SLOW_FORWARD_TURN {
+            log_read();
+        } else {
+            tracing::debug!(
+                namespace = name,
+                cursor,
+                persisted,
+                scanned_through,
+                live_segments,
+                candidate_segments,
+                rows = row_count,
+                visibility_wait_ms = visibility_wait.as_millis() as u64,
+                snapshot_ms = snapshot_elapsed.as_millis() as u64,
+                planning_ms = planning_elapsed.as_millis() as u64,
+                scan_ms = scan_elapsed.as_millis() as u64,
+                encode_ms = encode_elapsed.as_millis() as u64,
+                total_ms = total.as_millis() as u64,
+                "finelog forwarder: read completed"
+            );
+        }
+        Ok(Batch {
+            rows,
+            resume_at,
+            scanned_through,
+            complete_window,
+        })
+    }
+
+    /// Turn a scan result into a batch ready for [`WriteRows`]: concatenate the collected
+    /// batches, drop the server-assigned `seq` column (the hub assigns its own), and
+    /// stamp the origin column with this store's cluster. `None` when the scan matched no
+    /// rows. Returns the dropped seqs alongside, so the caller can advance its cursor.
+    fn ship_batch(
+        &self,
+        result: QueryResult,
+    ) -> Result<Option<(RecordBatch, Int64Array)>, StatsError> {
+        if result.batches.is_empty() {
+            return Ok(None);
+        }
+        let batch = concat_batches(&result.schema, &result.batches)
+            .map_err(|e| StatsError::Internal(format!("concat batches: {e}")))?;
+        let num_rows = batch.num_rows();
+        if num_rows == 0 {
+            return Ok(None);
+        }
+
+        let seq_idx = result
+            .schema
+            .index_of(IMPLICIT_SEQ_COLUMN)
+            .map_err(|e| StatsError::Internal(format!("scan result has no seq column: {e}")))?;
+        let seqs: Int64Array = batch.column(seq_idx).as_primitive::<Int64Type>().clone();
+
+        let origin: ArrayRef = Arc::new(StringArray::from(vec![
+            self.config.cluster.as_str();
+            num_rows
+        ]));
+        let mut fields: Vec<Field> = Vec::with_capacity(batch.num_columns() - 1);
+        let mut columns: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns() - 1);
+        for (i, field) in result.schema.fields().iter().enumerate() {
+            if i == seq_idx {
+                continue;
+            }
+            fields.push(field.as_ref().clone());
+            if field.name() == IMPLICIT_CLUSTER_COLUMN {
+                columns.push(Arc::clone(&origin));
+            } else {
+                columns.push(Arc::clone(batch.column(i)));
+            }
+        }
+        let ship_schema = Arc::new(ArrowSchema::new(fields));
+        let ship = RecordBatch::try_new(ship_schema, columns)
+            .map_err(|e| StatsError::Internal(format!("build ship batch: {e}")))?;
+        Ok(Some((ship, seqs)))
+    }
+
+    /// Create or evolve `name` on the hub when this process has not registered its
+    /// current source schema. The reserved `log` namespace exists on every finelog, so
+    /// it is never registered. Returns whether the hub is ready to take rows for `name`.
+    async fn ensure_registered(&self, name: &str, schema: &Schema) -> bool {
+        if name == LOG_NAMESPACE_NAME || self.registered.lock().unwrap().get(name) == Some(schema) {
+            return true;
+        }
+        let bearer = match self.minter.bearer() {
+            Ok(bearer) => bearer,
+            Err(e) => {
+                tracing::warn!(namespace = name, error = %e, "finelog forwarder: minting a bearer for register failed");
+                return false;
+            }
+        };
+        // An empty storage policy leaves the hub's own retention untouched (re-register
+        // with no policy is "no opinion").
+        let request = RegisterTableRequest {
+            schema: buffa::MessageField::some(schema_to_proto_owned(schema)),
+            ..Default::default()
+        }
+        .with_namespace(name);
+        let options = CallOptions::default()
+            .with_timeout(PUSH_TIMEOUT)
+            .with_header("authorization", format!("Bearer {bearer}"));
+        match self
+            .client
+            .register_table_with_options(request, options)
+            .await
+        {
+            Ok(_) => {
+                self.registered
+                    .lock()
+                    .unwrap()
+                    .insert(name.to_string(), schema.clone());
+                true
+            }
+            Err(e) => {
+                tracing::warn!(namespace = name, error = %e, "finelog forwarder: registering the namespace on the hub failed");
+                false
+            }
+        }
+    }
+
+    /// Ship one encoded chunk to `name` on the hub and wait for it to durably ack.
+    /// Retry transient failures at most [`PUSH_ATTEMPTS_PER_TURN`] times, then return the
+    /// chunk still owed so the caller can give the next namespace its turn.
+    ///
+    /// Returns [`PushError::Permanent`] when the hub identifies invalid content,
+    /// [`PushError::SchemaConflict`] when registration state may make the same bytes
+    /// valid later, [`PushError::Retryable`] for other conditions that may clear, and
+    /// [`PushError::Stopping`] when `stop` latches.
+    async fn push(
+        &self,
+        name: &str,
+        arrow_ipc: Vec<u8>,
+        mut stop: watch::Receiver<bool>,
+    ) -> Result<(), PushError> {
+        let bytes = arrow_ipc.len();
+        let request = WriteRowsRequest::default()
+            .with_namespace(name)
+            .with_arrow_ipc(arrow_ipc);
+
+        let mut backoff = PUSH_RETRY_BACKOFF;
+        for attempt in 1..=PUSH_ATTEMPTS_PER_TURN {
+            if *stop.borrow() {
+                return Err(PushError::Stopping("shutdown requested".to_string()));
+            }
+            let attempt_started = Instant::now();
+            let result = match self.minter.bearer() {
+                Ok(bearer) => {
+                    let options = CallOptions::default()
+                        .with_timeout(PUSH_TIMEOUT)
+                        .with_header("authorization", format!("Bearer {bearer}"));
+                    match self
+                        .client
+                        .write_rows_with_options(request.clone(), options)
+                        .await
+                    {
+                        Ok(_) => {
+                            let elapsed = attempt_started.elapsed();
+                            if elapsed >= SLOW_FORWARD_TURN {
+                                tracing::info!(
+                                    namespace = name,
+                                    attempt,
+                                    bytes,
+                                    push_ms = elapsed.as_millis() as u64,
+                                    "finelog forwarder: slow hub durability acknowledgement completed"
+                                );
+                            } else {
+                                tracing::debug!(
+                                    namespace = name,
+                                    attempt,
+                                    bytes,
+                                    push_ms = elapsed.as_millis() as u64,
+                                    "finelog forwarder: batch delivered"
+                                );
+                            }
+                            return Ok(());
+                        }
+                        Err(e) if is_permanent_rejection(&e) => {
+                            Err(PushError::Permanent(e.to_string()))
+                        }
+                        Err(e) if is_schema_conflict(&e) => {
+                            Err(PushError::SchemaConflict(e.to_string()))
+                        }
+                        Err(e) if *stop.borrow() => Err(PushError::Stopping(e.to_string())),
+                        Err(e) => Err(PushError::Retryable(e.to_string())),
+                    }
+                }
+                Err(e) => Err(PushError::Retryable(e)),
+            };
+            match result {
+                Err(PushError::Retryable(error)) if attempt < PUSH_ATTEMPTS_PER_TURN => {
+                    tracing::warn!(
+                        namespace = name,
+                        error = %error,
+                        attempt,
+                        max_attempts = PUSH_ATTEMPTS_PER_TURN,
+                        backoff_seconds = backoff.as_secs(),
+                        "finelog forwarder: push failed; retrying"
+                    );
+                    if wait_or_stop(backoff, &mut stop).await {
+                        return Err(PushError::Stopping(error));
+                    }
+                    backoff *= 2;
+                }
+                result => return result,
+            }
+        }
+        unreachable!("the bounded push loop always returns on its last attempt")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ForwardTurn {
+    /// Retry on the normal interval: work is caught up, unable to progress, or stopping.
+    Wait,
+    /// Start another round immediately after every other namespace receives a turn.
+    MoreRows,
+}
+
+/// Why a push gave up.
+#[derive(Debug)]
+enum PushError {
+    /// The forwarder is shutting down. The chunk is still owed; the cursor stays where
+    /// it is and the next process re-reads it.
+    Stopping(String),
+    /// The request may succeed later. The chunk is still owed, and the next namespace
+    /// must receive its turn before this one retries.
+    Retryable(String),
+    /// The batch conflicts with the hub's current schema. The caller refreshes
+    /// registration and preserves the cursor because the same bytes may become valid.
+    SchemaConflict(String),
+    /// The hub identified invalid content that cannot succeed when resent unchanged.
+    Permanent(String),
+}
+
+fn is_permanent_rejection(error: &connectrpc::ConnectError) -> bool {
+    error.code == connectrpc::error::ErrorCode::InvalidArgument
+}
+
+fn is_schema_conflict(error: &connectrpc::ConnectError) -> bool {
+    error.code == connectrpc::error::ErrorCode::FailedPrecondition
+}
+
+/// Sleep between transient attempts. Returns `true` when shutdown latches or its sender
+/// closes, and `false` when the delay elapses.
+async fn wait_or_stop(backoff: Duration, stop: &mut watch::Receiver<bool>) -> bool {
+    tokio::select! {
+        _ = stop.changed() => true,
+        _ = tokio::time::sleep(backoff) => false,
+    }
+}
+
+/// One batch read from a namespace: the rows to forward (already stripped of `seq` and
+/// stamped with the origin cluster) and the seqs they carry, plus — when the cursor had
+/// fallen below the oldest local row — the seq to resume from instead.
+struct Batch {
+    rows: Option<(RecordBatch, Int64Array)>,
+    resume_at: Option<i64>,
+    /// Highest sequence position included in this physical scan window.
+    scanned_through: i64,
+    /// Whether LIMIT left no matching rows unread inside the window.
+    complete_window: bool,
+}
+
+/// Bound a forwarding scan by physical segment fanout as well as row count. Segment
+/// paths are ordered by minimum sequence, so the maximum sequence of the first
+/// `max_segments` live ranges gives the provider a tight predicate before localization.
+/// Any later range overlapping that bound is still selected by the provider, preserving
+/// correctness for historical overlapping geometry.
+fn bounded_forward_read_through(
+    paths: &[String],
+    seq_bounds: &BTreeMap<String, (i64, i64)>,
+    read_from: i64,
+    persisted: i64,
+    max_segments: usize,
+) -> i64 {
+    assert!(max_segments > 0);
+    paths
+        .iter()
+        .filter_map(|path| seq_bounds.get(path))
+        .filter(|(min_seq, max_seq)| *max_seq > read_from && *min_seq <= persisted)
+        .take(max_segments)
+        .map(|(_, max_seq)| *max_seq)
+        .max()
+        // `persisted` and the segment snapshot are separate observations. A
+        // concurrent local-disk-acknowledged flush may raise the former before
+        // its segment appears in the latter. No visible range means this scan
+        // can prove no progress, not that every sequence through `persisted`
+        // was inspected.
+        .unwrap_or(read_from)
+        .min(persisted)
+}
+
+/// The seq to resume from when the next row after `cursor` is already gone: `min_seq` is
+/// the oldest row the local segments still hold, and anything below it lives only in the
+/// remote archive, which no scan here reads. A forwarder that waits for those rows waits
+/// forever.
+///
+/// `None` means nothing was lost — `cursor + 1` is still present, so the cursor may sit
+/// one below `min_seq` — or there are no local segments at all (an empty namespace, whose
+/// watermark cannot be behind anything).
+fn resume_after_eviction(cursor: i64, min_seq: Option<i64>) -> Option<i64> {
+    min_seq
+        .filter(|min_seq| cursor + 1 < *min_seq)
+        .map(|min_seq| min_seq - 1)
+}
+
+/// A double-quoted SQL identifier for `name`, so a dotted namespace (`iris.worker`)
+/// resolves as one table and an embedded quote cannot break out of the identifier.
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// Encode `ship` into IPC chunks bounded by `max_bytes`, pairing each with the largest
+/// `seq` it carries. A single row that exceeds the budget is emitted alone so it cannot
+/// stall every later row behind the forwarding cursor.
+fn chunk_by_bytes(
+    ship: &RecordBatch,
+    seqs: &Int64Array,
+    max_bytes: usize,
+) -> Result<Vec<(Vec<u8>, i64)>, StatsError> {
+    let num_rows = ship.num_rows();
+    let mem = ship.get_array_memory_size().max(1);
+    let per_row = (mem / num_rows.max(1)).max(1);
+    let rows_per_chunk = (max_bytes / per_row).max(1);
+    let schema = ship.schema();
+
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < num_rows {
+        let remaining = num_rows - start;
+        let mut len = rows_per_chunk.min(num_rows - start);
+        let mut largest_fit: Option<(usize, Vec<u8>)> = None;
+        let mut smallest_oversized: Option<usize> = None;
+
+        let (len, ipc) = loop {
+            let ipc = encode_ipc(&schema, &[ship.slice(start, len)])
+                .map_err(|e| StatsError::Internal(format!("encode ship chunk: {e}")))?;
+
+            if ipc.len() <= max_bytes {
+                largest_fit = Some((len, ipc));
+                let lower = len + 1;
+                let upper = smallest_oversized.unwrap_or(remaining + 1);
+                if lower >= upper {
+                    break largest_fit.unwrap();
+                }
+
+                let proportional = len
+                    .saturating_mul(max_bytes)
+                    .checked_div(largest_fit.as_ref().unwrap().1.len().max(1))
+                    .unwrap_or(len)
+                    .max(lower);
+                len = if smallest_oversized.is_some() {
+                    lower + (upper - lower) / 2
+                } else {
+                    proportional.min(remaining)
+                };
+                continue;
+            }
+
+            if len == 1 {
+                break (len, ipc);
+            }
+
+            smallest_oversized = Some(len);
+            let lower = largest_fit.as_ref().map_or(1, |(fit, _)| fit + 1);
+            let upper = len;
+            if lower >= upper {
+                break largest_fit.expect("an oversized one-row chunk returns above");
+            }
+            let proportional = len.saturating_mul(max_bytes) / ipc.len();
+            len = proportional.clamp(lower, upper - 1);
+        };
+        out.push((ipc, seqs.value(start + len - 1)));
+        start += len;
+    }
+    Ok(out)
+}
+
+/// Cumulative forwarding counters, reported on a slow timer.
+struct Progress {
+    /// Requests the hub accepted, across every namespace. Counted in batches, not rows.
+    batches: u64,
+    /// `seq` positions the forwarder passed over because local retention evicted them or
+    /// the hub permanently rejected their batch. This is an upper bound on rows lost:
+    /// some positions held rows the scan would have filtered out anyway.
+    skipped_seqs: i64,
+    pending: ForwardingDeltas,
+    last_report: Instant,
+}
+
+impl Progress {
+    fn new() -> Self {
+        Self {
+            batches: 0,
+            skipped_seqs: 0,
+            pending: ForwardingDeltas::default(),
+            last_report: Instant::now(),
+        }
+    }
+
+    fn record_batch(&mut self, namespace: &str, outcome: &'static str) {
+        *self
+            .pending
+            .batches
+            .entry((namespace.to_string(), outcome))
+            .or_default() += 1;
+    }
+
+    fn record_seq_positions(&mut self, namespace: &str, outcome: &'static str, count: i64) {
+        let count = u64::try_from(count).expect("forwarding sequence deltas are nonnegative");
+        *self
+            .pending
+            .seq_positions
+            .entry((namespace.to_string(), outcome))
+            .or_default() += count;
+    }
+
+    fn take_report(&mut self) -> Option<ForwardingDeltas> {
+        if self.last_report.elapsed() < PROGRESS_INTERVAL {
+            return None;
+        }
+        self.last_report = Instant::now();
+        tracing::info!(
+            batches = self.batches,
+            skipped_seqs = self.skipped_seqs,
+            "finelog forwarder: progress"
+        );
+        if self.pending.is_empty() {
+            return None;
+        }
+        Some(std::mem::take(&mut self.pending))
+    }
+
+    fn restore(&mut self, deltas: ForwardingDeltas) {
+        self.pending.merge(deltas);
+    }
+}
+
+#[derive(Default)]
+struct ForwardingDeltas {
+    batches: BTreeMap<(String, &'static str), u64>,
+    seq_positions: BTreeMap<(String, &'static str), u64>,
+}
+
+impl ForwardingDeltas {
+    fn is_empty(&self) -> bool {
+        self.batches.is_empty() && self.seq_positions.is_empty()
+    }
+
+    fn samples(&self) -> Vec<CounterSample> {
+        self.batches
+            .iter()
+            .map(|((namespace, outcome), value)| CounterSample {
+                name: "forwarding_batches".to_string(),
+                value: *value as f64,
+                unit: "batches".to_string(),
+                attributes: forwarding_attributes(namespace, outcome),
+            })
+            .chain(
+                self.seq_positions
+                    .iter()
+                    .map(|((namespace, outcome), value)| CounterSample {
+                        name: "forwarding_seq_positions".to_string(),
+                        value: *value as f64,
+                        unit: "positions".to_string(),
+                        attributes: forwarding_attributes(namespace, outcome),
+                    }),
+            )
+            .collect()
+    }
+
+    fn merge(&mut self, other: Self) {
+        for (key, value) in other.batches {
+            *self.batches.entry(key).or_default() += value;
+        }
+        for (key, value) in other.seq_positions {
+            *self.seq_positions.entry(key).or_default() += value;
+        }
+    }
+}
+
+fn forwarding_attributes(namespace: &str, outcome: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (ATTRIBUTE_NAMESPACE.to_string(), namespace.to_string()),
+        (ATTRIBUTE_OUTCOME.to_string(), outcome.to_string()),
+    ])
+}
+
+/// Start the forward loop, which runs until `stop` changes or closes.
+pub fn spawn<T>(forwarder: Arc<Forwarder<T>>, stop: watch::Receiver<bool>) -> JoinHandle<()>
+where
+    T: connectrpc::client::ClientTransport + Send + Sync + 'static,
+    <T::ResponseBody as http_body::Body>::Error: std::fmt::Display,
+{
+    tokio::spawn(async move { forwarder.run(stop).await })
+}
+
+#[cfg(test)]
+#[path = "forwarding_tests.rs"]
+mod tests;

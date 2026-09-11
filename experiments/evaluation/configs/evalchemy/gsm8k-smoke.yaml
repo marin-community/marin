@@ -1,0 +1,8 @@
+tasks: [gsm8k]
+task_options:
+  gsm8k:
+    num_fewshot: 5
+    task_alias: gsm8k_5shot
+    generation: true
+max_tokens: 512
+limit: 128

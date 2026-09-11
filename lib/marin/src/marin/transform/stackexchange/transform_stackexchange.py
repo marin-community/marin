@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -6,10 +6,6 @@ stackexchange/transform_stackexchange.py
 
 Performs HTML->Text/MD conversion using the specified tools over a stackexchange dump save in DOLMA format.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=50 --memory=2GB --cluster=us-central2 \
-    lib/marin/src/marin/transform/stackexchange/transform_stackexchange.py \
-    --input_path gs://path/to/input --output_path gs://path/to/output ...
 """
 
 import logging
@@ -18,20 +14,21 @@ import random
 from dataclasses import dataclass
 
 import draccus
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from rigging.filesystem.storage_path import StoragePath
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.readers import load_jsonl
 
 from marin.schemas.web.convert import ExtractionConfig
-from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class StackExchangeExtractionConfig:
     input_path: str
     output_path: str
-    extract_method: str
     extract_config: ExtractionConfig
     max_files: int | None = None
     shuffle_answers_template: bool = True
@@ -43,7 +40,6 @@ def prepare_md_template(
     question: str,
     answers: list[dict],
     tags: list[str],
-    extract_method: str,
     extract_config: ExtractionConfig,
     prepend_vote_count: bool = True,
 ) -> str:
@@ -51,11 +47,11 @@ def prepare_md_template(
     Prepares a markdown template for a stackexchange question and answer.
     """
 
-    md_question = convert_page(question, extract_method=extract_method, config=extract_config)["content"]
+    md_question = convert_page(question, config=extract_config)["content"]
     template = f"# Question\nTitle: {title}\n{md_question}"
 
     for answer in answers:
-        md_answer = convert_page(answer["body"], extract_method=extract_method, config=extract_config)["content"]
+        md_answer = convert_page(answer["body"], config=extract_config)["content"]
         if prepend_vote_count:
             template += f"\n\n# Answer\n{md_answer}\n> {answer['votes']} votes"
         else:
@@ -69,7 +65,6 @@ def prepare_md_template(
 
 def process_record(
     row: dict,
-    extract_method: str,
     extract_config: ExtractionConfig,
     shuffle_answers_template: bool = True,
     seed: int | None = None,
@@ -78,7 +73,6 @@ def process_record(
 
     Args:
         row: Record from JSONL file
-        extract_method: Method to use for HTML extraction
         extract_config: Configuration for the extraction method
         shuffle_answers_template: Whether to shuffle answer template format
         seed: Random seed for reproducibility
@@ -102,7 +96,6 @@ def process_record(
             question,
             answers,
             tags,
-            extract_method,
             extract_config,
             prepend_vote_count,
         )
@@ -128,7 +121,7 @@ def process_record(
 def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
     logger.info(f"Starting processing of StackExchange dump in {cfg.input_path}")
 
-    files = fsspec_glob(f"{cfg.input_path}/*.jsonl.gz")
+    files = [str(m) for m in StoragePath(f"{cfg.input_path}/*.jsonl.gz").glob()]
 
     # only keep file of the form <id>.json.gz and not <language>.<id>.json.gz
     files = [file for file in files if len(os.path.basename(file).split(".")) == 3]
@@ -143,7 +136,6 @@ def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
         .map(
             lambda row: process_record(
                 row,
-                cfg.extract_method,
                 cfg.extract_config,
                 cfg.shuffle_answers_template,
                 cfg.seed,
@@ -152,5 +144,5 @@ def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
         .filter(lambda record: record is not None)
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
     )
-    with ZephyrContext(name="transform-stackexchange") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="transform-stackexchange")
+    ctx.execute(pipeline)

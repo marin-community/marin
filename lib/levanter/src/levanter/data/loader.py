@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
@@ -15,7 +15,7 @@ from typing import Generic, TypeVar
 
 import haliax.partitioning
 import jax
-import numpy
+import numpy as np
 from jax import Array
 from jax import numpy as jnp
 from jax import tree_util as jtu
@@ -39,7 +39,6 @@ from levanter.shapes import NamedShapeSpec, ShapeSpec, to_raw_shape
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.thread_utils import AsyncIteratorWrapper, blocking_wait
-
 
 Ex = TypeVar("Ex")
 
@@ -78,7 +77,7 @@ class DataLoader(Iterable[Ex]):
         max_buffered_batches: int | None = 64,
         mesh: Mesh | None = None,
         axis_resources: ResourceMapping | None = None,
-        prefetch_size: int = 32,
+        fetch_batch_size: int = 32,
         pad_final_batch: bool = True,
         allow_nondivisible_batch_size: bool = False,
     ):
@@ -96,14 +95,17 @@ class DataLoader(Iterable[Ex]):
             max_buffered_batches (Optional[int]): The maximum number of batches to buffer. If None, the buffer is unbounded.
              If <0, the buffer is disabled and single threaded operation is used.
             axis_resources (Optional[ResourceMapping]): axis mapping
-            prefetch_size (int): The number of batches to prefetch at once
+            fetch_batch_size (int): The number of batches to retrieve in each background storage request
             mesh (Mesh): The mesh to use
             batch_axis_name (str | None): The name of the batch axis. If None, defaults to "batch" unless batch_size is an Axis.
             pad_final_batch (bool): If True, the final batch will be padded to the size of the previous batch.
             allow_nondivisible_batch_size (bool): All the batch size to be non-divisible by the data axis size (typically the number of devices).
         """
+        if fetch_batch_size < 1:
+            raise ValueError("fetch_batch_size must be at least 1")
+
         self.max_buffered_batches = max_buffered_batches
-        self.prefetch_size = prefetch_size
+        self.fetch_batch_size = fetch_batch_size
         self.axis_resources = axis_resources
         self.data_store = data
 
@@ -171,12 +173,6 @@ class DataLoader(Iterable[Ex]):
         local_indices = self.compute_local_device_indices_for_bs(batch_size)
 
         return local_indices
-
-    def global_data_indices_by_device_for_step(self, step: int) -> dict[jax.Device, range]:
-        local_indices = self.local_data_indices_by_device_for_step(step)
-        offset = self.scheduler.global_data_offset_by_step(step)
-
-        return {device: range(offset + r.start, offset + r.stop, r.step) for device, r in local_indices.items()}
 
     def rounded_batch_size_at_step(self, step: int) -> int:
         return self._round_batch_size(self.scheduler.batch_size_at_step(step))
@@ -256,15 +252,16 @@ class DataLoaderIterator(Iterator[Ex]):
     def __next__(self):
         time_start = time.time()
         batch = next(self._batches)
-        time_mid = time.time()
-
-        time_end = time.time()
-        time_batch = time_end - time_mid
-        if (time_end - time_start) > 0.5:
-            if time_batch > 0.1:
-                logger.info(f"Prefetch wasn't fast enough: {time_end - time_start:.3f}. {time_batch:.3f} in batchify")
-            else:
-                logger.info(f"Prefetch wasn't fast enough: {time_end - time_start:.3f}.")
+        elapsed = time.time() - time_start
+        if elapsed > 0.5:
+            qsize = self._batches.qsize() if isinstance(self._batches, BackgroundIterator) else "N/A"
+            logger.warning(
+                "Data loader stalled %.3fs. queue_size=%s fetch_batch_size=%d max_buffered=%s",
+                elapsed,
+                qsize,
+                self.dl.fetch_batch_size,
+                self.dl.max_buffered_batches,
+            )
         return batch
 
     def __del__(self):
@@ -276,8 +273,7 @@ class DataLoaderIterator(Iterator[Ex]):
             batch_number = self._start_from_batch or 0
             done = False
             while not done:
-                # we try to prefetch multiple batches at a time
-                target_next_batch_number = batch_number + self.dl.prefetch_size
+                target_next_batch_number = batch_number + self.dl.fetch_batch_size
                 max_achievable_batch_number, final_batch_size = await self._dataset_get_available_batch_number(
                     target_next_batch_number
                 )
@@ -355,7 +351,7 @@ class DataLoaderIterator(Iterator[Ex]):
         Stacks the individual examples (pytrees) into a single example (pytree) with the batch axis added
         and creates a global array for each leaf of the example.
         """
-        cache: dict[tuple[int, int], list[Array | hax.NamedArray]] = {}
+        cache: dict[tuple[int, int], list[Array | hax.NamedArray | np.ndarray]] = {}
         padded_batch_size = self.dl.rounded_batch_size_at_step(batch.index)
         Batch = hax.Axis(self.dl.batch_axis_name, padded_batch_size)
 
@@ -373,14 +369,14 @@ class DataLoaderIterator(Iterator[Ex]):
 
             # TODO: if we ever do "big data" (i.e. huge examples) we might want to be able to load part of an example
             # which will require support from the datastore (i.e. tensorstore)
-            device_batch = stack_tree(self.dl.batch_axis_name, local_data)
-            batch_leaves = hax.tree_util.tree_leaves(device_batch)
+            host_batch = _stack_tree_on_host(self.dl.batch_axis_name, local_data)
+            batch_leaves = hax.tree_util.tree_leaves(host_batch)
 
             cache[(begin, end)] = batch_leaves
 
             return batch_leaves
 
-        def get_local_data_for_leaf(indices: _TensorSliceIndex, leaf_index: int) -> Array:
+        def get_local_data_for_leaf(indices: _TensorSliceIndex, leaf_index: int) -> Array | np.ndarray:
             batch_slice = indices[0]
             begin, end, stride = batch_slice.indices(padded_batch_size)
             if stride != 1:
@@ -571,6 +567,19 @@ def stack_tree(batch_name, individual_datums):
     return jax.tree.map(_stack_leaves_unchecked, *individual_datums, is_leaf=is_named_array)
 
 
+def _stack_tree_on_host(batch_name, individual_datums):
+    def _stack_leaves_on_host(*leaves):
+        if is_named_array(leaves[0]):
+            batch_axis = hax.Axis(batch_name, len(leaves)) if isinstance(batch_name, str) else batch_name
+            return hax.NamedArray(
+                np.stack([np.asarray(leaf.array) for leaf in leaves]), (batch_axis,) + leaves[0].axes
+            )
+        else:
+            return np.stack([np.asarray(leaf) for leaf in leaves])
+
+    return jax.tree.map(_stack_leaves_on_host, *individual_datums, is_leaf=is_named_array)
+
+
 def check_sharded_consistency(tree: PyTree, check_disjoint_indices_are_different: bool = False):
     """Checks the following consistency conditions on an array:
     - all replicas have the same data
@@ -615,7 +624,7 @@ def check_sharded_consistency(tree: PyTree, check_disjoint_indices_are_different
             replica_0_array = replica_0_arrays[_to_tuple(shard.index)]
             assert shard.data is not None
 
-            if not numpy.array_equal(shard.data, replica_0_array, equal_nan=True):
+            if not np.array_equal(shard.data, replica_0_array, equal_nan=True):
                 raise ValueError("Shard data does not match replica 0 data", shard, replica_0_array)
 
             if check_disjoint_indices_are_different:

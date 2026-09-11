@@ -62,7 +62,7 @@ data:
     type: prebuilt
     input_ids_key: input_ids
     loss_weights_key: loss_weights
-  tokenizer: stanford-crfm/marin-tokenizer
+  tokenizer: marin-community/marin-tokenizer
   cache_dir: gs://bucket/cache
 ```
 
@@ -94,7 +94,7 @@ data:
     owt: 0.5
     alpaca: 0.3
     tulu: 0.2
-  tokenizer: stanford-crfm/marin-tokenizer
+  tokenizer: marin-community/marin-tokenizer
   cache_dir: gs://bucket/cache
 ```
 
@@ -107,9 +107,45 @@ data:
 
     To use a chat format, your tokenizer must have a `chat_template`, or you must provide one in the config.
     This template must be formatted to work for training (which most are not, and it is not well documented in Hugging Face).
-    The `stanford-crfm/marin-tokenizer` has a default template that works. See our [chat template docs](../reference/Data-Formats.md#chat-templates) for more details.
+    The `marin-community/marin-tokenizer` has a default template that works. See our [chat template docs](../reference/Data-Formats.md#chat-templates) for more details.
 
 https://github.com/huggingface/transformers/blob/main/src/transformers/tokenization_utils_base.py#L1530
+
+### Shuffle Policies
+
+`data.shuffle` controls how training examples are shuffled:
+
+- `true`: full permutation shuffle (best mixing, highest random-access IO pressure)
+- `false`: no shuffle
+- object: hierarchical block shuffle (`BlockShuffleConfig`)
+- omitted: hierarchical block shuffle with `io_block_size: 256`, `window_blocks: 512`, and `perm_type: feistel`
+
+```yaml
+data:
+  # Hierarchical block shuffle (default)
+  shuffle:
+    io_block_size: 256
+    window_blocks: 512
+    perm_type: feistel
+```
+
+```yaml
+data:
+  # Full shuffle
+  shuffle: true
+```
+
+Block shuffle is designed for TensorStore-backed training caches: it preserves more IO locality than full shuffle.
+Internally it shuffles full blocks, then shuffles examples within a window of blocks.
+
+Practical defaults:
+
+- Set `io_block_size` to match one underlying cache storage chunk in sequence-space when possible.
+- Start `window_blocks` around your train batch size in examples (e.g. batch size 512 -> `window_blocks: 512`).
+- Increase `window_blocks` if you observe a persistent validation-loss gap vs full shuffle.
+
+If the dataset length is not divisible by `io_block_size`, the final tiny block stays at the end of the dataset and is
+locally permuted within itself.
 
 
 ### Training Mixture Schedules
@@ -143,7 +179,7 @@ data:
   train_weights:
     - [0, {"owt": 0.5, "alpaca": 0.3, "tulu": 0.2}]
     - [1000, {"owt": 0.2, "alpaca": 0.4, "tulu": 0.4}]
-  tokenizer: stanford-crfm/marin-tokenizer
+  tokenizer: marin-community/marin-tokenizer
 ```
 
 (Again, the weights need not sum to 1.)
@@ -158,7 +194,7 @@ Run with:
 python -m levanter.main.train_lm --config_path my_config.yaml
 ```
 
-The cache will build on-the-fly using Ray, and training will begin as soon as data is ready.
+If the configured cache is missing, Levanter will first build it using the Zephyr-backed preprocessing pipeline. Training will use the cache after construction and consolidation complete.
 
 ---
 

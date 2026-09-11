@@ -1,9 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Sequence
-
-from levanter.eval_harness import TaskConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
@@ -30,7 +28,7 @@ CORE_TASKS = (
 
 MMLU_0_SHOT = EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")
 MMLU_5_SHOT = EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")
-MMLU_PRO_5_SHOT = EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="mmlu_5shot")
+MMLU_PRO_5_SHOT = EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="mmlu_pro_5shot")
 
 OPEN_LM_LEADERBOARD_MCQ = (
     EvalTaskConfig("leaderboard_bbh", 3, task_alias="lb_bbh_3shot"),
@@ -535,20 +533,6 @@ MULTILINGUAL_LM_EVAL_LOGPROB_TASKS = (
 )
 
 MULTILINGUAL_LM_EVAL_GENERATIVE_TASKS = MGSM_MULTILINGUAL_TASKS
-
-
-def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
-    """
-    Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects.
-    """
-    return [
-        TaskConfig(
-            task=task.name,
-            num_fewshot=task.num_fewshot,
-            task_alias=task.task_alias,
-        )
-        for task in tasks
-    ]
 
 
 def convert_to_task_metrics(tasks: Sequence[EvalTaskConfig], metric: str) -> list[str]:

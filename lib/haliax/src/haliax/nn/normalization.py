@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,11 +13,11 @@ from jax import numpy as jnp
 import haliax
 import haliax as hax
 
-from .._src.state_dict import Mod, ModuleWithStateDictSerialization
-from ..axis import AxisSelection, AxisSpec
-from ..core import NamedArray
-from ..types import Scalar
-from ..wrap import unwrap_namedarrays, wrap_axiswise_call, wrap_reduction_call
+from haliax._src.state_dict import Mod, ModuleWithStateDictSerialization
+from haliax.axis import AxisSelection, AxisSpec
+from haliax.core import NamedArray
+from haliax.types import Scalar
+from haliax.wrap import unwrap_namedarrays, wrap_axiswise_call, wrap_reduction_call
 
 A = TypeVar("A", Scalar, NamedArray, jnp.ndarray)
 
@@ -113,9 +113,9 @@ class LayerNorm(LayerNormBase):
         out = out.astype(dtype)
 
         if self.weight is not None:
-            out = self.weight * out
+            out = self.weight.astype(out.dtype) * out
         if self.bias is not None:
-            out = out + self.bias
+            out = out + self.bias.astype(out.dtype)
         return out
 
 
@@ -133,9 +133,9 @@ class RmsNorm(LayerNormBase):
         out = out.astype(in_dtype)
 
         if self.weight is not None:
-            out = self.weight * out
+            out = self.weight.astype(out.dtype) * out
         if self.bias is not None:
-            out = out + self.bias
+            out = out + self.bias.astype(out.dtype)
         return out
 
 
@@ -166,8 +166,10 @@ def standardize(
 ) -> NamedArray:
     """Analogous to [jax.nn.standardize][], but with support for NamedArrays."""
     x, mean, variance, where = haliax.broadcast_arrays(x, mean, variance, where)  # type: ignore
-    raw_x, mean, variance, where = unwrap_namedarrays(x, mean, variance, where)
+    raw_x, raw_mean, raw_variance, raw_where = unwrap_namedarrays(x, mean, variance, where)
     axis_indices = x.axis_indices(axis)
 
-    plain = jnn.standardize(raw_x, axis_indices, mean=mean, variance=variance, epsilon=epsilon, where=where)
+    plain = jnn.standardize(
+        raw_x, axis_indices, mean=raw_mean, variance=raw_variance, epsilon=epsilon, where=raw_where
+    )
     return NamedArray(plain, x.axes)

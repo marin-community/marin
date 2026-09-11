@@ -1,0 +1,32 @@
+schema_version: 1
+code: ml-there-must-be-a-better-way
+lane: meta
+title: Whole-PR change wants a cleaner shape (umbrella)
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** The one judgment a senior reviewer makes that no local rule can:
+  "I see what you did, but the whole thing wants to be a Protocol / a dataclass / the
+  helper we already have." Each local rule sees an innocent hunk; only a reader
+  holding the entire change feels the aggregate friction, and the redesign is
+  cheapest while the shape is still new. This is the catch-all of last resort: if one
+  of the sharper rules below fits, emit that instead.
+
+  Fire only when ALL hold: (1) you can name ONE concrete, house-idiomatic construct
+  that replaces the added surface — a named Protocol, a named dataclass, or an
+  existing helper by qualified name, never an adjective like "cleaner"; (2) the
+  alternative provably *removes* surface the PR added (cite the lines it deletes),
+  not just rearranges it; (3) the construct does not cross a layer boundary
+  (`iris`/`haliax` → `levanter`/`zephyr` → `marin`) and does not collapse a value
+  that crosses a wire/proto/serialization boundary; (4) confidence ≥0.85. If you
+  cannot name the construct and the lines it deletes, suppress.
+
+  **When allowed:** The added surface is irreducible — three impls that genuinely
+  share little, a kind-string that is also a persisted/proto value, a positional
+  shape mandated by JAX/Haliax ergonomics.
+
+  **Bad example:**
+  ```python
+  # handle_memory_sink(), handle_disk_sink(), handle_s3_sink() each take the same six
+  # args and branch on a kind str threaded through three layers → one Sink Protocol
+  # with three small impls; the kind-string and the six-arg tuple vanish at the boundary.
+  ```

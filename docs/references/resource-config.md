@@ -1,7 +1,6 @@
 # Hardware Resource Configuration
 
-Marin uses Ray for scheduling and resource management. Ray provides a flexible resource model that allows you to specify
-the resources that a task requires. The `fray` library provides unified resource configuration types.
+Marin uses Fray for scheduling and resource management (dispatching to Iris on shared clusters, or to a local backend for laptop runs). The `fray` library provides unified resource configuration types that translate to concrete cluster resource requests.
 
 ## ResourceConfig
 
@@ -16,13 +15,13 @@ tpu_multislice = ResourceConfig.with_tpu("v4-8", slice_count=2)
 
 # GPU configuration
 gpu_config = ResourceConfig.with_gpu("H100", count=8)
-gpu_auto = ResourceConfig.with_gpu()  # auto-detect GPU type
+single_gpu = ResourceConfig.with_gpu("H100")  # count defaults to 1
 
 # CPU-only configuration
 cpu_config = ResourceConfig.with_cpu()
 ```
 
-::: fray.v2.types.ResourceConfig
+::: fray.types.ResourceConfig
 
 ## Device Configurations
 
@@ -30,12 +29,12 @@ These are the underlying device types wrapped by `ResourceConfig`:
 
 ### CPU
 
-::: fray.v2.types.CpuConfig
+::: fray.types.CpuConfig
 
 ### GPU
 
-::: fray.v2.types.GpuConfig
+::: fray.types.GpuConfig
 
 ### TPU
 
-::: fray.v2.types.TpuConfig
+::: fray.types.TpuConfig

@@ -1,0 +1,66 @@
+name: "Ops - Fork Ferry"
+
+# Ask Loom to refresh each supported fork unit weekly. The refresh-fork skill owns the migration;
+# this workflow only names the forks and launches one Loom session per unit.
+#
+# The trigger is a Loom run, not a GitHub issue: the job mints a GitHub Actions OIDC token
+# (audience = Loom), exchanges it for a short-lived Loom token at /api/auth/federate, and POSTs
+# /api/runs/create. Loom trusts this workflow through a `githubFederation` mapping (repository + workflow
+# ref -> a profile), the same federated path the Grafana operator bridge uses from GCE. No stored
+# PAT and no coordination issues.
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"  # Mondays 08:00 UTC
+  workflow_dispatch:
+    inputs:
+      unit:
+        description: "single unit to refresh; empty runs all"
+        required: false
+        default: ""
+
+concurrency:
+  group: fork-ferry
+  cancel-in-progress: false
+
+jobs:
+  ferry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - unit: tpu-vllm
+            forks: tpu-inference and vllm together
+          - unit: vllm-gpu
+            forks: the vllm GPU pin
+          - unit: evalchemy
+            forks: evalchemy
+          - unit: harbor
+            forks: harbor
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/launch-loom-run
+          sparse-checkout-cone-mode: false
+
+      - name: Launch a Loom refresh session for ${{ matrix.unit }}
+        if: ${{ github.event.inputs.unit == '' || github.event.inputs.unit == matrix.unit }}
+        uses: ./.github/actions/launch-loom-run
+        with:
+          profile: ${{ vars.LOOM_FORK_FERRY_PROFILE }}
+          idempotency-key: fork-ferry-${{ matrix.unit }}-${{ github.run_id }}
+          channel: ${{ matrix.unit }}
+          title: Fork ferry ${{ matrix.unit }}
+          goal: >-
+            Use the refresh-fork skill to refresh ${{ matrix.forks }} toward
+            upstream: stage the refresh, pin Marin as the descriptor directs (a
+            fork branch tip, or a promoted release wheel re-pinned from its
+            manifest), run the fork's e2e, and on green open the Marin pin PR
+            (or file the descriptor's blocker issue on a real external blocker).

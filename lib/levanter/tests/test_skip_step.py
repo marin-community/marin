@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import tempfile
@@ -12,9 +12,9 @@ from jax import numpy as jnp
 
 import haliax
 
-from test_utils import use_test_mesh
+from levanter.testing.helpers import use_test_mesh
 
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from levanter.optim.skipstep import SkipStepConfig, SkipStepState
 from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore, tree_serialize_leaves_tensorstore
 

@@ -1,18 +1,30 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import cProfile
 import os
-import sys
+import pstats
 import threading
 import time
 from contextlib import contextmanager
 from typing import Callable, Optional
 
+import wandb
+
 import jax
+from rigging.filesystem.storage_path import StoragePath
 from tqdm_loggable.auto import tqdm
 
 import levanter.tracker
-from levanter.callbacks._core import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
+from levanter.callbacks._core import (
+    Callback,
+    CBInfo,
+    JitCallback,
+    LambdaCallback,
+    ProgressEvent,
+    StepInfo,
+    progress_event_scope,
+)
 from levanter.callbacks._metrics import (
     _tqdm_logging_one_time_setup,
     log_performance_stats,
@@ -20,7 +32,19 @@ from levanter.callbacks._metrics import (
     logger,
     pbar_logger,
 )
-from levanter.data import DataLoader
+from levanter.callbacks.state_adapter import CallbackStateView, StateCallbackRunner
+from levanter.callbacks.profiler import (
+    ProfileOptionsConfig as ProfileOptionsConfig,
+    ProfilerConfig as ProfilerConfig,
+    XprofUploadConfig as XprofUploadConfig,
+    _flush_while_waiting,
+    profile,
+    xprof_viewer_url as xprof_viewer_url,
+)
+from levanter.callbacks.progress_watchdog import ProgressWatchdog, ProgressWatchdogConfig
+from levanter.data.loader import DataLoader
+from levanter.data.mixture import MixtureDataset
+from levanter.schedule import BatchSchedule
 from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
 from levanter.metrics import fold as fold_metric
 from levanter.tracker.wandb import WandbConfig
@@ -35,51 +59,51 @@ def eval_loss_loop(
     total_loss = 0.0
     total_load_time = 0.0
     total_loss_time = 0.0
-    accumulated_metrics = {}
+    accumulated_metrics: dict = {}
     n = 0
 
-    if name is not None:
-        desc = f"eval {name}"
-    else:
-        desc = "eval"
+    desc = f"eval {name}" if name is not None else "eval"
 
     _tqdm_logging_one_time_setup()
     pbar = tqdm(dataset, desc=desc, position=1, leave=False, total=max_batches)
 
     iter_ = iter(pbar)
-    while True:
-        time_in = time.time()
-        batch = next(iter_, None)
-        if batch is None:
-            break
-        load_time = time.time() - time_in
-        total_load_time += load_time
+    with jax.named_scope(desc):
+        while True:
+            time_in = time.time()
+            batch = next(iter_, None)
+            if batch is None:
+                break
+            load_time = time.time() - time_in
+            total_load_time += load_time
 
-        # loss_fn returns (loss, wrapped_metrics) where wrapped_metrics is Dict[str, Metric]
-        loss, wrapped_metrics = loss_fn(model, batch)
+            # loss_fn returns (loss, wrapped_metrics) where wrapped_metrics is Dict[str, Metric]
+            loss, wrapped_metrics = loss_fn(model, batch)
 
-        # Use fold() to accumulate Metric objects
-        for key, metric in wrapped_metrics.items():
-            if key not in accumulated_metrics:
-                accumulated_metrics[key] = metric
-            else:
-                accumulated_metrics[key] = fold_metric(accumulated_metrics[key], metric)
+            # Use fold() to accumulate Metric objects
+            for key, metric in wrapped_metrics.items():
+                if key not in accumulated_metrics:
+                    accumulated_metrics[key] = metric
+                else:
+                    accumulated_metrics[key] = fold_metric(accumulated_metrics[key], metric)
 
-        total_loss += loss.item()
-        n += 1
-        loss_time = time.time() - time_in - load_time
-        total_loss_time += loss_time
+            total_loss += loss.item()
+            n += 1
+            loss_time = time.time() - time_in - load_time
+            total_loss_time += loss_time
 
-        pbar.set_postfix(loss=total_loss / n)
+            pbar.set_postfix(loss=total_loss / n)
 
-        if max_batches is not None and n >= max_batches:
-            break
+            if max_batches is not None and n >= max_batches:
+                break
 
     if n > 0:
         total_loss /= n
 
-    # Unwrap metrics before returning
     plain_metrics = unwrap_metrics(accumulated_metrics)
+    plain_metrics["eval/timing/load_time"] = total_load_time
+    plain_metrics["eval/timing/loss_time"] = total_loss_time
+    plain_metrics["eval/timing/num_batches"] = float(n)
     return total_loss, plain_metrics
 
 
@@ -90,30 +114,34 @@ def compute_validation_loss(
     name: Optional[str] = None,
 ):
     def compute_loss(info: StepInfo):
-        loss, metrics = eval_loss_loop(loss_fn, info.eval_model, dataset, max_batches=max_batches, name=name)
+        with progress_event_scope(
+            info.emit_event,
+            ProgressEvent.EVALUATION_STARTED,
+            ProgressEvent.EVALUATION_FINISHED,
+        ):
+            loss, metrics = eval_loss_loop(loss_fn, info.eval_model, dataset, max_batches=max_batches, name=name)
 
-        prefix = "eval"
-        if name:
-            prefix += "/" + name
+            prefix = "eval"
+            if name:
+                prefix += "/" + name
 
-        # Log loss and metrics
-        to_log = {f"{prefix}/loss": loss}
-        to_log.update({f"{prefix}/{k}": v for k, v in metrics.items()})
-        levanter.tracker.log(to_log, step=info.step)
+            # Log loss and metrics. eval_loss_loop already namespaces its loop-timing
+            # keys under "eval/"; strip it so this prefix (e.g. "eval/<name>") is applied
+            # once, yielding "eval/<name>/timing/..." instead of "eval/eval/timing/...".
+            to_log = {f"{prefix}/loss": loss}
+            to_log.update({f"{prefix}/{k.removeprefix('eval/')}": v for k, v in metrics.items()})
+            levanter.tracker.log(to_log, step=info.step)
 
-        if name:
-            logger.info(f"{name} validation loss: {loss:.3f}")
-        else:
-            logger.info(f"validation loss: {loss:.3f}")
-
-        return loss
+            if name:
+                logger.info(f"{name} validation loss: {loss:.3f}")
+            else:
+                logger.info(f"validation loss: {loss:.3f}")
+            return loss
 
     return compute_loss
 
 
 def wandb_xla_logger(config: WandbConfig):
-    import wandb
-
     last_mtime = wandb.run and wandb.run.start_time or time.time()
 
     def log_xla_to_wandb(step: StepInfo):
@@ -128,50 +156,29 @@ def wandb_xla_logger(config: WandbConfig):
         return lambda x: None
 
 
-def profile(path: str, start_step: int, num_steps: int, create_perfetto_link: bool) -> Callable[[StepInfo], None]:
-    def profiler_callback_fn(step: StepInfo):
-        # -1 b/c step is the finished step
-        if step.step == start_step - 1:
-            _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
-            logger.info(f"Starting profiler until step {start_step + num_steps}.")
-            jax.profiler.start_trace(path, create_perfetto_link=_create_perfetto_link, create_perfetto_trace=True)
-        elif step.step == start_step + num_steps - 1:
-            if create_perfetto_link:
-                logger.info(
-                    f"Stopping profiler. Process 0 will open a perfetto link. I am process {jax.process_index()}"
-                )
-            else:
-                logger.info("Stopping profiler.")
-            # so, annoyingly, gcloud ssh doesn't reliably flush stdout here, so we need to spin up
-            # a thread to flush and print periodically until we make it past stop_trace
-            # (note: stop_trace blocks if perfetto is enabled)
-            event = threading.Event()
-            if create_perfetto_link and jax.process_index() == 0:
-                _flush_while_waiting(event)
+def mixture_weight_logging_hook(
+    batch_schedule: BatchSchedule, train_dataset: MixtureDataset
+) -> Callable[[StepInfo], None]:
+    """Build a hook that logs mixture component weights whenever the mixture stage advances.
 
-            jax.profiler.stop_trace()
+    A stage-scheduled ``MixtureDataset`` changes its component weights at block boundaries.
+    This hook maps the current step to a block, and logs the active weights (and stage index)
+    the first time each stage is seen.
+    """
+    last_stage = -1
 
-            if create_perfetto_link and jax.process_index() == 0:
-                event.set()
+    def log_mixture_weights(step_info: StepInfo):
+        nonlocal last_stage
+        seq_index = batch_schedule.global_data_offset_by_step(step_info.step)
+        stage = train_dataset._get_stage_for_block(seq_index // train_dataset.block_size)
+        if stage != last_stage:
+            weights = train_dataset.weight_stages[stage][1]
+            metrics = {f"mixture/weight/{name}": weight for name, weight in weights.items()}
+            metrics["mixture/stage"] = stage
+            levanter.tracker.log(metrics, step=step_info.step)
+            last_stage = stage
 
-            levanter.tracker.current_tracker().log_artifact(path, type="jax_profile")
-            barrier_sync()
-
-    return profiler_callback_fn
-
-
-def _flush_while_waiting(event):
-    def flush_stdout():
-        sys.stdout.flush()
-        sys.stderr.flush()
-        time.sleep(5)
-        while not event.is_set():
-            print("Waiting...", flush=True)
-            print("\n", file=sys.stderr, flush=True)
-            time.sleep(5)
-
-    thread = threading.Thread(target=flush_stdout)
-    thread.start()
+    return log_mixture_weights
 
 
 @contextmanager
@@ -183,6 +190,7 @@ def profile_ctx(
     host_profile: bool = False,
     host_profile_basename: str = "host_profile",
     host_profile_topn: int = 0,
+    profiler_options: jax.profiler.ProfileOptions | None = None,
 ):
     """Context manager for JAX profiling traces.
 
@@ -200,20 +208,24 @@ def profile_ctx(
 
     Notes:
         - Only process 0 creates the Perfetto link when ``create_perfetto_link`` is True.
-        - After stopping the trace, logs the artifact to the current tracker as type
-          "jax_profile" and performs a cross-process barrier.
+        - After exiting the context, the profile remains in ``path`` and the context
+          manager performs a cross-process barrier.
+        - When ``host_profile`` is enabled, the cProfile outputs are written into the
+          same directory as the JAX trace files.
     """
     _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
     logger.info("Starting profiler.")
 
-    # Ensure destination exists
-    try:
-        os.makedirs(path, exist_ok=True)
-    except Exception:
-        pass
+    # Ensure destination exists (handles both local and remote filesystems)
+    StoragePath(path).mkdirs()
 
     if device_profile:
-        jax.profiler.start_trace(path, create_perfetto_link=_create_perfetto_link, create_perfetto_trace=True)
+        jax.profiler.start_trace(
+            path,
+            create_perfetto_link=_create_perfetto_link,
+            create_perfetto_trace=True,
+            profiler_options=profiler_options,
+        )
 
     event = None
     pr = None
@@ -221,8 +233,6 @@ def profile_ctx(
     txt_summary_path = None
     if host_profile:
         try:
-            import cProfile  # type: ignore
-
             pr = cProfile.Profile()
             pr.enable()
             # Primary .pstats file and a human-readable txt summary
@@ -230,25 +240,24 @@ def profile_ctx(
             txt_summary_path = os.path.join(path, f"{host_profile_basename}.txt")
         except Exception as e:  # pragma: no cover - optional/diagnostic path
             logger.warning(f"Failed to start cProfile host profiler: {e}")
+
     try:
         yield
     finally:
-        # Stop host profiler and write artifacts
+        # Stop host profiler and write the profile outputs into the run directory.
         # Do this first because jax.profiler can be very slow to finish
         if pr is not None and stats_path is not None:
             try:
                 pr.disable()
                 pr.dump_stats(stats_path)
                 if host_profile_topn and txt_summary_path is not None:
-                    import pstats  # type: ignore
-
                     s = pstats.Stats(stats_path)
                     s.strip_dirs().sort_stats("cumtime")
                     with open(txt_summary_path, "w") as f:
                         s.stream = f  # type: ignore
                         s.print_stats(host_profile_topn)
             except Exception:  # pragma: no cover - optional/diagnostic path
-                logger.warn("Failed to log host profile stats", exc_info=True)
+                logger.warning("Failed to log host profile stats", exc_info=True)
 
         # Start periodic flushing before stop_trace since it may block when perfetto is enabled
         if create_perfetto_link and jax.process_index() == 0:
@@ -266,18 +275,6 @@ def profile_ctx(
         if event is not None:
             event.set()
 
-        levanter.tracker.current_tracker().log_artifact(path, type="jax_profile")
-        # Log host stats if available
-        if stats_path is not None and os.path.exists(stats_path):
-            try:
-                levanter.tracker.current_tracker().log_artifact(stats_path, type="host_profile")
-            except Exception:
-                logger.warn("Failed to log host profile stats", exc_info=True)
-        if txt_summary_path is not None and os.path.exists(txt_summary_path):
-            try:
-                levanter.tracker.current_tracker().log_artifact(txt_summary_path, type="host_profile")
-            except Exception:
-                logger.warn("Failed to log host profile summary", exc_info=True)
         barrier_sync()
 
 
@@ -291,8 +288,14 @@ __all__ = [
     "CBInfo",
     "JitCallback",
     "LambdaCallback",
+    "ProgressEvent",
+    "ProgressWatchdog",
+    "ProgressWatchdogConfig",
     "StepInfo",
+    "progress_event_scope",
     "log_performance_stats",
     "log_step_info",
     "pbar_logger",
+    "CallbackStateView",
+    "StateCallbackRunner",
 ]

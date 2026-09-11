@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 import logging
 import time
@@ -14,8 +14,10 @@ from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
+import levanter.config
+import levanter.tracker
 from levanter.callbacks import profile_ctx
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
@@ -77,7 +79,13 @@ def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:
     if config.checkpoint_path is not None:
         with use_cpu_device():
             model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-            model = load_checkpoint(model, config.checkpoint_path, subpath="model")
+            checkpoint_path = latest_checkpoint_path(config.checkpoint_path)
+            model = load_checkpoint(
+                model,
+                checkpoint_path,
+                subpath="model",
+                axis_mapping=config.trainer.parameter_axis_mapping,
+            )
             model = mp.cast_to_compute(model)
         return model
     else:
@@ -87,28 +95,30 @@ def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:
             reference_checkpoint=config.hf_checkpoint, tokenizer=load_tokenizer(config.tokenizer)
         )
         model = converter.load_pretrained(
-            config.model.model_type, ref=config.hf_checkpoint, dtype=config.trainer.mp.compute_dtype
+            config.model.model_type,
+            ref=config.hf_checkpoint,
+            axis_mapping=config.trainer.parameter_axis_mapping,
+            dtype=config.trainer.mp.compute_dtype,
         )
         return model  # type: ignore[return-value]
 
 
 def main(config: SampleLmConfig):
-    levanter.initialize(config)
+    levanter.trainer.initialize(config)
     tok_string: str | None = config.tokenizer
-    if config.tokenizer is None:
-        if config.hf_checkpoint is not None:
-            # If we have an HF checkpoint, we can load the tokenizer from it
-            tok_string = config.hf_checkpoint.model_name_or_path
+    if tok_string is None and config.hf_checkpoint is not None:
+        # If we have an HF checkpoint, we can load the tokenizer from it
+        tok_string = config.hf_checkpoint.model_name_or_path
 
     if tok_string is None:
         raise ValueError("Must specify a tokenizer or an HF checkpoint with a tokenizer")
 
-    tokenizer = load_tokenizer(config.tokenizer)
+    tokenizer = load_tokenizer(tok_string)
 
     key = jrandom.PRNGKey(config.seed)
 
     # NB: we use the compute_axis_mapping b/c we're doing inference
-    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+    with config.trainer.use_device_mesh():
         vocab_size = len(tokenizer)
         Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), config.trainer.compute_axis_mapping)
         model = _load_model(config, Vocab, key=key)
@@ -122,7 +132,12 @@ def main(config: SampleLmConfig):
         prompt_ids = tokenizer(prompts, add_special_tokens=False)["input_ids"]
 
         # Initialize a reusable generation service with capacity from config
-        service = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.engine)
+        service = InferenceEngine.from_model_with_config(
+            model=model,
+            tokenizer=tokenizer,
+            config=config.engine,
+            axis_resources=config.trainer.compute_axis_mapping,
+        )
 
         if config.log_kernel_jaxprs_path:
             service.write_kernel_jaxprs(config.log_kernel_jaxprs_path)
@@ -170,6 +185,7 @@ def main(config: SampleLmConfig):
                         max_num_tokens=jnp.array(len(toks) + config.max_new_tokens, dtype=jnp.int32),
                         stop_tokens=stop_ids,
                         temperature=jnp.array(config.temperature, dtype=jnp.float32),
+                        top_p=jnp.array(1.0, dtype=jnp.float32),
                         key=jrandom.fold_in(base_key, ridx),
                     )
                     reqs.append(
@@ -198,7 +214,7 @@ def main(config: SampleLmConfig):
                     ]
                     print(f"Tokens with text for sequence {seq_id}: {tokens_with_text}")
 
-    levanter.current_tracker().finish()
+    levanter.tracker.current_tracker().finish()
 
 
 if __name__ == "__main__":

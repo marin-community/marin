@@ -1,0 +1,53 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Contact points, provisioned from files like the rest of the alerting tree: UI
+# edits do not persist (Grafana's SQLite is ephemeral on Cloud Run) and would be
+# overwritten by these files anyway.
+#
+# ops-critical carries two receivers: email, and the loopback bridge that both
+# announces the alert in Slack and opens its Loom triage session. Slack is not a
+# receiver here — the bridge posts it, because an incoming webhook never reveals
+# the message timestamp Loom needs to route the thread to that session, so a
+# Grafana-posted alert cannot become a conversation. One poster also means one
+# message per alert rather than two side-by-side. See infra/grafana/README.md.
+#
+# ops-slack is the fallback for malformed or unlabeled alerts. It posts through
+# the bridge as well, so both receivers share one channel, one credential, and
+# one rendering; it differs only in opening no Loom run, since an alert carrying
+# no severity to route on carries no incident to triage. The warning policy
+# references it through an always-active mute timing and never invokes it.
+#
+# Both endpoints are loopback-only. The Loom one additionally authenticates to
+# Loom as the Cloud Run service account through Google identity federation.
+# Email delivery needs valid SMTP credentials — without them email is inert
+# while the bridge still posts.
+apiVersion: 1
+
+# File provisioning does not delete receivers merely omitted from contactPoints.
+deleteContactPoints:
+  - orgId: 1
+    uid: ops-critical-slack
+
+contactPoints:
+  - orgId: 1
+    name: ops-critical
+    receivers:
+      - uid: ops-critical-email
+        type: email
+        settings:
+          addresses: ops@openathena.ai
+      - uid: ops-critical-loom
+        type: webhook
+        settings:
+          url: http://127.0.0.1:8081/alerts/loom
+          httpMethod: POST
+
+  - orgId: 1
+    name: ops-slack
+    receivers:
+      - uid: ops-slack-webhook
+        type: webhook
+        settings:
+          url: http://127.0.0.1:8081/alerts/slack
+          httpMethod: POST

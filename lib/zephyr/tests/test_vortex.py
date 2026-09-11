@@ -1,17 +1,17 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for vortex file format support."""
 
 import pytest
-
-from fray.v2 import ResourceConfig
-from fray.v2.local_backend import LocalClient
-from zephyr import Dataset
-from zephyr.execution import ZephyrContext
+from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 from zephyr.expr import col
-from zephyr.readers import InputFileSpec, load_vortex
-from zephyr.writers import write_vortex_file
+from zephyr.input_file import InputFileSpec
+from zephyr.readers import load_parquet, load_vortex
+from zephyr.writers import write_parquet_file, write_vortex_file
 
 
 @pytest.fixture
@@ -27,7 +27,7 @@ def vortex_file(tmp_path):
 def sync_ctx():
     """ZephyrContext fixture for vortex tests."""
     client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=2, resources=ResourceConfig(cpu=1, ram="512m"), name="test-vortex")
+    ctx = ZephyrContext(client=client, max_workers=2, resources=ResourceConfig(cpu=1, ram="512m"), name="test-vortex")
     yield ctx
     ctx.shutdown()
 
@@ -56,6 +56,15 @@ class TestVortexReader:
         write_vortex_file([], str(empty_path))
 
         records = list(load_vortex(str(empty_path)))
+        assert records == []
+
+    def test_load_vortex_empty_file_with_column_projection(self, tmp_path):
+        """Test loading an empty vortex file with column projection."""
+        empty_path = tmp_path / "empty.vortex"
+        write_vortex_file([], str(empty_path))
+
+        spec = InputFileSpec(path=str(empty_path), columns=["id", "attributes"])
+        records = list(load_vortex(spec))
         assert records == []
 
 
@@ -110,7 +119,7 @@ class TestVortexPipeline:
             .write_vortex(output_pattern)
         )
 
-        results = list(sync_ctx.execute(ds))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 1
 
         # Verify output
@@ -124,7 +133,7 @@ class TestVortexPipeline:
 
         ds = Dataset.from_files(str(vortex_file)).load_file().filter(lambda r: r["id"] < 10).write_jsonl(output_pattern)
 
-        results = list(sync_ctx.execute(ds))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 1
 
     def test_vortex_to_parquet_conversion(self, sync_ctx, vortex_file, tmp_path):
@@ -133,11 +142,10 @@ class TestVortexPipeline:
 
         ds = Dataset.from_files(str(vortex_file)).load_vortex().write_parquet(output_pattern)
 
-        results = list(sync_ctx.execute(ds))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 1
 
         # Verify parquet output
-        from zephyr.readers import load_parquet
 
         loaded = list(load_parquet(results[0]))
         assert len(loaded) == 100
@@ -145,7 +153,6 @@ class TestVortexPipeline:
     def test_parquet_to_vortex_conversion(self, sync_ctx, tmp_path):
         """Test converting parquet to vortex."""
         # Create parquet file
-        from zephyr.writers import write_parquet_file
 
         records = [{"a": i, "b": f"val_{i}"} for i in range(50)]
         parquet_path = tmp_path / "input.parquet"
@@ -155,7 +162,7 @@ class TestVortexPipeline:
 
         ds = Dataset.from_files(str(parquet_path)).load_parquet().write_vortex(output_pattern)
 
-        results = list(sync_ctx.execute(ds))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 1
 
         # Verify vortex output
@@ -170,7 +177,7 @@ class TestVortexFilterPushdown:
         """Test filter pushdown with expression."""
         ds = Dataset.from_files(str(vortex_file)).load_vortex().filter(col("score") > 500)
 
-        results = list(sync_ctx.execute(ds))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 49  # scores 510, 520, ..., 990
         assert all(r["score"] > 500 for r in results)
 
@@ -178,6 +185,6 @@ class TestVortexFilterPushdown:
         """Test column selection pushdown."""
         ds = Dataset.from_files(str(vortex_file)).load_vortex().select("id", "score")
 
-        results = list(sync_ctx.execute(ds))
+        results = sync_ctx.execute(ds).results
         assert len(results) == 100
         assert set(results[0].keys()) == {"id", "score"}

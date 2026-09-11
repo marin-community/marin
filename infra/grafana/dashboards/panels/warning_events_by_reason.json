@@ -1,0 +1,86 @@
+{
+  "type": "timeseries",
+  "title": "Warning events by reason",
+  "description": "Warning task events per bucket, by reason. Replaces reading the raw event log: a reason that appears or climbs is the first shape of a cluster going bad.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "short",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 22,
+        "showPoints": "never",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "normal",
+          "group": "A"
+        }
+      },
+      "min": 0
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "table",
+      "placement": "right",
+      "calcs": [
+        "lastNotNull",
+        "max"
+      ]
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "timeseries",
+      "parser": "backend",
+      "url": "/query",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "sql",
+            "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, reason AS series, SUM(count) AS value FROM \"iris.task_event\" WHERE type = 'Warning' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "t",
+          "text": "time",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "series",
+          "text": "series",
+          "type": "string"
+        },
+        {
+          "selector": "value",
+          "text": "value",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

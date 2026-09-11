@@ -1,16 +1,23 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
+import tempfile
+from pathlib import Path
 
-import jax
-import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
-from levanter.data.mixture import MixtureDataset
-from levanter.data.text import TextLmDatasetFormat
-from levanter.store.cache import CacheLedger, TreeCache
-from marin.execution import InputName
-from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig, tokenize
+from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.store.cache import CacheLedger
+from marin.processing.tokenize.tokenize import (
+    MIN_GROUP_BYTES,
+    TokenizeConfig,
+    bundle_files_by_size,
+    compute_target_group_bytes,
+    tokenize,
+)
+from zephyr.dataset import FileEntry
+from zephyr.input_file import InputFileSpec
 
 # Dummy values for other required TokenizeConfig fields
 DUMMY_CACHE_PATH = "/dummy/cache"
@@ -25,6 +32,9 @@ DUMMY_VALIDATION_PATHS = []
         (["gs://bucket/data/test/file.jsonl"], True, "gs://bucket/data/test/file.jsonl"),
         (["gs://bucket/data/validation/file.jsonl"], True, "gs://bucket/data/validation/file.jsonl"),
         (["gs://bucket/data/latest_updates/file.jsonl"], False, None),
+        # 'test'/'validation' as a filename substring (underscore boundary) is still forbidden.
+        (["gs://bucket/data/train/file_test.jsonl"], True, "gs://bucket/data/train/file_test.jsonl"),
+        (["gs://bucket/data/train/file_validation.jsonl"], True, "gs://bucket/data/train/file_validation.jsonl"),
         (
             [
                 "gs://bucket/data/train/file1.jsonl",
@@ -63,109 +73,80 @@ def test_train_paths_variants(train_paths, should_error, expected_error_path):
 
 
 @pytest.mark.parametrize(
-    "input_name, should_error",
+    "total_bytes, max_workers, expected",
     [
-        (InputName.hardcoded("gs://bucket/data/train/file.jsonl"), False),
-        (InputName.hardcoded("gs://bucket/data/test/file.jsonl"), True),
-        (InputName.hardcoded("gs://bucket/data/validation/file.jsonl"), True),
-        (InputName.hardcoded("gs://bucket/data/latest_updates/file.jsonl"), False),
-        (InputName.hardcoded("gs://bucket/data/train/file_test.jsonl"), True),
-        (InputName.hardcoded("gs://bucket/data/train/file_validation.jsonl"), True),
+        # Normal: 100 GB across 100 workers → 1 GB per group
+        (100_000_000_000, 100, 1_000_000_000),
+        # Floor kicks in: 1 GB across 100 workers → would be 10 MB, but MIN_GROUP_BYTES = 100 MB
+        (1_000_000_000, 100, MIN_GROUP_BYTES),
+        # Single worker: entire dataset in one group
+        (50_000_000_000, 1, 50_000_000_000),
+        # Tiny dataset: floor still applies
+        (10_000_000, 4096, MIN_GROUP_BYTES),
+        # Exact division
+        (4_000_000_000, 4, 1_000_000_000),
     ],
 )
-def test_inputname_variants(input_name, should_error):
-    if should_error:
-        with pytest.raises(ValueError) as excinfo:
-            TokenizeConfig(
-                train_paths=[input_name],
-                validation_paths=DUMMY_VALIDATION_PATHS,
-                cache_path=DUMMY_CACHE_PATH,
-                tokenizer=DUMMY_TOKENIZER,
-            )
-        assert "contains a forbidden pattern ('test' or 'validation')" in str(excinfo.value)
-        assert input_name.name in str(excinfo.value)
-    else:
-        try:
-            TokenizeConfig(
-                train_paths=[input_name],
-                validation_paths=DUMMY_VALIDATION_PATHS,
-                cache_path=DUMMY_CACHE_PATH,
-                tokenizer=DUMMY_TOKENIZER,
-            )
-        except ValueError as e:
-            if "contains a forbidden pattern" in str(e):
-                pytest.fail("Unexpected ValueError for valid InputName")
+def test_compute_target_group_bytes(total_bytes, max_workers, expected):
+    assert compute_target_group_bytes(total_bytes, max_workers) == expected
 
 
-def test_mixed_paths_one_invalid_inputname():
-    with pytest.raises(ValueError) as excinfo:
-        TokenizeConfig(
-            train_paths=[
-                "gs://bucket/data/train/file1.jsonl",
-                InputName.hardcoded("gs://bucket/data/test/file2.jsonl"),
-                "gs://bucket/data/train/file3.jsonl",
-            ],
-            validation_paths=DUMMY_VALIDATION_PATHS,
-            cache_path=DUMMY_CACHE_PATH,
-            tokenizer=DUMMY_TOKENIZER,
+def _fe(path: str, size: int) -> FileEntry:
+    return FileEntry(spec=InputFileSpec(path=path), size=size)
+
+
+def test_bundle_files_produces_expected_groups():
+    """Auto-computed grouping should produce approximately max_workers groups."""
+    files = [_fe(f"file_{i}.jsonl", 500_000_000) for i in range(20)]
+    total_bytes = sum(f.size for f in files)  # 10 GB total
+    max_workers = 4
+    target = compute_target_group_bytes(total_bytes, max_workers)  # 2.5 GB per group
+
+    groups = list(bundle_files_by_size(files, target))
+    # bundle_files_by_size yields a group when adding the next file would reach
+    # the target (uses >=). With target=2.5 GB and 500 MB files, each group fits
+    # 4 files (2 GB < 2.5 GB), yielding 5 groups.
+    assert len(groups) == 5
+    for group in groups:
+        assert len(group) == 4
+
+
+def test_bundle_files_single_large_file():
+    """A single file larger than target_group_bytes gets its own group."""
+    files = [
+        _fe("big.jsonl", 5_000_000_000),
+        _fe("small1.jsonl", 100_000_000),
+        _fe("small2.jsonl", 100_000_000),
+    ]
+    target = 1_000_000_000  # 1 GB
+    groups = list(bundle_files_by_size(files, target))
+    assert groups[0] == ["big.jsonl"]
+    assert groups[1] == ["small1.jsonl", "small2.jsonl"]
+
+
+def test_tokenize_skips_empty_leading_data(tmp_path):
+    """Empty shards and documents must not determine the cache exemplar."""
+    # train_paths must not contain "test"; pytest's tmp_path always does.
+    with tempfile.TemporaryDirectory(prefix="sparse_") as raw_dir:
+        data_dir = Path(raw_dir)
+        pq.write_table(
+            pa.table({"text": pa.array([], type=pa.string())}),
+            str(data_dir / "data-00000.parquet"),
         )
-    assert "contains a forbidden pattern ('test' or 'validation')" in str(excinfo.value)
-    assert "gs://bucket/data/test/file2.jsonl" in str(excinfo.value)
+        pq.write_table(
+            pa.table({"text": ["", "hello world"]}),
+            str(data_dir / "data-00001.parquet"),
+        )
 
+        config = TokenizeConfig(
+            train_paths=[f"{data_dir}/*.parquet"],
+            validation_paths=[],
+            cache_path=str(tmp_path / "cache"),
+            tokenizer="gpt2",
+            format=TextLmDatasetFormat(text_key="text"),
+        )
+        tokenize(config)
 
-@pytest.mark.slow
-def test_tokenize_full_pipeline_integration(tmp_path):
-    """Integration test for the full tokenization pipeline."""
-    config = HfTokenizeConfig(
-        id="dlwh/wikitext_103_detokenized",
-        cache_path=str(tmp_path / "cache"),
-        tokenizer="gpt2",
-        sample_count=100,
-        window_size_bytes=1_000_000,
-        format=TextLmDatasetFormat(),
-    )
-
-    tokenize(config)
-    train_cache_dir = tmp_path / "cache" / "train"
-    train_ledger_path = train_cache_dir / "shard_ledger.json"
-    assert train_ledger_path.exists(), f"Ledger not found at {train_ledger_path}"
-
-    ledger = CacheLedger.load(str(train_cache_dir))
-    assert ledger.is_finished, "Ledger should be marked as finished"
-    assert ledger.total_num_rows > 0, f"Cache should have non-zero rows, got {ledger.total_num_rows}"
-
-    print("\nLedger info:")
-    print(f"  total_num_rows: {ledger.total_num_rows}")
-    print(f"  shard_rows: {ledger.shard_rows}")
-    print(f"  finished_shards: {ledger.finished_shards}")
-
-    # The exemplar should match the output structure of tokenization
-    exemplar = {"input_ids": np.array([0], dtype=np.int32)}
-    cache = TreeCache.load(str(train_cache_dir), exemplar=exemplar)
-
-    cache_len = len(cache)
-    assert cache_len == ledger.total_num_rows, f"Cache length {cache_len} != ledger rows {ledger.total_num_rows}"
-
-    first_example = cache[0]
-    assert "input_ids" in first_example, "Example should have input_ids field"
-
-    print("\nFirst 5 examples:")
-    for i in range(min(5, cache_len)):
-        example = cache[i]
-        print(f"  Example {i}: input_ids length = {len(example['input_ids'])}")
-        assert len(example["input_ids"]) > 0, f"Example {i} has empty input_ids"
-
-    # 8. Test that the cache can be used in a mixture without ZeroDivisionError
-
-    mixture = MixtureDataset(
-        datasets={"test": cache},
-        weights={"test": 1.0},
-        block_size=128,
-        key=jax.random.PRNGKey(0),
-    )
-
-    # This should not raise ZeroDivisionError
-    mixture_example = asyncio.run(mixture.getitem_async(0))
-    assert mixture_example is not None
-    assert "input_ids" in mixture_example
-    print("\nSuccessfully created mixture and sampled example!")
+    ledger = CacheLedger.load(str(tmp_path / "cache" / "train"))
+    assert ledger.is_finished
+    assert ledger.total_num_rows == 1

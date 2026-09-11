@@ -1,0 +1,205 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Tests for DockerRuntime mount resolution, staging, and container creation."""
+
+import subprocess
+from unittest.mock import Mock
+
+import pytest
+from iris.cluster.bundle import BundleStore
+from iris.cluster.runtime.docker import DockerRuntime, _security_flags
+from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
+from iris.rpc import job_pb2
+
+
+@pytest.fixture
+def runtime(tmp_path):
+    return DockerRuntime(cache_dir=tmp_path / "cache")
+
+
+@pytest.fixture
+def mock_bundle_store():
+    store = Mock(spec=BundleStore)
+    store.extract_bundle_to = Mock()
+    return store
+
+
+def test_resolve_mounts_workdir(monkeypatch, tmp_path, runtime):
+    """resolve_mounts resolves WORKDIR to the given host path."""
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
+
+    workdir = tmp_path / "task-workdir"
+    workdir.mkdir()
+    mounts = [MountSpec("app", container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024 * 1024 * 512)]
+    resolved = runtime.resolve_mounts(mounts, workdir_host_path=workdir)
+
+    assert len(calls) == 0
+    assert len(resolved) == 1
+    assert resolved[0].host_path == str(workdir)
+    assert resolved[0].container_path == "/app"
+    assert resolved[0].kind == MountKind.WORKDIR
+
+
+def test_resolve_mounts_cache_uses_cache_dir(tmp_path, runtime):
+    """CACHE mounts resolve to subdirectories under cache_dir."""
+    mounts = [MountSpec("root-cache-uv", container_path="/root/.cache/uv", kind=MountKind.CACHE)]
+    resolved = runtime.resolve_mounts(mounts)
+
+    assert len(resolved) == 1
+    assert resolved[0].host_path.startswith(str(tmp_path / "cache"))
+    assert resolved[0].container_path == "/root/.cache/uv"
+    assert resolved[0].kind == MountKind.CACHE
+
+
+def test_resolve_mounts_output_uses_attempt_host_path(tmp_path, runtime):
+    output_dir = tmp_path / "attempt-output"
+    mounts = [MountSpec("task-outputs", container_path="/iris/outputs", kind=MountKind.OUTPUT)]
+
+    resolved = runtime.resolve_mounts(mounts, output_host_path=output_dir)
+
+    assert output_dir.is_dir()
+    assert resolved[0].host_path == str(output_dir)
+    assert resolved[0].container_path == "/iris/outputs"
+
+
+def test_resolve_mounts_tmpfs_has_no_host_path(tmp_path, runtime):
+    """TMPFS mounts get empty host_path (Docker --tmpfs provides per-container isolation)."""
+    mounts = [MountSpec("tmp", container_path="/tmp", kind=MountKind.TMPFS)]
+    resolved = runtime.resolve_mounts(mounts)
+
+    assert len(resolved) == 1
+    assert resolved[0].host_path == ""
+    assert resolved[0].container_path == "/tmp"
+    assert resolved[0].kind == MountKind.TMPFS
+
+
+def test_resolve_mounts_workdir_requires_host_path(tmp_path):
+    """WORKDIR mount without workdir_host_path raises RuntimeError."""
+    runtime = DockerRuntime(cache_dir=tmp_path / "cache")
+    mounts = [MountSpec("app", container_path="/app", kind=MountKind.WORKDIR)]
+    with pytest.raises(RuntimeError, match="workdir_host_path"):
+        runtime.resolve_mounts(mounts)
+
+
+@pytest.mark.parametrize(
+    ("device", "memory_bytes", "expected_shm_mb"),
+    [
+        (None, 12 * 1024**3, 12 * 1024),
+        ("tpu", 12 * 1024**3, 12 * 1024),
+        ("tpu", 0, 100 * 1024),
+    ],
+)
+def test_run_container_shm_limit_matches_memory_or_tpu_fallback(
+    monkeypatch, tmp_path, runtime, device, memory_bytes, expected_shm_mb
+):
+    commands: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        stdout = "container-id\n" if cmd[:2] == ["docker", "create"] else ""
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
+
+    workdir = tmp_path / "task-workdir"
+    workdir.mkdir()
+    resources = job_pb2.ResourceSpecProto(memory_bytes=memory_bytes)
+    if device == "tpu":
+        resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v5p", count=4))
+    config = ContainerConfig(
+        image="iris-task:latest",
+        entrypoint=job_pb2.RuntimeEntrypoint(
+            run_command=job_pb2.CommandEntrypoint(argv=["echo", "hello"]),
+        ),
+        env={},
+        resources=resources,
+        mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
+        workdir_host_path=workdir,
+    )
+
+    runtime.create_container(config).run()
+
+    create_command = next(command for command in commands if command[:2] == ["docker", "create"])
+    if memory_bytes:
+        assert create_command[create_command.index("--memory") + 1] == f"{expected_shm_mb}m"
+    else:
+        assert "--memory" not in create_command
+    assert create_command[create_command.index("--shm-size") + 1] == f"{expected_shm_mb}m"
+
+
+def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
+    """stage_bundle extracts bundle and writes workdir files."""
+    calls: list = []
+    monkeypatch.setattr(
+        "iris.cluster.runtime.docker.subprocess.run",
+        lambda cmd, **kw: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
+    )
+
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    runtime.stage_bundle(
+        bundle_id="abc",
+        workdir=workdir,
+        workdir_files={},
+        bundle_store=mock_bundle_store,
+    )
+    assert len(calls) == 0
+    mock_bundle_store.extract_bundle_to.assert_called_once_with("abc", workdir)
+
+
+# ---------------------------------------------------------------------------
+# Container security profiles -> docker flags
+# ---------------------------------------------------------------------------
+
+
+def test_security_flags_default_cpu():
+    """UNSPECIFIED resolves to DEFAULT: hardened CPU defaults with SYS_PTRACE."""
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_UNSPECIFIED, is_tpu_run=False)
+    assert flags == ["--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--cap-add", "SYS_PTRACE"]
+
+
+def test_security_flags_default_tpu_is_privileged():
+    """A TPU run is privileged for device access even under DEFAULT."""
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_DEFAULT, is_tpu_run=True)
+    assert "--privileged" in flags
+    assert "no-new-privileges" not in flags
+    assert "SYS_PTRACE" in flags
+
+
+def test_security_flags_restricted_omits_ptrace():
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_RESTRICTED, is_tpu_run=False)
+    assert flags == ["--security-opt", "no-new-privileges", "--cap-drop", "ALL"]
+    assert "SYS_PTRACE" not in flags
+
+
+def test_security_flags_privileged_cpu():
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_PRIVILEGED, is_tpu_run=False)
+    assert "--privileged" in flags
+    assert "--cap-drop" not in flags
+    assert "SYS_PTRACE" in flags
+
+
+def test_security_flags_docker_access_mounts_socket():
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS, is_tpu_run=False)
+    assert "-v" in flags
+    assert "/var/run/docker.sock:/var/run/docker.sock" in flags
+    # Still hardened like DEFAULT otherwise.
+    assert "--cap-drop" in flags
+
+
+def test_security_flags_gvisor_uses_runsc_runtime_and_default_caps():
+    """gVisor selects the runsc runtime and keeps docker's default caps (no cap-drop)."""
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_GVISOR, is_tpu_run=False)
+    assert flags == ["--runtime", "runsc"]
+    # in-guest root needs the default cap set, so the container is NOT cap-dropped
+    # or privileged — gVisor provides the host isolation instead.
+    assert "--cap-drop" not in flags
+    assert "--privileged" not in flags
+    assert "no-new-privileges" not in flags

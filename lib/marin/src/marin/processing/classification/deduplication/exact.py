@@ -1,191 +1,240 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
+import itertools
+import logging
 from collections.abc import Iterator
-from functools import partial
+from typing import Any, TypeVar
+
+import dupekit
+import humanfriendly
+import pyarrow as pa
+from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import rebase_file_path
+from zephyr import counters
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN
+from zephyr.writers import write_parquet_file
+
 from marin.processing.classification.deduplication.dedup_commons import (
-    DedupConfig,
+    DEFAULT_FILETYPES,
     DedupMode,
     _collect_input_files,
-    _compute_dedup_stats,
-    _count_reduce,
+    _DupTally,
     _find_base_path,
     _get_extension,
     _init_wandb,
     _load_batches,
-    _load_dupe_map_shard,
+    finalize_dedup,
+    make_document_dedup_aggregator,
 )
-from marin.utils import rebase_file_path
-import pyarrow as pa
-import logging
-import wandb
-from zephyr import ZephyrContext
-from zephyr.dataset import Dataset
 
 logger = logging.getLogger(__name__)
 
+T = TypeVar("T")
 
-def dedup_exact_paragraph(config: DedupConfig):
-    import dupekit
-    from dupekit import Transformation
 
-    input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
+def _iter_has_more_than_one(records: Iterator[T]) -> tuple[bool, T, Iterator[T]]:
+    """Peek into an iterator to check if it has more than one item, without consuming items."""
+    records = iter(records)  # Ensure we have an iterator
+    # NOTE: we assume the iterator is non-empty, which is the case for use use-cases
+    first = next(records)
 
-    _init_wandb(config)
+    try:
+        second = next(records)
+        has_more_than_one = True
+        rest = itertools.chain([second], records)
+    except StopIteration:
+        has_more_than_one = False
+        rest = iter([])
+
+    return has_more_than_one, first, itertools.chain([first], rest)
+
+
+def _annotate_dups(records: Iterator[dict[str, Any]], *, include_span: bool) -> Iterator[dict[str, Any]]:
+    """Mark every non-canonical record in a hash group as a duplicate.
+
+    ``records`` are the members of a single hash group, pre-sorted by ``id`` so the
+    first record is the deterministic canonical keeper. Every other record with a
+    different ``id`` is a duplicate. When *include_span* is set (paragraph dedup),
+    the offending paragraph span is attached — empty for non-duplicate records.
+    """
+    has_dups, head_record, records = _iter_has_more_than_one(records)
+
+    # NOTE: we **arbitrarily** select the 1st record as the canonical record
+    cano_id = head_record["id"]
+
+    for item in records:
+        is_dup = has_dups and item["id"] != cano_id
+        annotated = {"id": item["id"], "is_dup": is_dup, "file_idx": item["file_idx"]}
+        if include_span:
+            annotated["span"] = item["paragraph_span"]["span"] if is_dup else []
+        yield annotated
+
+
+def dedup_exact_paragraph(
+    *,
+    input_paths: str | list[str],
+    output_path: str,
+    text_field: str = "text",
+) -> dict:
+    input_files = _collect_input_files(input_paths=input_paths, filetypes=["parquet"])
+    idx_to_path = dict(list(enumerate(input_files)))
+    path_to_idx = {v: k for k, v in idx_to_path.items()}
+
+    _init_wandb(mode=DedupMode.EXACT_PARAGRAPH, input_paths=input_paths)
 
     def compute_paragraph_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
+        # We know there's only one source per batch, so just get the first one
+        source = batch.column(DEFAULT_FILE_PATH_COLUMN)[0].as_py()
         pipeline = [
-            Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
-            Transformation.SplitParagraphs(text_col=config.text_field, id_col="resolved_id"),
-            Transformation.Hash(input_col="paragraph_text", output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128),
-            Transformation.SelectColumns(columns=["hash", "doc_id"]),
+            dupekit.Transformation.SplitParagraphs(text_col=text_field, id_col="id"),
+            dupekit.Transformation.Hash(
+                input_col="paragraph_text", output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128
+            ),
+            dupekit.Transformation.SelectColumns(columns=["doc_id", "paragraph_span", "hash"]),
         ]
-        return dupekit.transform(batch, pipeline)
+        result = dupekit.transform(batch, pipeline)
+        return result.append_column(DEFAULT_FILE_PATH_COLUMN, pa.array([source] * result.num_rows, type=pa.string()))
 
-    with ZephyrContext(name="exact-para-dedup") as ctx:
-        # first compute the full set of duplicate keys.
-        duplicate_key_shards = list(
-            ctx.execute(
-                Dataset.from_list(input_files)
-                .flat_map(_load_batches)
-                .map(compute_paragraph_hashes)
-                .flat_map(lambda batch: batch.to_pylist())
-                .group_by(
-                    lambda key_fn: key_fn["hash"],
-                    partial(_count_reduce, canonical_id="doc_id"),
-                    num_output_shards=42,
-                )
-                .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
-                verbose=True,
-            ),
+    resources = ResourceConfig(cpu=10, ram="100g", disk="20g")
+    map_task_resources = resources.scale(0.1)  # 1 cpu / 10g / 2g
+    reduce_task_resources = resources.scale(cpu=0.1, ram=0.2, disk=0.1)  # 1 cpu / 20g / 2g
+    ctx = ZephyrContext(name="exact-para-dedup", resources=resources)
+
+    def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict]) -> dict:
+        # NOTE: all records belong to the specific file and are sorted by doc_id
+        input_path = idx_to_path[file_idx]
+        output_file = rebase_file_path(
+            _find_base_path(input_paths, [input_path]),
+            input_path,
+            f"{output_path}/data/",
+            old_extension=_get_extension(input_path),
+            new_extension=".parquet",
         )
 
-        exact_cnts = _compute_dedup_stats(duplicate_key_shards, method="exact", level="paragraph")
-        logger.info(str(exact_cnts))
+        tally = _DupTally("dedup/exact/paragraph")
 
-        if wandb.run:
-            wandb.log(exact_cnts.to_dict())
+        def group_by_doc_id(records: Iterator[dict]) -> Iterator[dict]:
+            doc_level_record: dict[str, Any] | None = None
+            for record in records:
+                doc_id = record["id"]
+                if doc_level_record is None:
+                    doc_level_record = {
+                        "id": doc_id,
+                        "dup_spans": [record["span"]] if record["span"] else [],
+                    }
+                elif doc_level_record["id"] != doc_id:
+                    if doc_level_record["dup_spans"]:
+                        yield doc_level_record
+                    doc_level_record = {
+                        "id": doc_id,
+                        "dup_spans": [record["span"]] if record["span"] else [],
+                    }
+                else:
+                    assert doc_level_record["id"] == doc_id
+                    if record["span"]:
+                        doc_level_record["dup_spans"].append(record["span"])
+            if doc_level_record and doc_level_record["dup_spans"]:
+                yield doc_level_record
 
-        def mark_exact_dups_paragraphs(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
-            """Mark duplicate paragraphs in a single record using exact hash matching."""
+        result = write_parquet_file(group_by_doc_id(tally.tally(records)), output_file)
+        return tally.as_result(result)
 
-            dup_map = _load_dupe_map_shard(duplicate_key_shards)
+    def _flat_map_paragraph_hashes(batch: pa.RecordBatch) -> Iterator[dict]:
+        hashes = compute_paragraph_hashes(batch).to_pylist()
+        counters.pipeline.update_counter("hash/paragraphs", len(hashes))
+        for hash_record in hashes:
+            yield {
+                "file_idx": path_to_idx[hash_record.pop(DEFAULT_FILE_PATH_COLUMN)],
+                "id": hash_record.pop("doc_id"),
+                **hash_record,
+            }
 
-            for batch in batches:
-                yield dupekit.mark_paragraph_duplicates(
-                    batch,
-                    dup_map,
-                    attribute_name=str(DedupMode.EXACT_PARAGRAPH),
-                    algorithm=dupekit.HashAlgorithm.Xxh3_128,
-                )
-
-        base_path = _find_base_path(config.input_paths, input_files)
-        ctx.execute(
-            Dataset.from_list(input_files)
-            .flat_map(_load_batches)
-            .map_shard(mark_exact_dups_paragraphs)
-            .flat_map(lambda batch: batch.to_pylist())
-            .write_jsonl(
-                output_pattern=lambda shard_idx, total: rebase_file_path(
-                    base_path,
-                    input_files[shard_idx],
-                    f"{config.output_path}/data",
-                    old_extension=_get_extension(input_files[shard_idx]),
-                    new_extension=".jsonl.gz",
-                ),
-                skip_existing=True,
-            ),
-            verbose=True,
+    shard_results = ctx.execute(
+        Dataset.from_list(input_files)
+        .load_parquet(approx_shard_bytes=humanfriendly.parse_size("256M"), include_file_paths=True, batch_mode=True)
+        .flat_map(_flat_map_paragraph_hashes)
+        .group_by(
+            lambda record: record["hash"],
+            # NOTE: selecting the canonical record is deterministic via this sort
+            sort_by=lambda record: record["id"],
+            reducer=lambda _hash, records: _annotate_dups(records, include_span=True),
         )
+        .group_by(
+            lambda r: r["file_idx"],
+            sort_by=lambda r: r["id"],
+            reducer=aggregate_and_write_to_corresponding_files,
+        ),
+        verbose=True,
+        map_task_resources=map_task_resources,
+        reduce_task_resources=reduce_task_resources,
+    ).results
 
-    if wandb.run:
-        wandb.finish()
-
-    return {"success": True, "mode": str(DedupMode.EXACT_PARAGRAPH)} | exact_cnts.to_dict()
+    return finalize_dedup(shard_results, DedupMode.EXACT_PARAGRAPH, method="exact", level="paragraph")
 
 
-def dedup_exact_document(config: DedupConfig):
+def dedup_exact_document(
+    *,
+    input_paths: str | list[str],
+    output_path: str,
+    text_field: str = "text",
+    filetypes: list[str] | None = None,
+    max_parallelism: int,
+    worker_resources: ResourceConfig | None = None,
+    coordinator_resources: ResourceConfig | None = None,
+) -> dict:
     """Exact document deduplication: identify duplicate documents based on full text hash"""
-    import dupekit
-    from dupekit import Transformation
+    if filetypes is None:
+        filetypes = DEFAULT_FILETYPES
 
-    input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
+    input_files = _collect_input_files(input_paths=input_paths, filetypes=filetypes)
+    idx_to_path = dict(list(enumerate(input_files)))
+    path_to_idx = {v: k for k, v in idx_to_path.items()}
 
-    _init_wandb(config)
+    _init_wandb(mode=DedupMode.EXACT_DOCUMENT, input_paths=input_paths)
 
     def compute_document_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
         pipeline = [
-            Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
-            Transformation.Hash(input_col=config.text_field, output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128),
-            Transformation.SelectColumns(columns=["hash", "resolved_id"]),
+            dupekit.Transformation.Hash(input_col=text_field, output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128),
+            dupekit.Transformation.SelectColumns(columns=["hash", "id"]),
         ]
         return dupekit.transform(batch, pipeline)
 
-    with ZephyrContext(name="exact-doc-dedup") as ctx:
-        # first compute the full set of duplicate keys.
-        duplicate_key_shards = list(
-            ctx.execute(
-                Dataset.from_list(input_files)
-                .flat_map(_load_batches)
-                .map(compute_document_hashes)
-                .flat_map(lambda batch: batch.to_pylist())
-                .group_by(
-                    lambda key_fn: key_fn["hash"],
-                    partial(_count_reduce, canonical_id="resolved_id"),
-                    num_output_shards=42,
-                )
-                .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
-                verbose=True,
-            )
+    ctx_kwargs: dict = {
+        "name": "exact-doc-dedup",
+        "max_workers": max_parallelism,
+        "resources": worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+    }
+    if coordinator_resources is not None:
+        ctx_kwargs["coordinator_resources"] = coordinator_resources
+    ctx = ZephyrContext(**ctx_kwargs)
+
+    aggregate_and_write = make_document_dedup_aggregator(
+        idx_to_path=idx_to_path,
+        input_paths=input_paths,
+        output_path=output_path,
+        counter_prefix="dedup/exact/document",
+    )
+
+    def _flat_map_document_hashes(path: str) -> Iterator[dict]:
+        for batch in _load_batches(path):
+            hashes = compute_document_hashes(batch).to_pylist()
+            counters.pipeline.update_counter("hash/documents", len(hashes))
+            for hash_record in hashes:
+                yield {"file_idx": path_to_idx[path], **hash_record}
+
+    shard_results = ctx.execute(
+        Dataset.from_list(input_files)
+        .flat_map(_flat_map_document_hashes)
+        .group_by(
+            lambda record: record["hash"],
+            # NOTE: selecting the canonical record is deterministic via this sort
+            sort_by=lambda record: record["id"],
+            reducer=lambda _hash, records: _annotate_dups(records, include_span=False),
         )
+        .group_by(lambda r: r["file_idx"], sort_by=lambda r: r["id"], reducer=aggregate_and_write),
+        verbose=True,
+    ).results
 
-        exact_cnts = _compute_dedup_stats(duplicate_key_shards, method="exact", level="document")
-        logger.info(str(exact_cnts))
-
-        if wandb.run:
-            wandb.log(exact_cnts.to_dict())
-
-        def mark_dup_documents(batches: Iterator[pa.RecordBatch]) -> Iterator[dict]:
-            """Mark exact duplicate documents using exact hash matching."""
-            dup_map = _load_dupe_map_shard(duplicate_key_shards)
-
-            for batch in batches:
-                prepared_batch = dupekit.transform(
-                    batch,
-                    [
-                        Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="id"),
-                        Transformation.Hash(
-                            input_col=config.text_field, output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128
-                        ),
-                    ],
-                )
-                b = dupekit.mark_document_duplicates(
-                    prepared_batch,
-                    dup_map,
-                    attribute_name=str(DedupMode.EXACT_DOCUMENT),
-                    hash_col="hash",
-                )
-                yield from b.to_pylist()
-
-        base_path = _find_base_path(config.input_paths, input_files)
-        ctx.execute(
-            Dataset.from_list(input_files).flat_map(_load_batches)
-            # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
-            # the shards of the input files for rebase_file_path to work correctly.
-            .map_shard(mark_dup_documents).write_jsonl(
-                output_pattern=lambda shard_idx, total: rebase_file_path(
-                    base_path,
-                    input_files[shard_idx],
-                    f"{config.output_path}/data",
-                    old_extension=_get_extension(input_files[shard_idx]),
-                    new_extension=".jsonl.gz",
-                ),
-                skip_existing=True,
-            ),
-            verbose=True,
-        )
-
-    if wandb.run:
-        wandb.finish()
-
-    return {"success": True, "mode": str(DedupMode.EXACT_DOCUMENT)} | exact_cnts.to_dict()
+    return finalize_dedup(shard_results, DedupMode.EXACT_DOCUMENT, method="exact", level="document")

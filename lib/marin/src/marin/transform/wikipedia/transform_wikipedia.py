@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -6,11 +6,6 @@ wikipedia/transform_wikipedia.py
 
 Performs HTML->Text/MD conversion using the specified tools over a wiki dump save in DOLMA format.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=400 --memory=2GB --cluster=us-central2 \
-    lib/marin/src/marin/transform/wikipedia/transform_wikipedia.py \
-    --input_path gs://path/to/input --output_path gs://path/to/output \
-    --revision v1.0 --extract_method readability ...
 """
 
 import logging
@@ -19,12 +14,16 @@ import re
 from dataclasses import dataclass
 
 import draccus
-from marin.schemas.web.convert import ExtractionConfig
-from marin.utils import fsspec_glob
-from marin.web.convert import convert_page
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from bs4 import BeautifulSoup
+from rigging.filesystem.storage_path import StoragePath
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.readers import load_jsonl
 
-logger = logging.getLogger("ray")
+from marin.schemas.web.convert import ExtractionConfig
+from marin.web.convert import convert_page
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -33,7 +32,6 @@ class WikiExtractionConfig:
     input_path: The path to the Wikipedia dump file or directory containing the dump files in JSONL format
     output_path: The path where the processed text/markdown files will be saved
     revision: The revision identifier of the Wikipedia dump (e.g., "20241201") for versioning and tracking
-    extract_method: The method to use for HTML extraction (e.g., "readability", "resiliparse", "trafilatura")
     extract_config: Configuration object for the extraction method (e.g., ResiliparseConfig, HtmlToMarkdownConfig)
     remove_reference_section: If True, removes reference sections from articles to reduce noise in the extracted text
     max_files: Optional limit on the number of files to process, useful for testing or partial processing
@@ -48,7 +46,6 @@ class WikiExtractionConfig:
     input_path: str
     output_path: str
     revision: str
-    extract_method: str
     extract_config: ExtractionConfig
     remove_reference_section: bool
     max_files: int | None = None
@@ -61,8 +58,6 @@ def remove_and_append_infobox(html: str) -> str:
     """
     Wraps the infobox in a new section with heading 'InfoBox' and appends it to the end of the article.
     """
-    from bs4 import BeautifulSoup
-
     soup = BeautifulSoup(html, "html.parser")
 
     infobox = soup.find("table", {"class": "infobox"})
@@ -94,8 +89,6 @@ def remove_references_from_html(html: str) -> str:
     """
     Removes the references list and heading from the article.
     """
-    from bs4 import BeautifulSoup
-
     soup = BeautifulSoup(html, "html.parser")
 
     reflist = soup.find("div", {"class": "reflist"})
@@ -112,11 +105,9 @@ def remove_references_from_html(html: str) -> str:
 def unwrap_eqn(html: str):
     """Extract equations from math elements and convert to LaTeX inline/block quotes,
     wrapping display math in <p> tags."""
-    from bs4 import BeautifulSoup
-
-    html = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
     # Find all annotations containing equations
-    annotations = html.findAll("annotation", {"encoding": "application/x-tex"})
+    annotations = soup.find_all("annotation", {"encoding": "application/x-tex"})
 
     for annotation in annotations:
         # Extract the LaTeX content and remove \displaystyle wrapper
@@ -163,12 +154,12 @@ def unwrap_eqn(html: str):
         # Format equations
         if is_display:
             # Create a new <p> tag and insert the br tags plus the display math
-            p_tag = html.new_tag("p")
-            p_tag.append(html.new_tag("br"))
-            p_tag.append(html.new_tag("br"))
+            p_tag = soup.new_tag("p")
+            p_tag.append(soup.new_tag("br"))
+            p_tag.append(soup.new_tag("br"))
             p_tag.append(BeautifulSoup(f"$${latex}$$", "html.parser"))
-            p_tag.append(html.new_tag("br"))
-            p_tag.append(html.new_tag("br"))
+            p_tag.append(soup.new_tag("br"))
+            p_tag.append(soup.new_tag("br"))
             span_element.replace_with(p_tag)
         else:
             # Inline math: handle spacing
@@ -179,10 +170,12 @@ def unwrap_eqn(html: str):
             formatted_latex = f"{left_space}${latex}$"
             span_element.replace_with(formatted_latex)
 
-    return str(html)
+    return str(soup)
 
 
-def postprocess_content(content: str, digit_threshold: int, word_threshold: int, special_char_threshold: float) -> str:
+def postprocess_content(
+    content: str, digit_threshold: int, word_threshold: int, special_char_threshold: float
+) -> str | None:
     """
     Postprocesses the content by deleting it if its is mainly digits, words, and special characters.
     """
@@ -219,7 +212,6 @@ def clean_wiki_html(html: str, remove_reference_section: bool = True) -> str:
 
 def process_record(
     row: dict,
-    extract_method: str,
     extract_config: ExtractionConfig,
     remove_reference_section: bool = True,
     digit_threshold: int = 50,
@@ -230,7 +222,6 @@ def process_record(
 
     Args:
         row: Record from NDJSON file
-        extract_method: Method to use for HTML extraction
         extract_config: Configuration for the extraction method
         remove_reference_section: Whether to remove reference sections
         digit_threshold: Percentage threshold for filtering pages with excessive digits
@@ -248,7 +239,7 @@ def process_record(
             html_string = row["article_body"]["html"]
 
             filtered_html = clean_wiki_html(html_string, remove_reference_section)
-            content = convert_page(filtered_html, extract_method=extract_method, config=extract_config)["content"]
+            content = convert_page(filtered_html, config=extract_config)["content"]
         else:
             logger.error(f"No content found in the row: {row}")
             return None
@@ -279,7 +270,7 @@ def process_record(
 def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
     logger.info(f"Starting processing of Wikipedia dump in {cfg.input_path}")
 
-    files = fsspec_glob(f"{cfg.input_path}/*.ndjson")
+    files = [str(m) for m in StoragePath(f"{cfg.input_path}/*.ndjson").glob()]
     logger.info(f"Found {len(files)} files to process")
 
     if cfg.max_files:
@@ -293,7 +284,6 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
         .map(
             lambda row: process_record(
                 row,
-                cfg.extract_method,
                 cfg.extract_config,
                 cfg.remove_reference_section,
                 cfg.digit_threshold,
@@ -304,5 +294,5 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
         .filter(lambda record: record is not None)
         .write_jsonl(f"{output_base}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
     )
-    with ZephyrContext(name="transform-wikipedia") as ctx:
-        list(ctx.execute(pipeline))
+    ctx = ZephyrContext(name="transform-wikipedia")
+    ctx.execute(pipeline)

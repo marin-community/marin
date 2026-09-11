@@ -1,11 +1,16 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for operation fusion optimization via compute_plan."""
 
-from zephyr import Dataset, compute_plan
-from zephyr.dataset import FilterOp, MapOp, ReshardOp, TakePerShardOp
-from zephyr.plan import Map, PhysicalStage, Reshard
+import itertools
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset, FilterOp, MapOp, ReshardOp, TakePerShardOp
+from zephyr.expr import col
+from zephyr.plan import Map, PhysicalStage, Reshard, StageType, compute_plan
 
 
 def test_optimize_consecutive_maps():
@@ -86,7 +91,6 @@ def test_fused_execution_with_batch():
     Note: Batching happens per-shard. Since each input item becomes its own shard,
     and filtering may reduce items per shard, batches may not span across shards.
     """
-    from zephyr.execution import ZephyrContext
 
     # Use a flat_map to create multiple items in a single shard
     ds = (
@@ -97,8 +101,8 @@ def test_fused_execution_with_batch():
         .window(2)  # [[6, 8], [10, 12]]
     )
 
-    with ZephyrContext(name="test_fusion") as ctx:
-        result = list(ctx.execute(ds))
+    ctx = ZephyrContext(name="test_fusion")
+    result = ctx.execute(ds).results
     assert result == [[6, 8], [10, 12]]
 
 
@@ -119,7 +123,59 @@ def test_stage_name():
 
 def test_stage_name_truncation():
     """PhysicalStage.stage_name() truncates long names."""
-    stage = PhysicalStage(operations=[Map(fn=lambda x: x) for _ in range(20)])
+    stage = PhysicalStage(operations=[Map(fn=lambda x: x) for _ in range(20)], stage_type=StageType.MAP_WORKER)
     name = stage.stage_name(max_length=20)
     assert len(name) <= 20
     assert name.endswith("...")
+
+
+def test_lambda_filter_blocks_select_pushdown(tmp_path):
+    """A lambda filter prevents SelectOp pushdown — otherwise the projection
+    would drop columns the lambda reads, KeyError-ing the user code."""
+    path = str(tmp_path / "data.parquet")
+    pq.write_table(
+        pa.Table.from_pylist([{"a": 1, "b": 10, "c": 100}, {"a": 2, "b": 20, "c": 200}]),
+        path,
+    )
+
+    # Lambda reads column "c" but later select("a", "b") would drop it.
+    ds = Dataset.from_files(path).load_parquet().filter(lambda r: r["c"] > 150).select("a", "b")
+    results = ZephyrContext(name="test").execute(ds).results
+    assert results == [{"a": 2, "b": 20}]
+
+    # Sanity: an Expr filter (introspectable) does still allow select pushdown
+    # because referenced columns are added back at read time.
+    ds_expr = Dataset.from_files(path).load_parquet().filter(col("c") > 150).select("a", "b")
+    assert ZephyrContext(name="test").execute(ds_expr).results == [{"a": 2, "b": 20}]
+
+
+def test_parquet_splits_stay_paired_with_their_input_file(tmp_path):
+    """approx_shard_bytes splits each parquet file into contiguous row spans, and
+    every span stays attached to the file it was computed from — the planner reads
+    the footers concurrently, so the spans must be re-paired in input order."""
+    row_counts = [6, 24, 12, 40]
+    paths = []
+    for file_idx, row_count in enumerate(row_counts):
+        path = str(tmp_path / f"data-{file_idx}.parquet")
+        records = [{"id": file_idx * 100 + row} for row in range(row_count)]
+        pq.write_table(pa.Table.from_pylist(records), path, row_group_size=2)
+        paths.append(path)
+
+    row_group_bytes = pq.ParquetFile(paths[0]).metadata.row_group(0).total_byte_size
+    ds = Dataset.from_list(paths).load_parquet(approx_shard_bytes=row_group_bytes * 2 + 1)
+    plan = compute_plan(ds)
+
+    spans_by_path: dict[str, list[tuple[int, int]]] = {}
+    for expected_shard_idx, item in enumerate(plan.source_items):
+        assert item.shard_idx == expected_shard_idx
+        spans_by_path.setdefault(item.data.path, []).append((item.data.row_start, item.data.row_end))
+
+    assert list(spans_by_path) == paths
+    for path, row_count in zip(paths, row_counts, strict=True):
+        spans = spans_by_path[path]
+        assert len(spans) > 1
+        assert spans[0][0] == 0
+        # The last span ends at this file's own row count.
+        assert spans[-1][1] == row_count
+        for (_, end), (start, _) in itertools.pairwise(spans):
+            assert end == start

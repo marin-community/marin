@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 import equinox as eqx
-import haliax as hax
 import jax
 import jax.random as jrandom
 import jmp
@@ -38,8 +37,10 @@ from rich.console import Console
 from rich.panel import Panel
 
 import levanter
-from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, HfTokenizer, load_tokenizer
+import levanter.config
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
+from levanter.tokenizers import MarinTokenizer
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import (
     ChatCompletionRequest,
@@ -52,7 +53,6 @@ from levanter.inference.openai import (
 )
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.mesh import MeshConfig
 
 logger = logging.getLogger(__name__)
@@ -64,17 +64,6 @@ jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
 jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 
 
-def weight_loader(server, server_config, current_model: LmHeadModel) -> LmHeadModel:
-    with use_cpu_device():
-        key = jrandom.PRNGKey(server_config.seed)
-        vocab_size = len(server.inference_context.tokenizer)
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), server_config.trainer.param_axis_mapping)
-        model = eqx.filter_eval_shape(server_config.model.build, Vocab, key=key)
-        model = load_checkpoint(model, model, subpath="model")
-        model = server_config.trainer.mp.cast_to_compute(model)
-    return model
-
-
 def _load_model(
     trainer_config: TrainerConfig,
     model_config: LmConfig,
@@ -82,7 +71,7 @@ def _load_model(
     levanter_checkpoint: str | None,
     *,
     key,
-) -> tuple[LmHeadModel, HfTokenizer]:
+) -> tuple[LmHeadModel, MarinTokenizer | None]:
     """Load a model either from a checkpoint or HF repo."""
 
     if levanter_checkpoint is None and hf_checkpoint is None:
@@ -92,14 +81,20 @@ def _load_model(
 
     mp = trainer_config.mp
     tokenizer = load_tokenizer(hf_checkpoint)
-    vocab_size = len(tokenizer)
+    vocab_size = tokenizer.vocab_size
 
-    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+    with trainer_config.use_device_mesh():
         Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), trainer_config.compute_axis_mapping)
 
         if levanter_checkpoint is not None:
             model = eqx.filter_eval_shape(model_config.build, Vocab, key=key)
-            model = load_checkpoint(model, levanter_checkpoint, subpath="model")
+            checkpoint_path = latest_checkpoint_path(levanter_checkpoint)
+            model = load_checkpoint(
+                model,
+                checkpoint_path,
+                subpath="model",
+                axis_mapping=trainer_config.parameter_axis_mapping,
+            )
             model = mp.cast_to_compute(model)
             return model, None
         else:
@@ -150,16 +145,6 @@ class InferenceReplConfig:
             ),
         )
     )
-    # bad
-    #                 max_pages=32,
-    #                 max_seqs=2,
-    #                 page_size=8,
-    #                 max_pages_per_seq=8,
-    #                 max_queued_tokens=4,
-    #                 max_seqs_in_prefill=2,
-    #                 max_prefill_size=64,
-    #                 max_tokens_per_round=16,
-    #                 max_rounds=8,
     server: InferenceServerConfig = field(
         default_factory=lambda: InferenceServerConfig(
             service=InferenceEngineConfig(
@@ -232,7 +217,7 @@ class ReplContext:
             tokenizer = self.config.tokenizer
 
         if is_hf_model:
-            model, tokenizer = _load_model(
+            model, loaded_tokenizer = _load_model(
                 trainer_config=self.config.trainer,
                 model_config=self.config.model,
                 hf_checkpoint=path,
@@ -243,7 +228,7 @@ class ReplContext:
             if not tokenizer:
                 console.print("[red]Must specify --tokenizer for local checkpoints[/red]")
                 return
-            model, tokenizer = _load_model(
+            model, loaded_tokenizer = _load_model(
                 trainer_config=self.config.trainer,
                 model_config=self.config.model,
                 hf_checkpoint=None,
@@ -253,13 +238,13 @@ class ReplContext:
 
         if self.server is not None:
 
-            def _reload(current_model: LmHeadModel) -> LmHeadModel:
-                return weight_loader(self.server, self.config.server, current_model)
+            def _reload(_current_model: LmHeadModel) -> LmHeadModel:
+                return model
 
             self.server.reload(_reload)
         else:
-            with self.config.trainer.use_device_mesh(), hax.axis_mapping(self.config.trainer.compute_axis_mapping):
-                self.server = InferenceServer.create(self.config.server, model=model, tokenizer=tokenizer)
+            with self.config.trainer.use_device_mesh():
+                self.server = InferenceServer.create(self.config.server, model=model, tokenizer=loaded_tokenizer)
 
         console.print(f"[green]✓ Loaded {path}[/green]")
 

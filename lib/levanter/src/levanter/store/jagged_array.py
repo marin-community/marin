@@ -1,19 +1,23 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import contextlib
 import os
+import threading
+import uuid
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-import fsspec.core
-import jax.experimental.array_serialization.serialization as ser
 import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 
-from levanter.utils import fsspec_utils
-from levanter.utils.thread_utils import future_from_value
+from rigging.filesystem.cross_region import is_cross_region_url, record_transfer
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
+
+from levanter.tensorstore_serialization import build_kvstore_spec
 
 
 CACHE_BYTES_LIMIT = int(os.getenv("LEVANTER_TS_CACHE_LIMIT", "1000000000"))
@@ -22,6 +26,91 @@ CACHE_BYTES_LIMIT = int(os.getenv("LEVANTER_TS_CACHE_LIMIT", "1000000000"))
 # at 4 bytes this is 256k elements
 DEFAULT_CHUNK_SIZE = 256 * 1024
 DEFAULT_WRITE_CHUNK_SIZE = DEFAULT_CHUNK_SIZE * 512
+
+
+@dataclass(frozen=True)
+class BloscCodec:
+    """Blosc settings used when creating a jagged-array store."""
+
+    compressor: str
+    compression_level: int
+
+
+DEFAULT_BLOSC_CODEC = BloscCodec("zstd", 1)
+
+
+_READ_CONTEXT: ts.Context | None = None
+_READ_CONTEXT_LOCK = threading.Lock()
+_READ_CACHE_SETTINGS = {"total_bytes_limit": CACHE_BYTES_LIMIT}
+
+
+def set_jagged_array_read_cache_bytes(total_bytes_limit: int) -> None:
+    """Set the shared TensorStore read cache size before opening any stores."""
+    if total_bytes_limit <= 0:
+        raise ValueError("total_bytes_limit must be positive")
+    with _READ_CONTEXT_LOCK:
+        if _READ_CONTEXT is not None:
+            raise RuntimeError("Jagged array read cache is already initialized")
+        _READ_CACHE_SETTINGS["total_bytes_limit"] = total_bytes_limit
+
+
+def _read_context() -> ts.Context:
+    global _READ_CONTEXT
+    with _READ_CONTEXT_LOCK:
+        if _READ_CONTEXT is None:
+            # TensorStore only shares cache_pool entries across stores that share a Context.
+            _READ_CONTEXT = ts.Context({"cache_pool": _READ_CACHE_SETTINGS})
+    return _READ_CONTEXT
+
+
+# Distinct datastore paths already charged against the cross-region transfer
+# budget in this process. Reads of the bulk token/offset chunks go through
+# tensorstore's native GCS driver, which bypasses fsspec and the cross-region
+# guard, so we charge a store's full on-disk size once when its reader opens.
+_charged_store_reads: set[str] = set()
+_charged_store_reads_lock = threading.Lock()
+
+
+def charge_store_read_budget(path: Optional[str]) -> None:
+    """Charge a tokenized datastore's on-disk size to the cross-region budget.
+
+    Stats the store at ``path`` and records its total size against the shared
+    transfer budget, so a job streaming a remote datastore is accounted for by
+    the same budget that guards fsspec reads. The full size is charged once, up
+    front, rather than per batch, since the tensorstore reads themselves are
+    invisible to the budget. Each distinct store path is charged once per
+    process; a no-op for local or same-region paths.
+
+    The ``du`` stat pass only runs when ``path`` is actually cross-region, so
+    the common same-region and local opens pay nothing beyond a cached region
+    lookup.
+    """
+    if not path or path == "memory" or not is_cross_region_url(path):
+        return
+    with _charged_store_reads_lock:
+        if path in _charged_store_reads:
+            return
+        _charged_store_reads.add(path)
+    fs, fs_path = url_to_fs(path)
+    try:
+        total_bytes = fs.du(fs_path, total=True)
+    except FileNotFoundError:
+        return
+    record_transfer(total_bytes, path)
+
+
+@contextlib.contextmanager
+def _no_cache_read_context():
+    """Use a disposable, zero-byte-cache read context for the duration of the block."""
+    global _READ_CONTEXT
+    with _READ_CONTEXT_LOCK:
+        prev = _READ_CONTEXT
+        _READ_CONTEXT = ts.Context({"cache_pool": {"total_bytes_limit": 0}})
+    try:
+        yield
+    finally:
+        with _READ_CONTEXT_LOCK:
+            _READ_CONTEXT = prev
 
 
 @dataclass
@@ -34,10 +123,6 @@ class PreparedBatch:
     offsets: np.ndarray
     shapes: Optional[np.ndarray]
 
-    @property
-    def byte_size(self):
-        return self.data.nbytes + self.offsets.nbytes + (self.shapes.nbytes if self.shapes is not None else 0)
-
     def astype(self, dtype):
         return PreparedBatch(self.data.astype(dtype), self.offsets, self.shapes)
 
@@ -46,9 +131,29 @@ class PreparedBatch:
         return len(self.offsets)
 
     @staticmethod
-    def from_batch(items: Sequence[np.ndarray], item_rank: Optional[int] = None) -> "PreparedBatch":
+    def from_batch(items: Sequence, item_rank: Optional[int] = None) -> "PreparedBatch":
+        if items and not hasattr(items[0], "ndim"):
+            if (item_rank or 1) == 1:
+                return PreparedBatch._from_sequences(items)
+            items = [np.asarray(x) for x in items]
         data, offsets, shapes = _prepare_batch(items, item_rank)
         return PreparedBatch(data, offsets, shapes)
+
+    @staticmethod
+    def _from_sequences(items: Sequence[Sequence]) -> "PreparedBatch":
+        """Build from Python sequences without per-item numpy conversion.
+        Pre-allocates a single flat array and copies each sequence into it."""
+        lengths = np.array([len(item) for item in items], dtype=np.int64)
+        offsets = np.cumsum(lengths)
+        total = int(offsets[-1]) if len(offsets) else 0
+        dtype = np.result_type(items[0][0]) if items and len(items[0]) > 0 else np.int64
+        data = np.empty(total, dtype=dtype)
+        pos = 0
+        for item, length in zip(items, lengths):
+            end = pos + int(length)
+            data[pos:end] = item
+            pos = end
+        return PreparedBatch(data, offsets, None)
 
     @staticmethod
     def concat(batches: Sequence["PreparedBatch"]) -> "PreparedBatch":
@@ -82,6 +187,18 @@ def _prepare_batch(arrays, item_rank):
     return data, offsets, shapes
 
 
+@contextlib.contextmanager
+def _index_error_on_out_of_range(item):
+    """Translate tensorstore's out-of-bounds ValueError into an ``IndexError`` for ``item``."""
+    try:
+        yield
+    except ValueError as e:
+        # ts raises a ValueError for an index out of bounds OUT_OF_RANGE
+        if "OUT_OF_RANGE" in str(e):
+            raise IndexError(f"JaggedArrayStore index out of range: {item}") from e
+        raise
+
+
 @dataclass
 class JaggedArrayStore:
     """
@@ -107,40 +224,49 @@ class JaggedArrayStore:
 
     @staticmethod
     async def open_async(
-        path: Optional[str], *, mode="a", item_rank=1, dtype, cache_metadata: bool = False
+        path: Optional[str],
+        *,
+        mode="a",
+        item_rank=1,
+        dtype,
+        cache_metadata: bool = False,
+        write_codec: BloscCodec = DEFAULT_BLOSC_CODEC,
     ) -> "JaggedArrayStore":
         offset_path = _extend_path(path, "offsets")
-        cache_settings = {"total_bytes_limit": CACHE_BYTES_LIMIT} if cache_metadata and mode == "r" else {}
-        offsets = _ts_open_async(offset_path, jnp.int64, [1], mode=mode, cache_settings=cache_settings)
+        offsets = await _ts_open_async(offset_path, jnp.int64, [1], mode=mode, write_codec=write_codec)
 
         data_path = _extend_path(path, "data")
-        # not generally worth this
-        data = _ts_open_async(data_path, dtype, [0], mode=mode, cache_settings={})
+        data = await _ts_open_async(data_path, dtype, [0], mode=mode, write_codec=write_codec)
 
         if item_rank > 1:
             shape_path = _extend_path(path, "shapes")
-            shapes = _ts_open_async(
-                shape_path, jnp.int64, [0, item_rank - 1], mode=mode, cache_settings=cache_settings
+            shapes = await _ts_open_async(
+                shape_path, jnp.int64, [0, item_rank - 1], mode=mode, write_codec=write_codec
             )
         else:
             shapes = None
 
-        return JaggedArrayStore(
-            await offsets, await data, await shapes if shapes is not None else None, item_rank, cache_metadata
-        )
+        return JaggedArrayStore(offsets, data, shapes, item_rank, cache_metadata)
 
     @staticmethod
-    def open(path: Optional[str], *, mode="a", item_rank=1, dtype, cache_metadata: bool = False) -> "JaggedArrayStore":
+    def open(
+        path: Optional[str],
+        *,
+        mode="a",
+        item_rank=1,
+        dtype,
+        cache_metadata: bool = False,
+        write_codec: BloscCodec = DEFAULT_BLOSC_CODEC,
+    ) -> "JaggedArrayStore":
         offset_path = _extend_path(path, "offsets")
-        cache_settings = {"total_bytes_limit": CACHE_BYTES_LIMIT} if cache_metadata and mode == "r" else {}
-        offsets = _ts_open_sync(offset_path, jnp.int64, [1], mode=mode, cache_settings=cache_settings)
+        offsets = _ts_open_sync(offset_path, jnp.int64, [1], mode=mode, write_codec=write_codec)
 
         data_path = _extend_path(path, "data")
-        data = _ts_open_sync(data_path, dtype, [0], mode=mode, cache_settings=cache_settings)
+        data = _ts_open_sync(data_path, dtype, [0], mode=mode, write_codec=write_codec)
 
         if item_rank > 1:
             shape_path = _extend_path(path, "shapes")
-            shapes = _ts_open_sync(shape_path, jnp.int64, [0, item_rank - 1], mode=mode, cache_settings=cache_settings)
+            shapes = _ts_open_sync(shape_path, jnp.int64, [0, item_rank - 1], mode=mode, write_codec=write_codec)
         else:
             shapes = None
 
@@ -165,7 +291,6 @@ class JaggedArrayStore:
 
     @property
     def data_size(self):
-        # return int(self.offsets[self.num_rows].read().result())
         if self._cached_data_size is not None:
             return self._cached_data_size
         result = int(self.offsets[self.num_rows].read().result())
@@ -181,10 +306,10 @@ class JaggedArrayStore:
             self._cached_data_size = result
         return result
 
-    async def append_async(self, data: np.ndarray):
+    async def append_async(self, data: Sequence):
         await self.extend_async([data])
 
-    def append(self, data: np.ndarray):
+    def append(self, data: Sequence):
         self.extend([data])
 
     async def trim_to_size_async(self, size: int):
@@ -246,7 +371,7 @@ class JaggedArrayStore:
         data_fut = self.data[new_max:old_data_size].write(np.zeros((), dtype=self.data.dtype.name))
 
         f1.result()
-        offsets_fut = self.offsets[size + 1 : old_data_size + 1].write(0)
+        offsets_fut = self.offsets[size + 1 : old_len + 1].write(0)
 
         data_fut.result()
         offsets_fut.result()
@@ -258,7 +383,7 @@ class JaggedArrayStore:
             self._cached_num_rows = size
             self._cached_data_size = new_max
 
-    async def extend_async(self, arrays: Sequence[np.ndarray] | PreparedBatch):
+    async def extend_async(self, arrays: Sequence[Sequence] | PreparedBatch):
         if isinstance(arrays, PreparedBatch):
             prepared = arrays
         else:
@@ -289,7 +414,7 @@ class JaggedArrayStore:
             self._cached_num_rows = num_rows + num_added
             self._cached_data_size = current_data_size + len(data)
 
-    def extend(self, arrays: Sequence[np.ndarray] | PreparedBatch):
+    def extend(self, arrays: Sequence[Sequence] | PreparedBatch):
         if isinstance(arrays, PreparedBatch):
             prepared = arrays
         else:
@@ -327,24 +452,15 @@ class JaggedArrayStore:
             self._cached_num_rows = num_rows + num_added
             self._cached_data_size = current_data_size + len(data)
 
-    async def reload_async(self) -> "JaggedArrayStore":
-        """
-        Calls `resolve` on the underlying tensorstore objects, updating size information
-
-        @return: new JaggedArrayStore with resolved tensorstores
-        """
-        offsets = ts.open(_unshaped_spec(self.offsets))
-        data = ts.open(_unshaped_spec(self.data))
-        shapes = future_from_value(None) if self.shapes is None else ts.open(_unshaped_spec(self.shapes.spec()))
-
-        offsets, data, shapes = await asyncio.gather(offsets, data, shapes)
-
-        return JaggedArrayStore(offsets, data, shapes, self.item_rank)
-
     def reload(self) -> "JaggedArrayStore":
-        offsets = ts.open(_unshaped_spec(self.offsets))
-        data = ts.open(_unshaped_spec(self.data))
-        shapes = None if self.shapes is None else ts.open(_unshaped_spec(self.shapes.spec())).result()
+        """Re-open the underlying tensorstores so size information reflects concurrent writes."""
+        offsets = ts.open(_unshaped_spec(self.offsets, retain_context=False), **_reload_kwargs())
+        data = ts.open(_unshaped_spec(self.data, retain_context=False), **_reload_kwargs())
+        shapes = (
+            None
+            if self.shapes is None
+            else ts.open(_unshaped_spec(self.shapes, retain_context=False), **_reload_kwargs()).result()
+        )
 
         offsets = offsets.result()
         data = data.result()
@@ -357,18 +473,8 @@ class JaggedArrayStore:
     async def get_item_async(self, item):
         if isinstance(item, slice):
             raise NotImplementedError("Slicing not supported")
-            len_self = await self.num_rows_async()
-            start, stop, step = item.indices(len_self)
-            if step != 1:
-                raise ValueError("JaggedArrayStore doesn't support slicing with step != 1")
-            shapes = None if self.shapes is None else self.shapes[start:stop]
-            # NB: JaggedArray not JaggedArrayStore
-            # TODO: use a transformed TS?
-            data_start, data_stop, offsets = await self._bounds_for_rows_async(start, stop)
-            new_offsets = offsets - offsets[0]
-            return JaggedArray(new_offsets, await self.data[data_start:data_stop].read(), shapes)
         else:
-            try:
+            with _index_error_on_out_of_range(item):
                 start, stop, _ = await self._bounds_for_rows_async(item, item + 1)
                 data = await self.data[start:stop].read()
 
@@ -376,12 +482,6 @@ class JaggedArrayStore:
                     shapes = np.array(self.shapes[item])
                     data = data.reshape(*shapes, -1)
                 return data
-            except ValueError as e:
-                # ts raises a value error for an index out of bounds OUT_OF_RANGE
-                if "OUT_OF_RANGE" in str(e):
-                    raise IndexError(f"JaggedArrayStore index out of range: {item}") from e
-                else:
-                    raise e
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[np.ndarray]:
         # get indices
@@ -427,23 +527,10 @@ class JaggedArrayStore:
 
     def __getitem__(self, item):
         if isinstance(item, slice):
-            # raise NotImplementedError("Slicing not supported")
-            # # TODO: do we need to avoid reading len(self)?
-            # start, stop, step = item.indices(len(self))
-            # if step != 1:
-            #     raise ValueError("JaggedArrayStore doesn't support slicing with step != 1")
-            # shapes = None if self.shapes is None else self.shapes[start:stop]
-            # # NB: JaggedArray not JaggedArrayStore
-            # # TODO: use a transformed TS?
-            # data_start, data_stop, offsets = self._bounds_for_rows(start, stop)
-            # new_offsets = offsets - offsets[0]
-            # return JaggedArray(new_offsets, self.data[data_start:data_stop].read().result(), shapes)
             start, stop, step = item.indices(len(self))
-            # for now, just read the data into a list
-
             return self.get_batch_sync(list(range(start, stop, step)))
         else:
-            try:
+            with _index_error_on_out_of_range(item):
                 start, stop, _ = self._bounds_for_rows(item, item + 1)
                 data = self.data[start:stop].read().result()
 
@@ -451,12 +538,6 @@ class JaggedArrayStore:
                     shapes = np.array(self.shapes[item])
                     data = data.reshape(*shapes, -1)
                 return data
-            except ValueError as e:
-                # ts raises a value error for an index out of bounds OUT_OF_RANGE
-                if "OUT_OF_RANGE" in str(e):
-                    raise IndexError(f"JaggedArrayStore index out of range: {item}") from e
-                else:
-                    raise e
 
     def _bounds_for_rows(self, start, stop):
         num_rows = self.num_rows
@@ -492,7 +573,7 @@ class JaggedArrayStore:
         offsets = [(offset[0], offset[-1]) for offset in offsets]
 
         if zero_pos is not None:
-            offsets[zero_pos] = [0, offsets[zero_pos][1]]
+            offsets[zero_pos] = (0, offsets[zero_pos][1])
 
         return offsets
 
@@ -516,7 +597,7 @@ class JaggedArrayStore:
         offsets = [(offset[0], offset[-1]) for offset in offsets]
 
         if zero_pos is not None:
-            offsets[zero_pos] = [0, offsets[zero_pos][1]]
+            offsets[zero_pos] = (0, offsets[zero_pos][1])
 
         return offsets
 
@@ -531,40 +612,60 @@ class JaggedArrayStore:
         return data_start, data_stop, offsets
 
 
-def _unshaped_spec(store: ts.TensorStore) -> ts.Spec:
-    spec = store.spec(retain_context=True)
+def _unshaped_spec(store: ts.TensorStore, *, retain_context: bool = True) -> ts.Spec:
+    spec = store.spec(retain_context=retain_context)
     return spec
 
 
-def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode, cache_settings: dict):
-    spec = _get_spec(path, shape)
-    mode = _mode_to_open_mode(mode)
+def _reload_kwargs() -> dict:
+    """Fresh context + recheck so reload picks up mutations from the writer."""
+    return {
+        "context": ts.Context({"cache_pool": _READ_CACHE_SETTINGS}),
+        "recheck_cached_data": True,
+    }
 
-    # Basically, we want to load the existing shape metadata if it exists
-    if not mode.get("delete_existing", False):
+
+def _ts_open_kwargs(mode: str) -> dict:
+    if mode == "r":
+        return {
+            "context": _read_context(),
+            "recheck_cached_data": False,
+        }
+    return {"context": ts.Context({"cache_pool": {}})}
+
+
+def _ts_open_sync(
+    path: Optional[str], dtype: jnp.dtype, shape, *, mode, write_codec: BloscCodec = DEFAULT_BLOSC_CODEC
+):
+    mode_config = _mode_to_open_mode(mode)
+    open_spec = _get_spec(path, shape, write_codec=None)
+    create_spec = _get_spec(path, shape, write_codec=write_codec)
+
+    if path is not None and mode != "r":
+        StoragePath(path).parent.mkdirs()
+
+    open_kwargs = _ts_open_kwargs(mode)
+
+    # Basically, we want to load the existing shape metadata if it exists.
+    # When we're deleting the store anyway, there is no metadata to reuse and this open always fails.
+    if not mode_config["open_mode"].delete_existing:
         try:
-            return ts.open(spec, context=ts.Context({"cache_pool": cache_settings}), **mode).result()
+            return ts.open(open_spec, **open_kwargs, **mode_config).result()
         except FileNotFoundError:
             pass
         except ValueError:
             pass
 
     # TODO: groups?
-    # TODO: set chunk sizes
     try:
-        if spec.get("kvstore", {}).get("path", "").startswith("memory://"):
+        if create_spec.get("kvstore", {}).get("path", "").startswith("memory://"):
             raise ValueError("No kvstore specified in spec, cannot open TensorStore")
         return ts.open(
-            spec,
+            create_spec,
             dtype=jnp.dtype(dtype).name,
             shape=[2**54, *shape[1:]],
-            context=ts.Context({"cache_pool": cache_settings}),
-            # chunk_layout=ts.ChunkLayout(
-            #     read_chunk_shape=[DEFAULT_CHUNK_SIZE, *shape[1:]],
-            #     write_chunk_shape=[DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]
-            # ),
-            # compression={"codec": "zstd", "compression_level": 5},
-            **mode,
+            **open_kwargs,
+            **mode_config,
         ).result()
     except ValueError as e:
         if "NOT_FOUND" in str(e):
@@ -573,65 +674,74 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode, cache_s
             raise e
 
 
-async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode, cache_settings: dict):
-    spec = _get_spec(path, shape)
-    mode = _mode_to_open_mode(mode)
+async def _ts_open_async(
+    path: Optional[str], dtype: jnp.dtype, shape, *, mode, write_codec: BloscCodec = DEFAULT_BLOSC_CODEC
+):
+    mode_config = _mode_to_open_mode(mode)
+    open_spec = _get_spec(path, shape, write_codec=None)
+    create_spec = _get_spec(path, shape, write_codec=write_codec)
 
-    # Basically, we want to load the existing shape metadata if it exists
-    if not mode.get("delete_existing", False):
+    if path is not None and mode != "r":
+        StoragePath(path).parent.mkdirs()
+
+    open_kwargs = _ts_open_kwargs(mode)
+
+    # Basically, we want to load the existing shape metadata if it exists.
+    # When we're deleting the store anyway, there is no metadata to reuse and this open always fails.
+    if not mode_config["open_mode"].delete_existing:
         try:
-            return await ts.open(spec, context=ts.Context({"cache_pool": cache_settings}), **mode)
+            return await ts.open(open_spec, **open_kwargs, **mode_config)
         except FileNotFoundError:
             pass
         except ValueError:
             pass
 
     # TODO: groups?
-    # TODO: set chunk sizes
-    return await ts.open(
-        spec,
-        dtype=jnp.dtype(dtype).name,
-        shape=[2**54, *shape[1:]],
-        context=ts.Context({"cache_pool": cache_settings}),
-        # chunk_layout=ts.ChunkLayout(
-        #     read_chunk_shape=[DEFAULT_CHUNK_SIZE, *shape[1:]],
-        #     write_chunk_shape=[DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]
-        # ),
-        # compression={"codec": "zstd", "compression_level": 5},
-        **mode,
-    )
+    try:
+        return await ts.open(
+            create_spec,
+            dtype=jnp.dtype(dtype).name,
+            shape=[2**54, *shape[1:]],
+            **open_kwargs,
+            **mode_config,
+        )
+    except ValueError as e:
+        if "NOT_FOUND" in str(e):
+            raise FileNotFoundError(f"File not found: {path}") from e
+        raise
 
 
-def _get_spec(path, shape):
+def _get_spec(path, shape, *, write_codec: BloscCodec | None):
     if path is None:
-        import uuid
-
         random_name = str(uuid.uuid4())
         spec = ts.Spec({"driver": "zarr", "kvstore": f"memory://{random_name}"})
     else:
-        # make path absolute if it's not already
-        protocol, _ = fsspec.core.split_protocol(path)
-        if protocol is None:
-            path = os.path.abspath(path)
-        spec = ser.get_tensorstore_spec(path, ocdbt=False)
-        store = spec.get("kvstore")
-        spec = {"driver": "zarr3", "kvstore": store}
-        fsspec_utils.mkdirs(os.path.dirname(path))
-        spec["metadata"] = {
-            "chunk_grid": {
-                "name": "regular",
-                "configuration": {"chunk_shape": [DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]},
-            },
-            "codecs": [
-                {
-                    "name": "sharding_indexed",
-                    "configuration": {
-                        "chunk_shape": [DEFAULT_CHUNK_SIZE, *shape[1:]],
-                        "codecs": [{"name": "blosc", "configuration": {"clevel": 5}}],
+        kvstore = build_kvstore_spec(path)
+        spec = {"driver": "zarr3", "kvstore": kvstore}
+        if write_codec is not None:
+            spec["metadata"] = {
+                "chunk_grid": {
+                    "name": "regular",
+                    "configuration": {"chunk_shape": [DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]},
+                },
+                "codecs": [
+                    {
+                        "name": "sharding_indexed",
+                        "configuration": {
+                            "chunk_shape": [DEFAULT_CHUNK_SIZE, *shape[1:]],
+                            "codecs": [
+                                {
+                                    "name": "blosc",
+                                    "configuration": {
+                                        "cname": write_codec.compressor,
+                                        "clevel": write_codec.compression_level,
+                                    },
+                                }
+                            ],
+                        },
                     },
-                }
-            ],
-        }
+                ],
+            }
     return spec
 
 

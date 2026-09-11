@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -6,19 +6,20 @@ import functools
 import logging
 import os
 import time
-import warnings
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
 import equinox as eqx
-import fsspec
 import haliax as hax
+import humanfriendly as hly
+from rigging.filesystem.factory import open_url
 import haliax.haxtyping as ht
 import jax
 import jax.numpy as jnp
 import numpy as np
 from haliax import NamedArray
 from haliax.jax_utils import is_jax_array_like
+from haliax.partitioning import ResourceMapping
 
 import levanter.tracker
 from levanter.inference.jit_scheduler import (
@@ -29,6 +30,7 @@ from levanter.inference.jit_scheduler import (
 )
 from levanter.inference.page_table import PageTable
 from levanter.inference.utils import INVALID, is_valid
+from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
 from levanter.layers.sampler import Sampler
 from levanter.models.lm_model import LmHeadModel
@@ -117,10 +119,10 @@ class InferenceEngineConfig:
         return (self.max_seq_len + self.page_size - 1) // self.page_size
 
 
-def _tree_byte_size(tree) -> int:
+def _tree_byte_size(tree, axis_resources: ResourceMapping | None = None) -> int:
     """Return the per-device number of bytes represented by ``tree``."""
 
-    return sharded_tree_size(tree)
+    return sharded_tree_size(tree, mapping=axis_resources)
 
 
 def _available_hbm_budget_bytes(hbm_utilization: float) -> int:
@@ -148,7 +150,11 @@ def _available_hbm_budget_bytes(hbm_utilization: float) -> int:
     return min(budgets)
 
 
-def _infer_max_pages_from_hbm(model: LmHeadModel, config: InferenceEngineConfig) -> int:
+def _infer_max_pages_from_hbm(
+    model: LmHeadModel,
+    config: InferenceEngineConfig,
+    axis_resources: ResourceMapping | None = None,
+) -> int:
     """Infer a KV-page budget using HBM utilization targets."""
 
     max_pages_per_seq = config.max_pages_per_seq
@@ -175,7 +181,7 @@ def _infer_max_pages_from_hbm(model: LmHeadModel, config: InferenceEngineConfig)
 
         cache_shape = eqx.filter_eval_shape(initial_cache, num_pages)
 
-        return _tree_byte_size(cache_shape)
+        return _tree_byte_size(cache_shape, axis_resources)
 
     bytes_one = cache_bytes(1)
     if bytes_one > budget:
@@ -184,30 +190,17 @@ def _infer_max_pages_from_hbm(model: LmHeadModel, config: InferenceEngineConfig)
             "Provide `max_pages` explicitly or increase `hbm_utilization`."
         )
 
-    # Use the previous heuristic as the initial guess before expanding.
-    guess = max(int(config.max_seqs * max_pages_per_seq), 1)
-
+    # No engine state can use more than max_seqs fully populated sequences. Allocating pages beyond
+    # this bound only consumes the HBM needed by compilation and transient execution buffers.
+    page_capacity = max(int(config.max_seqs * max_pages_per_seq), 1)
     low = 1
-    high = guess
+    high = page_capacity
     high_bytes = cache_bytes(high)
 
     if high_bytes <= budget:
-        low = high
-        while True:
-            high *= 2
-            if high > (1 << 20):
-                warnings.warn(
-                    "KV cache size exceeded 1M pages during budget inference; "
-                    "aborting search and using current estimate."
-                )
-                high = 1 << 20
-                break
-            high_bytes = cache_bytes(high)
-            if high_bytes > budget:
-                break
-            low = high
+        low = page_capacity
 
-    # Binary search between the known-good lower bound and the first oversized bound.
+    # Binary search between one known-good page and the capacity bound when the full cache is too large.
     while low + 1 < high:
         mid = (low + high) // 2
         mid_bytes = cache_bytes(mid)
@@ -222,8 +215,6 @@ def _infer_max_pages_from_hbm(model: LmHeadModel, config: InferenceEngineConfig)
     next_bytes = cache_bytes(high)
     per_page = bytes_at_max if max_pages == 1 else bytes_at_max - cache_bytes(max_pages - 1)
     base_bytes = max(bytes_at_max - per_page * max_pages, 0)
-
-    import humanfriendly as hly
 
     logger.info(
         "Auto-computed KV cache budget: base=%s, per_page=%s, budget=%s, used=%s, next=%s -> max_pages=%d",
@@ -279,7 +270,10 @@ class GenState(eqx.Module):
         )
 
     def clone_sequence(
-        self, parent_local_id: int, child_local_id: int | None = None, seq_params: SeqDecodingParams | None = None
+        self,
+        parent_local_id: int | jax.Array,
+        child_local_id: int | jax.Array | None = None,
+        seq_params: SeqDecodingParams | None = None,
     ) -> tuple["GenState", int]:
         """Clone a sequence into a new local slot, sharing full pages and using a fresh page for the last partial page.
 
@@ -439,8 +433,9 @@ def _prefill_kernel(
     # )
 
     temps = decode_state.temperature["seq", new_slot_ids]
+    top_ps = decode_state.top_p["seq", new_slot_ids]
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, key=prng_keys)
+    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
 
     # Update decode_state (also enqueues into the main decode queue)
     decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -605,9 +600,10 @@ def _handle_clones(
 
     # Sample clones from the same boundary logits as their sources
     temps = gen_state.decode_state.temperature["seq", tgt_ids]
+    top_ps = gen_state.decode_state.top_p["seq", tgt_ids]
     prng_keys = gen_state.decode_state.prng_keys_for(tgt_ids, pos_ids_this_time)
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_this_time, temps, key=prng_keys)
+    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_this_time, temps, top_ps=top_ps, key=prng_keys)
 
     # update page table and cache for the clone targets
     decode_state = gen_state.decode_state
@@ -652,7 +648,6 @@ def _handle_clones(
     return gen_state, outputs
 
 
-# @hax.named_jit(donate_args=(True, False, False))
 @functools.partial(jax.jit, static_argnums=(3, 4), donate_argnames=("gen_state",))
 def _run_generation_loop(
     gen_state: GenState,
@@ -706,8 +701,9 @@ def _run_generation_loop(
         prng_keys = decode_state.prng_keys_for(new_slot_ids, new_pos_ids)
 
         temps = decode_state.temperature["seq", new_slot_ids]
+        top_ps = decode_state.top_p["seq", new_slot_ids]
 
-        new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, key=prng_keys)
+        new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
 
         # Update decode state with the freshly sampled tokens (also enqueues them)
         decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -742,6 +738,62 @@ class GenerationResult:
     tokens: list[list[int]]
     logprobs: list[list[float]] | None
     total_generated: int
+
+
+FIRST_TOKEN_LOGPROB = 0.0
+
+
+@dataclass(frozen=True)
+class TokenSequenceLogprobs:
+    """Causal logprobs aligned with an input token sequence.
+
+    The first token has no preceding context, so its logprob is the synthetic
+    ``FIRST_TOKEN_LOGPROB`` sentinel and its top-token map contains only itself.
+    """
+
+    token_logprobs: list[float]
+    top_token_logprobs: list[dict[int, float]]
+
+
+def score_token_sequence_logprobs(
+    model: LmHeadModel,
+    token_ids: Sequence[int],
+    top_k: int,
+) -> TokenSequenceLogprobs:
+    """Score a token sequence with a causal full forward pass."""
+    if top_k < 1:
+        raise ValueError("top_k must be at least 1")
+
+    token_id_list = [int(token_id) for token_id in token_ids]
+    if not token_id_list:
+        return TokenSequenceLogprobs(token_logprobs=[], top_token_logprobs=[])
+
+    token_logprobs = [FIRST_TOKEN_LOGPROB]
+    top_token_logprobs = [{token_id_list[0]: FIRST_TOKEN_LOGPROB}]
+    if len(token_id_list) == 1:
+        return TokenSequenceLogprobs(token_logprobs=token_logprobs, top_token_logprobs=top_token_logprobs)
+
+    Pos = hax.Axis("position", len(token_id_list))
+    input_ids = hax.named(jnp.array(token_id_list, dtype=jnp.int32), Pos)
+    pos_ids = hax.named(jnp.arange(len(token_id_list), dtype=jnp.int32), Pos)
+    logits = model(input_ids=input_ids, attn_mask=AttentionMask.causal(), pos_ids=pos_ids, key=None)
+
+    logits_array = logits.astype(jnp.float32).rearrange((Pos, model.Vocab)).array
+    next_token_logprobs = jax.nn.log_softmax(logits_array[:-1], axis=-1)
+    target_ids = jnp.array(token_id_list[1:], dtype=jnp.int32)
+    scored_logprobs = next_token_logprobs[jnp.arange(len(target_ids)), target_ids]
+    token_logprobs.extend(float(logprob) for logprob in jax.device_get(scored_logprobs))
+
+    vocab_top_k = min(top_k, next_token_logprobs.shape[-1])
+    top_values, top_indices = jax.lax.top_k(next_token_logprobs, vocab_top_k)
+    top_values = np.asarray(jax.device_get(top_values))
+    top_indices = np.asarray(jax.device_get(top_indices))
+    for values, indices in zip(top_values, top_indices, strict=True):
+        top_token_logprobs.append(
+            {int(token_id): float(logprob) for token_id, logprob in zip(indices, values, strict=True)}
+        )
+
+    return TokenSequenceLogprobs(token_logprobs=token_logprobs, top_token_logprobs=top_token_logprobs)
 
 
 class InferenceEngine:
@@ -802,10 +854,11 @@ class InferenceEngine:
         model: LmHeadModel,
         tokenizer,
         config: InferenceEngineConfig,
+        axis_resources: ResourceMapping | None = None,
     ) -> "InferenceEngine":
         """Build an engine using a EngineConfig for sizing knobs."""
         if config.max_pages is None:
-            inferred_pages = _infer_max_pages_from_hbm(model, config)
+            inferred_pages = _infer_max_pages_from_hbm(model, config, axis_resources)
             config = dataclasses.replace(config, max_pages=int(inferred_pages))
 
         max_pages_per_seq = config.max_pages_per_seq
@@ -813,7 +866,9 @@ class InferenceEngine:
         assert config.max_pages is not None
 
         table = PageTable.init(config.max_pages, config.max_seqs, config.page_size, max_pages_per_seq)
-        cache = hax.named_jit(model.initial_cache)(table.spec(), dtype=config.compute_dtype)
+        cache = hax.named_jit(model.initial_cache, axis_resources=axis_resources)(
+            table.spec(), dtype=config.compute_dtype
+        )
         decode_state = DecodeState.init(
             table,
             max_stop_seqs=config.max_stop_seqs,
@@ -841,6 +896,10 @@ class InferenceEngine:
         self.local_map.clear()
         self.sequences.clear()
         self.results = {}
+
+    def score_token_logprobs(self, token_ids: Sequence[int], top_k: int) -> TokenSequenceLogprobs:
+        """Score a token sequence under this engine's model."""
+        return score_token_sequence_logprobs(self.model, token_ids, top_k)
 
     def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
@@ -883,6 +942,7 @@ class InferenceEngine:
         stop_tokens_template = decode_state.stop_tokens
         max_num_tokens = np.zeros((max_slots,), dtype=np.int32)
         temperatures = np.zeros((max_slots,), dtype=np.float32)
+        top_ps = np.ones((max_slots,), dtype=np.float32)
         prng_keys = np.zeros((max_slots, 2), dtype=np.uint32)
         if stop_tokens_template is not None:
             stop_tokens = np.full(
@@ -936,6 +996,7 @@ class InferenceEngine:
 
             max_num_tokens[prefill_idx] = np.asarray(seq_params.max_num_tokens, dtype=np.int32).item()
             temperatures[prefill_idx] = np.asarray(seq_params.temperature, dtype=np.float32).item()
+            top_ps[prefill_idx] = np.asarray(seq_params.top_p, dtype=np.float32).item()
             prng_keys[prefill_idx] = np.asarray(seq_params.key, dtype=np.uint32)
             if stop_tokens is not None:
                 if seq_params.stop_tokens is None:
@@ -975,6 +1036,7 @@ class InferenceEngine:
                     # Clones reuse prompt tokens from their parent; no need to copy here.
                     max_num_tokens[clone_idx] = np.asarray(child_params.max_num_tokens, dtype=np.int32).item()
                     temperatures[clone_idx] = np.asarray(child_params.temperature, dtype=np.float32).item()
+                    top_ps[clone_idx] = np.asarray(child_params.top_p, dtype=np.float32).item()
                     prng_keys[clone_idx] = np.asarray(child_params.key, dtype=np.uint32)
                     if stop_tokens is not None:
                         stop_tokens[clone_idx] = stop_tokens[prefill_idx]
@@ -1009,6 +1071,7 @@ class InferenceEngine:
                     else hax.named(jnp.asarray(stop_tokens, dtype=jnp.int32), axis=("seq", "stop_seq", "position"))
                 ),
                 temperature=jnp.asarray(temperatures, dtype=jnp.float32),
+                top_p=jnp.asarray(top_ps, dtype=jnp.float32),
                 key=jnp.asarray(prng_keys, dtype=jnp.uint32),
             ),
         )
@@ -1073,7 +1136,7 @@ class InferenceEngine:
         time_in = time.time()
         # Initial admission from queue and extract prompt tokens
         decode_outputs = self._prefill_batch(requests)
-        self._ingest_outputs(decode_outputs)
+        self._extract_outputs(decode_outputs)
         initial_prefill_out = time.time()
         logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
@@ -1097,20 +1160,6 @@ class InferenceEngine:
 
             iter_start = time.time()
 
-            fake_submit_start = time.time()
-            # future_state, decode_outputs = _run_generation_loop(
-            jax.tree.flatten(
-                (
-                    self.gen_state,
-                    self.model,
-                    self.sampler,
-                    1,
-                    0,
-                )
-            )
-            fake_submit_done = time.time()
-
-            submit_start = iter_start
             future_state, decode_outputs = _run_generation_loop(
                 self.gen_state,
                 self.model,
@@ -1125,22 +1174,21 @@ class InferenceEngine:
             device_time = time.time() - submit_done
 
             extract_start = time.time()
-            new_tokens = self._ingest_outputs(decode_outputs)
+            new_tokens = self._extract_outputs(decode_outputs)
             extract_time = time.time() - extract_start
 
             iter_end = time.time()
             iter_time = iter_end - iter_start
             # Host time is everything except the device execution wait
             host_time = max(iter_time - device_time, 0.0)
-            submit_time = submit_done - submit_start
+            submit_time = submit_done - iter_start
             if iter_time > 0:
                 tps_total = new_tokens / iter_time
                 logger.info(
                     f"Decode iter: total {iter_time:.3f}s (device {device_time:.3f}s, host {host_time:.3f}s, "
                     f"submit {submit_time:.3f}s), "
-                    f"fake_submit {fake_submit_done - fake_submit_start:.3f}s, "
                     f"{tps_total:.2f} tok/s, {new_tokens} new"
-                    f" (extract {extract_time:.3f}s"
+                    f" (extract {extract_time:.3f}s)"
                 )
 
             decode_iteration += 1
@@ -1194,9 +1242,9 @@ class InferenceEngine:
             self.config.imputed_max_tokens_per_round,
             self.config.max_rounds,
         )
-        with fsspec.open(os.path.join(path, "gen_loop.jaxpr.txt.gz"), "w", compression="infer") as f:
+        with open_url(os.path.join(path, "gen_loop.jaxpr.txt.gz"), "w", compression="infer") as f:
             f.write(str(traced.jaxpr))
-        with fsspec.open(os.path.join(path, "gen_loop.hlo.txt.gz"), "w", compression="infer") as f:
+        with open_url(os.path.join(path, "gen_loop.hlo.txt.gz"), "w", compression="infer") as f:
             f.write(traced.lower().as_text())
 
         def _create_dummy_work():
@@ -1220,6 +1268,7 @@ class InferenceEngine:
                     max_num_tokens=jnp.zeros(max_slots, dtype=jnp.int32),
                     stop_tokens=None,
                     temperature=jnp.zeros(max_slots, dtype=jnp.float32),
+                    top_p=jnp.ones(max_slots, dtype=jnp.float32),
                     key=jnp.zeros((max_slots, 2), dtype=jnp.uint32),
                 ),
             )
@@ -1231,9 +1280,9 @@ class InferenceEngine:
             eqx.filter_eval_shape(_create_dummy_work),
             self.config.max_seqs_in_prefill,
         )
-        with fsspec.open(os.path.join(path, "run_prefill.jaxpr.txt.gz"), "w", compression="infer") as f:
+        with open_url(os.path.join(path, "run_prefill.jaxpr.txt.gz"), "w", compression="infer") as f:
             f.write(str(prefill_traced.jaxpr))
-        with fsspec.open(os.path.join(path, "run_prefill.hlo.txt.gz"), "w", compression="infer") as f:
+        with open_url(os.path.join(path, "run_prefill.hlo.txt.gz"), "w", compression="infer") as f:
             f.write(prefill_traced.lower().as_text())
 
         if log_artifacts:
@@ -1242,7 +1291,7 @@ class InferenceEngine:
         else:
             logger.info(f"Written trace info to {path}")
 
-    def _extract_outputs(self, pending_outputs) -> int:
+    def _extract_outputs(self, pending_outputs: _DecodeOutputs | None) -> int:
         """Append newly available tokens into outputs per (request_id, child_id).
 
         Returns number of new tokens appended.
@@ -1274,16 +1323,6 @@ class InferenceEngine:
             dr.tokens_decoded += 1
             appended += 1
 
-            # # Print accumulated decoded text as it is generated -- For debugging
-            # print_every_n = 10
-            # if dr.tokens_decoded % print_every_n == 0:
-            #     try:
-            #         # Decode the full sequence so far
-            #         full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
-            #         logger.info(f"[Request {rid}, Choice {cid}] Tokens {dr.tokens_decoded}: '{full_text}'")
-            #     except Exception as e:
-            #         logger.info(f"[Request {rid}, Choice {cid}] Tokens {dr.tokens_decoded}: <decode_error: {e}>")
-
         # Update done flags based on snapshot
         for local_slot, is_done in enumerate(fins):
             if not bool(is_done):
@@ -1295,24 +1334,18 @@ class InferenceEngine:
             dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
             dr.done = True
 
-            # Print final complete text when sequence is finished
-            try:
-                full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
-                logger.debug(f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): '{full_text}'")
-            except Exception as e:
-                logger.error(f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): <decode_error: {e}>")
+            # Finished slots stay finished until they are released, so this runs on every drain: only
+            # detokenize the sequence when the debug log that consumes it is actually enabled.
+            if logger.isEnabledFor(logging.DEBUG):
+                try:
+                    full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
+                    logger.debug(f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): '{full_text}'")
+                except Exception as e:
+                    logger.error(
+                        f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): <decode_error: {e}>"
+                    )
 
-        num_finished = int(fins.sum()) if hasattr(fins, "sum") else 0
+        num_finished = int(fins.sum())
         logger.debug(f"extract: appended={appended} (drained={n}) unmapped={unmapped} finished_count={num_finished}")
 
-        return appended
-
-    def _ingest_outputs(self, outputs: _DecodeOutputs | None) -> int:
-        """Drain device outputs into host results and apply host-side release.
-
-        Returns the number of tokens appended to results. No-op if outputs is None.
-        """
-        if outputs is None:
-            return 0
-        appended = self._extract_outputs(outputs)
         return appended

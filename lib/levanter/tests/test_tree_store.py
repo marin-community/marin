@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import tempfile
@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 import tensorstore as ts
 
-from levanter.data import BatchProcessor, ShardedDataSource
+from levanter.data._preprocessor import BatchProcessor
+from levanter.data.sharded_datasource import ShardedDataSource
 from levanter.data.utils import batched
 from levanter.store.tree_store import TreeStore
 
@@ -257,32 +258,33 @@ def test_reading_from_written():
                 pytest.fail("Unexpected index")
 
 
-def test_using_prepared_batches():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        exemplar = {"a": np.array([0], dtype=np.float64), "b": np.array([0], dtype=np.float64)}
-        builder = TreeStore.open(exemplar, tmpdir, mode="w")
-        preparer = builder.batch_preparer
+def _write_mirrored_store(path):
+    exemplar = {"data": np.array([0], dtype=np.int64)}
+    writer = TreeStore.open(exemplar, str(path), mode="w")
+    writer.extend([{"data": np.array([1, 2, 3], dtype=np.int64)}])
+    return exemplar
 
-        batch = [
-            {"a": np.array([1.0, 2.0]), "b": np.array([3.0, 4.0])},
-            {"a": np.array([5.0, 6.0]), "b": np.array([7.0, 8.0])},
-        ]
-        batch = preparer(batch)
-        builder.extend_with_batch(batch)
 
-        del builder
+def test_reading_from_mirror_path(tmp_path, monkeypatch):
+    local_root = tmp_path / "local"
+    exemplar = _write_mirrored_store(local_root / "cache")
+    monkeypatch.setenv("MARIN_PREFIX", local_root.as_uri())
 
-        builder2 = TreeStore.open(exemplar, tmpdir, mode="r")
+    reader = TreeStore.open(exemplar, "mirror://cache", mode="r")
 
-        for i, result in enumerate(builder2):
-            if i == 0:
-                assert np.all(result["a"] == np.array([1.0, 2.0]))
-                assert np.all(result["b"] == np.array([3.0, 4.0]))
-            elif i == 1:
-                assert np.all(result["a"] == np.array([5.0, 6.0]))
-                assert np.all(result["b"] == np.array([7.0, 8.0]))
-            else:
-                pytest.fail("Unexpected index")
+    np.testing.assert_array_equal(reader[0]["data"], np.array([1, 2, 3], dtype=np.int64))
+
+
+@pytest.mark.asyncio
+async def test_reading_from_mirror_path_async(tmp_path, monkeypatch):
+    local_root = tmp_path / "local"
+    exemplar = _write_mirrored_store(local_root / "cache")
+    monkeypatch.setenv("MARIN_PREFIX", str(local_root))
+
+    reader = await TreeStore.open_async(exemplar, "mirror://cache", mode="r")
+
+    result = (await reader.get_batch([0]))[0]
+    np.testing.assert_array_equal(result["data"], np.array([1, 2, 3], dtype=np.int64))
 
 
 def test_resolve_changed_cache_size():

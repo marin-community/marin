@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -6,10 +6,6 @@ ar5iv/transform_ar5iv.py
 
 Performs HTML->Text/MD conversion using the specified tools over a ar5iv dump save in DOLMA format.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=200 --memory=2GB --cluster=us-central2 \
-    lib/marin/src/marin/transform/ar5iv/transform_ar5iv.py \
-    --input_path gs://path/to/input --output_path gs://path/to/output ...
 """
 
 import logging
@@ -17,6 +13,11 @@ import re
 from dataclasses import dataclass
 
 from bs4 import BeautifulSoup
+from rigging.filesystem.storage_path import StoragePath
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.readers import load_jsonl
+
 from marin.schemas.web.convert import ExtractionConfig
 from marin.transform.ar5iv.transform import (
     clean_li,
@@ -34,11 +35,9 @@ from marin.transform.ar5iv.transform import (
     transform_abstract,
     unwrap_eqn,
 )
-from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
-from zephyr import Dataset, ZephyrContext, load_jsonl
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -47,7 +46,6 @@ class Ar5ivExtractionConfig:
     output_path: str
     revision: str
     remove_reference_section: bool
-    extract_method: str
     extract_config: ExtractionConfig
 
 
@@ -73,59 +71,58 @@ def clean_html(html: str, remove_reference_section: bool = True) -> str:
         str: The cleaned HTML content.
     """
 
-    html = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
 
     # Transform the abstract section into an h2 heading to ensure proper structure
     # This makes the abstract a section in the markdownified output
-    transform_abstract(html)
+    transform_abstract(soup)
 
     # Remove author information to reduce noise and remove PII from appearing
-    remove_authors(html)
+    remove_authors(soup)
 
     # Remove the title page elements which typically contain redundant information
     # that will be prepended elsewhere
-    remove_title_page(html)
+    remove_title_page(soup)
 
     # Clean list items to avoid duplicate numbering patterns like (1. 1.)
     # which can occur when LaTeX numbering is combined with HTML list markers
-    clean_li(html)
+    clean_li(soup)
 
     # Remove bibliography sections to remove references
-    remove_biblio(html)
+    remove_biblio(soup)
 
     # Remove footnotes
-    remove_footnotes(html)
+    remove_footnotes(soup)
 
     # Remove biblinks since we're removing the references section
-    remove_biblinks(html)
+    remove_biblinks(soup)
 
     # Convert code listing lines to proper newlines to preserve code formatting
-    linelisting_to_newline(html)
+    linelisting_to_newline(soup)
 
     # Transform equation tables into inline elements for better markdown conversion
-    deconstruct_eqn(html)
+    deconstruct_eqn(soup)
 
     # Extract mathematical notation from alt text attributes and convert to LaTeX format
-    html = unwrap_eqn(html)
+    soup = unwrap_eqn(soup)
 
     # Remove the ar5iv footer which contains boilerplate text about the conversion process
-    remove_ar5iv_footer(html)
+    remove_ar5iv_footer(soup)
 
     # Remove content before the first main section (typically metadata and preamble)
-    remove_before_section(html)
+    remove_before_section(soup)
 
     # Remove figure captions
-    remove_figure_captions(html)
+    remove_figure_captions(soup)
 
     if remove_reference_section:
-        remove_references(html)
+        remove_references(soup)
 
-    return str(html)
+    return str(soup)
 
 
 def process_record(
     row: dict,
-    extract_method: str,
     extract_config: ExtractionConfig,
     remove_reference_section: bool = True,
 ) -> dict[str, str]:
@@ -133,7 +130,6 @@ def process_record(
 
     Args:
         row: Record from JSONL file
-        extract_method: Method to use for HTML extraction
         extract_config: Configuration for the extraction method
         remove_reference_section: Whether to remove reference sections
 
@@ -142,7 +138,7 @@ def process_record(
     """
     try:
         filtered_html = clean_html(row["content"], remove_reference_section)
-        result = convert_page(filtered_html, extract_method=extract_method, config=extract_config)
+        result = convert_page(filtered_html, config=extract_config)
         if remove_reference_section:
             result["content"] = re.sub(r"\s?\\\[(?:\d+(?:,\s*\d+)*)\\\]", "", result["content"])
 
@@ -160,7 +156,7 @@ def process_record(
 
 
 def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
-    files = fsspec_glob(f"{cfg.input_path}/*.jsonl.gz")
+    files = [str(m) for m in StoragePath(f"{cfg.input_path}/*.jsonl.gz").glob()]
 
     pipeline = (
         Dataset.from_list(files)
@@ -168,12 +164,11 @@ def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
         .map(
             lambda row: process_record(
                 row,
-                cfg.extract_method,
                 cfg.extract_config,
                 cfg.remove_reference_section,
             )
         )
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    with ZephyrContext(name="transform-ar5iv-v2") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="transform-ar5iv-v2")
+    ctx.execute(pipeline)

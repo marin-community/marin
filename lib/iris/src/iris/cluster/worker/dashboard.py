@@ -1,18 +1,18 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """HTTP dashboard with Connect RPC and web UI for worker monitoring."""
 
-import uvicorn
 from starlette.applications import Starlette
-from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
+from iris.cluster.dashboard_common import favicon_route, html_shell, static_files_mount
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.dashboard_common import html_shell, static_files_mount
-from iris.rpc.cluster_connect import WorkerServiceWSGIApplication
+from iris.rpc.async_adapter import AsyncServiceAdapter
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
+from iris.rpc.worker_connect import WorkerServiceASGIApplication
 
 
 class WorkerDashboard:
@@ -28,51 +28,38 @@ class WorkerDashboard:
         self._host = host
         self._port = port
         self._app = self._create_app()
-        self._server: uvicorn.Server | None = None
 
     @property
     def port(self) -> int:
         return self._port
 
-    def _create_app(self) -> Starlette:
-        rpc_wsgi_app = WorkerServiceWSGIApplication(service=self._service)
-        rpc_app = WSGIMiddleware(rpc_wsgi_app)
+    @property
+    def app(self) -> Starlette:
+        return self._app
 
+    def _create_app(self) -> Starlette:
+        # The ASGI connect app awaits each handler; AsyncServiceAdapter dispatches
+        # the sync WorkerServiceImpl methods to a thread.
+        rpc_app = WorkerServiceASGIApplication(
+            service=AsyncServiceAdapter(self._service),
+            compressions=IRIS_RPC_COMPRESSIONS,
+        )
+
+        # Vue Router handles client-side routing, so every SPA path serves the same shell.
         routes = [
             Route("/health", self._health),
             Route("/", self._dashboard),
-            Route("/task/{task_id:path}", self._task_detail_page),
-            Route("/logs", self._logs_page),
+            favicon_route(),
+            Route("/task/{task_id:path}", self._dashboard),
+            Route("/status", self._dashboard),
             static_files_mount(),
-            Mount(rpc_wsgi_app.path, app=rpc_app),
+            Mount(rpc_app.path, app=rpc_app),
         ]
         return Starlette(routes=routes)
-
-    def _logs_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Iris Logs", "/static/worker/logs-page.js"))
 
     def _health(self, _request: Request) -> JSONResponse:
         """Simple health check endpoint for bootstrap and load balancers."""
         return JSONResponse({"status": "healthy"})
 
     def _dashboard(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Iris Worker", "/static/worker/app.js"))
-
-    def _task_detail_page(self, request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Task Detail", "/static/worker/task-detail.js"))
-
-    def run(self) -> None:
-        import uvicorn
-
-        uvicorn.run(self._app, host=self._host, port=self._port)
-
-    async def run_async(self) -> None:
-        import uvicorn
-
-        config = uvicorn.Config(self._app, host=self._host, port=self._port)
-        self._server = uvicorn.Server(config)
-        await self._server.serve()
-
-    async def shutdown(self) -> None:
-        if self._server:
-            self._server.should_exit = True
+        return HTMLResponse(html_shell("worker"))

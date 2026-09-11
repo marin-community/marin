@@ -6,23 +6,22 @@ In this tutorial, you will install Marin on your local machine.
 
 Before you begin, ensure you have the following installed:
 
-- Python 3.11 or higher
+- Python 3.12 or higher
 - uv (Python package manager)
 - Git
-- Rust toolchain via [rustup](https://rustup.rs) (needed for `lib/dupekit`, which is built with Maturin;
-  see [`lib/dupekit/README.md`](https://github.com/marin-community/marin/blob/main/lib/dupekit/README.md) for background)
+- Rust toolchain via [rustup](https://rustup.rs) (only needed for source builds of Rust crates; see Rust Crates section below)
     - Recommended: `rustup toolchain install 1.91.0 && rustup default 1.91.0` (matches the Docker pin)
     - If you hit an `edition2024` error from Cargo (e.g., when building Arrow), use nightly: `rustup default nightly`
 - On macOS, install additional build tools for SentencePiece: ```brew install cmake pkg-config coreutils```
 
 In addition, you might find it useful to have the following accounts:
-- [GitHub](https://github.com) for submitting pull requests or speedruns
+- [GitHub](https://github.com) for submitting pull requests
 - [Weights & Biases](https://wandb.ai) for experiment tracking
 - [Hugging Face](https://huggingface.co) for accessing gated models/tokenizers (such as [Meta's Llama 3.1 8B model](https://huggingface.co/meta-llama/Llama-3.1-8B))
 
 This document focuses on basic setup and usage of Marin.
 If you're on a GPU, see [Local GPU Setup](local-gpu.md) for a GPU-specific walkthrough for getting started.
-If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
+Running on shared TPU/GPU capacity is handled by [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md); Marin's live TPU pool is reachable via `uv run iris --cluster=marin job run ...`.
 
 ## Installation
 
@@ -34,7 +33,7 @@ If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
 
 2. Create and activate a virtual environment (~0s):
    ```bash
-   uv venv --python 3.11
+   uv venv --python 3.12
    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
    ```
 
@@ -65,11 +64,35 @@ You can also set `WANDB_ENTITY` and `WANDB_PROJECT`.
 For example, training checkpoints usually will be written to
 `${MARIN_PREFIX}/checkpoints/`. You can set this to an fsspec-recognizable path
 (e.g., a GCS bucket) or a directory on your machine. See [Understanding
-`MARIN_PREFIX` and `--prefix`](../explanations/marin-prefix.md) for details.
+`MARIN_PREFIX`](../explanations/marin-prefix.md) for details.
 
 You might find it convenient to store `WANDB_API_KEY` and `HF_TOKEN` and
 `MARIN_PREFIX` in an `.env` file, which you can load in one go with `source
-.env`.
+.env`. The file is gitignored.
+
+### Local runs versus submitted jobs
+
+The exports above configure your shell, so they apply to scripts you run
+directly and to the `iris` CLI itself. A job submitted with `iris job run`,
+the Iris job-submission command, runs in a container on the cluster and does
+not inherit your shell. Three things reach it:
+
+- `WANDB_API_KEY` and `HF_TOKEN`, which the CLI copies from your shell when
+  they are set.
+- Any variable passed as `-e KEY VALUE` on the `iris job run` command line.
+- The `env:` section of a gitignored `.marin.yaml` at the checkout root, which
+  the CLI reads when you run it from that directory:
+
+  ```yaml
+  env:
+    WANDB_ENTITY: your-entity
+    WANDB_PROJECT: marin
+  ```
+
+Leave `MARIN_PREFIX` out of `.marin.yaml`. The cluster sets it for every task
+to a bucket in the same region as the worker running the task; a value in the
+file overrides that and can send output across regions. See
+[Understanding `MARIN_PREFIX`](../explanations/marin-prefix.md).
 
 ## Hardware-specific Setup
 
@@ -118,6 +141,31 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
         uv sync --all-packages --extra=tpu
         ```
 
+## Rust Crates (dupekit)
+
+Marin includes Rust-backed packages (`marin-dupekit-native`,
+`marin-finelog-server`) that are installed as **pre-built wheels** by default —
+no Rust toolchain needed. `uv sync` fetches the wheels from PyPI automatically.
+
+To switch to **source builds** (requires Cargo), use the Makefile targets:
+
+```bash
+# Check current mode and Cargo availability
+make rust-status
+
+# Switch to dev mode: modifies pyproject.toml to build from source (requires Cargo)
+make rust-dev
+
+# Switch back to user mode: reverts pyproject.toml to pre-built wheels (no Cargo needed)
+make rust-user
+```
+
+!!! warning
+    `make rust-dev` adds local path sources for the native packages to the root
+    `pyproject.toml` and to `lib/dupekit/pyproject.toml` / `lib/finelog/pyproject.toml`.
+    **Do not commit those files while in dev mode** — CI will reject them.
+    Run `make rust-user` before committing.
+
 ## Trying it Out
 
 To check that your installation worked, you can go to the [First Experiment](first-experiment.md) tutorial, where
@@ -125,8 +173,12 @@ you train a tiny language model on TinyStories on your CPU.  For a sneak preview
 
 ```bash
 wandb offline  # Disable WandB logging
-uv run experiments/tutorials/train_tiny_model_cpu.py
+uv run python experiments/tutorials/train_tiny_model.py \
+  --device cpu --dataset tinystories --version dev --run
 ```
+
+`--version` is required and `--run` builds the graph; without `--run` the script prints the
+plan and exits.
 
 This will:
 
@@ -142,4 +194,4 @@ language models.
 
 1. Follow our [First Experiment](first-experiment.md) tutorial to run a training experiment.
 2. Read our [Language Modeling Pipeline](../explanations/lm-pipeline.md) to understand Marin's approach to language models.
-3. Submit a [speedrun](submitting-speedrun.md) to the Marin speedrun leaderboard.
+3. Read [Lazy artifacts](../explanations/lazy-artifacts.md) to understand Marin's execution model.

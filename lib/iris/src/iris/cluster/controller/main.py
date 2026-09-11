@@ -1,20 +1,398 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Click-based CLI for the Iris controller daemon."""
+"""CLI for the Iris controller daemon.
 
+The core logic lives in ``run_controller_serve`` so it can be called from both
+the standalone ``python -m iris.cluster.controller.main serve`` entrypoint
+(used by Dockerfile / GCP bootstrap / k8s) and the ``iris cluster controller
+serve`` subcommand in the main CLI.
+"""
+
+import datetime
 import logging
+import shutil
 import signal
 import threading
+import time
 from pathlib import Path
 
 import click
+from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
+from rigging.log_setup import configure_logging
+from rigging.timing import Duration, Timestamp
 
-from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
-from iris.logging import configure_logging
-from iris.time_utils import Duration
+from iris.cluster.composer import make_backend
+from iris.cluster.config import IrisClusterConfig, load_config, resolve_config_secrets
+from iris.cluster.controller.auth import create_controller_auth, require_persistent_signing_key
+from iris.cluster.controller.budget import reconcile_user_budget_tiers
+from iris.cluster.controller.checkpoint import (
+    download_checkpoint_to_local,
+    latest_checkpoint_epoch_ms,
+    parse_checkpoint_epoch_ms,
+    probe_database_dir,
+)
+from iris.cluster.controller.controller import Controller, ControllerConfig
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.log_stack import build_log_stack
+from iris.cluster.controller.rollout import RolloutPhase, read_rollout_record, write_rollout_record
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
+from iris.cluster.provenance import provenance_from_env
+from iris.cluster.types import UserBudgetDefaults
 
 logger = logging.getLogger(__name__)
+
+
+LOCAL_STATE_DIR_DEFAULT = Path("/var/cache/iris/controller")
+DRY_RUN_STATE_DIR_ROOT = Path("/tmp/dry-run")
+HOURLY_CHECKPOINT_SECONDS = 3600.0
+
+
+def _apply_requested_rollback(db_dir: Path, remote_state_dir: str) -> bool:
+    """Restore a requested rollback's checkpoint over the local DB, exactly once.
+
+    Reads the rollout record; when it is ``ROLLBACK_REQUESTED`` with a checkpoint,
+    replaces ``db_dir`` with that checkpoint and rewrites the record ``ROLLED_BACK``
+    so a later restart reuses the restored DB instead of rewinding again. Returns
+    whether a rollback was applied.
+    """
+    record = read_rollout_record(remote_state_dir)
+    if record is None or record.phase is not RolloutPhase.ROLLBACK_REQUESTED:
+        return False
+    checkpoint = record.rollback_checkpoint
+    if not checkpoint:
+        logger.warning("Rollback requested but no checkpoint recorded; starting from local DB")
+        return False
+
+    logger.info("Rollback requested: restoring pre-deploy checkpoint %s over local DB %s", checkpoint, db_dir)
+    if db_dir.exists():
+        shutil.rmtree(db_dir)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    if not download_checkpoint_to_local(remote_state_dir, db_dir, checkpoint_dir=checkpoint):
+        raise ValueError(f"Rollback checkpoint not found: {checkpoint}")
+
+    write_rollout_record(
+        remote_state_dir,
+        record.model_copy(
+            update={
+                "phase": RolloutPhase.ROLLED_BACK,
+                "previous_image": None,
+                "rollback_checkpoint": None,
+                "updated_at_ms": int(time.time() * 1000),
+            }
+        ),
+    )
+    logger.info("Rollback applied; marked rollout record ROLLED_BACK")
+    return True
+
+
+def prepare_controller_state(
+    db_dir: Path,
+    remote_state_dir: str,
+    *,
+    fresh: bool,
+    checkpoint_path: str | None,
+) -> None:
+    """Prepare ``db_dir`` so ControllerDB can open it: restore a checkpoint or reuse local.
+
+    - ``fresh``: wipe ``db_dir`` and start empty (no restore).
+    - a requested rollback (rollout record in ``ROLLBACK_REQUESTED``): restore the
+      recorded pre-deploy checkpoint over the local DB, then self-clear the record.
+    - otherwise: reuse a healthy local DB only when its persisted checkpoint
+      ancestry matches the selected remote checkpoint; else restore it.
+    """
+    if fresh:
+        # Wipe any pre-existing db_dir so we're guaranteed to start with an empty
+        # database. Otherwise a stale or corrupt local SQLite file would be
+        # silently reused, defeating the purpose of --fresh.
+        if db_dir.exists():
+            logger.info("--fresh: removing existing db_dir %s", db_dir)
+            shutil.rmtree(db_dir)
+        logger.info("--fresh: starting with empty database, skipping checkpoint restore")
+        db_dir.mkdir(parents=True, exist_ok=True)
+        return
+
+    if _apply_requested_rollback(db_dir, remote_state_dir):
+        return
+
+    probe = probe_database_dir(db_dir)
+    if checkpoint_path:
+        remote_ms = parse_checkpoint_epoch_ms(checkpoint_path)
+        if remote_ms is None:
+            raise ValueError(f"Checkpoint path must end with a numeric epoch: {checkpoint_path}")
+    else:
+        remote_ms = latest_checkpoint_epoch_ms(remote_state_dir)
+    if probe.healthy and remote_ms is None:
+        logger.info("Local DB at %s is healthy and no remote checkpoint exists, skipping restore", db_dir)
+        return
+    if probe.healthy and probe.checkpoint_epoch_ms == remote_ms:
+        logger.info(
+            "Local DB at %s is healthy and contains checkpoint %d, skipping restore",
+            db_dir,
+            remote_ms,
+        )
+        return
+    if probe.exists and not probe.healthy:
+        quarantine_dir = db_dir.with_name(f"{db_dir.name}.corrupt-{Timestamp.now().epoch_ms()}")
+        logger.error("Local DB at %s failed validation (%s); preserving it at %s", db_dir, probe.detail, quarantine_dir)
+        db_dir.rename(quarantine_dir)
+    restored = download_checkpoint_to_local(remote_state_dir, db_dir, checkpoint_dir=checkpoint_path)
+    if checkpoint_path and not restored:
+        raise ValueError(f"Checkpoint not found: {checkpoint_path}")
+    if probe.exists and not restored:
+        raise ValueError(f"Local DB failed validation and no remote checkpoint was available: {probe.detail}")
+
+
+def _resolve_cluster_endpoints(cluster_config: IrisClusterConfig) -> dict[str, str]:
+    """Resolve ``cluster_config.endpoints`` to concrete URLs.
+
+    Each EndpointSpec is dispatched through ``resolve_endpoint_uri`` so callers
+    can declare ``http://``, ``gcp://``, or ``k8s://`` schemes uniformly.
+
+    ``/system/log-server`` is optional: when absent, the Controller starts a
+    bundled in-process finelog log server as a fallback (state lives in
+    a tempdir for the controller's lifetime). Production deployments should
+    declare an external endpoint.
+    """
+    resolved: dict[str, str] = {}
+    for name, spec in cluster_config.endpoints.items():
+        resolved[name] = resolve_endpoint_uri(spec.uri, dict(spec.metadata))
+
+    if cluster_config.finelog.config:
+        if LOG_SERVER_ENDPOINT_NAME in cluster_config.endpoints:
+            raise ValueError(
+                f"cannot set both finelog.config={cluster_config.finelog.config!r} "
+                f"and endpoints[{LOG_SERVER_ENDPOINT_NAME}] in the same cluster config"
+            )
+        fcfg = load_finelog_config(cluster_config.finelog.config)
+        uri, meta = derive_endpoint_uri(fcfg)
+        resolved[LOG_SERVER_ENDPOINT_NAME] = resolve_endpoint_uri(uri, meta)
+    return resolved
+
+
+def run_controller_serve(
+    cluster_config: IrisClusterConfig,
+    *,
+    host: str = "0.0.0.0",
+    port: int = 10000,
+    checkpoint_path: str | None = None,
+    checkpoint_interval: float | None = None,
+    dry_run: bool = False,
+    fresh: bool = False,
+    state_dir: Path | None = None,
+) -> None:
+    """Start the Iris controller, block until SIGTERM/SIGINT.
+
+    This is the shared implementation used by both the standalone daemon
+    entrypoint and the ``iris cluster controller serve`` CLI command.
+    """
+    logger.info("Initializing Iris controller (%s)", provenance_from_env())
+
+    remote_state_dir = cluster_config.storage.remote_state_dir
+    if not remote_state_dir:
+        raise ValueError(
+            "storage.remote_state_dir is required in the cluster config. "
+            "Example: storage: { remote_state_dir: 'gs://my-bucket/iris/state' }"
+        )
+    logger.info("Using remote_state_dir from config: %s", remote_state_dir)
+
+    # Resolve cluster endpoints up front so a misconfigured config fails before
+    # we touch DBs, providers, or the autoscaler.
+    endpoints = _resolve_cluster_endpoints(cluster_config)
+    log_service_address = endpoints.get(LOG_SERVER_ENDPOINT_NAME, "")
+    if log_service_address:
+        logger.info("Resolved %d cluster endpoints; log server: %s", len(endpoints), log_service_address)
+    else:
+        logger.warning(
+            "%s not in endpoints config — Controller will host a bundled in-process "
+            "MemStore log server. Logs are lost on restart and capped in memory. "
+            "Run finelog-server out-of-band for production.",
+            LOG_SERVER_ENDPOINT_NAME,
+        )
+
+    if state_dir is not None:
+        local_state_dir = state_dir
+    elif dry_run:
+        local_state_dir = DRY_RUN_STATE_DIR_ROOT / datetime.date.today().isoformat()
+    elif cluster_config.storage.local_state_dir:
+        local_state_dir = Path(cluster_config.storage.local_state_dir)
+    else:
+        local_state_dir = LOCAL_STATE_DIR_DEFAULT
+    logger.info("Controller local state dir: %s (dry_run=%s)", local_state_dir, dry_run)
+
+    # --- Restore or reuse local DB ---
+    local_state_dir.mkdir(parents=True, exist_ok=True)
+    db_dir = local_state_dir / "db"
+    prepare_controller_state(db_dir, remote_state_dir, fresh=fresh, checkpoint_path=checkpoint_path)
+
+    db = ControllerDB(db_dir=db_dir)
+
+    # Resolve reference-based secrets (SecretRefSpec fields) at the controller
+    # runtime — the deploy/render path renders references verbatim and never
+    # resolves. A configured-but-erroring source fails fast here.
+    cluster_config = resolve_config_secrets(cluster_config)
+    signing_key_pem = (
+        cluster_config.auth.signing_key if (cluster_config.auth and cluster_config.auth.signing_key) else None
+    )
+
+    # Only a controller that calls federation peers needs a persistent signing key: each
+    # peer pins this controller's public key to verify its federation tokens. Everything
+    # else runs on the ephemeral fallback.
+    require_persistent_signing_key(cluster_config.peers, signing_key_pem)
+
+    auth = create_controller_auth(
+        cluster_config.auth,
+        cluster_name=cluster_config.name,
+        signing_key_pem=signing_key_pem,
+    )
+    log_stack = build_log_stack(
+        log_service_address=log_service_address,
+        local_log_dir=local_state_dir / "log-server",
+        host=host,
+        worker_token=auth.worker_token if auth.worker_token else None,
+    )
+    if checkpoint_interval is None:
+        checkpoint_interval = HOURLY_CHECKPOINT_SECONDS
+        logger.info("Defaulting to hourly checkpointing")
+
+    config = ControllerConfig(
+        host=host,
+        port=port,
+        remote_state_dir=remote_state_dir,
+        checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
+        local_state_dir=local_state_dir,
+        auth_verifier=auth.verifier,
+        auth_provider=auth.provider,
+        auth=auth,
+        dry_run=dry_run,
+        endpoints=endpoints,
+        autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
+        cluster_id=cluster_config.name,
+        dashboard_url=cluster_config.dashboard_url,
+        federation_public_parent=cluster_config.federation_public_parent,
+        peers=cluster_config.peers,
+        user_budget_defaults=UserBudgetDefaults(
+            budget_limit=cluster_config.user_budget_defaults.budget_limit,
+            max_band=cluster_config.user_budget_defaults.max_band,
+        ),
+    )
+
+    backend = make_backend(
+        cluster_config,
+        auth=auth,
+        remote_state_dir=remote_state_dir,
+        dry_run=dry_run,
+        log_stack=log_stack,
+    )
+
+    logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
+
+    # Reconcile per-user budget tiers from the cluster config into the DB.
+    # Runs after migrations have cleared user_budgets (see migration 0037).
+    # Unlisted users are left without a row and fall through to
+    # UserBudgetDefaults when the scheduler and launch-job guard look them up.
+    if cluster_config.user_budgets:
+        reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
+
+    controller = Controller(
+        config=config,
+        log_stack=log_stack,
+        db=db,
+    )
+    controller.register_backend(backend)
+    logger.info("Controller instance created")
+
+    controller.start()
+    logger.info("Controller started successfully on %s:%d", host, port)
+    logger.info("Controller is ready to accept connections")
+
+    stop_event = threading.Event()
+
+    def handle_shutdown(_signum, _frame):
+        # Second signal force-exits immediately.
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+        # Write a final checkpoint then exit. Do NOT call controller.stop()
+        # here — its shutdown path runs autoscaler.shutdown() which terminates
+        # every worker VM in the cluster. On a controller restart, workers must
+        # survive; the new controller picks them up from the checkpoint. Even on
+        # a full cluster teardown, `iris cluster stop` handles VM cleanup via
+        # stop_all(), so the SIGTERM handler never needs to delete VMs itself.
+        logger.info("Shutdown signal received")
+        controller.begin_shutdown()
+        if not config.dry_run:
+            try:
+                path, result = controller.begin_checkpoint()
+                logger.info(
+                    "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
+                    path,
+                    result.job_count,
+                    result.task_count,
+                    result.worker_count,
+                )
+            except Exception:
+                logger.exception("Final checkpoint on shutdown failed")
+        logger.info("Controller exiting")
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, handle_shutdown)
+    signal.signal(signal.SIGINT, handle_shutdown)
+
+    stop_event.wait()
+
+
+# ---------------------------------------------------------------------------
+# Standalone CLI — used by Dockerfile, GCP bootstrap, and k8s entrypoints
+# (python -m iris.cluster.controller.main serve)
+# ---------------------------------------------------------------------------
+
+
+def controller_serve_options(command):
+    """Apply the click options shared by both ``controller serve`` entrypoints.
+
+    The standalone ``python -m iris.cluster.controller.main serve`` and the
+    ``iris cluster controller serve`` subcommand expose the same runtime knobs.
+    Defining them once here keeps the two entrypoints from drifting apart.
+    """
+    options = [
+        click.option("--host", default="0.0.0.0", help="Bind host"),
+        click.option("--port", default=10000, type=int, help="Bind port"),
+        click.option(
+            "--checkpoint-path",
+            default=None,
+            help="Restore from this specific checkpoint directory (e.g. gs://bucket/.../controller-state/1234567890)",
+        ),
+        click.option(
+            "--checkpoint-interval",
+            default=None,
+            type=float,
+            help="Periodic checkpoint interval in seconds (default: hourly)",
+        ),
+        click.option(
+            "--dry-run",
+            is_flag=True,
+            default=False,
+            help="Start in dry-run mode: compute scheduling but suppress all side effects",
+        ),
+        click.option(
+            "--fresh",
+            is_flag=True,
+            default=False,
+            help="Start with an empty database, ignoring any remote checkpoint",
+        ),
+        click.option(
+            "--state-dir",
+            default=None,
+            type=click.Path(path_type=Path),
+            help=(
+                "Override the local state dir (default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)"
+            ),
+        ),
+    ]
+    for option in reversed(options):
+        command = option(command)
+    return command
 
 
 @click.group()
@@ -24,138 +402,36 @@ def cli():
 
 
 @cli.command()
-@click.option("--host", default="0.0.0.0", help="Bind host")
-@click.option("--port", default=10000, type=int, help="Bind port")
-@click.option(
-    "--bundle-prefix", default=None, help="URI prefix for job bundles (e.g., gs://bucket/path or file:///path)"
-)
-@click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
-@click.option("--worker-timeout", default=60.0, type=float, help="Worker heartbeat timeout (seconds)")
-@click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config for autoscaling")
+@click.option("--config", "config_file", type=click.Path(exists=True), required=True, help="Cluster config YAML")
 @click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]), help="Log level")
+@controller_serve_options
 def serve(
     host: str,
     port: int,
-    bundle_prefix: str | None,
-    scheduler_interval: float,
-    worker_timeout: float,
-    config_file: str | None,
+    config_file: str,
     log_level: str,
+    checkpoint_path: str | None,
+    checkpoint_interval: float | None,
+    dry_run: bool,
+    fresh: bool,
+    state_dir: Path | None,
 ):
-    """Start the Iris controller service.
-
-    When --config is provided, the controller runs an integrated autoscaler
-    that provisions/terminates VM slices based on pending task demand.
-    """
-    from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.config import load_config, create_autoscaler
-    from iris.cluster.platform.bootstrap import WorkerBootstrap
-    from iris.cluster.platform.factory import create_platform
-
+    """Start the Iris controller service."""
     configure_logging(level=getattr(logging, log_level))
 
-    logger.info("Initializing Iris controller")
+    cluster_config = load_config(Path(config_file))
+    logger.info("Cluster config loaded from %s: %d scale groups", config_file, len(cluster_config.scale_groups))
 
-    # Load cluster config first to extract bundle_prefix if not provided via CLI
-    autoscaler: Autoscaler | None = None
-    cluster_config = None
-    if config_file:
-        logger.info("Loading cluster config from %s", config_file)
-        try:
-            cluster_config = load_config(Path(config_file))
-            logger.info("Cluster config loaded: %d scale groups defined", len(cluster_config.scale_groups))
-        except Exception as e:
-            logger.exception("Failed to load cluster config from %s", config_file)
-            raise click.ClickException(f"Failed to load cluster config: {e}") from e
-
-        # Extract bundle_prefix from config if not provided via CLI
-        if bundle_prefix is None and cluster_config.controller.bundle_prefix:
-            bundle_prefix = cluster_config.controller.bundle_prefix
-            logger.info("Using bundle_prefix from config: %s", bundle_prefix)
-
-        try:
-            platform = create_platform(
-                platform_config=cluster_config.platform,
-                ssh_config=cluster_config.defaults.ssh,
-            )
-            logger.info("Platform created")
-
-            worker_bootstrap = (
-                WorkerBootstrap(cluster_config) if cluster_config.defaults.bootstrap.docker_image else None
-            )
-
-            autoscaler = create_autoscaler(
-                platform=platform,
-                autoscaler_config=cluster_config.defaults.autoscaler,
-                scale_groups=cluster_config.scale_groups,
-                label_prefix=cluster_config.platform.label_prefix or "iris",
-                worker_bootstrap=worker_bootstrap,
-            )
-            logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
-        except Exception as e:
-            logger.exception("Failed to create autoscaler from config")
-            raise click.ClickException(f"Failed to create autoscaler: {e}") from e
-
-        try:
-            autoscaler.reconcile()
-            logger.info("Autoscaler initial reconcile completed")
-        except Exception as e:
-            logger.exception("Autoscaler initial reconcile failed")
-            raise click.ClickException(f"Autoscaler reconcile failed: {e}") from e
-    else:
-        logger.info("No cluster config provided, autoscaler disabled")
-
-    # Use worker_timeout from cluster config if available
-    if cluster_config and cluster_config.controller.worker_timeout.milliseconds > 0:
-        effective_timeout = Duration.from_proto(cluster_config.controller.worker_timeout)
-    else:
-        effective_timeout = Duration.from_seconds(worker_timeout)
-
-    logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
-    logger.info(
-        "Configuration: scheduler_interval=%.2fs worker_timeout=%.0fms", scheduler_interval, effective_timeout.to_ms()
-    )
-
-    config = ControllerConfig(
+    run_controller_serve(
+        cluster_config,
         host=host,
         port=port,
-        bundle_prefix=bundle_prefix,
-        scheduler_interval_seconds=scheduler_interval,
-        worker_timeout=effective_timeout,
+        checkpoint_path=checkpoint_path,
+        checkpoint_interval=checkpoint_interval,
+        dry_run=dry_run,
+        fresh=fresh,
+        state_dir=state_dir,
     )
-
-    try:
-        controller = Controller(
-            config=config,
-            worker_stub_factory=RpcWorkerStubFactory(),
-            autoscaler=autoscaler,
-        )
-        logger.info("Controller instance created")
-    except Exception as e:
-        logger.exception("Failed to create controller")
-        raise click.ClickException(f"Failed to create controller: {e}") from e
-
-    try:
-        controller.start()
-        logger.info("Controller started successfully on %s:%d", host, port)
-    except Exception as e:
-        logger.exception("Failed to start controller")
-        raise click.ClickException(f"Failed to start controller: {e}") from e
-
-    logger.info("Controller is ready to accept connections")
-
-    stop_event = threading.Event()
-
-    def handle_shutdown(_signum, _frame):
-        logger.info("Shutdown signal received, stopping controller...")
-        controller.stop()
-        logger.info("Controller stopped")
-        stop_event.set()
-
-    signal.signal(signal.SIGTERM, handle_shutdown)
-    signal.signal(signal.SIGINT, handle_shutdown)
-
-    stop_event.wait()
 
 
 if __name__ == "__main__":

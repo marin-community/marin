@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
@@ -6,7 +6,6 @@ import os
 import typing
 from dataclasses import dataclass, field
 
-import equinox as eqx
 import jax
 import jmp
 
@@ -15,17 +14,16 @@ from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
-from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.data import DataLoader
-from levanter.data.text import LmDataConfig
+import levanter.config
+from levanter.data.loader import DataLoader
+from levanter.data.text.datasets import LmDataConfig
+from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.models.loss import next_token_loss
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
-from levanter.visualization import compute_and_diff_log_probs, compute_and_visualize_log_probs
+from levanter.analysis.visualization import compute_and_diff_log_probs, compute_and_visualize_log_probs
 
 
 logger = logging.getLogger(__name__)
@@ -52,7 +50,7 @@ class VizLmConfig:
 
 
 def main(config: VizLmConfig):
-    levanter.initialize(config)
+    levanter.trainer.initialize(config)
     tokenizer = config.data.the_tokenizer
 
     # some axes we use outside the model proper
@@ -64,7 +62,7 @@ def main(config: VizLmConfig):
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
 
-    with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
+    with config.trainer.use_device_mesh():
         key = jax.random.PRNGKey(0)
 
         vocab_size = len(tokenizer)
@@ -76,64 +74,67 @@ def main(config: VizLmConfig):
 
         # don't want to compute the mask w.r.t. the final token
 
-        @hax.named_jit
+        @hax.named_jit(axis_resources=compute_axis_mapping)
         def compute_log_probs(model: LmHeadModel, example: LmExample):
-            with hax.axis_mapping(config.trainer.compute_axis_mapping):
-                model = inference_mode(model, True)
-                model = mp.cast_to_compute(model)
+            model = inference_mode(model, True)
+            model = mp.cast_to_compute(model)
 
-                activations = model.activations(example.tokens, example.attn_mask, key=key)
-                logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)
+            activations, _ = split_activations(model.activations(example.tokens, example.attn_mask, key=key))
+            logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)
 
-                loss = next_token_loss(
-                    model.Pos,
-                    model.Vocab,
-                    logits=logits,
-                    true_ids=example.tokens,
-                    loss_weight=example.loss_weight,
-                    reduction=None,
-                )
-                logprobs = -loss
-                # roll forward to get the loss for each predicted token
-                logprobs = hax.roll(logprobs, 1, Pos)
-                logits = hax.roll(logits, 1, Pos)
-                argmaxes = hax.argmax(logits, axis=Vocab)
-                return logprobs.rearrange((EvalBatch, Pos)).array, argmaxes.rearrange((EvalBatch, Pos)).array
+            loss = next_token_loss(
+                model.Pos,
+                model.Vocab,
+                logits=logits,
+                true_ids=example.tokens,
+                loss_weight=example.loss_weight,
+                reduction=None,
+            )
+            logprobs = -loss
+            # roll forward to get the loss for each predicted token
+            logprobs = hax.roll(logprobs, 1, Pos)
+            logits = hax.roll(logits, 1, Pos)
+            argmaxes = hax.argmax(logits, axis=Vocab)
+            return logprobs.rearrange((EvalBatch, Pos)).array, argmaxes.rearrange((EvalBatch, Pos)).array
 
         model: LmHeadModel
-
-        # initialize the model
         if config.checkpoint_is_hf:
-            model_config = config.model
-            converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-            converter = converter.replaced(reference_checkpoint=config.checkpoint_path, tokenizer=tokenizer)
-            model = converter.load_pretrained(
-                model_config.model_type, ref=config.checkpoint_path, dtype=config.trainer.mp.compute_dtype  # type: ignore
+            model = load_hf_checkpoint(
+                config.model,
+                config.checkpoint_path,
+                axis_mapping=parameter_axis_mapping,
+                tokenizer=tokenizer,
+                compute_dtype=mp.compute_dtype,
             )
         else:
-            with use_cpu_device():
-                model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                model = load_checkpoint(model, config.checkpoint_path, subpath="model")
-            model = hax.shard(model, parameter_axis_mapping)
-
+            model = load_levanter_checkpoint(
+                config.model,
+                config.checkpoint_path,
+                Vocab=Vocab,
+                axis_mapping=parameter_axis_mapping,
+                key=key,
+            )
         model = typing.cast(LmHeadModel, inference_mode(model, True))
 
+        comparison_model: LmHeadModel | None = None
         if config.comparison_model_path is not None:
             if config.comparison_is_hf:
-                model_config = config.model
-                converter = model_config.hf_checkpoint_converter()
-                converter = converter.replaced(reference_checkpoint=config.comparison_model_path, tokenizer=tokenizer)
-                comparison_model = converter.load_pretrained(
-                    model_config.model_type, ref=config.comparison_model_path, dtype=config.trainer.mp.compute_dtype  # type: ignore
+                comparison_model = load_hf_checkpoint(
+                    config.model,
+                    config.comparison_model_path,
+                    axis_mapping=parameter_axis_mapping,
+                    tokenizer=tokenizer,
+                    compute_dtype=mp.compute_dtype,
                 )
             else:
-                with use_cpu_device():
-                    comparison_model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                    comparison_model = load_checkpoint(comparison_model, config.comparison_model_path, subpath="model")
-                comparison_model = hax.shard(comparison_model, parameter_axis_mapping)
+                comparison_model = load_levanter_checkpoint(
+                    config.model,
+                    config.comparison_model_path,
+                    Vocab=Vocab,
+                    axis_mapping=parameter_axis_mapping,
+                    key=key,
+                )
             comparison_model = typing.cast(LmHeadModel, inference_mode(comparison_model, True))
-        else:
-            comparison_model = None
 
         for name, dataset in validation_sets.items():
 

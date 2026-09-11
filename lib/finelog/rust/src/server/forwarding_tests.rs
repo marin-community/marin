@@ -1,0 +1,1773 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//! Integration tests for the cross-cluster forwarder. Each drives a real source finelog
+//! and the hub it forwards to, both served over loopback sockets.
+
+use std::net::SocketAddr;
+
+use arrow::array::{RecordBatch, StringArray};
+use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+
+use crate::proto::finelog::logging::{FetchLogsRequest, LogEntry, MatchScope, PushLogsRequest};
+use crate::proto::finelog::stats::ColumnType;
+use crate::server::auth::{AuthIdentity, AuthPolicy};
+use crate::server::telemetry::telemetry_schema;
+use crate::server::test_support::{
+    client, disk_store, serve, serve_rejecting, serve_schema_conflict, serve_unavailable,
+    serve_with_outage, stats_client, RequestStats, TestTransport, PRIV_A, PRIV_UNTRUSTED, PUB_A,
+};
+use crate::store::policy::StoragePolicy;
+use crate::store::schema::{Column, Schema};
+use crate::store::store::LOG_NAMESPACE_NAME;
+use crate::store::Store;
+use crate::telemetry_policy::TELEMETRY_NAMESPACE;
+
+use super::*;
+
+use crate::proto::finelog::logging::LogServiceClient;
+
+const SOURCE_CLUSTER: &str = "cw-test";
+const TELEMETRY_ROW_BYTES: usize = 450;
+const UNSEEN_TELEMETRY_SERVICE: &str = "marinskyrl";
+const UNSEEN_TELEMETRY_NAMESPACE: &str = "telemetry_v1.marinskyrl";
+
+fn jwt_policy(cluster: &str) -> AuthPolicy {
+    AuthPolicy::parse(
+        &serde_json::json!([
+            {"type": "jwt", "keys": [{"cluster": cluster, "public_keys": [PUB_A]}]}
+        ])
+        .to_string(),
+    )
+    .unwrap()
+}
+
+/// A hub that verifies a bearer against the sending cluster's public key, and lets a
+/// bearerless local client (this test, reading the result back) fall through to the
+/// loopback rule.
+///
+/// Jwt sits first, inverting the cidr-first order deployed hubs use. Both ends are on
+/// loopback here, so a cidr-first hub would admit every push on the network rule and
+/// never reach the bearer that names the sending cluster.
+fn hub_policy(cluster: &str) -> AuthPolicy {
+    AuthPolicy::parse(
+        &serde_json::json!([
+            {"type": "jwt", "keys": [{"cluster": cluster, "public_keys": [PUB_A]}]},
+            {"type": "cidr", "cidrs": ["127.0.0.0/8", "::1/128"]}
+        ])
+        .to_string(),
+    )
+    .unwrap()
+}
+
+/// A source store and the hub it forwards to, each served over a real socket: the hub
+/// under [`hub_policy`], the source open to loopback.
+struct Fixture {
+    source: Arc<Store>,
+    source_client: LogServiceClient<TestTransport>,
+    /// The hub's store, kept for direct assertions. `None` when the hub is a stub that
+    /// keeps no state (the rejecting hub).
+    target_store: Option<Arc<Store>>,
+    target_addr: SocketAddr,
+    target_url: String,
+    target_requests: Arc<RequestStats>,
+}
+
+fn test_forwarder(
+    source: Arc<Store>,
+    target_url: String,
+    target_addr: SocketAddr,
+    private_pem: &str,
+) -> Forwarder<TestTransport> {
+    let config = ForwardingConfig {
+        target: target_url,
+        cluster: SOURCE_CLUSTER.to_string(),
+    };
+    let minter = TokenMinter::new(private_pem, config.cluster.clone()).unwrap();
+    Forwarder::with_client(source, config, minter, stats_client(target_addr))
+}
+
+impl Fixture {
+    /// A hub that trusts [`SOURCE_CLUSTER`]'s public key, and a source that writes under
+    /// it. Each namespace's watermark is unset: a forwarder started now seeds at the tip.
+    /// Call [`Self::forward_from_start`] to drain what is already written.
+    async fn new(tag: &str) -> Self {
+        let target = disk_store(&format!("{tag}_target"));
+        let (target_addr, target_requests) =
+            serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+        Self::with_hub(tag, Some(target), target_addr, target_requests).await
+    }
+
+    /// As [`Self::new`], but the hub refuses every request with `invalid_argument` and
+    /// keeps no store, so only the source and the request count are observable.
+    async fn with_rejecting_hub(tag: &str) -> Self {
+        let (target_addr, target_requests) = serve_rejecting().await;
+        Self::with_hub(tag, None, target_addr, target_requests).await
+    }
+
+    async fn with_unavailable_hub(tag: &str) -> Self {
+        let (target_addr, target_requests) = serve_unavailable().await;
+        Self::with_hub(tag, None, target_addr, target_requests).await
+    }
+
+    async fn with_schema_conflict_hub(tag: &str) -> Self {
+        let (target_addr, target_requests) = serve_schema_conflict().await;
+        Self::with_hub(tag, None, target_addr, target_requests).await
+    }
+
+    async fn with_hub(
+        tag: &str,
+        target_store: Option<Arc<Store>>,
+        target_addr: SocketAddr,
+        target_requests: Arc<RequestStats>,
+    ) -> Self {
+        let source = disk_store(&format!("{tag}_source"));
+        let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
+        Self {
+            source,
+            source_client: client(source_addr),
+            target_store,
+            target_addr,
+            target_url: format!("http://{target_addr}"),
+            target_requests,
+        }
+    }
+
+    /// Point `namespace`'s watermark below every row, so a forward drains it whole.
+    async fn forward_from_start(&self, namespace: &str) {
+        self.source
+            .set_forward_cursor(&self.target_url, namespace, 0)
+            .await
+            .unwrap();
+    }
+
+    /// A forwarder from this source to this hub, signing with `private_pem`.
+    fn forwarder(&self, private_pem: &str) -> Forwarder<TestTransport> {
+        test_forwarder(
+            Arc::clone(&self.source),
+            self.target_url.clone(),
+            self.target_addr,
+            private_pem,
+        )
+    }
+
+    fn target_store(&self) -> &Arc<Store> {
+        self.target_store.as_ref().expect("this hub keeps a store")
+    }
+
+    /// The last seq the source has made durable in `namespace`.
+    fn tip(&self, namespace: &str) -> i64 {
+        self.source.namespace_persisted_seq(namespace).unwrap()
+    }
+
+    fn cursor(&self, namespace: &str) -> Option<i64> {
+        self.source
+            .forward_cursor(&self.target_url, namespace)
+            .unwrap()
+    }
+
+    fn requests(&self) -> usize {
+        self.target_requests.total()
+    }
+
+    fn zstd_requests(&self) -> usize {
+        self.target_requests.zstd_requests()
+    }
+
+    /// Forward until `namespace`'s watermark settles at the source's current tip, then
+    /// stop.
+    async fn drain(&self, private_pem: &str, namespace: &str) {
+        forward_until(
+            self.forwarder(private_pem),
+            &self.source,
+            &self.target_url,
+            namespace,
+            self.tip(namespace),
+        )
+        .await;
+    }
+
+    /// Every log row the hub holds, as `(key, data)`.
+    async fn hub_log_rows(&self) -> Vec<(String, String)> {
+        read_all(&client(self.target_addr)).await
+    }
+}
+
+/// Write `lines` under `key` into `store` through its own RPC surface, which returns
+/// only once the rows are durable and therefore visible to a scan.
+async fn push(client: &LogServiceClient<TestTransport>, key: &str, lines: &[&str]) {
+    let entries = lines
+        .iter()
+        .map(|line| LogEntry::default().with_source("stdout").with_data(*line))
+        .collect();
+    let request = PushLogsRequest {
+        entries,
+        ..Default::default()
+    }
+    .with_key(key);
+    client.push_logs(request).await.unwrap();
+}
+
+/// Register a generic string-keyed table and write `rows` durable rows into it.
+async fn write_id_rows(store: &Store, namespace: &str, rows: usize) {
+    let ids: Vec<String> = (0..rows).map(|row| row.to_string()).collect();
+    write_string_rows(store, namespace, ids).await;
+}
+
+async fn write_string_rows(store: &Store, namespace: &str, ids: Vec<String>) {
+    let schema = Schema::new(
+        vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
+        "id",
+    );
+    store
+        .register_table(namespace, schema, StoragePolicy::default())
+        .unwrap();
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+        "id",
+        DataType::Utf8,
+        false,
+    )]));
+    let mut last_seq = -1;
+    for chunk in ids.chunks(20_000) {
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema),
+            vec![Arc::new(StringArray::from(
+                chunk.iter().map(String::as_str).collect::<Vec<_>>(),
+            ))],
+        )
+        .unwrap();
+        let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+        (_, last_seq) = store.write_rows(namespace, &ipc, None).unwrap();
+    }
+    store
+        .await_persisted(namespace, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+}
+
+fn root_telemetry_batch(batch_id: &str, service: &str, name: &str) -> RecordBatch {
+    RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("schema_version", DataType::Int32, false),
+            Field::new("timestamp_ms", DataType::Int64, false),
+            Field::new("batch_id", DataType::Utf8, false),
+            Field::new("record_index", DataType::Int64, false),
+            Field::new("service", DataType::Utf8, false),
+            Field::new("kind", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("resource_attributes_json", DataType::Utf8, false),
+            Field::new("attributes_json", DataType::Utf8, false),
+        ])),
+        vec![
+            Arc::new(arrow::array::Int32Array::from(vec![1])),
+            Arc::new(arrow::array::Int64Array::from(vec![1])),
+            Arc::new(StringArray::from(vec![batch_id])),
+            Arc::new(arrow::array::Int64Array::from(vec![0])),
+            Arc::new(StringArray::from(vec![service])),
+            Arc::new(StringArray::from(vec!["gauge"])),
+            Arc::new(StringArray::from(vec![name])),
+            Arc::new(StringArray::from(vec!["{}"])),
+            Arc::new(StringArray::from(vec!["{}"])),
+        ],
+    )
+    .unwrap()
+}
+
+async fn write_root_telemetry(store: &Arc<Store>, batch_id: &str, name: &str) {
+    let register_store = Arc::clone(store);
+    tokio::task::spawn_blocking(move || {
+        register_store.register_table(
+            TELEMETRY_NAMESPACE,
+            telemetry_schema(),
+            StoragePolicy::default(),
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let batch = root_telemetry_batch(batch_id, UNSEEN_TELEMETRY_SERVICE, name);
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = store.write_rows(TELEMETRY_NAMESPACE, &ipc, None).unwrap();
+    store
+        .await_persisted(TELEMETRY_NAMESPACE, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+}
+
+/// Every value of `column` the hub holds for `namespace`, read straight off the hub
+/// store. Lets a test assert on a column a log reader never surfaces — notably the
+/// stamped origin `cluster` on a generic stat table. Holds the query-visibility read
+/// guard across the scan, exactly as the server does.
+async fn hub_column(store: &Store, namespace: &str, column: &str) -> Vec<Option<String>> {
+    let _guard = store.query_visibility().read().await;
+    let providers = store.query_providers().unwrap();
+    let sql = format!("SELECT {column} FROM \"{namespace}\" ORDER BY seq");
+    let result = run_query_over(&make_ctx(), providers, &sql).await.unwrap();
+    let mut values = Vec::new();
+    for batch in &result.batches {
+        let col = batch.column(0).as_string::<i32>();
+        values.extend(col.iter().map(|v| v.map(str::to_string)));
+    }
+    values
+}
+
+async fn scalar_i64(store: &Store, sql: &str) -> i64 {
+    let _guard = store.query_visibility().read().await;
+    let providers = store.query_providers().unwrap();
+    let result = run_query_over(&make_ctx(), providers, sql).await.unwrap();
+    result.batches[0]
+        .column(0)
+        .as_primitive::<Int64Type>()
+        .value(0)
+}
+
+/// Every log row the server behind `client` holds, newest last, as `(key, data)` — read
+/// back over the wire so the assertion sees exactly what a log reader would.
+async fn read_all(client: &LogServiceClient<TestTransport>) -> Vec<(String, String)> {
+    let response = client
+        .fetch_logs(
+            FetchLogsRequest {
+                ..Default::default()
+            }
+            .with_source("/")
+            .with_match_scope(MatchScope::MATCH_SCOPE_PREFIX)
+            .with_max_lines(1000),
+        )
+        .await
+        .unwrap();
+    response
+        .into_view()
+        .entries
+        .iter()
+        .map(|e| {
+            (
+                e.key.unwrap_or("").to_string(),
+                e.data.unwrap_or("").to_string(),
+            )
+        })
+        .collect()
+}
+
+/// Poll `condition` until it holds, or fail after five seconds with `describe()`, so a
+/// wedged forwarder fails the test rather than hanging it.
+async fn poll_until<F, Fut>(mut condition: F, describe: impl Fn() -> String)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    for _ in 0..200 {
+        if condition().await {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("{}", describe());
+}
+
+async fn wait_for_scalar(store: &Store, sql: &str, expected: i64) {
+    poll_until(
+        || async { scalar_i64(store, sql).await == expected },
+        || format!("query {sql:?} never returned {expected}"),
+    )
+    .await;
+}
+
+/// Wait for `store`'s watermark for `(target, namespace)` to reach `expected`. Reads
+/// local state only, so a test can tell "the forwarder is done" without an RPC that
+/// would perturb the target's request count.
+async fn wait_for_cursor(store: &Store, target: &str, namespace: &str, expected: i64) {
+    poll_until(
+        || std::future::ready(store.forward_cursor(target, namespace).unwrap() == Some(expected)),
+        || {
+            format!(
+                "watermark for {namespace:?} never reached {expected} (stuck at {:?})",
+                store.forward_cursor(target, namespace).unwrap()
+            )
+        },
+    )
+    .await;
+}
+
+/// Poll `counter` until the hub has served at least `expected` requests. Lets a test
+/// that asserts on the *absence* of an effect first wait for the attempt that would have
+/// produced it.
+async fn wait_for_requests(counter: &RequestStats, expected: usize) {
+    poll_until(
+        || std::future::ready(counter.total() >= expected),
+        || {
+            format!(
+                "hub never served {expected} requests (saw {})",
+                counter.total()
+            )
+        },
+    )
+    .await;
+}
+
+/// Poll the hub until its log rows equal `expected`, or fail after five seconds. The hub
+/// ACKs a push once the row is durable (which advances the source forward cursor), but a
+/// query only ever sees *sealed* segments, never the in-RAM buffer. The seal happens on an
+/// async flush *after* the ACK, so a single read races that flush; polling waits it out.
+async fn wait_for_hub_log_rows(fx: &Fixture, expected: &[(&str, &str)]) {
+    let want: Vec<(String, String)> = expected
+        .iter()
+        .map(|(key, data)| (key.to_string(), data.to_string()))
+        .collect();
+    poll_until(
+        || {
+            let want = &want;
+            async move { fx.hub_log_rows().await == *want }
+        },
+        || format!("hub never held {want:?}"),
+    )
+    .await;
+}
+
+/// A forwarder running on its own task, stopped and joined by [`Self::finish`].
+struct RunningForwarder {
+    stop: watch::Sender<bool>,
+    task: JoinHandle<()>,
+}
+
+impl RunningForwarder {
+    fn start(forwarder: Forwarder<TestTransport>) -> Self {
+        let (stop, stop_rx) = watch::channel(false);
+        Self {
+            stop,
+            task: spawn(Arc::new(forwarder), stop_rx),
+        }
+    }
+
+    /// Latch the stop signal and join. Bounded, so an outbound request that does not
+    /// return fails the test instead of hanging it.
+    async fn finish(self) {
+        self.stop.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), self.task)
+            .await
+            .expect("forwarder did not stop within 5s")
+            .expect("forwarder task panicked");
+    }
+}
+
+/// Run `forwarder` until `store`'s watermark for `namespace` reaches `expected`, then
+/// stop it.
+async fn forward_until(
+    forwarder: Forwarder<TestTransport>,
+    store: &Store,
+    target: &str,
+    namespace: &str,
+    expected: i64,
+) {
+    let running = RunningForwarder::start(forwarder);
+    wait_for_cursor(store, target, namespace, expected).await;
+    running.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_remote_store_forwarder_registers_progress_without_panicking() {
+    let local_dir = crate::test_support::unique_dir("forwarder_fresh_remote_local");
+    let remote_dir = crate::test_support::unique_dir("forwarder_fresh_remote_archive");
+    let source = Arc::new(
+        Store::new(
+            Some(local_dir),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Live,
+        )
+        .unwrap(),
+    );
+    source.bootstrap_maintenance();
+
+    let target = disk_store("forwarder_fresh_remote_target");
+    let (target_addr, _) = serve(target, hub_policy(SOURCE_CLUSTER)).await;
+    let target_url = format!("http://{target_addr}");
+    let config = ForwardingConfig {
+        target: target_url,
+        cluster: SOURCE_CLUSTER.to_string(),
+    };
+    let minter = TokenMinter::new(PRIV_A, config.cluster.clone()).unwrap();
+    let forwarder = Forwarder::with_client(
+        Arc::clone(&source),
+        config,
+        minter,
+        stats_client(target_addr),
+    );
+
+    let running = RunningForwarder::start(forwarder);
+    poll_until(
+        || std::future::ready(source.get_table_schema(FINELOG_NAMESPACE).is_ok()),
+        || "forwarder did not register its progress namespace".to_string(),
+    )
+    .await;
+    running.finish().await;
+}
+
+// -------------------------------------------------------------------------------------
+// Unit tests: the credential, config, and pure helpers.
+
+#[test]
+fn minted_bearer_is_accepted_by_a_hub_trusting_the_matching_public_key() {
+    // The two halves of the trust config -- this server's private key and the public key
+    // an operator pastes into the hub's `jwt` auth layer -- must agree.
+    let minter = TokenMinter::new(PRIV_A, SOURCE_CLUSTER.to_string()).unwrap();
+    let bearer = minter.bearer().unwrap();
+    assert!(jwt_policy(SOURCE_CLUSTER)
+        .admits(Some(&bearer), None)
+        .is_some());
+    // A hub that trusts some other cluster's key rejects it.
+    let minter = TokenMinter::new(PRIV_UNTRUSTED, SOURCE_CLUSTER.to_string()).unwrap();
+    assert!(jwt_policy(SOURCE_CLUSTER)
+        .admits(Some(&minter.bearer().unwrap()), None)
+        .is_none());
+}
+
+#[test]
+fn the_key_names_the_forwarding_cluster_not_the_bearer() {
+    // The hub binds an admitted identity to the key that verified the bearer. A sender
+    // that mints under someone else's name still lands under the cluster the hub
+    // configured for its key.
+    let hub = jwt_policy("cw-rno2a");
+    let admitted = Some(AuthIdentity::Jwt {
+        cluster: "cw-rno2a".to_string(),
+    });
+
+    let honest = TokenMinter::new(PRIV_A, "cw-rno2a".to_string()).unwrap();
+    assert_eq!(hub.admits(Some(&honest.bearer().unwrap()), None), admitted);
+
+    // Same key, a bearer whose `iss`/`sub` claim another cluster entirely.
+    let liar = TokenMinter::new(PRIV_A, "us-central2".to_string()).unwrap();
+    assert_ne!(liar.bearer().unwrap(), honest.bearer().unwrap());
+    assert_eq!(hub.admits(Some(&liar.bearer().unwrap()), None), admitted);
+}
+
+#[test]
+fn a_cached_bearer_is_reused_until_it_nears_expiry() {
+    // Asserting that two successive mints are equal would prove nothing: EdDSA is
+    // deterministic and `iat`/`exp` are second-granular. Drive the cache directly.
+    let minter = TokenMinter::new(PRIV_A, SOURCE_CLUSTER.to_string()).unwrap();
+
+    let usable = Instant::now() + Duration::from_secs(600);
+    *minter.cached.lock().unwrap() = Some(("cached-bearer".to_string(), usable));
+    assert_eq!(minter.bearer().unwrap(), "cached-bearer");
+
+    // Once the entry is inside the refresh margin, it is replaced rather than handed to
+    // the hub, which would reject a token expiring mid-flight.
+    *minter.cached.lock().unwrap() = Some(("stale-bearer".to_string(), Instant::now()));
+    let fresh = minter.bearer().unwrap();
+    assert_ne!(fresh, "stale-bearer");
+    assert_eq!(
+        jwt_policy(SOURCE_CLUSTER).admits(Some(&fresh), None),
+        Some(AuthIdentity::Jwt {
+            cluster: SOURCE_CLUSTER.to_string()
+        }),
+        "the re-minted bearer must still verify at the hub"
+    );
+}
+
+#[test]
+fn forwarding_config_rejects_a_target_that_would_expose_the_bearer() {
+    assert!(ForwardingConfig::parse(r#"{"target":"http://hub","cluster":"a"}"#).is_err());
+    assert!(ForwardingConfig::parse(r#"{"target":"https://hub","cluster":"a"}"#).is_ok());
+}
+
+#[test]
+fn forwarding_config_rejects_an_empty_cluster() {
+    assert!(ForwardingConfig::parse(r#"{"target":"https://hub","cluster":""}"#).is_err());
+    assert!(ForwardingConfig::parse(r#"{"target":"https://hub","cluster":"a"}"#).is_ok());
+}
+
+#[test]
+fn resume_after_eviction_reports_only_a_real_gap() {
+    // Cursor at or above the oldest local row: nothing was lost.
+    assert_eq!(resume_after_eviction(10, Some(11)), None);
+    assert_eq!(resume_after_eviction(10, Some(5)), None);
+    // Cursor below it: rows 11..=40 are archive-only, so resume just before 41.
+    assert_eq!(resume_after_eviction(10, Some(41)), Some(40));
+    // No local segments at all: nothing to be behind.
+    assert_eq!(resume_after_eviction(10, None), None);
+}
+
+#[test]
+fn forwarding_read_window_is_bounded_by_ordered_segment_ranges() {
+    let paths = vec![
+        "settled".into(),
+        "first".into(),
+        "overlap".into(),
+        "later".into(),
+    ];
+    let mut seq_bounds = BTreeMap::from([
+        ("settled".into(), (1, 10)),
+        ("first".into(), (11, 20)),
+        ("overlap".into(), (15, 30)),
+        ("later".into(), (31, 40)),
+    ]);
+
+    assert_eq!(
+        bounded_forward_read_through(&paths, &seq_bounds, 10, 40, 2),
+        30
+    );
+    assert_eq!(
+        bounded_forward_read_through(&paths, &seq_bounds, 10, 25, 2),
+        25
+    );
+
+    seq_bounds.remove("first");
+    assert_eq!(
+        bounded_forward_read_through(&paths, &seq_bounds, 10, 40, 1),
+        30
+    );
+
+    assert_eq!(
+        bounded_forward_read_through(&[], &BTreeMap::new(), 10, 40, 1),
+        10,
+        "a newer durability watermark must not make absent snapshot rows look scanned"
+    );
+}
+
+#[test]
+fn chunk_by_bytes_splits_and_pairs_each_chunk_with_its_last_seq() {
+    let batch = RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![Field::new(
+            "data",
+            DataType::Utf8,
+            false,
+        )])),
+        vec![Arc::new(StringArray::from(vec!["a", "b", "c"]))],
+    )
+    .unwrap();
+    let seqs = Int64Array::from(vec![10, 20, 30]);
+
+    // A budget that fits the whole batch ships it in one chunk, cursor = last seq.
+    let chunks = chunk_by_bytes(&batch, &seqs, 1 << 20).unwrap();
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0].1, 30);
+
+    // A minimal budget forces one row per chunk; each chunk's cursor is its own row.
+    let chunks = chunk_by_bytes(&batch, &seqs, 1).unwrap();
+    let last_seqs: Vec<i64> = chunks.iter().map(|(_, seq)| *seq).collect();
+    assert_eq!(last_seqs, vec![10, 20, 30]);
+}
+
+#[test]
+fn chunk_by_bytes_shrinks_an_estimate_that_encodes_over_budget() {
+    let batch = RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![Field::new(
+            "data",
+            DataType::Utf8,
+            false,
+        )])),
+        vec![Arc::new(StringArray::from(vec![""; 1_000]))],
+    )
+    .unwrap();
+    let seqs = Int64Array::from_iter_values(1..=1_000);
+    let max_bytes = 1_024;
+    let per_row = batch.get_array_memory_size() / batch.num_rows();
+    let estimated_rows = (max_bytes / per_row).max(1);
+    let estimated_ipc = encode_ipc(&batch.schema(), &[batch.slice(0, estimated_rows)]).unwrap();
+    assert!(
+        estimated_ipc.len() > max_bytes,
+        "the fixture must exercise an estimate that needs correction"
+    );
+
+    let chunks = chunk_by_bytes(&batch, &seqs, max_bytes).unwrap();
+
+    assert!(chunks.len() > 1);
+    assert!(chunks.iter().all(|(ipc, _)| ipc.len() <= max_bytes));
+    assert_eq!(chunks.last().unwrap().1, 1_000);
+}
+
+#[test]
+fn one_telemetry_sized_read_turn_fits_one_request() {
+    let rows = FORWARD_BATCH_ROWS as usize;
+    let row = "x".repeat(TELEMETRY_ROW_BYTES);
+    let batch = RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![Field::new(
+            "data",
+            DataType::Utf8,
+            false,
+        )])),
+        vec![Arc::new(StringArray::from(vec![row; rows]))],
+    )
+    .unwrap();
+    let seqs = Int64Array::from_iter_values(1..=FORWARD_BATCH_ROWS);
+
+    let chunks = chunk_by_bytes(&batch, &seqs, FORWARD_BATCH_BYTES).unwrap();
+
+    assert_eq!(chunks.len(), 1);
+    assert!(chunks
+        .iter()
+        .all(|(ipc, _)| ipc.len() <= FORWARD_BATCH_BYTES));
+    assert_eq!(chunks.last().unwrap().1, FORWARD_BATCH_ROWS);
+}
+
+// -------------------------------------------------------------------------------------
+// Integration tests: the `log` namespace end to end.
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn drains_a_startup_backlog_of_many_keys_in_one_request() {
+    // A batch spanning many keys costs ONE WriteRows: forwarding throughput is
+    // independent of how many distinct log keys are in flight, so a job fanned out over
+    // 140 workers ships as fast as one that is not. The count is taken at the hub's HTTP
+    // boundary, which is where the contract lives.
+    let fx = Fixture::new("bulk").await;
+    for key in ["/user/job/task-a", "/user/job/task-b", "/system/worker/1"] {
+        push(&fx.source_client, key, &["first", "second"]).await;
+    }
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+    let requests_before = fx.requests();
+
+    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
+
+    assert_eq!(
+        fx.requests() - requests_before,
+        1,
+        "six rows across three keys must ship in a single request"
+    );
+
+    let mut forwarded = fx.hub_log_rows().await;
+    forwarded.sort();
+    assert_eq!(
+        forwarded,
+        vec![
+            ("/system/worker/1".to_string(), "first".to_string()),
+            ("/system/worker/1".to_string(), "second".to_string()),
+            ("/user/job/task-a".to_string(), "first".to_string()),
+            ("/user/job/task-a".to_string(), "second".to_string()),
+            ("/user/job/task-b".to_string(), "first".to_string()),
+            ("/user/job/task-b".to_string(), "second".to_string()),
+        ],
+        "every row lands under the key it was written with"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forwarded_rows_carry_the_origin_cluster_of_the_store_that_sent_them() {
+    // The hub selects logs by origin, and the forwarder stamps that origin into the
+    // `cluster` column on the way out.
+    let fx = Fixture::new("stamp").await;
+    push(&fx.source_client, "/user/job/t", &["hello"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
+
+    let entries = client(fx.target_addr)
+        .fetch_logs(
+            FetchLogsRequest {
+                ..Default::default()
+            }
+            .with_source("/")
+            .with_match_scope(MatchScope::MATCH_SCOPE_PREFIX)
+            .with_cluster(SOURCE_CLUSTER),
+        )
+        .await
+        .unwrap()
+        .into_view()
+        .entries
+        .len();
+    assert_eq!(
+        entries, 1,
+        "the row is readable only if `cluster` was stamped"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forwarded_telemetry_ignores_candidate_only_nullable_columns() {
+    let fx = Fixture::new("telemetry-schema-skew").await;
+    let namespace = "telemetry_v1.iris.rpc";
+    for store in [Arc::clone(&fx.source), Arc::clone(fx.target_store())] {
+        tokio::task::spawn_blocking(move || {
+            store.register_table(namespace, telemetry_schema(), StoragePolicy::default())
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    }
+    let mut source_schema = fx.source.get_table_schema(namespace).unwrap();
+    source_schema
+        .columns
+        .retain(|column| column.name != IMPLICIT_SEQ_COLUMN);
+    source_schema.columns.push(Column::new(
+        "candidate",
+        ColumnType::COLUMN_TYPE_STRING,
+        true,
+    ));
+    let source = Arc::clone(&fx.source);
+    tokio::task::spawn_blocking(move || {
+        source.register_table(namespace, source_schema, StoragePolicy::default())
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let batch = root_telemetry_batch("batch", "service", "accepted");
+    let mut fields: Vec<Field> = batch
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect();
+    fields.push(Field::new("candidate", DataType::Utf8, true));
+    let mut columns = batch.columns().to_vec();
+    columns.push(Arc::new(StringArray::from(vec![Some("ignored")])));
+    let batch = RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), columns).unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = fx.source.write_rows(namespace, &ipc, None).unwrap();
+    fx.source
+        .await_persisted(namespace, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+    fx.forward_from_start(namespace).await;
+
+    fx.drain(PRIV_A, namespace).await;
+
+    let hub_schema = fx.target_store().get_table_schema(namespace).unwrap();
+    assert!(hub_schema.column("candidate").is_none());
+    assert_eq!(
+        hub_column(fx.target_store(), namespace, "name").await,
+        vec![Some("accepted".to_string())]
+    );
+    assert_eq!(fx.cursor(namespace), Some(fx.tip(namespace)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forwarded_root_telemetry_registers_an_unseen_semantic_namespace() {
+    let fx = Fixture::new("telemetry-unseen-service").await;
+    write_root_telemetry(&fx.source, "batch", "queue_depth").await;
+    fx.forward_from_start(TELEMETRY_NAMESPACE).await;
+
+    fx.drain(PRIV_A, TELEMETRY_NAMESPACE).await;
+
+    assert_eq!(
+        hub_column(fx.target_store(), UNSEEN_TELEMETRY_NAMESPACE, "name").await,
+        vec![Some("queue_depth".to_string())]
+    );
+    assert_eq!(
+        fx.cursor(TELEMETRY_NAMESPACE),
+        Some(fx.tip(TELEMETRY_NAMESPACE))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_forwarders_share_one_unseen_semantic_namespace_engine() {
+    let target = disk_store("telemetry-concurrent-target");
+    let (target_addr, target_requests) =
+        serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+    let fx_a = Fixture::with_hub(
+        "telemetry-concurrent-a",
+        Some(Arc::clone(&target)),
+        target_addr,
+        Arc::clone(&target_requests),
+    )
+    .await;
+    let fx_b = Fixture::with_hub(
+        "telemetry-concurrent-b",
+        Some(target),
+        target_addr,
+        target_requests,
+    )
+    .await;
+    write_root_telemetry(&fx_a.source, "batch-a", "queue_a").await;
+    write_root_telemetry(&fx_b.source, "batch-b", "queue_b").await;
+    fx_a.forward_from_start(TELEMETRY_NAMESPACE).await;
+    fx_b.forward_from_start(TELEMETRY_NAMESPACE).await;
+
+    tokio::join!(
+        fx_a.drain(PRIV_A, TELEMETRY_NAMESPACE),
+        fx_b.drain(PRIV_A, TELEMETRY_NAMESPACE)
+    );
+
+    let mut names = hub_column(fx_a.target_store(), UNSEEN_TELEMETRY_NAMESPACE, "name").await;
+    names.sort();
+    assert_eq!(
+        names,
+        vec![Some("queue_a".to_string()), Some("queue_b".to_string())]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bearer_the_hub_does_not_trust_forwards_nothing_and_loses_nothing() {
+    // The hub rejects the push, so the watermark must not advance: the rows are still
+    // owed, and the local store still serves them.
+    let fx = Fixture::new("reject").await;
+    push(&fx.source_client, "/user/job/t", &["hello"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+
+    let running = RunningForwarder::start(fx.forwarder(PRIV_UNTRUSTED));
+    // Wait for the push to REACH the hub. Stopping on a timer instead would let a
+    // forwarder that never pushed at all satisfy both assertions below.
+    wait_for_requests(&fx.target_requests, 1).await;
+    running.finish().await;
+
+    assert_eq!(
+        fx.cursor(LOG_NAMESPACE_NAME),
+        Some(0),
+        "a refused push leaves the watermark where it was, so the rows are retried"
+    );
+    assert!(fx.hub_log_rows().await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_batch_the_hub_calls_malformed_is_dropped() {
+    let fx = Fixture::with_rejecting_hub("poison").await;
+    push(&fx.source_client, "/user/job/t", &["hello"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    progress.last_report = Instant::now() - PROGRESS_INTERVAL;
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder.forward_round(&mut progress, &mut stop).await;
+
+    assert_eq!(
+        fx.cursor(LOG_NAMESPACE_NAME),
+        Some(fx.tip(LOG_NAMESPACE_NAME)),
+        "a permanently rejected batch must not wedge every later row in the namespace"
+    );
+    assert_eq!(
+        scalar_i64(
+            &fx.source,
+            r#"SELECT CAST(sum(value) AS BIGINT)
+               FROM "telemetry_v1.finelog"
+               WHERE name = 'forwarding_batches'
+                 AND json_get(attributes_json, 'namespace') = 'log'
+                 AND json_get(attributes_json, 'outcome') = 'permanent_rejection'"#,
+        )
+        .await,
+        1,
+    );
+    assert_eq!(
+        scalar_i64(
+            &fx.source,
+            r#"SELECT CAST(sum(value) AS BIGINT)
+               FROM "telemetry_v1.finelog"
+               WHERE name = 'forwarding_seq_positions'
+                 AND json_get(attributes_json, 'namespace') = 'log'
+                 AND json_get(attributes_json, 'outcome') = 'permanent_rejection'"#,
+        )
+        .await,
+        fx.tip(LOG_NAMESPACE_NAME),
+    );
+    assert_eq!(
+        fx.requests(),
+        1,
+        "one namespace receives only one attempt in a forwarding sweep"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_batch_that_conflicts_with_the_hub_schema_stays_owed() {
+    let fx = Fixture::with_schema_conflict_hub("schema-conflict").await;
+    push(&fx.source_client, "/user/job/t", &["hello"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder.forward_round(&mut progress, &mut stop).await;
+
+    assert_eq!(
+        fx.cursor(LOG_NAMESPACE_NAME),
+        Some(0),
+        "a schema-state rejection may clear after registration or a hub upgrade"
+    );
+    assert_eq!(fx.requests(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forwarding_progress_telemetry_reaches_the_hub() {
+    let fx = Fixture::new("forwarding-progress").await;
+    let forwarder = fx.forwarder(PRIV_A);
+    forwarder.ensure_progress_namespace().await.unwrap();
+    fx.forward_from_start(FINELOG_NAMESPACE).await;
+
+    push(&fx.source_client, "/user/job/t", &["hello"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+    let mut progress = Progress::new();
+    progress.last_report = Instant::now() - PROGRESS_INTERVAL;
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder.forward_round(&mut progress, &mut stop).await;
+    forwarder.forward_round(&mut progress, &mut stop).await;
+
+    assert_eq!(
+        scalar_i64(
+            fx.target_store(),
+            &format!(
+                r#"SELECT CAST(sum(value) AS BIGINT)
+                   FROM "telemetry_v1.finelog"
+                   WHERE cluster = '{SOURCE_CLUSTER}'
+                     AND name = 'forwarding_batches'
+                     AND json_get(attributes_json, 'namespace') = 'log'
+                     AND json_get(attributes_json, 'outcome') = 'accepted'"#
+            ),
+        )
+        .await,
+        1,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn three_retryable_push_failures_yield_to_the_next_namespace() {
+    let fx = Fixture::with_unavailable_hub("unavailable").await;
+    push(&fx.source_client, "/user/job/t", &["hello"]).await;
+    write_id_rows(&fx.source, "events", 1).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+    fx.forward_from_start("events").await;
+
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        forwarder.forward_round(&mut progress, &mut stop),
+    )
+    .await
+    .expect("a retryable failure must yield instead of monopolizing the sweep");
+
+    assert_eq!(fx.cursor(LOG_NAMESPACE_NAME), Some(0));
+    assert_eq!(fx.target_requests.write_rows_requests(), 3);
+    assert_eq!(
+        fx.target_requests.register_table_requests(),
+        1,
+        "the namespace after the failed log batch must receive its registration turn"
+    );
+}
+
+// Flaky in CI (~1/306): after the forward cursor reaches the new tip the pushed row is
+// occasionally not yet query-visible on the hub, so the final read comes back empty.
+// Re-enable once the hub read is made to wait for the row it just forwarded (#7376).
+#[ignore = "flaky: hub read races the last forwarded write (#7376)"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn seeding_at_the_tip_ships_new_rows_and_never_backfills() {
+    let fx = Fixture::new("seed").await;
+    push(&fx.source_client, "/user/job/t", &["before"]).await;
+
+    // No watermark for the log namespace: seed at the tip, so "before" is never shipped.
+    let running = RunningForwarder::start(fx.forwarder(PRIV_A));
+    wait_for_cursor(
+        &fx.source,
+        &fx.target_url,
+        LOG_NAMESPACE_NAME,
+        fx.tip(LOG_NAMESPACE_NAME),
+    )
+    .await;
+
+    push(&fx.source_client, "/user/job/t", &["after"]).await;
+    wait_for_cursor(
+        &fx.source,
+        &fx.target_url,
+        LOG_NAMESPACE_NAME,
+        fx.tip(LOG_NAMESPACE_NAME),
+    )
+    .await;
+    running.finish().await;
+
+    // Only "after" ever reaches the hub — "before" was seeded past, so an exact-match poll
+    // can only converge on this set, still asserting the "never backfills" guarantee.
+    wait_for_hub_log_rows(&fx, &[("/user/job/t", "after")]).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rows_that_already_carry_an_origin_cluster_are_never_re_forwarded() {
+    // A row that arrived by forwarding already names an origin. Relaying it onward would
+    // loop, so only rows this store's own writers produced are eligible.
+    let fx = Fixture::new("loop").await;
+
+    fx.source_client
+        .push_logs(
+            PushLogsRequest {
+                entries: vec![LogEntry::default().with_data("relayed")],
+                ..Default::default()
+            }
+            .with_key("/user/job/t")
+            .with_cluster("some-other-cluster"),
+        )
+        .await
+        .unwrap();
+    push(&fx.source_client, "/user/job/t", &["local"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
+
+    assert_eq!(
+        fx.hub_log_rows().await,
+        vec![("/user/job/t".to_string(), "local".to_string())]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_watermark_ahead_of_the_store_reseeds_at_the_tip() {
+    // The volume was recreated: the stored cursor names a seq space that no longer
+    // exists. Forwarding from it would mean forwarding nothing, forever.
+    let fx = Fixture::new("ahead").await;
+    push(&fx.source_client, "/user/job/t", &["one"]).await;
+    fx.source
+        .set_forward_cursor(&fx.target_url, LOG_NAMESPACE_NAME, 10_000)
+        .await
+        .unwrap();
+
+    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
+
+    assert!(fx.hub_log_rows().await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_backlog_beyond_the_warning_threshold_is_drained_without_loss() {
+    let fx = Fixture::new("cap").await;
+    push(
+        &fx.source_client,
+        "/user/job/t",
+        &["one", "two", "three", "four"],
+    )
+    .await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+
+    let mut forwarder = fx.forwarder(PRIV_A);
+    forwarder.lag_warning_seqs = 2;
+    forward_until(
+        forwarder,
+        &fx.source,
+        &fx.target_url,
+        LOG_NAMESPACE_NAME,
+        fx.tip(LOG_NAMESPACE_NAME),
+    )
+    .await;
+
+    assert_eq!(
+        fx.hub_log_rows().await,
+        vec![
+            ("/user/job/t".to_string(), "one".to_string()),
+            ("/user/job/t".to_string(), "two".to_string()),
+            ("/user/job/t".to_string(), "three".to_string()),
+            ("/user/job/t".to_string(), "four".to_string()),
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_busy_namespace_yields_before_the_next_namespace_is_forwarded() {
+    let fx = Fixture::new("fairness").await;
+    write_id_rows(&fx.source, "busy", FORWARD_BATCH_ROWS as usize + 1).await;
+    write_id_rows(&fx.source, "urgent", 1).await;
+    fx.forward_from_start("busy").await;
+    fx.forward_from_start("urgent").await;
+
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    assert_eq!(
+        forwarder.forward_round(&mut progress, &mut stop).await,
+        ForwardTurn::MoreRows
+    );
+
+    assert!(
+        fx.cursor("busy").unwrap() < fx.tip("busy"),
+        "one busy namespace must yield after one batch instead of monopolizing the sweep"
+    );
+    assert_eq!(
+        fx.cursor("urgent"),
+        Some(fx.tip("urgent")),
+        "the namespace after a backlog must get a forwarding turn in the same sweep"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dense_backlog_is_forwarded_in_one_read_batch() {
+    let fx = Fixture::new("large-batch").await;
+    write_id_rows(&fx.source, "events", FORWARD_BATCH_ROWS as usize).await;
+    fx.forward_from_start("events").await;
+    let requests_before = fx.requests();
+    let zstd_before = fx.zstd_requests();
+
+    fx.drain(PRIV_A, "events").await;
+
+    assert_eq!(
+        fx.requests() - requests_before,
+        2,
+        "one compact read turn needs one RegisterTable and one WriteRows request"
+    );
+    assert_eq!(
+        fx.zstd_requests() - zstd_before,
+        1,
+        "the large WriteRows body is zstd encoded while the small registration stays identity"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn telemetry_sized_chunks_are_delivered_concurrently_without_loss() {
+    let fx = Fixture::new("concurrent-chunks").await;
+    let row_bytes = FORWARD_BATCH_BYTES / FORWARD_BATCH_ROWS as usize + 64;
+    write_string_rows(
+        &fx.source,
+        "telemetry",
+        vec!["x".repeat(row_bytes); FORWARD_BATCH_ROWS as usize],
+    )
+    .await;
+    fx.forward_from_start("telemetry").await;
+
+    fx.drain(PRIV_A, "telemetry").await;
+
+    let stats = fx.target_store().list_namespaces_with_stats().unwrap();
+    let telemetry = stats
+        .iter()
+        .find(|(name, _, _, _)| name == "telemetry")
+        .expect("the hub registered the telemetry namespace");
+    assert_eq!(telemetry.2.row_count, FORWARD_BATCH_ROWS);
+    assert!(
+        fx.target_requests.max_in_flight() >= 2,
+        "the two telemetry chunks must overlap at the hub's durable-ack boundary"
+    );
+}
+
+// -------------------------------------------------------------------------------------
+// Integration test: a non-log table forwards generically.
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() {
+    // Forwarding is table-generic: a table the hub has never seen is created there with
+    // RegisterTable, then its rows arrive through the same WriteRows path as logs. Every
+    // registered table carries the implicit origin `cluster` column, so a generic stat
+    // table's rows land on the hub stamped with the cluster that produced them — the
+    // producer writes only its own columns and never has to know the column exists.
+    let fx = Fixture::new("generic").await;
+
+    // The producer declares `id` only; `cluster` is added implicitly at registration.
+    write_id_rows(&fx.source, "events", 2).await;
+
+    fx.forward_from_start("events").await;
+    fx.drain(PRIV_A, "events").await;
+
+    let stats = fx.target_store().list_namespaces_with_stats().unwrap();
+    let events = stats
+        .iter()
+        .find(|(name, _, _, _)| name == "events")
+        .expect("the hub created the events namespace from RegisterTable");
+    assert_eq!(events.2.row_count, 2, "both rows landed on the hub");
+
+    assert_eq!(
+        hub_column(fx.target_store(), "events", "cluster").await,
+        vec![
+            Some(SOURCE_CLUSTER.to_string()),
+            Some(SOURCE_CLUSTER.to_string())
+        ],
+        "the forwarder stamps the origin cluster onto a table that never declared it"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn schema_evolution_is_registered_before_forwarding_new_rows() {
+    let fx = Fixture::new("schema-evolution").await;
+    write_id_rows(&fx.source, "events", 1).await;
+    fx.forward_from_start("events").await;
+
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder.forward_round(&mut progress, &mut stop).await;
+
+    let evolved_schema = Schema::new(
+        vec![
+            Column::new("id", ColumnType::COLUMN_TYPE_STRING, false),
+            Column::new("run_id", ColumnType::COLUMN_TYPE_STRING, true),
+        ],
+        "id",
+    );
+    let source = Arc::clone(&fx.source);
+    tokio::task::spawn_blocking(move || {
+        source.register_table("events", evolved_schema, StoragePolicy::default())
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("run_id", DataType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        arrow_schema,
+        vec![
+            Arc::new(StringArray::from(vec!["1"])),
+            Arc::new(StringArray::from(vec![Some("run-1")])),
+        ],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = fx.source.write_rows("events", &ipc, None).unwrap();
+    fx.source
+        .await_persisted("events", last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    forwarder.forward_round(&mut progress, &mut stop).await;
+
+    let target_schema = fx.target_store().get_table_schema("events").unwrap();
+    assert!(target_schema.column("run_id").is_some());
+    let target_rows = fx
+        .target_store()
+        .list_namespaces_with_stats()
+        .unwrap()
+        .into_iter()
+        .find(|(name, _, _, _)| name == "events")
+        .unwrap()
+        .2
+        .row_count;
+    assert_eq!(target_rows, 2);
+}
+
+// -------------------------------------------------------------------------------------
+// Journeys: the forwarding failure points rollouts keep hitting, in a box.
+
+/// A hub outage mid-stream: rounds against the dead hub leave the watermark
+/// untouched, and once the hub returns at the same address the next drain
+/// delivers everything written before and during the outage exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hub_outage_holds_the_cursor_and_recovery_delivers_every_row_once() {
+    use std::sync::atomic::Ordering;
+
+    let target = disk_store("hub_outage_target");
+    let (target_addr, target_requests, outage) =
+        serve_with_outage(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+    let fx = Fixture::with_hub("hub_outage", Some(target), target_addr, target_requests).await;
+    push(&fx.source_client, "/user/job/t", &["before-outage"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+
+    outage.store(true, Ordering::SeqCst);
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        forwarder.forward_round(&mut progress, &mut stop),
+    )
+    .await
+    .expect("an unreachable hub must yield the round, not wedge it");
+    assert_eq!(
+        fx.cursor(LOG_NAMESPACE_NAME),
+        Some(0),
+        "a failed push must not advance the watermark"
+    );
+
+    // Rows written during the outage queue behind the watermark.
+    push(&fx.source_client, "/user/job/t", &["during-outage"]).await;
+    outage.store(false, Ordering::SeqCst);
+    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
+
+    wait_for_hub_log_rows(
+        &fx,
+        &[
+            ("/user/job/t", "before-outage"),
+            ("/user/job/t", "during-outage"),
+        ],
+    )
+    .await;
+    assert_eq!(
+        fx.cursor(LOG_NAMESPACE_NAME),
+        Some(fx.tip(LOG_NAMESPACE_NAME))
+    );
+}
+
+/// The [`write_id_rows`] schema as a version-1 object-backed spec, for a source
+/// that migrates a forwarded table mid-stream.
+fn id_object_spec() -> crate::store::table_spec::ValidatedTableSpec {
+    use crate::proto::finelog::stats::{
+        L0Mode, OperatingPolicy, RemoteRetentionPolicy, SourceLayout, TableSpec, TableSpecView,
+    };
+    use buffa::{Message, MessageField, MessageView};
+
+    let schema = Schema::new(
+        vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
+        "id",
+    );
+    let spec = TableSpec {
+        version: Some(1),
+        logical_schema: MessageField::some(crate::store::schema::schema_to_proto_owned(&schema)),
+        source_layout: MessageField::some(SourceLayout::default()),
+        operating_policy: MessageField::some(OperatingPolicy {
+            l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
+            remote_retention: MessageField::some(RemoteRetentionPolicy {
+                retain_forever: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let encoded = spec.encode_to_vec();
+    let view = TableSpecView::decode_view(&encoded).unwrap();
+    crate::store::table_spec::ValidatedTableSpec::from_view(
+        &view,
+        &schema,
+        &StoragePolicy::default(),
+    )
+    .unwrap()
+}
+
+async fn drive_object_activation(store: &Store, namespace: &str, rounds: usize) {
+    for _ in 0..rounds {
+        if store.spec_lifecycle(namespace).unwrap().active_version() == 1 {
+            break;
+        }
+        store.maintain_namespace(namespace, false).await.unwrap();
+    }
+    let lifecycle = store.spec_lifecycle(namespace).unwrap();
+    assert_eq!(
+        lifecycle.active_version(),
+        1,
+        "object migration never activated (phase: {:?})",
+        lifecycle.phase
+    );
+}
+
+/// As [`write_id_rows`], but for a store with no background maintenance: one
+/// explicit round makes the rows durable. Returns the last written seq.
+async fn durable_id_rows(store: &Store, namespace: &str, ids: std::ops::Range<usize>) -> i64 {
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+        "id",
+        DataType::Utf8,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        arrow_schema,
+        vec![Arc::new(StringArray::from(
+            ids.map(|row| row.to_string()).collect::<Vec<_>>(),
+        ))],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = store.write_rows(namespace, &ipc, None).unwrap();
+    store.maintain_namespace(namespace, false).await.unwrap();
+    store
+        .await_persisted(namespace, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+    last_seq
+}
+
+/// An object-native relay keeps a durable local copy while the hub is behind,
+/// then advances its cursor and retires covered segments in one publication.
+/// The bytes remain recoverable through retained states until object GC's
+/// rollback window expires.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_object_native_relay_retires_only_hub_settled_segments() {
+    const EVENTS: &str = "events";
+    let target = disk_store("relay_retirement_target");
+    let (target_addr, _target_requests) =
+        serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+    let target_url = format!("http://{target_addr}");
+    let source_data = crate::test_support::unique_dir("relay_retirement_source_data");
+    let source_remote = crate::test_support::unique_dir("relay_retirement_source_remote");
+    let source = Arc::new(
+        Store::new(
+            Some(source_data.clone()),
+            source_remote.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Shadow,
+        )
+        .unwrap(),
+    );
+
+    source
+        .register_table(
+            EVENTS,
+            Schema::new(
+                vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
+                "id",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+    source
+        .register_versioned_table(EVENTS, id_object_spec())
+        .unwrap();
+    source.publish_object_catalog(EVENTS).await.unwrap();
+    drive_object_activation(&source, EVENTS, 8).await;
+    source.configure_relay();
+
+    let first_tip = durable_id_rows(&source, EVENTS, 0..20).await;
+    source.maintain_namespace(EVENTS, false).await.unwrap();
+    assert_eq!(
+        source.list_segments(EVENTS).unwrap().len(),
+        1,
+        "an unacknowledged segment must survive relay maintenance"
+    );
+
+    forward_until(
+        test_forwarder(source.clone(), target_url.clone(), target_addr, PRIV_A),
+        &source,
+        &target_url,
+        EVENTS,
+        first_tip,
+    )
+    .await;
+    assert_eq!(
+        source.forward_cursor(&target_url, EVENTS).unwrap(),
+        Some(first_tip)
+    );
+    assert!(
+        source.list_segments(EVENTS).unwrap().is_empty(),
+        "settlement must remove the covered segment without an age-based maintenance pass"
+    );
+
+    let tip = durable_id_rows(&source, EVENTS, 20..40).await;
+    let remaining = source.list_segments(EVENTS).unwrap();
+    assert_eq!(
+        remaining.len(),
+        1,
+        "the newly written segment remains live until its sequences settle"
+    );
+    source.maintain_namespace(EVENTS, false).await.unwrap();
+    assert_eq!(
+        source.list_segments(EVENTS).unwrap().len(),
+        1,
+        "the second segment must remain until its own sequences settle"
+    );
+
+    forward_until(
+        test_forwarder(source.clone(), target_url.clone(), target_addr, PRIV_A),
+        &source,
+        &target_url,
+        EVENTS,
+        tip,
+    )
+    .await;
+    assert_eq!(
+        source.forward_cursor(&target_url, EVENTS).unwrap(),
+        Some(tip)
+    );
+
+    assert!(
+        source.list_segments(EVENTS).unwrap().is_empty(),
+        "the relay should remove a whole segment once the hub settled it"
+    );
+    wait_for_scalar(&target, &format!("SELECT count(*) FROM \"{EVENTS}\""), 40).await;
+
+    source.shutdown(Duration::from_secs(1)).await;
+    drop(source);
+    let reopened = Store::new(
+        Some(source_data),
+        source_remote.to_string_lossy().into_owned(),
+        crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+        crate::store::ServeMode::Shadow,
+    )
+    .unwrap();
+    reopened.recover_tables().await.unwrap();
+    assert_eq!(
+        reopened.forward_cursor(&target_url, EVENTS).unwrap(),
+        Some(tip)
+    );
+    assert!(reopened.list_segments(EVENTS).unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_object_native_relay_never_compacts_its_unsettled_spool() {
+    const EVENTS: &str = "events";
+    let source_data = crate::test_support::unique_dir("relay_no_compaction_data");
+    let source_remote = crate::test_support::unique_dir("relay_no_compaction_remote");
+    let source = Arc::new(
+        Store::new(
+            Some(source_data.clone()),
+            source_remote.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Shadow,
+        )
+        .unwrap(),
+    );
+    source
+        .register_table(
+            EVENTS,
+            Schema::new(
+                vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
+                "id",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+    source
+        .register_versioned_table(EVENTS, id_object_spec())
+        .unwrap();
+    source.publish_object_catalog(EVENTS).await.unwrap();
+    drive_object_activation(&source, EVENTS, 8).await;
+    source.configure_relay();
+
+    durable_id_rows(&source, EVENTS, 0..10).await;
+    durable_id_rows(&source, EVENTS, 10..20).await;
+    source.maintain_namespace(EVENTS, true).await.unwrap();
+
+    let segments = source.list_segments(EVENTS).unwrap();
+    assert_eq!(segments.len(), 2);
+    assert!(segments.iter().all(|segment| segment.level == 0));
+
+    source.shutdown(Duration::from_secs(1)).await;
+    std::fs::remove_dir_all(source_data).ok();
+    std::fs::remove_dir_all(source_remote).ok();
+}
+
+/// Restarting the forwarding node mid-migration loses nothing: the forward
+/// watermark and the migration checkpoint are both durable, so the reopened
+/// store finishes the migration and resumes shipping from where it stopped,
+/// and the hub converges to every source row exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_mid_migration_resumes_forwarding_from_the_durable_cursor() {
+    const EVENTS: &str = "events";
+    let target = disk_store("restart_migration_target");
+    let (target_addr, _target_requests) =
+        serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+    let target_url = format!("http://{target_addr}");
+
+    // A source over durable directories, reopened across the restart. Shadow
+    // mode runs no background maintenance, so the migration advances only when
+    // this test says so.
+    let data_dir = crate::test_support::unique_dir("restart_migration_data");
+    let remote_dir = crate::test_support::unique_dir("restart_migration_remote");
+    let open_source = || {
+        Arc::new(
+            Store::new(
+                Some(data_dir.clone()),
+                remote_dir.to_string_lossy().into_owned(),
+                crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+                crate::store::ServeMode::Shadow,
+            )
+            .unwrap(),
+        )
+    };
+    let forwarder_for = |source: &Arc<Store>| {
+        test_forwarder(Arc::clone(source), target_url.clone(), target_addr, PRIV_A)
+    };
+
+    // First life: ship forty rows, land twenty more, then start the object
+    // migration and stop the node before it can activate.
+    let source = open_source();
+    source
+        .register_table(
+            EVENTS,
+            Schema::new(
+                vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
+                "id",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+    let shipped_tip = durable_id_rows(&source, EVENTS, 0..40).await;
+    source
+        .set_forward_cursor(&target_url, EVENTS, 0)
+        .await
+        .unwrap();
+    forward_until(
+        forwarder_for(&source),
+        &source,
+        &target_url,
+        EVENTS,
+        shipped_tip,
+    )
+    .await;
+    let unshipped_tip = durable_id_rows(&source, EVENTS, 40..60).await;
+
+    source
+        .register_versioned_table(EVENTS, id_object_spec())
+        .unwrap();
+    source.publish_object_catalog(EVENTS).await.unwrap();
+    assert_eq!(
+        source.spec_lifecycle(EVENTS).unwrap().active_version(),
+        0,
+        "the restart must land mid-migration, before activation"
+    );
+    source.shutdown(Duration::from_secs(1)).await;
+    drop(source);
+
+    // Second life: the watermark survived, the migration runs to activation,
+    // and forwarding resumes from it — no gap, no replay.
+    let source = open_source();
+    source.recover_tables().await.unwrap();
+    assert_eq!(
+        source.forward_cursor(&target_url, EVENTS).unwrap(),
+        Some(shipped_tip)
+    );
+    drive_object_activation(&source, EVENTS, 8).await;
+    forward_until(
+        forwarder_for(&source),
+        &source,
+        &target_url,
+        EVENTS,
+        unshipped_tip,
+    )
+    .await;
+
+    // The hub ACKs before its async flush seals the rows, so poll the count.
+    let count_sql = format!("SELECT count(*) FROM \"{EVENTS}\"");
+    wait_for_scalar(&target, &count_sql, 60).await;
+    assert_eq!(
+        scalar_i64(
+            &target,
+            &format!("SELECT count(DISTINCT id) FROM \"{EVENTS}\"")
+        )
+        .await,
+        60,
+        "a resumed cursor must not replay shipped rows"
+    );
+    source.shutdown(Duration::from_secs(1)).await;
+}
+
+/// The hub-side flip: a forwarded table migrates to object-backed storage on
+/// the hub while its source cluster keeps pushing. Forwarded writes land
+/// through the same write path organic ones do, so the migration activates
+/// under live traffic and the hub converges to every source row exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hub_migration_under_live_forwarding_loses_nothing() {
+    const EVENTS: &str = "events";
+    // An object-capable hub in live mode: its own maintenance drives the
+    // migration while forwarded writes keep landing.
+    let hub_data = crate::test_support::unique_dir("hub_migration_data");
+    let hub_remote = crate::test_support::unique_dir("hub_migration_remote");
+    let hub = Arc::new(
+        Store::new(
+            Some(hub_data),
+            hub_remote.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Live,
+        )
+        .unwrap(),
+    );
+    hub.bootstrap_maintenance();
+    let (hub_addr, hub_requests) = serve(Arc::clone(&hub), hub_policy(SOURCE_CLUSTER)).await;
+    let fx = Fixture::with_hub(
+        "hub_migration",
+        Some(Arc::clone(&hub)),
+        hub_addr,
+        hub_requests,
+    )
+    .await;
+
+    let ids = |range: std::ops::Range<usize>| range.map(|id| id.to_string()).collect::<Vec<_>>();
+    write_string_rows(&fx.source, EVENTS, ids(0..100)).await;
+    fx.forward_from_start(EVENTS).await;
+    fx.drain(PRIV_A, EVENTS).await;
+
+    // The operator registers the object spec on the hub; rows keep arriving
+    // while the version-0 import backfills.
+    let spec_hub = Arc::clone(&hub);
+    tokio::task::spawn_blocking(move || {
+        spec_hub.register_versioned_table(EVENTS, id_object_spec())
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    write_string_rows(&fx.source, EVENTS, ids(100..200)).await;
+    fx.drain(PRIV_A, EVENTS).await;
+    // Drive maintenance rather than waiting out the scheduler cadence; the
+    // forwarded traffic above keeps landing between rounds either way.
+    drive_object_activation(&hub, EVENTS, 40).await;
+
+    // Post-activation traffic lands in the object-backed table.
+    write_string_rows(&fx.source, EVENTS, ids(200..250)).await;
+    fx.drain(PRIV_A, EVENTS).await;
+
+    // Exactly once, before and after the flip. The hub ACKs before its async
+    // flush seals rows for queries, so poll the count.
+    let count_sql = format!("SELECT count(*) FROM \"{EVENTS}\"");
+    wait_for_scalar(&hub, &count_sql, 250).await;
+    assert_eq!(
+        scalar_i64(
+            &hub,
+            &format!("SELECT count(DISTINCT id) FROM \"{EVENTS}\"")
+        )
+        .await,
+        250,
+        "a hub migration under live forwarding must not duplicate or drop rows"
+    );
+}

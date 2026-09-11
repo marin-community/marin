@@ -1,110 +1,249 @@
 # Agent Guidelines for Marin
 
-## How to Use This Guide
+Start with the shared practices below. Consult subproject manuals for directory-specific guidance:
 
-- Start with the shared practices below; if you discover missing guidance, expand this document so the next agent benefits.
-- When you uncover directory-specific guidance, add it to the relevant subproject manual so the next agent stays aligned.
-- Consult the subproject manuals when working in submodule trees:
-  * `lib/levanter/AGENTS.md` for Levanter-specific conventions.
-  * `lib/marin/AGENTS.md` for Marin-specific conventions
-  * `lib/iris/AGENTS.md` for Iris-specific conventions
+- `lib/levanter/AGENTS.md` — Levanter (JAX training library)
+- `lib/marin/AGENTS.md` — Marin (pipeline framework)
+- `lib/iris/AGENTS.md` — Iris (job orchestration)
+- `lib/zephyr/AGENTS.md` — Zephyr (dataset processing)
+- `lib/fray/AGENTS.md` — Fray (distributed execution)
 
-## Shared Workflow Playbooks
+## Operational Guides
 
-- Begin with the agent-friendly recipes in `docs/recipes/`.
-- The first step for dataset addition is schema inspection. See the [add_dataset.md](docs/recipes/add_dataset.md) recipe for details.
-- You can help organize experiments using the [organize_experiments.md](docs/recipes/organize_experiments.md) recipe.
-- When making significant changes to Grug/Grugformer, follow [change_grug.md](docs/recipes/change_grug.md).
-- Follow the rules and examples in each recipe to ensure compatibility and automation-friendliness.
+For debugging and operating live infrastructure, read the relevant OPS.md:
 
-## Shared Coding Practices
+- `lib/iris/OPS.md` — cluster lifecycle, job/task management, profiling, SQL queries, GCP/CoreWeave operations
+- `lib/zephyr/OPS.md` — pipeline debugging, straggler diagnosis, coordinator queries, diagnostic patterns
 
-### Tooling
+Zephyr OPS.md references Iris OPS.md for shared infrastructure commands — read Iris first when debugging zephyr jobs on Iris.
 
-- Assume Python >=3.11.
-- Always use `uv run` for Python entry points. If that fails, try `.venv/bin/python` directly.
-- Run `./infra/pre-commit.py --all-files` before sending changes; formatting and linting are enforced with `ruff`.
-- Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
+## Infrastructure (Pulumi)
 
-### Communication & Commits
+`infra/` hosts several independent Pulumi projects following three distinct
+patterns (infrastructure, application deploys, SaaS resource declarations). Read
+`infra/pulumi.md` before creating or modifying a Pulumi project so new work
+lands in the right pattern.
+
+## Workflow Playbooks
+
+Skills are task-focused playbooks in `.agents/skills/` (also accessible as
+`.claude/skills/`). **Before starting any non-trivial task, check whether a
+matching skill exists** by scanning the skill descriptions in your system
+prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
+favor of ad-hoc commands.
+
+## Handle Requests
+
+If a request comes from Slack or GitHub and appears to be a simple question,
+you may answer it in the originating conversation instead of making a
+repository change. Otherwise, carry the request through the applicable change
+and landing workflow; do not stop after investigation while a safe, in-scope
+fix remains.
+
+## Search Prior Work
+
+Use Echo when prior Marin decisions, incidents, workflows, GitHub work, or
+indexed repository documentation could inform a task:
+
+```bash
+uv run infra/marina/apps/echo/cli.py search "how do I deploy Iris"
+uv run infra/marina/apps/echo/cli.py search "compare cache implementations" --repository all
+uv run infra/marina/apps/echo/cli.py get <source-id>
+```
+
+Search covers wiki, repository files, pull requests, and issues by default.
+File search infers the configured Marin-community repository from the current
+Git checkout, including ordinary contributor forks. Pass `--repository
+<owner/repo>` for one configured repository or `--repository all` for all six.
+Repeat `--domain` to select a subset; searches without the file domain do not
+need a Git checkout. Add `--domain discord` only when discussion history is
+relevant. Use `grep` for exact strings in remote activity and `rg` for the
+current checkout, including branch-only or uncommitted files. Echo's file
+results follow the periodically refreshed GitHub head rather than the local
+working tree. See the `consult-echo` skill for the complete workflow.
+
+## Development
+
+```bash
+# Lint and format
+./infra/pre-commit.py --all-files --fix
+- `./infra/pre-commit.py` is the required lint entry point for this repo.
+- Do not replace it with `uv run pre-commit ...`!
+
+# Type checking (also done by pre-commit.py)
+uv run pyrefly check
+- Keep type hints passing under `uv run pyrefly check`; configuration lives in `pyproject.toml`.
+
+# Safe tests affected by the current branch and working tree
+uv run --no-project infra/ci/run_tests.py
+
+# Lint review — agentic pass over the branch diff against the infra/lint/ catalog
+./infra/pre-commit.py --review
+- Run this once before opening or updating a PR, and fix or respond to every
+  finding it reports (see the `commit` skill). Do not rerun it after small,
+  targeted touch-ups made in response to its findings. Rerun only when the
+  follow-up materially changes the implementation approach or scope.
+```
+
+- Python >=3.12. Use `uv run` for entry points.
+- Do not replace pytest's default marker expression with a partial expression
+  such as `-m "not slow"`; `-m` overrides the whole default and can select live
+  cluster tests. Run excluded markers only when the user or a dedicated task
+  guide explicitly requests them; otherwise defer them to CI.
+- NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
+- In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
+- do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
+
+## Communication & Commits
 
 - NEVER SAY "You're absolutely right!"
-- You never credit yourself in commits.
-- NEVER EVER EVER credit yourself in commit messages.
+- NEVER credit yourself, in commit messages or in PR/issue bodies. No
+  `Co-Authored-By` trailer, no "Generated with …" line, no emoji attribution —
+  even if a tool default suggests one.
+- Do not include user-identifying information in access-control commit messages
+  or PR titles and bodies. Describe only the access scope and resource types.
+- When an agent creates a PR or issue, add the `agent-generated` label.
+- Agent *comments* on PRs/issues must begin with `🤖` unless the exact text was
+  explicitly approved by the user. This applies to comments only — never put a
+  `🤖` marker in a commit message or a PR/issue body.
+- All agent-authored commit, PR, and issue titles and bodies must follow
+  `.agents/skills/writing-style/SKILL.md` and its PR or issue guide. Review the
+  exact text that will be published, then apply `ai-writing-donts.md` as a final
+  compression pass. Do not publish raw implementation notes, test narration,
+  prompt-shaped headings, or claims that use emphasis in place of evidence.
+- A PR description is the squash-merge commit message. Keep every fact a future
+  reader needs to understand the behavior and rationale, including measured
+  results and caveats when they affect review. Remove headings, diff narration,
+  and implementation inventories; put extended history in a linked issue,
+  logbook, or artifact. Follow the `commit` skill
+  (`.agents/skills/commit/SKILL.md`) when committing, pushing, or opening a PR.
+- PR monitoring is part of the `commit` skill. After opening or updating a PR,
+  follow its `wait_for.py` loop through an exit condition. Do not substitute
+  `gh pr checks --watch`, repeated `gh pr view` calls, or handoff at green CI.
+  Keep one `wait_for.py` process attached in the foreground until it exits.
+  Never background it or give the shell, tool, or agent a separate timeout;
+  `wait_for.py --timeout` owns the deadline. If the execution interface yields
+  a process handle, keep making blocking wait/resume calls on that same handle
+  until the process exits. A runner yield is not a monitoring event: do not
+  narrate it or inspect GitHub while the process is still running.
+- When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
-### Code Style
+## Code Style
 
-- Put all imports at the top of the file. Avoid local imports unless technically necessary (for example, to break circular dependencies or guard optional dependencies).
-- Prefer top-level functions when code does not mutate shared state; use classes to encapsulate data when that improves clarity.
-- Prefer top-level Python tests and fixtures.
-- Separation of responsibilities: when a change introduces a new subsystem (e.g., serving/inference, data access, evaluation), encapsulate lifecycle/configuration in a dedicated module and have callers depend on the interface rather than re-implementing setup/teardown details.
-- Disprefer internal mutation of function arguments, especially config dataclasses; prefer returning a modified copy (e.g., via `dataclasses.replace`) so call sites remain predictable and side effects are explicit.
-- Use early returns (`if not x: return None`) when they reduce nesting.
-- Do not introduce ad-hoc compatibility hacks like `hasattr(m, "old_attr")`; update the code consistently instead.
-- Document public APIs with concise Google-style docstrings.
-- Prefer small, concrete helpers over abstraction that adds indirection without reuse.
-- When defaults depend on environment/resource type, resolve them once and fail fast on unknown/ambiguous inputs rather than silently guessing.
-- Keep environment detection logic minimal and explicit; avoid multi-key heuristics unless they are clearly required.
-- Prefer single strong signals over sprawling defensive checks when detecting environment state (e.g., check the one variable that must be set rather than many optional ones).
-- In marin we generally prefer logging over `print` statements. `print` is fine for debugging and "scripts".
+- All imports at the top of the file. No local imports except to break circular dependencies or guard optional deps. No `TYPE_CHECKING` guards — fix cycles structurally via protocols.
+- Prefer top-level functions over classes when code does not mutate shared state. Reduce deep inheritance hierarchies.
+- Use early returns to reduce nesting.
+- Document public APIs with concise Google-style docstrings. Skip docstrings on trivial functions with clear names.
+- Prefer `dataclasses.replace` over mutating config arguments in-place.
+- Prefer logging over `print` (except in scripts and debugging).
+- Resolve environment-dependent defaults once and fail fast on unknown inputs.
+- No ad-hoc compatibility hacks (`hasattr(m, "old_attr")`); update code consistently.
+- Prefer small concrete helpers over abstraction that adds indirection without reuse. Start simple; abstract only under real pressure.
+- Delete dead code: unused parameters, stale options, old experiments.
+- Top-level constants for magic strings/numbers.
+- Separate computation from I/O (split compute from upload/write).
+- Use context managers for resource lifecycle.
 
-### Error Handling
+## Naming
+
+- No `*_utils.py` — use descriptive names like `text_cleaning.py`.
+- Function names should reflect return types (`probe_task` → `task_status`).
+- No `_s` suffix for seconds (assumed in this codebase). No abbreviations like `exe` — use `exec` or full words.
+
+## Types & Data Structures
+
+- Dataclass/namedtuple over raw dicts. `StrEnum` over string keys.
+- Use `Protocol` for decoupling; avoid hard-coupling to concrete types.
+- Avoid `X | str` unions that require `isinstance` checks — pick one input type.
+- Replace compound booleans encoding state with an enum.
+
+## Configuration
+
+- No `default_*` wrappers that obscure underlying mechanisms.
+- Force explicit specification of critical parameters (no silent defaults).
+- Centralize defaults in one canonical location.
+- Prefer explicit constructor/config parameters over env vars.
+- Composition over inheritance: embed sub-configs, don't subclass.
+
+## API Design
+
+- Accept only what's necessary. Replace boolean flags with meaningful parameters (e.g., `num_workers: int` instead of `parallel: bool`).
+- Use separate classes over boolean flags for variant behavior (`NativeVllm` / `DockerVllm`, not `Vllm(docker=True)`).
+- Normalize inputs to a standard format once at the boundary, not throughout.
+
+## Error Handling
 
 - Let exceptions propagate by default.
-- Only catch exceptions when you can add meaningful context and re-raise, or when you are intentionally altering control flow.
-- NEVER EVER SWALLOW EXCEPTIONS unless specifically requested by the user.
+- Only catch to add meaningful context and re-raise, or to intentionally alter control flow.
+- NEVER swallow exceptions unless specifically requested.
+- Assert liberally; prefer `raise ValueError` over silent fallbacks.
 
-### Documentation
+## Documentation
 
-- Keep MkDocs content in sync with code. Docs live in `docs/` or in the subproject's `docs/` directory; use Markdown and mkdocs-style links when referencing symbols.
-- Public-facing modules and APIs need concise Google-style docstrings; align terminology across code and docs.
+- Keep MkDocs content in sync with code. Use Markdown and mkdocs-style links.
+- Write docs that stand alone without conversational context.
 
-### Deprecation
+## Agent Artifacts
 
-**NO BACKWARD COMPATIBILITY**: Do NOT add deprecation warnings, fallback paths, or compatibility shims. Update all call sites instead. Only add backward compatibility if the user explicitly requests it.
+- Publish infrastructure incidents and durable debugging investigations to
+  Echo with the `write-ops-log` skill. Link the canonical Echo URL from the
+  associated PR or issue. Do not create repository debug-log files.
+- Keep user-facing and reusable product documentation in `docs/`; keep research
+  progress in the relevant task logbook or project artifact. These are distinct
+  from incident records.
+
+## Deprecation
+
+**NO BACKWARD COMPATIBILITY**: Update all call sites instead. Only add compatibility shims if the user explicitly requests it.
 
 ## Comments
 
-You write detailed comments when appropriate to describe code behavior as a
-whole, e.g. at the module or class level, or when describing some subtle
-behavior.
+- Write comments for module/class-level behavior or subtle logic. Do not restate the code.
+- Delete stale comments immediately on discovery.
+- Inline comments to clarify non-obvious boolean arguments.
 
-You don't generate comments that merely restate the code, e.g.
+## LLM-Generated Code Pitfalls
 
-<bad>
-     # Use in-memory rollout queue
-    rollout_queue = InMemoryRolloutQueue()
-</bad>
-
-<good>
-# We have found that each instance of a FlightServer can provide approximately 1GB/s
-# of throughput. As our typical VMs run with 200Gbps NICs, running 16 parallel servers
-# should be sufficient to saturate the network.
-</good>
+Watch for and eliminate these patterns in generated code:
+- Over-protective try/except and defensive None checks
+- Tautological tests (type exists, constant has value)
+- Verbose/redundant docstrings and `__all__` in `__init__.py`
+- Boolean dispatch instead of separate classes
+- Environment variables instead of explicit parameters
 
 ## Planning
 
-- When planning, you produce detailed plans including code snippets.
-- You ask questions up front when building a plan instead of guessing.
-- When a request feels too large for one pass, capture a plan (for example in `.agents/projects/` when the subproject provides one) before pausing.
+- The `write-design-doc` skill owns design-doc creation and runs only when the
+  user explicitly asks for one. Diff size and implementation complexity do not
+  require a design artifact.
+- Planning applies to change-mode work. Produce a detailed plan, with code
+  snippets when they clarify a concrete implementation, for non-trivial
+  changes. Resolve context from the repository and prior work first; ask only
+  when a missing decision would materially change the implementation.
+- In answer mode, investigate and reply directly. Do not manufacture a plan or
+  `.agents/projects/` artifact.
+- When a change request is too large for one pass, capture a plan in
+  `.agents/projects/` before pausing.
+
+## Code Reuse
+
+Before writing any utility function, helper, or data structure:
+1. Search the codebase for existing implementations
+2. Check subproject utils: `lib/marin/src/marin/`, `lib/iris/src/iris/`, `lib/levanter/`
+3. Check `pyproject.toml` for available third-party packages before adding new ones
+
+If a suitable implementation exists, use it. Do not create parallel implementations.
+
+Dependency direction: {`iris`, `haliax`} → {`levanter`, `zephyr`} → `marin`. Each layer may only import from layers to its left. Never introduce reverse dependencies (e.g., levanter importing from marin).
 
 ## Testing
 
-- Always fix tests if you broke them.
-- Do not fix tests by relaxing tolerances or hacking around them.
-- Avoid “tautological” tests that merely restate implementation logic as asserts; prefer tests that validate externally-observable behavior, integration points, or realistic failure modes.
-- Run the appropriate tests for your changes (for example, `uv run pytest` under the relevant directory); consult subproject guides for preferred markers.
-- Use pytest features like fixtures and parameterization to avoid duplication and write clean code.
+Read `TESTING.md` before writing or reviewing tests. It is the root testing
+policy for behavior-focused tests, slop-test rejection, mocks/fakes, timing,
+numerical tolerances, and pytest style.
 
-PREFER:
+Before touching tests under `lib/*`, also read the nearest module `AGENTS.md`
+and any module `TESTING.md` it references. Module docs define local commands,
+markers, fakes, mocks, optional dependencies, and integration-test boundaries.
 
-- Integration style tests which exercise behavior and test the output
-
-DO NOT:
-
-- Create tests which validate obvious features: if a type exists, a constant has a value, etc.
-
-
-## Environment
-
-- Prefer to use `uv` when possible. If you can't (for instance, due to sandbox restrictions) you can use `.venv/bin/python`
+Always fix tests you broke. Do not relax tolerances or hack around failures.

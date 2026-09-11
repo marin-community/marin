@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Readers for common input formats.
@@ -6,45 +6,101 @@
 Supports reading from local filesystems, cloud storage (gs://, s3://) and HuggingFace Hub (hf://) via fsspec.
 """
 
-from __future__ import annotations
-
 import fnmatch
+import io
 import logging
 import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import replace
 from typing import Literal
 
 import fsspec
 import msgspec
 import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
+import vortex
+import zstandard as zstd
+from rigging.filesystem.factory import open_url, url_to_fs
 
-from zephyr.expr import Expr
+from zephyr import counters
+from zephyr.expr import referenced_columns, to_pyarrow_expr
+from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Shared Parquet row-group reader
+# ---------------------------------------------------------------------------
 
-@dataclass
-class InputFileSpec:
-    """Specification for reading a file or portion of a file.
 
-    Attributes:
-        path: Path to the file
-        format: File format ("parquet", "jsonl", or "auto" to detect)
-        columns: List of columns to read
-        row_start: Optional start row for chunked reading
-        row_end: Optional end row for chunked reading
-        filter_expr: Optional filter expression to apply
+def iter_parquet_row_groups(
+    source: str | pq.ParquetFile,
+    *,
+    columns: list[str] | None = None,
+    row_start: int | None = None,
+    row_end: int | None = None,
+) -> Iterator[pa.Table]:
+    """Yield one ``pa.Table`` per qualifying row group with O(row_group) memory.
+
+    Uses ``pq.ParquetFile`` instead of ``pyarrow.dataset`` to avoid the
+    upstream memory leak (https://github.com/apache/arrow/issues/39808).
+
+    Args:
+        source: Path to parquet file or an already-open ``pq.ParquetFile``.
+        columns: Columns to read (``None`` for all).
+        row_start: First row to include (inclusive, before filtering).
+        row_end: Last row to include (exclusive, before filtering).
     """
+    # Open string paths through open_file (rigging fsspec) rather than letting
+    # pyarrow build a native S3FileSystem from the URI: pyarrow's default S3
+    # client uses path-style addressing, which CoreWeave object storage rejects
+    # with HTTP 400. open_file routes through the correctly-addressed fsspec fs
+    # (same path the JSONL reader uses). The `with` stays open for the lifetime
+    # of the delegated generator.
+    if isinstance(source, str):
+        with open_file(source, "rb") as f:
+            yield from iter_parquet_row_groups(pq.ParquetFile(f), columns=columns, row_start=row_start, row_end=row_end)
+        return
 
-    path: str
-    format: Literal["parquet", "jsonl", "vortex", "auto"] = "auto"
-    columns: list[str] | None = None
-    row_start: int | None = None
-    row_end: int | None = None
-    filter_expr: Expr | None = None
+    pf = source
+    has_row_range = row_start is not None and row_end is not None
+
+    cumulative_rows = 0
+
+    for i in range(pf.metadata.num_row_groups):
+        rg_meta = pf.metadata.row_group(i)
+        rg_num_rows = rg_meta.num_rows
+        rg_start = cumulative_rows
+        rg_end = cumulative_rows + rg_num_rows
+        cumulative_rows = rg_end
+
+        if has_row_range:
+            assert row_start is not None and row_end is not None
+            if rg_end <= row_start:
+                continue
+            if rg_start >= row_end:
+                return
+
+        table = pf.read_row_group(i, columns=columns)
+
+        if has_row_range:
+            assert row_start is not None and row_end is not None
+            is_interior = rg_start >= row_start and rg_end <= row_end
+            if not is_interior:
+                local_start = max(0, row_start - rg_start)
+                local_end = min(rg_num_rows, row_end - rg_start)
+                table = table.slice(local_start, local_end - local_start)
+
+        if len(table) > 0:
+            yield table
+
+
+# 16 MB read blocks with background prefetch for S3/remote reads.
+_READ_BLOCK_SIZE = 16_000_000
+_READ_CACHE_TYPE = "background"
+_READ_MAX_BLOCKS = 2
 
 
 def _as_spec(source: str | InputFileSpec) -> InputFileSpec:
@@ -52,6 +108,24 @@ def _as_spec(source: str | InputFileSpec) -> InputFileSpec:
     if isinstance(source, InputFileSpec):
         return source
     return InputFileSpec(path=source)
+
+
+def _strip_injected_file_path_column(spec: InputFileSpec, file_path_column: str) -> InputFileSpec:
+    """Drop the injected file-path column from a reader projection.
+
+    When a caller projects ``columns`` and also requests ``include_file_paths``,
+    the path column must appear in the projection (it is appended after the
+    read) but must not be passed to the underlying reader (it is not in the
+    file). Returns a spec with that column stripped from ``columns``.
+
+    Raises:
+        RuntimeError: If ``file_path_column`` is missing from the projection.
+    """
+    assert spec.columns is not None
+    if file_path_column not in spec.columns:
+        raise RuntimeError(f"Column filter must include file path column '{file_path_column}'.")
+    reader_columns = [c for c in spec.columns if c != file_path_column]
+    return replace(spec, columns=reader_columns or None)
 
 
 # Register HuggingFace filesystem with authentication if HF_TOKEN is available
@@ -67,35 +141,99 @@ except ImportError:
 
 @contextmanager
 def open_file(file_path: str, mode: str = "rb"):
-    """Open `file_path` with sensible defaults for compression and caching."""
+    """Open ``file_path``, decompressing by extension, with caching defaults.
+
+    ``.zst`` / ``.zstd`` decode via zstandard; ``.gz`` / ``.xz`` via fsspec's
+    built-in codecs. ``mode`` may be binary (``rb``) or text (``rt``).
+    """
+    # Use url_to_fs + fs.open so that block_size/cache_type reach the file
+    # opener (AbstractBufferedFile) rather than the filesystem constructor.
+    # fsspec.open() routes all **kwargs to the FS constructor, where S3's
+    # AioSession rejects unknown kwargs like block_size.
+    fs, resolved_path = url_to_fs(file_path)
+    read_kwargs = {
+        "block_size": _READ_BLOCK_SIZE,
+        "cache_type": _READ_CACHE_TYPE,
+        "cache_options": {"maxblocks": _READ_MAX_BLOCKS},
+    }
+
+    if file_path.endswith((".zst", ".zstd")):
+        # Decompress with the zstandard package directly (as the writer and
+        # shuffle/spill already do), NOT fsspec's compression="zstd": fsspec's
+        # zstd codec is backed by stdlib compression.zstd (Python 3.14+) or
+        # backports.zstd, neither of which zephyr requires, so routing through
+        # it fails wherever those are absent. Open the raw bytes (keeping the
+        # prefetch cache); read_across_frames decodes concatenated zstd frames;
+        # text modes are wrapped so line-iterating callers get str, like "rt".
+        with fs.open(resolved_path, "rb", **read_kwargs) as raw_f:
+            reader = zstd.ZstdDecompressor().stream_reader(raw_f, read_across_frames=True)
+            yield reader if "b" in mode else io.TextIOWrapper(reader, encoding="utf-8")
+        return
 
     compression = None
     if file_path.endswith(".gz"):
         compression = "gzip"
-    elif file_path.endswith(".zst"):
-        compression = "zstd"
     elif file_path.endswith(".xz"):
         compression = "xz"
 
-    with fsspec.open(
-        file_path,
-        mode,
-        compression=compression,
-        block_size=16_000_000,
-        cache_type="background",
-        maxblocks=2,
-    ) as f:
+    with fs.open(resolved_path, mode, compression=compression, **read_kwargs) as f:
         yield f
+
+
+def compute_parquet_splits(path: str, approx_shard_bytes: int) -> list[tuple[int, int]]:
+    """Compute row-range split points from Parquet footer metadata.
+
+    Reads only the file footer — no data is transferred. Splits are aligned to
+    row-group boundaries, so actual shard sizes may exceed approx_shard_bytes when
+    a single row group is larger than the target. Files whose total compressed size
+    is below approx_shard_bytes return a single span.
+
+    Args:
+        path: Path to the Parquet file (local or remote via fsspec).
+        approx_shard_bytes: Approximate target split size in bytes. Best-effort:
+            a row group will never be split, so individual shards may be larger.
+
+    Returns:
+        List of (row_start, row_end) tuples where row_end is exclusive.
+    """
+    # Read the footer through open_file (fsspec) so CoreWeave object storage's
+    # virtual-host addressing is honored; a raw path makes pyarrow use its native
+    # path-style S3 client, which CW rejects with HTTP 400.
+    with open_file(path, "rb") as f:
+        metadata = pq.ParquetFile(f).metadata
+    splits: list[tuple[int, int]] = []
+    split_start = 0
+    split_bytes = 0
+    cumulative_rows = 0
+
+    for i in range(metadata.num_row_groups):
+        rg = metadata.row_group(i)
+        rg_bytes = rg.total_byte_size
+
+        if split_bytes > 0 and split_bytes + rg_bytes > approx_shard_bytes:
+            splits.append((split_start, cumulative_rows))
+            split_start = cumulative_rows
+            split_bytes = 0
+
+        split_bytes += rg_bytes
+        cumulative_rows += rg.num_rows
+
+    splits.append((split_start, cumulative_rows))
+    return splits
 
 
 def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
     """Load a JSONL file and yield parsed records as dictionaries.
 
     If the input file is compressed (.gz, .zst, .xz), it will be automatically
-    decompressed during loading.
+    decompressed during loading. When given an InputFileSpec, ``filter_expr``
+    and ``columns`` are honored at read time (mirroring ``load_parquet`` /
+    ``load_vortex``); ``row_start`` / ``row_end`` are ignored because JSONL
+    has no random-access index.
 
     Args:
-        source: Path to JSONL file or InputFileSpec containing the path.
+        source: Path to JSONL file or InputFileSpec containing the path,
+            optional filter expression, and optional column projection.
             Supports: local paths, gs://, s3://, hf://datasets/{repo}@{rev}/{path}
 
     Yields:
@@ -109,21 +247,75 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
         ...     .filter(lambda r: r["score"] > 0.5)
         ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
         >>>
         >>> # Load from HuggingFace Hub (requires HF_TOKEN env var)
         >>> hf_url = "hf://datasets/username/dataset@main/data/train.jsonl.gz"
         >>> ds = Dataset.from_list([hf_url]).flat_map(load_jsonl)
-        >>> records = list(ctx.execute(ds))
+        >>> records = ctx.execute(ds).results
     """
     spec = _as_spec(source)
     decoder = msgspec.json.Decoder()
+    filter_fn = spec.filter_expr.evaluate if spec.filter_expr is not None else None
+    columns = spec.columns
 
     with open_file(spec.path, "rt") as f:
         for line in f:
             line = line.strip()
-            if line:
-                yield decoder.decode(line)
+            if not line:
+                continue
+            record = decoder.decode(line)
+            if filter_fn is not None and not filter_fn(record):
+                continue
+            if columns is not None:
+                record = {k: record[k] for k in columns if k in record}
+            counters.pipeline.update_counter(counters.RECORDS_IN, 1)
+            yield record
+
+
+def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
+    """Load a Parquet file and yield one ``pa.RecordBatch`` per row group.
+
+    Applies the same column projection, row-range slicing, and filter pushdown
+    as ``load_parquet``, but returns Arrow batches rather than Python dicts so
+    callers can stay in the columnar world.
+
+    Args:
+        source: Path to Parquet file or InputFileSpec containing the path, columns,
+            row range, and filter expression.
+
+    Yields:
+        One ``pa.RecordBatch`` per qualifying row group.
+    """
+    spec = _as_spec(source)
+    logger.info("Loading: %s", spec.path)
+
+    pa_filter = None
+    if spec.filter_expr is not None:
+        pa_filter = to_pyarrow_expr(spec.filter_expr)
+
+    # Determine columns to read: include any filter-referenced columns
+    # so post-hoc filtering works, then project down afterwards.
+    read_columns = spec.columns
+    need_project = False
+    if spec.columns is not None and spec.filter_expr is not None:
+        filter_cols = referenced_columns(spec.filter_expr) - set(spec.columns)
+        if filter_cols:
+            read_columns = list(spec.columns) + sorted(filter_cols)
+            need_project = True
+
+    for table in iter_parquet_row_groups(
+        spec.path,
+        columns=read_columns,
+        row_start=spec.row_start,
+        row_end=spec.row_end,
+    ):
+        if pa_filter is not None:
+            table = table.filter(pa_filter)
+        if need_project:
+            table = table.select(spec.columns)
+        counters.pipeline.update_counter(counters.RECORDS_IN, len(table))
+        yield from table.to_batches()
 
 
 def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
@@ -148,67 +340,10 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
         ...     .map(lambda r: transform_record(r))
         ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
     """
-    import pyarrow.dataset as pads
-
-    spec = _as_spec(source)
-    logger.info("Loading: %s", spec.path)
-    columns = spec.columns
-
-    pa_filter = None
-    if spec.filter_expr is not None:
-        from zephyr.expr import to_pyarrow_expr
-
-        pa_filter = to_pyarrow_expr(spec.filter_expr)
-
-    dataset = pads.dataset(spec.path, format="parquet")
-
-    # Handle empty parquet files (no data columns in schema)
-    schema_names = dataset.schema.names
-    if not schema_names:
-        return
-
-    if spec.row_start is not None and spec.row_end is not None:
-        # Row range first: select rows by position, then apply filter
-        cumulative_rows = 0
-        for fragment in dataset.get_fragments():
-            for rg_fragment in fragment.split_by_row_group():
-                # Get row group size from RowGroupInfo (no data read)
-                assert len(rg_fragment.row_groups) == 1
-                rg_info = rg_fragment.row_groups[0]
-                rg_num_rows = rg_info.num_rows
-                rg_start = cumulative_rows
-                rg_end = cumulative_rows + rg_num_rows
-
-                if rg_end > spec.row_start and rg_start < spec.row_end:
-                    is_interior = rg_start >= spec.row_start and rg_end <= spec.row_end
-
-                    if is_interior:
-                        # Entirely within range: push filter down, yield all
-                        table = rg_fragment.to_table(columns=columns, filter=pa_filter)
-                        yield from table.to_pylist()
-                    else:
-                        # Boundary row group: slice first, then filter
-                        table = rg_fragment.to_table(columns=columns)
-                        local_start = max(0, spec.row_start - rg_start)
-                        local_end = min(rg_num_rows, spec.row_end - rg_start)
-                        sliced = table.slice(local_start, local_end - local_start)
-
-                        if pa_filter is not None:
-                            yield from sliced.filter(pa_filter).to_pylist()
-                        else:
-                            yield from sliced.to_pylist()
-
-                cumulative_rows = rg_end
-                if cumulative_rows >= spec.row_end:
-                    return
-    elif pa_filter is not None:
-        table = dataset.to_table(columns=columns, filter=pa_filter)
-        yield from table.to_pylist()
-    else:
-        for batch in dataset.to_batches(columns=columns):
-            yield from batch.to_pylist()
+    for batch in load_parquet_batch(source):
+        yield from batch.to_pylist()
 
 
 def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
@@ -231,18 +366,14 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
         ...     .filter(lambda r: r["score"] > 0.5)
         ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
     """
-    import vortex
-
     spec = _as_spec(source)
     columns = spec.columns
 
     # Convert filter to PyArrow expression if provided
     pa_filter = None
     if spec.filter_expr is not None:
-        from zephyr.expr import to_pyarrow_expr
-
         pa_filter = to_pyarrow_expr(spec.filter_expr)
 
     # Open vortex file and get PyArrow Dataset interface
@@ -250,14 +381,18 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     vf = vortex.open(spec.path)
     dataset = vf.to_dataset()
 
+    # Empty vortex files have no schema, so column projection would fail
+    if dataset.count_rows() == 0:
+        return
+
     if spec.row_start is not None and spec.row_end is not None:
-        indices = np.arange(spec.row_start, spec.row_end, dtype=np.uint64)
-        indices = pa.array(indices)
+        indices = pa.array(np.arange(spec.row_start, spec.row_end, dtype=np.uint64))
         table = dataset.take(indices, columns=columns, filter=pa_filter)
-        yield from table.to_pylist()
     else:
         table = dataset.to_table(columns=columns, filter=pa_filter)
-        yield from table.to_pylist()
+
+    counters.pipeline.update_counter(counters.RECORDS_IN, len(table))
+    yield from table.to_pylist()
 
 
 SUPPORTED_EXTENSIONS = tuple(
@@ -278,18 +413,52 @@ SUPPORTED_EXTENSIONS = tuple(
 )
 
 
-def load_file(source: str | InputFileSpec) -> Iterator[dict]:
-    """Load records from file, auto-detecting JSONL, Parquet, or Vortex format.
+def _resolve_read_format(spec: InputFileSpec) -> Literal["parquet", "jsonl", "vortex"]:
+    """Return the reader format for *spec*.
+
+    An explicit ``format`` wins. ``Dataset.load_parquet`` and its siblings record
+    the caller's choice on the spec, so a source whose name lacks the matching
+    extension — Spark-style ``part-00000``, a ``.bin`` shard — still reads as the
+    requested format instead of being rejected or handed to the wrong reader.
+    ``auto`` infers the format from the path extension.
+
+    Raises:
+        ValueError: If ``format`` is ``auto`` and the extension is unsupported.
+    """
+    if spec.format != "auto":
+        return spec.format
+    if spec.path.endswith(".parquet"):
+        return "parquet"
+    if spec.path.endswith(".vortex"):
+        return "vortex"
+    if spec.path.endswith(SUPPORTED_EXTENSIONS):
+        return "jsonl"
+    raise ValueError(f"Unsupported extension: {spec.path}.")
+
+
+def load_file(
+    source: str | InputFileSpec,
+    include_file_paths: bool = False,
+    file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+) -> Iterator[dict]:
+    """Load records from file as JSONL, Parquet, or Vortex.
+
+    The spec's ``format`` selects the reader; ``auto`` (the default for a bare
+    path) infers it from the file extension.
 
     Args:
-        source: Path to file or InputFileSpec containing the path, columns,
+        source: Path to file or InputFileSpec containing the path, format, columns,
             row range, and filter expression.
+        include_file_paths: If True, inject the source file path into each record
+            under file_path_column.
+        file_path_column: Key to add when include_file_paths is True.
 
     Yields:
         Parsed records as dictionaries
 
     Raises:
-        ValueError: If file extension is not supported
+        ValueError: If the format is ``auto`` and the file extension is not supported.
+        RuntimeError: If file_path_column already exists in a record.
 
     Example:
         >>> ds = (Dataset
@@ -298,28 +467,78 @@ def load_file(source: str | InputFileSpec) -> Iterator[dict]:
         ...     .filter(lambda r: r["score"] > 0.5)
         ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
     """
     spec = _as_spec(source)
     logger.info("Loading file: %s", spec.path)
 
-    if not spec.path.endswith(SUPPORTED_EXTENSIONS):
-        raise ValueError(f"Unsupported extension: {spec.path}.")
+    read_format = _resolve_read_format(spec)
 
-    if spec.path.endswith(".parquet"):
-        yield from load_parquet(spec)
-    elif spec.path.endswith(".vortex"):
-        yield from load_vortex(spec)
+    if include_file_paths and spec.columns is not None:
+        spec = _strip_injected_file_path_column(spec, file_path_column)
+
+    if read_format == "parquet":
+        records = load_parquet(spec)
+    elif read_format == "vortex":
+        records = load_vortex(spec)
     else:
-        # For JSONL, apply filter and column selection manually
-        filter_fn = spec.filter_expr.evaluate if spec.filter_expr is not None else None
-        for record in load_jsonl(spec):
-            if filter_fn is not None and not filter_fn(record):
-                continue
-            if spec.columns is not None:
-                yield {k: v for k, v in record.items() if k in spec.columns}
-            else:
-                yield record
+        records = load_jsonl(spec)
+
+    if not include_file_paths:
+        yield from records
+        return
+
+    for record in records:
+        if file_path_column in record:
+            raise RuntimeError(f"Cannot add file path column '{file_path_column}': key already exists in record")
+        record[file_path_column] = spec.path
+        yield record
+
+
+def load_file_batch(
+    source: str | InputFileSpec,
+    include_file_paths: bool = False,
+    file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+) -> Iterator[pa.RecordBatch]:
+    """Load a Parquet file and yield ``pa.RecordBatch`` objects.
+
+    Only Parquet files are supported. Raises ``RuntimeError`` for any other
+    file type so callers get a clear error rather than silent dict conversion.
+    A spec with ``format="parquet"`` is honored whatever the extension.
+
+    Args:
+        source: Path to Parquet file or InputFileSpec containing the path, format,
+            columns, row range, and filter expression.
+        include_file_paths: If True, append a string column named file_path_column
+            containing the source file path to each batch.
+        file_path_column: Name of the column to add when include_file_paths is True.
+
+    Yields:
+        One ``pa.RecordBatch`` per qualifying row group.
+
+    Raises:
+        RuntimeError: If the file is not a Parquet file, or if file_path_column
+            already exists in the batch schema.
+    """
+    spec = _as_spec(source)
+    # Inlined rather than routed through _resolve_read_format so an unsupported
+    # extension reports "not Parquet" instead of that helper's ValueError.
+    is_parquet = spec.format == "parquet" or (spec.format == "auto" and spec.path.endswith(".parquet"))
+    if not is_parquet:
+        raise RuntimeError(f"load_file_batch only supports Parquet files, got: {spec.path}")
+    if include_file_paths and spec.columns is not None:
+        spec = _strip_injected_file_path_column(spec, file_path_column)
+    for batch in load_parquet_batch(spec):
+        if include_file_paths:
+            if file_path_column in batch.schema.names:
+                raise RuntimeError(
+                    f"Cannot add file path column '{file_path_column}': column already exists in batch schema"
+                )
+            batch = batch.append_column(
+                file_path_column,
+                pa.array([spec.path] * len(batch), type=pa.string()),
+            )
+        yield batch
 
 
 def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterator[dict]:
@@ -341,14 +560,15 @@ def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterato
         ...     .flat_map(lambda p: load_zip_members(p, pattern="test.jsonl"))
         ...     .map(lambda m: process_file(m["filename"], m["content"]))
         ... )
-        >>> output_files = list(ctx.execute(ds))
+        >>> output_files = ctx.execute(ds).results
     """
     spec = _as_spec(source)
-    with fsspec.open(spec.path, "rb") as f:
+    with open_url(spec.path, "rb") as f:
         with zipfile.ZipFile(f) as zf:
             for member_name in zf.namelist():
                 if not member_name.endswith("/") and fnmatch.fnmatch(member_name, pattern):
                     with zf.open(member_name, "r") as member_file:
+                        counters.pipeline.update_counter(counters.RECORDS_IN, 1)
                         yield {
                             "filename": member_name,
                             "content": member_file.read(),

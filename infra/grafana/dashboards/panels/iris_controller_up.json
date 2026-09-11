@@ -1,0 +1,79 @@
+{
+  "type": "stat",
+  "title": "Iris controller",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "iris-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "min": 0,
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "red",
+            "value": null
+          },
+          {
+            "color": "green",
+            "value": 1
+          }
+        ]
+      },
+      "max": 1,
+      "mappings": [
+        {
+          "type": "value",
+          "options": {
+            "0": {
+              "text": "DOWN",
+              "color": "red",
+              "index": 1
+            },
+            "1": {
+              "text": "UP",
+              "color": "green",
+              "index": 0
+            }
+          }
+        }
+      ]
+    },
+    "overrides": []
+  },
+  "options": {
+    "reduceOptions": {
+      "calcs": [
+        "lastNotNull"
+      ],
+      "fields": "",
+      "values": false
+    },
+    "colorMode": "background",
+    "graphMode": "none",
+    "textMode": "auto",
+    "orientation": "auto"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/health",
+      "url_options": {
+        "method": "GET",
+        "params": []
+      },
+      "columns": [
+        {
+          "selector": "up",
+          "text": "up",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

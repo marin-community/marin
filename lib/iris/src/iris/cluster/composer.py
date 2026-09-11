@@ -1,0 +1,274 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Compose live cluster components from a parsed config.
+
+:mod:`iris.cluster.config` parses and validates configuration into plain
+pydantic models. This module is the inverse boundary: it imports the backends,
+controller, and autoscaler and stitches a validated config into running
+objects (task backends, provider bundles, worker configs, the autoscaler).
+
+Keeping construction here means the config layer stays dependency-free and a
+single place owns the wiring order.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from finelog.client.log_client import Table
+
+from iris.cluster.backends.k8s.tasks import (
+    _CW_DEFAULT_TOPOLOGIES,
+    _DEFAULT_PRIORITY_CLASS_NAMES,
+    K8sTaskProvider,
+    PodConfig,
+)
+from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
+from iris.cluster.config import (
+    IrisClusterConfig,
+    WorkerConfig,
+    backend_attribute_sets,
+)
+from iris.cluster.controller.auth import ControllerAuth
+from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.factory import create_autoscaler
+from iris.cluster.controller.backend import (
+    BackendCapability,
+    BackendDescriptor,
+    BackendKind,
+    TaskBackend,
+)
+from iris.cluster.controller.log_stack import LogStack
+from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
+from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundle
+from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
+from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
+from iris.cluster.platforms.k8s.service import CloudK8sService
+from iris.cluster.platforms.types import local_queue_name
+from iris.cluster.types import DEFAULT_BACKEND_ID
+from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name
+
+logger = logging.getLogger(__name__)
+
+# Maps kubernetes_provider.priority_classes keys to the PriorityBand enum stamped on Pods.
+_PRIORITY_BANDS = {priority_band_name(band): band for band in PRIORITY_BAND_VALUES}
+
+
+def make_task_backend(
+    config: IrisClusterConfig,
+    *,
+    descriptor: BackendDescriptor,
+    task_event_table: Table | None = None,
+    profile_table: Table | None = None,
+    autoscaler: Autoscaler | None = None,
+) -> TaskBackend:
+    """Create a TaskBackend from cluster configuration.
+
+    Returns a ``K8sTaskProvider`` when ``kubernetes_provider`` is configured,
+    or an ``RpcTaskBackend`` when ``worker_provider`` is configured. Event and
+    profile tables are passed to the K8s backend; node agents write per-pod
+    resource samples, while RPC worker daemons write their own rows.
+    ``autoscaler`` provisions capacity for that backend (None for clusters with
+    no controller-managed capacity).
+    """
+    which = config.provider_kind()
+    if which == "kubernetes_provider":
+        kp = config.kubernetes_provider
+        # Kueue is mandatory on the K8s backend: every pod is admitted through it, so
+        # its accounting and preemption arbitrate all capacity. A cluster with no
+        # ClusterQueue has no flavor to admit pods against — they would hang gated.
+        if not kp.kueue.cluster_queue:
+            raise ValueError(
+                "kubernetes_provider requires kueue.cluster_queue: the K8s backend admits every pod "
+                "through Kueue. Provision it (lib/iris/scripts/install_kueue.py --with-queues) and set "
+                "kubernetes_provider.kueue.cluster_queue."
+            )
+        namespace = kp.namespace or "iris"
+        label_prefix = config.platform.label_prefix or "iris"
+        managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
+
+        # Start from the iris-{band} defaults; override with any explicit config.
+        pod_priority_classes: dict[int, str] = dict(_DEFAULT_PRIORITY_CLASS_NAMES)
+        for band_name, pc_name in kp.priority_classes.items():
+            band = _PRIORITY_BANDS.get(band_name)
+            if band is None:
+                raise ValueError(
+                    f"Unknown priority band {band_name!r} in kubernetes_provider.priority_classes; "
+                    f"valid bands: {sorted(_PRIORITY_BANDS)}"
+                )
+            pod_priority_classes[band] = pc_name
+
+        # Empty topologies falls back to the CoreWeave-convention defaults.
+        topologies = {
+            group_by: KueueTopologyBinding(topo.node_label, topo.mode, topo.coarse_preferred_label or None)
+            for group_by, topo in kp.kueue.topologies.items()
+        }
+        # The LocalQueue name is derived from label_prefix, not configured; Kueue is
+        # mandatory (checked above), so it is always set.
+        local_queue = local_queue_name(label_prefix)
+        env_secret_name = TASK_ENV_SECRET_NAME if projects_task_env_secret(config) else ""
+        return K8sTaskProvider(
+            descriptor=descriptor,
+            kubectl=CloudK8sService(
+                namespace=namespace,
+                kubeconfig_path=kp.kubeconfig or None,
+                context=kp.kube_context or None,
+            ),
+            pods=PodConfig(
+                namespace=namespace,
+                default_image=config.defaults.worker.default_task_image,
+                logship_image=config.controller.image,
+                service_account=kp.service_account or "",
+                host_network=kp.host_network,
+                cache_dir=kp.cache_dir or DEFAULT_TASK_CACHE_DIR,
+                controller_address=kp.controller_address or None,
+                managed_label=managed_label,
+                task_env=dict(config.defaults.task_env),
+                task_outputs=config.task_outputs.model_copy(deep=True) if config.task_outputs is not None else None,
+                env_secret_name=env_secret_name,
+                local_queue=local_queue,
+                kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
+                priority_class_names=pod_priority_classes,
+            ),
+            preempt_namespaces=list(kp.preempt_namespaces),
+            task_event_table=task_event_table,
+            profile_table=profile_table,
+        )
+    if which == "worker_provider":
+        return RpcTaskBackend(
+            descriptor=descriptor,
+            stub_factory=RpcWorkerStubFactory(),
+            autoscaler=autoscaler,
+        )
+    raise ValueError(
+        "IrisClusterConfig.provider must be set. Add either:\n"
+        "  worker_provider: {}\n"
+        "or:\n"
+        "  kubernetes_provider:\n"
+        "    namespace: iris\n"
+        "to your cluster config."
+    )
+
+
+def provider_bundle(config: IrisClusterConfig) -> ProviderBundle:
+    """Create the ControllerProvider + WorkerInfraProvider bundle for *config*."""
+    return create_provider_bundle(
+        platform_config=config.platform,
+        worker_port=config.defaults.worker.port,
+        cluster_config=config,
+        ssh_config=config.defaults.ssh,
+    )
+
+
+def build_base_worker_config(
+    config: IrisClusterConfig,
+    *,
+    controller_address: str,
+    storage_prefix: str,
+    auth_token: str,
+) -> WorkerConfig:
+    """Build the base worker config the autoscaler ships to every worker.
+
+    ``controller_address`` is pre-resolved by the caller (discovery runs only
+    when the configured default is empty).
+    """
+    worker_config = config.defaults.worker.model_copy(deep=True)
+    worker_config.controller_address = controller_address
+    worker_config.platform = config.platform.model_copy(deep=True)
+    worker_config.storage_prefix = storage_prefix
+    worker_config.task_outputs = config.task_outputs.model_copy(deep=True) if config.task_outputs is not None else None
+    if auth_token:
+        worker_config.auth_token = auth_token
+    return worker_config
+
+
+def make_backend(
+    config: IrisClusterConfig,
+    *,
+    auth: ControllerAuth,
+    remote_state_dir: str,
+    dry_run: bool,
+    log_stack: LogStack,
+) -> TaskBackend:
+    """Create the TaskBackend and its provider-side capacity mechanism.
+
+    The finelog tables from ``log_stack`` are threaded into the backend and
+    autoscaler at construction. Capacity-managing backends (k8s) provision their
+    own pods, so no autoscaler is built. The autoscaler is built BEFORE the
+    worker-daemon backend so it can be passed to its constructor. In dry-run both
+    the autoscaler and the provider bundle are skipped (bundle creation needs
+    platform credentials unavailable on a dev machine).
+    """
+    which = config.provider_kind()
+    capabilities = (
+        frozenset({BackendCapability.DIRECT_DISPATCH})
+        if which == "kubernetes_provider"
+        else frozenset({BackendCapability.WORKER_FLEET} | ({BackendCapability.AUTOSCALER} if not dry_run else set()))
+    )
+    descriptor = BackendDescriptor(
+        backend_id=DEFAULT_BACKEND_ID,
+        display_name=config.name or DEFAULT_BACKEND_ID,
+        kind=BackendKind.KUBERNETES if config.provider_kind() == "kubernetes_provider" else BackendKind.WORKER,
+        advertised_attributes={key: frozenset(values) for key, values in backend_attribute_sets(config).items()},
+        scale_groups=frozenset(config.scale_groups),
+        capabilities=capabilities,
+    )
+    if which == "kubernetes_provider":
+        provider = make_task_backend(
+            config,
+            descriptor=descriptor,
+            task_event_table=log_stack.task_event_table,
+            profile_table=log_stack.profile_table,
+        )
+        logger.info("Backend created: %s", type(provider).__name__)
+        return provider
+
+    if which != "worker_provider":
+        # Neither provider configured: defer to make_task_backend's guidance error.
+        return make_task_backend(
+            config,
+            descriptor=descriptor,
+            task_event_table=log_stack.task_event_table,
+            profile_table=log_stack.profile_table,
+        )
+
+    autoscaler = None
+    if dry_run:
+        logger.info("Dry-run mode: skipping autoscaler and provider bundle creation")
+    else:
+        bundle = provider_bundle(config)
+        workers = bundle.workers
+        logger.info("Provider bundle created")
+
+        base_worker_config = None
+        if config.defaults.worker.docker_image:
+            controller_address = config.defaults.worker.controller_address
+            if not controller_address:
+                controller_address = bundle.controller.discover_controller(config.controller)
+            base_worker_config = build_base_worker_config(
+                config,
+                controller_address=controller_address,
+                storage_prefix=remote_state_dir,
+                auth_token=auth.worker_token or "",
+            )
+
+        autoscaler = create_autoscaler(
+            platform=workers,
+            autoscaler_config=config.defaults.autoscaler,
+            scale_groups=config.scale_groups,
+            label_prefix=config.platform.label_prefix or "iris",
+            base_worker_config=base_worker_config,
+            provisioning_table=log_stack.provisioning_table,
+        )
+        logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
+
+    provider = make_task_backend(
+        config,
+        descriptor=descriptor,
+        task_event_table=log_stack.task_event_table,
+        profile_table=log_stack.profile_table,
+        autoscaler=autoscaler,
+    )
+    logger.info("Backend created: %s", type(provider).__name__)
+    return provider

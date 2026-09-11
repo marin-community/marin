@@ -12,8 +12,8 @@ The hobbit Frodo Baggins is travelling to Bucklebury in the Shire, accompanied b
 
 > They began to hum softly, as hobbits have a way of doing as they walk along, especially when they are drawing near to home at night. With most hobbits it is a supper-song or a bed-song; but these hobbits hummed a walking-song (though not, of course, without any mention of supper and bed).
 
-> **The song begins:** 
-> 
+> **The song begins:**
+>
 > Upon the hearth the fire is red,  
 > Beneath the roof there is a bed;  
 > But not yet weary are our feet,  

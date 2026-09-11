@@ -1,0 +1,244 @@
+# Iris Testing Guidelines
+
+Comprehensive testing policy for the Iris project. Referenced from [AGENTS.md](AGENTS.md).
+
+## Core Principle
+
+Tests should test **stable behavior**, not implementation details.
+
+ABSOLUTELY DO NOT test things that are trivially caught by the type checker:
+
+- No tests for "constant = constant"
+- No tests for "method exists"
+- No tests for "create an object(x, y, z) and attributes are x, y, z"
+
+These tests have negative value — they make our code more brittle.
+
+## What to Test
+
+Test _stable behavior_. Prefer integration-style tests which exercise behavior
+and test externally-observable output. Use mocks as needed to isolate external
+dependencies (e.g. mock around subprocess for gcloud/kubectl, HTTP for remote
+APIs), but prefer "fakes" — real implementations backed by in-memory or
+temporary-file state — when reasonable.
+
+Good tests validate:
+
+- Integration points and round-trip behavior (submit job -> observe status)
+- Realistic failure modes (worker crash, heartbeat timeout, quota exhaustion)
+- Edge cases at API boundaries (empty inputs, duplicate names, constraint mismatches)
+- State machine transitions via the public event API
+
+## What NOT to Test
+
+### Private attributes
+
+No assertions on `_`-prefixed attributes. If a behavior is worth testing, it
+must be observable through the public API. If no public API exists, either add
+one or accept the behavior is an implementation detail.
+
+```python
+# BAD — reaches into private state
+assert group._backoff_until is not None
+assert worker_id in state._pending_dispatch
+
+# GOOD — observes behavior through public API
+status = autoscaler.get_status()
+assert status.groups[0].backoff_active
+```
+
+### Internal call dispatch
+
+No `assert_called_once_with` or `call_count` on internal helpers. When using
+mocks at external boundaries (subprocess, HTTP, gcloud), asserting on call
+shape is acceptable. But mocking internal functions and asserting on call
+counts tests the wiring, not the behavior. If you need to verify a side
+effect, use a fake that records observable state.
+
+### Python language semantics
+
+Do not test that `list(set)` creates a snapshot, or that `len(list) >= 0`.
+Test application behavior.
+
+### Constructor round-trips
+
+Do not test that `Foo(x=1).x == 1`.
+
+## Test Hygiene
+
+### Every test must assert something
+
+Every test function must contain at least one `assert` statement or
+`pytest.raises` context. Tests that only verify "does not raise" must include a
+comment explaining this intent. Screenshot-only tests are not acceptable
+without accompanying behavioral assertions.
+
+### No permanently-skipped tests
+
+Do not check in `@pytest.mark.skip`-ed tests. A skipped test provides zero
+value and accumulates maintenance debt. If a test is flaky, either fix it or
+delete it. If a feature is not yet implemented, track it in an issue, not a
+skipped test.
+
+### No dead code in test files
+
+Remove unused helpers, fakes, classes, and imports from test files. Delete
+empty stub files. A test file with no test functions has negative value.
+
+### Test naming
+
+Use `test_<subject>_<scenario>_<expected_outcome>`:
+
+```
+test_scheduler_with_insufficient_capacity_returns_empty_assignments
+test_worker_after_heartbeat_timeout_is_marked_failed
+```
+
+Names must accurately describe the verified behavior. A test named
+`test_multiple_workers_one_fails` that uses a single-worker cluster is
+misleading and must be renamed or rewritten.
+
+File naming: use `test_<module>.py` where `<module>` matches the source file
+being tested.
+
+## Timing and Polling
+
+Avoid bare `time.sleep()` in polling loops. Use `rigging.timing.Deadline`,
+`ExponentialBackoff.wait_until()`, or `wait_for_condition` from test utilities.
+
+A single short sleep to let a background thread start is acceptable when
+documented with a comment. Sleeping in a loop to wait for a condition is not.
+
+Test helpers must not use bare `except Exception`. Catch specific exception
+types even in startup-polling loops.
+
+## Markers and Organization
+
+- All tests that boot a cluster (local or Docker) must be marked
+  `@pytest.mark.requires_cluster`.
+- Docker-dependent tests must also be marked `@pytest.mark.docker`.
+- E2E tests live in `tests/e2e/`.
+- Reusable fakes, factories, and test drivers live in `src/iris/testing/` and
+  are imported through `iris.testing`. Tests do not import `conftest.py` or
+  another test module.
+- Pytest fixtures and hooks stay in `conftest.py`. Consume setup through fixture
+  parameters instead of importing fixture functions.
+- Shared fakes live in `src/iris/cluster/backends/gcp/fake.py`
+  (`InMemoryGcpService`), `src/iris/cluster/backends/k8s/fake.py`
+  (`InMemoryK8sService`), `src/iris/test_util.py`, or `src/iris/testing/`.
+  Do not duplicate fakes across files.
+
+## Protocols
+
+Non-trivial public classes should define a protocol which represents their
+_important_ interface characteristics. Test to this protocol, not the concrete
+class: the protocol should describe the interesting behavior of the class, but
+not betray the implementation details. (You may of course _instantiate_ the
+concrete class for testing.)
+
+## E2E Tests
+
+Iris separates deterministic product journeys from live adapter proofs.
+
+### Product journeys
+
+`tests/journeys/` owns cross-component state-machine behavior. A journey uses the
+real controller, service, persistence, reconciliation, and checkpoint code with
+a manual clock. Fakes replace only external systems such as an execution backend
+or federation peer. Assertions use public job and task reads plus the fake's
+externally visible launch/stop observations; journeys do not inspect controller
+tables or private attributes.
+
+Journey actions form the shared vocabulary for behaviors such as:
+
+```python
+job = journey.submit("training", tasks=8, failure_retries=1)
+journey.settle()
+journey.fail(job[7])
+journey.settle()
+journey.succeed(job[7])
+```
+
+The harness checks invariants after every control tick: Attempt history is
+append-only, terminal state does not revive, one Task has at most one live
+Attempt, job counts agree with public Task reads, and a backend launch is not
+duplicated. Add a journey when behavior crosses persistence, scheduling,
+reconciliation, federation, or restart boundaries. Extend its vocabulary with a
+domain action, not a SQL setup helper.
+
+### Live adapters
+
+`tests/e2e/` proves boundaries the journey fakes intentionally omit: a real task
+process, worker registration, bundle transfer, controller RPC, browser, container,
+or cloud provider. Every such test is marked `requires_cluster`. Keep one focused
+adapter proof per boundary; do not repeat controller retry or failure policy in a
+live test when a journey already owns it. Failure injection must identify the
+fault that was consumed and assert the resulting external behavior. Avoid random
+failure rates and wall-clock polling.
+
+The module-scoped smoke cluster covers representative job and dashboard paths.
+Function-scoped clusters isolate worker/process fault adapters. Docker-dependent
+tests also carry the `docker` marker.
+
+Core fixtures:
+
+- `cluster`: Function-scoped local cluster with `IrisClient` and RPC access (adapter tests)
+- `smoke_cluster`: Module-scoped local cluster for smoke tests (12 workers)
+- `smoke_page` / `smoke_screenshot`: Module-scoped Playwright page and screenshot capture
+- `page` / `screenshot`: Function-scoped Playwright page and screenshot capture
+
+Cloud mode: smoke tests can connect to existing clusters via `--iris-controller-url`
+or start one via `--iris-config` + `--iris-mode`.
+
+Fault injection is auto-reset between tests. Call `enable_chaos()` only at an
+external boundary that the test names.
+Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
+
+## Running Tests
+
+Run dashboard unit tests with `npm test` from `lib/iris/dashboard/`. These tests
+use the Node.js test runner with native TypeScript support, as in the Finelog
+dashboard. Run `npm run build:check` for Vue and TypeScript checks and the build.
+
+```bash
+# All unit tests
+uv run --package marin-iris --group test pytest lib/iris/tests/
+
+# Manual in-process memory profiling
+uv run --package marin-iris --group test pytest \
+  -m 'manual and not slow and not docker and not requires_cluster' \
+  lib/iris/tests/cluster/runtime/test_memray_profile.py
+
+# Focused root and Iris tests in one pytest process
+uv run --package marin-iris --group test pytest \
+  tests/cluster/vllm/test_backend_parity.py \
+  lib/iris/tests/cluster/controller/test_preemption.py
+
+# E2E smoke tests (shared cluster, fast)
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster -o "addopts="
+
+# E2E worker/process adapters (fresh cluster per test, slower)
+uv run pytest lib/iris/tests/e2e/test_failure_adapters.py -m requires_cluster -o "addopts="
+
+# Deterministic cross-component journeys
+uv run pytest lib/iris/tests/journeys/
+
+# All E2E tests
+uv run pytest lib/iris/tests/e2e/ -m requires_cluster -o "addopts="
+
+# E2E without Docker (fast)
+uv run pytest lib/iris/tests/e2e/ -m "requires_cluster and not docker" -o "addopts="
+
+# Docker-only tests
+uv run pytest lib/iris/tests/e2e/ -m docker -o "addopts="
+
+# Dashboard smoke tests with screenshots
+IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_smoke.py -o "addopts="
+
+# Cloud mode: connect to running cluster
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url http://localhost:8080 -o "addopts="
+
+# K8s runtime tests (requires a running cluster — kind, k3d, minikube, etc.)
+uv run pytest lib/iris/tests/e2e/test_coreweave_live_kubernetes_runtime.py \
+  -m slow -k lifecycle -v
+```

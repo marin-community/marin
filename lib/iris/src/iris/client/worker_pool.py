@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """WorkerPool for task dispatch.
@@ -10,7 +10,8 @@ jobs that can execute any callable.
 
 Example:
     from pathlib import Path
-    from iris.client import IrisClient, WorkerPool, WorkerPoolConfig
+    from iris.client.client import IrisClient
+    from iris.client.worker_pool import WorkerPool, WorkerPoolConfig
     from iris.cluster.types import ResourceSpec
 
     client = IrisClient.remote("http://controller:8080", workspace=Path("./my-project"))
@@ -28,7 +29,6 @@ Example:
 
 import logging
 import threading
-import time
 import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
@@ -40,15 +40,15 @@ from typing import Any, Generic, TypeVar
 
 import cloudpickle
 from connectrpc.errors import ConnectError
+from rigging.timing import Duration, ExponentialBackoff
 
-from iris.actor import ActorServer
 from iris.actor.client import ActorClient
 from iris.actor.resolver import Resolver
+from iris.actor.server import ActorServer
 from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.client import get_job_info
-from iris.cluster.types import EnvironmentSpec, Entrypoint, JobName, ResourceSpec
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.time_utils import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +86,6 @@ class PendingTask:
     serialized_args: bytes
     serialized_kwargs: bytes
     future: Future
-    fn_name: str
-    submitted_at: float
     retries_remaining: int = 0
 
 
@@ -139,7 +137,7 @@ def worker_job_entrypoint(pool_id: str) -> None:
     """Job entrypoint that starts a TaskExecutor actor.
 
     This function runs inside each task of the co-scheduled worker pool job.
-    It uses IRIS_JOB_ID (task name) from the environment to determine which
+    It uses IRIS_TASK_ID (task identity) from the environment to determine which
     worker index this task represents.
 
     Args:
@@ -195,7 +193,6 @@ class WorkerDispatcher:
         self._timeout = timeout
         self._discover_backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
         self._actor_client: ActorClient | None = None
-        self._stop_event: threading.Event | None = None
 
     def make_target(self) -> Callable[..., None]:
         """Create a thread target that carries the current context.
@@ -211,27 +208,19 @@ class WorkerDispatcher:
         return target
 
     def _run(self, stop_event: threading.Event) -> None:
-        self._stop_event = stop_event
         while not stop_event.is_set():
             if self.state.status == WorkerStatus.PENDING:
-                self._discover_endpoint()
+                self._discover_endpoint(stop_event)
                 continue
 
             if self.state.status == WorkerStatus.FAILED:
                 break
 
-            if self._actor_client is None:
-                self._actor_client = ActorClient(
-                    resolver=self._resolver,
-                    name=self.state.worker_name,
-                    resolve_timeout=self._timeout,
-                )
-
             task = self._get_task()
             if task:
                 self._execute_task(task)
 
-    def _discover_endpoint(self) -> None:
+    def _discover_endpoint(self, stop_event: threading.Event) -> None:
         logger.debug(
             "Discovering endpoint for worker %s (name=%s)",
             self.state.worker_id,
@@ -247,15 +236,12 @@ class WorkerDispatcher:
             self._actor_client = ActorClient(
                 resolver=self._resolver,
                 name=self.state.worker_name,
-                resolve_timeout=self._timeout,
+                call_timeout=self._timeout,
             )
             logger.info("Worker %s discovered at %s", self.state.worker_id, endpoint.url)
         else:
             logger.debug("Worker %s not found, waiting...", self.state.worker_id)
-            if self._stop_event:
-                self._stop_event.wait(self._discover_backoff.next_interval())
-            else:
-                time.sleep(self._discover_backoff.next_interval())
+            stop_event.wait(self._discover_backoff.next_interval())
 
     def _get_task(self) -> PendingTask | None:
         """Try to get a task from the queue."""
@@ -332,7 +318,6 @@ class WorkerFuture(Generic[T]):
     """Future representing an in-flight task."""
 
     _future: Future
-    _fn_name: str
 
     def result(self, timeout: float | None = None) -> T:
         """Block until result is available.
@@ -426,10 +411,6 @@ class WorkerPool:
         return sum(1 for w in self._workers.values() if w.status in (WorkerStatus.IDLE, WorkerStatus.BUSY))
 
     @property
-    def idle_count(self) -> int:
-        return sum(1 for w in self._workers.values() if w.status == WorkerStatus.IDLE)
-
-    @property
     def job_id(self) -> JobName | None:
         return self._job.job_id if self._job else None
 
@@ -492,11 +473,9 @@ class WorkerPool:
         if min_workers is None:
             min_workers = self._config.num_workers
 
-        ExponentialBackoff(initial=0.05, maximum=1.0).wait_until_or_raise(
-            lambda: self.size >= min_workers,
-            timeout=timeout,
-            error_message=f"Only {self.size} of {min_workers} workers registered within {timeout}s",
-        )
+        backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
+        if not backoff.wait_until(lambda: self.size >= min_workers, timeout=timeout):
+            raise TimeoutError(f"Only {self.size} of {min_workers} workers registered within {timeout}")
 
     def submit(
         self,
@@ -526,13 +505,11 @@ class WorkerPool:
             serialized_args=cloudpickle.dumps(args),
             serialized_kwargs=cloudpickle.dumps(kwargs),
             future=Future(),
-            fn_name=getattr(fn, "__name__", "lambda"),
-            submitted_at=time.monotonic(),
             retries_remaining=self._config.max_retries,
         )
 
         self._task_queue.put(task)
-        return WorkerFuture(_future=task.future, _fn_name=task.fn_name)
+        return WorkerFuture(_future=task.future)
 
     def map(
         self,
@@ -602,6 +579,6 @@ class WorkerPool:
         # Terminate worker job
         if self._job:
             try:
-                self._job.terminate()
+                self._job.cancel()
             except Exception as e:
                 logger.debug("Failed to terminate worker job %s: %s", self._job.job_id, e)

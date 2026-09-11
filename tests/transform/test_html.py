@@ -1,10 +1,11 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for HTML conversion transforms."""
 
 from bs4 import BeautifulSoup
 from marin.schemas.web.convert import ResiliparseConfig
+from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
 from marin.transform.ar5iv.transform_ar5iv import clean_html as ar5iv_clean_html
 from marin.transform.ar5iv.transform_ar5iv import process_record as ar5iv_process_record
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
@@ -148,10 +149,9 @@ def test_clean_wiki_html():
     assert "$E = mc^2$" in str(cleaned)
 
 
-# One extraction method test (resiliparse variant only)
 def test_convert_page_with_resiliparse(sample_html_simple):
     config = ResiliparseConfig()
-    result = convert_page(sample_html_simple, url=None, extract_method="resiliparse", config=config)
+    result = convert_page(sample_html_simple, url=None, config=config)
 
     assert "content" in result
     assert "title" in result
@@ -165,9 +165,7 @@ def test_ar5iv_process_record():
     row = {"filename": "arxiv_12345", "content": SAMPLE_AR5IV_HTML}
     config = ResiliparseConfig()
 
-    result = ar5iv_process_record(
-        row, extract_method="resiliparse", extract_config=config, remove_reference_section=True
-    )
+    result = ar5iv_process_record(row, extract_config=config, remove_reference_section=True)
 
     assert result["id"] == "arxiv_12345"
     assert result["source"] == "ar5iv"
@@ -192,7 +190,6 @@ def test_wiki_process_record_with_html():
 
     result = wiki_process_record(
         row,
-        extract_method="resiliparse",
         extract_config=config,
         remove_reference_section=True,
         digit_threshold=50,
@@ -221,7 +218,6 @@ def test_wiki_process_record_filters_bad_content():
     # Set unreasonable thresholds to trigger filtering
     result = wiki_process_record(
         row,
-        extract_method="resiliparse",
         extract_config=config,
         remove_reference_section=True,
         digit_threshold=0,  # Filter if any digits
@@ -246,14 +242,11 @@ def test_ar5iv_pipeline_integration(tmp_path, write_jsonl_gz, read_all_jsonl_gz)
         ],
     )
 
-    from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
-
     config = Ar5ivExtractionConfig(
         input_path=str(input_dir),
         output_path=str(output_dir),
         revision="test",
         remove_reference_section=True,
-        extract_method="resiliparse",
         extract_config=ResiliparseConfig(),
     )
 
@@ -283,7 +276,6 @@ def test_simple_html_to_md_pipeline(tmp_path, write_jsonl_gz, read_all_jsonl_gz)
     config = SimpleHtmlToMdConfig(
         input_path=str(input_dir),
         output_path=str(output_dir),
-        extract_method="resiliparse",
         config=ResiliparseConfig(),
     )
 

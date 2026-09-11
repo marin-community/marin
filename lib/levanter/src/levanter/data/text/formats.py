@@ -1,23 +1,35 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, TypedDict
+from typing import Any, TypedDict
 
 import numpy as np
-from draccus import ChoiceRegistry
+from draccus import PluginRegistry
 
 from levanter.data._preprocessor import BatchProcessor
+from levanter.tokenizers import MarinTokenizer, chat_template_has_generation_block
+
 from ._batch_tokenizer import BatchTokenizer
-from levanter.utils.hf_utils import HfTokenizer, num_cpus_used_by_tokenizer
 
 
-class LmDatasetFormatBase(ChoiceRegistry):
+class LmDatasetFormatBase(PluginRegistry, discover_packages_path="levanter.data.text"):
+    # PluginRegistry so the format subclasses split across formats.py, preference.py, and
+    # trace_chat.py register lazily on first parse -- levanter/data/text/__init__.py no longer
+    # imports them eagerly, so draccus discovers them under the package path instead.
     @classmethod
     def default_choice_name(cls) -> str | None:
         return "text"
+
+    @property
+    def token_data_key(self) -> str:
+        return "input_ids"
+
+    def build_preprocessor(
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        raise ValueError(f"Unknown format {self}")
 
 
 @LmDatasetFormatBase.register_subclass("text")
@@ -26,6 +38,11 @@ class TextLmDatasetFormat(LmDatasetFormatBase):
     """Dataset configuration for raw text examples."""
 
     text_key: str = "text"  # key for the text field in the jsonl file
+
+    def build_preprocessor(
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        return BatchTokenizer(tokenizer, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=self.text_key)
 
 
 @LmDatasetFormatBase.register_subclass("chat")
@@ -37,8 +54,20 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
     chat_template: str | None = None
     system_prompt: str | None = None
     chat_template_kwargs: str | None = "chat_template_kwargs"
-    pack: bool | int | Literal["pad"] | None = None  # None => default pack behavior (currently pack)
+    pack: bool | int | None = None  # None => default pack behavior (currently pack)
     mask_user_turns: bool = True
+
+    def build_preprocessor(
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        return ChatProcessor(
+            tokenizer,
+            messages_field=self.messages_field,
+            chat_template=self.chat_template,
+            system_prompt_field=self.system_prompt,
+            chat_template_kwargs_field=self.chat_template_kwargs,
+            mask_user_turns=self.mask_user_turns,
+        )
 
 
 @LmDatasetFormatBase.register_subclass("prebuilt")
@@ -56,6 +85,16 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
     loss_weights_key: str | None = None
     loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None = None
 
+    @property
+    def token_data_key(self) -> str:
+        return self.input_ids_key
+
+    def build_preprocessor(
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        del tokenizer, enforce_eos, enforce_bos
+        return PrebuiltCacheProcessor(self.input_ids_key, self.loss_weights_key)
+
 
 class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):
     """
@@ -65,7 +104,7 @@ class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):
     def __init__(self, input_ids_key: str, loss_weights_key: str | None):
         self.input_ids_key = input_ids_key
         self.loss_weights_key = loss_weights_key
-        self._exemplar = {input_ids_key: np.zeros((0,), dtype=np.int32)}
+        self._exemplar: dict[str, np.ndarray] = {input_ids_key: np.zeros((0,), dtype=np.int32)}
         if loss_weights_key is not None:
             self._exemplar[loss_weights_key] = np.zeros((0,), dtype=np.float32)
 
@@ -74,7 +113,7 @@ class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):
         for example in batch:
             if self.input_ids_key not in example:
                 raise ValueError(f"Missing required field '{self.input_ids_key}' in prebuilt example.")
-            item = {
+            item: dict[str, np.ndarray] = {
                 self.input_ids_key: np.asarray(example[self.input_ids_key], dtype=np.int32),
             }
             if self.loss_weights_key is not None:
@@ -112,7 +151,7 @@ class ChatProcessor(BatchProcessor[dict, dict]):
 
     def __init__(
         self,
-        tokenizer: HfTokenizer,
+        tokenizer: MarinTokenizer,
         chat_template: str | None = None,
         messages_field: str = "messages",
         system_prompt_field: str | None = "system",
@@ -131,9 +170,9 @@ class ChatProcessor(BatchProcessor[dict, dict]):
         if self.chat_template is None:
             raise ValueError("No chat template provided and tokenizer has no default chat template")
 
-        if mask_user_turns and not re.search(r"\{%-?\s*generation\s*-?%}", self.chat_template):
+        if mask_user_turns and not chat_template_has_generation_block(self.chat_template):
             raise ValueError(
-                "Chat template must contain {%generation%} to indicate the position of the assistant message "
+                "Chat template must contain {% generation %} to indicate the position of the assistant message "
                 "if mask_user_turns is True."
             )
 
@@ -170,16 +209,13 @@ class ChatProcessor(BatchProcessor[dict, dict]):
         use_per_example_kwargs = any(kwargs for kwargs in chat_kwargs_list)
 
         if not use_per_example_kwargs:
-            tokenized = self.tokenizer.apply_chat_template(
+            tokenized = self.tokenizer.apply_chat_template_with_masks(
                 messages,
-                tokenize=True,
                 chat_template=self.chat_template,
-                return_assistant_tokens_mask=True,
-                return_dict=True,
             )
         else:
-            input_ids_batches: list[Sequence[int]] = []
-            assistant_mask_batches: list[Sequence[int]] = []
+            input_ids_batches: list[list[int]] = []
+            assistant_mask_batches: list[list[int]] = []
 
             for conversation, example_kwargs in zip(messages, chat_kwargs_list):
                 kwargs_dict = dict(example_kwargs) if example_kwargs is not None else {}
@@ -191,15 +227,14 @@ class ChatProcessor(BatchProcessor[dict, dict]):
                 if chat_template_override is None:
                     raise ValueError("Chat template must be provided either in the dataset format or per example.")
 
-                apply_kwargs = {
-                    **kwargs_dict,
-                    "tokenize": True,
-                    "return_assistant_tokens_mask": True,
-                    "return_dict": True,
-                    "chat_template": chat_template_override,
-                }
+                # Remove add_generation_prompt if present; it's not used for mask computation.
+                kwargs_dict.pop("add_generation_prompt", None)
 
-                tokenized_single = self.tokenizer.apply_chat_template([conversation], **apply_kwargs)
+                tokenized_single = self.tokenizer.apply_chat_template_with_masks(
+                    [conversation],
+                    chat_template=chat_template_override,
+                    **kwargs_dict,
+                )
                 input_ids_batches.extend(tokenized_single["input_ids"])
                 assistant_mask_batches.extend(tokenized_single["assistant_masks"])
 
@@ -229,13 +264,13 @@ class ChatProcessor(BatchProcessor[dict, dict]):
 
     @property
     def num_cpus(self) -> int:
-        return num_cpus_used_by_tokenizer(self.tokenizer)
+        return 1
 
     @property
     def metadata(self) -> dict[str, Any]:
         return {
             "tokenizer": self.tokenizer.name_or_path,
-            "vocab_size": len(self.tokenizer),
+            "vocab_size": self.tokenizer.vocab_size,
             "chat_template": self.chat_template,
             "messages_field": self.messages_field,
             "system_prompt_field": self.system_prompt_field,
@@ -244,27 +279,6 @@ class ChatProcessor(BatchProcessor[dict, dict]):
 
 
 def preprocessor_for_format(
-    format: LmDatasetFormatBase, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    format: LmDatasetFormatBase, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
 ) -> BatchProcessor[dict, dict]:
-    match format:
-        case TextLmDatasetFormat(text_key=key):
-            return BatchTokenizer(tokenizer, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=key)
-        case PrebuiltLmDatasetFormat(input_ids_key=input_ids_key, loss_weights_key=loss_weights_key):
-            return PrebuiltCacheProcessor(input_ids_key, loss_weights_key)
-        case ChatLmDatasetFormat(
-            messages_field=m,
-            chat_template=ct,
-            system_prompt=sp,
-            chat_template_kwargs=ct_kwargs,
-            mask_user_turns=mt,
-        ):
-            return ChatProcessor(
-                tokenizer,
-                messages_field=m,
-                chat_template=ct,
-                system_prompt_field=sp,
-                chat_template_kwargs_field=ct_kwargs,
-                mask_user_turns=mt,
-            )  # type: ignore
-        case _:
-            raise ValueError(f"Unknown format {format}")
+    return format.build_preprocessor(tokenizer, enforce_eos=enforce_eos, enforce_bos=enforce_bos)

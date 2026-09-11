@@ -1,13 +1,14 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for deduplicate and group_by operations."""
-
 import hashlib
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
-
-from zephyr import Dataset
+from zephyr.dataset import Dataset
+from zephyr.writers import infer_arrow_schema
 
 
 @pytest.fixture
@@ -38,7 +39,7 @@ def test_deduplicate_basic(zephyr_ctx):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
 
     # Should have exactly 3 unique items (ids 1, 2, 3)
     assert len(results) == 3
@@ -51,7 +52,7 @@ def test_deduplicate_basic(zephyr_ctx):
 def test_deduplicate_empty(zephyr_ctx):
     """Test deduplication on empty dataset."""
     ds = Dataset.from_list([]).deduplicate(key=lambda x: x["id"])
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     assert results == []
 
 
@@ -61,7 +62,7 @@ def test_deduplicate_all_unique(zephyr_ctx):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     assert len(results) == 10
 
 
@@ -71,7 +72,7 @@ def test_deduplicate_all_duplicates(zephyr_ctx):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     assert len(results) == 1
     assert results[0]["id"] == 1
 
@@ -91,7 +92,7 @@ def test_group_by_count(zephyr_ctx):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)}
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
 
     # Should have 3 groups
     assert len(results) == 3
@@ -118,7 +119,7 @@ def test_group_by_sum(zephyr_ctx):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "sum": sum(item["val"] for item in items)}
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     results = sorted(results, key=lambda x: x["cat"])
 
     assert results[0] == {"cat": "A", "sum": 4}  # 1 + 3
@@ -138,7 +139,7 @@ def test_group_by_list(zephyr_ctx):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "vals": [item["val"] for item in items]}
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     results = sorted(results, key=lambda x: x["cat"])
 
     assert results[0]["cat"] == "A"
@@ -154,7 +155,7 @@ def test_group_by_empty(zephyr_ctx):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)}
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
     assert results == []
 
 
@@ -164,12 +165,45 @@ def test_deduplicate_with_num_output_shards(zephyr_ctx):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"], num_output_shards=5)
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
 
     # Should have exactly 3 unique items (ids 0, 1, 2)
     assert len(results) == 3
     ids = sorted([r["id"] for r in results])
     assert ids == [0, 1, 2]
+
+
+def test_group_by_num_output_shards_smaller_than_input(zephyr_ctx, tmp_path):
+    """``num_output_shards`` is authoritative even when the input has more shards.
+
+    Regression test for marin#5162: scatter writes records into ``num_output_shards``
+    buckets (``hash(key) % num_output_shards``), but the reduce stage previously
+    spawned ``max(input_shards, num_output_shards)`` tasks. The "extra" reduce
+    tasks ran on a ``shard_idx`` that scatter never wrote to and emitted empty
+    output files.
+    """
+    output_dir = tmp_path / "out"
+    output_pattern = str(output_dir / "data-{shard:05d}-of-{total:05d}.parquet")
+
+    ds = (
+        Dataset.from_list([{"id": i, "val": i} for i in range(60)])
+        .reshard(10)
+        .group_by(
+            key=lambda x: x["id"],
+            reducer=lambda k, items: next(iter(items)),
+            num_output_shards=3,
+        )
+        .write_parquet(output_pattern)
+    )
+
+    output_files = zephyr_ctx.execute(ds).results
+
+    assert len(output_files) == 3, (
+        f"expected 3 output files (= num_output_shards), got {len(output_files)}; "
+        "extra files come from reduce tasks that ran on padding shards"
+    )
+    for p in output_files:
+        assert "of-00003" in p, f"unexpected total in {p}"
 
 
 def test_group_by_with_hash_key_large(zephyr_ctx, large_document_dataset):
@@ -196,7 +230,7 @@ def test_group_by_with_hash_key_large(zephyr_ctx, large_document_dataset):
         .group_by(key=lambda doc: doc["hash"], reducer=count_and_extract)
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
 
     # Should have exactly 100 groups (one per unique content)
     assert len(results) == 100
@@ -208,6 +242,174 @@ def test_group_by_with_hash_key_large(zephyr_ctx, large_document_dataset):
     # Verify all hashes are unique
     hashes = [r["hash"] for r in results]
     assert len(set(hashes)) == 100
+
+
+def test_group_by_generator_reducer(zephyr_ctx):
+    """Test group_by with a generator reducer that yields multiple items per group."""
+    data = [
+        {"cat": "A", "val": 1},
+        {"cat": "B", "val": 2},
+        {"cat": "A", "val": 3},
+        {"cat": "B", "val": 5},
+    ]
+
+    def explode_reducer(key, items):
+        """Generator reducer: yield each item individually with group metadata."""
+        for item in items:
+            yield {"cat": key, "val": item["val"], "from_group": True}
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["cat"],
+        reducer=explode_reducer,
+    )
+
+    results = zephyr_ctx.execute(ds).results
+
+    # Generator reducer should flatten: 4 items total (2 from A, 2 from B)
+    assert len(results) == 4
+
+    results = sorted(results, key=lambda x: (x["cat"], x["val"]))
+    assert results[0] == {"cat": "A", "val": 1, "from_group": True}
+    assert results[1] == {"cat": "A", "val": 3, "from_group": True}
+    assert results[2] == {"cat": "B", "val": 2, "from_group": True}
+    assert results[3] == {"cat": "B", "val": 5, "from_group": True}
+
+
+def test_group_by_reducer_returns_generator_expression(zephyr_ctx):
+    """Reducer that *returns* an iterator (not a generator function) is flattened.
+
+    The ``group_by`` contract documents ``reducer: ... -> R | Iterator[R]``, so a
+    reducer that returns a generator expression / ``map`` / ``filter`` is valid.
+    Regression for the ``'generator' object has no attribute 'keys'`` crash where
+    such a reducer's return value was emitted whole into the writer instead of
+    being flattened.
+    """
+    data = [
+        {"cat": "A", "val": 1},
+        {"cat": "B", "val": 2},
+        {"cat": "A", "val": 3},
+        {"cat": "B", "val": 5},
+    ]
+
+    # NOTE: returns a generator expression — deliberately NOT a generator
+    # function (no ``yield`` in the body), so ``inspect.isgeneratorfunction``
+    # would not detect it.
+    def explode_via_genexpr(key, items):
+        return ({"cat": key, "val": item["val"], "from_group": True} for item in items)
+
+    ds = Dataset.from_list(data).group_by(key=lambda x: x["cat"], reducer=explode_via_genexpr)
+
+    results = sorted(zephyr_ctx.execute(ds).results, key=lambda x: (x["cat"], x["val"]))
+    assert results == [
+        {"cat": "A", "val": 1, "from_group": True},
+        {"cat": "A", "val": 3, "from_group": True},
+        {"cat": "B", "val": 2, "from_group": True},
+        {"cat": "B", "val": 5, "from_group": True},
+    ]
+
+
+def test_group_by_reducer_returns_map_object(zephyr_ctx):
+    """A reducer returning a ``map`` object (also an iterator, not a generator function)."""
+    data = [
+        {"cat": "A", "val": 1},
+        {"cat": "A", "val": 3},
+        {"cat": "B", "val": 2},
+    ]
+
+    def explode_via_map(key, items):
+        return map(lambda item: {"cat": key, "doubled": item["val"] * 2}, items)
+
+    ds = Dataset.from_list(data).group_by(key=lambda x: x["cat"], reducer=explode_via_map)
+
+    results = sorted(zephyr_ctx.execute(ds).results, key=lambda x: (x["cat"], x["doubled"]))
+    assert results == [
+        {"cat": "A", "doubled": 2},
+        {"cat": "A", "doubled": 6},
+        {"cat": "B", "doubled": 4},
+    ]
+
+
+def test_group_by_reducer_returns_generator_then_parquet(zephyr_ctx, tmp_path):
+    """Reduce fused with a parquet Write — the exact production failure path.
+
+    Mirrors the trace where ``Reduce-Write`` sent the reducer's (un-flattened)
+    generator into ``write_parquet_file``, which crashed in ``_build_table``.
+    """
+    data = [{"cat": "A", "val": 1}, {"cat": "A", "val": 3}, {"cat": "B", "val": 2}]
+    output_pattern = str(tmp_path / "out" / "data-{shard:05d}-of-{total:05d}.parquet")
+
+    def explode_via_genexpr(key, items):
+        return ({"cat": key, "val": item["val"]} for item in items)
+
+    ds = (
+        Dataset.from_list(data)
+        .group_by(key=lambda x: x["cat"], reducer=explode_via_genexpr)
+        .write_parquet(output_pattern)
+    )
+
+    output_files = zephyr_ctx.execute(ds).results
+    rows = [row for path in output_files for row in pq.read_table(path).to_pylist()]
+    assert sorted(rows, key=lambda r: (r["cat"], r["val"])) == [
+        {"cat": "A", "val": 1},
+        {"cat": "A", "val": 3},
+        {"cat": "B", "val": 2},
+    ]
+
+
+def test_group_by_secondary_sort(zephyr_ctx):
+    """Test group_by with sort_by delivers items in sorted order within each group."""
+    data = [
+        {"user": "A", "ts": 3, "event": "c"},
+        {"user": "B", "ts": 2, "event": "b"},
+        {"user": "A", "ts": 1, "event": "a"},
+        {"user": "B", "ts": 5, "event": "e"},
+        {"user": "A", "ts": 2, "event": "b"},
+        {"user": "B", "ts": 1, "event": "a"},
+    ]
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["user"],
+        reducer=lambda key, items: {"user": key, "events": [i["event"] for i in items]},
+        sort_by=lambda x: x["ts"],
+    )
+
+    results = zephyr_ctx.execute(ds).results
+    results = sorted(results, key=lambda x: x["user"])
+
+    # Items within each group should be sorted by timestamp
+    assert results[0] == {"user": "A", "events": ["a", "b", "c"]}
+    assert results[1] == {"user": "B", "events": ["a", "b", "e"]}
+
+
+def test_group_by_secondary_sort_with_generator_reducer(zephyr_ctx):
+    """Test sort_by combined with a generator reducer."""
+    data = [
+        {"cat": "X", "rank": 2, "val": "second"},
+        {"cat": "X", "rank": 1, "val": "first"},
+        {"cat": "Y", "rank": 3, "val": "third"},
+        {"cat": "Y", "rank": 1, "val": "first"},
+    ]
+
+    def ranked_explode(key, items):
+        for item in items:
+            yield {"cat": key, "val": item["val"], "rank": item["rank"]}
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["cat"],
+        reducer=ranked_explode,
+        sort_by=lambda x: x["rank"],
+    )
+
+    results = zephyr_ctx.execute(ds).results
+    results = sorted(results, key=lambda x: (x["cat"], x["rank"]))
+
+    # Items should arrive at reducer sorted by rank
+    assert results == [
+        {"cat": "X", "val": "first", "rank": 1},
+        {"cat": "X", "val": "second", "rank": 2},
+        {"cat": "Y", "val": "first", "rank": 1},
+        {"cat": "Y", "val": "third", "rank": 3},
+    ]
 
 
 def test_group_by_with_none_and_filter(zephyr_ctx):
@@ -234,8 +436,145 @@ def test_group_by_with_none_and_filter(zephyr_ctx):
         .filter(lambda x: x is not None)  # Filter out None values
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = zephyr_ctx.execute(ds).results
 
     # Should only have duplicate keys: "a" and "foo"
     assert len(results) == 2
     assert sorted(results) == ["a", "foo"]
+
+
+def test_group_by_shard_starting_with_none_item(zephyr_ctx):
+    """A shard whose first item is ``None`` must still be scattered.
+
+    A peek that cannot distinguish a ``None`` item from an exhausted stream
+    reports the shard as empty and drops its contents without error.
+    """
+    ds = Dataset.from_list([None, None, 1]).group_by(
+        key=lambda item: item is None,
+        reducer=lambda key, items: {"key": key, "count": sum(1 for _ in items)},
+    )
+
+    results = sorted(zephyr_ctx.execute(ds).results, key=lambda r: r["key"])
+
+    assert results == [{"key": False, "count": 1}, {"key": True, "count": 2}]
+
+
+def test_group_by_non_vortex_serializable(zephyr_ctx):
+    """Shuffle with items that Vortex/Arrow cannot serialize uses pickle-in-parquet.
+
+    Uses frozenset (not Arrow-serializable) so the pickle envelope path is
+    exercised. Items are serialized via cloudpickle into a binary ``__pickle__``
+    column inside Parquet, avoiding the N*M pickle file blowup.
+    """
+
+    # NOTE: confirm frozenset is not arrow-serializable type to trigger the pickle envelope path
+    with pytest.raises(pa.lib.ArrowInvalid, match="Could not convert frozenset"):
+        infer_arrow_schema([{"foo": frozenset([1, 2, 3])}])
+
+    data = [
+        {"key": "a", "values": frozenset([1, 2, 3])},
+        {"key": "b", "values": frozenset([2])},
+        {"key": "a", "values": frozenset([3, 4])},
+    ]
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["key"],
+        reducer=lambda key, items: {"key": key, "value": frozenset().union(*(item["values"] for item in items))},
+    )
+
+    results = zephyr_ctx.execute(ds).results
+    results = sorted(results, key=lambda x: x["key"])
+    assert len(results) == 2
+    assert results[0] == {"key": "a", "value": frozenset([1, 2, 3, 4])}
+    assert results[1] == {"key": "b", "value": frozenset([2])}
+
+
+def test_group_by_schema_evolution(zephyr_ctx):
+    """Schema evolution: a field that is null in some chunks gains a type in others."""
+    data = []
+    # First batch of items: score is None (Arrow infers Null type)
+    for i in range(20):
+        data.append({"id": i, "cat": f"g{i % 5}", "score": None})
+    # Second batch: score is int (Arrow infers int64)
+    for i in range(20, 40):
+        data.append({"id": i, "cat": f"g{i % 5}", "score": i})
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["cat"],
+        reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)},
+    )
+
+    results = zephyr_ctx.execute(ds).results
+    results = sorted(results, key=lambda x: x["cat"])
+
+    assert len(results) == 5
+    for r in results:
+        assert r["count"] == 8  # 4 with None score + 4 with int score
+
+
+def test_group_by_combiner(zephyr_ctx):
+    """Combiner deduplicates locally during scatter; reducer still deduplicates globally."""
+    data = [
+        {"key": "a", "id": 1},
+        {"key": "a", "id": 1},  # duplicate
+        {"key": "a", "id": 2},
+        {"key": "b", "id": 3},
+        {"key": "b", "id": 3},  # duplicate
+        {"key": "b", "id": 3},  # duplicate
+        {"key": "b", "id": 4},
+    ]
+
+    def dedup_combiner(key, items):
+        seen = set()
+        for item in items:
+            if item["id"] not in seen:
+                seen.add(item["id"])
+                yield item
+
+    def dedup_reducer(key, items):
+        seen = set()
+        ids = []
+        for item in items:
+            if item["id"] not in seen:
+                seen.add(item["id"])
+                ids.append(item["id"])
+        return {"key": key, "ids": sorted(ids)}
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["key"],
+        reducer=dedup_reducer,
+        combiner=dedup_combiner,
+    )
+
+    results = sorted(zephyr_ctx.execute(ds).results, key=lambda x: x["key"])
+    assert results == [
+        {"key": "a", "ids": [1, 2]},
+        {"key": "b", "ids": [3, 4]},
+    ]
+
+
+def test_group_by_combiner_sum(zephyr_ctx):
+    """Combiner pre-aggregates partial sums, reducer produces final sum."""
+    data = [
+        {"cat": "x", "val": 1},
+        {"cat": "x", "val": 2},
+        {"cat": "x", "val": 3},
+        {"cat": "y", "val": 10},
+        {"cat": "y", "val": 20},
+    ]
+
+    def sum_combiner(key, items):
+        total = sum(item["val"] for item in items)
+        yield {"cat": key, "val": total}
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["cat"],
+        reducer=lambda key, items: {"cat": key, "total": sum(item["val"] for item in items)},
+        combiner=sum_combiner,
+    )
+
+    results = sorted(zephyr_ctx.execute(ds).results, key=lambda x: x["cat"])
+    assert results == [
+        {"cat": "x", "total": 6},
+        {"cat": "y", "total": 30},
+    ]

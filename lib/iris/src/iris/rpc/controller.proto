@@ -1,0 +1,949 @@
+// Copyright The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2023";
+
+// Controller-specific request/response messages and the ControllerService RPC.
+// Shared types live in job.proto; worker-specific types live in worker.proto.
+//
+// Package deliberately kept as iris.cluster to preserve the wire-protocol URL
+// /iris.cluster.ControllerService/... for all existing clients and JS dashboard.
+package iris.cluster;
+
+import "job.proto";
+import "query.proto";
+import "time.proto";
+import "vm.proto";
+
+// ============================================================================
+// CONTROLLER SERVICE MESSAGES
+// ============================================================================
+
+message Controller {
+  // --- Job Lifecycle ---
+  message LaunchJobRequest {
+    string name = 1;
+    iris.job.RuntimeEntrypoint entrypoint = 2;       // Structured entrypoint for runtime layer
+    iris.job.ResourceSpecProto resources = 3;        // Full resource specification
+    iris.job.EnvironmentConfig environment = 4;  // Environment configuration
+
+    // Bundle information - either provide bundle_id OR blob (not both)
+    string bundle_id = 5;  // Canonical bundle identifier (SHA256 of zip bytes)
+    bytes bundle_blob = 6;  // Direct bundle upload (controller writes to bundle store)
+
+    // Scheduling timeout - job fails with UNSCHEDULABLE if not scheduled within this time
+    // If not set or milliseconds=0, no timeout (wait forever)
+    iris.time.Duration scheduling_timeout = 8;
+
+    // Named ports to allocate (e.g., ["http", "grpc", "actor"])
+    // Worker allocates ports and injects FLUSTER_PORT_<NAME> env vars into the container
+    repeated string ports = 9;
+
+    // Job-level failure tolerance.
+    // A job fails when the cumulative number of failed task attempts across the
+    // whole job exceeds this (default 0 = fail on the first failure). The count
+    // accumulates across retries, so a job cannot crash-loop indefinitely. For a
+    // coscheduled gang one crashed round charges one failure. Preemptions are
+    // retried by Iris and never count toward this limit.
+    int32 max_task_failures = 11;
+
+    // Per-task retry limits
+    // When a task fails (non-zero exit code), retry up to this many times before marking permanently failed
+    int32 max_retries_failure = 12;  // Default: 0 (no retries on task failure)
+
+    // When a task is preempted (worker dies), retry up to this many times
+    int32 max_retries_preemption = 13;  // Default: 100 (generous preemption tolerance)
+
+    // Constraints for filtering workers by attribute.
+    // All constraints must match for a worker to be eligible (AND semantics).
+    repeated iris.job.Constraint constraints = 14;
+
+    // Coscheduling configuration for multi-host jobs (e.g., multi-host TPU).
+    // When set, all tasks are scheduled atomically to workers sharing the same
+    // group_by attribute value. If not enough workers are available in any group,
+    // the job stays pending.
+    iris.job.CoschedulingConfig coscheduling = 15;
+
+    // Number of tasks to create for gang scheduling (default: 1).
+    // For multi-host TPU jobs, set to the number of VMs in the slice.
+    int32 replicas = 20;
+
+    // Per-task timeout. Task is killed if it runs longer than this.
+    // If not set or milliseconds=0, no timeout.
+    iris.time.Duration timeout = 21;
+
+    // If true, return ALREADY_EXISTS error even if an existing job with the same
+    // name is in a terminal state. If false (default), finished jobs are automatically
+    // removed and replaced with the new submission.
+    bool fail_if_exists = 22;
+
+    reserved 30;  // was: iris.job.ReservationConfig reservation (replaced by hard availability:<variant> constraints)
+
+    iris.job.JobPreemptionPolicy preemption_policy = 31;
+    iris.job.ExistingJobPolicy existing_job_policy = 32;
+    iris.job.PriorityBand priority_band = 33;
+
+    // Per-job override for the task container image. When empty, the worker
+    // uses its cluster-configured default_task_image. Used for jobs that
+    // need a custom runtime (e.g. an image with runsc/skopeo for sandboxing
+    // untrusted child workloads).
+    string task_image = 34;
+
+    // Full argv of the CLI invocation that submitted this job (e.g. the
+    // user's `iris ... job run -- python train.py ...`). Captured from
+    // sys.argv at the client with secret-looking env var values redacted.
+    // Empty when submitted programmatically. Bookkeeping only; not
+    // interpreted by the controller.
+    repeated string submit_argv = 35;
+
+    // ISO date (YYYY-MM-DD) of the client's marin-iris build. For wheels this
+    // is stamped at build time by scripts/python_libs_package.py; for editable
+    // installs it's derived from `git log` on the iris source tree. Root
+    // submissions more than FRESHNESS_WINDOW (14d) older than the controller's
+    // own build are rejected. Nested submissions (is_root == false) are exempt,
+    // as is an empty string, which means the build can't identify itself.
+    string client_revision_date = 36;
+
+    // Requested container security profile. UNSPECIFIED => DEFAULT. Elevated
+    // profiles (DOCKER_ACCESS, PRIVILEGED) require the admin role at submission
+    // when auth is enabled; see service.LaunchJob.
+    iris.job.ContainerProfile container_profile = 37;
+
+    // Set only when a federation parent hands a whole job off to this cluster as
+    // a peer. Its presence marks the job as peer-owned: the receiving controller
+    // records the handing-off cluster's ownership (so FederationSync reports the
+    // job back only to that requester) and runs the job in its own DAG on its own
+    // backends. Absent for an ordinary local submission.
+    FederationHandoff federation = 38;
+  }
+
+  // Attribution carried on a federated handoff (LaunchJobRequest.federation).
+  // Ownership is an explicit field, never parsed out of the job name.
+  message FederationHandoff {
+    string requester_id = 1;     // the handing-off (parent) cluster's id
+    string owner_principal = 2;  // the end-user identity the parent asserts
+    // The authenticated principal that submitted the root (an email, or
+    // "local_admin"). Unlike owner_principal (a friendly, caller-chosen name),
+    // this is the parent's verified identity and the key a peer's per-cluster
+    // allowlist gates on. The peer re-checks it against the same claim carried in
+    // the federation JWT before trusting it (defense in depth).
+    string submitting_user = 3;
+    // Identifies one parent-side handoff incarnation. A re-drive of the same
+    // handle repeats it; a resubmission that replaced the parent's job mints a
+    // new one. The peer matches it against the nonce stored on its RECEIVED
+    // handle: equal means idempotent replay (return the existing job), different
+    // means a new incarnation (the existing-job policy applies, so a finished
+    // previous run is replaced and re-run).
+    string handoff_nonce = 4;
+  }
+
+  message LaunchJobResponse {
+    string job_id = 1;
+  }
+
+  message GetJobStatusRequest {
+    string job_id = 1;
+    reserved 2;  // was include_result (removed: serialized_result no longer exists)
+    reserved 3;  // was include_tasks (all callers use ListTasks for per-task detail)
+  }
+
+  message GetJobStatusResponse {
+    iris.job.JobStatus job = 1;
+    LaunchJobRequest request = 2;  // Original job request for debugging
+    reserved 3;  // was: ResourceUsage resource_min (now derived from iris.task stats client-side)
+    reserved 4;  // was: ResourceUsage resource_max (now derived from iris.task stats client-side)
+  }
+
+  // Lightweight batch state query — returns only the state enum for each job,
+  // avoiding the cost of loading tasks, attempts, and worker addresses.
+  message GetJobStateRequest {
+    repeated string job_ids = 1;
+  }
+
+  message GetJobStateResponse {
+    map<string, iris.job.JobState> states = 1;
+  }
+
+  message TerminateJobRequest {
+    string job_id = 1;
+  }
+
+  message CompleteJobRequest {
+    string job_id = 1;
+  }
+
+  // Sort fields for job listing
+  enum JobSortField {
+    JOB_SORT_FIELD_UNSPECIFIED = 0;
+    JOB_SORT_FIELD_DATE = 1;     // submitted_at_ms
+    JOB_SORT_FIELD_NAME = 2;
+    JOB_SORT_FIELD_STATE = 3;
+    JOB_SORT_FIELD_FAILURES = 4;
+    JOB_SORT_FIELD_PREEMPTIONS = 5;
+  }
+
+  enum SortDirection {
+    SORT_DIRECTION_UNSPECIFIED = 0;  // Default to descending for date, ascending for others
+    SORT_DIRECTION_ASC = 1;
+    SORT_DIRECTION_DESC = 2;
+  }
+
+  enum JobQueryScope {
+    JOB_QUERY_SCOPE_UNSPECIFIED = 0;
+    JOB_QUERY_SCOPE_ALL = 1;
+    JOB_QUERY_SCOPE_ROOTS = 2;
+    JOB_QUERY_SCOPE_CHILDREN = 3;
+  }
+
+  message JobQuery {
+    // Ancestry scope. Defaults to JOB_QUERY_SCOPE_ALL (flat list, all depths).
+    JobQueryScope scope = 1;
+    // Required when scope == JOB_QUERY_SCOPE_CHILDREN; ignored otherwise.
+    string parent_job_id = 2;
+    // Substring match against the job's local name (case-insensitive).
+    // Use this for the dashboard "search by name" box; it does NOT anchor and
+    // does NOT match the leading "/user/..." path. For path-prefix filtering
+    // (e.g. "/alice/exp-"), set ``job_id_prefix`` instead.
+    string name_filter = 3;
+    // Exact state name (e.g. "running"). Empty means all user-visible states.
+    string state_filter = 4;
+    JobSortField sort_field = 5;
+    SortDirection sort_direction = 6;
+    int32 offset = 7;
+    int32 limit = 8;  // Max jobs to return (default: 50, max: 500).
+    // Anchored prefix match against the full job_id (wire form, e.g.
+    // "/alice/exp-"). The caller does not need to provide a parseable JobName;
+    // any string is accepted and is matched as ``job_id LIKE '<prefix>%'``.
+    string job_id_prefix = 9;
+    // Filter to one backend. Empty = all backends.
+    string backend_id = 10;
+    // Filter to jobs owned by one cluster (matched against jobs.cluster:
+    // "local" for this controller's own jobs, a peer id for handed-off jobs).
+    // Unset = all clusters, local and federated.
+    string cluster = 11;
+  }
+
+  message ListJobsRequest {
+    reserved 1, 2, 3, 4, 5, 6, 7;
+    reserved offset, limit, sort_field, sort_direction, name_filter, state_filter, parent_job_id;
+    JobQuery query = 9;
+  }
+
+  message ListJobsResponse {
+    repeated iris.job.JobStatus jobs = 1;
+
+    // Pagination info
+    int32 total_count = 2;  // Total jobs matching filters (before pagination)
+    bool has_more = 3;      // More jobs available after this page
+  }
+
+  // --- Task Operations ---
+  message GetTaskStatusRequest {
+    string task_id = 1;
+  }
+
+  message GetTaskStatusResponse {
+    iris.job.TaskStatus task = 1;
+    // Job-level resource limits for this task's parent job.
+    iris.job.ResourceSpecProto job_resources = 2;
+    // Likely root-cause log lines distilled from the task's own logs, populated
+    // only for a failed task. Empty for healthy tasks or when no logs matched.
+    repeated string root_cause_highlights = 3;
+  }
+
+  message ListTasksRequest {
+    string job_id = 1;
+  }
+
+  message ListTasksResponse {
+    repeated iris.job.TaskStatus tasks = 1;
+  }
+
+  // --- Task administrative overrides ---
+  // KickTasks forces task attempts into a terminal state out-of-band, for
+  // emergencies such as a scheduling bug wedging a task on a machine. The
+  // controller queues each kick and applies it through the normal reconcile
+  // finalization on the next control tick, so it shares one write transaction
+  // with the scheduler instead of racing it.
+  message KickTasksRequest {
+    // Task, task-attempt, or job identifiers. A task id (/user/job/0) or
+    // task-attempt id (/user/job/0:3) targets a single task; a job id
+    // (/user/job) expands to that job's active tasks. The optional ":attempt"
+    // suffix is honored only when it matches the task's current attempt.
+    repeated string targets = 1;
+    // Terminal state to force. Only TASK_STATE_PREEMPTED (retried if budget
+    // remains) and TASK_STATE_FAILED (no retry) are accepted.
+    iris.job.TaskState desired_state = 2;
+    string reason = 3;
+  }
+
+  message KickResult {
+    string target = 1;   // The requested target, verbatim.
+    string task_id = 2;  // Resolved task id, when the target was understood.
+    bool queued = 3;     // True if the kick was accepted and queued.
+    string detail = 4;   // Rejection reason when queued is false.
+  }
+
+  message KickTasksResponse {
+    repeated KickResult results = 1;
+  }
+
+  // --- Exec in Container (proxied to worker) ---
+  message ExecInContainerRequest {
+    string task_id = 1;             // Task whose container to exec into
+    repeated string command = 2;     // Command to execute (e.g. ["bash", "-c", "ls"])
+    int32 timeout_seconds = 3;      // Command timeout in seconds (0 = default 60s)
+  }
+
+  message ExecInContainerResponse {
+    int32 exit_code = 1;
+    string stdout = 2;
+    string stderr = 3;
+    string error = 4;               // Non-empty if exec setup failed
+  }
+
+  // --- Worker Management ---
+  message WorkerInfo {
+    string worker_id = 1;
+    string address = 2;              // host:port for WorkerService
+    iris.job.WorkerMetadata metadata = 3;
+    iris.time.Timestamp registered_at = 4;
+  }
+
+  message WorkerHealthStatus {
+    string worker_id = 1;
+    bool healthy = 2;
+    int32 consecutive_failures = 3;
+    iris.time.Timestamp last_heartbeat = 4;
+    repeated string running_job_ids = 5;
+    string address = 6;                    // Worker RPC address (host:port)
+    iris.job.WorkerMetadata metadata = 7;           // Full worker metadata
+    string status_message = 8;             // Error or status message (e.g., "Reconcile timeout", "Worker crashed")
+    string backend_id = 9;     // resolved from scale_group via the controller map
+    string scale_group = 10;   // scale group this worker belongs to
+  }
+
+  // Sort fields for worker listing
+  enum WorkerSortField {
+    WORKER_SORT_FIELD_UNSPECIFIED = 0;
+    WORKER_SORT_FIELD_WORKER_ID = 1;
+    WORKER_SORT_FIELD_LAST_HEARTBEAT = 2;
+    WORKER_SORT_FIELD_DEVICE_TYPE = 3;
+  }
+
+  message WorkerQuery {
+    // Case-insensitive substring match against worker_id (and address as
+    // fallback so address:port searches also work in the dashboard).
+    string contains = 1;
+    WorkerSortField sort_field = 2;
+    SortDirection sort_direction = 3;
+    int32 offset = 4;
+    // Max workers to return. 0 means unbounded (preserves CLI behavior);
+    // dashboard callers should always set an explicit page size.
+    int32 limit = 5;
+    // Filter to one backend. Empty = all backends.
+    string backend_id = 6;
+  }
+
+  message ListWorkersRequest {
+    WorkerQuery query = 1;
+  }
+
+  message ListWorkersResponse {
+    repeated WorkerHealthStatus workers = 1;
+    int32 total_count = 2;  // Total workers matching the query before paging.
+    bool has_more = 3;      // More workers available after this page.
+  }
+
+  message RegisterRequest {
+    string address = 1;
+    iris.job.WorkerMetadata metadata = 2;
+    // Worker ID assigned by the autoscaler via WorkerConfig.
+    // The controller uses this as the canonical worker identity.
+    string worker_id = 3;
+    // Infrastructure identity from WorkerConfig, set by the autoscaler at
+    // bootstrap. Stored in the workers table so the CLI-side worker-restart
+    // driver can look up the worker's slice without waiting for the autoscaler
+    // refresh cycle.
+    string slice_id = 4;
+    string scale_group = 5;
+  }
+
+  message RegisterResponse {
+    string worker_id = 1;
+    bool accepted = 2;
+  }
+
+  // --- Endpoint Registry ---
+  // Endpoints are registered with prefixed names: "{root_job_id}/{actor_name}"
+
+  // Who may reach an endpoint through the controller's /proxy route.
+  // PRIVATE is the zero value, so an unset field means PRIVATE.
+  enum EndpointAccess {
+    ENDPOINT_ACCESS_PRIVATE = 0;  // a full cluster identity is required (the default)
+    // Reachable with a scoped capability token carried in the URL path
+    // (/proxy/t/<token>/<name>/...) or a full cluster identity — possession of
+    // the link is the credential.
+    ENDPOINT_ACCESS_LINK = 2;
+    reserved 1;  // was ENDPOINT_ACCESS_PUBLIC (no-auth mode); every shared endpoint now needs a token
+    reserved ENDPOINT_ACCESS_PUBLIC, ENDPOINT_ACCESS_BEARER;
+  }
+
+  message Endpoint {
+    string endpoint_id = 1;
+    string name = 2;                 // Full prefixed name: "abc123/my-actor"
+    string address = 3;              // host:port
+    string task_id = 4;              // Wire-format task ID (e.g. "/user/job/0")
+    map<string, string> metadata = 5;
+    EndpointAccess access = 6;       // Proxy access mode.
+    // Owning peer cluster id when this endpoint lives on a federated child (the
+    // controller reaches it by forwarding /proxy to that peer); empty for a local
+    // endpoint served from this controller's own registry.
+    string peer_id = 7;
+  }
+
+  message RegisterEndpointRequest {
+    string name = 1;                 // Full prefixed name: "abc123/my-actor"
+    string address = 2;
+    string task_id = 3;              // Wire-format task ID (e.g. "/user/job/0")
+    map<string, string> metadata = 4;
+    int32 attempt_id = 5;            // Attempt number for stale endpoint cleanup
+    string endpoint_id = 6;          // Client-generated UUID for idempotency; server generates one if empty.
+    // Lease length the registrant wants; it renews within this. Unset selects
+    // the server default. The server clamps it to its own [min, max] bounds and
+    // returns the granted value in RegisterEndpointResponse.lease_duration.
+    iris.time.Duration lease_duration = 7;
+    EndpointAccess access = 8;       // Proxy access mode.
+  }
+
+  // Mint a scoped bearer token authorizing only this endpoint's /proxy path.
+  // Signed by the controller's JWT key with a deadline; carries no RPC authority
+  // (see rpc/auth.py::authorize_method). Only the endpoint's owning user or an
+  // admin may mint.
+  message MintEndpointTokenRequest {
+    string endpoint_name = 1;        // Wire name, e.g. "/serve/foo"
+    iris.time.Duration ttl = 2;      // Token lifetime; unset selects the server default, clamped to a max.
+  }
+
+  message MintEndpointTokenResponse {
+    string token = 1;
+    iris.time.Timestamp expires_at = 2;
+    // Fully-qualified capability URL the controller assembled for this token:
+    // a cluster-tagged parent URL when a public parent is configured, else the
+    // local origin. Empty when the controller has no public origin configured.
+    string capability_url = 3;
+  }
+
+  message RegisterEndpointResponse {
+    string endpoint_id = 1;
+    // Lease granted for this endpoint. The registrant re-registers (renews)
+    // before this elapses; an unrenewed endpoint expires and is GC'd. Unset
+    // on the legacy ControllerService surface, which does not lease-renew.
+    iris.time.Duration lease_duration = 2;
+  }
+
+  message UnregisterEndpointRequest {
+    string endpoint_id = 1;
+  }
+
+  message ListEndpointsRequest {
+    string prefix = 1;               // Prefix to match: "abc123/" or "abc123/my-actor"
+    bool exact = 2;                  // If true, match prefix as an exact name instead
+    repeated string task_ids = 3;    // Wire-format task IDs; when set, only endpoints registered by these tasks are returned (ANDed with prefix/exact).
+  }
+
+  message ListEndpointsResponse {
+    repeated Endpoint endpoints = 1;
+  }
+
+  // --- Autoscaler ---
+  message GetAutoscalerStatusRequest {
+    // Filter to one backend. Empty = merge all.
+    string backend_id = 1;
+  }
+
+  message GetAutoscalerStatusResponse {
+    iris.vm.AutoscalerStatus status = 1;
+  }
+
+  // --- Checkpoint ---
+  message BeginCheckpointRequest {}
+  message BeginCheckpointResponse {
+    string checkpoint_path = 1;
+    iris.time.Timestamp created_at = 2;
+    int32 job_count = 3;
+    int32 task_count = 4;
+    int32 worker_count = 5;
+  }
+
+  message UserSummary {
+    string user = 1;
+    map<string, int32> task_state_counts = 2;
+    map<string, int32> job_state_counts = 3;
+    // Config-derived role (from the controller's in-memory RolePolicy): "admin"
+    // for a config-listed admin, otherwise the provider default.
+    string role = 4;
+  }
+
+  message ListUsersRequest {}
+
+  message ListUsersResponse {
+    repeated UserSummary users = 1;
+  }
+
+  // --- Worker Detail (unified VM + worker view) ---
+  message GetWorkerStatusRequest {
+    string id = 1;  // VM ID or worker ID — resolved against both
+  }
+
+  message GetWorkerStatusResponse {
+    // VM info (null if identifier matched a worker with no VM)
+    iris.vm.VmInfo vm = 1;
+    string scale_group = 2;
+
+    // Worker health (null if no worker registered)
+    WorkerHealthStatus worker = 3;
+
+    // Bootstrap logs (from VM init)
+    string bootstrap_logs = 4;
+
+    reserved 5;  // was: repeated ProcessLogRecord worker_logs
+    reserved 6;  // was: repeated TaskStatus recent_tasks (replaced by recent_attempts)
+    reserved 7;  // was: WorkerResourceSnapshot current_resources (now in iris.worker stats)
+    reserved 8;  // was: repeated WorkerResourceSnapshot resource_history (now in iris.worker stats)
+    reserved 9;  // was: repeated LogEntry worker_log_entries (now fetched async via FetchLogs)
+
+    // Per-attempt history for this worker, newest first. Each retry of the
+    // same task gets its own entry — the dashboard needs distinct rows for
+    // distinct attempts so a failed attempt doesn't render with its
+    // successor's state/duration.
+    repeated WorkerTaskAttempt recent_attempts = 10;
+  }
+
+  // One attempt that ran (or is running) on a worker. Per-attempt projection
+  // for the worker-detail Task History view; embeds the canonical TaskAttempt
+  // alongside its parent task_id so the dashboard can render rows without
+  // re-deriving state from a sibling task.
+  message WorkerTaskAttempt {
+    string task_id = 1;
+    iris.job.TaskAttempt attempt = 2;
+    // Static resource allocation for this task, inherited from its parent
+    // job's ResourceSpecProto. Lets the worker page compare what the scheduler
+    // reserved against the live usage in the iris.task stats namespace. Unset
+    // when the job declared no resource request.
+    iris.job.ResourceSpecProto resources = 3;
+  }
+
+  message GetKubernetesClusterStatusRequest {
+    // If set, must match this controller's backend ID.
+    string backend_id = 1;
+  }
+
+  message KubernetesPodStatus {
+    string pod_name = 1;
+    string task_id = 2;
+    string phase = 3;
+    string reason = 4;
+    string message = 5;
+    iris.time.Timestamp last_transition = 6;
+    string node_name = 7;
+  }
+
+  message NodePoolStatus {
+    string name = 1;
+    string instance_type = 2;
+    string scale_group = 3;
+    int32 target_nodes = 4;
+    int32 current_nodes = 5;
+    int32 queued_nodes = 6;
+    int32 in_progress_nodes = 7;
+    bool autoscaling = 8;
+    int32 min_nodes = 9;
+    int32 max_nodes = 10;
+    string capacity = 11;
+    string quota = 12;
+  }
+
+  // One physical Kubernetes node. Identity, liveness, and allocatable capacity come from the periodic kubectl
+  // node sync. Hardware utilization is published by the Iris node agent.
+  message NodeStatus {
+    string name = 1;
+    bool ready = 2;               // kubelet Ready condition
+    bool schedulable = 3;         // not cordoned (spec.unschedulable is false)
+    string status_summary = 4;    // "Ready", "NotReady", "Ready,SchedulingDisabled"
+    string instance_type = 5;
+    string region = 6;
+    int32 gpu_count = 7;          // allocatable nvidia.com/gpu
+    string gpu_model = 8;
+    int64 cpu_millicores = 9;     // allocatable cpu
+    int64 memory_bytes = 10;      // allocatable memory
+    int64 disk_bytes = 11;        // allocatable ephemeral-storage
+    int32 running_pods = 12;      // Iris-managed pods scheduled on this node
+    string created = 13;          // node creationTimestamp (RFC3339)
+
+    reserved 20 to 32;
+  }
+
+  message GetKubernetesClusterStatusResponse {
+    string namespace = 1;
+    int32 total_nodes = 2;
+    int32 schedulable_nodes = 3;
+    string allocatable_cpu = 4;
+    string allocatable_memory = 5;
+    repeated KubernetesPodStatus pod_statuses = 6;
+    string provider_version = 7;
+    repeated NodePoolStatus node_pools = 8;
+    repeated NodeStatus nodes = 9;
+  }
+
+  // --- Budget Management ---
+  message SetUserBudgetRequest {
+    string user_id = 1;
+    int64 budget_limit = 2;      // max budget value (0 = unlimited)
+    iris.job.PriorityBand max_band = 3;   // highest-priority band this user can submit to
+  }
+  message SetUserBudgetResponse {}
+
+  message GetUserBudgetRequest {
+    string user_id = 1;
+  }
+  message GetUserBudgetResponse {
+    string user_id = 1;
+    int64 budget_limit = 2;
+    int64 budget_spent = 3;      // current running resource value
+    iris.job.PriorityBand max_band = 4;
+  }
+
+  message ListUserBudgetsRequest {}
+  message ListUserBudgetsResponse {
+    repeated GetUserBudgetResponse users = 1;
+  }
+
+  // --- Scheduler State ---
+  message GetSchedulerStateRequest {}
+
+  // Aggregated pending-task count keyed by (band, user, job). The dashboard
+  // SchedulerTab derives per-user, per-band, and per-job rollups from these
+  // buckets; the server no longer sends one entry per pending task.
+  message PendingTaskBucket {
+    iris.job.PriorityBand band = 1;
+    string user_id = 2;
+    string job_id = 3;
+    int32 count = 4;
+    string backend_id = 5;
+  }
+
+  // Aggregated running-task count keyed by (band, user, worker, job). The
+  // dashboard AutoscalerTab renders one chip per (worker, job) and shows the
+  // bucket count; SchedulerTab uses (band, user, count) for user-band rollups.
+  message RunningTaskBucket {
+    iris.job.PriorityBand band = 1;
+    string user_id = 2;
+    string worker_id = 3;
+    string job_id = 4;
+    int32 count = 5;
+    string backend_id = 6;
+  }
+
+  message SchedulerUserBudget {
+    string user_id = 1;
+    int64 budget_limit = 2;
+    int64 budget_spent = 3;
+    iris.job.PriorityBand max_band = 4;
+    iris.job.PriorityBand effective_band = 5;
+    float utilization_percent = 6;
+  }
+
+  message GetSchedulerStateResponse {
+    // Old per-task shapes (pending_queue, running_tasks) sent thousands of
+    // entries per response on busy clusters; replaced by aggregated buckets
+    // in fields 6 and 7.
+    reserved 1, 3;
+    repeated SchedulerUserBudget user_budgets = 2;
+    int32 total_pending = 4;
+    int32 total_running = 5;
+    repeated PendingTaskBucket pending_buckets = 6;
+    repeated RunningTaskBucket running_buckets = 7;
+  }
+
+  message ListBackendsRequest {}
+
+  // Worker-daemon fleet detail: the backend's own autoscaler view plus the
+  // controller's DB-derived worker health counts. Populated by a worker backend.
+  message WorkerFleetDetail {
+    iris.vm.AutoscalerStatus autoscaler = 1;
+    int32 healthy_worker_count = 2;
+    int32 total_worker_count = 3;
+  }
+
+  // The expanded, backend-authored status each TaskBackend.status() returns. The
+  // variant follows the backend kind: Kubernetes fills ``kubernetes`` and a
+  // worker backend fills ``worker``.
+  message BackendStatus {
+    oneof detail {
+      GetKubernetesClusterStatusResponse kubernetes = 1;
+      WorkerFleetDetail worker = 2;
+    }
+  }
+
+  // Capacity held by admitted work at one priority band, per resource token.
+  message BandCapacity {
+    iris.job.PriorityBand band = 1;
+    // Held amount per resource token, same keys and units as
+    // ResourceAvailability.amounts (accelerator variant -> chips, e.g. {"h100": 8}).
+    map<string, int64> amounts = 2;
+  }
+
+  // How much of each consumable resource a backend has free right now. Wrapped in
+  // a message (not a bare map on BackendSummary) so a peer that predates the field
+  // is distinguishable from one reporting an authoritative zero: proto3 cannot tell
+  // an omitted map from an empty one, but it CAN tell an unset message from a set
+  // one. UNSET => legacy peer, the parent falls back to shape-only federation for
+  // that backend; SET with empty amounts => authoritative "nothing free".
+  message ResourceAvailability {
+    // Metric-semantics version. A parent reading a version newer than it knows treats
+    // the availability as unknown rather than trusting the amounts.
+    //
+    // v2: `amounts` counts only capacity admitted work actually holds (work still
+    // queued for admission no longer subtracts from it) and `held_by_band` splits the
+    // held remainder by priority band.
+    uint32 version = 1;
+    // When the serving peer computed these amounts, ms since epoch. The parent's
+    // reservation ledger keys on this as the observation GENERATION: reservations
+    // made against one observation are held until a strictly newer one arrives.
+    int64 observation_epoch_ms = 2;
+    // Free amount per resource token, in the token's natural unit (accelerator
+    // variant -> free chips, e.g. {"h100": 8}). Keys are lowercased device-variants.
+    map<string, int64> amounts = 3;
+    // Total amount per resource token over the same capacity the free amounts were
+    // computed from (accelerator variant -> total chips, e.g. {"h100": 64}). Same
+    // keys as `amounts`; a token's free amount never exceeds its total. Display
+    // only — the federation availability gate never reads it.
+    map<string, int64> total_amounts = 4;
+    // What admitted work holds, split by the priority band holding it. A parent
+    // whose queued job outranks a band knows that band's amount is reclaimable by
+    // preemption on this peer, so a peer with no free capacity is still a valid
+    // placement for higher-priority work. Empty when the serving backend cannot
+    // attribute held capacity to a band — the parent then reclaims nothing and
+    // gates on `amounts` alone.
+    repeated BandCapacity held_by_band = 5;
+  }
+
+  message BackendSummary {
+    string backend_id = 1;
+    string name = 2;
+    string kind = 3;
+    repeated string capabilities = 4;
+    map<string, StringList> advertised_attributes = 5;
+    reserved 6, 7;  // was: bool restricted, int32 allowed_user_count
+    repeated string scale_groups = 8;
+    int32 worker_count = 9;
+    int32 pending_task_count = 10;
+    int32 running_task_count = 11;
+    bool has_autoscaler = 12;
+    map<string, int32> capacity_health = 13;
+    // Expanded status for the always-on Backends tab's detail panel.
+    BackendStatus detail = 14;
+    // Free consumable capacity for federation queueing; unset on a legacy peer.
+    ResourceAvailability availability = 15;
+  }
+
+  message UnroutableJob {
+    string job_id = 1;
+    string reason = 2;
+  }
+
+  message ListBackendsResponse {
+    repeated BackendSummary backends = 1;
+    int32 unroutable_job_count = 2;
+    repeated UnroutableJob unroutable_sample = 3;
+  }
+
+  message BackendListMetadata {
+    int32 unroutable_job_count = 1;
+    repeated UnroutableJob unroutable_sample = 2;
+  }
+
+  message ListPeersRequest {}
+
+  // A federation peer: a remote Iris controller this cluster may delegate whole
+  // jobs to. Distinct from a backend (BackendSummary): a backend is a local
+  // execution substrate this controller drives and folds into its own DAG; a
+  // peer owns its own DAG and is handed whole jobs.
+  message PeerSummary {
+    reserved 3;  // was dashboard_url (a peer's jobs and tasks are mirrored into the local dashboard)
+    string peer_id = 1;
+    string controller_address = 2;
+    bool reachable = 4;               // last capability heartbeat succeeded
+    int64 last_contact_ms = 5;        // last successful capability heartbeat, ms since epoch
+    int32 active_federated_jobs = 6;
+    int64 aggregate_spend_micros = 7;
+    // The peer's backends, forwarded from its ListBackends: the underlying
+    // cluster's static topology (kind, advertised devices) and dynamic state
+    // (availability, worker/task counts). Refreshed by the capability heartbeat.
+    repeated BackendSummary backends = 8;
+  }
+
+  message ListPeersResponse {
+    repeated PeerSummary peers = 1;
+  }
+
+  // --- Federation sync (served by every peer, called by each parent) ---
+
+  message FederationSyncRequest {
+    // The federating (parent) cluster's id: authenticates the caller and selects
+    // which handed-off jobs the peer reports.
+    string requester_id = 1;
+    // Opaque monotonic watermark into the peer's changelog. Empty on first
+    // contact or after the parent lost its cursor — the peer then answers with a
+    // full active-set snapshot (cursor_stale = true).
+    string cursor = 2;
+  }
+
+  // One handed-off job's state as the peer currently holds it. The parent mirrors
+  // this into its own jobs/tasks rows (stamped with the peer's cluster) for that handle.
+  message FederationJobDelta {
+    // The peer's own job id for this handoff, which now EQUALS the parent's job
+    // id: job ids are cluster-invariant, so there is no rebasing.
+    string job_id = 1;
+    iris.job.JobStatus summary = 2;               // job state + counts (+ spend once reported)
+    repeated iris.job.TaskStatus changed_tasks = 3;  // full row for each task changed since the cursor
+    bool tombstone = 4;                           // peer has pruned the job; parent drops its projection
+  }
+
+  // One service endpoint exported by a handed-off (RECEIVED) job on the peer.
+  // Reported as the peer's full current set each sync (independent of the job
+  // changelog cursor), so the parent set-replaces and a re-register, access
+  // change, or lease expiry self-heals within one sync interval. No proxy
+  // address of the parent's is carried: the parent reaches the endpoint by
+  // forwarding /proxy to the peer, keyed by the reporting peer's id.
+  message FederationEndpoint {
+    string endpoint_id = 1;
+    string name = 2;                 // Globally-unique wire name, e.g. "/serve/foo"
+    string address = 3;              // Peer-side host:port (service-discovery parity / display)
+    string task_id = 4;              // Wire-format task id that registered it; FKs the mirrored task
+    EndpointAccess access = 5;       // Proxy access mode the parent enforces for its users
+    map<string, string> metadata = 6;
+    // Lease time remaining, not an absolute deadline: the parent sets its mirror's
+    // expiry to now + this (clamped), sidestepping cross-cluster clock skew.
+    iris.time.Duration lease_remaining = 7;
+  }
+
+  message FederationSyncResponse {
+    repeated FederationJobDelta deltas = 1;
+    string next_cursor = 2;   // persisted to federation_sync_state.cursor; sent back next tick
+    // The requested cursor is below the retained changelog floor (or empty), so
+    // `deltas` is the peer's entire active set for this requester and the parent
+    // must set-replace: drop any local handle for this peer absent from the set.
+    bool cursor_stale = 3;
+    // The requester's full current endpoint set across all its RECEIVED jobs, sent
+    // every sync regardless of `cursor_stale`. The parent set-replaces its remote
+    // endpoints for this peer from it.
+    repeated FederationEndpoint endpoints = 4;
+  }
+}
+
+// ============================================================================
+// SERVICES
+// ============================================================================
+
+message StringList { repeated string values = 1; }
+
+service ControllerService {
+  // Job lifecycle
+  rpc LaunchJob(Controller.LaunchJobRequest) returns (Controller.LaunchJobResponse);
+  rpc GetJobStatus(Controller.GetJobStatusRequest) returns (Controller.GetJobStatusResponse);
+  rpc GetJobState(Controller.GetJobStateRequest) returns (Controller.GetJobStateResponse);
+  rpc TerminateJob(Controller.TerminateJobRequest) returns (iris.job.Empty);
+  rpc CompleteJob(Controller.CompleteJobRequest) returns (iris.job.Empty);
+  rpc ListJobs(Controller.ListJobsRequest) returns (Controller.ListJobsResponse);
+
+  // Task operations
+  rpc GetTaskStatus(Controller.GetTaskStatusRequest) returns (Controller.GetTaskStatusResponse);
+  rpc ListTasks(Controller.ListTasksRequest) returns (Controller.ListTasksResponse);
+  // Force task attempts into a terminal state out-of-band (emergency override).
+  rpc KickTasks(Controller.KickTasksRequest) returns (Controller.KickTasksResponse);
+
+  // Worker management
+  rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
+  rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
+  // Mint a scoped bearer token for one endpoint's /proxy path (owner/admin only).
+  rpc MintEndpointToken(Controller.MintEndpointTokenRequest) returns (Controller.MintEndpointTokenResponse);
+
+  // Autoscaler
+  rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);
+
+  rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
+
+  // Profiling (proxied to worker)
+  rpc ProfileTask(iris.job.ProfileTaskRequest) returns (iris.job.ProfileTaskResponse);
+
+  // Exec in container (proxied to worker)
+  rpc ExecInContainer(Controller.ExecInContainerRequest) returns (Controller.ExecInContainerResponse);
+
+  // Unified worker detail (VM + worker + logs in one call)
+  rpc GetWorkerStatus(Controller.GetWorkerStatusRequest) returns (Controller.GetWorkerStatusResponse);
+
+  // Checkpoint
+  rpc BeginCheckpoint(Controller.BeginCheckpointRequest) returns (Controller.BeginCheckpointResponse);
+
+  // Process status (local process info + recent logs)
+  rpc GetProcessStatus(iris.job.GetProcessStatusRequest) returns (iris.job.GetProcessStatusResponse);
+
+  // Authentication
+  rpc GetCurrentUser(iris.job.GetCurrentUserRequest) returns (iris.job.GetCurrentUserResponse);
+
+  // Kubernetes cluster status
+  rpc GetKubernetesClusterStatus(Controller.GetKubernetesClusterStatusRequest) returns (Controller.GetKubernetesClusterStatusResponse);
+
+  // Generic query API
+  rpc ExecuteRawQuery(iris.query.RawQueryRequest) returns (iris.query.RawQueryResponse);
+
+  // Budget management
+  rpc SetUserBudget(Controller.SetUserBudgetRequest) returns (Controller.SetUserBudgetResponse);
+  rpc GetUserBudget(Controller.GetUserBudgetRequest) returns (Controller.GetUserBudgetResponse);
+  rpc ListUserBudgets(Controller.ListUserBudgetsRequest) returns (Controller.ListUserBudgetsResponse);
+
+  // Scheduler state (dashboard)
+  rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
+
+  rpc ListBackends(Controller.ListBackendsRequest) returns (Controller.ListBackendsResponse);
+
+  // Federation peers this controller may delegate whole jobs to. Distinct from
+  // ListBackends: backends are what this controller runs, peers are what it
+  // delegates to.
+  rpc ListPeers(Controller.ListPeersRequest) returns (Controller.ListPeersResponse);
+
+  // Bulk delta-sync of handed-off jobs, called by a federation parent once per
+  // tick against each of its peers. The peer reports every job this requester
+  // handed off that changed since the cursor (or the full active set when the
+  // cursor is stale). Handoff itself reuses LaunchJob; a routed cancel reuses
+  // TerminateJob.
+  rpc FederationSync(Controller.FederationSyncRequest) returns (Controller.FederationSyncResponse);
+}
+
+// Service-discovery endpoint registry, leased.
+//
+// Registration grants a time-bounded lease; the registrant renews by
+// re-registering with the same endpoint_id before the lease elapses, and an
+// unrenewed endpoint expires (stops being served and is GC'd) independent of
+// the owning task's row lifetime. RegisterEndpoint returns the granted
+// lease_duration so the client can pace its renewals off the server's policy.
+//
+// MintEndpointToken (scoped proxy tokens) lives on ControllerService.
+service EndpointService {
+  rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
+  rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);
+  rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
+}

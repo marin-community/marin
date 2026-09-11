@@ -95,6 +95,7 @@ nav:
     - Explicit Sharding: 'explicit-sharding.md'
   - Higher Order Functions:
     - Scan and Fold: 'scan.md'
+    - ArrayStacked: 'array-stacked.md'
     - Vectorization: 'vmap.md'
   - Neural Networks: 'nn.md'
   - Partitioning: 'partitioning.md'

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -8,12 +8,6 @@ Usage:
 - Register your adapter in preference_data_adapters.py
 - Run this script with TransformPreferenceDatasetConfig.
 
-Example:
-uv run zephyr --backend=ray --max-parallelism=100 --memory=8GB \
-    lib/marin/src/marin/transform/conversation/transform_preference_data.py \
-    --input_path gs://bucket/path/to/dataset \
-    --output_path gs://bucket/output/path \
-    --source HuggingFaceH4/ultrafeedback_binarized
 """
 
 import hashlib
@@ -24,9 +18,15 @@ from dataclasses import dataclass, field
 import datasets
 import draccus
 from datasets import get_dataset_config_info
-from zephyr import Dataset, ZephyrContext, write_jsonl_file
+from rigging.filesystem.storage_path import StoragePath
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.writers import write_jsonl_file
+
+from marin.utils import is_path_like
 
 from .preference_data_adapters import PreferenceTransformAdapter, get_preference_adapter
+from .transform_conversation import get_shard_dir
 
 logger = logging.getLogger(__name__)
 
@@ -51,13 +51,14 @@ class SplitTask:
     """Task for processing a single subset/split combination."""
 
     input_path: str  # GCS or local path
-    subset: str
+    subset: str | None
     split: str
     output_path: str
     adapter_name: str
     source: str
     metadata_columns: list[str]
     shard_size: int
+    filetype: str
 
 
 def generate_hash_from_pair(chosen, rejected) -> str:
@@ -65,12 +66,49 @@ def generate_hash_from_pair(chosen, rejected) -> str:
     return hashlib.sha256((str(chosen) + str(rejected)).encode()).hexdigest()
 
 
+def _find_split_files(input_path: str, subset: str | None, split: str, filetype: str) -> list[str]:
+    """Find split shard files under an fsspec path."""
+    roots = [StoragePath(input_path)]
+    if subset and subset != "default":
+        roots.append(StoragePath(input_path) / subset)
+    patterns = []
+    for root in roots:
+        patterns.append(str(root / f"{split}-*.{filetype}"))
+        patterns.append(str(root / "data" / f"{split}-*.{filetype}"))
+    matches = []
+    for pattern in patterns:
+        matches.extend(str(match) for match in StoragePath(pattern).glob())
+    if not matches:
+        raise FileNotFoundError(
+            f"No {filetype} files found for split '{split}' under {input_path}. " f"Tried patterns: {patterns}"
+        )
+    return sorted(set(matches))
+
+
+def _infer_splits_from_files(input_path: str, subsets: list[str | None], filetype: str) -> list[str]:
+    """Infer split names from filenames in an fsspec path."""
+    roots = [StoragePath(input_path)]
+    roots.extend(StoragePath(input_path) / subset for subset in subsets if subset)
+    candidates = []
+    for root in roots:
+        candidates.extend(str(match) for match in (root / f"*.{filetype}").glob())
+        candidates.extend(str(match) for match in (root / "data" / f"*.{filetype}").glob())
+    splits = set()
+    for path in candidates:
+        filename = os.path.basename(path)
+        if "-" in filename:
+            split = filename.split("-", 1)[0]
+            if split:
+                splits.add(split)
+    return sorted(splits)
+
+
 def transform_row(row: dict, task: SplitTask, adapter: PreferenceTransformAdapter):
     example = adapter.extract_preference_example(row)
     if example is None:
         return None
-    chosen_dicts = [msg.__dict__ for msg in example["chosen"]]
-    rejected_dicts = [msg.__dict__ for msg in example["rejected"]]
+    chosen_dicts = [msg.model_dump() for msg in example["chosen"]]
+    rejected_dicts = [msg.model_dump() for msg in example["rejected"]]
     result = {
         "chosen": chosen_dicts,
         "rejected": rejected_dicts,
@@ -82,21 +120,32 @@ def transform_row(row: dict, task: SplitTask, adapter: PreferenceTransformAdapte
     return result
 
 
-def get_shard_dir(dir_name: str, subset_name: str | None, split: str) -> str:
-    if (subset_name == "default") or (subset_name is None):
-        return os.path.join(dir_name, split)
-
-    logger.info(f"Getting shard dir for {dir_name} {subset_name} {split}")
-    logger.info(f"shard dir (os.path.join(dir_name, subset_name, split)): {os.path.join(dir_name, subset_name, split)}")
-    return os.path.join(dir_name, subset_name, split)
-
-
 def get_dataset_tasks(cfg: TransformPreferenceDatasetConfig):
     """Identify all subset/split combinations to process.
 
     Yields SplitTask objects for each subset/split combination.
     """
     input_path = cfg.input_path
+    if is_path_like(input_path):
+        subsets = cfg.subsets or [None]
+        splits = cfg.splits or _infer_splits_from_files(input_path, subsets, cfg.filetype)
+        if not splits:
+            raise ValueError(f"Unable to infer splits for {input_path}; specify splits explicitly in the config.")
+        for subset in subsets:
+            for split in splits:
+                subset_output_path = get_shard_dir(cfg.output_path, subset, split)
+                yield SplitTask(
+                    input_path=input_path,
+                    subset=subset,
+                    split=split,
+                    output_path=subset_output_path,
+                    adapter_name=cfg.adapter_name,
+                    source=cfg.source,
+                    metadata_columns=cfg.metadata_columns,
+                    shard_size=cfg.shard_size,
+                    filetype=cfg.filetype,
+                )
+        return
 
     # 1. Identify subsets
     if cfg.subsets:
@@ -130,6 +179,7 @@ def get_dataset_tasks(cfg: TransformPreferenceDatasetConfig):
                 source=cfg.source,
                 metadata_columns=cfg.metadata_columns,
                 shard_size=cfg.shard_size,
+                filetype=cfg.filetype,
             )
 
 
@@ -155,7 +205,16 @@ def process_split_task(task: SplitTask) -> dict:
         raise ValueError(f"No preference adapter found for source: {task.adapter_name or task.source}")
 
     logger.info(f"Processing subset: {subset}, split: {split}")
-    dataset = datasets.load_dataset(path=task.input_path, name=subset, split=split, streaming=True)
+    if is_path_like(task.input_path):
+        data_files = _find_split_files(task.input_path, subset, split, task.filetype)
+        dataset = datasets.load_dataset(
+            task.filetype,
+            data_files={split: data_files},
+            split=split,
+            streaming=True,
+        )
+    else:
+        dataset = datasets.load_dataset(path=task.input_path, name=subset, split=split, streaming=True)
 
     # Batch records and write to multiple shard files
     shard_files = []
@@ -203,8 +262,8 @@ def transform_hf_preference_dataset(cfg: TransformPreferenceDatasetConfig):
 
     # Process all tasks in parallel
     pipeline = Dataset.from_list(tasks).map(process_split_task)
-    with ZephyrContext(name="transform-preference") as ctx:
-        results = ctx.execute(pipeline)
+    ctx = ZephyrContext(name="transform-preference")
+    results = ctx.execute(pipeline).results
 
     # Log summary
     for result in results:

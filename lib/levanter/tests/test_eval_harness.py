@@ -1,20 +1,22 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+from levanter.testing.helpers import skip_if_module_missing
 from transformers import AutoTokenizer
 
 from levanter.data.packing import PromptCompletion
-from levanter.eval_harness import LmEvalHarnessConfig, TaskConfig, _iterate_tokenized_requests
-from test_utils import skip_if_module_missing
+from levanter.eval_harness import LmEvalHarnessConfig, _call_with_retry, _iterate_tokenized_requests
+from levanter.eval_harness_config import TaskConfig
 
 
 @skip_if_module_missing("lm_eval")
 def test_iterate_tokenized_requests_with_chat_template():
     """Test the chat template functionality in _iterate_tokenized_requests"""
-    from lm_eval.api.instance import Instance
+    from lm_eval.api.instance import Instance  # noqa: PLC0415  # optional dep: lm_eval
 
     # Load a tokenizer with chat template - Llama 3 has one
-    hf_tokenizer = AutoTokenizer.from_pretrained("stanford-crfm/marin-tokenizer")
+    hf_tokenizer = AutoTokenizer.from_pretrained("marin-community/marin-tokenizer")
     if hf_tokenizer.pad_token is None:
         hf_tokenizer.pad_token = hf_tokenizer.eos_token
 
@@ -96,9 +98,9 @@ def test_iterate_tokenized_requests_with_chat_template():
 
 @skip_if_module_missing("lm_eval")
 def test_iterate_tokenized_requests():
-    from lm_eval.api.instance import Instance
+    from lm_eval.api.instance import Instance  # noqa: PLC0415  # optional dep: lm_eval
 
-    hf_tokenizer = AutoTokenizer.from_pretrained("stanford-crfm/marin-tokenizer")
+    hf_tokenizer = AutoTokenizer.from_pretrained("marin-community/marin-tokenizer")
     if hf_tokenizer.pad_token is None:
         hf_tokenizer.pad_token = hf_tokenizer.eos_token
 
@@ -183,3 +185,21 @@ def test_task_config():
     q = config.to_task_dict()
 
     assert len(q) == 3
+
+
+def test_call_with_retry_does_not_sleep_after_the_last_attempt(monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("levanter.eval_harness.time.sleep", sleeps.append)
+
+    attempts = 0
+
+    def always_fails():
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="Failed after 3 attempts"):
+        _call_with_retry(always_fails, max_retries=3, base_delay=1.0)
+
+    assert attempts == 3
+    assert len(sleeps) == 2

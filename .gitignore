@@ -6,6 +6,9 @@ logs/
 # CPU profiles
 prof/
 
+# Downloaded build tools (zig, etc.)
+.tools/
+
 tests/snapshots/outputs
 tests/snapshots/diffs
 
@@ -29,6 +32,9 @@ __pycache__/
 
 # C extensions
 *.so
+
+# pypa/gh-action-pypi-publish caches its Docker action manifest here.
+.github/.tmp/
 
 # Distribution / packaging
 .Python
@@ -208,9 +214,7 @@ archive/
 
 # wandb logs
 wandb
-
-# Generated leaderboard data
-marin/speedrun/static/data/runs.json
+artifacts
 
 # Ignore generated credentials from google-github-actions/auth
 gha-creds-*.json
@@ -220,6 +224,8 @@ gha-creds-*.json
 
 *.jsonl
 **/*.jsonl
+# Echo's judged search corpus is source, not a run artifact.
+!infra/marina/apps/echo/benchmarks/*.jsonl
 scr/*
 .weaver/
 
@@ -228,4 +234,20 @@ scr/*
 
 /scratch
 
-.claude
+.forge
+.claude/*
+!.claude/skills
+!.claude/agents
+!.claude/settings.json
+.agents/tmp/
+.codex
+.entire
+.beads
+
+.worktrees
+.obsidian
+.cw_env
+.localbin/
+
+# Stamped into built artifacts by lib/iris/hatch_build.py; never tracked.
+lib/iris/src/iris/_build_info.py

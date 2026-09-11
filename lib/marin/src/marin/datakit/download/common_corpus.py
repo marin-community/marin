@@ -1,0 +1,96 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Download, filter, and normalize PleIAs/common_corpus from HuggingFace."""
+
+
+from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import prefix_join
+from zephyr import counters
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+
+from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import normalize_step
+from marin.execution.step_spec import StepSpec
+
+HF_DATASET_ID = "PleIAs/common_corpus"
+OPEN_TYPES = ["Open Science", "Open Government", "Open Culture"]
+
+
+def _count_total(record: dict) -> dict:
+    counters.pipeline.update_counter("common_corpus/total", 1)
+    return record
+
+
+def _language_is_english(record: dict) -> bool:
+    if record.get("language") != "English":
+        counters.pipeline.update_counter("common_corpus/dropped_non_english", 1)
+        return False
+    return True
+
+
+def _open_type_allowed(record: dict) -> bool:
+    if record.get("open_type") not in OPEN_TYPES:
+        counters.pipeline.update_counter("common_corpus/dropped_wrong_open_type", 1)
+        return False
+    return True
+
+
+def _count_kept(record: dict) -> dict:
+    counters.pipeline.update_counter("common_corpus/kept", 1)
+    return record
+
+
+def download_common_corpus_raw_step() -> StepSpec:
+    """Download the raw PleIAs/common_corpus parquet files to GCS."""
+    return download_hf_step(
+        "raw/common_corpus",
+        hf_dataset_id=HF_DATASET_ID,
+        revision="b78a5c1",
+        hf_urls_glob=["common_corpus_*/*.parquet"],
+    )
+
+
+def filter_common_corpus(input_path: str, output_path: str) -> None:
+    """Filter common_corpus to English + open types, writing parquet."""
+    pipeline = (
+        Dataset.from_files(prefix_join(input_path, "**/*.parquet"))
+        .load_parquet()
+        .map(_count_total)
+        .filter(_language_is_english)
+        .filter(_open_type_allowed)
+        .map(_count_kept)
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+            skip_existing=True,
+        )
+    )
+
+    ctx = ZephyrContext(name="filter-common-corpus", resources=ResourceConfig(cpu=1, ram="8g"))
+    ctx.execute(pipeline)
+
+
+def filter_common_corpus_step(raw_step: StepSpec) -> StepSpec:
+    return StepSpec(
+        name="raw/common_corpus_english_filtered",
+        fn=lambda output_path: filter_common_corpus(raw_step.output_path, output_path),
+        deps=[raw_step],
+    )
+
+
+def normalize_common_corpus_step(filtered_step: StepSpec) -> StepSpec:
+    """Normalize filtered common_corpus: generate content-hash IDs, dedup, sort."""
+    return normalize_step(
+        name="normalized/common_corpus_english_filtered",
+        download=filtered_step,
+        id_field="identifier",
+        drop_fields=("__index_level_0__", "curator"),
+    )
+
+
+def common_corpus_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the download, English/open-license filter, and normalization chain."""
+    download = download_common_corpus_raw_step()
+    filtered = filter_common_corpus_step(download)
+    return download, filtered, normalize_common_corpus_step(filtered)

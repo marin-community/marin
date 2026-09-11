@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -13,10 +13,13 @@ from functools import wraps
 from typing import List, Optional, Union
 
 import draccus
-import fsspec
+import jax.numpy as jnp
 import jmp
 from draccus import parse
-from fsspec import AbstractFileSystem
+from draccus.parsers.decoding import decode_dataclass
+from haliax import ScanCheckpointPolicy
+from jax.sharding import PartitionSpec
+from rigging.filesystem.storage_path import StoragePath
 
 from levanter.utils.datetime_utils import encode_timedelta, parse_timedelta
 
@@ -30,8 +33,6 @@ def register_codecs():
     # draccus.decode.register(jnp.dtype, lambda dtype_name: jnp.dtype(dtype_name))
 
     # register raw dtypes
-    import jax.numpy as jnp
-
     dtype = jnp.float32
     draccus.encode.register(type(dtype), lambda dtype, decl_type=None: str(dtype))
     draccus.decode.register(type(dtype), lambda dtype_name, decl_type=None: jnp.dtype(dtype_name))
@@ -53,8 +54,6 @@ def register_codecs():
     draccus.decode.register(timedelta, parse_timedelta)
     draccus.encode.register(timedelta, encode_timedelta)
 
-    from haliax import ScanCheckpointPolicy
-
     def scan_checkpoint_policy_encode(policy: ScanCheckpointPolicy):
         return policy
 
@@ -62,12 +61,46 @@ def register_codecs():
         if not isinstance(policy, dict):
             return ScanCheckpointPolicy.from_bool_or_str(policy)
 
-        from draccus.parsers.decoding import decode_dataclass
-
         return decode_dataclass(ScanCheckpointPolicy, policy)
 
     draccus.decode.register(ScanCheckpointPolicy, scan_checkpoint_policy_decode)
     draccus.encode.register(ScanCheckpointPolicy, scan_checkpoint_policy_encode)
+
+    # jax.sharding.PartitionSpec has no default draccus codec, so dumping a config that
+    # carries one (e.g. Grug's batch spec P(("replica_dcn", "data"))) previously raised and
+    # dropped the whole config artifact. Encode it as a list of axis entries (a string, None,
+    # a nested list of names, or the UNCONSTRAINED marker) that survives a YAML round-trip.
+    draccus.decode.register(PartitionSpec, partition_spec_decode)
+    draccus.encode.register(PartitionSpec, partition_spec_encode)
+
+
+_PARTITION_SPEC_UNCONSTRAINED = "__unconstrained__"
+
+
+def _encode_partition_spec_entry(entry):
+    if entry is None:
+        return None
+    if entry is PartitionSpec.UNCONSTRAINED:
+        return _PARTITION_SPEC_UNCONSTRAINED
+    if isinstance(entry, (tuple, list)):
+        return [_encode_partition_spec_entry(e) for e in entry]
+    return str(entry)
+
+
+def partition_spec_encode(spec: PartitionSpec, decl_type=None):
+    return [_encode_partition_spec_entry(entry) for entry in spec]
+
+
+def _decode_partition_spec_entry(entry):
+    if entry == _PARTITION_SPEC_UNCONSTRAINED:
+        return PartitionSpec.UNCONSTRAINED
+    if isinstance(entry, (tuple, list)):
+        return tuple(_decode_partition_spec_entry(e) for e in entry)
+    return entry
+
+
+def partition_spec_decode(value, decl_type=None) -> PartitionSpec:
+    return PartitionSpec(*(_decode_partition_spec_entry(entry) for entry in value))
 
 
 register_codecs()
@@ -140,12 +173,12 @@ def _maybe_get_config_path_and_cmdline_args(args: List[str]):
             config_path = args[config_path_index]
 
             if urllib.parse.urlparse(config_path).scheme:
-                fs: AbstractFileSystem
-                fs, fs_path = fsspec.core.url_to_fs(config_path)
                 temp_file = tempfile.NamedTemporaryFile(prefix="config", suffix=".yaml", delete=False)
-                atexit.register(lambda: os.unlink(temp_file.name))
-                fs.get(fs_path, temp_file.name)
-                config_path = temp_file.name
+                temp_config_path = temp_file.name
+                temp_file.close()
+                atexit.register(lambda path=temp_config_path: os.unlink(path))  # pyrefly: ignore[missing-argument]
+                StoragePath(config_path).download_to(temp_config_path)
+                config_path = temp_config_path
 
             config_paths.append(config_path)
             del args[config_path_index]
@@ -157,12 +190,13 @@ def _maybe_get_config_path_and_cmdline_args(args: List[str]):
         elif len(config_paths) > 1:
             # merge the configs by concatenating them
             temp_merged_config_path = tempfile.NamedTemporaryFile(prefix="config_merged", suffix=".yaml", delete=False)
-            atexit.register(lambda: os.unlink(temp_merged_config_path.name))
-            with open(temp_merged_config_path.name, "w") as f:
+            merged_config_path = temp_merged_config_path.name
+            temp_merged_config_path.close()
+            atexit.register(lambda path=merged_config_path: os.unlink(path))  # pyrefly: ignore[missing-argument]
+            with open(merged_config_path, "w") as f:
                 for config_path in config_paths:
                     with open(config_path) as config_file:
                         f.write(config_file.read())
-            merged_config_path = temp_merged_config_path.name
         else:
             raise ValueError("No config path found in args")
 

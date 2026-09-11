@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@ from jax.sharding import Mesh
 import haliax as hax
 from haliax import Axis
 from haliax.partitioning import ResourceAxis, axis_mapping
-from test_utils import skip_if_not_enough_devices
+from haliax.testing import skip_if_not_enough_devices
 
 Dim = Axis("dim", 8)
 

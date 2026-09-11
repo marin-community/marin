@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
@@ -68,8 +68,6 @@ def scale_by_adopt(
     eps: float = 1e-6,
     eps_root: float = 0.0,
     mu_dtype: Optional[Any] = None,
-    *,
-    nesterov: bool = False,
 ) -> optax.GradientTransformation:
     r"""Rescale updates according to the Adopt algorithm.
 

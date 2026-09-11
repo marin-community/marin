@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Job management via command passthrough (replaces ``iris-run``).
@@ -8,10 +8,10 @@ Usage:
     iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 """
 
-import getpass
-import json
+import difflib
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -19,86 +19,96 @@ from pathlib import Path
 import click
 import humanfriendly
 import yaml
-from google.protobuf import json_format
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from rigging.credentials import ClientCredentials
+from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
-from iris.cli.main import require_controller_url
-from iris.client import IrisClient
-from iris.client.client import JobFailedError
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, tpu_device
-from iris.rpc import cluster_pb2
-from iris.time_utils import Duration, Timestamp
+from iris.cli.connect import iris_client_for_ctx, require_controller_url
+from iris.cli.logs import echo_workload_logs, workload_log_options
+from iris.cli.targets import collect_resource_ids
+from iris.client.client import IrisClient, JobFailedError
+from iris.client.workload import JobStatus, TaskStatus
+from iris.cluster.constraints import (
+    CLUSTER_CONSTRAINT_KEY,
+    Constraint,
+    ConstraintOp,
+    WellKnownAttribute,
+    availability_constraint,
+    device_variant_constraint,
+    get_device_variant,
+    infer_preemptible_constraint,
+    preemptible_constraint,
+    region_constraint,
+    zone_constraint,
+)
+from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
+from iris.cluster.redaction import redact_submit_argv
+from iris.cluster.tpu_topology import get_tpu_topology
+from iris.cluster.types import (
+    CoschedulingConfig,
+    Entrypoint,
+    EnvironmentSpec,
+    JobName,
+    ResourceSpec,
+    gpu_device,
+    tpu_device,
+)
+from iris.resources.state import TERMINAL_TASK_STATES, JobState
+from iris.rpc import job_pb2
+from iris.rpc.errors import format_connect_error
+from iris.rpc.proto_display import (
+    CONTAINER_PROFILE_NAMES,
+    PRIORITY_BAND_NAMES,
+    priority_band_value,
+)
 
 logger = logging.getLogger(__name__)
 
-_STATE_MAP: dict[str, cluster_pb2.JobState] = {
-    "pending": cluster_pb2.JOB_STATE_PENDING,
-    "building": cluster_pb2.JOB_STATE_BUILDING,
-    "running": cluster_pb2.JOB_STATE_RUNNING,
-    "succeeded": cluster_pb2.JOB_STATE_SUCCEEDED,
-    "failed": cluster_pb2.JOB_STATE_FAILED,
-    "killed": cluster_pb2.JOB_STATE_KILLED,
-    "worker_failed": cluster_pb2.JOB_STATE_WORKER_FAILED,
-    "unschedulable": cluster_pb2.JOB_STATE_UNSCHEDULABLE,
-}
+# Default page size for `iris job list`. The server sorts by submission date
+# descending, so this fetches the most recent jobs rather than walking the whole
+# jobs table (which would hit the controller's deep-offset cap on a busy cluster).
+DEFAULT_JOB_LIST_LIMIT = 50
+_SYSTEM_PRIORITY_NAME = "system"
+_SYSTEM_REASON_PATTERN = re.compile(r"\b(?:hero|finelog|iris)\b", re.IGNORECASE)
 
 
-def _job_state_name(state: cluster_pb2.JobState) -> str:
-    return cluster_pb2.JobState.Name(state).replace("JOB_STATE_", "").lower()
+def _remote_client(ctx: click.Context) -> IrisClient:
+    return iris_client_for_ctx(ctx, workspace=Path.cwd())
 
 
-def _format_resources(resources: cluster_pb2.ResourceSpecProto | None) -> str:
-    """Format job resources as a compact human-readable string."""
-    if not resources:
-        return "-"
-
-    parts = []
-
-    # CPU
-    if resources.cpu:
-        parts.append(f"{resources.cpu}cpu")
-
-    # Memory
-    if resources.memory_bytes:
-        parts.append(humanfriendly.format_size(resources.memory_bytes, binary=True))
-
-    # Disk
-    if resources.disk_bytes:
-        parts.append(f"{humanfriendly.format_size(resources.disk_bytes, binary=True)} disk")
-
-    # Device (TPU/GPU)
-    if resources.HasField("device"):
-        device = resources.device
-        if device.HasField("tpu"):
-            parts.append(device.tpu.variant)
-        elif device.HasField("gpu"):
-            gpu = device.gpu
-            gpu_str = f"{gpu.count}x{gpu.variant}" if gpu.variant else f"{gpu.count}gpu"
-            parts.append(gpu_str)
-
-    return ", ".join(parts) if parts else "-"
-
-
-def _terminate_jobs(
+def _cancel_jobs(
     client: IrisClient,
     job_ids: tuple[str, ...],
-    include_children: bool,
+    prefix: bool,
 ) -> list[JobName]:
-    terminated: list[JobName] = []
+    cancelled: list[JobName] = []
     for raw in job_ids:
+        if prefix:
+            cancelled.extend(client.cancel_jobs_with_prefix(raw))
+            continue
+
         name = JobName.from_wire(raw)
-        if include_children:
-            terminated.extend(client.terminate_prefix(name, exclude_finished=True))
-        else:
-            client.terminate(name)
-            terminated.append(name)
-    return terminated
+        try:
+            client.cancel_job(name)
+        except ConnectError as exc:
+            if exc.code != Code.NOT_FOUND:
+                raise
+            candidates = client.list_jobs(prefix=name.to_wire(), limit=5)
+            suggestion = ""
+            if candidates:
+                candidate_names = ", ".join(str(job.job_id) for job in candidates)
+                suggestion = f" Did you mean: {candidate_names}?"
+            raise click.ClickException(f"No job named '{name}'.{suggestion}") from exc
+        cancelled.append(name)
+    return cancelled
 
 
-def _print_terminated(terminated: list[JobName]) -> None:
-    if terminated:
-        click.echo("Terminated jobs:")
-        for job_name in terminated:
+def _print_cancelled(cancelled: list[JobName]) -> None:
+    if cancelled:
+        click.echo("Cancelled jobs:")
+        for job_name in cancelled:
             click.echo(f"  {job_name}")
     else:
         click.echo("No running jobs matched.")
@@ -132,8 +142,7 @@ def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[
                 raise ValueError(f"Too many values for env var: {' '.join(item)}")
             if "=" in item[0]:
                 raise ValueError(
-                    f"Key cannot contain '=': {item[0]}\n"
-                    f"You probably meant to do '-e {' '.join(item[0].split('='))}'"
+                    f"Key cannot contain '=': {item[0]}\nYou probably meant to do '-e {' '.join(item[0].split('='))}'"
                 )
             env_vars[item[0]] = item[1] if len(item) == 2 else ""
 
@@ -162,21 +171,275 @@ def add_standard_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
     return result
 
 
+KNOWN_GPU_VARIANTS: frozenset[str] = frozenset(
+    {
+        "A100",
+        "A10G",
+        "B100",
+        "B200",
+        "GB200",
+        "GH200",
+        "H100",
+        "H200",
+        "L4",
+        "L40",
+        "L40S",
+        "RTX4090",
+        "T4",
+        "V100",
+    }
+)
+
+_GPU_VARIANT_LOOKUP: dict[str, str] = {v.lower(): v for v in KNOWN_GPU_VARIANTS}
+
+
+def parse_gpu_spec(spec: str) -> tuple[str, int]:
+    """Parse a GPU spec string into (variant, count).
+
+    Accepts: 'H100x8' → ("H100", 8), '8' → ("", 8), 'H100' → ("H100", 1).
+    The variant must be a known GPU name from KNOWN_GPU_VARIANTS (case-insensitive).
+    """
+    if not spec:
+        raise ValueError("GPU spec must not be empty")
+
+    if spec.isdigit():
+        count = int(spec)
+        if count <= 0:
+            raise ValueError(f"GPU count must be positive, got {count}")
+        return "", count
+
+    spec_lower = spec.lower()
+    for known_lower, canonical in _GPU_VARIANT_LOOKUP.items():
+        if not spec_lower.startswith(known_lower):
+            continue
+        rest = spec[len(known_lower) :]
+        if not rest:
+            return canonical, 1
+        if rest[0] == "x" and rest[1:].isdigit():
+            count = int(rest[1:])
+            if count <= 0:
+                raise ValueError(f"GPU count must be positive, got {count}")
+            return canonical, count
+
+    known = ", ".join(sorted(KNOWN_GPU_VARIANTS))
+    raise ValueError(
+        f"Unknown GPU spec: {spec!r}. "
+        f"Expected a known variant (e.g., H100), VARIANTxCOUNT (e.g., H100x8), "
+        f"or a bare count (e.g., 8). Known variants: {known}"
+    )
+
+
+def _find_closest(value: str, known: set[str]) -> str | None:
+    """Return the closest match from *known* by sequence similarity, or None."""
+    matches = difflib.get_close_matches(value, sorted(known), n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
+
+def _known_regions_and_zones(config) -> tuple[set[str], set[str]]:
+    """Extract known regions and zones from an IrisClusterConfig.
+
+    Returns:
+        (regions, zones) sets derived from scale group worker attributes.
+    """
+    regions: set[str] = set()
+    zones: set[str] = set()
+    for sg in config.scale_groups.values():
+        attrs = sg.worker.attributes
+        if WellKnownAttribute.REGION in attrs:
+            regions.add(attrs[WellKnownAttribute.REGION])
+        if WellKnownAttribute.ZONE in attrs:
+            zones.add(attrs[WellKnownAttribute.ZONE])
+    return regions, zones
+
+
+def validate_region_zone(
+    regions: tuple[str, ...] | None,
+    zone: str | None,
+    config,
+) -> None:
+    """Validate --region/--zone CLI values against the cluster config.
+
+    Raises click.BadParameter if a value doesn't match any known region/zone.
+    Only validates when a config is available (i.e. --config was passed).
+    """
+    if config is None:
+        return
+
+    known_regions, known_zones = _known_regions_and_zones(config)
+
+    if not known_regions and not known_zones:
+        return
+
+    if regions:
+        for r in regions:
+            if r not in known_regions:
+                suggestion = _find_closest(r, known_regions)
+                hint = f" Did you mean '{suggestion}'?" if suggestion else ""
+                raise click.BadParameter(
+                    f"'{r}' is not a known region in the cluster config.{hint}"
+                    f" Known regions: {', '.join(sorted(known_regions))}",
+                    param_hint="'--region'",
+                )
+
+    if zone:
+        if zone not in known_zones:
+            suggestion = _find_closest(zone, known_zones)
+            hint = f" Did you mean '{suggestion}'?" if suggestion else ""
+            raise click.BadParameter(
+                f"'{zone}' is not a known zone in the cluster config.{hint}"
+                f" Known zones: {', '.join(sorted(known_zones))}",
+                param_hint="'--zone'",
+            )
+
+
 def build_resources(
     tpu: str | None,
-    gpu: int | None,
-    cpu: int | None,
-    memory: str | None,
+    gpu: str | None,
+    cpu: float = 0.5,
+    memory: str = "1GB",
+    disk: str = "5GB",
 ) -> ResourceSpec:
-    """Build ResourceSpec from CLI arguments."""
-    spec = ResourceSpec(cpu=cpu or 1, memory=memory or "2GB", disk="10GB")
+    """Build ResourceSpec from CLI arguments.
+
+    When ``tpu`` contains multiple comma-separated variants, the first one is
+    used as the canonical device (its chip count drives resource accounting),
+    and the alternatives are surfaced separately via ``build_tpu_alternatives``
+    so the caller can attach a ``device_variant_constraint`` accepting any of
+    them. All variants must have the same ``vm_count``.
+    """
+    spec = ResourceSpec(cpu=cpu, memory=memory, disk=disk)
 
     if tpu:
-        spec.device = tpu_device(tpu)
+        primary, _ = _parse_tpu_alternatives(tpu)
+        spec.device = tpu_device(primary)
     elif gpu:
-        raise ValueError("GPU support not yet implemented in Iris")
+        variant, count = parse_gpu_spec(gpu)
+        spec.device = gpu_device(variant, count)
 
     return spec
+
+
+def _parse_tpu_alternatives(tpu_arg: str) -> tuple[str, list[str]]:
+    """Split a ``--tpu`` value into (primary, alternatives).
+
+    The CLI accepts a comma-separated list (e.g. ``v6e-4,v5litepod-4``) so a
+    single job can be schedulable on any of the listed variants. The first
+    variant is canonical; the rest are alternatives. All listed variants must
+    share the same ``vm_count`` so multinode coscheduling stays consistent.
+    """
+    variants = [v.strip() for v in tpu_arg.split(",") if v.strip()]
+    if not variants:
+        raise click.BadParameter("--tpu must specify at least one TPU variant")
+    if len(variants) == 1:
+        return variants[0], []
+
+    primary = variants[0]
+    alternatives = variants[1:]
+    primary_topo = get_tpu_topology(primary)
+    for alt in alternatives:
+        alt_topo = get_tpu_topology(alt)
+        if alt_topo.vm_count != primary_topo.vm_count:
+            raise click.BadParameter(
+                f"TPU alternative {alt!r} has vm_count={alt_topo.vm_count} "
+                f"but primary {primary!r} has vm_count={primary_topo.vm_count}. "
+                f"All TPU alternatives must share the same vm_count."
+            )
+    return primary, alternatives
+
+
+def build_tpu_alternatives(tpu_arg: str | None) -> list[str]:
+    """Return the list of all TPU variants requested via ``--tpu``."""
+    if not tpu_arg:
+        return []
+    primary, alternatives = _parse_tpu_alternatives(tpu_arg)
+    return [primary, *alternatives]
+
+
+# Thresholds above which the entrypoint job is considered "extra-resource-heavy"
+# and requires --enable-extra-resources to proceed.
+_LARGE_MEMORY_THRESHOLD_BYTES: int = humanfriendly.parse_size("4GB")
+_LARGE_DISK_THRESHOLD_BYTES: int = humanfriendly.parse_size("10GB")
+
+_ACCELERATOR_HINT = (
+    "The top-level entrypoint (coordinator) job only needs CPU to schedule and "
+    "dispatch work; accelerators are attached to worker tasks spawned by the job. "
+    "If you truly need an accelerator on this entrypoint, pass --enable-extra-resources."
+)
+_LARGE_RESOURCE_HINT = (
+    "The top-level entrypoint (coordinator) job typically needs only modest CPU/RAM/disk "
+    "to schedule and dispatch work. "
+    "If this large resource request is intentional, pass --enable-extra-resources."
+)
+
+
+def validate_extra_resources(
+    tpu: str | None,
+    gpu: str | None,
+    memory: str,
+    disk: str,
+    enable_extra_resources: bool,
+) -> None:
+    """Raise UsageError if heavy resources are requested without --enable-extra-resources.
+
+    Guards against common mistakes where users attach accelerators or request
+    large RAM/disk on the entrypoint (coordinator) job instead of on worker tasks.
+
+    Args:
+        tpu: TPU type string, or None.
+        gpu: GPU spec string, or None.
+        memory: Memory size string (e.g. "8GB").
+        disk: Disk size string (e.g. "64GB").
+        enable_extra_resources: True if the user explicitly opted in.
+    """
+    if enable_extra_resources:
+        return
+
+    if tpu:
+        raise click.UsageError(f"--tpu requires --enable-extra-resources.\n{_ACCELERATOR_HINT}")
+
+    if gpu:
+        raise click.UsageError(f"--gpu requires --enable-extra-resources.\n{_ACCELERATOR_HINT}")
+
+    try:
+        memory_bytes = humanfriendly.parse_size(memory)
+    except humanfriendly.InvalidSize:
+        memory_bytes = 0  # let build_resources surface the parse error
+
+    if memory_bytes >= _LARGE_MEMORY_THRESHOLD_BYTES:
+        raise click.UsageError(f"--memory {memory} (>= 4 GB) requires --enable-extra-resources.\n{_LARGE_RESOURCE_HINT}")
+
+    try:
+        disk_bytes = humanfriendly.parse_size(disk)
+    except humanfriendly.InvalidSize:
+        disk_bytes = 0  # let build_resources surface the parse error
+
+    if disk_bytes >= _LARGE_DISK_THRESHOLD_BYTES:
+        raise click.UsageError(f"--disk {disk} (>= 10 GB) requires --enable-extra-resources.\n{_LARGE_RESOURCE_HINT}")
+
+
+def reserve_spec_to_availability(spec: str) -> Constraint:
+    """Turn a ``--reserve`` spec like ``4:H100x8`` or ``v5litepod-16`` into a hard
+    ``availability:<variant>`` constraint.
+
+    Format: ``[COUNT:]DEVICE_SPEC``. The count is ignored — availability is a
+    zone-level placement constraint ("schedule me where this accelerator can be
+    found"), not a capacity hold, so the number of workers is meaningless.
+    DEVICE_SPEC resolves as a known TPU variant first, then falls back to a GPU
+    spec.
+    """
+    device_spec = spec.split(":", 1)[1] if ":" in spec else spec
+
+    try:
+        get_tpu_topology(device_spec)
+        device = tpu_device(device_spec)
+    except ValueError:
+        variant, gpu_count = parse_gpu_spec(device_spec)
+        device = gpu_device(variant, gpu_count)
+
+    variant = get_device_variant(device)
+    if not variant:
+        raise click.UsageError(f"--reserve {spec!r} does not name an accelerator variant.")
+    return availability_constraint(variant)
 
 
 def generate_job_name(command: list[str]) -> str:
@@ -189,8 +452,112 @@ def generate_job_name(command: list[str]) -> str:
             break
 
     timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-    username = getpass.getuser()
-    return f"iris-run-{username}-{script_name}-{timestamp}"
+    return f"iris-run-{script_name}-{timestamp}"
+
+
+def resolve_multinode_defaults(
+    tpu: str | None,
+    gpu: str | None,
+    replicas: int | None,
+) -> tuple[int, CoschedulingConfig | None]:
+    """Auto-detect multinode topology and set replicas/coscheduling.
+
+    For TPUs with vm_count > 1, infers replicas from the topology and enables
+    coscheduling by ``tpu-name`` so that all tasks land on workers in the same
+    TPU slice. For GPUs with replicas > 1, the coscheduling level is derived from
+    the GPU variant: NVL72 (GB200/GB300) gangs that fit a rack's guaranteed-schedulable
+    node slice bind HARD to ``nvlink.domain``; larger NVL72 gangs bind to
+    ``nvlink.domain.sliced``, which partitions them into rack-sized slices placed one per
+    NVLink domain (balanced N racks x 16); H100 and other GPUs coschedule on the soft
+    ``leafgroup`` IB level. A sliced gang whose size cannot split into equal, more-than-half-a-rack
+    slices, or whose pods are not node-saturating, is rejected here with a ``click.UsageError``
+    rather than deferred to a controller-side failure.
+
+    Args:
+        tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.
+        gpu: GPU spec string (e.g. ``"H100x8"``, ``"GB200x4"``), or ``None``.
+        replicas: Explicit replica count from the caller, or ``None`` if not
+            specified (meaning the default should be inferred).
+
+    Returns:
+        A ``(replicas, coscheduling)`` tuple.  ``coscheduling`` is ``None``
+        for single-host or non-multinode jobs.
+    """
+    if not tpu:
+        if gpu and replicas is not None and replicas > 1:
+            variant, gpu_count = parse_gpu_spec(gpu)
+            try:
+                level = gpu_gang_coscheduling_level(variant, gpu_count, replicas)
+            except ValueError as e:
+                raise click.UsageError(f"--replicas {replicas} for {variant}: {e}") from e
+            return replicas, CoschedulingConfig(group_by=level)
+        return replicas or 1, None
+
+    try:
+        topo = get_tpu_topology(tpu)
+    except ValueError:
+        return replicas or 1, None
+
+    if topo.vm_count <= 1:
+        return replicas or 1, None
+
+    # Multinode TPU: auto-set replicas and coscheduling.
+    if replicas is None:
+        replicas = topo.vm_count
+        logger.info(
+            f"Multinode TPU '{tpu}' detected (vm_count={topo.vm_count}). "
+            f"Auto-setting replicas={replicas} and coscheduling by tpu-name."
+        )
+    else:
+        logger.info(
+            f"Multinode TPU '{tpu}' detected (vm_count={topo.vm_count}). "
+            f"Using explicit replicas={replicas} with coscheduling by tpu-name."
+        )
+
+    coscheduling = CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME)
+    return replicas, coscheduling
+
+
+def build_job_constraints(
+    resources_proto: job_pb2.ResourceSpecProto,
+    tpu_variants: list[str],
+    replicas: int,
+    regions: tuple[str, ...] | None = None,
+    zone: str | None = None,
+    preemptible: bool | None = None,
+    target_cluster: str | None = None,
+) -> list[Constraint]:
+    """Assemble the constraint list for a submitted job.
+
+    An explicit ``preemptible`` value wins over the executor heuristic:
+    ``infer_preemptible_constraint`` short-circuits when any preemptible
+    constraint is already present, so we append the user's choice first.
+
+    ``target_cluster``, if set, appends a ``cluster EQ <peer>`` federation
+    pin (``CLUSTER_CONSTRAINT_KEY``) that routes the whole job to the named
+    federation peer instead of scheduling it locally.
+    """
+    constraints: list[Constraint] = []
+    if regions:
+        constraints.append(region_constraint(list(regions)))
+    if zone:
+        constraints.append(zone_constraint(zone))
+    if len(tpu_variants) > 1:
+        constraints.append(device_variant_constraint(tpu_variants))
+    if preemptible is not None:
+        constraints.append(preemptible_constraint(preemptible))
+    if target_cluster:
+        constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster))
+
+    # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
+    # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
+    # coordinators survive spot reclamation. Skipped when the user supplied
+    # --preemptible / --no-preemptible.
+    inferred = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    if inferred is not None:
+        constraints.append(inferred)
+        logger.info("Executor heuristic: auto-tagging job as non-preemptible")
+    return constraints
 
 
 def run_iris_job(
@@ -198,40 +565,126 @@ def run_iris_job(
     env_vars: dict[str, str],
     controller_url: str,
     tpu: str | None = None,
-    gpu: int | None = None,
-    cpu: int | None = None,
-    memory: str | None = None,
+    gpu: str | None = None,
+    cpu: float = 0.5,
+    memory: str = "1GB",
+    disk: str = "5GB",
     wait: bool = True,
     job_name: str | None = None,
-    replicas: int = 1,
+    replicas: int | None = None,
     max_retries: int = 0,
     timeout: int = 0,
     extras: list[str] | None = None,
-    include_children_logs: bool = True,
-    terminate_on_exit: bool = True,
+    setup_scripts: list[str] | None = None,
+    sync_packages: list[str] | None = None,
+    cancel_on_exit: bool = True,
+    regions: tuple[str, ...] | None = None,
+    zone: str | None = None,
+    user: str | None = None,
+    reserve: tuple[str, ...] | None = None,
+    priority: str | None = None,
+    preemptible: bool | None = None,
+    task_image: str | None = None,
+    container_profile: str | None = None,
+    credentials: ClientCredentials | None = None,
+    submit_argv: list[str] | None = None,
+    dashboard_url: str | None = None,
+    target_cluster: str | None = None,
+    bundle_exclude: re.Pattern[str] | None = None,
 ) -> int:
     """Core job submission logic.
 
     Args:
         controller_url: Controller URL (from parent context tunnel).
-        terminate_on_exit: If True, terminate the job on any non-normal exit
+        dashboard_url: Public dashboard origin (e.g. https://iris.oa.dev). When
+            set, a clickable job URL is logged on submit.
+        cancel_on_exit: Cancel the Job when the local command is interrupted
             (KeyboardInterrupt, unexpected exceptions). Normal completion is unaffected.
+        regions: If provided, restrict the job to workers in these regions.
+        zone: If provided, restrict the job to workers in this zone.
+        reserve: Hard availability constraints (e.g., ("4:H100x8", "v5litepod-16"))
+            that confine the job to a zone where the named accelerator can be found.
+        preemptible: If True/False, force scheduling on (non-)preemptible workers
+            and bypass the executor heuristic. If None (default), the heuristic runs.
+        target_cluster: If provided, federate the whole job to this peer cluster
+            instead of scheduling it locally. Distinct from the connection-level
+            ``--cluster`` option, which only selects which controller the CLI talks to.
+        task_image: Optional task container image override. When None, workers use
+            their cluster-configured default task image.
+        bundle_exclude: Regex matched against each candidate bundle path (POSIX,
+            relative to the workspace); matching paths are dropped from the bundle
+            so a job can trim otherwise-tracked files it does not need.
 
     Returns:
         Exit code: 0 for success, 1 for failure
     """
     env_vars = add_standard_env_vars(env_vars)
-    resources = build_resources(tpu, gpu, cpu, memory)
+    resources = build_resources(tpu, gpu, cpu=cpu, memory=memory, disk=disk)
     job_name = job_name or generate_job_name(command)
     extras = extras or []
 
+    tpu_variants = build_tpu_alternatives(tpu)
+    primary_tpu = tpu_variants[0] if tpu_variants else None
+
+    replicas, coscheduling = resolve_multinode_defaults(primary_tpu, gpu, replicas)
+
+    resources_proto = resources.to_proto()
+    constraints = build_job_constraints(
+        resources_proto=resources_proto,
+        tpu_variants=tpu_variants,
+        replicas=replicas,
+        regions=regions,
+        zone=zone,
+        preemptible=preemptible,
+        target_cluster=target_cluster,
+    )
+
+    if reserve:
+        # --reserve is now a hard, zone-level availability constraint: "schedule me
+        # only in a zone where this accelerator can be found." It filters candidate
+        # zones rather than holding capacity, so it composes with --region/--zone.
+        availability = [reserve_spec_to_availability(spec) for spec in reserve]
+        constraints = [*(constraints or []), *availability]
+
     logger.info(f"Submitting job: {job_name}")
     logger.info(f"Command: {' '.join(command)}")
-    logger.info(f"Resources: cpu={resources.cpu}, memory={resources.memory}")
+    logger.info(f"Resources: cpu={resources.cpu:g}, memory={resources.memory}, disk={resources.disk}")
     if resources.device and resources.device.HasField("tpu"):
-        logger.info(f"TPU: {resources.device.tpu.variant}")
+        if len(tpu_variants) > 1:
+            logger.info(f"TPU: {resources.device.tpu.variant} (alternatives: {', '.join(tpu_variants[1:])})")
+        else:
+            logger.info(f"TPU: {resources.device.tpu.variant}")
+    if resources.device and resources.device.HasField("gpu"):
+        gpu_dev = resources.device.gpu
+        logger.info(f"GPU: {gpu_dev.count}x {gpu_dev.variant or 'any'}")
+    if replicas > 1:
+        logger.info(f"Replicas: {replicas}")
+    if coscheduling:
+        logger.info(f"Coscheduling: group_by={coscheduling.group_by}")
+    if regions:
+        logger.info(f"Region constraint: {', '.join(regions)}")
+    if zone:
+        logger.info(f"Zone constraint: {zone}")
+    if preemptible is not None:
+        logger.info(f"Preemptible constraint: {preemptible}")
+    if target_cluster:
+        logger.info(f"Federating to peer cluster: {target_cluster}")
+    if reserve:
+        logger.info(f"Availability constraint: {', '.join(reserve)}")
+    if task_image:
+        logger.info(f"Task image: {task_image}")
 
     logger.info(f"Using controller: {controller_url}")
+    priority_band = job_pb2.PRIORITY_BAND_INHERIT
+    if priority is not None:
+        priority_band = priority_band_value(priority)
+        logger.info(f"Priority band: {priority}")
+
+    profile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED
+    if container_profile is not None:
+        profile = job_pb2.ContainerProfile.Value(container_profile)
+        logger.info(f"Container profile: {container_profile}")
+
     return _submit_and_wait_job(
         controller_url=controller_url,
         job_name=job_name,
@@ -243,8 +696,19 @@ def run_iris_job(
         timeout=timeout,
         wait=wait,
         extras=extras,
-        include_children_logs=include_children_logs,
-        terminate_on_exit=terminate_on_exit,
+        setup_scripts=setup_scripts,
+        sync_packages=sync_packages,
+        cancel_on_exit=cancel_on_exit,
+        constraints=constraints or None,
+        coscheduling=coscheduling,
+        user=user,
+        priority_band=priority_band,
+        container_profile=profile,
+        credentials=credentials,
+        submit_argv=submit_argv,
+        dashboard_url=dashboard_url,
+        task_image=task_image,
+        bundle_exclude=bundle_exclude,
     )
 
 
@@ -259,52 +723,99 @@ def _submit_and_wait_job(
     timeout: int,
     wait: bool,
     extras: list[str] | None = None,
-    include_children_logs: bool = True,
-    terminate_on_exit: bool = True,
+    setup_scripts: list[str] | None = None,
+    sync_packages: list[str] | None = None,
+    cancel_on_exit: bool = True,
+    constraints: list[Constraint] | None = None,
+    coscheduling: CoschedulingConfig | None = None,
+    user: str | None = None,
+    priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
+    container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+    credentials: ClientCredentials | None = None,
+    submit_argv: list[str] | None = None,
+    dashboard_url: str | None = None,
+    task_image: str | None = None,
+    bundle_exclude: re.Pattern[str] | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
-    When terminate_on_exit is True, the job (and its children) are killed on
-    any non-normal exit: KeyboardInterrupt, unexpected exceptions, etc.
-    Normal completion (success or JobFailedError) does not trigger termination.
+    Only KeyboardInterrupt terminates the remote job; connection failures
+    are logged and re-raised without killing the job.
     """
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(
+        controller_url, workspace=Path.cwd(), credentials=credentials, bundle_exclude=bundle_exclude
+    )
     entrypoint = Entrypoint.from_command(*command)
 
     job = client.submit(
         entrypoint=entrypoint,
         name=job_name,
         resources=resources,
-        environment=EnvironmentSpec(env_vars=env_vars, extras=extras or []),
+        environment=EnvironmentSpec(
+            env_vars=env_vars,
+            extras=extras or [],
+            setup_scripts=setup_scripts,
+            sync_packages=sync_packages or [],
+        ),
+        constraints=constraints,
+        coscheduling=coscheduling,
         replicas=replicas,
         max_retries_failure=max_retries,
+        max_task_failures=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
+        user=user,
+        priority_band=priority_band,
+        container_profile=container_profile,
+        submit_argv=submit_argv,
+        task_image=task_image,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
+    if dashboard_url:
+        logger.info(f"Dashboard: {job.job_id.dashboard_url(dashboard_url)}")
+    click.echo(str(job.job_id))
 
     if not wait:
-        logger.info("Job submitted (not waiting for completion)")
         return 0
 
-    logger.info("Streaming logs (Ctrl+C to kill)...")
+    logger.info(
+        "Streaming logs (Ctrl+C to stop). If disconnected, reconnect with: iris job logs -f %s",
+        job.job_id,
+    )
     try:
         try:
-            status = job.wait(stream_logs=True, include_children=include_children_logs, timeout=float("inf"))
+            status = job.wait(stream_logs=True, timeout=float("inf"))
             logger.info(f"Job completed with state: {status.state}")
-            return 0 if status.state == cluster_pb2.JOB_STATE_SUCCEEDED else 1
+            return 0 if status.state is JobState.SUCCEEDED else 1
         except JobFailedError as e:
-            logger.info(f"Job failed with state: {e.status.state}")
+            logger.error(f"Job failed: {e}")
             return 1
-    except BaseException:
-        if terminate_on_exit:
-            logger.info(f"Terminating job {job.job_id}...")
-            terminated = _terminate_jobs(client, (str(job.job_id),), include_children=True)
-            for t in terminated:
-                logger.info(f"  Terminated: {t}")
-        if isinstance(sys.exc_info()[1], KeyboardInterrupt):
-            return 130
+    except KeyboardInterrupt:
+        if cancel_on_exit:
+            logger.info(f"Cancelling job {job.job_id}...")
+            cancelled = _cancel_jobs(client, (str(job.job_id),), prefix=False)
+            for target in cancelled:
+                logger.info(f"  Cancelled: {target}")
+        return 130
+    except Exception:
+        logger.warning(
+            "Connection lost; job %s is still running. Reconnect with: iris job logs -f %s",
+            job.job_id,
+            job.job_id,
+        )
         raise
+
+
+def validate_system_reason(priority: str | None, system_reason: str | None) -> None:
+    """Restrict CLI system submissions to named critical workload classes."""
+    if priority == _SYSTEM_PRIORITY_NAME:
+        if system_reason is None or _SYSTEM_REASON_PATTERN.search(system_reason) is None:
+            raise click.UsageError(
+                "--priority system requires --system-reason=<reason> containing hero, finelog, or iris."
+            )
+        return
+    if system_reason is not None:
+        raise click.UsageError("--system-reason is only valid with --priority system.")
 
 
 @click.group("job")
@@ -341,25 +852,136 @@ Examples:
     type=(str, str),
     help="Set environment variables for the job (KEY VALUE). Can be repeated.",
 )
-@click.option("--tpu", type=str, help="TPU type to request (e.g., v5litepod-16)")
-@click.option("--gpu", type=int, help="Number of GPUs to request")
-@click.option("--cpu", type=int, help="Number of CPUs to request (default: 1)")
-@click.option("--memory", type=str, help="Memory size to request (e.g., 8GB, 512MB; default: 2GB)")
-@click.option("--no-wait", is_flag=True, help="Don't wait for job completion")
-@click.option("--job-name", type=str, help="Custom job name (default: auto-generated)")
-@click.option("--replicas", type=int, default=1, help="Number of tasks for gang scheduling (default: 1)")
-@click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
-@click.option("--timeout", type=int, default=0, help="Job timeout in seconds (default: 0 = no timeout)")
-@click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
 @click.option(
-    "--include-children-logs/--no-include-children-logs",
-    default=True,
-    help="Stream logs from child jobs (nested submissions).",
+    "--tpu",
+    type=str,
+    help=(
+        "TPU type to request (e.g., v5litepod-16). Pass a comma-separated list "
+        "(e.g., v6e-4,v5litepod-4) to allow scheduling on any of the listed "
+        "variants — useful when capacity is contested. All variants must share "
+        "the same vm_count. Requires --enable-extra-resources."
+    ),
 )
 @click.option(
-    "--terminate-on-exit/--no-terminate-on-exit",
+    "--gpu",
+    type=str,
+    help="GPU spec: VARIANTxCOUNT (e.g., H100x8), COUNT (e.g., 8), or VARIANT (e.g., H100). Needs --enable-extra-resources.",  # noqa: E501
+)
+@click.option(
+    "--enable-extra-resources",
+    is_flag=True,
+    default=False,
+    help=(
+        "Allow accelerators (--tpu/--gpu) and large resource requests (>= 4 GB RAM or >= 10 GB disk) "
+        "on the entrypoint job. Not needed for typical coordinator jobs — accelerators should be "
+        "requested by worker tasks spawned by the job."
+    ),
+)
+@click.option("--cpu", type=float, default=0.1, show_default=True, help="Number of CPUs to request")
+@click.option("--memory", type=str, default="1GB", show_default=True, help="Memory size to request (e.g., 8GB, 512MB)")
+@click.option(
+    "--disk", type=str, default="5GB", show_default=True, help="Ephemeral disk size to request (e.g., 64GB, 1TB)"
+)
+@click.option("--no-wait", is_flag=True, help="Don't wait for job completion")
+@click.option("--job-name", type=str, help="Custom job name (default: auto-generated)")
+@click.option("--user", type=str, help="Override the user prefix for the submitted job.")
+@click.option(
+    "--replicas", type=int, default=None, help="Number of tasks for gang scheduling (auto-detected for multinode TPUs)"
+)
+@click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
+@click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
+@click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
+@click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
+@click.option(
+    "--target-cluster",
+    type=str,
+    default=None,
+    help=(
+        "Federate the whole job to this peer cluster instead of scheduling it locally. "
+        "This is distinct from the top-level --cluster option, which only selects which "
+        "controller the CLI connects to; --target-cluster stays connected to that "
+        "controller and asks it to hand the job off to the named peer."
+    ),
+)
+@click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
+@click.option(
+    "--sync-package",
+    multiple=True,
+    help=(
+        "Scope the default `uv sync --all-packages --no-dev` to specific "
+        "workspace members (e.g., --sync-package marin-core). Can be repeated."
+    ),
+)
+@click.option(
+    "--no-sync",
+    is_flag=True,
+    help="Skip environment setup entirely: run the command in the task image as-is (no uv sync).",
+)
+@click.option(
+    "--reserve",
+    multiple=True,
+    help=(
+        "Availability constraint: schedule only in a zone where this accelerator can "
+        "be found (the job waits otherwise). Format: [COUNT:]DEVICE (e.g., 4:H100x8, "
+        "v5litepod-16); the count is ignored. Can be repeated. This only constrains "
+        "placement — it holds no capacity and attaches no device. Use --tpu/--gpu to "
+        "actually request an accelerator."
+    ),
+)
+@click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
+    default=None,
+    help="Priority band for scheduling (default: interactive).",
+)
+@click.option(
+    "--system-reason",
+    type=str,
+    default=None,
+    metavar="REASON",
+    help="Required justification for --priority system; must contain hero, finelog, or iris.",
+)
+@click.option(
+    "--preemptible/--no-preemptible",
+    "preemptible",
+    default=None,
+    help=(
+        "Force scheduling on preemptible (--preemptible) or non-preemptible "
+        "(--no-preemptible) workers. Overrides the executor heuristic. "
+        "Default: heuristic-based (small CPU-only jobs pinned to non-preemptible)."
+    ),
+)
+@click.option(
+    "--task-image",
+    type=str,
+    default=None,
+    help=(
+        "Override the task container image for this job. The image must already exist in a registry visible to workers."
+    ),
+)
+@click.option(
+    "--container-profile",
+    type=click.Choice(CONTAINER_PROFILE_NAMES, case_sensitive=False),
+    default=None,
+    help=(
+        "Container security profile (default: CONTAINER_PROFILE_DEFAULT). RESTRICTED hardens "
+        "the container; DOCKER_ACCESS and PRIVILEGED are elevated and require admin."
+    ),
+)
+@click.option(
+    "--cancel-on-exit/--no-cancel-on-exit",
     default=True,
-    help="Terminate the job if an unexpected error occurs (default: terminate).",
+    help="Cancel the Job on Ctrl+C. Tunnel failures leave it running.",
+)
+@click.option(
+    "--exclude",
+    multiple=True,
+    help=(
+        "Regex matched against each candidate bundle path (POSIX, relative to the "
+        "workspace); matching paths are dropped from the workspace bundle. Repeat to "
+        "add patterns; they are OR'd together. Use to keep tracked-but-unneeded files "
+        "(e.g. --exclude '^docs/') out of the bundle and under its size cap."
+    ),
 )
 @click.argument("cmd", nargs=-1, type=click.UNPROCESSED, required=True)
 @click.pass_context
@@ -367,157 +989,332 @@ def run(
     ctx,
     env_vars: tuple[tuple[str, str], ...],
     tpu: str | None,
-    gpu: int | None,
-    cpu: int | None,
-    memory: str | None,
+    gpu: str | None,
+    cpu: float,
+    memory: str,
+    disk: str,
+    enable_extra_resources: bool,
     no_wait: bool,
     job_name: str | None,
-    replicas: int,
+    user: str | None,
+    replicas: int | None,
     max_retries: int,
     timeout: int,
+    region: tuple[str, ...],
+    zone: str | None,
+    target_cluster: str | None,
     extra: tuple[str, ...],
-    include_children_logs: bool,
-    terminate_on_exit: bool,
+    sync_package: tuple[str, ...],
+    no_sync: bool,
+    reserve: tuple[str, ...],
+    priority: str | None,
+    system_reason: str | None,
+    preemptible: bool | None,
+    task_image: str | None,
+    container_profile: str | None,
+    cancel_on_exit: bool,
+    exclude: tuple[str, ...],
     cmd: tuple[str, ...],
 ):
     """Submit jobs to Iris clusters."""
     controller_url = require_controller_url(ctx)
+    config = ctx.obj.get("config") if ctx.obj else None
+    dashboard_url = config.dashboard_url if config else None
+    validate_extra_resources(tpu, gpu, memory, disk, enable_extra_resources)
+    validate_region_zone(region or None, zone, ctx.obj.get("config"))
+    if no_sync and sync_package:
+        raise click.UsageError("--no-sync skips setup entirely; it cannot be combined with --sync-package.")
+    validate_system_reason(priority, system_reason)
 
     command = list(cmd)
     if not command:
         raise click.UsageError("No command provided after --")
 
-    env_vars_dict = load_env_vars(env_vars)
+    submit_argv = redact_submit_argv(list(sys.argv))
 
-    exit_code = run_iris_job(
-        command=command,
-        env_vars=env_vars_dict,
-        controller_url=controller_url,
-        tpu=tpu,
-        gpu=gpu,
-        cpu=cpu,
-        memory=memory,
-        wait=not no_wait,
-        job_name=job_name,
-        replicas=replicas,
-        max_retries=max_retries,
-        timeout=timeout,
-        extras=list(extra),
-        include_children_logs=include_children_logs,
-        terminate_on_exit=terminate_on_exit,
-    )
+    # ignore_unknown_options silently passes typo'd flags (e.g. --reservation
+    # instead of --reserve) into cmd. Catch any flags that leaked through
+    # before the actual command starts — these were meant for iris, not the
+    # user's program.
+    for arg in command:
+        if not arg.startswith("-"):
+            break
+        raise click.UsageError(
+            f"Unknown option {arg!r}. Iris options must come before '--'. Did you mean a different flag?"
+        )
+
+    env_vars_dict = load_env_vars(env_vars)
+    bundle_exclude = re.compile("|".join(f"(?:{pattern})" for pattern in exclude)) if exclude else None
+
+    try:
+        exit_code = run_iris_job(
+            command=command,
+            env_vars=env_vars_dict,
+            controller_url=controller_url,
+            tpu=tpu,
+            gpu=gpu,
+            cpu=cpu,
+            memory=memory,
+            disk=disk,
+            wait=not no_wait,
+            job_name=job_name,
+            user=user,
+            replicas=replicas,
+            max_retries=max_retries,
+            timeout=timeout,
+            extras=list(extra),
+            setup_scripts=[] if no_sync else None,
+            sync_packages=list(sync_package),
+            cancel_on_exit=cancel_on_exit,
+            regions=region or None,
+            zone=zone,
+            target_cluster=target_cluster,
+            reserve=reserve or None,
+            priority=priority,
+            preemptible=preemptible,
+            task_image=task_image,
+            container_profile=container_profile,
+            credentials=ctx.obj.get("credentials"),
+            submit_argv=submit_argv,
+            dashboard_url=dashboard_url or None,
+            bundle_exclude=bundle_exclude,
+        )
+    except Exception:
+        bundle = ctx.obj.get("provider_bundle")
+        if bundle is not None:
+            try:
+                bundle.controller.debug_report()
+            except Exception:
+                logger.debug("Controller post-mortem failed", exc_info=True)
+        raise
+
     sys.exit(exit_code)
 
 
-@job.command("stop")
-@click.argument("job_id", nargs=-1, required=True)
+@job.command("cancel")
+@click.argument("job_ids", nargs=-1, required=False)
 @click.option(
-    "--include-children/--no-include-children",
-    default=True,
-    help="Terminate child jobs under the given job ID prefix (default: include).",
+    "--prefix/--exact",
+    default=False,
+    help="Match each Job ID as a prefix instead of exactly.",
 )
+@click.option("--stdin", is_flag=True, default=False, help="Read additional Job IDs from stdin CSV rows.")
+@click.option("--dry-run", is_flag=True, default=False, help="Print the Jobs that would be cancelled.")
 @click.pass_context
-def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
-    """Terminate one or more jobs."""
-    controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
-    terminated = _terminate_jobs(client, job_id, include_children)
-    _print_terminated(terminated)
+def cancel(ctx, job_ids: tuple[str, ...], prefix: bool, stdin: bool, dry_run: bool) -> None:
+    """Cancel Jobs and their descendants."""
+    targets = collect_resource_ids(job_ids, stdin)
+    if not targets:
+        raise click.UsageError("No Jobs given. Pass IDs or use --stdin.")
+    if dry_run:
+        if prefix:
+            client = _remote_client(ctx)
+            matches = [
+                job_name.to_wire() for target in targets for job_name in client.active_job_names_for_prefix(target)
+            ]
+        else:
+            matches = [JobName.from_wire(target).to_wire() for target in targets]
+        click.echo(f"[dry-run] would cancel {len(matches)} Job(s):")
+        for match in matches:
+            click.echo(f"  {match}")
+        return
+    client = _remote_client(ctx)
+    _print_cancelled(_cancel_jobs(client, tuple(targets), prefix))
 
 
-@job.command("kill")
-@click.argument("job_id", nargs=-1, required=True)
-@click.option(
-    "--include-children/--no-include-children",
-    default=True,
-    help="Terminate child jobs under the given job ID prefix (default: include).",
-)
+@job.command("complete")
+@click.argument("job_id")
 @click.pass_context
-def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
-    """Terminate one or more jobs (alias for stop)."""
-    controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
-    terminated = _terminate_jobs(client, job_id, include_children)
-    _print_terminated(terminated)
+def complete(ctx: click.Context, job_id: str) -> None:
+    """Mark a Job and its unfinished descendants successful, then stop them."""
+    job_name = JobName.from_wire(job_id)
+    _remote_client(ctx).job(job_name).complete()
+    click.echo(f"Completed job: {job_name}")
 
 
 @job.command("list")
 @click.option("--state", type=str, default=None, help="Filter by state (e.g., running, pending, failed)")
-@click.option("--prefix", type=str, default=None, help="Filter by job name prefix")
-@click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+@click.option(
+    "--prefix",
+    type=str,
+    default=None,
+    help="Anchored prefix match against the wire-form job_id (e.g. '/alice/exp-').",
+)
+@click.option(
+    "--limit",
+    type=click.IntRange(min=1),
+    default=DEFAULT_JOB_LIST_LIMIT,
+    show_default=True,
+    help="Show at most this many of the most recent jobs. Raise it (with --state/--prefix to narrow) to see more.",
+)
 @click.pass_context
-def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
-    """List jobs with optional filtering."""
-    controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+def list_jobs(ctx, state: str | None, prefix: str | None, limit: int) -> None:
+    """List the most recent jobs with optional filtering.
 
-    states: list[cluster_pb2.JobState] | None = None
+    Only the ``--limit`` most recently submitted matching jobs are fetched, so
+    the command stays fast on a busy cluster instead of scanning the whole jobs
+    table. Narrow with ``--state`` / ``--prefix`` to find older jobs.
+    """
+    client = _remote_client(ctx)
+
+    state_value: JobState | None = None
     if state is not None:
-        state_lower = state.lower()
-        if state_lower not in _STATE_MAP:
-            valid = ", ".join(sorted(_STATE_MAP.keys()))
-            raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}")
-        states = [_STATE_MAP[state_lower]]
+        try:
+            state_value = JobState(state.lower())
+            if state_value is JobState.UNSPECIFIED:
+                raise ValueError
+        except ValueError:
+            valid = ", ".join(candidate.value for candidate in JobState if candidate is not JobState.UNSPECIFIED)
+            raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}") from None
 
-    prefix_name = JobName.from_wire(prefix) if prefix else None
-    jobs = client.list_jobs(states=states, prefix=prefix_name)
+    jobs = client.list_jobs(state=state_value, prefix=prefix, limit=limit)
 
     # Sort by submitted_at descending (most recent first)
-    jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
-
-    if json_output:
-        serialized = [json_format.MessageToDict(j, preserving_proto_field_name=True) for j in jobs]
-        click.echo(json.dumps(serialized, indent=2))
-        return
+    jobs.sort(key=lambda job: job.submitted_at.epoch_ms() if job.submitted_at is not None else 0, reverse=True)
 
     if not jobs:
         click.echo("No jobs found.")
         return
 
-    # Build table rows
     rows: list[list[str]] = []
     has_reasons = False
 
     for j in jobs:
         job_id = j.job_id
-        state_name = _job_state_name(j.state)
-        submitted = Timestamp.from_proto(j.submitted_at).as_formatted_date() if j.submitted_at.epoch_ms else "-"
-        resources = _format_resources(j.resources) if j.HasField("resources") else "-"
+        state_name = j.state.value
+        submitted = j.submitted_at.as_formatted_date() if j.submitted_at is not None else "-"
 
-        # Show error for failed jobs, pending_reason for pending/unschedulable
-        reason = j.error or j.pending_reason or ""
+        reason = j.error_message or j.pending_reason or ""
         if reason:
             has_reasons = True
-            # Truncate long reasons
             reason = (reason[:60] + "...") if len(reason) > 63 else reason
 
-        rows.append([job_id, state_name, resources, submitted, reason])
+        rows.append([job_id, state_name, submitted, reason])
 
-    # Build headers - only include REASON column if there are any reasons
     if has_reasons:
-        headers = ["JOB ID", "STATE", "RESOURCES", "SUBMITTED", "REASON"]
+        headers = ["JOB ID", "STATE", "SUBMITTED", "REASON"]
     else:
-        headers = ["JOB ID", "STATE", "RESOURCES", "SUBMITTED"]
-        rows = [row[:4] for row in rows]
+        headers = ["JOB ID", "STATE", "SUBMITTED"]
+        rows = [row[:3] for row in rows]
 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
+
+    if len(jobs) >= limit:
+        click.echo(
+            f"\nShowing the {limit} most recent jobs. Raise --limit or narrow with --state/--prefix to see more.",
+            err=True,
+        )
+
+
+def _task_index(task_id: str) -> str:
+    last = task_id.rsplit("/", 1)[-1]
+    return last or task_id
+
+
+def _task_duration_ms(task: TaskStatus) -> int | None:
+    if task.started_at is None:
+        return None
+    end_ms = task.finished_at.epoch_ms() if task.finished_at is not None else Timestamp.now().epoch_ms()
+    return max(0, end_ms - task.started_at.epoch_ms())
+
+
+def _format_duration_ms(ms: int | None) -> str:
+    if ms is None:
+        return "-"
+    return humanfriendly.format_timespan(ms / 1000)
+
+
+def _format_memory_mb(mb: int) -> str:
+    if not mb:
+        return "-"
+    return humanfriendly.format_size(mb * 1_000_000)
+
+
+def render_job_description_text(
+    job_status: JobStatus,
+    tasks: list[TaskStatus],
+) -> str:
+    """Render a Job and its Tasks for the terminal."""
+
+    def _sort_key(task: TaskStatus) -> tuple[int, str]:
+        idx = _task_index(str(task.task_id))
+        try:
+            return (int(idx), "")
+        except ValueError:
+            return (2**31, idx)
+
+    lines = [
+        f"Job: {job_status.job_id}" + (f" ({job_status.name})" if job_status.name else ""),
+        f"State: {job_status.state.value}  exit={job_status.exit_code}  "
+        f"failures={job_status.failure_count}  preemptions={job_status.preemption_count}",
+        f"Tasks: {job_status.completed_count}/{job_status.task_count} completed  "
+        + "  ".join(
+            f"{state.name.lower()}={count}"
+            for state, count in sorted(job_status.task_state_counts.items(), key=lambda item: item[0].value)
+            if count
+        ),
+    ]
+    if job_status.error_message:
+        lines.append(f"Error: {job_status.error_message}")
+    lines.append("")
+
+    rows = []
+    for task_status in sorted(tasks, key=_sort_key):
+        usage = task_status.resource_usage
+        diagnostic = task_status.status_message or task_status.error_message
+        if len(diagnostic) > 120:
+            diagnostic = diagnostic[:117] + "..."
+        rows.append(
+            [
+                _task_index(str(task_status.task_id)),
+                task_status.state.value,
+                task_status.exit_code if task_status.state in TERMINAL_TASK_STATES else "-",
+                _format_duration_ms(_task_duration_ms(task_status)),
+                _format_memory_mb(usage.memory_peak_mb if usage is not None else 0),
+                _format_memory_mb(usage.memory_mb if usage is not None else 0),
+                diagnostic,
+            ]
+        )
+    headers = ["TASK", "STATE", "EXIT", "DURATION", "PEAK MEM", "CUR MEM", "DIAGNOSTIC"]
+    lines.append(tabulate(rows, headers=headers, tablefmt="plain"))
+    return "\n".join(lines)
+
+
+@job.command("describe")
+@click.argument("job_id")
+@click.pass_context
+def describe(ctx, job_id: str) -> None:
+    """Describe a running or completed Job and its Tasks."""
+    client = _remote_client(ctx)
+    job_name = JobName.from_wire(job_id)
+    job_status = client.job_status(job_name)
+    tasks = client.list_tasks(job_name)
+    click.echo(render_job_description_text(job_status, tasks))
+
+
+@job.command("wait")
+@click.argument("job_id")
+@click.pass_context
+def wait(ctx, job_id: str) -> None:
+    """Wait for an existing job to finish and print its terminal state."""
+    client = _remote_client(ctx)
+    job_name = JobName.from_wire(job_id)
+    try:
+        status = client.job(job_name).wait(
+            timeout=float("inf"),
+            raise_on_failure=False,
+        )
+    except ConnectError as exc:
+        raise click.ClickException(format_connect_error(exc)) from exc
+
+    click.echo(status.state.value)
+    if status.state is not JobState.SUCCEEDED:
+        raise SystemExit(1)
 
 
 @job.command("logs")
 @click.argument("job_id")
-@click.option("--since-ms", type=int, default=None, help="Only show logs after this epoch millisecond timestamp.")
-@click.option(
-    "--since-seconds",
-    type=int,
-    default=None,
-    help="Only show logs from the last N seconds.",
-)
-@click.option("--follow", "-f", is_flag=True, help="Stream logs continuously.")
-@click.option(
-    "--include-children/--no-include-children",
-    default=False,
-    help="Include logs from child jobs (nested submissions).",
-)
+@workload_log_options
 @click.pass_context
 def logs(
     ctx,
@@ -525,40 +1322,21 @@ def logs(
     since_ms: int | None,
     since_seconds: int | None,
     follow: bool,
-    include_children: bool,
+    max_lines: int,
+    tail: bool,
+    level: str | None,
+    substring: str,
 ) -> None:
-    """Stream task logs for a job using batch log fetching."""
-    if since_ms is not None and since_seconds is not None:
-        raise click.UsageError("Specify only one of --since-ms or --since-seconds.")
-
-    controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
-
-    if since_seconds is not None:
-        since_ms = Timestamp.now().epoch_ms() - (since_seconds * 1000)
-
-    cursor_ms = since_ms or 0
+    """Read logs for a Job and its descendants."""
+    client = _remote_client(ctx)
     job_name = JobName.from_wire(job_id)
-
-    while True:
-        result = client.stream_task_logs(
-            job_name,
-            include_children=include_children,
-            since_ms=cursor_ms,
-        )
-
-        # Print errors first so user knows why some logs might be missing
-        for error in result.errors:
-            click.echo(f"[ERROR] task={error.task_id} worker={error.worker_id or '?'} | {error.error}", err=True)
-
-        # Print log entries
-        for entry in result.entries:
-            ts = entry.timestamp.as_short_time()
-            click.echo(f"[{ts}] worker={entry.worker_id} task={entry.task_id} | {entry.data}")
-
-        if result.last_timestamp_ms > cursor_ms:
-            cursor_ms = result.last_timestamp_ms
-
-        if not follow:
-            break
-        time.sleep(1.0)
+    echo_workload_logs(
+        client.job(job_name),
+        since_ms=since_ms,
+        since_seconds=since_seconds,
+        follow=follow,
+        max_lines=max_lines,
+        tail=tail,
+        level=level,
+        substring=substring,
+    )

@@ -1,0 +1,6 @@
+tasks: [arc_easy]
+task_options:
+  arc_easy:
+    num_fewshot: 0
+    task_alias: arc_easy_0shot
+max_tokens: 256

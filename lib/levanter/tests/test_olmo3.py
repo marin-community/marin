@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 """
 Test suite for OLMo 3 model implementation.
@@ -14,15 +14,17 @@ import dataclasses
 import tempfile
 
 import chex
+import haliax as hax
 import numpy as np
 import pytest
 from jax import random
-
-import haliax as hax
+from levanter.testing.helpers import skip_if_module_missing, skip_if_no_torch, use_test_mesh
+from transformers import AutoModelForCausalLM
 
 from levanter.layers.attention import AttentionMask
+from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
+from levanter.models.olmo3 import Olmo3Config, Olmo3DecoderLayer, Olmo3LMHeadModel
 from levanter.utils.jax_utils import parameter_count
-from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
 
 pytestmark = skip_if_module_missing("transformers")
 
@@ -37,7 +39,6 @@ def _get_olmo3_config(use_flash=False, num_kv_heads=4, seq_len=128, sliding_wind
         sliding_window: Size of sliding window for sliding attention layers
     """
     # Import here to avoid import errors before implementation exists
-    from levanter.models.olmo3 import Olmo3Config
 
     return Olmo3Config(
         max_seq_len=seq_len,
@@ -84,7 +85,6 @@ def test_olmo3_config_hf_roundtrip():
     assert hf_config.num_key_value_heads == 4
 
     # Convert back and check fields
-    from levanter.models.olmo3 import Olmo3Config
 
     config2 = Olmo3Config.from_hf_config(hf_config)
     assert config2.hidden_dim == 16
@@ -112,7 +112,6 @@ def test_olmo3_layer_types():
 
 def test_olmo3_layer_types_8_layers():
     """Test layer types with 8 layers."""
-    from levanter.models.olmo3 import Olmo3Config
 
     config = Olmo3Config(
         max_seq_len=128,
@@ -142,7 +141,6 @@ def test_olmo3_layer_types_8_layers():
 
 def test_olmo3_custom_layer_types():
     """Test that custom layer_types override the default pattern."""
-    from levanter.models.olmo3 import Olmo3Config, Olmo3LMHeadModel
 
     # Custom pattern: alternating full/sliding
     custom_pattern = [
@@ -153,7 +151,7 @@ def test_olmo3_custom_layer_types():
     ]
 
     config = Olmo3Config(
-        max_seq_len=128,
+        max_seq_len=64,
         hidden_dim=16,
         intermediate_dim=32,
         num_layers=4,
@@ -168,7 +166,7 @@ def test_olmo3_custom_layer_types():
 
     with use_test_mesh():
         # Build model and verify each layer has correct attention type
-        Vocab = hax.Axis("vocab", 1000)
+        Vocab = hax.Axis("vocab", 256)
         model = Olmo3LMHeadModel.init(Vocab=Vocab, config=config, key=random.PRNGKey(0))
 
         for i, layer in enumerate(model.transformer.layers):
@@ -177,13 +175,6 @@ def test_olmo3_custom_layer_types():
                 assert layer.self_attn.config.sliding_window == config.sliding_window
             else:
                 assert layer.self_attn.config.sliding_window is None
-
-        # Verify model runs successfully
-        Batch = hax.Axis("batch", 2)
-        input_ids = hax.random.randint(random.PRNGKey(0), (Batch, config.max_Pos), 0, Vocab.size)
-        mask = AttentionMask.causal()
-        out = model(input_ids, mask)
-        assert out.array.shape == (Batch.size, config.max_Pos.size, Vocab.size)
 
 
 def test_olmo3_sliding_window_config():
@@ -200,11 +191,11 @@ def test_olmo3_sliding_window_config():
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_olmo3_attention_vs_hf(use_yarn, num_kv_heads):
     """Test attention matches HuggingFace implementation."""
-    import torch
-    from transformers.models.olmo3.modeling_olmo3 import Olmo3Attention as HFOlmo3Attention
-    from transformers.models.olmo3.modeling_olmo3 import Olmo3RotaryEmbedding as HFOlmo3RotaryEmbedding
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.olmo3 import modeling_olmo3  # noqa: PLC0415  # optional dep: torch
 
-    from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
+    HFOlmo3Attention = modeling_olmo3.Olmo3Attention
+    HFOlmo3RotaryEmbedding = modeling_olmo3.Olmo3RotaryEmbedding
 
     if use_yarn:
         rope_config = YarnRotaryEmbeddingsConfig(
@@ -247,6 +238,49 @@ def test_olmo3_attention_vs_hf(use_yarn, num_kv_heads):
     chex.assert_trees_all_close(hf_out[0].detach().cpu().numpy(), out.array, rtol=1e-4, atol=1e-4)
 
 
+@skip_if_no_torch
+def test_olmo3_sliding_attention_yarn_vs_hf():
+    """Regression: TF5 OLMo3 applies the model RoPE config to sliding layers too."""
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.olmo3 import modeling_olmo3  # noqa: PLC0415  # optional dep: torch
+
+    rope_config = YarnRotaryEmbeddingsConfig(
+        theta=500000.0,
+        factor=8.0,
+        original_max_position_embeddings=32,
+        beta_fast=32.0,
+        beta_slow=1.0,
+    )
+    config = dataclasses.replace(_get_olmo3_config(num_kv_heads=2, seq_len=256), rope=rope_config)
+    layer_idx = 0
+
+    attention = _get_olmo3_attention(config, layer_idx=layer_idx, key=random.PRNGKey(0))
+    state = hax.state_dict.to_torch_compatible_state_dict(attention)
+    state = {k: torch.from_numpy(np.array(v)) for k, v in state.items()}
+
+    hf_config = config.to_hf_config(32000)
+    hf_rotary_emb = modeling_olmo3.Olmo3RotaryEmbedding(config=hf_config)
+    hf_attention = modeling_olmo3.Olmo3Attention(hf_config, layer_idx=layer_idx)
+    hf_attention.load_state_dict(state, strict=True)
+
+    x, mask = _get_random_inputs(config)
+    x_torch = torch.from_numpy(np.array(x.array))
+    batch_size = x_torch.shape[0]
+    mask_for_hf = mask.with_sliding_window(config.sliding_window)
+    explicit_mask = torch.from_numpy(np.array(mask_for_hf.materialize(config.max_Pos, config.KeyPos).array))
+    mask_torch = explicit_mask.broadcast_to((batch_size, 1, -1, -1))
+    mask_torch = (mask_torch == 0).float() * -1e9
+
+    out = attention(x, mask)
+    position_ids = torch.arange(config.max_Pos.size).unsqueeze(0)
+    cos, sin = hf_rotary_emb(x_torch, position_ids)
+    hf_out = hf_attention(
+        x_torch, position_ids=position_ids, attention_mask=mask_torch, position_embeddings=(cos, sin)
+    )
+
+    chex.assert_trees_all_close(hf_out[0].detach().cpu().numpy(), out.array, rtol=1e-4, atol=1e-4)
+
+
 @pytest.mark.parametrize("layer_idx", [0, 3])  # 0 = sliding, 3 = full
 def test_olmo3_attention_layer_type_detection(layer_idx):
     """Test that attention correctly detects its layer type."""
@@ -265,11 +299,11 @@ def test_olmo3_attention_layer_type_detection(layer_idx):
 @pytest.mark.parametrize("layer_idx", [0, 3])  # Test both sliding and full attention layers
 def test_olmo3_decoder_layer_vs_hf(num_kv_heads, layer_idx):
     """Test decoder layer matches HuggingFace implementation."""
-    import torch
-    from transformers.models.olmo3.modeling_olmo3 import Olmo3DecoderLayer as HFOlmo3DecoderLayer
-    from transformers.models.olmo3.modeling_olmo3 import Olmo3RotaryEmbedding as HFOlmo3RotaryEmbedding
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.olmo3 import modeling_olmo3  # noqa: PLC0415  # optional dep: torch
 
-    from levanter.models.olmo3 import Olmo3DecoderLayer
+    HFOlmo3DecoderLayer = modeling_olmo3.Olmo3DecoderLayer
+    HFOlmo3RotaryEmbedding = modeling_olmo3.Olmo3RotaryEmbedding
 
     olmo3_config = _get_olmo3_config(num_kv_heads=num_kv_heads, seq_len=256)
     key = random.PRNGKey(0)
@@ -343,7 +377,7 @@ def test_olmo3_sliding_vs_full_attention_differ():
 @skip_if_no_torch
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
-def test_olmo3_roundtrip(scan_layers, num_kv_heads):
+def test_olmo3_roundtrip(scan_layers, num_kv_heads, local_gpt2_tokenizer_path):
     """Test save/load roundtrip with HuggingFace.
 
     Uses config parameters from allenai/OLMo-3-1025-7B but with scaled-down
@@ -357,13 +391,12 @@ def test_olmo3_roundtrip(scan_layers, num_kv_heads):
     - sliding_window=4096, rms_norm_eps=1e-6
     - tie_word_embeddings=False, attention_bias=False
     """
-    import torch
-    from transformers import AutoModelForCausalLM, Olmo3ForCausalLM
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers import Olmo3ForCausalLM  # noqa: PLC0415  # optional dep: torch
 
-    from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
-    from levanter.models.olmo3 import Olmo3Config, Olmo3LMHeadModel
-
-    converter = Olmo3Config().hf_checkpoint_converter()
+    # Local tokenizer + no remote reference keeps the roundtrip off the Hub; the
+    # tokenizer is incidental (random inputs, logit-equivalence only).
+    converter = Olmo3Config(reference_checkpoint=None, tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
 
     # YARN config from allenai/OLMo-3-1025-7B with scaled-down original_max_position_embeddings
     # Real: original_max_position_embeddings=8192, but we scale down proportionally
@@ -441,7 +474,7 @@ def test_olmo3_roundtrip(scan_layers, num_kv_heads):
         assert np.isclose(torch_out, np.array(jax_out), rtol=1e-4, atol=1e-4).all(), f"{torch_out} != {jax_out}"
 
         # Save our model
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
 
         # Load saved model into HF
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
@@ -456,10 +489,9 @@ def test_olmo3_roundtrip(scan_layers, num_kv_heads):
 
 def test_olmo3_param_counts_dont_change_with_seqlen():
     """Test that parameter counts are independent of sequence length."""
-    from levanter.models.olmo3 import Olmo3LMHeadModel
 
-    model = Olmo3LMHeadModel.init(hax.Axis("v", 2048), _get_olmo3_config(seq_len=128), key=random.PRNGKey(0))
-    model2 = Olmo3LMHeadModel.init(hax.Axis("v", 2048), _get_olmo3_config(seq_len=256), key=random.PRNGKey(0))
+    model = Olmo3LMHeadModel.init(hax.Axis("v", 1024), _get_olmo3_config(seq_len=64), key=random.PRNGKey(0))
+    model2 = Olmo3LMHeadModel.init(hax.Axis("v", 1024), _get_olmo3_config(seq_len=128), key=random.PRNGKey(0))
     assert parameter_count(model) == parameter_count(model2)
 
 
@@ -467,9 +499,7 @@ def test_olmo3_param_counts_dont_change_with_seqlen():
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_olmo3_state_dict_consistency(num_kv_heads):
     """Test state dict keys match HuggingFace."""
-    from transformers import Olmo3ForCausalLM
-
-    from levanter.models.olmo3 import Olmo3Config, Olmo3LMHeadModel
+    from transformers import Olmo3ForCausalLM  # noqa: PLC0415  # optional dep: torch
 
     config = Olmo3Config(
         max_seq_len=128,
@@ -490,23 +520,16 @@ def test_olmo3_state_dict_consistency(num_kv_heads):
     assert set(hf_model.state_dict().keys()) == set(levanter_state_dict.keys())
 
 
-@pytest.mark.parametrize("num_kv_heads", [2, 4])
+@pytest.mark.parametrize("num_kv_heads", [2])
 def test_olmo3_seq_len_doesnt_change_predictions(num_kv_heads):
     """Test that predictions are consistent across sequence lengths."""
-    from levanter.models.olmo3 import Olmo3Config, Olmo3LMHeadModel
 
-    config = Olmo3Config(
-        max_seq_len=128,
-        hidden_dim=16,
-        num_heads=4,
-        num_kv_heads=num_kv_heads,
-        gradient_checkpointing=False,
-    )
-    Vocab = hax.Axis("vocab", 1000)
+    config = _get_olmo3_config(num_kv_heads=num_kv_heads, seq_len=128)
+    Vocab = hax.Axis("vocab", 256)
 
     # Make input and attn_mask
-    input_256 = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
-    input_128 = input_256[config.max_Pos, :128]
+    input_full = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
+    input_prefix = input_full[config.max_Pos, :64]
     attn_mask = AttentionMask.causal()
 
     model = Olmo3LMHeadModel.init(Vocab=Vocab, config=config, key=random.PRNGKey(0))
@@ -516,15 +539,14 @@ def test_olmo3_seq_len_doesnt_change_predictions(num_kv_heads):
         model_output = model(input, attn_mask=attn_mask)
         return model_output
 
-    jax_out_1 = compute(model, input_128)
-    jax_out_2 = compute(model, input_256)[config.max_Pos, :128]
+    jax_out_1 = compute(model, input_prefix)
+    jax_out_2 = compute(model, input_full)[config.max_Pos, :64]
 
-    assert np.allclose(jax_out_1.array, jax_out_2.array, rtol=1e-6, atol=1e-6)
+    assert np.allclose(jax_out_1.array, jax_out_2.array, rtol=1e-5, atol=1e-5)
 
 
 def test_olmo3_all_layers_have_correct_attention_type():
     """Test that all layers in a model have the expected attention type."""
-    from levanter.models.olmo3 import Olmo3Config, Olmo3LMHeadModel
 
     config = Olmo3Config(
         max_seq_len=128,

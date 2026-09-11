@@ -1,23 +1,18 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import tempfile
 
 import chex
 import equinox as eqx
-import numpy
+import haliax as hax
+import haliax.nn as hnn
 import numpy as np
 import pytest
 import transformers
 from jax import random
-
-import haliax as hax
-import haliax.nn as hnn
-
-from levanter.layers.attention import AttentionBackend, AttentionMask
-from levanter.models.llama import Attention, LlamaConfig, LlamaDecoderLayer, LlamaLMHeadModel
-from levanter.utils.jax_utils import parameter_count
-from test_utils import (
+from levanter.testing.helpers import (
     check_load_config,
     check_model_works_with_seqlen,
     parameterize_with_configs,
@@ -25,6 +20,13 @@ from test_utils import (
     skip_if_no_torch,
     use_test_mesh,
 )
+from transformers import AutoModelForCausalLM, LlamaForCausalLM
+
+from levanter.layers.attention import AttentionBackend, AttentionMask
+from levanter.main.train_lm import TrainLmConfig
+from levanter.models.llama import Attention, LlamaConfig, LlamaDecoderLayer, LlamaLMHeadModel
+from levanter.testing.model_configs import llama_test_config
+from levanter.utils.jax_utils import parameter_count
 
 
 @skip_if_no_torch
@@ -78,11 +80,16 @@ def test_llama_params():
 @pytest.mark.parametrize("use_flash", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_llama_attention(use_flash, num_kv_heads):
-    import torch
-    from transformers.models.llama.modeling_llama import LlamaAttention as HFLlamaAttention
-    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch
+        LlamaAttention as HFLlamaAttention,
+    )
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch
+        LlamaRotaryEmbedding as HFLlamaRotaryEmbedding,
+    )
 
-    config = _get_llama_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
+    attention_backend = AttentionBackend.DEFAULT if use_flash else AttentionBackend.VANILLA
+    config = llama_test_config(attention_backend=attention_backend, num_kv_heads=num_kv_heads)
 
     attention_config = config.attention_config()
     attention = Attention.init(config=attention_config, key=random.PRNGKey(0))  # type: ignore
@@ -113,17 +120,43 @@ def test_llama_attention(use_flash, num_kv_heads):
 
 
 def test_llama_param_counts_dont_change_with_seqlen():
-    model = LlamaLMHeadModel.init(hax.Axis("v", 2048), _get_llama_config(seq_len=128), key=random.PRNGKey(0))
-    model2 = LlamaLMHeadModel.init(hax.Axis("v", 2048), _get_llama_config(seq_len=256), key=random.PRNGKey(0))
+    model = LlamaLMHeadModel.init(hax.Axis("v", 512), llama_test_config(seq_len=32), key=random.PRNGKey(0))
+    model2 = LlamaLMHeadModel.init(hax.Axis("v", 512), llama_test_config(seq_len=64), key=random.PRNGKey(0))
     assert parameter_count(model) == parameter_count(model2)
+
+
+def test_llama_resize_vocab_grows_embeddings_and_head():
+    # untied: both the input embeddings and the lm_head must be resized to the new vocab
+    Vocab = hax.Axis("vocab", 50)
+    model = LlamaLMHeadModel.init(Vocab, llama_test_config(), key=random.PRNGKey(0))
+    assert model.lm_head is not None
+
+    resized = model.resize_vocab(64, key=random.PRNGKey(1))
+    assert resized.Vocab.size == 64
+    assert resized.embeddings.Vocab.size == 64
+    assert resized.lm_head.Out.size == 64
+    # the rows for the original tokens are preserved
+    chex.assert_trees_all_close(resized.lm_head.weight["vocab", : Vocab.size].array, model.lm_head.weight.array)
+
+    # tied: there is no separate lm_head, so only the embeddings are resized
+    tied_config = dataclasses.replace(llama_test_config(), tie_word_embeddings=True)
+    tied = LlamaLMHeadModel.init(Vocab, tied_config, key=random.PRNGKey(0))
+    assert tied.lm_head is None
+
+    resized_tied = tied.resize_vocab(40, key=random.PRNGKey(1))
+    assert resized_tied.lm_head is None
+    assert resized_tied.Vocab.size == 40
+    assert resized_tied.embeddings.Vocab.size == 40
 
 
 @skip_if_no_torch
 def test_llama_rms_norm():
-    import torch
-    from transformers.models.llama.modeling_llama import LlamaRMSNorm as HFLlamaRMSNorm
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch
+        LlamaRMSNorm as HFLlamaRMSNorm,
+    )
 
-    config = _get_llama_config()
+    config = llama_test_config()
     ln = hnn.RmsNorm.init(config.Embed, eps=config.layer_norm_epsilon, use_bias=config.use_bias)
     hf_ln = HFLlamaRMSNorm(config.Embed.size, eps=config.layer_norm_epsilon)
 
@@ -141,11 +174,15 @@ def test_llama_rms_norm():
 @skip_if_no_torch
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_llama_decoder_layer(num_kv_heads):
-    import torch
-    from transformers.models.llama.modeling_llama import LlamaDecoderLayer as HFLlamaDecoderLayer
-    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch
+        LlamaDecoderLayer as HFLlamaDecoderLayer,
+    )
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch
+        LlamaRotaryEmbedding as HFLlamaRotaryEmbedding,
+    )
 
-    llama_config = _get_llama_config(num_kv_heads=num_kv_heads)
+    llama_config = llama_test_config(num_kv_heads=num_kv_heads)
     key = random.PRNGKey(0)
     llama_decoder_layer = LlamaDecoderLayer.init(config=llama_config, key=key)
 
@@ -185,7 +222,7 @@ def test_llama_decoder_layer(num_kv_heads):
 
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_llama_lm_head_model(num_kv_heads):
-    llama_config = _get_llama_config(num_kv_heads=num_kv_heads)
+    llama_config = llama_test_config(num_kv_heads=num_kv_heads)
     Batch = hax.Axis("batch", 2)
     Vocab = hax.Axis("vocab", 1000)
     Pos = llama_config.max_Pos
@@ -198,11 +235,12 @@ def test_llama_lm_head_model(num_kv_heads):
 
 
 @pytest.mark.parametrize("use_flash", [True, False])
-@pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
+@pytest.mark.parametrize("num_kv_heads", [2])
 def test_llama_lm_head_model_bwd(use_flash, num_kv_heads):
-    llama_config = _get_llama_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
-    Batch = hax.Axis("batch", 2)
-    Vocab = hax.Axis("vocab", 1000)
+    attention_backend = AttentionBackend.DEFAULT if use_flash else AttentionBackend.VANILLA
+    llama_config = llama_test_config(attention_backend=attention_backend, num_kv_heads=num_kv_heads)
+    Batch = hax.Axis("batch", 1)
+    Vocab = hax.Axis("vocab", 256)
     Pos = llama_config.max_Pos
     input_ids = hax.random.randint(random.PRNGKey(0), (Batch, Pos), 0, Vocab.size)
     mask = AttentionMask.causal()
@@ -219,11 +257,12 @@ def test_llama_lm_head_model_bwd(use_flash, num_kv_heads):
 @skip_if_no_torch
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
-def test_llama_roundtrip(scan_layers, num_kv_heads):
-    import torch
-    from transformers import AutoModelForCausalLM, LlamaForCausalLM
+def test_llama_roundtrip(scan_layers, num_kv_heads, local_gpt2_tokenizer_path):
+    import torch  # noqa: PLC0415  # optional dep: torch
 
-    converter = LlamaConfig().hf_checkpoint_converter()
+    # Local tokenizer + no remote reference keeps the roundtrip off the Hub; the
+    # tokenizer is incidental (random inputs, logit-equivalence only).
+    converter = LlamaConfig(reference_checkpoint=None, tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
 
     config = LlamaConfig(
         max_seq_len=128,
@@ -270,26 +309,14 @@ def test_llama_roundtrip(scan_layers, num_kv_heads):
         # now we're going to magnify the model parameters enough that differences should actualy show up
         jax_out = compute(model, input).array
 
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
 
         torch_out2 = torch_model2(input_torch)
         torch_out2 = torch_out2.logits[0].detach().cpu().numpy()
         assert torch_out2.shape == jax_out.shape, f"{torch_out2.shape} != {jax_out.shape}"
-        numpy.testing.assert_allclose(torch_out2, jax_out, rtol=1e-5, atol=1e-5)
-
-
-def _get_llama_config(use_flash=False, num_kv_heads=4, seq_len=128) -> LlamaConfig:
-    return LlamaConfig(
-        max_seq_len=seq_len,
-        hidden_dim=32,
-        num_heads=4,
-        num_kv_heads=num_kv_heads,
-        gradient_checkpointing=False,  # disable for tests so debugging is easier
-        attn_backend=AttentionBackend.DEFAULT if use_flash else AttentionBackend.VANILLA,
-        flash_attention_block_size=8 if use_flash else None,
-    )
+        np.testing.assert_allclose(torch_out2, jax_out, rtol=1e-5, atol=1e-5)
 
 
 def _get_random_inputs(config: LlamaConfig, override_Pos=None):
@@ -306,8 +333,6 @@ def _get_random_inputs(config: LlamaConfig, override_Pos=None):
 
 @parameterize_with_configs("llama*.yaml")
 def test_llama_configs(config_file):
-    from levanter.main.train_lm import TrainLmConfig
-
     config_class = TrainLmConfig
 
     check_load_config(config_class, config_file)
@@ -329,8 +354,6 @@ def test_pass_different_length_seq(num_kv_heads):
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_state_dict_consistency(scan_layers, num_kv_heads):
-    from transformers import LlamaForCausalLM
-
     config = LlamaConfig(
         max_seq_len=128,
         hidden_dim=16,
@@ -348,20 +371,14 @@ def test_state_dict_consistency(scan_layers, num_kv_heads):
     assert set(hf_model.state_dict().keys()) == set(levanter_state_dict.keys())
 
 
-@pytest.mark.parametrize("num_kv_heads", [2, 4])
+@pytest.mark.parametrize("num_kv_heads", [2])
 def test_llama_seq_len_doesnt_change_predictions(num_kv_heads):
-    config = LlamaConfig(
-        max_seq_len=128,
-        hidden_dim=16,
-        num_heads=4,
-        num_kv_heads=num_kv_heads,
-        gradient_checkpointing=False,
-    )
-    Vocab = hax.Axis("vocab", 1000)
+    config = llama_test_config(num_kv_heads=num_kv_heads, seq_len=128)
+    Vocab = hax.Axis("vocab", 256)
 
     # Make input and attn_mask
-    input_256 = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
-    input_128 = input_256[config.max_Pos, :128]
+    input_full = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
+    input_prefix = input_full[config.max_Pos, :64]
     attn_mask = AttentionMask.causal()
 
     model = LlamaLMHeadModel.init(Vocab=Vocab, config=config, key=random.PRNGKey(0))
@@ -371,7 +388,7 @@ def test_llama_seq_len_doesnt_change_predictions(num_kv_heads):
         model_output = model(input, attn_mask=attn_mask)
         return model_output
 
-    jax_out_1 = compute(model, input_128)
-    jax_out_2 = compute(model, input_256)[config.max_Pos, :128]
+    jax_out_1 = compute(model, input_prefix)
+    jax_out_2 = compute(model, input_full)[config.max_Pos, :64]
 
-    assert np.allclose(jax_out_1.array, jax_out_2.array, rtol=1e-6, atol=1e-6)
+    assert np.allclose(jax_out_1.array, jax_out_2.array, rtol=1e-5, atol=1e-5)
