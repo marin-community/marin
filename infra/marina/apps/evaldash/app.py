@@ -167,6 +167,7 @@ class PanelRowResponse(BaseModel):
     missing: dict[str, MissingCellResponse]
     aggregate: PanelAggregateResponse | None
     covered: int
+    last_updated: str | None
 
 
 class PanelRequestResponse(BaseModel):

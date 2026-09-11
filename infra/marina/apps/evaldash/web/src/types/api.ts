@@ -115,6 +115,8 @@ export interface PanelRow {
   missing: Record<string, MissingCell>
   aggregate: PanelAggregate | null
   covered: number
+  // Maximum created_at among the row's cells.
+  last_updated: string | null
 }
 
 export interface PanelRequest {

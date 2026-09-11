@@ -231,6 +231,7 @@ def build_panel(
                 "archived": model in archived_models,
                 "cells": {name: cell_payload(measurement) for name, measurement in cells.items()},
                 "missing": missing.get(model, {}),
+                "last_updated": max((measurement.created_at for measurement in cells.values()), default=None),
                 "aggregate": _aggregate_payload(panel_aggregate(cells, protocol)) if protocol else None,
                 "covered": sum(1 for name in panel if name in cells),
             }
