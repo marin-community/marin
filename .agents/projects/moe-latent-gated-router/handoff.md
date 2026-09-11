@@ -1,38 +1,34 @@
 # Gated latent router continuation
 
-**Paused:** user questioned normalization semantics. Do not submit or resume jobs
-until clarified. Gate-only smoke completed successfully, but the just-submitted full
-d512 parent was cancelled; d768 was never submitted. Heartbeat is PAUSED.
+User confirmed the intended architecture: `down(h) -> RMSNorm -> gate -> router + experts`.
+Retain the latent RMSNorm. Do not restore or compare the superseded gate-only smoke.
 
 Issue: https://github.com/marin-community/marin/issues/9110. Idea: Zihan Qiu.
 Worktree: `/Users/kaiyuew/Downloads/Project/marin-latent-gated-router`.
-Branch: `codex/moe-latent-gated-router`. Training source: `da78e56d0`.
+Branch: `codex/moe-latent-gated-router`. Exact training source is in the state file.
 Owner: thread heartbeat `follow-gated-latent-moe-ablation-9110`, every 10 minutes.
-State: `scratch/20260911-1028_moe-lgr-9110_monitoring_state.json`.
+State: `scratch/20260911-1105_moe-lgr-9110-rmsgated_monitoring_state.json`.
 
 ## Scope and current state
 
-The user clarified that no new baseline is needed. **Never submit a control
-training job.** Reuse existing Agent MoE baseline runs. The code retains a control
-only for numerical tests and schedule calculation. The treatment is literally
-`z = GatedNorm(h @ latent_down)` with no latent RMSNorm, and router plus routed
-experts both consume z. Shared experts and outer norms retain the hero behavior.
+**Never submit a control training job.** Reuse existing Agent MoE baseline runs.
+The control in code exists only for numerical tests and schedule calculation.
+The treatment computes `z = GatedNorm(RMSNorm(h @ latent_down))`; both router and
+routed experts consume z. Shared experts and outer norms retain hero behavior.
 
-At handoff the only submitted workload is the five-step smoke:
+The corrected smoke is `moe-lgr-9110-d512-rmsgated-smoke`. Its parent is
+`/kaiyuew/moe-lgr-9110-d512-rmsgated-smoke` and its only child is
+`<parent>/grug-train-moe-lgr-9110-d512-rmsgated-smoke`. Read the state file for the
+current submission and progress status. W&B uses the same run ID in
+`marin-community/marin_moe`. Its final checkpoint is
+`gs://marin-us-central1/users/kaiyuew/grug/moe-lgr-9110-d512-rmsgated-smoke/dev/checkpoints/step-5`.
 
-- Parent: `/kaiyuew/moe-lgr-9110-d512-gated-smoke`.
-- Child: `/kaiyuew/moe-lgr-9110-d512-gated-smoke/grug-train-moe-lgr-9110-d512-gated-smoke`.
-- Attempt 0 was scheduler-preempted. Iris automatically started attempt 1 on another v5p-8; latest logs enter training 0/5 at 17:49:13 UTC. Manual recovery count is zero.
-- Parent has read all cached dependencies and dispatched only the expected child.
-- Model starts from scratch as intended. No advancing training loss or final checkpoint is verified yet.
-- W&B ID/name: `moe-lgr-9110-d512-gated-smoke`, project `marin-community/marin_moe`.
-- Expected final checkpoint:
-  `gs://marin-us-central1/users/kaiyuew/grug/moe-lgr-9110-d512-gated-smoke/dev/checkpoints/step-5`.
-
-The original user checkout is dirty and unrelated. Work only in this worktree.
-Do not alter production jobs, cluster configuration, or shared data caches.
-All 32 canonical data caches are already successful in us-central1. Recipe-drift
-warnings concern new resource fields; pinned cached outputs are intentionally reused.
+Old `gated` identities are superseded: the gate-only smoke finished, and the
+full d512 parent plus child were cancelled. Old d768 was never submitted.
+Keep all corrected experiments under fresh `rmsgated` identities and output roots.
+The original user checkout is dirty and unrelated; work only in this worktree.
+All 32 pinned data caches already exist in us-central1. Do not alter production
+jobs, cluster settings, or shared data caches.
 
 ## Startup, recovery and progression
 
@@ -46,13 +42,13 @@ CPU-parent placement; removing `--reserve` resolved it. Keep the parent CPU-only
 After a successful five-step smoke, verify finite training/evaluation, terminal
 successful Iris state, W&B `finished`, and final checkpoint `metadata.json`.
 Then submit exactly two full Gate 1 cells, `dim=512` and `dim=768`, with run IDs
-`moe-lgr-9110-d512-gated` and `moe-lgr-9110-d768-gated`. Before each submission,
+`moe-lgr-9110-d512-rmsgated` and `moe-lgr-9110-d768-rmsgated`. Before each submission,
 check that its parent and child do not already exist in a pending/running state.
 Use the existing launcher; do not create a separate training implementation.
 
 ```bash
 LGR_DIM=512
-LGR_RUN_ID="moe-lgr-9110-d${LGR_DIM}-gated"
+LGR_RUN_ID="moe-lgr-9110-d${LGR_DIM}-rmsgated"
 LGR_COMMIT=$(git rev-parse HEAD)
 uv run --no-sync iris --cluster=marin job run --no-wait \
   --job-name "$LGR_RUN_ID" --cpu 1 --memory 2G --region us-central1 --extra cpu \
@@ -71,7 +67,7 @@ No secret values belong in state files, logs, or issue comments.
 
 The exact smoke resubmit command is stored in the JSON state file. If code changes,
 run appropriate checks, commit/push, and record the new source commit before recovery.
-The smoke bundle did not contain `.git`; full jobs explicitly receive `GIT_COMMIT`
+Bundles do not contain `.git`; all corrected jobs explicitly receive `GIT_COMMIT`
 so W&B can log their source. At most two manual recoveries per cell; diagnose
 persistent failures and report them rather than retrying indefinitely.
 

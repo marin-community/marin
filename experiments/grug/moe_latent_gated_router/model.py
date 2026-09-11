@@ -937,11 +937,7 @@ class MoEMLP(eqx.Module):
                 if latent is None
                 else reshard(_init_weight(k_down, (d, latent), cfg.initializer_std), P(_FSDP_AXES, "model"))
             ),
-            latent_norm=(
-                RMSNorm.init(latent, cfg.layer_norm_eps)
-                if latent is not None and cfg.latent_routing == LatentRouting.FULL_WIDTH_RMS
-                else None
-            ),
+            latent_norm=RMSNorm.init(latent, cfg.layer_norm_eps) if latent is not None else None,
             # Derive a new key without changing the baseline's common parameter initialization.
             latent_gated_norm=(
                 GatedNorm.init(expert_width, cfg.initializer_std, key=random.fold_in(key, 4))
@@ -981,11 +977,10 @@ class MoEMLP(eqx.Module):
             routed_input = jnp.einsum(
                 "td,dl->tl", x_flat, self.w_latent_down.astype(x_flat.dtype), out_sharding=_batch_spec()
             )
+            assert self.latent_norm is not None
+            routed_input = self.latent_norm(routed_input)
             if self.latent_gated_norm is not None:
                 routed_input = self.latent_gated_norm(routed_input)
-            else:
-                assert self.latent_norm is not None
-                routed_input = self.latent_norm(routed_input)
         router_input = routed_input if self.cfg.latent_routing == LatentRouting.GATED_LATENT else x_flat
         # Top-k, sigmoid weights, and QB statistics read fp32 logits in both arms.
         router_logits = jnp.einsum("td,de->te", router_input, reshard(self.router, P(None, None))).astype(jnp.float32)

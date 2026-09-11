@@ -6,9 +6,9 @@ Base: main at d891fba48a7d3729fdac2595df3c6ca292a53b74.
 
 1. Copy the EP hero model and training loop into `experiments/grug/moe_latent_gated_router`.
    Keep the existing full-width router / latent RMSNorm as an explicit control arm.
-   The treatment computes `z = GatedNorm(h @ W_latent_down)` before routing;
+   The treatment computes `z = GatedNorm(RMSNorm(h @ W_latent_down))` before routing;
    both `z @ W_router` and the selected experts read this same `z`. The gate
-   replaces RMSNorm and has rank 128. Shared experts keep their original input.
+   follows the retained RMSNorm and has rank 128. Shared experts keep their original input.
 2. Preserve common parameter initialization. The new gate receives a folded-in key;
    creating it must not perturb expert, attention, shared, or projection initialization.
    Reuse the hero optimizer: latent gate matrices use MuonH and router uses Adam.
@@ -25,6 +25,8 @@ Base: main at d891fba48a7d3729fdac2595df3c6ca292a53b74.
    FLOPs and batches (32/64). Count the gate and reduced router FLOPs separately.
 6. Run a bounded accelerator startup check before full Gate 1. Each arm gets a unique
    run ID/output root. Confirm final evaluation/checkpoint writing and restart handling.
+   Use `moe-lgr-9110-d{dim}-rmsgated` IDs and a separate `-smoke` suffix.
+   The earlier gate-only smoke and cancelled `gated` full run are superseded.
 7. Submit only the d512/d768 gated_latent cells, verify children and W&B identity,
    and monitor until terminal. Reuse `moe_may_compute_opt_d{dim}_ep1` in
    `marin-community/marin_moe`. Recenter the baseline loss at alpha=0.0941 and

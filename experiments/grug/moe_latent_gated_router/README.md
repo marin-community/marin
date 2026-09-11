@@ -5,9 +5,9 @@ Tracking: [#9110](https://github.com/marin-community/marin/issues/9110).
 
 The control routes the full-width pre-MLP feature `h` and dispatches
 `RMSNorm(h @ W_latent_down)`. The treatment dispatches
-`z = GatedNorm(h @ W_latent_down)` and routes `z`. GatedNorm is the existing
-rank-128 multiplicative gate; there is no RMSNorm after the latent projection
-in the treatment. Both arms keep the pre-MLP RMSNorm/GatedNorm, shared experts,
+`z = GatedNorm(RMSNorm(h @ W_latent_down))` and routes `z`. GatedNorm is the existing
+rank-128 multiplicative gate. The original latent RMSNorm is retained before the gate.
+Both arms keep the pre-MLP RMSNorm/GatedNorm, shared experts,
 QB bias, sigmoid combine weights, and shared latent up-projection.
 
 The model and trainer are copied from `moe_hero_ep` at
@@ -47,10 +47,10 @@ Run the treatment at one width at a time with an exact run ID:
 
 ```bash
 uv run python -m experiments.grug.moe_latent_gated_router.launch \
-  --dim 512 --arm gated_latent --run-id moe-lgr-9110-d512-gated \
+  --dim 512 --arm gated_latent --run-id moe-lgr-9110-d512-rmsgated \
   --version dev
 uv run python -m experiments.grug.moe_latent_gated_router.launch \
-  --dim 768 --arm gated_latent --run-id moe-lgr-9110-d768-gated \
+  --dim 768 --arm gated_latent --run-id moe-lgr-9110-d768-rmsgated \
   --version dev
 ```
 
@@ -58,6 +58,9 @@ These commands print the plan. Add `--run` inside an Iris CPU parent to submit
 its TPU child. `--stop-after-steps` supports a separately named bounded smoke
 while retaining the full schedule. Checkpoints are written every 15 minutes
 and at completion under the artifact's output; restarts use the same run ID.
+The `rmsgated` IDs identify the user-confirmed RMSNorm-then-gate architecture.
+Earlier `gated` IDs used a superseded gate-only interpretation; do not resume those
+checkpoints or include their startup smoke metrics in the ablation results.
 
 Final comparison requires W&B state `finished`, Paloma macro loss, final total
 tokens, last-100-step mean token throughput, router entropy/counts and drop rate,

@@ -18,7 +18,7 @@ Experiment prefix: MOE-LGR. W&B group: moe-latent-gated-router-9110 in marin_moe
 
 EP hero main `d891fba48a7d3729fdac2595df3c6ca292a53b74`, scaled to small widths.
 The control is `RMSNorm(down(h))` for experts and `router(h)` for routing.
-The treatment is `z=GatedNorm(down(h))`, used by both router and experts.
+The treatment is `z=GatedNorm(RMSNorm(down(h)))`, used by both router and experts.
 The control is retained for numerical checks and analytic budget calculation.
 Only the treatment is trained. Historical comparisons have architecture,
 optimizer, hardware, and token-count differences.
@@ -141,3 +141,17 @@ See the [plan](../projects/moe-latent-gated-router/plan.md) and
 - Clarification pending: retain latent RMSNorm and add the gate, or keep the current
   gate-only treatment. The full d512 parent was cancelled and the heartbeat paused;
   d768 and all baseline jobs were never submitted. Do not auto-resume until resolved.
+
+### 2026-09-11 — Confirmed RMSNorm then gate
+
+- User confirmed: “down(h) → RMSNorm → gate → router + experts 我指的是这个”.
+  Retain the latent RMSNorm and apply the existing rank-128 gate after it.
+  The earlier gate-only interpretation and its smoke result are superseded.
+- Updated the model to normalize before gating for both router and experts.
+  Added regression coverage using a zero gate matrix and nonuniform learned norm
+  scales; this distinguishes missing normalization and normalization after gating.
+  Router gradients reach the down projection, norm weights and gate matrix.
+- Safe diff-driven test runner: all four numerical tests passed. Existing control
+  parity and the dense selected-expert oracle remain valid.
+- Use fresh `rmsgated` run IDs and output roots for corrected smoke and Gate 1.
+  Never restore the gate-only checkpoint. No new baseline training is authorized.

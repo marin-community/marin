@@ -70,20 +70,24 @@ def test_router_and_experts_ignore_hidden_components_removed_by_latent_projectio
         np.testing.assert_array_equal(left, right)
 
 
-def test_zero_latent_gate_gives_half_projection_and_router_gradient_reaches_it(mesh):
+def test_zero_latent_gate_halves_normalized_projection_and_router_gradient_reaches_it(mesh):
     with set_mesh(mesh):
         mlp = model.MoEMLP.init(config(model.LatentRouting.GATED_LATENT), key=jax.random.key(2))
         mlp = eqx.tree_at(lambda m: m.latent_gated_norm.w_up, mlp, jnp.zeros_like(mlp.latent_gated_norm.w_up))
+        mlp = eqx.tree_at(lambda m: m.latent_norm.weight, mlp, jnp.array([0.5, 1.0, 1.5, 2.0]))
         x = jax.random.normal(jax.random.key(3), (1, 4, 8))
         _, stats = mlp(x)
-        # With a zero final gate matrix, sigmoid(0)=1/2. RMS normalization here
-        # would change these logits, so this catches an accidentally retained norm.
-        z = 0.5 * (x.reshape(-1, 8) @ mlp.w_latent_down)
+        # A zero gate matrix must halve the normalized feature, including its
+        # learned scale. This catches a missing norm or norm placed after the gate.
+        projected = np.asarray(x).reshape(-1, 8) @ np.asarray(mlp.w_latent_down)
+        normalized = projected / np.sqrt(np.mean(projected**2, axis=-1, keepdims=True) + mlp.cfg.layer_norm_eps)
+        z = jnp.asarray(0.5 * normalized * np.array([0.5, 1.0, 1.5, 2.0]))
         logits = z @ mlp.router
         expected = jax.nn.softmax(logits, axis=-1).sum(axis=0)
         np.testing.assert_allclose(stats["router_prob_sum_local"][0], expected, rtol=1e-5, atol=1e-6)
         grads = eqx.filter_grad(lambda m: m(x)[1]["router_z_sq_sum_local"].sum())(mlp)
     assert np.linalg.norm(grads.w_latent_down) > 0
+    assert np.linalg.norm(grads.latent_norm.weight) > 0
     assert np.linalg.norm(grads.latent_gated_norm.w_up) > 0
 
 
@@ -93,8 +97,9 @@ def test_output_matches_selected_dense_experts_on_gated_latent(mesh):
         x = jax.random.normal(jax.random.key(5), (1, 4, 8))
         actual, _ = mlp(x)
         assert mlp.latent_gated_norm is not None
+        assert mlp.latent_norm is not None
         assert mlp.w_latent_down is not None
-        z = mlp.latent_gated_norm(x.reshape(-1, 8) @ mlp.w_latent_down)
+        z = mlp.latent_gated_norm(mlp.latent_norm(x.reshape(-1, 8) @ mlp.w_latent_down))
         logits = z @ mlp.router
         # Compute all experts densely, then select the per-token winners. This is
         # independent of the grouped dispatch/combine implementation.
