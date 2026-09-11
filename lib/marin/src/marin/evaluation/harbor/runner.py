@@ -180,7 +180,7 @@ def _job_dir(output_dir: str, job_name: str) -> StoragePath:
 
 
 def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> HarborTrial:
-    """Normalize one finished trial off its ``result.json``, locating its durable trajectory."""
+    """Normalize one Harbor result and locate its durable trajectory."""
     trial_dir = result_file.parent
     data = json.loads(result_file.read_text())
     task_id = data.get("task_name", trial_dir.name)
@@ -216,7 +216,7 @@ def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> Harb
 
 
 def _read_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy) -> list[HarborTrial]:
-    """Read every finished trial under ``job_dir``, one parallel per-trial read each."""
+    """Read all finished trials under ``job_dir`` concurrently."""
     result_files = sorted((job_dir / "*/result.json").glob(), key=lambda path: path.parent.name)
     if not result_files:
         return []
@@ -249,7 +249,7 @@ def _attempted_trials(job_dir: StoragePath) -> int | None:
 
 
 def _remove_unscored_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy) -> None:
-    """Remove incomplete results so Harbor reruns them after a confirmed interruption."""
+    """Remove results Harbor should retry after a confirmed inference interruption."""
     for result_file in (job_dir / "*/result.json").glob():
         try:
             trial = _read_trial(result_file, taxonomy)
