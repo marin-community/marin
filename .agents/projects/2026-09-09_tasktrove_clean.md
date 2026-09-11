@@ -25,7 +25,7 @@ raw → summaries → templates → converted → graded → clean
 7. [x] Clean step: tasks/ per source, ledger/, manifest.json, report.md, export CLI, README
 8. [x] Full run on Iris `cw-us-east-02a` with the pushed SHA as tool ref; measured counts in the PR body; 100-task random sample inspected
 9. [x] Run 2026.09.10.1 (`/power/iris-run-job-20260910-030245`, tool ref 105b4541): its Docker sample exposed doctest-graded swesmith tasks and an uncompilable TACO oracle; both fixed in the converters and rerun as 2026.09.10.2, whose sample was clean; the reward-file fix reran it as 2026.09.10.3 (`/power/iris-run-job-20260910-055608`, tool ref 5062aaa3)
-10. [x] Delete superseded bucket artifacts: `tasktrove/*/{2026.09.09,2026.09.10,2026.09.10.1,2026.09.10.2,2026.09.10.3,2026.09.10.4}`, `raw/tasktrove/2026.09.10` (duplicate download; the pipeline pins `raw/tasktrove/2026.09.09`) and the first two smoke attempts' exports and checkpoints are gone; `raw/tasktrove/2026.09.09`, `tasktrove/clean/2026.09.10.5` and the third smoke's export and checkpoint remain
+10. [x] Delete superseded bucket artifacts: all intermediate TaskTrove run versions through `2026.09.10.6`, the duplicate raw download, the first two smoke attempts' exports and checkpoints, and Marina's obsolete catalog files are gone; pinned raw `raw/tasktrove/2026.09.09`, final run `2026.09.10.7`, and the successful smoke export and checkpoint remain
 11. [x] Update this logbook's run section and the PR body with the final numbers; verified with `gh pr view --json title,body`
 12. [x] Publish an artifact with the detailed analysis: https://claude.ai/code/artifact/22018f48-ca1f-4a55-9f5c-12108557d2ba (funnel, kept and dropped sources with reasons, per-check rejections, normalization, the four Docker samples, the smoke run)
 13. [x] Smoke-train Qwen 0.6B on the clean dataset through marin skyrl, configured after the curriculum experiment; config and result in the smoke section below (third attempt succeeded end to end, reward 0.0)
@@ -42,7 +42,36 @@ raw → summaries → templates → converted → graded → clean
 24. [x] M6 cleanup skipped by product decision; retain the existing exact, within-source instruction deduplication without a near-duplicate study or key change
 25. [x] Replace the TaskTrove Marina app with a cleanup report and a paginated viewer over the final clean Parquet file itself
 26. [x] Reshard TaskTrove to 64 working shards and exactly one final clean Parquet shard
-27. [ ] Final cleanup: rerun the full pipeline once after the cleanup decisions, regenerate the report and artifact, run the final Docker sample, deploy Marina, and update PR #9061
+27. [x] Final cleanup: run `2026.09.10.7` at the pushed verifier ref, validate its 64-to-1 outputs, publish the exact final Parquet and manifest, deploy Marina revision `marina-00041-rx2`, and update the artifact and PR #9061
+
+## Final publication
+
+Run `2026.09.10.7` completed on `cw-us-east-02a` as Iris job
+`/power/iris-run-job-20260910-231924` with no failures or preemptions. It used verifier ref
+`b2b68d8b0a770cdc0ab3903780172c4b3eea81b1`, read 1,739,326 pinned raw tasks, and retained
+1,450,969 tasks from 44 sources through 20 converters, 12 verifier modes, and 39 Dockerfiles.
+Template summaries, converted tasks, and graded tasks each contain exactly 64 part files. The final
+dataset contains one 3,880,427,133-byte Parquet file with 1,450,969 rows, 67 row groups, and the
+expected 12-column schema.
+
+Canonical outputs:
+
+- `s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.7/tasks/part-00000.parquet`
+- `s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.7/manifest.json`
+- `s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.7/ledger.parquet`
+- `s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.7/report.md`
+
+The production mirror contains only `gs://marin-marina/tasktrove/manifest.json` and
+`gs://marin-marina/tasktrove/tasks/part-00000.parquet`. The manifest MD5 is
+`08dc8a859e8f8645f7eaa8551378a74b` in both stores. Marina revision `marina-00041-rx2` serves
+image digest `sha256:3e8b4024e873b70d2eee66be328368ad883e635175e26959036616127cec1475`.
+Authenticated production checks returned the page and manifest with 200, a 3,880,427,133-byte
+Parquet HEAD with `Accept-Ranges: bytes`, and `PAR1` from both boundary range requests with 206.
+
+The final run changes sharding and reporting, not the task conversion or verifier semantics already
+covered by the 190-task Daytona validity run, the 100-task random Docker audit, the language-specific
+golden samples, converter fixtures, and verifier tests recorded below. A new full Daytona solve run
+was not repeated after the 64-to-1 reshard because it would exercise identical task archives.
 
 ## Cleanup extension
 
