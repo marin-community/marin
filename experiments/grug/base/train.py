@@ -73,7 +73,13 @@ class GrugTrainerConfig:
         default_factory=lambda: BackwardFlowConfig(interval=_BACKWARD_FLOW_DEFAULT_INTERVAL)
     )
     loss_implementation: str | tuple[str, ...] | None = None
+    # This variant has no sequence sharding; context parallelism requires moe_hero_ep.
+    context_axis_size: int = 1
     sharding_dump_path: str | None = None
+
+    def __post_init__(self):
+        if self.context_axis_size != 1:
+            raise ValueError("This Grug variant requires context_axis_size=1; use moe_hero_ep for context parallelism.")
 
 
 @dataclass(frozen=True)
@@ -446,7 +452,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
     # Keep the mesh compact so P(("replica_dcn", "data")) spans slices directly.
-    mesh = compact_grug_mesh()
+    mesh = compact_grug_mesh(context_axis_size=config.trainer.context_axis_size)
     checkpointer = trainer.checkpointer.create(run_id)
     with set_mesh(mesh), TrainingDashboard(config, checkpointer.request_checkpoint, run_id):
         batch_schedule = trainer.batch_schedule
