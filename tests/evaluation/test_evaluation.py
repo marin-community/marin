@@ -551,8 +551,6 @@ def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):
 
 
 def test_registry_family_travels_into_the_record_the_launcher_writes(monkeypatch):
-    """The dashboard groups settings of one benchmark from what each run declares, so the family a
-    definition carries has to reach the record. An eval that declares none writes no family."""
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
         model=models()["qwen3-8b"],

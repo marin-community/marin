@@ -574,10 +574,4 @@ def select(
 
 
 def covers_panel(cells: Mapping[str, Measurement], panel: Sequence[str]) -> bool:
-    """Whether one model's chosen cells cover every benchmark on ``panel``.
-
-    This is the rule behind :data:`Completeness.COMPLETE_PANEL`. A caller that decides its own panel
-    after selection -- a view that collapses several settings of a benchmark into one column, say --
-    applies it there instead of in :func:`select`, over the same definition rather than its own.
-    """
     return all(name in cells for name in panel)
