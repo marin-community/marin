@@ -6,6 +6,7 @@
 import bisect
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,7 +16,6 @@ import pyarrow.parquet as pq
 from fastapi import FastAPI, HTTPException, Query, Response, status
 from iris.cluster.controller.lru_cache import LRUCache
 from marina.apps import RegisteredApi, Services, registered_api
-from pyarrow.fs import FSSpecHandler, PyFileSystem
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
@@ -27,6 +27,7 @@ PAGE_LIMIT = 100
 ROW_GROUP_CACHE_SIZE = 8
 FILTER_CACHE_SIZE = 32
 PAGE_CACHE_SIZE = 128
+FILTER_READERS = 16
 METADATA_COLUMNS = (
     "source",
     "path",
@@ -84,14 +85,12 @@ class TaskStore:
 
     def __init__(self, data_url: str) -> None:
         self._fs, self._root = filesystem_for(data_url)
-        self._pa_fs = PyFileSystem(FSSpecHandler(self._fs))
         self._tasks_path = prefix_join(self._root, TASKS_FILE)
         self._manifest_path = prefix_join(self._root, MANIFEST_FILE)
         self._load_lock = threading.Lock()
         self._row_group_ends: tuple[int, ...] | None = None
         self._environments: dict[str, str] | None = None
         self._source_counts: dict[str, int] | None = None
-        self._columns: dict[str, pa.Array] = {}
         self._row_groups = LRUCache[int, pa.Table](ROW_GROUP_CACHE_SIZE)
         self._matches = LRUCache[TaskFilters, pa.Array](FILTER_CACHE_SIZE)
         self._pages = LRUCache[tuple[int, int, TaskFilters], TaskPage](PAGE_CACHE_SIZE)
@@ -124,23 +123,6 @@ class TaskStore:
         self._load_index()
         assert self._row_group_ends is not None
         return self._row_group_ends[-1] if self._row_group_ends else 0
-
-    def _column(self, name: str) -> pa.Array:
-        cached = self._columns.get(name)
-        if cached is not None:
-            return cached
-        with self._load_lock:
-            cached = self._columns.get(name)
-            if cached is not None:
-                return cached
-            column = pq.read_table(
-                self._tasks_path,
-                filesystem=self._pa_fs,
-                columns=[name],
-                use_threads=True,
-            )[name].combine_chunks()
-            self._columns[name] = column
-            return column
 
     def _environment_ids(self, environment: str) -> list[str]:
         self._load_index()
@@ -213,16 +195,15 @@ class TaskStore:
             limit=limit,
         )
 
-    def _matching_rows(
-        self,
-        filters: TaskFilters,
-    ) -> pa.Array | None:
-        cached = self._matches.get(filters)
-        if cached is not None:
-            return cached
-        mask: pa.Array | None = None
+    def _filter_row_group(self, row_group: int, columns: list[str]) -> pa.Table:
+        with self._fs.open(self._tasks_path, "rb") as handle:
+            return pq.ParquetFile(handle).read_row_group(row_group, columns=columns)
 
-        def add(next_mask: pa.Array) -> None:
+    @staticmethod
+    def _local_matches(table: pa.Table, filters: TaskFilters, environment_ids: list[str]) -> list[int]:
+        mask: pa.Array | pa.ChunkedArray | None = None
+
+        def add(next_mask: pa.Array | pa.ChunkedArray) -> None:
             nonlocal mask
             mask = next_mask if mask is None else pc.and_(mask, next_mask)
 
@@ -232,20 +213,58 @@ class TaskStore:
             ("mode", filters.mode),
         ):
             if value:
-                add(pc.equal(self._column(column), value))
+                add(pc.equal(table[column], value))
+        if filters.environment:
+            add(pc.is_in(table["dockerfile_id"], value_set=pa.array(environment_ids)))
+        if filters.tag:
+            tags = table["tags"]
+            tag_rows = pc.filter(pc.list_parent_indices(tags), pc.equal(pc.list_flatten(tags), filters.tag))
+            add(pc.is_in(pa.array(range(table.num_rows), type=pa.int64()), value_set=tag_rows))
+        if filters.query:
+            add(pc.match_substring(table["path"], filters.query, ignore_case=True))
+        assert mask is not None
+        return pc.indices_nonzero(mask).to_pylist()
+
+    def _matching_rows(
+        self,
+        filters: TaskFilters,
+    ) -> pa.Array | None:
+        cached = self._matches.get(filters)
+        if cached is not None:
+            return cached
+        columns = [
+            column
+            for column, value in (
+                ("source", filters.source),
+                ("converter", filters.converter),
+                ("mode", filters.mode),
+                ("dockerfile_id", filters.environment),
+                ("tags", filters.tag),
+                ("path", filters.query),
+            )
+            if value
+        ]
+        if not columns:
+            return None
+
+        environment_ids: list[str] = []
         if filters.environment:
             environment_ids = self._environment_ids(filters.environment)
             if not environment_ids:
                 return self._matches.put(filters, pa.array([], type=pa.int64()))
-            add(pc.is_in(self._column("dockerfile_id"), value_set=pa.array(environment_ids)))
-        if filters.tag:
-            tags = self._column("tags")
-            tag_rows = pc.filter(pc.list_parent_indices(tags), pc.equal(pc.list_flatten(tags), filters.tag))
-            add(pc.is_in(pa.array(range(self.num_rows), type=pa.int64()), value_set=tag_rows))
-        if filters.query:
-            add(pc.match_substring(self._column("path"), filters.query, ignore_case=True))
-        matches = None if mask is None else pc.indices_nonzero(mask)
-        return matches if matches is None else self._matches.put(filters, matches)
+
+        self._load_index()
+        assert self._row_group_ends is not None
+        row_groups = range(len(self._row_group_ends))
+        with ThreadPoolExecutor(FILTER_READERS) as pool:
+            tables = pool.map(lambda row_group: self._filter_row_group(row_group, columns), row_groups)
+            local_matches = [self._local_matches(table, filters, environment_ids) for table in tables]
+
+        matches: list[int] = []
+        starts = (0, *self._row_group_ends[:-1])
+        for start, rows in zip(starts, local_matches, strict=True):
+            matches.extend(start + row for row in rows)
+        return self._matches.put(filters, pa.array(matches, type=pa.int64()))
 
     def page(
         self,
