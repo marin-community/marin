@@ -104,6 +104,8 @@ def _spot_check_docs(sources: dict[str, QualityScores]) -> list[dict]:
     keeping up to SAMPLE_PER_CELL docs per (source, bucket)."""
     kept: dict[tuple[str, int], list[dict]] = defaultdict(list)
     for qs in sources.values():
+        if qs.samples_output_dir is None:
+            continue
         rows = sample_rows(
             qs.samples_output_dir, ["source", "id", "score", "quality_bucket", "text"], SAMPLE_ROWS_PER_SOURCE
         )

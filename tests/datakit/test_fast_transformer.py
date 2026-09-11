@@ -18,7 +18,11 @@ import numpy as np
 import pytest
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
-from experiments.datakit.cluster.quality.fast_transformer.calibrate import calibration_knots, fit_cutpoints
+from experiments.datakit.cluster.quality.fast_transformer.calibrate import (
+    apply_calibration,
+    calibration_knots,
+    fit_cutpoints,
+)
 from experiments.datakit.cluster.quality.fast_transformer.score import _systematic_take
 from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CHARS, PooledScorer, score_bme
 
@@ -132,3 +136,29 @@ def test_systematic_sample_is_deterministic_and_hits_target_fraction():
         assert kept == [i for i in range(1000) if _systematic_take(i, pct)]
         # ~pct of records, evenly spaced
         assert abs(len(kept) / 1000 - pct) < 0.01
+
+
+# ---------- apply_calibration: global vs per-type routing ----------
+
+FLAT = {"xk": [0.0, 0.5, 1.0], "yk": [0.0, 0.2, 1.0]}
+PER_TYPE = {"default": FLAT, "types": {"code": {"xk": [0.0, 0.5, 1.0], "yk": [0.0, 0.8, 1.0]}}}
+
+
+def test_global_calibration_applies_one_remap_to_every_document():
+    raw = np.array([0.0, 0.5, 1.0])
+    assert apply_calibration(raw, None, FLAT).tolist() == pytest.approx([0.0, 0.2, 1.0])
+    # Types are ignored under a global calibration.
+    assert apply_calibration(raw, np.array(["code", "prose", "code"], dtype=object), FLAT).tolist() == pytest.approx(
+        [0.0, 0.2, 1.0]
+    )
+
+
+def test_per_type_calibration_routes_by_type_and_falls_back_to_default():
+    raw = np.array([0.5, 0.5, 0.5])
+    types = np.array(["code", "prose", "code"], dtype=object)
+    assert apply_calibration(raw, types, PER_TYPE).tolist() == pytest.approx([0.8, 0.2, 0.8])
+
+
+def test_per_type_calibration_requires_types():
+    with pytest.raises(ValueError, match="content type"):
+        apply_calibration(np.array([0.5]), None, PER_TYPE)

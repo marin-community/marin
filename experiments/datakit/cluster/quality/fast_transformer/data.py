@@ -8,26 +8,14 @@ training split (mirroring fasttext's ``minCount`` pruning so every embedding row
 actually trained and the table stays small), and packs into dense padded arrays.
 """
 
-import functools
 import logging
 from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
-from transformers import AutoTokenizer
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
 logger = logging.getLogger(__name__)
-
-
-@functools.lru_cache(maxsize=8)
-def load_tokenizer(tokenizer_name: str):
-    """Load a HuggingFace tokenizer, memoized per process.
-
-    ``AutoTokenizer.from_pretrained`` re-runs the slow→fast conversion of the
-    250K-vocab tokenizer on every call; scoring calls this once per batch, so
-    without the cache a many-batch shard reloads the tokenizer hundreds of times.
-    """
-    return AutoTokenizer.from_pretrained(tokenizer_name)
 
 
 # Reserved compact ids. Real tokens are remapped to dense ids starting at 2.
@@ -57,19 +45,14 @@ class PackedData:
     max_tokens: int
 
 
-def _encode(tokenizer, texts: list[str], max_tokens: int) -> list[list[int]]:
+def _encode(tokenizer: MarinTokenizer, texts: list[str], max_tokens: int) -> list[list[int]]:
     """Tokenize *texts* (no special tokens), truncating to ``max_tokens``."""
     # Pre-truncate by characters to bound tokenizer work; ~8 chars/token is a
     # safe over-estimate so we never starve the max_tokens budget.
     char_cap = max_tokens * 8
     capped = [t[:char_cap] for t in texts]
-    encoded = tokenizer(
-        capped,
-        add_special_tokens=False,
-        truncation=True,
-        max_length=max_tokens,
-    )["input_ids"]
-    return encoded
+    encoded = tokenizer.encode_batch(capped, add_special_tokens=False)
+    return [row[:max_tokens] for row in encoded]
 
 
 def _build_vocab(train_ids: list[list[int]], min_count: int, max_vocab: int | None = None) -> dict[int, int]:
