@@ -135,6 +135,13 @@ Runtime values do not change the source-policy digest. Policy kwargs override mo
 the served endpoint/model, output paths, materialized source, and explicit `--limit` override both.
 Temporary policy and overlay files are owner-readable and removed after each isolated call.
 
+### Trial error taxonomy
+
+Preflight snapshots Harbor's infrastructure, agent, and passthrough error categories from the pinned
+`harbor-config` environment. Marin uses that snapshot to classify trial results and records the
+package version in `record.json`. Unknown exception names fail the run as an infrastructure failure,
+so taxonomy changes cannot silently alter scoring or completion coverage.
+
 ## Results
 
 Each Harbor evaluation writes:

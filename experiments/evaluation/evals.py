@@ -130,6 +130,7 @@ class HarborDefinition:
                 env=config.environment,
                 task_limit=runtime_task_limit,
                 config_digest=config.digest,
+                harbor_config_version=config.error_taxonomy.version,
             ),
         )
 

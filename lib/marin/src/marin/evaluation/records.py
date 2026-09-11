@@ -193,6 +193,7 @@ class HarborRef(BaseModel):
         pattern=r"^sha256:[0-9a-f]{64}$",
         exclude_if=lambda value: value is None,
     )
+    harbor_config_version: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class EvalRef(BaseModel):
