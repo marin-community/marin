@@ -586,3 +586,4 @@ author: benfeuer
 
 - Result: qk157 root `/benfeuer/eval-20260910-233618-snowball-final-qk157-base-f415` succeeded with zero failed attempts or preemptions. FineStore compacted exactly 1,196 sample rows, and durable record `20260910-233618-snowball-final-qk157-base-mrcr-8543` reports `status=succeeded`, 1,196 attempted, 1,196 scored, zero unanswered, and `mrcr_accuracy=0.004348118377484316`.
 - Release: submitted the remaining 73,728-token MRCR roots qk175 `…-12e6` (record `…-499f`), skew2 `…-c17f` (`…-ee04`), skew4 `…-24be` (`…-a1fd`), and skew8 `…-f3f7` (`…-f56b`) at interactive priority on `cw-rno2a`.
+- Cleanup: cancelled orphan evaluator `/benfeuer/eval-20260910-170609-snowball-final-qk157-base-4463/eval-mmlupro-4792804e`. Its parent and inference server had failed seven hours earlier, its latest evidence was repeated HTTP 502 retries against the dead endpoint, and dedicated qk157 MMLU-Pro root `…-2429` supersedes it. No durable successful record was deleted.
