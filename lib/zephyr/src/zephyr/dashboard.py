@@ -192,15 +192,15 @@ class WorkerQuery:
     limit: int
 
 
-class CoordinatorDashboardData(Protocol):
-    """Dashboard data methods that stay private to avoid actor RPC publication."""
+class DashboardData(Protocol):
+    """Queries used by the dashboard HTTP routes."""
 
-    def _dashboard_pipelines(self) -> PipelineList: ...
-    def _dashboard_plan(self, execution_id: str) -> PipelinePlan: ...
-    def _dashboard_status(self, execution_id: str) -> PipelineStatus: ...
-    def _dashboard_metrics(self, execution_id: str, max_points: int) -> PipelineMetrics: ...
-    def _dashboard_counters(self, query: CounterQuery) -> CounterPage: ...
-    def _dashboard_workers(self, query: WorkerQuery) -> WorkerPage: ...
+    def pipelines(self) -> PipelineList: ...
+    def plan(self, execution_id: str) -> PipelinePlan: ...
+    def status(self, execution_id: str) -> PipelineStatus: ...
+    def metrics(self, execution_id: str, max_points: int) -> PipelineMetrics: ...
+    def counters(self, query: CounterQuery) -> CounterPage: ...
+    def workers(self, query: WorkerQuery) -> WorkerPage: ...
 
 
 def bounded_limit(value: int, default: int, maximum: int) -> int:
@@ -329,25 +329,25 @@ def _integer_parameter(request: Request, name: str) -> int:
         raise HTTPException(status_code=400, detail=f"Query parameter {name!r} must be an integer") from error
 
 
-def create_dashboard_application(coordinator: CoordinatorDashboardData) -> ASGIApp:
+def create_dashboard_application(data: DashboardData) -> ASGIApp:
     """Serve the dashboard and its read-only JSON API."""
     raw_html = _dashboard_html()
 
     async def pipelines(_request: Request) -> Response:
-        return _json_response(await run_in_threadpool(coordinator._dashboard_pipelines))
+        return _json_response(await run_in_threadpool(data.pipelines))
 
     async def plan(request: Request) -> Response:
         execution_id = request.query_params.get("execution_id", "")
-        return _json_response(await run_in_threadpool(coordinator._dashboard_plan, execution_id))
+        return _json_response(await run_in_threadpool(data.plan, execution_id))
 
     async def status(request: Request) -> Response:
         execution_id = request.query_params.get("execution_id", "")
-        return _json_response(await run_in_threadpool(coordinator._dashboard_status, execution_id))
+        return _json_response(await run_in_threadpool(data.status, execution_id))
 
     async def metrics(request: Request) -> Response:
         execution_id = request.query_params.get("execution_id", "")
         max_points = bounded_limit(_integer_parameter(request, "max_points"), DEFAULT_METRIC_POINTS, MAX_METRIC_POINTS)
-        return _json_response(await run_in_threadpool(coordinator._dashboard_metrics, execution_id, max_points))
+        return _json_response(await run_in_threadpool(data.metrics, execution_id, max_points))
 
     async def counters(request: Request) -> Response:
         query = CounterQuery(
@@ -359,7 +359,7 @@ def create_dashboard_application(coordinator: CoordinatorDashboardData) -> ASGIA
             offset=max(_integer_parameter(request, "offset"), 0),
             limit=bounded_limit(_integer_parameter(request, "limit"), DEFAULT_COUNTER_LIMIT, MAX_COUNTER_LIMIT),
         )
-        return _json_response(await run_in_threadpool(coordinator._dashboard_counters, query))
+        return _json_response(await run_in_threadpool(data.counters, query))
 
     async def workers(request: Request) -> Response:
         query = WorkerQuery(
@@ -369,7 +369,7 @@ def create_dashboard_application(coordinator: CoordinatorDashboardData) -> ASGIA
             offset=max(_integer_parameter(request, "offset"), 0),
             limit=bounded_limit(_integer_parameter(request, "limit"), DEFAULT_WORKER_LIMIT, MAX_WORKER_LIMIT),
         )
-        return _json_response(await run_in_threadpool(coordinator._dashboard_workers, query))
+        return _json_response(await run_in_threadpool(data.workers, query))
 
     async def index(request: Request) -> HTMLResponse:
         return HTMLResponse(_html_with_base(raw_html, request.headers.get("x-forwarded-prefix", "")))
