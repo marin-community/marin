@@ -152,7 +152,7 @@
       "id": 1,
       "type": "stat",
       "title": "Run status",
-      "description": "Where the run is right now. The window is a fixed fifteen minutes; the dashboard time range does not reach this panel. One query serves every tile from the semantic Levanter metrics table. Time since last step is the stall alert's own input, the age of the wall-clock stamp Levanter writes after each completed step. Sample age is the age of any metric from the run, so the two together separate a stalled trainer from a broken metrics path. Active execution and active share come from W&B, not from finelog: W&B counts the seconds each attempt was alive and carries that count across every restart, thus the total covers the whole run and no Finelog eviction truncates it. Active share divides that total by the time from the creation of the run to its last heartbeat, so the remainder is downtime. The total holds while an attempt restarts, because W&B advances it when the attempt logs its first step. Progress efficiency is stricter: it divides the tokens this run has produced, cumulative tokens less the count it started from, by what it would have reached had it held its mean token rate with no downtime, so it also counts the throughput lost to checkpoints, evals, and steps redone after a rollback, not only downtime. Subtracting the starting count keeps a run resumed under a fresh id from a mid-schedule checkpoint from being credited the tokens it inherited.",
+      "description": "Where the run is right now, and when it reaches the end of its schedule. The window is a fixed fifteen minutes; the dashboard time range does not reach this panel. One query serves every tile from the semantic Levanter metrics table. Time since last step is the stall alert's own input, the age of the wall-clock stamp Levanter writes after each completed step. Sample age is the age of any metric from the run, so the two together separate a stalled trainer from a broken metrics path. Active execution and active share come from W&B, not from finelog: W&B counts the seconds each attempt was alive and carries that count across every restart, thus the total covers the whole run and no Finelog eviction truncates it. Active share divides that total by the time from the creation of the run to its last heartbeat, so the remainder is downtime. The total holds while an attempt restarts, because W&B advances it when the attempt logs its first step. Progress efficiency is stricter: it divides the tokens this run has produced, cumulative tokens less the count it started from, by what it would have reached had it held its mean token rate with no downtime, so it also counts the throughput lost to checkpoints, evals, and steps redone after a rollback, not only downtime. Subtracting the starting count keeps a run resumed under a fresh id from a mid-schedule checkpoint from being credited the tokens it inherited. Projected finish extrapolates the same run-own accounting to the stop step: this run's steps since its first logged one, over the wall clock since then, carried forward to the step the run stops at, which is step over run_progress. Measuring from the first logged step means a run resumed from a checkpoint is not credited with the steps it inherited, while every restart, checkpoint, and eval since then slows the rate. The rate spans the run's whole life under this id -- the steadiest average there is, and the one that lags a throughput change longest. The wall clock ends at the last heartbeat, so an outage in progress moves the date only once the run resumes. Blank until the run has advanced past its first sample, and only for a run configured with a total step count, which is what makes it report run_progress.",
       "datasource": {
         "type": "datasource",
         "uid": "-- Mixed --"
@@ -382,6 +382,18 @@
                 "value": 1
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "projected finish"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
           }
         ]
       },
@@ -514,6 +526,11 @@
             {
               "selector": "progress_efficiency",
               "text": "progress efficiency",
+              "type": "number"
+            },
+            {
+              "selector": "projected_finish_ms",
+              "text": "projected finish",
               "type": "number"
             }
           ]

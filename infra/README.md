@@ -36,7 +36,8 @@ abstraction that handles parallelism and fault tolerance automatically.
 ### Quick Example
 
 ```python
-from zephyr import Dataset, ZephyrContext
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 
 def process_file(input_path: str, output_path: str) -> None:
     # Your processing logic here - no manual worker orchestration needed

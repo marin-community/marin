@@ -14,7 +14,7 @@ Local handles use subprocess rather than SSH, so they do not use this base.
 import logging
 import shlex
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from rigging.timing import Duration
 
@@ -33,7 +33,7 @@ class RemoteExecWorkerBase:
     """Shared implementation for RemoteWorkerHandle backed by a RemoteExec connection.
 
     Provides the methods that are identical across GCP and Manual handles:
-    run_command, bootstrap, bootstrap_log, and wait_for_connection.
+    run_command, bootstrap, and wait_for_connection.
 
     Subclasses must implement status() and any platform-specific operations
     (terminate, set_labels, set_metadata).
@@ -43,7 +43,6 @@ class RemoteExecWorkerBase:
     _vm_id: str
     _internal_address: str
     _port: int
-    _bootstrap_log_lines: list[str] = field(default_factory=list)
 
     @property
     def worker_id(self) -> str:
@@ -84,10 +83,7 @@ class RemoteExecWorkerBase:
         return CommandResult(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
 
     def bootstrap(self, script: str) -> None:
-        self._bootstrap_log_lines.clear()
-
         def on_line(line: str) -> None:
-            self._bootstrap_log_lines.append(line)
             logger.info("[%s] %s", self._vm_id, line)
 
         result = run_streaming_with_retry(
@@ -97,10 +93,6 @@ class RemoteExecWorkerBase:
         )
         if result.returncode != 0:
             raise RuntimeError(f"Bootstrap failed on {self._vm_id}: exit code {result.returncode}")
-
-    @property
-    def bootstrap_log(self) -> str:
-        return "\n".join(self._bootstrap_log_lines)
 
     def restart_worker(self, bootstrap_script: str) -> None:
         """Restart the worker with a fresh bootstrap script.

@@ -16,6 +16,7 @@ from infra.loom.infrastructure import (
     DeploymentConfig,
     GitHubFederationConfig,
     ProfileConfig,
+    RemoteMcpConfig,
     WorkloadIdentityConfig,
     _deployment_manifest,
     _deployment_profiles,
@@ -72,6 +73,16 @@ def deployment_config() -> DeploymentConfig:
         boot_disk_snapshot="loom-pre-c4d-hyperdisk-20260816",
         dotenv_secret_version=3,
         prune_deployment=True,
+        remote_mcps=(
+            RemoteMcpConfig.parse(
+                {
+                    "identity": "/marina/api",
+                    "label": "Marina API",
+                    "url": "https://marina.example.com/api/marina/mcp/",
+                    "auth": {"type": "iap", "audience": "iap-client-id"},
+                }
+            ),
+        ),
         profiles=(
             ProfileConfig.parse(
                 "ops",
@@ -116,7 +127,7 @@ def field(inputs: dict, snake: str, camel: str):
 def test_empty_runtime_policy_cannot_prune_existing_profiles() -> None:
     base = deployment_config()
     with pytest.raises(ValueError, match="non-empty runtime policy"):
-        replace(base, prune_deployment=True, profiles=(), workloads=(), github_federations=())
+        replace(base, prune_deployment=True, remote_mcps=(), profiles=(), workloads=(), github_federations=())
 
 
 def test_domain_is_a_canonical_hostname() -> None:
@@ -155,9 +166,10 @@ def test_fork_ferry_workflow_stays_within_loom_profile_capacity() -> None:
     assert len(units) <= max_concurrent
 
 
-def test_loom_pr_review_launcher_never_executes_pull_request_code() -> None:
+def test_loom_pr_review_launcher_starts_one_bounded_review_session() -> None:
     workflow_path = ROOT.parent.parent / ".github/workflows/ops-loom-review.yaml"
     workflow = yaml.safe_load(workflow_path.read_text())
+    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
     trigger = workflow.get("on", workflow.get(True))
     job = workflow["jobs"]["review"]
 
@@ -169,6 +181,13 @@ def test_loom_pr_review_launcher_never_executes_pull_request_code() -> None:
     assert checkout["with"]["sparse-checkout"] == ".github/actions/launch-loom-run"
     assert launch["uses"] == "./.github/actions/launch-loom-run"
     assert "head.repo.full_name == github.repository" in job["if"]
+    assert "strategy" not in job
+    assert launch["with"]["idempotency-key"] == (
+        "pr-review:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}"
+    )
+
+    review_profile = stack["config"]["marin-loom:profiles"]["pr-review"]
+    assert 0 < review_profile["idleArchiveSeconds"] <= 900
 
 
 def test_loom_launch_action_uses_registered_automation_endpoint() -> None:
@@ -268,6 +287,26 @@ def test_profile_instructions_reject_ambiguous_or_external_sources() -> None:
 def test_profile_mcp_access_rejects_invalid_selections(mcp_access: dict[str, object]) -> None:
     with pytest.raises(ValueError, match="mcpAccess"):
         ProfileConfig.parse("ops", {"agent": "codex", "mcpAccess": mcp_access})
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"url": "http://marina.example.com/mcp"},
+        {"auth": {"type": "iap"}},
+    ],
+)
+def test_remote_mcp_rejects_unsafe_or_ambiguous_configuration(override: dict[str, object]) -> None:
+    value: dict[str, object] = {
+        "identity": "/marina/api",
+        "label": "Marina API",
+        "url": "https://marina.example.com/mcp",
+        "auth": {"type": "none"},
+    }
+    value.update(override)
+
+    with pytest.raises(ValueError, match="remote MCP"):
+        RemoteMcpConfig.parse(value)
 
 
 @pulumi.runtime.test

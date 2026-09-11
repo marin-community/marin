@@ -9,10 +9,12 @@ storage all agree on one shape: ``eval`` (not the Python attribute name ``evalua
 These tests pin that shape independently of the pydantic model that produces it.
 """
 
+import dataclasses
 import json
 from pathlib import Path
 
 import pytest
+from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.records import (
     EvalchemyRef,
     EvalRef,
@@ -20,7 +22,12 @@ from marin.evaluation.records import (
     EvalTaskRef,
     HarborRef,
     HardwareRef,
+    ModelAgentConfig,
+    ModelConfigRef,
+    ModelGenerationConfig,
     ModelRef,
+    ModelResourceConfig,
+    ModelServeConfig,
     Provenance,
     RunStatus,
     RunTiming,
@@ -329,3 +336,52 @@ def test_read_record_parses_a_previously_written_record_json(tmp_path, runtime_k
         "eval_runtime": "evalchemy:old",
         "launch_host": "ci-runner",
     }
+
+
+CONFIG_MIRRORS = (
+    (ModelConfigRef, ModelConfig),
+    (ModelResourceConfig, ResourceHint),
+    (ModelServeConfig, ServeConfig),
+    (ModelGenerationConfig, GenerationConfig),
+    (ModelAgentConfig, AgentConfig),
+)
+
+
+@pytest.mark.parametrize("mirror,launcher", CONFIG_MIRRORS, ids=[m.__name__ for m, _ in CONFIG_MIRRORS])
+def test_record_config_mirror_covers_every_launcher_field(mirror, launcher):
+    """A field the launcher records is a field the record schema keeps.
+
+    The mirrors drop what they do not name, so this is where drift has to fail; a record written
+    by a launcher ahead of the schema would otherwise silently lose the new field.
+    """
+    missing = {field.name for field in dataclasses.fields(launcher)} - set(mirror.model_fields)
+
+    assert not missing, f"{mirror.__name__} does not mirror {launcher.__name__} fields {sorted(missing)}"
+
+
+def test_a_serve_field_the_schema_has_not_learned_does_not_discard_the_run(tmp_path):
+    """An unknown key under model.config.serve costs that key, not the whole record."""
+    configured = _RECORD.model_copy(
+        update={
+            "model": ModelRef(
+                name="qwen3-8b",
+                location="gs://marin-models/qwen3-8b",
+                backend="vllm",
+                config=ModelConfigRef.model_validate(
+                    dataclasses.asdict(ModelConfig(name="qwen3-8b", location="gs://marin-models/qwen3-8b"))
+                ),
+            )
+        }
+    )
+    path = Path(write_record(configured, str(tmp_path)))
+    raw = json.loads(path.read_text())
+    raw["model"]["config"]["serve"]["pipeline_parallel_size"] = 2
+    path.write_text(json.dumps(raw))
+
+    record = read_record(str(path))
+
+    assert record.run_id == _RECORD.run_id
+    assert record.metrics == _RECORD.metrics
+    assert record.model.config is not None
+    assert record.model.config.serve.tensor_parallel_size is None
+    assert not hasattr(record.model.config.serve, "pipeline_parallel_size")

@@ -6,6 +6,10 @@ are unsure whether a change is wanted, open an issue or ask in the
 unlikely to merge typo fixes, stylistic rewrites, or speculative refactors that
 are not tied to an issue.
 
+If you are new to Marin, ask for code review in the `#code-review` channel of
+the [Marin Discord](https://discord.gg/J9CTk7pqcM). If you are unable to join
+the Discord, tag a Marin maintainer in the issue or pull request.
+
 ## AI-generated contributions
 
 We use coding agents ourselves and accept contributions made with them. We do

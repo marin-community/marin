@@ -11,23 +11,50 @@ outcome and provenance metadata.
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cache
 
+import pyarrow as pa
 from fray.types import ResourceConfig
+from huggingface_hub import hf_hub_download
+from rigging.filesystem.storage_path import prefix_join
+from tokenizers import Tokenizer
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.opencode import opencode_conversation, opencode_protocol_messages
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
     TRAJECTORY_UNVERIFIED_TAG,
+    checked_openai_chat_document,
     load_parquet_batched,
     render_role_message,
     text_document,
 )
+from marin.datakit.download.terminus import TASK_DESCRIPTION_MARKER, terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
+
+# The dataset README identifies the tokenizer used to record these literal IDs.
+OPENCODE_TOKENIZER = "Qwen/Qwen3.5-122B-A10B-FP8"
+OPENCODE_TOKENIZER_REVISION = "a099dee70ccfcd8d5dda56aaa0b60cb8ecadabc9"
+CHAT_QUARANTINE_COUNTER_PREFIXES = {
+    "minimax-m27-131k": "penfever_rollouts/minimax/chat",
+    "qwen35-122b-32k": "penfever_rollouts/qwen32k/chat",
+}
+
+
+SOURCE_CHAT_SCHEMA = pa.schema(
+    [
+        *CHAT_SCHEMA,
+        pa.field("teacher", pa.string()),
+        pa.field("task_source", pa.string()),
+        pa.field("outcome", pa.string()),
+    ]
+)
 
 
 @dataclass(frozen=True)
@@ -1066,6 +1093,7 @@ def outcome_tag(verifier_output: str | None, result: str | None) -> str | None:
 
 def row_to_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
     """Build a row-to-document transform for one repository."""
+
     counter_prefix = f"penfever_rollouts/{dataset.cohort_name}/{dataset.task_source}"
 
     def transform_row(row: dict) -> list[dict]:
@@ -1090,6 +1118,74 @@ def row_to_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
     return transform_row
 
 
+@cache
+def _opencode_tokenizer() -> Tokenizer:
+    path = hf_hub_download(OPENCODE_TOKENIZER, "tokenizer.json", revision=OPENCODE_TOKENIZER_REVISION)
+    return Tokenizer.from_file(path)
+
+
+def _opencode_conversation(row: dict) -> tuple[list[dict], list[dict]] | None:
+    prompts = row.get("prompt_token_ids")
+    if not prompts or not prompts[0]:
+        counters.pipeline.update_counter("penfever_rollouts/opencode/missing_prompt_filtered", 1)
+        return None
+    prompt = _opencode_tokenizer().decode(prompts[0], skip_special_tokens=False)
+    return opencode_conversation(row["conversations"], prompt)
+
+
+def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
+    """Build a row-to-structured-chat transform for one repository."""
+
+    def transform_row(row: dict) -> list[dict]:
+        conversations = row.get("conversations")
+        if not conversations:
+            return []
+        if dataset.cohort_name == "qwen35-122b-131k-opencode":
+            recovered = _opencode_conversation(row)
+            if recovered is None:
+                return []
+            conversations, tools = recovered
+            converted = opencode_protocol_messages(conversations, tools)
+        else:
+            first = conversations[0]
+            content = first.get("content")
+            if first.get("role") == "user" and isinstance(content, str) and TASK_DESCRIPTION_MARKER in content:
+                conversations = [
+                    {**first, "content": content[content.index(TASK_DESCRIPTION_MARKER) :]},
+                    *conversations[1:],
+                ]
+            converted = terminus_protocol_messages(conversations)
+        if converted is None:
+            return []
+        messages, metadata = converted
+        if dataset.cohort_name == "qwen35-122b-32k":
+            merged: list[dict] = []
+            for message in messages:
+                if merged and message.get("role") == "user" and merged[-1].get("role") == "user":
+                    previous = merged[-1]
+                    previous["content"] = f"{previous.get('content') or ''}\n\n{message.get('content') or ''}".strip()
+                else:
+                    merged.append(dict(message))
+            counters.pipeline.update_counter(
+                "penfever_rollouts/qwen32k/chat/adjacent_user_merged", len(messages) - len(merged)
+            )
+            messages = merged
+        tag = outcome_tag(row.get("verifier_output"), row.get("result"))
+        return checked_openai_chat_document(
+            messages,
+            dataset.hf_dataset_id,
+            counter_prefix=CHAT_QUARANTINE_COUNTER_PREFIXES.get(
+                dataset.cohort_name, f"penfever_rollouts/{dataset.cohort_name}/chat"
+            ),
+            teacher=dataset.teacher,
+            task_source=dataset.task_source,
+            outcome=tag or "",
+            **metadata,
+        )
+
+    return transform_row
+
+
 def transform(dataset: PenfeverRollout, input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/**/*.parquet")
@@ -1102,6 +1198,23 @@ def transform(dataset: PenfeverRollout, input_path: str, output_path: str) -> No
         resources=ResourceConfig(cpu=1, ram="32g"),
     )
     ctx.execute(pipeline)
+
+
+def transform_chat(dataset: PenfeverRollout, input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet_batched)
+        .flat_map(row_to_chat_doc(dataset))
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+            schema=SOURCE_CHAT_SCHEMA,
+            skip_existing=True,
+        )
+    )
+    ZephyrContext(
+        name=f"penfever-{dataset.cohort_name}-{dataset.task_source}-chat-transform",
+        resources=ResourceConfig(cpu=1, ram="32g"),
+    ).execute(pipeline)
 
 
 def _rollout_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
@@ -1130,3 +1243,35 @@ def _rollout_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
 
 def penfever_rollouts_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
     return {dataset.marin_name: _rollout_steps(dataset) for dataset in PENFEVER_ROLLOUTS}
+
+
+def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
+    download = download_hf_step(
+        f"raw/{dataset.marin_name}", hf_dataset_id=dataset.hf_dataset_id, revision=dataset.revision
+    )
+    processed = StepSpec(
+        name=f"processed-chat/{dataset.marin_name}",
+        deps=[download],
+        fn=lambda output_path: transform_chat(dataset, download.output_path, output_path),
+        hash_attrs={
+            "version": (
+                {
+                    "qwen35-122b-131k-opencode": "2026.09.09.continuations",
+                    "qwen35-122b-32k": "2026.09.09.adjacent-users",
+                    "minimax-m27-131k": "2026.09.09.quarantine",
+                }.get(dataset.cohort_name, "2026.09.05.4.explicit-tools")
+            ),
+            "schema_tokenizer": (OPENCODE_TOKENIZER, OPENCODE_TOKENIZER_REVISION),
+            "terminus_version": "2026.09.10.terminal-wait",
+            "conversion_version": "2026.09.11.review-fixes",
+            "teacher": dataset.teacher,
+            "task_source": dataset.task_source,
+        },
+    )
+    return processed, normalize_chat_step(
+        output_schema=SOURCE_CHAT_SCHEMA, name=f"normalized-chat/{dataset.marin_name}", download=processed
+    )
+
+
+def penfever_rollouts_chat_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
+    return {dataset.marin_name: _rollout_chat_steps(dataset) for dataset in PENFEVER_ROLLOUTS}

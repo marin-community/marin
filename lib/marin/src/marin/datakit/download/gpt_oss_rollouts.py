@@ -11,13 +11,20 @@ assistant response. We render these into a single document.
 """
 
 from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
+from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import text_document
+from marin.datakit.download.opencode import INLINE_TOOL_CALL
+from marin.datakit.download.rollout_transforms import (
+    CHAT_CONTROL_TOKEN,
+    checked_openai_chat_document,
+    text_document,
+)
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -50,6 +57,28 @@ def row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, "andyrdt/gpt-oss-20b-rollouts")]
 
 
+def row_to_chat_doc(row: dict) -> list[dict]:
+    user = row.get("user_content") or ""
+    response = row.get("assistant_content") or ""
+    if not user or not response:
+        return []
+    thinking = row.get("assistant_thinking") or ""
+    if any(CHAT_CONTROL_TOKEN.search(text) for text in (user, thinking, response)):
+        counters.pipeline.update_counter("gpt_oss_rollouts/chat_control_token_filtered", 1)
+        return []
+    if thinking and any(token in thinking for token in ("<think>", "<|start_think|>")):
+        assistant = f"{thinking}\n\n{response}"
+    elif thinking:
+        assistant = f"<think>\n{thinking}\n</think>\n\n{response}"
+    else:
+        assistant = response
+    if INLINE_TOOL_CALL.search(assistant):
+        counters.pipeline.update_counter("gpt_oss_rollouts/chat_inline_tool_syntax_filtered", 1)
+        return []
+    messages = [{"role": "user", "content": user}, {"role": "assistant", "content": assistant}]
+    return checked_openai_chat_document(messages, HF_DATASET_ID, counter_prefix="gpt_oss_rollouts/chat")
+
+
 def transform(input_path: str, output_path: str) -> None:
     input_files = [f"{input_path}/{subset}/{split}.jsonl" for subset, split in SUBSETS.items()]
     pipeline = (
@@ -60,6 +89,19 @@ def transform(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="gpt-oss-rollouts-transform", resources=ResourceConfig(cpu=1, ram="8g"))
     ctx.execute(pipeline)
+
+
+def transform_chat(input_path: str, output_path: str) -> None:
+    input_files = [f"{input_path}/{subset}/{split}.jsonl" for subset, split in SUBSETS.items()]
+    pipeline = (
+        Dataset.from_list(input_files)
+        .flat_map(load_jsonl)
+        .flat_map(row_to_chat_doc)
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), schema=CHAT_SCHEMA, skip_existing=True
+        )
+    )
+    ZephyrContext(name="gpt-oss-rollouts-chat-transform", resources=ResourceConfig(cpu=1, ram="8g")).execute(pipeline)
 
 
 def download_gpt_oss_rollouts_step() -> StepSpec:
@@ -92,4 +134,20 @@ def gpt_oss_rollouts_normalize_steps() -> tuple[StepSpec, ...]:
     return (
         processed,
         normalize_step(name="normalized/gpt-oss-rollouts", download=processed),
+    )
+
+
+def gpt_oss_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    paths = [f"{subset}/{split}.jsonl" for subset, split in SUBSETS.items()]
+    download = download_hf_step(
+        "raw/gpt-oss-20b-rollouts", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION, hf_urls_glob=paths
+    )
+    processed = StepSpec(
+        name="processed-chat/gpt-oss-20b-rollouts",
+        deps=[download],
+        fn=lambda output_path: transform_chat(download.output_path, output_path),
+        hash_attrs={"version": "2026.09.11.review-fixes"},
+    )
+    return processed, normalize_chat_step(
+        output_schema=CHAT_SCHEMA, name="normalized-chat/gpt-oss-rollouts", download=processed
     )

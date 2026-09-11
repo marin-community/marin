@@ -11,6 +11,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use axum::response::IntoResponse;
 use connectrpc::client::{ClientBody, ClientConfig, ServiceTransport};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client as HyperClient;
@@ -106,7 +107,7 @@ pub fn disk_store(tag: &str) -> Arc<Store> {
         Store::new(
             Some(unique_dir(tag)),
             String::new(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             crate::store::ServeMode::Live,
         )
         .unwrap(),
@@ -167,6 +168,63 @@ pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<Re
         .unwrap();
     });
     (addr, requests)
+}
+
+/// Serve `store` behind an outage switch: while the returned flag is `true`,
+/// every request is answered `unavailable` before it reaches the store,
+/// modeling a hub that loses contact and later recovers at the same address.
+pub async fn serve_with_outage(
+    store: Arc<Store>,
+    policy: AuthPolicy,
+) -> (
+    SocketAddr,
+    Arc<RequestStats>,
+    Arc<std::sync::atomic::AtomicBool>,
+) {
+    let down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let outage = Arc::clone(&down);
+    let requests = Arc::new(RequestStats::default());
+    let counted = Arc::clone(&requests);
+    let app = build_app_with_config(store, ServerConfig::default().with_auth(policy)).layer(
+        axum::middleware::from_fn(
+            move |req: axum::extract::Request, next: axum::middleware::Next| {
+                let counted = Arc::clone(&counted);
+                let down = Arc::clone(&down);
+                async move {
+                    let observed = counted.begin(&req);
+                    let response = if down.load(Ordering::SeqCst) {
+                        let error = connectrpc::ConnectError::new(
+                            connectrpc::ErrorCode::Unavailable,
+                            "hub outage",
+                        );
+                        (
+                            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                            [(axum::http::header::CONTENT_TYPE, "application/json")],
+                            error.to_json(),
+                        )
+                            .into_response()
+                    } else {
+                        next.run(req).await
+                    };
+                    if observed {
+                        counted.finish();
+                    }
+                    response
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    (addr, requests, outage)
 }
 
 /// A hub that answers every RPC with `invalid_argument`, as the real one does for

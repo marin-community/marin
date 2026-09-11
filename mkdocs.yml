@@ -65,6 +65,7 @@ nav:
   - Tutorials:
       - Installation: tutorials/installation.md
       - First Experiment: tutorials/first-experiment.md
+      - Add a Chat Dataset: tutorials/add-chat-dataset.md
       - Setting up a Local GPU Environment: tutorials/local-gpu.md
       - Training on Cloud GPUs: tutorials/cloud-gpu.md
       - Prepare a Storage Bucket: tutorials/storage-bucket.md
