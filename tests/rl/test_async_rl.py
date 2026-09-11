@@ -1585,3 +1585,40 @@ def test_fsdp2_implicit_and_explicit_async_n2_reject_before_changing_training_de
             kl_loss=False,
             minibatches=minibatches,
         )
+
+
+def test_fsdp2_rejects_optimizer_state_metrics_at_compose_time():
+    # The runtime validator (skyrl_train/utils/utils.py validate_cfg) refuses optimizer_state_metrics on any
+    # non-Megatron strategy, so an FSDP2 request carrying it fails at launch; the recipe must refuse it first.
+    result = CliRunner().invoke(
+        async_rl.main,
+        [
+            "--version",
+            "2026.09.10.25",
+            "--runner",
+            "sync",
+            "--scale",
+            "screening",
+            "--stage",
+            "rl",
+            "--completion",
+            "metrics",
+            "--updates",
+            "100",
+            "--eval-updates",
+            "20",
+            "--minibatches",
+            "2",
+            "--no-kl-loss",
+            "--backend",
+            "fsdp2",
+            "--bf16-update-mode",
+            "fp32_master",
+            "--reduce-dtype",
+            "fp32",
+            "--optimizer-state-metrics",
+        ],
+    )
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+    assert "optimizer_state_metrics requires backend megatron" in str(result.exception)

@@ -295,6 +295,10 @@ def training_config(
     if backend is Backend.FSDP2:
         if optimizer_precision is not OptimizerPrecision.NATIVE:
             raise ValueError("Megatron optimizer precision presets require backend megatron")
+        if optimizer_state_metrics:
+            raise ValueError(
+                "optimizer_state_metrics requires backend megatron; backend fsdp2 has no optimizer-state observer"
+            )
         if bf16_update_mode not in (None, "fp32_master", "stochastic", "kahan", "nearest"):
             raise ValueError("Unknown FSDP bf16 update mode")
         if reduce_dtype not in (None, "fp32", "bf16"):
