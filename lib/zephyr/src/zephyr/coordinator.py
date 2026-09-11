@@ -27,8 +27,8 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, log_time
 from starlette.types import ASGIApp
 
-from zephyr.coordinator_dashboard import CoordinatorDashboard
-from zephyr.dashboard import PipelinePlan, create_dashboard_application
+from zephyr.dashboard.app import PipelinePlan, create_dashboard_application
+from zephyr.dashboard.coordinator import CoordinatorDashboard
 from zephyr.memory_store import MemoryTableRegistration
 from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, SourceItem, StageType
 from zephyr.shuffle import ListShard, MemChunk

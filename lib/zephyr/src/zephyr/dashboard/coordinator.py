@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping, Sized
 from dataclasses import dataclass
 from typing import Protocol
 
-from zephyr.dashboard import (
+from zephyr.dashboard.app import (
     SOURCE_STAGE_TYPE,
     CounterPage,
     CounterQuery,
