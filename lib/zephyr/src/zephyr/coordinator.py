@@ -47,8 +47,6 @@ from zephyr.dashboard import (
     counter_value,
     create_dashboard_application,
     pipeline_plan,
-    source_node_id,
-    stage_node_id,
 )
 from zephyr.memory_store import MemoryTableRegistration
 from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, SourceItem, StageType
@@ -567,13 +565,9 @@ class ZephyrCoordinator:
                         state = PlanNodeState.RUNNING
                 node_statuses.append(PlanNodeStatus(node_id=node.node_id, state=state))
 
-            current_node_id = (
-                stage_node_id("main", run.current_stage_index) if run.stage_name else source_node_id("main")
-            )
             return PipelineStatus(
                 execution_id=run.execution_id,
                 phase=phase,
-                current_node_id=current_node_id,
                 current_stage=run.stage_name,
                 completed_shards=run.completed_shards,
                 total_shards=run.total_shards,

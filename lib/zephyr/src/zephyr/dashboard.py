@@ -107,7 +107,6 @@ class ResourceUsage:
 class PipelineStatus:
     execution_id: str
     phase: PipelinePhase = PipelinePhase.UNKNOWN
-    current_node_id: str = ""
     current_stage: str = ""
     completed_shards: int = 0
     total_shards: int = 0

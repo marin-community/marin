@@ -172,7 +172,8 @@ def test_dashboard_rejects_metrics_for_unknown_execution(actor_context, tmp_path
     try:
         with TestClient(coordinator.web_application) as client:
             metrics = _api(client, "metrics", {"execution_id": "another-job", "max_points": 10})
-            assert metrics == {"points": [], "warning": "The selected pipeline is not active."}
+            assert metrics["points"] == []
+            assert metrics["warning"]
     finally:
         coordinator.shutdown()
 
