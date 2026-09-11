@@ -614,3 +614,8 @@ author: benfeuer
 
 - Representative SimpleQA, DS-1000, and SWE-bench trials that retained `AgentTimeoutError` all logged verification start, verification completion, and result persistence first. This directly confirms that campaign commit `611d02df57` retains Harbor's verified timeout outcomes as scored benchmark failures.
 - Unverified infrastructure attrition remains isolated and below the 95% coverage gate: one or two LLM connection-timeout trials per SimpleQA Base, one qk157 DS-1000 tmux failure, and one skew2 SWE-bench tmux failure at the time of audit. No corrective restart is warranted while the full roots remain healthy.
+
+## 2026-09-10 22:12 EDT — Progress counters qualified as rolling-window evidence
+
+- The persistent watcher completed 28 controller snapshots with all 20 unfinished target roots running and no terminal parent or root failure.
+- An apparent decrease in one Harbor persistence count proved that `iris job logs --max-lines` exposes a rolling log window rather than a cumulative event stream. Those counts remain useful evidence of fresh activity but are not coverage measurements and must not be treated as monotonic. Final coverage continues to come only from canonical terminal `record.json` artifacts.
