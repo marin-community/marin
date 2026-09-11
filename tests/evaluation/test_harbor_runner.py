@@ -361,7 +361,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         nonlocal driver_starts
         driver_starts += 1
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
-        _write_job_record(job_dir, 3)
+        _write_job_record(job_dir, 4)
         completed_result = job_dir / "trial-one" / "result.json"
         completed_result.parent.mkdir(parents=True, exist_ok=True)
         if not completed_result.exists():
@@ -373,6 +373,18 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         if not zero_reward_result.exists():
             zero_reward_result.write_text(
                 json.dumps({"task_name": "trial-three", "verifier_result": {"rewards": {"reward": 0.0}}})
+            )
+        agent_failure_result = job_dir / "trial-four" / "result.json"
+        agent_failure_result.parent.mkdir(parents=True, exist_ok=True)
+        if not agent_failure_result.exists():
+            agent_failure_result.write_text(
+                json.dumps(
+                    {
+                        "task_name": "trial-four",
+                        "verifier_result": None,
+                        "exception_info": {"exception_type": "AgentError"},
+                    }
+                )
             )
         interrupted_result = job_dir / "trial-two" / "result.json"
         if driver_starts == 1:
@@ -389,6 +401,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         else:
             assert completed_result.exists()
             assert zero_reward_result.exists()
+            assert agent_failure_result.exists()
             assert not interrupted_result.exists()
             interrupted_result.parent.mkdir(parents=True, exist_ok=True)
             interrupted_result.write_text(
@@ -404,11 +417,11 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
     assert session.recovery_waits == 1
     assert driver_starts == 2
     assert outcome.metrics[executor.config.record_dataset] == {
-        "accuracy": 2 / 3,
-        "mean_reward": 2 / 3,
+        "accuracy": 0.5,
+        "mean_reward": 0.5,
         "solved": 2.0,
-        "total": 3.0,
-        "attempted": 3.0,
+        "total": 4.0,
+        "attempted": 4.0,
     }
 
 

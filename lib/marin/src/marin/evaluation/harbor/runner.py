@@ -248,18 +248,19 @@ def _attempted_trials(job_dir: StoragePath) -> int | None:
     return None
 
 
-def _remove_unscored_trials(job_dir: StoragePath) -> None:
+def _remove_unscored_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy) -> None:
     """Remove incomplete results so Harbor reruns them after a confirmed interruption."""
     for result_file in (job_dir / "*/result.json").glob():
         try:
-            result = json.loads(result_file.read_text())
+            trial = _read_trial(result_file, taxonomy)
         except json.JSONDecodeError as exc:
             logger.warning(
                 "removing unreadable Harbor trial result after inference interruption: %s (%s)", result_file, exc
             )
             result_file.parent.rmtree()
             continue
-        if result.get("verifier_result") is None:
+        error_type = (trial.error or {}).get("type", "")
+        if not trial.scored and not error_type.startswith(_UNKNOWN_ERROR_PREFIX):
             result_file.parent.rmtree()
 
 
@@ -378,7 +379,7 @@ def _run_harbor_job(
             break
         except HarborBackendsUnavailable as exc:
             logger.warning("pausing Harbor job %s while inference recovers: %s", job_name, exc)
-            _remove_unscored_trials(job_dir)
+            _remove_unscored_trials(job_dir, config.error_taxonomy)
             inference_session.wait_until_ready()
             logger.info("inference recovered; resuming Harbor job %s", job_name)
 
