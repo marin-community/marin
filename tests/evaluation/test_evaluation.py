@@ -18,7 +18,12 @@ from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, Constra
 from iris.rpc import job_pb2
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
+from marin.evaluation.harbor.driver_config import (
+    HARBOR_RUNTIME,
+    HarborDatasetKind,
+    HarborErrorTaxonomy,
+    ValidatedHarborConfig,
+)
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus, TaskCoverage, read_record
@@ -61,6 +66,12 @@ def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
                     workspace_dataset_path=None,
                     agent="opencode",
                     environment="daytona",
+                    error_taxonomy=HarborErrorTaxonomy(
+                        infrastructure=frozenset({"InfrastructureError"}),
+                        agent=frozenset({"AgentError"}),
+                        passthrough=frozenset({"PassthroughError"}),
+                        version="1.2.3",
+                    ),
                 )
             )
         return tuple(configs)
@@ -700,6 +711,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
             "env": "daytona",
             "task_limit": 2,
             "config_digest": evaluation.identity.eval_ref.harbor.config_digest,
+            "harbor_config_version": "1.2.3",
         },
     }
     assert batch.secret_env == {

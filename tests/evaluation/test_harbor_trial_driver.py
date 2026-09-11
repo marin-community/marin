@@ -210,6 +210,24 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     assert all(result["digest"] == expected["digest"] for result in seeded)
 
 
+def test_preflight_exports_pinned_harbor_error_taxonomy(checked_policies):
+    expected = json.loads(
+        _external_python(
+            "-c",
+            """import importlib.metadata, json
+from harbor_config.errors import ErrorCategory, errors_by_category
+print(json.dumps({
+    \"infrastructure\": sorted(errors_by_category(ErrorCategory.INFRASTRUCTURE)),
+    \"agent\": sorted(errors_by_category(ErrorCategory.AGENT)),
+    \"passthrough\": sorted(errors_by_category(ErrorCategory.PASSTHROUGH)),
+    \"version\": importlib.metadata.version(importlib.metadata.packages_distributions()[\"harbor_config\"][0]),
+}))""",
+        ).stdout
+    )
+
+    assert all(payload["error_taxonomy"] == expected for payload in checked_policies.values())
+
+
 @pytest.mark.parametrize(
     ("setup_parameters", "run_parameters", "callback", "keywords"),
     [

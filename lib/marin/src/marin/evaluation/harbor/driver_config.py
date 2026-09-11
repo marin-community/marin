@@ -94,6 +94,16 @@ class HarborDatasetKind(StrEnum):
 
 
 @dataclass(frozen=True)
+class HarborErrorTaxonomy:
+    """Harbor exception names grouped by their published scoring semantics."""
+
+    infrastructure: frozenset[str]
+    agent: frozenset[str]
+    passthrough: frozenset[str]
+    version: str
+
+
+@dataclass(frozen=True)
 class ValidatedHarborConfig:
     """An opaque validated policy plus Marin-owned launch metadata."""
 
@@ -105,6 +115,7 @@ class ValidatedHarborConfig:
     workspace_dataset_path: Path | None
     agent: str
     environment: str
+    error_taxonomy: HarborErrorTaxonomy
 
     @property
     def record_dataset(self) -> str:
@@ -225,6 +236,28 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
     except ValueError as exc:
         raise ValueError(f"Harbor preflight returned an unknown dataset kind for {path}") from exc
     dataset_selector = required_string("dataset_selector")
+    taxonomy_payload = payload.get("error_taxonomy")
+    if not isinstance(taxonomy_payload, Mapping):
+        raise ValueError(f"Harbor preflight returned invalid error taxonomy metadata for {path}")
+
+    def taxonomy_names(category: str) -> frozenset[str]:
+        values = taxonomy_payload.get(category)
+        if not isinstance(values, list) or not all(isinstance(value, str) and value for value in values):
+            raise ValueError(f"Harbor preflight returned invalid {category!r} error taxonomy for {path}")
+        return frozenset(values)
+
+    taxonomy_version = taxonomy_payload.get("version")
+    if not isinstance(taxonomy_version, str) or not taxonomy_version:
+        raise ValueError(f"Harbor preflight returned invalid error taxonomy version for {path}")
+    error_taxonomy = HarborErrorTaxonomy(
+        infrastructure=taxonomy_names("infrastructure"),
+        agent=taxonomy_names("agent"),
+        passthrough=taxonomy_names("passthrough"),
+        version=taxonomy_version,
+    )
+    categories = (error_taxonomy.infrastructure, error_taxonomy.agent, error_taxonomy.passthrough)
+    if any(left & right for index, left in enumerate(categories) for right in categories[index + 1 :]):
+        raise ValueError(f"Harbor preflight returned overlapping error taxonomy categories for {path}")
     workspace_dataset_path = None
     if dataset_kind == HarborDatasetKind.LOCAL:
         workspace_root = find_project_root(path)
@@ -247,6 +280,7 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
         workspace_dataset_path=workspace_dataset_path,
         agent=required_string("agent"),
         environment=required_string("environment"),
+        error_taxonomy=error_taxonomy,
     )
 
 
