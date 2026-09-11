@@ -781,7 +781,7 @@ wheels = [
 [[package]]
 name = "harbor"
 version = "0.8.1"
-source = { git = "https://github.com/marin-community/harbor.git?branch=main#ce2a55949f99f2d3baa48e5b523e0703f81280c0" }
+source = { git = "https://github.com/marin-community/harbor.git?branch=main#06139137912c5764a889e7613c1d5a5eb0704448" }
 dependencies = [
     { name = "dirhash" },
     { name = "fastapi" },

@@ -1074,6 +1074,14 @@ def test_training_status_reads_whole_run_active_time_from_wandb():
     # Four days of wall clock, ninety hours of them running.
     assert (row["active_seconds"], row["active_share"]) == (324_000.0, 0.9375)
     assert {column["selector"] for column in target["columns"]} <= set(row)
+    # The projected finish rides on the same target as epoch milliseconds, which only the
+    # date unit makes readable in a stat tile.
+    finish = next(
+        override
+        for override in panel["fieldConfig"]["overrides"]
+        if override["matcher"]["options"] == "projected finish"
+    )
+    assert {field["id"]: field["value"] for field in finish["properties"]} == {"unit": "dateTimeAsIso"}
 
 
 def test_training_attempts_table_links_the_newest_attempt_to_iris():
