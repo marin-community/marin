@@ -212,7 +212,8 @@ def run_scout(subproject: str, worktree_path: Path) -> tuple[str, dict, str]:
     agent_result = run_claude(
         prompt,
         [
-            "--model=opus",
+            "--model=claude-opus-4-8",
+            "--effort=high",
             "--dangerously-skip-permissions",
             *NO_SELF_CREDIT_SETTINGS,
             "--tools=Read,Write,Edit,Glob,Grep,Bash",
@@ -260,7 +261,8 @@ def run_merge(date: str, scout_results: list[dict], worktree_info: list[tuple[st
     result = run_claude(
         prompt,
         [
-            "--model=opus",
+            "--model=claude-opus-4-8",
+            "--effort=high",
             "--dangerously-skip-permissions",
             *NO_SELF_CREDIT_SETTINGS,
             "--tools=Read,Write,Edit,Glob,Grep,Bash",

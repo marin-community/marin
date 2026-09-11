@@ -13,6 +13,7 @@ from pathlib import Path
 
 RATE_LIMITED_OUTPUT = "rate_limited"
 WEEKLY_LIMIT_MESSAGE = "You've hit your weekly limit"
+CLAUDE_MODEL_ALIASES = frozenset({"haiku", "sonnet", "opus"})
 
 
 class ClaudeRunStatus(StrEnum):
@@ -50,6 +51,25 @@ def classify_claude_result(value: object) -> ClaudeRunStatus:
     return ClaudeRunStatus.SUCCESS
 
 
+def _option_value(args: Sequence[str], name: str) -> str | None:
+    for index, argument in enumerate(args):
+        if argument == name:
+            return args[index + 1] if index + 1 < len(args) else None
+        if argument.startswith(f"{name}="):
+            return argument.split("=", maxsplit=1)[1]
+    return None
+
+
+def validate_agent_policy(args: Sequence[str]) -> None:
+    """Require recursive Claude launches to pin a model and effort tier."""
+    model = _option_value(args, "--model")
+    effort = _option_value(args, "--effort")
+    if not model or model in CLAUDE_MODEL_ALIASES:
+        raise ValueError("Claude subprocesses must select a full model identifier with --model")
+    if not effort:
+        raise ValueError("Claude subprocesses must select an effort tier with --effort")
+
+
 def run_claude(
     prompt: str,
     args: Sequence[str],
@@ -59,6 +79,7 @@ def run_claude(
     timeout: float | None = None,
 ) -> ClaudeRunResult:
     """Run the Claude CLI in JSON mode, raising on non-quota failures."""
+    validate_agent_policy(args)
     command = [str(executable), "--print", "--output-format", "json", *args, "--", prompt]
     completed = subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     try:

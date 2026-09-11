@@ -5,7 +5,7 @@ description: Implement and land a fix for an explicitly identified marin-communi
 
 # Fix a GitHub issue
 
-Read `AGENTS.md` and the issue guidance in `writing-style`. Keep issue comments
+Read the issue guidance in `writing-style`. Keep issue comments
 terse: omit filler and repetition, use annotated links, and keep each prose
 section to three or four sentences. Complete the workflow in order. If blocked,
 comment on the issue with the last completed state and the blocker.

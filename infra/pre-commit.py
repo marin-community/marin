@@ -948,11 +948,7 @@ def _get_check_name(check) -> str:
     "agent_command",
     default=LINT_REVIEW_AGENT_DEFAULT,
     show_default=True,
-    help=(
-        "Headless agent invocation for --review. Agents calling this from a skill "
-        "should pass their own command (e.g. 'claude -p', 'codex exec') so the "
-        "sub-agent matches the calling environment."
-    ),
+    help=("Headless agent invocation for --review. The command must explicitly select " "a model and effort tier."),
 )
 @click.option(
     "--lint-lane",
@@ -963,9 +959,9 @@ def _get_check_name(check) -> str:
 @click.option(
     "--lint-compose/--no-lint-compose",
     "lint_compose",
-    default=True,
+    default=False,
     show_default=True,
-    help="With --review, merge lanes via the composer agent (default) or a deterministic concat.",
+    help="With --review, use an extra composer agent instead of deterministic dedupe and concat.",
 )
 @click.option("--files", "files_opt", multiple=True, help="Files to check (alias for positional args)")
 @click.option("--skip", multiple=True, help="Skip specific checks by name (e.g. ruff, black)")

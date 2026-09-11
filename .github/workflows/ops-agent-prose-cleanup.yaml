@@ -78,6 +78,7 @@ jobs:
             </current-description>
           claude_args: |
             --model claude-opus-4-8
+            --effort high
             --max-turns 10
             --tools "Read"
             --json-schema '{"type":"object","properties":{"body":{"type":"string"}},"required":["body"],"additionalProperties":false}'

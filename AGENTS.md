@@ -8,29 +8,14 @@ Start with the shared practices below. Consult subproject manuals for directory-
 - `lib/zephyr/AGENTS.md` — Zephyr (dataset processing)
 - `lib/fray/AGENTS.md` — Fray (distributed execution)
 
-## Operational Guides
-
-For debugging and operating live infrastructure, read the relevant OPS.md:
-
-- `lib/iris/OPS.md` — cluster lifecycle, job/task management, profiling, SQL queries, GCP/CoreWeave operations
-- `lib/zephyr/OPS.md` — pipeline debugging, straggler diagnosis, coordinator queries, diagnostic patterns
-
-Zephyr OPS.md references Iris OPS.md for shared infrastructure commands — read Iris first when debugging zephyr jobs on Iris.
-
-## Infrastructure (Pulumi)
-
-`infra/` hosts several independent Pulumi projects following three distinct
-patterns (infrastructure, application deploys, SaaS resource declarations). Read
-`infra/pulumi.md` before creating or modifying a Pulumi project so new work
-lands in the right pattern.
+Use `lib/iris/OPS.md` for live Iris operations and read it before
+`lib/zephyr/OPS.md` when a Zephyr job runs on Iris. Read `infra/pulumi.md`
+before changing a Pulumi project.
 
 ## Workflow Playbooks
 
-Skills are task-focused playbooks in `.agents/skills/` (also accessible as
-`.claude/skills/`). **Before starting any non-trivial task, check whether a
-matching skill exists** by scanning the skill descriptions in your system
-prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
-favor of ad-hoc commands.
+Skills are task-focused playbooks in `.agents/skills/`. Use a skill when the
+request explicitly names it or clearly matches its description.
 
 ## Handle Requests
 
@@ -42,48 +27,34 @@ fix remains.
 
 ## Search Prior Work
 
-Use Echo when prior Marin decisions, incidents, workflows, GitHub work, or
-indexed repository documentation could inform a task:
-
-```bash
-uv run infra/marina/apps/echo/cli.py search "how do I deploy Iris"
-uv run infra/marina/apps/echo/cli.py search "compare cache implementations" --repository all
-uv run infra/marina/apps/echo/cli.py get <source-id>
-```
-
-Search covers wiki, repository files, pull requests, and issues by default.
-File search infers the configured Marin-community repository from the current
-Git checkout, including ordinary contributor forks. Pass `--repository
-<owner/repo>` for one configured repository or `--repository all` for all six.
-Repeat `--domain` to select a subset; searches without the file domain do not
-need a Git checkout. Add `--domain discord` only when discussion history is
-relevant. Use `grep` for exact strings in remote activity and `rg` for the
-current checkout, including branch-only or uncommitted files. Echo's file
-results follow the periodically refreshed GitHub head rather than the local
-working tree. See the `consult-echo` skill for the complete workflow.
+Use Echo when a historical decision, incident, or cross-repository workflow can
+change the current decision. Skip it for localized implementation that current
+code and docs answer. Use `rg` for the working tree and the `consult-echo` skill
+for search syntax and durable-record policy.
 
 ## Development
 
 ```bash
 # Lint and format
 ./infra/pre-commit.py --all-files --fix
-- `./infra/pre-commit.py` is the required lint entry point for this repo.
-- Do not replace it with `uv run pre-commit ...`!
 
 # Type checking (also done by pre-commit.py)
 uv run pyrefly check
-- Keep type hints passing under `uv run pyrefly check`; configuration lives in `pyproject.toml`.
 
 # Safe tests affected by the current branch and working tree
 uv run --no-project infra/ci/run_tests.py
 
 # Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
-- Run this once before opening or updating a PR, and fix or respond to every
-  finding it reports (see the `commit` skill). Do not rerun it after small,
-  targeted touch-ups made in response to its findings. Rerun only when the
-  follow-up materially changes the implementation approach or scope.
 ```
+
+- `./infra/pre-commit.py` is the required lint entry point; do not replace it
+  with `uv run pre-commit`.
+- Keep type hints passing under `uv run pyrefly check`; configuration lives in
+  `pyproject.toml`.
+- Run agentic lint once before opening or updating a PR and resolve every
+  finding. Rerun it only when a follow-up changes the implementation approach
+  or scope. The `commit` skill owns the full workflow.
 
 - Python >=3.12. Use `uv run` for entry points.
 - Do not replace pytest's default marker expression with a partial expression
@@ -106,27 +77,15 @@ uv run --no-project infra/ci/run_tests.py
 - Agent *comments* on PRs/issues must begin with `🤖` unless the exact text was
   explicitly approved by the user. This applies to comments only — never put a
   `🤖` marker in a commit message or a PR/issue body.
-- All agent-authored commit, PR, and issue titles and bodies must follow
-  `.agents/skills/writing-style/SKILL.md` and its PR or issue guide. Review the
-  exact text that will be published, then apply `ai-writing-donts.md` as a final
-  compression pass. Do not publish raw implementation notes, test narration,
-  prompt-shaped headings, or claims that use emphasis in place of evidence.
-- A PR description is the squash-merge commit message. Keep every fact a future
-  reader needs to understand the behavior and rationale, including measured
-  results and caveats when they affect review. Remove headings, diff narration,
-  and implementation inventories; put extended history in a linked issue,
-  logbook, or artifact. Follow the `commit` skill
-  (`.agents/skills/commit/SKILL.md`) when committing, pushing, or opening a PR.
+- Use the `writing-style` guides for durable prose and the `commit` skill for
+  commits, PRs, and monitoring. A PR body is the squash-merge commit message;
+  keep behavior, rationale, material results, and caveats.
 - PR monitoring is part of the `commit` skill. After opening or updating a PR,
-  follow its `wait_for.py` loop through an exit condition. Do not substitute
-  `gh pr checks --watch`, repeated `gh pr view` calls, or handoff at green CI.
-  Keep one `wait_for.py` process attached in the foreground until it exits.
-  Never background it or give the shell, tool, or agent a separate timeout;
-  `wait_for.py --timeout` owns the deadline. If the execution interface yields
-  a process handle, keep making blocking wait/resume calls on that same handle
-  until the process exits. A runner yield is not a monitoring event: do not
-  narrate it or inspect GitHub while the process is still running.
-- When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
+  use a harness heartbeat or scheduled callback when available and the
+  event-driven `wait_for.py` fallback elsewhere. Follow the capability-specific
+  details and exit conditions in that skill.
+- Prefer narrow `gh --json` fields; plain issue and PR views can fail on
+  deprecated classic-project fields.
 
 ## Code Style
 
@@ -213,28 +172,27 @@ Watch for and eliminate these patterns in generated code:
 
 ## Planning
 
-- The `write-design-doc` skill owns design-doc creation and runs only when the
-  user explicitly asks for one. Diff size and implementation complexity do not
-  require a design artifact.
-- Planning applies to change-mode work. Produce a detailed plan, with code
-  snippets when they clarify a concrete implementation, for non-trivial
-  changes. Resolve context from the repository and prior work first; ask only
-  when a missing decision would materially change the implementation.
-- In answer mode, investigate and reply directly. Do not manufacture a plan or
-  `.agents/projects/` artifact.
-- When a change request is too large for one pass, capture a plan in
-  `.agents/projects/` before pausing.
+Plan non-trivial changes after resolving local context. Use `write-design-doc`
+only when explicitly requested. Do not create a plan artifact for answer-mode
+work; use `.agents/projects/` only when a change cannot fit in one pass.
 
 ## Code Reuse
 
-Before writing any utility function, helper, or data structure:
-1. Search the codebase for existing implementations
-2. Check subproject utils: `lib/marin/src/marin/`, `lib/iris/src/iris/`, `lib/levanter/`
-3. Check `pyproject.toml` for available third-party packages before adding new ones
-
-If a suitable implementation exists, use it. Do not create parallel implementations.
+Before adding a helper or data structure, search the relevant module or package
+for an existing implementation and check available dependencies. Expand to a
+repository-wide search only for a shared abstraction or dependency-sensitive
+change. Do not create parallel implementations.
 
 Dependency direction: {`iris`, `haliax`} → {`levanter`, `zephyr`} → `marin`. Each layer may only import from layers to its left. Never introduce reverse dependencies (e.g., levanter importing from marin).
+
+## Recursive Agents
+
+Any automation that launches another LLM must select a vendor model and effort
+tier explicitly. Do not inherit an interactive parent or CLI default. Use a
+budget review model for local lint and code-review subprocesses; for Codex, use
+`gpt-5.6-terra` at low effort unless the workflow documents a stronger need.
+Equivalent explicitly configured budget models are valid for other vendors.
+Keep the active-launch inventory in `docs/dev-guide/agent-automation.md` current.
 
 ## Testing
 

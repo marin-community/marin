@@ -432,7 +432,8 @@ def run_agent(prompt: str, root: Path) -> None:
     result = run_claude(
         prompt,
         [
-            "--model=opus",
+            "--model=claude-opus-4-8",
+            "--effort=high",
             "--dangerously-skip-permissions",
             *NO_SELF_CREDIT_SETTINGS,
             "--tools=Read,Write,Edit,Glob,Grep,Bash",

@@ -81,6 +81,17 @@ class Invocation:
     variant: str | None
     trigger: str | None
     agent_cli: str | None
+    agent_vendor: str | None
+    agent_model: str | None
+    agent_effort: str | None
+    agent_calls: int | None
+    agent_calls_json: str | None
+    input_tokens: int | None
+    cache_creation_input_tokens: int | None
+    cache_read_input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+    cost_usd: float | None
     git_branch: str | None
     merge_base_sha: str | None
     head_sha: str | None

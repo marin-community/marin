@@ -7,7 +7,6 @@ description: Add, revise, or review Marin tests for an explicit behavior change,
 
 Read these before choosing test style, fixtures, mocks, markers, or commands:
 
-- root `AGENTS.md`
 - root `TESTING.md`
 - the nearest subproject `AGENTS.md` for files under `lib/*`
 - package testing docs referenced from that `AGENTS.md`, such as

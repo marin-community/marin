@@ -31,7 +31,7 @@ def verify_screenshots(pairs: list[tuple[Path, str]]) -> tuple[ClaudeRunStatus, 
     )
     result = run_claude(
         prompt,
-        ["--model=sonnet", "--dangerously-skip-permissions", "--tools=Read"],
+        ["--model=claude-sonnet-4-6", "--effort=low", "--dangerously-skip-permissions", "--tools=Read"],
         timeout=180,
     )
     if result.status == ClaudeRunStatus.RATE_LIMITED:

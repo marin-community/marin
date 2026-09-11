@@ -21,6 +21,19 @@ pipeline = (
 ctx.execute(pipeline)
 ```
 
+## Source layout
+
+- `src/zephyr/dataset.py` defines `Dataset` and its transformations.
+- `src/zephyr/context.py`, `coordinator.py`, and `worker.py` implement execution
+  and worker lifecycle.
+- `src/zephyr/plan.py` computes and fuses physical plans.
+- `src/zephyr/readers.py`, `writers.py`, and `input_file.py` define storage
+  boundaries and file formats.
+- `src/zephyr/shuffle.py` implements hash routing, combiners, sidecars, and
+  bounded merge passes.
+- `src/zephyr/expr.py`, `memory_budget.py`, and `counters.py` contain expression,
+  memory-budget, and scoped-counter APIs.
+
 ## Key Patterns
 
 **Dataset Creation:**

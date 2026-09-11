@@ -39,14 +39,15 @@ shared_prompt: |-
   inspect each changed file themselves (see "Inputs"). The complexity lane
   additionally receives a `COMPLEXITY LEADS` block of advisory static metrics. One lane is holistic: the **meta** lane reasons over
   the whole change rather than scanning hunks, may read beyond the diff to confirm a
-  finding, and runs only on larger diffs (>100 changed lines). A final **composer**
-  agent then merges the lanes' outputs into one list.
+  finding, and runs only on larger diffs (>100 changed lines). Deterministic
+  deduplication and concatenation merge the lane outputs. `--lint-compose` adds
+  a **composer** agent for an explicit higher-cost review.
 
   Consequences for a lane agent: apply only your lane's rules, and resolve
   overlap precedence *within* your lane. Cross-lane duplicates (the same line
-  flagged by two lanes) and cross-lane precedence are the composer's job — do not
-  second-guess other lanes. The composer never culls a finding on disagreement; it
-  only collapses true duplicates and drops precedence losers.
+  flagged by two lanes) are handled by the deterministic merge. Do not
+  second-guess other lanes. When enabled, the composer may also apply cross-lane
+  precedence; it never culls a finding on disagreement.
 
   "Stay in scope" has two axes. *Rule scope* — the `ml-` codes you own — is narrow
   for **every** lane, meta included: never emit another lane's code. *Diff scope* —
@@ -56,8 +57,8 @@ shared_prompt: |-
   hunk-scoped pass structurally cannot see the problem; if a single hunk would let a
   local lane catch it, the meta lane defers.
 
-  `--lint-lane <name>` runs a single lane; `--no-lint-compose` skips the composer
-  and concatenates lanes (deduped) instead of reasoning over them.
+  `--lint-lane <name>` runs a single lane; `--lint-compose` enables the optional
+  model composer instead of the default deterministic merge.
 
   ### Inputs
 
