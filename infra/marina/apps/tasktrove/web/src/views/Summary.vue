@@ -29,6 +29,7 @@ const loaded = ref<Manifest>()
 const problem = ref('')
 const sourceQuery = ref('')
 const sourceVerdict = ref<'all' | 'keep' | 'drop'>('all')
+const release = '2026.09.10.8'
 
 onMounted(async () => {
   try {
@@ -148,7 +149,7 @@ function statusSummary(statuses: [string, number][]): string {
             <rect x="20" y="65" width="170" height="80" rx="8" /><text x="40" y="94"><tspan>Raw TaskTrove</tspan><tspan x="40" dy="24" class="dag-count">{{ count(loaded.input_tasks) }} rows</tspan></text>
             <rect x="245" y="65" width="170" height="80" rx="8" /><text x="265" y="94"><tspan>Inventory</tspan><tspan x="265" dy="24" class="dag-note">templates + graders</tspan></text>
             <rect x="470" y="65" width="170" height="80" rx="8" /><text x="490" y="94"><tspan>Normalize</tspan><tspan x="490" dy="24" class="dag-note">{{ Object.keys(loaded.by_converter).length }} converters</tspan></text>
-            <rect x="695" y="65" width="170" height="80" rx="8" /><text x="715" y="94"><tspan>Row checks</tspan><tspan x="715" dy="24" class="dag-note">shape · gold · empty</tspan></text>
+            <rect x="695" y="65" width="170" height="80" rx="8" /><text x="715" y="94"><tspan>Row checks</tspan><tspan x="715" dy="24" class="dag-note">shape · policy · verifier</tspan></text>
             <rect x="920" y="65" width="170" height="80" rx="8" /><text x="940" y="94"><tspan>Final reshard</tspan><tspan x="940" dy="24" class="dag-note">one Parquet file</tspan></text>
           </g>
           <g class="dag-node accepted">
@@ -195,9 +196,9 @@ function statusSummary(statuses: [string, number][]): string {
         <p class="eyebrow">Validation evidence</p>
         <h2>What was checked, and when</h2>
         <p>
-          Historical checks informed the converters; a separate stratified review inspected the published
-          <code>2026.09.10.7</code> Parquet. The older results are supporting evidence, not a claim that they
-          validate the current file byte-for-byte.
+          Historical checks informed the converters; a separate stratified review inspected the preceding
+          <code>2026.09.10.7</code> Parquet. Release <code>{{ release }}</code> applies the narrow confirmed fixes
+          from that review. The older results are supporting evidence, not validation of the new file byte-for-byte.
         </p>
       </div>
       <div class="data-table-wrap">
@@ -232,6 +233,13 @@ function statusSummary(statuses: [string, number][]): string {
               <td>96/96 empty rejected · 44/45 shipped goldens accepted</td>
               <td>One nl2bash golden failed; eight checks did not complete after Daytona sandbox or snapshot failures.</td>
             </tr>
+            <tr>
+              <td><b>Conservative cleanup</b><small>Confirmed findings only</small></td>
+              <td><code>{{ release }}</code></td>
+              <td>17 confirmed findings adjudicated from the 100-task review</td>
+              <td>11 exact rows excluded · one 1,272-row source dropped · two numeric graders repaired</td>
+              <td>Suspect and merely weak tasks remain; no broad heuristic recovery or near-dedup pass was applied.</td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -241,7 +249,11 @@ function statusSummary(statuses: [string, number][]): string {
           <p>
             Confirmed defects included exact grading where a problem allowed tolerance or any valid witness,
             an under-specified math problem, a structured-output prompt that required absent facts, unrelated SWE
-            tests, and a prompt-injection checker that rewarded arbitrary non-target behavior.
+            tests, and a prompt-injection checker that rewarded arbitrary non-target behavior. The new release fixes
+            the two explicit numeric tolerances, excludes the eleven irreparable rows, and drops that uniformly broken
+            prompt-injection source. The ill-defined questions, inconsistent goldens, missing special judges, and weak
+            tests came from the source tasks. The lost numeric tolerance and stale Java submission wording were
+            conversion defects; both are repaired rather than used as reasons to discard otherwise sound rows.
           </p>
         </article>
         <article>
@@ -254,10 +266,6 @@ function statusSummary(statuses: [string, number][]): string {
           </p>
         </article>
       </div>
-      <p class="audit-warning">
-        This is the audit of the currently published candidate. Its confirmed row-level findings are not yet
-        subtracted from the <code>2026.09.10.7</code> manifest totals shown above.
-      </p>
     </section>
 
     <section id="sources" class="paper source-audit">

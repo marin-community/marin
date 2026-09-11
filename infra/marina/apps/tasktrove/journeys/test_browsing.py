@@ -11,7 +11,7 @@ from marina.journeys import Journey
 
 def test_cleanup_report_explains_the_pipeline(journey: Journey) -> None:
     journey.visit("/").sees("A task collection with explicit, testable rewards")
-    journey.sees("Cleanup pipeline").sees("1,450,969").sees("clean tasks")
+    journey.sees("Cleanup pipeline").sees("1,449,686").sees("clean tasks")
     journey.sees("What happened to every source").sees("DCAgent__exp_rle_adversarial-v6")
     journey.click("Source audit").fill("Find a source", "nl2bash")
     journey.sees("Run the oracle command and compare its sandbox effects.").sees("script")
@@ -22,7 +22,7 @@ def test_cleanup_report_explains_the_pipeline(journey: Journey) -> None:
 def test_browser_reads_the_parquet_and_opens_a_task(journey: Journey) -> None:
     journey.visit("/").click("Browse the clean Parquet")
     journey.sees("Parquet viewer")
-    journey.select("Source", "DCAgent2__nl2bash-tasks-cleaned-oracle-v2 (1,498)")
+    journey.select("Source", "DCAgent2__nl2bash-tasks-cleaned-oracle-v2 (1,497)")
     journey.sees("task_5407", timeout=60).shoot("filtered-table").click("task_5407")
     journey.sees("tests/verifier.toml").click("tests/verifier.toml")
     journey.sees('mode = "script"').shoot("script-task")

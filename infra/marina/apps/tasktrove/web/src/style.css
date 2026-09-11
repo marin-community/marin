@@ -43,7 +43,6 @@ h3 { margin: 0; }
 .validation-notes article { padding: 1.25rem; background: var(--panel); }
 .validation-notes h3 { font-size: 0.95rem; margin-bottom: 0.5rem; }
 .validation-notes p { color: var(--muted); font-size: 0.86rem; margin: 0; }
-.audit-warning { margin: 1rem 0 0; padding: 0.8rem 1rem; border-left: 3px solid var(--tasktrove-gold); background: color-mix(in srgb, var(--tasktrove-gold) 8%, var(--panel)); color: var(--muted); font-size: 0.84rem; }
 
 .dag-wrap { overflow-x: auto; border: 1px solid var(--edge); background: var(--panel); }
 .dag { display: block; width: 100%; min-width: 55rem; height: auto; font-family: var(--sans); }
