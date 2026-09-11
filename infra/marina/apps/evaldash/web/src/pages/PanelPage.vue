@@ -244,6 +244,10 @@ function sortGlyph(key: string): string {
   if (sortKey.value !== key) return ''
   return sortDirection.value === 'asc' ? '▲' : '▼'
 }
+// Every sortable header marks the active column in the accent colour.
+function headerClass(key: string): string {
+  return sortKey.value === key ? 'text-accent' : 'text-text-secondary'
+}
 
 // What the active column ranks a row on. null means the row has nothing to rank there: no cell on
 // that benchmark, or no result at all behind its timestamp.
@@ -521,7 +525,7 @@ function goToModel(model: string) {
                 <th class="px-3 py-2 text-left w-8"></th>
                 <th
                   class="px-3 py-2 text-left cursor-pointer"
-                  :class="sortKey === MODEL_SORT ? 'text-accent' : 'text-text-secondary'"
+                  :class="headerClass(MODEL_SORT)"
                   title="Sort by model name"
                   @click="sortBy(MODEL_SORT)"
                 >
@@ -529,7 +533,7 @@ function goToModel(model: string) {
                 </th>
                 <th
                   class="px-3 py-2 text-left cursor-pointer"
-                  :class="sortKey === COVERAGE_SORT ? 'text-accent' : 'text-text-secondary'"
+                  :class="headerClass(COVERAGE_SORT)"
                   title="Sort by panel coverage"
                   @click="sortBy(COVERAGE_SORT)"
                 >
@@ -649,7 +653,7 @@ function goToModel(model: string) {
               <tr class="border-b border-surface-border bg-surface-raised">
                 <th
                   class="sticky left-0 z-10 bg-surface-raised px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer"
-                  :class="sortKey === MODEL_SORT ? 'text-accent' : 'text-text-secondary'"
+                  :class="headerClass(MODEL_SORT)"
                   title="Sort by model name"
                   @click="sortBy(MODEL_SORT)"
                 >
@@ -659,7 +663,7 @@ function goToModel(model: string) {
                   v-for="task in visibleTasks"
                   :key="task"
                   class="px-3 py-2 text-center text-xs font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer"
-                  :class="sortKey === task ? 'text-accent' : 'text-text-secondary'"
+                  :class="headerClass(task)"
                   @click="sortBy(task)"
                 >
                   {{ task }} {{ sortGlyph(task) }}
@@ -672,7 +676,7 @@ function goToModel(model: string) {
                 </th>
                 <th
                   class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer"
-                  :class="sortKey === UPDATED_SORT ? 'text-accent' : 'text-text-secondary'"
+                  :class="headerClass(UPDATED_SORT)"
                   title="Newest contributing benchmark result; individual cells may be older"
                   @click="sortBy(UPDATED_SORT)"
                 >
