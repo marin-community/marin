@@ -1,6 +1,12 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+import os
+import subprocess
+import sys
+import textwrap
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -17,7 +23,7 @@ from levanter.grug.attention import (
     gpu_fa4_cute_attention,
     reference_attention,
 )
-from levanter.grug.attention._fa4_cute import _simple_causal_lower_bounds
+from levanter.grug.attention._fa4_cute import _segmented_kernel_config, _simple_causal_lower_bounds
 
 
 class _reset_abstract_mesh:
@@ -176,6 +182,54 @@ def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
     assert out.sharding.spec == qkv_sharding.spec
 
 
+_CONTEXT_METADATA_SCRIPT = """
+    import jax
+    import jax.numpy as jnp
+    import numpy as np
+    from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+    from levanter.grug.attention import AttentionMask
+    from levanter.grug.attention._fa4_cute import fa4_cute_segment_bounds
+
+    segment_ids = jnp.asarray(
+        [[3] * 7 + [4] * 13 + [5] * 9 + [-1] * 3, [6] * 20 + [7] * 12],
+        dtype=jnp.int32,
+    )
+    for window in (None, 5):
+        def bounds(ids):
+            return fa4_cute_segment_bounds(
+                AttentionMask.causal(sliding_window=window).with_segment_ids(ids),
+                batch_size=2, seq_len=32, sliding_window=window,
+            )
+
+        expected = bounds(segment_ids)
+        for context_size in (1, 2, 4):
+            mesh = Mesh(
+                np.asarray(jax.devices()).reshape(8 // context_size, context_size),
+                ("data", "context"), axis_types=(AxisType.Explicit,) * 2,
+            )
+            with jax.set_mesh(mesh):
+                ids = jax.device_put(segment_ids, NamedSharding(mesh, P(None, "context")))
+                actual = jax.jit(bounds)(ids)
+            for actual_array, expected_array in zip(actual, expected, strict=True):
+                np.testing.assert_array_equal(np.asarray(actual_array), np.asarray(expected_array))
+"""
+
+
+def test_context_sharded_segment_ids_preserve_global_bounds():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(_CONTEXT_METADATA_SCRIPT)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_fa4_wide_attention_rejects_unsupported_hardware(monkeypatch):
     q = jnp.zeros((1, 1, 2, 128), dtype=jnp.bfloat16)
     k = jnp.zeros((1, 1, 1, 128), dtype=jnp.bfloat16)
@@ -291,6 +345,58 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_leading_padding(slid
     cotangent = cotangent * valid[..., None, None].astype(jnp.bfloat16)
 
     _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, valid_tokens=valid)
+
+
+@pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_fa4_cute_wide"])
+@pytest.mark.parametrize("context_size", [2, 4])
+@pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (8, 2, 128), (4, 4, 128)])
+def test_real_gpu_fa4_cute_attention_matches_reference_with_context_sharded_queries(
+    q_heads, kv_heads, head_dim, context_size, implementation
+):
+    if jax.default_backend() != "gpu":
+        pytest.skip("FA4/CuTe correctness requires a GPU backend.")
+    if implementation == "gpu_fa4_cute_wide" and (head_dim != 128 or fa4_cute.gpu_compute_capability() != 100):
+        pytest.skip("Wide tiles require sm100 and head_dim=128.")
+    if jax.device_count() < context_size:
+        pytest.skip(f"Context-parallel FA4/CuTe needs at least {context_size} devices.")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+    if head_dim == 128 and q_heads != kv_heads and _segmented_kernel_config(head_dim).sm90_backward is not None:
+        pytest.skip("The native SM90 GQA backward carries no context-parallel query offset.")
+    # Multiple query tiles exercise offset bounds in both forward and backward kernels.
+    seq_len = 512
+    mesh = jax.sharding.Mesh(
+        np.asarray(jax.devices()).reshape(1, jax.device_count() // context_size, context_size, 1, 1),
+        ("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    batch_axes = ("replica_dcn", "data", "expert")
+    # Use one sequence per batch coordinate.
+    batch = math.prod(mesh.shape[axis] for axis in batch_axes)
+    key = jax.random.PRNGKey(7)
+    q_key, k_key, v_key, cotangent_key = jax.random.split(key, 4)
+    q = jax.random.normal(q_key, (batch, seq_len, q_heads, head_dim), dtype=jnp.bfloat16)
+    k = jax.random.normal(k_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
+    v = jax.random.normal(v_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
+    segment_ids = jnp.broadcast_to(jnp.array([[11] * 213 + [12] * 291 + [-1] * 8], dtype=jnp.int32), (batch, seq_len))
+    mask = AttentionMask.causal(sliding_window=129).with_segment_ids(segment_ids)
+    valid = segment_ids >= 0
+    cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
+    cotangent = cotangent * valid[..., None, None].astype(jnp.bfloat16)
+
+    q_sharding = NamedSharding(mesh, P(batch_axes, "context", "model", None))
+    kv_sharding = NamedSharding(mesh, P(batch_axes, None, "model", None))
+    with jax.set_mesh(mesh):
+        _assert_real_gpu_fa4_cute_matches_reference(
+            jax.device_put(q, q_sharding),
+            jax.device_put(k, kv_sharding),
+            jax.device_put(v, kv_sharding),
+            mask,
+            jax.device_put(cotangent, q_sharding),
+            valid_tokens=valid,
+            implementation=implementation,
+        )
 
 
 def test_real_gpu_fa4_cute_attention_matches_reference_for_simple_sliding_mask():
