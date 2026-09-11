@@ -183,6 +183,8 @@ class _CudaVllmInstall:
     torch_backend: str
     executable: str
     executable_args: tuple[str, ...] = ()
+    extra_requirements: tuple[str, ...] = _CUDA_TOOLCHAIN_REQUIREMENTS
+    constraints: str | None = None
 
 
 @dataclass(frozen=True)
@@ -219,6 +221,11 @@ class IsolatedCudaVllm:
                     str(Path(__file__).with_name("vllm_wheel_entrypoint.py")),
                     provenance,
                 ),
+                extra_requirements=("cuda-toolkit[nvcc,cccl]", "flashinfer-cubin"),
+                constraints=(
+                    "https://raw.githubusercontent.com/marin-community/vllm/"
+                    f"{VLLM_GPU_RELEASE.source_commit}/infra/release/gpu-constraints.txt"
+                ),
             )
         return _CudaVllmInstall(
             requirement=f"vllm[runai]=={self.version}",
@@ -235,14 +242,26 @@ class IsolatedCudaVllm:
             "--with",
             _RUNAI_STREAMER_REQUIREMENT,
         ]
-        for requirement in _CUDA_TOOLCHAIN_REQUIREMENTS:
+        for requirement in install.extra_requirements:
             command.extend(("--with", requirement))
+        command.extend(("--python", self.python_version))
+        if install.constraints is not None:
+            command.extend(
+                (
+                    "--constraints",
+                    install.constraints,
+                    "--index",
+                    "https://flashinfer.ai/whl/",
+                    "--index",
+                    f"https://download.pytorch.org/whl/{install.torch_backend}",
+                    "--index-strategy",
+                    "unsafe-best-match",
+                )
+            )
+        else:
+            command.extend(("--torch-backend", install.torch_backend))
         command.extend(
             (
-                "--python",
-                self.python_version,
-                "--torch-backend",
-                install.torch_backend,
                 "python",
                 "-c",
                 _CUDA_NVCC_BOOTSTRAP,
@@ -262,8 +281,9 @@ class IsolatedCudaVllm:
 
     def cache_identity(self) -> str:
         install = self._install()
-        toolchain = ",".join(_CUDA_TOOLCHAIN_REQUIREMENTS)
-        return f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:{toolchain}"
+        toolchain = ",".join(install.extra_requirements)
+        identity = f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:{toolchain}"
+        return f"{identity}:{install.constraints}" if install.constraints is not None else identity
 
 
 def _write_virtual_hosted_s3_config() -> str:
