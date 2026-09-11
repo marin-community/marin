@@ -16,6 +16,7 @@ import jax
 import jax.experimental.array_serialization.serialization as array_ser
 import jax.tree_util as jtu
 import levanter.checkpoint as checkpoint_module
+import levanter.mpmd_checkpoint as mpmd_checkpoint
 import levanter.tensorstore_serialization as tensorstore_serialization
 import numpy as np
 import optax
@@ -1113,3 +1114,48 @@ def test_backward_compatibility_with_ocdbt():
         )
         assert all(np.isclose(restored_state.training_key, initial_state.training_key))
         assert restored_state.step == initial_state.step
+
+
+def test_mpmd_checkpoint_uses_standard_format_across_destination_shardings(tmp_path):
+    devices = np.array(jax.devices())
+    mesh = jax.sharding.Mesh(devices, ("data",))
+    source_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data"))
+    target_mesh = jax.sharding.Mesh(devices[:1], ("stage",))
+    target_sharding = jax.sharding.NamedSharding(target_mesh, jax.sharding.PartitionSpec())
+    weights = np.arange(8 * len(devices), dtype=np.float32)
+    state = {
+        "weights": jax.device_put(weights, source_sharding),
+        "progress": {"step": jax.device_put(np.array(7, dtype=np.int32), target_sharding)},
+        "unused": None,
+    }
+    path = str(tmp_path / "step-7")
+    save_checkpoint(mpmd_checkpoint.checkpoint_arrays(state), 7, path)
+    assert discover_latest_checkpoint(tmp_path) == path
+
+    templates = {
+        "weights": jax.ShapeDtypeStruct(weights.shape, weights.dtype, sharding=target_sharding),
+        "progress": {"step": jax.ShapeDtypeStruct((), np.int32, sharding=target_sharding)},
+        "unused": None,
+    }
+    restored = mpmd_checkpoint.restore_checkpoint(
+        templates, path, jax.tree.map(lambda value: value.sharding, templates)
+    )
+    np.testing.assert_array_equal(restored["weights"], weights)
+    assert restored["weights"].sharding == target_sharding
+    # A canonical scalar can feed every destination stage, even when its
+    # exemplar initially resides on only one stage's devices.
+    assert restored["progress"]["step"].sharding.device_set == set(jax.devices())
+    for shard in restored["progress"]["step"].addressable_shards:
+        np.testing.assert_array_equal(shard.data, 7)
+    assert restored["unused"] is None
+
+    # Save the stage-local result and read it with the ordinary loader on the
+    # original data mesh: the checkpoint format carries no source-topology gate.
+    reverse_path = str(tmp_path / "step-8")
+    save_checkpoint(mpmd_checkpoint.checkpoint_arrays(restored), 8, reverse_path)
+    source_templates = jax.tree.map(lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=x.sharding), state)
+    loaded = load_checkpoint(source_templates, reverse_path)
+    np.testing.assert_array_equal(loaded["weights"], weights)
+    assert loaded["weights"].sharding == source_sharding
+    np.testing.assert_array_equal(loaded["progress"]["step"], 7)
+    assert loaded["unused"] is None

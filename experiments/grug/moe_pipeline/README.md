@@ -16,10 +16,80 @@ each physical rank in JaxPP's V-shaped placement. DualPipeV requires at least `2
 microbatches. `PIPELINE_LAYERS_PER_STAGE` contains one positive layer count per logical
 stage.
 
-The canonical loop initializes fresh parameters, uses a fixed AdamW optimizer, and
-trains on synthetic token rows. It does not save or restore checkpoints. A model-specific
-training variant should replace those parts while retaining the stage split and JaxPP
-orchestration that it needs.
+The canonical loop uses a fixed AdamW optimizer and synthetic token rows. Set
+`checkpoint_root` on `GrugPipelineTrainConfig` to resume the latest completed
+checkpoint in that root, or initialize fresh parameters if none exists. Set
+`checkpoint_every_steps` to a positive interval to save periodically and on clean
+completion. An interval of zero disables saves but still permits restore. The
+trainer rejects a positive interval without a checkpoint root. The
+benchmark exposes these settings as `PIPELINE_CHECKPOINT_ROOT` and
+`PIPELINE_CHECKPOINT_EVERY_STEPS`. `steps` is the total target number of optimizer
+updates, including updates completed before restore.
+
+Checkpoints use ordinary Levanter TensorStore Zarr3/OCDBT storage and discovery.
+Each save creates `step-<12-digit-completed-step>-<unique-id>/`. Completion
+metadata is published atomically after all processes commit their shards;
+directories without that marker are ignored. Discovery selects the highest
+completed step. Use one writer gang per root and shared storage accessible to
+all processes. Checkpoints remain until explicitly deleted.
+
+The saved `GrugMoeCheckpointState` contains one unsplit `params` model, one
+`opt_state` tree, and a tuple of pending router updates indexed by global layer.
+FSDP can save and load this tree with `levanter.checkpoint.save_checkpoint` and
+`load_checkpoint`. PP assembles the same paths from its stage-local buffers at
+save time, then partitions the restored tree according to the destination's
+compiled input shardings. No model or optimizer tensor is gathered across
+stages; the small replicated optimizer counters are read on every destination
+stage. Pending router biases are installed at the next step, so they are
+excluded from trainable parameters and Adam moments in both modes.
+
+The same state can move between FSDP and PP, between pipeline schedules, and
+between different layer splits or device meshes. The model and optimizer state
+structures must agree. Checkpoints written by this trainer also record and
+validate model configuration, optimizer settings, and precision; ordinary
+Levanter checkpoints without that optional metadata rely on the destination
+state template. Pipeline execution still requires each process to own exactly
+one physical stage. `levanter.mpmd_checkpoint` only adapts array buffers and
+placement; checkpoint publication and discovery use the standard Levanter APIs.
+
+[`checkpoint_smoke.py`](./checkpoint_smoke.py) tests continuation across fresh
+four-process H100x8 gangs with PP2, EP8, and replica axis two. Run `--phase save`
+and then `--phase resume` with the same `--checkpoint-root`. Choose `--mode fsdp`
+or `--mode pp` independently for each phase; PP supports `--schedule zero_bubble`
+or `--schedule dualpipe_v`. Use `--dtype float32` for cross-mode numerical
+comparisons, or the default `bfloat16` for same-mode continuation. The default
+FSDP mesh uses 32 devices; `--fsdp-devices 16` selects a smaller mesh. Cross-mode
+checks allow update differences because shard-local QB quantiles and
+expert-capacity clipping depend on token grouping. Byte-sensitive checksums
+indexed by global tensor coordinates verify restoration before any update.
+`--restore-only` skips the loss evaluation. The first gang saves step one and an uninterrupted
+step-two reference; the second restores step one and compares its next step.
+Restore checksums must match exactly and loss must have relative error at most
+0.002. Add `--compare-state` for same-mode continuation to require exact integer
+state and floating state relative L2 error at most 0.002. Cross-mode optimizer
+updates can differ because routing depends on token grouping. Adam counters must equal the
+recorded completed step. Only local shards and scalar error
+reductions are read during comparison. Disable command buffers in both gangs:
+`XLA_FLAGS='--xla_gpu_executable_terminate_timeout=300 --xla_gpu_enable_command_buffer='`.
+
+For example, submit through the Iris hub to an H100 peer. Choose an unused job
+name and checkpoint root in the peer's regional storage:
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --enable-extra-resources --target-cluster cw-rno2a --priority batch \
+  --gpu H100x8 --replicas 4 --cpu 32 --memory 256GB --disk 64GB \
+  --timeout 3600 --extra pipeline --job-name <unique-save-job> \
+  -e IRIS_PORT_JAX 32761 -e XLA_PYTHON_CLIENT_PREALLOCATE false \
+  -e XLA_FLAGS '--xla_gpu_executable_terminate_timeout=300 --xla_gpu_enable_command_buffer=' \
+  -- python -m experiments.grug.moe_pipeline.checkpoint_smoke \
+  --checkpoint-root <shared-regional-root> --schedule zero_bubble --phase save
+```
+
+After that job succeeds, repeat with a new job name and `--phase resume`, keeping
+the checkpoint root and schedule unchanged. Use a distinct root for the
+`dualpipe_v` pair. Concurrent gangs need distinct `IRIS_PORT_JAX` values. A
+successful resume emits `CHECKPOINT_SMOKE_PASSED` with the maximum per-leaf error.
 
 The best validated Snowball 67B-A2B throughput point uses eight H100x8 replicas,
 sixteen logical stages, batch 256, 32 microbatches, sequence length 8192, and layer

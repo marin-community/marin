@@ -6,14 +6,19 @@ from dataclasses import replace
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 from jax.sharding import AxisType, Mesh
+from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import save_checkpoint as save_levanter_checkpoint
 from levanter.data.text.examples import GrugLmExample
 
 from experiments.grug.moe_pipeline.benchmark import _resolve_benchmark_config
+from experiments.grug.moe_pipeline.checkpoint import checkpoint_state, restore_checkpoint, save_checkpoint
 from experiments.grug.moe_pipeline.model import GrugModelConfig, Transformer
 from experiments.grug.moe_pipeline.pipeline import (
     AutomaticPipelineSchedule,
+    GrugMoeAutomaticPipelineState,
     GrugMoePipelineConfig,
     _apply_qb_betas,
     automatic_stage_to_mpmd_indices,
@@ -179,3 +184,65 @@ def test_dualpipe_v_train_config_rejects_too_few_microbatches():
             microbatches=3,
             schedule=PipelineSchedule.DUALPIPE_V,
         )
+
+
+def test_checkpoint_restores_optimizer_and_pending_router_updates(tmp_path):
+    mesh, model = _tiny_model(num_layers=4)
+    params, _ = split_automatic_stages(model, num_stages=2)
+    optimizer = optax.adamw(1e-4)
+    with jax.set_mesh(mesh):
+        state = GrugMoeAutomaticPipelineState(
+            params,
+            tuple(optimizer.init(stage) for stage in params),
+            (jnp.array([[2.0, -1.0], [1.0, 3.0]]), jnp.array([[-3.0, 1.0], [4.0, 2.0]])),
+        )
+        # Populate Adam moments and counts; a fresh optimizer must differ.
+        gradients = jax.tree.map(jnp.ones_like, params)
+        updated = [
+            optimizer.update(grad, opt, param)
+            for grad, opt, param in zip(gradients, state.opt_state, params, strict=True)
+        ]
+        state = replace(
+            state,
+            trainable_params=tuple(
+                optax.apply_updates(param, item[0]) for param, item in zip(params, updated, strict=True)
+            ),
+            opt_state=tuple(item[1] for item in updated),
+        )
+        root = str(tmp_path)
+        checkpoint = save_checkpoint(root, state, step=1, contract={"schedule": "zero_bubble"})
+        # An interrupted newer save must not hide the committed checkpoint.
+        (tmp_path / "step-000000000002-incomplete").mkdir()
+        empty = jax.tree.map(jnp.zeros_like, state)
+        shardings = jax.tree.map(lambda value: value.sharding, empty)
+        restored, step = restore_checkpoint(root, empty, shardings, contract={"schedule": "zero_bubble"})
+        assert step == 1
+        for actual, expected in zip(jax.tree.leaves(restored), jax.tree.leaves(state), strict=True):
+            np.testing.assert_array_equal(actual, expected)
+        for stage_optimizer in restored.opt_state:
+            np.testing.assert_array_equal(stage_optimizer[0].count, step)
+        # A plain Levanter reader sees a whole model and optimizer, not stages.
+        canonical = checkpoint_state(state)
+        loaded = load_checkpoint(jax.tree.map(jnp.zeros_like, canonical), checkpoint)
+        _assert_trees_close(loaded, canonical)
+        # Save with the ordinary FSDP API and restore into the pipeline.
+        fsdp_path = str(tmp_path / "fsdp")
+        save_levanter_checkpoint(loaded, 1, fsdp_path)
+        restored_fsdp, completed = restore_checkpoint(fsdp_path, empty, shardings, contract={})
+        assert completed == 1
+        _assert_trees_close(restored_fsdp, state)
+        with pytest.raises(ValueError, match="training configuration"):
+            restore_checkpoint(checkpoint, empty, shardings, contract={"schedule": "dualpipe_v"})
+
+        # The same FSDP checkpoint can populate a different logical layer split.
+        four_params, _ = split_automatic_stages(model, num_stages=4)
+        four_state = GrugMoeAutomaticPipelineState(
+            four_params,
+            tuple(optimizer.init(stage) for stage in four_params),
+            tuple(jnp.zeros((1, 2)) for _ in four_params),
+        )
+        four_restored, completed = restore_checkpoint(
+            fsdp_path, four_state, jax.tree.map(lambda value: value.sharding, four_state), contract={}
+        )
+        assert completed == 1
+        _assert_trees_close(checkpoint_state(four_restored), loaded)

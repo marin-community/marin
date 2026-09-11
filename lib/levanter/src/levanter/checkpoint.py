@@ -34,10 +34,12 @@ from jax.experimental.array_serialization.serialization import GlobalAsyncCheckp
 from jaxtyping import PyTree
 
 from rigging import telemetry
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
+    TensorStoreReadConfig,
     TensorStoreWriteConfig,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
@@ -788,6 +790,7 @@ def save_checkpoint(
     is_temporary: bool = True,
     debug: CheckpointDebugConfig | None = None,
     write_config: TensorStoreWriteConfig | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ):
     """
     Save a checkpoint to a given path using TensorStore with OCDBT.
@@ -804,8 +807,11 @@ def save_checkpoint(
         manager: the GlobalAsyncCheckpointManager to use for saving the checkpoint
         commit_callback: a callback to call after the checkpoint has been saved
         is_temporary: whether the checkpoint is temporary
+        metadata: Additional application metadata committed with the completion marker.
         write_config: how the save divides work across the processes holding the state
     """
+    if metadata is not None and {"step", "timestamp", "is_temporary"}.intersection(metadata):
+        raise ValueError("Checkpoint metadata must not override step, timestamp, or is_temporary")
     step = int(step)
     checkpoint_path = str(checkpoint_path)
     checkpoint_debug = debug or CheckpointDebugConfig()
@@ -836,7 +842,7 @@ def save_checkpoint(
             progress_logger.set_phase("metadata_write")
         status = "completed"
         try:
-            _save_metadata(checkpoint_path, fs, step, is_temporary)
+            _save_metadata(checkpoint_path, step, is_temporary, metadata)
             logger.info(f"Saved checkpoint to {checkpoint_path} for step {step}")
 
             if commit_callback is not None:
@@ -887,11 +893,16 @@ def save_checkpoint(
     return checkpoint_path
 
 
-def _save_metadata(checkpoint_path, fs, step, is_temporary):
-    metadata = {"step": step, "timestamp": datetime.datetime.now().isoformat(), "is_temporary": is_temporary}
+def _save_metadata(checkpoint_path, step, is_temporary, extra_metadata=None):
+    metadata = {
+        **(extra_metadata or {}),
+        "step": step,
+        "timestamp": datetime.datetime.now().isoformat(),
+        "is_temporary": is_temporary,
+    }
     if jax.process_index() == 0:
-        with fs.open(os.path.join(checkpoint_path, "metadata.json"), "w") as json_out:
-            json.dump(metadata, json_out)
+        with atomic_rename(prefix_join(checkpoint_path, "metadata.json")) as temporary_path:
+            StoragePath(temporary_path).write_text(json.dumps(metadata))
 
 
 def load_checkpoint(
@@ -902,6 +913,7 @@ def load_checkpoint(
     axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
     mesh: Optional[jax.sharding.Mesh] = None,
     allow_partial: bool = False,
+    read_config: TensorStoreReadConfig | None = None,
 ) -> M:
     """
     Load a checkpoint from a given path using TensorStore.
@@ -919,6 +931,7 @@ def load_checkpoint(
         subpath: the subpath to load from the checkpoint
         axis_mapping: the axis mapping to use for loading the checkpoint
         mesh: the mesh to use for loading the checkpoint
+        read_config: Controls replica-local reads and restore collectives.
         allow_partial: if True, allow partial loading of the checkpoint. If False, all parameters must be present in the checkpoint.
     Returns:
         the loaded checkpoint, with the same structure as the exemplar tree
@@ -939,7 +952,12 @@ def load_checkpoint(
 
     ser, non_ser = equinox.partition(tree, is_jax_array_like)
     tree = tree_deserialize_leaves_tensorstore(
-        checkpoint_path, ser, axis_mapping=axis_mapping, mesh=mesh, allow_missing=allow_partial
+        checkpoint_path,
+        ser,
+        axis_mapping=axis_mapping,
+        mesh=mesh,
+        allow_missing=allow_partial,
+        read_config=read_config,
     )
     tree = equinox.combine(tree, non_ser)
     return tree

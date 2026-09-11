@@ -9,7 +9,7 @@ import json
 import os
 import statistics
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from types import SimpleNamespace
 from typing import cast
@@ -30,6 +30,7 @@ from levanter.pipeline import reshape_batch_into_microbatches
 from levanter.utils.flop_utils import lm_flops_per_token
 
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe_pipeline.checkpoint import restore_checkpoint, save_checkpoint
 from experiments.grug.moe_pipeline.model import BATCH_AXES, GrugModelConfig, Transformer
 from experiments.grug.moe_pipeline.pipeline import (
     TRAIN_LOSS_KEY,
@@ -89,8 +90,14 @@ class GrugPipelineTrainConfig:
     attention_implementation: str
     moe_implementation: str
     schedule: PipelineSchedule
+    checkpoint_root: str | None
+    checkpoint_every_steps: int
 
     def __post_init__(self) -> None:
+        if self.checkpoint_every_steps < 0:
+            raise ValueError("checkpoint_every_steps must be nonnegative")
+        if self.checkpoint_every_steps and not self.checkpoint_root:
+            raise ValueError("checkpoint_root is required for checkpoint saves")
         if not isinstance(self.schedule, PipelineSchedule):
             raise ValueError(f"unknown pipeline schedule: {self.schedule!r}")
         if self.schedule == PipelineSchedule.ZERO_BUBBLE and self.stages != self.physical_stages:
@@ -191,7 +198,8 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
         expert_axis_size=config.expert_axis_size,
         replica_axis_size=replica_axis_size,
     )
-    optimizer = optax.adamw(learning_rate=1e-4, b1=0.9, b2=0.95, weight_decay=0.1)
+    optimizer_config = dict(learning_rate=1e-4, b1=0.9, b2=0.95, weight_decay=0.1)
+    optimizer = optax.adamw(**optimizer_config)
     peak_flops_per_device = device_flops("h100")
     if peak_flops_per_device is None:
         raise ValueError("Fray does not define H100 BF16 peak FLOP/s")
@@ -292,6 +300,17 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
     state = prepared.state
     batches = prepared.batches
     loss_denominator = prepared.loss_denominator
+    checkpoint_contract = {
+        "model": asdict(model_config),
+        "mp_policy": config.mp_policy_string,
+        "optimizer": {"type": optax.adamw.__name__, **optimizer_config},
+    }
+    start_step = 0
+    if config.checkpoint_root:
+        state, start_step = restore_checkpoint(
+            config.checkpoint_root, state, step.in_shardings[0][0], contract=checkpoint_contract
+        )
+        _log("PIPELINE_RESTORE", step=start_step, checkpoint_root=config.checkpoint_root)
     _log(
         "PIPELINE_LOWER",
         process_index=jax.process_index(),
@@ -299,11 +318,13 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
     )
 
     profiler_callback = None
-    if config.profile_steps > 0:
+    profile_start_step = max(config.profile_start_step, start_step)
+    profile_end_step = min(config.profile_start_step + config.profile_steps, config.steps)
+    if config.profile_steps > 0 and profile_start_step < profile_end_step:
         profiler_callback = ProfilerConfig(
             enabled=True,
-            start_step=config.profile_start_step,
-            num_steps=config.profile_steps,
+            start_step=profile_start_step,
+            num_steps=profile_end_step - profile_start_step,
             perfetto_link=False,
             profile_options=ProfileOptionsConfig(
                 host_tracer_level=1,
@@ -314,11 +335,11 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
             "/tmp/grug-moe-pipeline-profiler",
             run_id=config.profile_run_id,
         )
-        profiler_callback(SimpleNamespace(step=-1))
+        profiler_callback(SimpleNamespace(step=start_step - 1))
 
     step_times = []
     loss = None
-    for step_index in range(config.steps):
+    for step_index in range(start_step, config.steps):
         started = time.monotonic()
         state, metrics = step(state, batches, loss_denominator)
         jax.block_until_ready((state, metrics))
@@ -327,6 +348,13 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
         metric_loss = metrics[TRAIN_LOSS_KEY]
         if profiler_callback is not None:
             profiler_callback(SimpleNamespace(step=step_index))
+        completed_steps = step_index + 1
+        if config.checkpoint_root and config.checkpoint_every_steps:
+            if completed_steps % config.checkpoint_every_steps == 0 or completed_steps == config.steps:
+                checkpoint_path = save_checkpoint(
+                    config.checkpoint_root, state, step=completed_steps, contract=checkpoint_contract
+                )
+                _log("PIPELINE_CHECKPOINT", step=completed_steps, path=checkpoint_path)
         if isinstance(metric_loss, MpmdArray):
             if not metric_loss.is_partially_addressable:
                 continue
@@ -344,6 +372,9 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
             loss=loss,
         )
 
+    if not step_times:
+        _log("PIPELINE_COMPLETE", step=start_step)
+        return
     measured = step_times[config.warmup_steps :]
     if not measured:
         measured = step_times
