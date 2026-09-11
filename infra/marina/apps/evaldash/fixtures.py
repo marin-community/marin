@@ -74,9 +74,7 @@ _DEFAULT_SERVING = ServingParams(
 )
 
 
-# Settings of one benchmark, as the launcher's eval registry declares them. Fixture records carry the
-# family so the dev panel collapses gsm8k at 8 shots and at 0 into one column with a variant picker,
-# the way records from a real launch do.
+# Match the launcher registry so local fixtures exercise variant selection.
 _EVAL_FAMILIES = {"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"}
 
 
@@ -429,7 +427,6 @@ def build_fixtures(dest: str) -> list[str]:
             _generation_sample("gsm8k-0shot", "2", extracted="120", target="120"),
         ],
     )
-    # The same benchmark at 8 shots: one leaderboard column with two settings behind it.
     r = f"{grp}-gsm8k"
     emit(
         _record(

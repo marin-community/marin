@@ -102,12 +102,7 @@ def eval_suites(evals: set[str]) -> list[dict]:
 
 
 def declared_families(records: Iterable[EvalRunRecord]) -> dict[str, str]:
-    """Each eval name's declared benchmark family, from the newest record that declares one.
-
-    The family is a registry property the launcher writes into every record, so the dashboard reads
-    the grouping rather than keeping its own copy of it. A name no record families is absent here and
-    is its own family. A name whose family changed takes the newest declaration.
-    """
+    """Map each eval name to its newest non-null family declaration."""
     declared: dict[str, tuple[str, str]] = {}
     for record in records:
         family = record.evaluation.family
@@ -141,14 +136,7 @@ def _family_columns(
     families: Mapping[str, str],
     cells: Mapping[str, Mapping[str, Measurement]],
 ) -> list[FamilyColumn]:
-    """The requested benchmarks grouped into families, each with the variant its column shows.
-
-    The variant shown is the one with the most admitted cells under the request that produced
-    ``cells``, ties broken by eval name. Admission depends on the request -- a coverage gate, a pinned
-    cohort, a metadata filter -- so the variant that says the most about the models on screen is a
-    property of the question being asked and cannot be decided once at registry time. Requesting a
-    single sibling pins that setting, since it is then its family's only candidate.
-    """
+    """Choose each family's variant by admitted-cell count, then eval name."""
     admitted = Counter(name for model_cells in cells.values() for name in model_cells)
     return [
         FamilyColumn(
@@ -269,22 +257,18 @@ def build_panel(
     policy -- a panel aggregate carrying its own protocol. No aggregate is produced by default: a mean
     across benchmarks has no interpretation without a declared panel and missing-data policy.
 
-    ``families`` groups the requested benchmarks into the columns a reader sees, each naming its
-    variants and the one shown. ``panel`` is that one variant per family, and it is what coverage,
-    completeness and the aggregate are all computed over, so every number describes the columns on
-    screen. ``benchmarks`` stays the full admitted list. Cells stay keyed by exact eval name, so a
-    variant's provenance and every benchmark-named parameter are unchanged.
+    ``families`` describes each column and its selected variant. ``panel`` contains those selected
+    variants and controls coverage, completeness, and aggregation. ``benchmarks`` and ``cells`` retain
+    every admitted variant under its exact eval name.
     """
     eligible = _panel_records(records)
     metadata = run_metadata(eligible)
-    # Completeness is applied below rather than in the engine: it has to be judged against the columns
-    # a reader sees, which are one variant per family and are not known until the selection is in hand.
+    # Family columns are resolved after selection, so apply completeness to the effective panel below.
     selection = select(measurements_from_records(eligible), replace(request, completeness=Completeness.ANY), metadata)
     requested = list(request.panel) if request.panel is not None else list(selection.benchmarks)
     families = _family_columns(requested, declared_families(eligible), selection.cells)
     panel = [column.default for column in families]
-    # A sibling the column is not showing gets no gap entry: an explained empty cell belongs to a
-    # column on screen. Its admitted results still reach the payload as cells.
+    # Omit gap entries for sibling variants without a visible column; admitted cells remain in the payload.
     hidden = {name for column in families for name in column.variants if name != column.default}
 
     on_panel = [
@@ -388,12 +372,7 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
 
 
 def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = frozenset()) -> dict:
-    """Distinct filter values across all records, plus the archived set and the run facets.
-
-    ``families`` lists every variant each benchmark family has ever been run under, which is what the
-    column picker offers. It is wider than a panel's own ``families``: a panel narrowed to one variant
-    must still be able to switch back to a sibling it is not currently showing.
-    """
+    """Return panel filter metadata and all known variants for each family."""
     eval_names = {r.evaluation.name for r in records}
     by_family = group_by_family(sorted(eval_names), declared_families(records))
     metadata = run_metadata(records)

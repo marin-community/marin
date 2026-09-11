@@ -134,10 +134,7 @@ const sharedTasks = computed<string[]>(() => {
   return visibleTasks.value.filter((task) => selected.value.every((model) => modelCells.value[model]?.[task]))
 })
 
-// Carry the panel's selection into the compare route, so the comparison answers the same question
-// the panel was showing rather than falling back to every benchmark at the newest cohort. The column
-// list travels explicitly, by exact eval name: a family's siblings are admitted results the panel
-// resolved down to one column, and Compare has to score the setting the reader was shown.
+// Pin Compare to the exact variants shown in the panel.
 function goCompare() {
   const benchmarks = columns.value.map((column) => column.task).join(',')
   const query: Record<string, string> = { ...selection.value, models: selected.value.join(',') }
@@ -246,17 +243,13 @@ const rows = computed<PanelRow[]>(() => {
   })
 })
 
-// --- Benchmark families: several settings of one benchmark share one leaderboard column ---
-// The server resolves which setting each column shows and returns `panel` as that one variant per
-// family, so coverage, completeness and the aggregate are already over the columns on screen. The
-// picker offers every variant the fleet has run, from meta, so a column narrowed to one can switch
-// back to a sibling this panel is not showing.
 interface FamilyColumn {
   family: string
   task: string
   variants: string[]
 }
 
+// Meta includes siblings omitted by a narrowed panel, so the picker can switch back.
 const knownVariants = computed<Record<string, string[]>>(() => {
   const known = new Set(knownEvals.value)
   const out: Record<string, string[]> = {}
@@ -664,7 +657,7 @@ function goToModel(model: string) {
                   <select
                     v-if="column.variants.length > 1"
                     class="block mx-auto mt-0.5 rounded border border-surface-border bg-surface px-1 py-0 font-mono text-[10px] font-normal normal-case text-text-secondary"
-                    title="Which setting of this benchmark the column shows. The choice travels in the URL and into Compare."
+                    title="Which setting of this benchmark the column shows. Compare uses the selected setting."
                     :value="column.task"
                     @click.stop
                     @change="pickVariant(column, ($event.target as HTMLSelectElement).value)"

@@ -159,9 +159,6 @@ def test_serving_round_trips_and_defaults_to_none(tmp_path):
 
 
 def test_eval_family_is_optional_and_absent_from_a_record_that_declares_none(tmp_path):
-    """Benchmark families arrived after records were in object storage, so ``eval.family`` is omitted
-    when the registry declares none: every record written so far still parses, and its eval reads back
-    as a leaderboard column of its own. A declared family round-trips."""
     path = write_record(_RECORD, str(tmp_path))
     with open(path) as f:
         raw = json.load(f)

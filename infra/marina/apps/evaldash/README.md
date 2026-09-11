@@ -114,20 +114,15 @@ than standing as a model's newest score -- the zero is real but is equally consi
 grader, and reporting a collapse on that basis would be the same error as hiding it. The empty cell
 names the flag and links the run, and `include_flagged=1` admits it, starred.
 
-Several settings of one benchmark share a leaderboard column. Which names belong together is declared
-once in the launcher's eval registry and written into each run's `eval.family`, so the dashboard reads
-the grouping off the records instead of keeping a table that drifts; a run that declares no family is
-a column of its own. `/panel` returns `families`, each with its variants and the variant the column
-shows: the one with the most admitted cells under this request, ties broken by eval name, or the
-single sibling a request that names one asks for. The choice is made per request rather than fixed in
-the registry, because the coverage gate, a pinned cohort, and the metadata filters all change which
-settings have results for the models on screen. `panel` is that one variant per family, and coverage,
-`complete=1`, and the aggregate protocol are all computed over it, so every number describes the
-columns a reader sees; `benchmarks` stays the full admitted list, and a cell is kept for every
-admitted variant. Cells are keyed by the exact eval name, which is also what `benchmarks=` carries, so
-a `/panel` or `/compare` link and `/history` all resolve the same setting the reader was looking at.
-The SPA's own panel view keeps its column selection in local storage rather than in its route, as it
-does every other panel filter; the Compare route is the one that carries the selection in its URL.
+Several settings of one benchmark can share a leaderboard column. The launcher writes this grouping
+to each run's `eval.family`; a run without a family keeps its own column. `/panel` returns each family,
+its requested variants, and the selected variant. It selects the variant with the most admitted cells
+for that request, breaking ties by eval name. Requesting one variant pins it.
+
+The response's `panel` contains one selected variant per family and controls coverage, `complete=1`,
+and aggregation. `benchmarks` and `cells` retain every admitted variant under its exact eval name.
+The SPA stores its panel selection locally. The Compare route carries the selected variants in its
+URL, and `/meta` lists siblings omitted from a narrowed panel so the picker can restore them.
 
 The primary metric per task matches on the base metric name with lm-eval's `,<filter>` suffix
 stripped: the first present of `exact_match`, `accuracy`, `acc_norm`, `acc`, `pass@1` (falling back to
