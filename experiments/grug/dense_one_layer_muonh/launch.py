@@ -75,6 +75,7 @@ class DenseMuonHExperiment:
     wandb_group: str
     lr_schedule: str
     schedule_tag: str
+    min_lr_ratio: float = 0.05
 
 
 CONSTANT_LR_EXPERIMENT = DenseMuonHExperiment(
@@ -119,6 +120,7 @@ def dense_muonh_optimizer(
         reference,
         learning_rate=reference.learning_rate * point.lr_multiplier,
         adam_lr=reference.adam_lr * point.lr_multiplier,
+        min_lr_ratio=experiment.min_lr_ratio,
     )
 
 

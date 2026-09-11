@@ -17,11 +17,12 @@ from experiments.grug.dense_one_layer_sgdh.launch import (
 )
 
 EXPERIMENT = DenseSGDHExperiment(
-    experiment_prefix="AUG-LIN-1L-DENSE-SGDH",
-    experiment_version="2026.09.11",
-    wandb_group="issue-7856-d512-linear-decay-one-layer-dense-sgdh-tpu",
+    experiment_prefix="AUG-LIN0-1L-DENSE-SGDH",
+    experiment_version="2026.09.11-zero-tail",
+    wandb_group="issue-7856-d512-linear-decay-zero-tail-one-layer-dense-sgdh-tpu",
     lr_schedule="linear",
     schedule_tag="linear-decay-lr",
+    min_lr_ratio=0.0,
 )
 
 SWEEP_POINTS = tuple(

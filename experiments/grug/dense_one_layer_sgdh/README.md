@@ -13,6 +13,6 @@ embeddings/norm gains use Adam, matching the parameter-group policy of the MoE
 SGD-H ablation.
 
 `launch_linear_decay.py` runs the matched 25-cell comparison with 1% warmup
-followed by linear decay to 5% of the peak learning rate. It retains the same
+followed by linear decay to zero. It retains the same
 raw-gradient SGD-H update and uses separate experiment, W&B, and artifact
 identities from the constant-LR sweep.

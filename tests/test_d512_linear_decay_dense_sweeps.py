@@ -69,14 +69,15 @@ def test_linear_decay_dense_sweep_matches_grid_without_reusing_identity(
         (dense_sgdh_optimizer, SGDMH_LINEAR_POINTS[0], SGDMH_LINEAR_EXPERIMENT),
     ],
 )
-def test_linear_decay_dense_schedule_warms_up_then_reaches_five_percent_floor(optimizer_factory, point, experiment):
+def test_linear_decay_dense_schedule_warms_up_then_decays_to_zero(optimizer_factory, point, experiment):
     optimizer = optimizer_factory(point, experiment)
     schedule = optimizer.lr_scheduler(point.num_train_steps)
     warmup_steps = int(optimizer.warmup * point.num_train_steps)
 
     assert float(schedule(0)) == pytest.approx(0.0)
     assert float(schedule(warmup_steps)) == pytest.approx(optimizer.learning_rate)
-    assert float(schedule(point.num_train_steps)) == pytest.approx(optimizer.learning_rate * optimizer.min_lr_ratio)
+    assert optimizer.min_lr_ratio == 0.0
+    assert float(schedule(point.num_train_steps)) == pytest.approx(0.0)
 
 
 def test_dense_sweeps_fit_current_v4_host_memory_limit():

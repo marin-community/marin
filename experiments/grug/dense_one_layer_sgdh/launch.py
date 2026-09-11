@@ -78,6 +78,7 @@ class DenseSGDHExperiment:
     optimizer_tag: str = "sgdh"
     momentum: float = 0.0
     nesterov: bool = False
+    min_lr_ratio: float = 0.05
 
 
 CONSTANT_LR_EXPERIMENT = DenseSGDHExperiment(
@@ -134,7 +135,7 @@ def dense_sgdh_optimizer(
         learning_rate=reference.learning_rate * point.lr_multiplier,
         adam_lr=reference.adam_lr * point.lr_multiplier,
         weight_decay=reference.weight_decay,
-        min_lr_ratio=reference.min_lr_ratio,
+        min_lr_ratio=experiment.min_lr_ratio,
         warmup=reference.warmup,
         decay=reference.decay,
         rewarmup=reference.rewarmup,
