@@ -129,8 +129,9 @@ output changes so cached processed and normalized artifacts are rebuilt.
 ## 5. Register and verify the source
 
 Add the chat step factory to `all_sft_sources()` in `sft_sources.py`. Its
-`DatakitChatSource` records the name, ordered processing steps, and approximate
-token count. Existing text sources reuse their weights from `all_sources()`.
+`DatakitChatSource` records the name, structured-chat processing steps, and
+approximate token count. It appends rendering and standard text normalization
+automatically; `normalize_steps` exposes the complete chain. Existing text sources reuse their weights from `all_sources()`.
 For a chat-only source, add its explicit weight in billions to `token_counts`
 inside `all_sft_sources()`. Do not add it to the pretraining registry merely to
 supply this weight: that registry also defines the expected coverage of pinned
@@ -161,8 +162,8 @@ from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 
 source = all_sft_sources()["superior-reasoning"]
-StepRunner().run([source.normalized], max_concurrent=1)
-artifact = read_artifact(source.normalized.output_path, NormalizedData)
+StepRunner().run([source.chat_normalized], max_concurrent=1)
+artifact = read_artifact(source.chat_normalized.output_path, NormalizedData)
 print(artifact.main_output_dir)
 print(artifact.counters)
 ```
@@ -174,3 +175,81 @@ deduplication counts. Normalization fails if quarantined records exceed its 5%
 health limit; investigate unexpected drops instead of raising the limit. Run near
 the source data when using Iris to avoid cross-region reads. Formatting checks do
 not establish answer quality.
+
+## 6. Render for text processing
+
+`all_sft_sources()` exposes both the structured conversation and its rendered
+text. `.chat_normalized` contains Harmony messages, `.rendered` contains only
+`id` and `text`, and `.normalized` contains standard Datakit normalized text:
+
+```python
+from marin.datakit.sft_sources import all_sft_sources
+
+source = all_sft_sources()["superior-reasoning"]
+rendered = source.rendered
+normalized = source.normalized
+```
+
+`StepRunner().run([source.normalized], max_concurrent=1)` builds the full dependency
+chain. Rendering preserves input IDs and duplicate rows; standard normalization assigns content hashes and
+deduplicates the rendered text. The original chat IDs become `source_id` in the
+normalized text. Deduplication compares rendered bytes: equivalent conversations
+rendered with different templates need not deduplicate. Use the same template
+version when combining rendered sources. The structured Harmony artifact remains
+available through `source.chat_normalized`.
+
+Stored text omits BOS; the standard text tokenizer prepends it and appends its
+normal space-plus-EOS document separator after the final chat EOT. Direct
+`render_marin_chat` calls include BOS by default for inference.
+
+Python converts Harmony messages to Hugging Face message dictionaries, then Hugging Face
+renders them with `MARIN_CHAT_TEMPLATE` in `marin.datakit.chat_template`. Tokenizer
+export uses the same template. The rendering behavior described here is the current Marin format; changes
+to the prompt wording or a switch to Harmony wire tokens require separate
+training and serving validation. The adapter joins adjacent assistant analysis, commentary, and function calls
+into one turn. The template emits one end-of-turn token after all parallel calls,
+so generation can reach the tool handoff. The trace evaluation processor also
+keeps inline tool calls in one assistant turn while labeling prose and calls
+separately. Analysis uses Marin think tokens,
+function calls use `<tool_call>` JSON blocks, and named tool replies use
+`<tool_response>` blocks. The template also accepts `reasoning_content` from
+inference clients and serializes structured tool definitions as JSON. API tool
+reply IDs are resolved to function names; the rendered text omits the IDs. Reasoning
+from earlier turns is retained, including records ending in analysis or unanswered
+tool calls. Supported per-record `chat_template_kwargs` are `tools` (a list of
+recorded function definitions), `enable_thinking` (a boolean), and
+`custom_instructions` (a string). `enable_thinking` adds a `/think` or `/nothink`
+system instruction; omitting it adds neither. It does not remove reasoning.
+
+All rendering helpers are in `marin.datakit.chat_render`.
+For an existing directory of normalized chat Parquet, use
+`render_chat_to_parquet(input_path=..., output_path=...)`. For a conversation in
+memory, `render_marin_chat(messages)` returns the rendered string. Bump
+`CHAT_RENDER_VERSION` when changing the Harmony conversion. The template itself
+is included in the rendering step hash, so template changes also produce a new
+artifact. The inference-consistency tests live in
+`tests/test_marin_tokenizer.py`.
+
+
+For inference, export this template with the model's tokenizer; the existing
+`marin-community/marin-tokenizer` revision
+`a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2` contains the older template:
+
+```python
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("path/to/model")
+tokenizer.chat_template = MARIN_CHAT_TEMPLATE
+tokenizer.save_pretrained("path/to/model")
+```
+
+Point MarinSkyRL's policy tokenizer at that same artifact and enable tool parsing
+in the generator's `engine_init_kwargs` with `enable_auto_tool_choice: true` and
+`tool_call_parser: hermes`. This preserves the existing Marin header and reasoning
+tokens. The [pinned MarinSkyRL wrapper](https://github.com/marin-community/MarinSkyRL/blob/93d84333acdf27275d258f0f25dad24129f0cf6e/skyrl-train/skyrl_train/inference_engines/vllm/utils.py)
+forwards tool-parser settings but does not forward a reasoning parser. Reasoning
+therefore remains in assistant `content`; tool-enabled requests preserve its
+think markers. Returning a separate reasoning field in OpenAI chat-completion
+responses requires a MarinSkyRL wrapper change. Native Harmony wire tokens are not used by this
+renderer.
