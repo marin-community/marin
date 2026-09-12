@@ -16,6 +16,7 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import cast
 
+import yaml
 from rigging.filesystem.storage_path import prefix_join
 
 from marin.evaluation.model_config import ModelConfig
@@ -211,6 +212,29 @@ class SkyRLOutputPaths:
     terminal_manifest_uri: str
 
 
+# The trainer strategy each runtime profile installs the closure for. A profile decides which
+# dependencies reach the pod; `trainer.strategy` decides which backend the trainer then asks for.
+# Nothing downstream reconciles them, so a mismatch installs one backend and runs another.
+_STRATEGY_FOR_PROFILE = {
+    SkyRLRuntimeProfile.FSDP: "fsdp2",
+    SkyRLRuntimeProfile.MEGATRON: "megatron",
+}
+
+
+def _declared_strategy(config_yaml: str) -> str | None:
+    """Return `trainer.strategy` from a config, or None when it does not name one.
+
+    Anything that is not a mapping with a mapping under `trainer` names no strategy. `trainer:`
+    with nothing under it parses to None, which is the common way a config leaves the trainer's own
+    defaults alone, and must not read as a contradiction.
+    """
+    declared = yaml.safe_load(config_yaml)
+    if not isinstance(declared, dict):
+        return None
+    trainer = declared.get("trainer")
+    return trainer.get("strategy") if isinstance(trainer, dict) else None
+
+
 @dataclass(frozen=True)
 class SkyRLLaunchRequest:
     run_id: str
@@ -224,6 +248,16 @@ class SkyRLLaunchRequest:
     output: SkyRLOutputPaths
     seed: int
     overrides: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Reject a runtime profile that does not install the strategy the config asks for."""
+        strategy = _declared_strategy(self.config_yaml)
+        expected = _STRATEGY_FOR_PROFILE.get(self.runtime.profile)
+        if strategy is not None and expected is not None and strategy != expected:
+            raise ValueError(
+                f"runtime profile {self.runtime.profile.value!r} installs the {expected!r} backend, "
+                f"but config_yaml asks for trainer.strategy={strategy!r}"
+            )
 
 
 @dataclass(frozen=True)

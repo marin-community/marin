@@ -276,39 +276,8 @@ def test_evaluation_uses_the_validated_training_tokenizer() -> None:
 
 
 def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    output = SkyRLOutputPaths(
-        checkpoint_root="s3://test/run/checkpoints",
-        export_root="s3://test/run/exports",
-        attempts_root="s3://test/run/attempts",
-        resolved_config_uri="s3://test/run/resolved.json",
-        terminal_manifest_uri="s3://test/run/terminal.json",
-    )
-    request = SkyRLLaunchRequest(
-        run_id="checkpoints/iceball-rl-2026.08.01",
-        attempt_id="attempt-1",
-        config_yaml="trainer: {}\n",
-        runtime=_spec().runtime,
-        model=ResolvedModelLocator(
-            uri="s3://test/sft/hf",
-            identity="sft@version:fingerprint",
-            local_path="/tmp/model",
-            tokenizer_uri="Qwen/Qwen3-0.6B-Base",
-            tokenizer_revision="da87bfb",
-        ),
-        train_data=(
-            ResolvedDataLocator(
-                uri="s3://test/gsm8k",
-                identity="gsm8k@version:fingerprint",
-                local_path="/tmp/data",
-                relative_path="train.parquet",
-            ),
-        ),
-        validation_data=(),
-        topology=_spec().topology,
-        output=output,
-        seed=17,
-        overrides=(),
-    )
+    request = _launch_request()
+    output = request.output
     response = {
         "run_id": request.run_id,
         "attempt_id": request.attempt_id,
@@ -415,3 +384,78 @@ def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
     )
 
     assert completed.returncode == 4
+
+
+def _launch_request() -> SkyRLLaunchRequest:
+    """One complete launch request, as the marin launcher builds it."""
+    return SkyRLLaunchRequest(
+        run_id="checkpoints/iceball-rl-2026.08.01",
+        attempt_id="attempt-1",
+        config_yaml="trainer: {}\n",
+        runtime=_spec().runtime,
+        model=ResolvedModelLocator(
+            uri="s3://test/sft/hf",
+            identity="sft@version:fingerprint",
+            local_path="/tmp/model",
+            tokenizer_uri="Qwen/Qwen3-0.6B-Base",
+            tokenizer_revision="da87bfb",
+        ),
+        train_data=(
+            ResolvedDataLocator(
+                uri="s3://test/gsm8k",
+                identity="gsm8k@version:fingerprint",
+                local_path="/tmp/data",
+                relative_path="train.parquet",
+            ),
+        ),
+        validation_data=(),
+        topology=_spec().topology,
+        output=SkyRLOutputPaths(
+            checkpoint_root="s3://test/run/checkpoints",
+            export_root="s3://test/run/exports",
+            attempts_root="s3://test/run/attempts",
+            resolved_config_uri="s3://test/run/resolved.json",
+            terminal_manifest_uri="s3://test/run/terminal.json",
+        ),
+        seed=17,
+        overrides=(),
+    )
+
+
+def test_a_runtime_profile_that_contradicts_the_config_strategy_is_refused() -> None:
+    """The mismatch is otherwise silent until the pod has its GPUs: the launcher installs one
+    backend's closure, the trainer asks for the other, and the run dies on an import error naming
+    neither the profile nor the strategy."""
+    request = _launch_request()
+
+    with pytest.raises(ValueError, match="megatron"):
+        dataclasses.replace(
+            request,
+            config_yaml="trainer:\n  strategy: megatron\n",
+            runtime=dataclasses.replace(request.runtime, profile=SkyRLRuntimeProfile.FSDP),
+        )
+
+
+@pytest.mark.parametrize(
+    "config_yaml",
+    [
+        pytest.param("trainer:\n  strategy: megatron\n", id="names the matching strategy"),
+        pytest.param("trainer:\n  max_steps: 8\n", id="names no strategy"),
+        pytest.param("trainer:\n", id="empty trainer section"),
+        pytest.param("", id="empty config"),
+        pytest.param("- a list\n", id="not a mapping"),
+    ],
+)
+def test_a_config_that_does_not_contradict_the_profile_is_accepted(config_yaml: str) -> None:
+    """Only a config that names a *different* strategy is a contradiction. Everything else leaves
+    the trainer's own default alone, including the shapes that are not a mapping at all -- the
+    guard must not turn those into a crash inside a frozen dataclass constructor."""
+    request = _launch_request()
+
+    accepted = dataclasses.replace(
+        request,
+        config_yaml=config_yaml,
+        runtime=dataclasses.replace(request.runtime, profile=SkyRLRuntimeProfile.MEGATRON),
+    )
+
+    assert accepted.config_yaml == config_yaml

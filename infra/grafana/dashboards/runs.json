@@ -206,14 +206,7 @@
       "url": "/d/infra"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "RL runs",
-      "type": "link",
-      "url": "/d/marin-rl-runs"
+      "linkRef": "rl_post_training"
     }
   ],
   "panels": [

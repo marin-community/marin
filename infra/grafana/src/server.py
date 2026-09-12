@@ -119,6 +119,7 @@ from loom_alerts import (
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from nightly_config import NIGHTLY_LANES
+from rl_producers import check_window, collect_producers
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -461,6 +462,53 @@ def create_app(
             return JSONResponse({"error": str(err)}, status_code=400)
         except QueryResultTooLargeError as err:
             return JSONResponse({"error": f"{err}; narrow the vLLM time range"}, status_code=400)
+
+    def rl_producers(request: Request) -> JSONResponse:
+        try:
+            target = _target_for(request.path_params["cluster"], finelog_sources)
+            params = request.query_params
+            run = _require(params, "run")
+            clusters = tuple(value for value in params.get("clusters", "").split(",") if value)
+            if not clusters:
+                raise _BadRequest("clusters must name at least one cluster")
+            start = _require_time(params, "from")
+            end = _require_time(params, "to")
+            start_ms = round(start.timestamp() * 1000)
+            end_ms = round(end.timestamp() * 1000)
+
+            source = finelog_sources[target.name]
+
+            # Snap the window edges as /query does; the window is inside the SQL this route builds,
+            # so keying on the SQL alone would never hit on a rolling range.
+            key = (
+                target.name,
+                "rl_producers",
+                run,
+                clusters,
+                _bucket(start, config.cache_ttl),
+                _bucket(end, config.cache_ttl),
+            )
+
+            try:
+                check_window(start_ms, end_ms)
+            except ValueError as err:
+                raise _BadRequest(str(err)) from err
+
+            def run_query() -> list[dict[str, object]]:
+                logger.info("rl producers %s: run=%s [%d, %d)", target.name, run, start_ms, end_ms)
+                return collect_producers(
+                    lambda sql: rows_to_json(source.query(sql, max_rows=config.max_rows)),
+                    run,
+                    clusters,
+                    start_ms,
+                    end_ms,
+                )
+
+            return JSONResponse(finelog_cache.get_or_compute(key, run_query))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except QueryResultTooLargeError as err:
+            return JSONResponse({"error": f"{err}; narrow the time range"}, status_code=400)
 
     def fleet_health_rows() -> list[FinelogHealth]:
         _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
@@ -832,6 +880,7 @@ def create_app(
             Route("/wandb/report/{chart}", wandb_report_chart),
             Route("/finelog/{cluster}/query", query),
             Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),
+            Route("/finelog/{cluster}/v1/rl/producers", rl_producers),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_stalls", finelog_alerts_training_stalls),
