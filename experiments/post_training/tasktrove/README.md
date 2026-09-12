@@ -93,6 +93,22 @@ cold full-column read. Other filters cache their columns, and every process keep
 row-group, filter-result, and rendered-page caches. Task archives are read one at a time and are
 not cached.
 
+## Publish to Hugging Face
+
+Publish a built release with an `HF_TOKEN` that can write to the destination dataset repository:
+
+```bash
+uv run python -m experiments.post_training.tasktrove.publish huggingface \
+  s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9
+```
+
+The destination defaults to `open-athena/task-trove`; pass `--repo-id organization/dataset` to
+choose another repository. The command streams each release object into a temporary local staging
+directory, uploads task shards under `data/`, and puts `ledger.parquet`, `manifest.json`, and a
+generated dataset card at the repository root. The card configures only `data/*.parquet` as the
+`train` split, so the rejection ledger remains downloadable metadata instead of becoming a second
+dataset split.
+
 ## Add a converter
 
 1. Build the `templates` stage. Inspect `coverage.json` and its exemplar under

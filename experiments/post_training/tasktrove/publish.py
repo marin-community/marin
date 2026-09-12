@@ -15,6 +15,7 @@ distinct Dockerfile, for its base image.
 
     python -m experiments.post_training.tasktrove.publish summary <filtered_path> <output_path> <tool_ref>
     python -m experiments.post_training.tasktrove.publish export <tasks_dir> <path> [--dest DIR]
+    python -m experiments.post_training.tasktrove.publish huggingface <release_path> [--repo-id REPO]
 
 ``summary`` rewrites the ledger, manifest and report of an existing output without touching
 ``tasks/``; ``export`` writes one row back out as a Harbor task directory for hand inspection.
@@ -23,13 +24,17 @@ distinct Dockerfile, for its base image.
 import json
 import logging
 import re
+import shutil
+import tempfile
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Protocol
 
 import click
 import pyarrow as pa
 import pyarrow.parquet as pq
+from huggingface_hub import HfApi
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
@@ -79,6 +84,35 @@ SUMMARY_COLUMNS = (
 _READERS = 32
 FINAL_SHARDS = 1
 _FROM_LINE = re.compile(r"^FROM\s+(\S+)", re.MULTILINE | re.IGNORECASE)
+DEFAULT_HF_REPO_ID = "open-athena/task-trove"
+_COPY_BUFFER_BYTES = 8 * 1024 * 1024
+_DATASET_CARD_HEADER = """\
+---
+pretty_name: TaskTrove Clean
+configs:
+  - config_name: default
+    data_files:
+      - split: train
+        path: data/*.parquet
+---
+
+"""
+
+
+class HuggingFaceApi(Protocol):
+    """Hub operations used by the release publisher."""
+
+    def create_repo(self, repo_id: str, *, repo_type: str, private: bool, exist_ok: bool) -> object: ...
+
+    def upload_folder(
+        self,
+        *,
+        repo_id: str,
+        folder_path: str | Path,
+        repo_type: str,
+        commit_message: str,
+        delete_patterns: str,
+    ) -> object: ...
 
 
 def _write_tasks(filtered_path: str, output_path: str) -> None:
@@ -214,6 +248,55 @@ def publish_release(filtered_path: str, output_path: str, tool_ref: str) -> None
             (out / stale).rmtree()
     _write_tasks(filtered_path, output_path)
     write_summary(filtered_path, output_path, tool_ref)
+
+
+def _copy_to_local(source: StoragePath, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with source.open("rb") as remote, destination.open("wb") as local:
+        shutil.copyfileobj(remote, local, length=_COPY_BUFFER_BYTES)
+
+
+def stage_huggingface_release(release_path: str, destination: Path) -> None:
+    """Stage a release as one Hugging Face dataset split plus its audit metadata."""
+    release = StoragePath(release_path)
+    task_shards = sorted((release / "tasks" / "*.parquet").glob(), key=str)
+    if not task_shards:
+        raise FileNotFoundError(f"no task Parquet files under {release / 'tasks'}")
+
+    metadata = ("ledger.parquet", "manifest.json", "report.md")
+    missing = [name for name in metadata if not (release / name).exists()]
+    if missing:
+        raise FileNotFoundError(f"release {release_path} is missing {missing}")
+
+    for shard in task_shards:
+        _copy_to_local(shard, destination / "data" / Path(str(shard)).name)
+    for name in ("ledger.parquet", "manifest.json"):
+        _copy_to_local(release / name, destination / name)
+    report = (release / "report.md").read_text()
+    (destination / "README.md").write_text(_DATASET_CARD_HEADER + report)
+
+
+def publish_to_huggingface(
+    release_path: str,
+    repo_id: str = DEFAULT_HF_REPO_ID,
+    *,
+    private: bool = False,
+    api: HuggingFaceApi | None = None,
+) -> None:
+    """Upload a built release to a Hugging Face dataset repository."""
+    with tempfile.TemporaryDirectory(prefix="tasktrove-hf-") as staging_dir:
+        staging = Path(staging_dir)
+        stage_huggingface_release(release_path, staging)
+        api = api or HfApi()
+        api.create_repo(repo_id, repo_type="dataset", private=private, exist_ok=True)
+        api.upload_folder(
+            repo_id=repo_id,
+            folder_path=staging,
+            repo_type="dataset",
+            commit_message="Publish TaskTrove release",
+            delete_patterns="data/*.parquet",
+        )
+    logger.info("published %s to https://huggingface.co/datasets/%s", release_path, repo_id)
 
 
 def write_summary(filtered_path: str, output_path: str, tool_ref: str) -> None:
@@ -356,6 +439,14 @@ def export(tasks_dir: str, path: str, dest: Path) -> None:
 @click.argument("tool_ref")
 def summary(filtered_path: str, output_path: str, tool_ref: str) -> None:
     write_summary(filtered_path, output_path, tool_ref)
+
+
+@main.command(name="huggingface", help="Publish a built release to a Hugging Face dataset repository.")
+@click.argument("release_path")
+@click.option("--repo-id", default=DEFAULT_HF_REPO_ID, show_default=True)
+@click.option("--private", is_flag=True, help="Create the repository as private if it does not exist.")
+def huggingface(release_path: str, repo_id: str, private: bool) -> None:
+    publish_to_huggingface(release_path, repo_id, private=private)
 
 
 if __name__ == "__main__":

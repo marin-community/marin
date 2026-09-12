@@ -10,12 +10,19 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from experiments.post_training.tasktrove.convert import ConvertedRecord, convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
-from experiments.post_training.tasktrove.publish import TASK_COLUMNS, export_task, publish_release
+from experiments.post_training.tasktrove.publish import (
+    DEFAULT_HF_REPO_ID,
+    TASK_COLUMNS,
+    export_task,
+    publish_release,
+    publish_to_huggingface,
+)
 from experiments.post_training.tasktrove.task_format import VERIFIER_TOML
 from experiments.post_training.tasktrove.taskbinary import INSTRUCTION, TaskFiles, read_task_binary, write_task_binary
 from experiments.post_training.tasktrove.verify import DedupStatus, filter_tasks
@@ -24,6 +31,21 @@ FIXTURES = Path(__file__).parents[1] / "fixtures"
 # The release summary looks every source up in source_verdicts.json.
 SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
 MATH_SOURCE = "laion__nemotron-gym-math-v5"
+
+
+class RecordingHubApi:
+    def __init__(self) -> None:
+        self.created: dict | None = None
+        self.uploaded: dict | None = None
+        self.files: dict[str, bytes] = {}
+
+    def create_repo(self, repo_id: str, **kwargs) -> None:
+        self.created = {"repo_id": repo_id, **kwargs}
+
+    def upload_folder(self, *, folder_path: str | Path, **kwargs) -> None:
+        root = Path(folder_path)
+        self.uploaded = {"folder_path": folder_path, **kwargs}
+        self.files = {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
 
 
 def _record(path: str, blob: bytes, source: str = SOURCE, family: str = "qa-short-answer") -> ConvertedRecord:
@@ -125,3 +147,43 @@ def test_publish_writes_survivors_and_rejection_ledger(tmp_path):
 
     exported = export_task(str(tmp_path / "release" / "tasks"), "good.tar.gz", tmp_path / "export")
     assert (exported / "tests" / "verifier.toml").is_file() and (exported / "environment" / "Dockerfile").is_file()
+
+
+def test_huggingface_publish_uploads_tasks_and_audit_metadata(tmp_path):
+    blob = (FIXTURES / "nemotron_mcqa.tar.gz").read_bytes()
+    converted = _write_converted(tmp_path / "converted", [_record("good.tar.gz", blob)])
+    filtered = str(tmp_path / "filtered")
+    release = str(tmp_path / "release")
+    filter_tasks(str(converted), filtered, max_tasks_per_source=None)
+    publish_release(filtered, release, tool_ref="ref")
+    api = RecordingHubApi()
+
+    publish_to_huggingface(release, private=True, api=api)
+
+    assert api.created == {
+        "repo_id": DEFAULT_HF_REPO_ID,
+        "repo_type": "dataset",
+        "private": True,
+        "exist_ok": True,
+    }
+    assert api.uploaded is not None
+    assert {key: value for key, value in api.uploaded.items() if key != "folder_path"} == {
+        "repo_id": DEFAULT_HF_REPO_ID,
+        "repo_type": "dataset",
+        "commit_message": "Publish TaskTrove release",
+        "delete_patterns": "data/*.parquet",
+    }
+    assert set(api.files) == {"README.md", "data/part-00000.parquet", "ledger.parquet", "manifest.json"}
+    assert api.files["data/part-00000.parquet"] == (tmp_path / "release/tasks/part-00000.parquet").read_bytes()
+    card = api.files["README.md"].decode()
+    assert "path: data/*.parquet" in card
+    assert "# TaskTrove release" in card
+
+
+def test_huggingface_publish_validates_release_before_creating_repo(tmp_path):
+    api = RecordingHubApi()
+
+    with pytest.raises(FileNotFoundError, match="no task Parquet files"):
+        publish_to_huggingface(str(tmp_path / "missing"), api=api)
+
+    assert api.created is None
