@@ -8,4 +8,4 @@ dependencies = ["evalchemy"]
 package = false
 
 [tool.uv.sources]
-evalchemy = { git = "https://github.com/marin-community/evalchemy.git", branch = "main" }
+evalchemy = { git = "https://github.com/marin-community/evalchemy.git", rev = "56f6c9b8c24fb34652ee207bd7b008873d00ef66" }

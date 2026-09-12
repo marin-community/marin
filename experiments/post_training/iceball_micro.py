@@ -17,7 +17,7 @@ Programmatic callers use :func:`build_workflow` and select any stage handle.
 
 Run the same graph in Iris from a CPU coordinator::
 
-    uv run iris --cluster=cw-us-east-08a job run --no-wait \
+    uv run iris --cluster=cw-us-east-02a job run --no-wait \
       -e DAYTONA_API_KEY "$DAYTONA_API_KEY" \
       -- python -m experiments.post_training.iceball_micro --version 2026.08.02 --run
 
@@ -90,13 +90,14 @@ GSM8K_REVISION = "e53f048"
 GSM8K_TRAIN_ROWS = 1024
 GSM8K_VALIDATION_ROWS = 128
 ICEBALL_EVALS = "gsm8k-smoke,aime-smoke"
-ICEBALL_CLUSTER = "cw-us-east-08a"
+ICEBALL_CLUSTER = "cw-us-east-02a"
 ICEBALL_CLUSTER_CONFIG = f"lib/iris/config/{ICEBALL_CLUSTER}.yaml"
-ICEBALL_GPU_VARIANT = "GB200"
-ICEBALL_TRAIN_GPUS = 4
+ICEBALL_GPU_VARIANT = "H100"
+ICEBALL_TRAIN_GPUS = 8
 ICEBALL_TRAIN_ACCELERATOR = f"{ICEBALL_TRAIN_GPUS}x{ICEBALL_GPU_VARIANT}"
 ICEBALL_EVAL_ACCELERATOR = f"{ICEBALL_GPU_VARIANT}x1"
 ICEBALL_SEQUENCE_LENGTH = 512
+ICEBALL_EVAL_CONTEXT_LENGTH = 4096
 ICEBALL_WANDB_PROJECT = f"marin-{ICEBALL_MODEL_NAME}"
 FINEWEB_ARTIFACT_NAME = f"documents/{ICEBALL_MODEL_NAME}-fineweb-edu"
 FINEWEB_TOKENIZED_ARTIFACT_NAME = f"tokenized/{ICEBALL_MODEL_NAME}-fineweb-edu-qwen3"
@@ -178,7 +179,7 @@ trainer:
   eval_interval: -1
   ckpt_interval: 2
   resume_mode: latest
-  logger: wandb
+  logger: console
   project_name: {ICEBALL_WANDB_PROJECT}
   policy:
     optimizer_config:
@@ -429,6 +430,8 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
             name=rl_name,
             version=version or resolve_version(rl_base_name, None),
             config_yaml=ICEBALL_RL_CONFIG,
+            # Evaluation consumes the regional export; disable the launcher's default Hub publication.
+            overrides=("++trainer.hf_hub_repo_id=null",),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ArtifactHfModel(
                 step=sft,
@@ -470,7 +473,10 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
                 resource_hint=ResourceHint(gpu={ICEBALL_GPU_VARIANT: 1}),
                 serve=ServeConfig(
                     tensor_parallel_size=1,
-                    max_model_len=ICEBALL_SEQUENCE_LENGTH,
+                    # Fit the unchanged five-shot prompts beyond the short training context.
+                    auto_overrides=False,
+                    max_model_len=ICEBALL_EVAL_CONTEXT_LENGTH,
+                    hf_overrides=json.dumps({"max_position_embeddings": ICEBALL_EVAL_CONTEXT_LENGTH}),
                     max_num_seqs=32,
                     vllm_extra_args=("--enforce-eager",),
                 ),

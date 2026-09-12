@@ -57,7 +57,7 @@ EVALCHEMY = ExternalDependency(
     distribution="evalchemy",
     repository="https://github.com/marin-community/evalchemy.git",
     version="0.1.0",
-    commit="f42990450edf4e694fe5a22b3d23ed09ab42da1e",
+    commit="56f6c9b8c24fb34652ee207bd7b008873d00ef66",
     runtime_requirements=(),
 )
 
@@ -75,35 +75,25 @@ MARIN_SKYRL = ExternalDependency(
     distribution="marinskyrl",
     repository="https://github.com/marin-community/MarinSkyRL.git",
     version="0.1.0",
-    commit="6b981f54b3cbdc9c60493bc76d6090ff678229fd",
+    commit="32f87a9894f4c9ab47b345e16d461fb2cc9f241b",
     runtime_requirements=(),
 )
 
 VLLM_GPU_RELEASE = VllmGpuRelease(
-    release_tag="marin-vllm-gpu-20260827-f0d7cc7f5874",
-    source_commit="f0d7cc7f587482e0ab771e3c9715e726eb914e60",
-    version="0.0.0.dev20260827+marin.f0d7cc7f5874",
-    torch_backend="cu130",
+    release_tag="marin-vllm-gpu-20260912-177d960f5b43",
+    source_commit="177d960f5b437a813738b1d9544f150ba41dc200",
+    version="0.0.0.dev20260912+marin.177d960f5b43.cu132",
+    torch_backend="cu132",
     wheels=(
-        VllmGpuWheel(
-            architecture="aarch64",
-            sm_targets=("10.0",),
-            url=(
-                "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-20260827-f0d7cc7f5874/vllm-0.0.0.dev20260827%2Bmarin.f0d7cc7f5874-cp38-"
-                "abi3-manylinux_2_28_aarch64.whl"
-            ),
-            sha256="de51618bb9ca6074edb0b8ff3ee53396742586c6c738e2161921c840867939c5",
-        ),
         VllmGpuWheel(
             architecture="x86_64",
             sm_targets=("9.0",),
             url=(
                 "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-20260827-f0d7cc7f5874/vllm-0.0.0.dev20260827%2Bmarin.f0d7cc7f5874-cp38-"
-                "abi3-manylinux_2_28_x86_64.whl"
+                "marin-vllm-gpu-20260912-177d960f5b43/vllm-0.0.0.dev20260912%2Bmarin.177d960f5b43.cu132-"
+                "cp38-abi3-manylinux_2_28_x86_64.whl"
             ),
-            sha256="400cb816aea3d46841da6cf9f8e3f4e40bcb7b6a60cf66ecf59e7afd7da4c7c7",
+            sha256="93684330f606a830417431bf29b7cb47498d9ed723f86ed64694ee7b5d21c655",
         ),
     ),
 )
