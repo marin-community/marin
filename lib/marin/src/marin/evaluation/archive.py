@@ -252,13 +252,16 @@ def steps_schema() -> pa.Schema:
     return arrow_schema(StepRecord)
 
 
-def sample_to_archive_row(sample: EvalSample, *, trial_id: str = "") -> dict:
-    """One archive ``samples`` row: the sample's JSON-mode dump plus its ``trial_id`` and ``filter``
-    archive keys. The filter comes from the sample's own grading, so a caller sets it by grading the
-    sample, not by passing it here."""
+def sample_to_archive_row(sample: EvalSample, *, trial_id: str = "", extraction_filter: str | None = None) -> dict:
+    """One archive ``samples`` row plus its ``trial_id`` and extraction-filter merge keys.
+
+    The explicit source filter supports custom lm-eval tasks that emit a filtered response without
+    a per-sample grade. Other producers derive it from :class:`Grading` as before.
+    """
     row = sample.model_dump(mode="json")
     row[TRIAL_ID_COLUMN] = trial_id
-    row[FILTER_COLUMN] = (sample.grading.filter or "") if sample.grading else ""
+    grading_filter = sample.grading.filter if sample.grading else None
+    row[FILTER_COLUMN] = extraction_filter or grading_filter or ""
     return row
 
 
@@ -370,9 +373,9 @@ class EvaluationStore:
         """Open the archive for the run rooted at ``root``, written by ``writer_id``."""
         return cls(DataStore.open(root, writer_id=writer_id))
 
-    def add_sample(self, sample: EvalSample, *, trial_id: str = "") -> None:
+    def add_sample(self, sample: EvalSample, *, trial_id: str = "", extraction_filter: str | None = None) -> None:
         """Append one evaluated question to the ``samples`` table."""
-        self._samples.append(sample_to_archive_row(sample, trial_id=trial_id))
+        self._samples.append(sample_to_archive_row(sample, trial_id=trial_id, extraction_filter=extraction_filter))
 
     def add_source_artifact(self, name: str, raw: bytes, *, content_type: str) -> str:
         """Preserve one evaluator-native source file inside the archive; return its blob URI.

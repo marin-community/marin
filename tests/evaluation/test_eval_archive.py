@@ -226,6 +226,7 @@ def test_sample_metrics_exclude_evalchemy_provenance_indices(tmp_path):
 
     [archived] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     sample = sample_from_archive_row(archived)
+    assert archived["filter"] == "none"
     assert sample.metrics == {}
     assert sample.grading is None
     assert sample.correct is None

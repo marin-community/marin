@@ -556,8 +556,10 @@ def _add_lm_eval_rows(
         start = end + 1
         if not line or line.isspace():
             continue
-        sample = sample_from_lm_eval(task, json.loads(line))
-        store.add_sample(sample)
+        raw = json.loads(line)
+        sample = sample_from_lm_eval(task, raw)
+        extraction_filter = raw.get("filter")
+        store.add_sample(sample, extraction_filter=extraction_filter if isinstance(extraction_filter, str) else None)
         accumulator.add(sample)
         count += 1
     if not count:
