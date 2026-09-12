@@ -15,6 +15,7 @@ distinct Dockerfile, for its base image.
 
     python -m experiments.post_training.tasktrove.publish summary <filtered_path> <output_path> <tool_ref>
     python -m experiments.post_training.tasktrove.publish export <tasks_dir> <path> [--dest DIR]
+    python -m experiments.post_training.tasktrove.publish huggingface <release_path> [--repo-id REPO]
 
 ``summary`` rewrites the ledger, manifest and report of an existing output without touching
 ``tasks/``; ``export`` writes one row back out as a Harbor task directory for hand inspection.
@@ -23,13 +24,17 @@ distinct Dockerfile, for its base image.
 import json
 import logging
 import re
+import shutil
+import tempfile
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Protocol
 
 import click
 import pyarrow as pa
 import pyarrow.parquet as pq
+from huggingface_hub import HfApi
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
@@ -79,6 +84,50 @@ SUMMARY_COLUMNS = (
 _READERS = 32
 FINAL_SHARDS = 1
 _FROM_LINE = re.compile(r"^FROM\s+(\S+)", re.MULTILINE | re.IGNORECASE)
+DEFAULT_HF_REPO_ID = "open-athena/task-trove"
+_COPY_BUFFER_BYTES = 8 * 1024 * 1024
+_HF_DATA_GLOB = "data/*.parquet"
+_DATASET_CARD_HEADER = f"""\
+---
+pretty_name: TaskTrove Clean
+license: apache-2.0
+language:
+  - en
+task_categories:
+  - text-generation
+tags:
+  - agent
+  - code
+  - agentic-tasks
+  - harbor
+  - reinforcement-learning
+configs:
+  - config_name: default
+    data_files:
+      - split: train
+        path: {_HF_DATA_GLOB}
+---
+
+"""
+
+_TASKTROVE_CODE_URL = "https://github.com/marin-community/marin/tree/main/experiments/post_training/tasktrove"
+_VERIFIER_CODE_URL = "https://github.com/marin-community/marin/tree/main/lib/tasktrove-verify"
+
+
+class HuggingFaceApi(Protocol):
+    """Hub operations used by the release publisher."""
+
+    def create_repo(self, repo_id: str, *, repo_type: str, private: bool, exist_ok: bool) -> object: ...
+
+    def upload_folder(
+        self,
+        *,
+        repo_id: str,
+        folder_path: str | Path,
+        repo_type: str,
+        commit_message: str,
+        delete_patterns: str,
+    ) -> object: ...
 
 
 def _write_tasks(filtered_path: str, output_path: str) -> None:
@@ -214,6 +263,137 @@ def publish_release(filtered_path: str, output_path: str, tool_ref: str) -> None
             (out / stale).rmtree()
     _write_tasks(filtered_path, output_path)
     write_summary(filtered_path, output_path, tool_ref)
+
+
+def _copy_to_local(source: StoragePath, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with source.open("rb") as remote, destination.open("wb") as local:
+        shutil.copyfileobj(remote, local, length=_COPY_BUFFER_BYTES)
+
+
+def render_huggingface_card(manifest: dict, report: str, repo_id: str) -> str:
+    """Render the dataset card from release provenance and its generated report."""
+    source = manifest["tasktrove"]
+    report_body = report.removeprefix("# TaskTrove release\n").lstrip().replace("\n## ", "\n### ")
+    return (
+        _DATASET_CARD_HEADER
+        + f"""\
+# TaskTrove Clean
+
+TaskTrove Clean is a normalized release of
+[`{source['hf_id']}`](https://huggingface.co/datasets/{source['hf_id']}) at revision
+`{source['revision']}`. It contains {manifest['clean_tasks']:,} retained Harbor tasks from
+{manifest['input_tasks']:,} input rows. The graders were built from Marin commit
+`{manifest['verify_tool_ref']}`.
+
+## How it was made
+
+The [conversion pipeline]({_TASKTROVE_CODE_URL}) applies these stages:
+
+1. Pin the upstream Hugging Face revision and inventory each source's task templates.
+2. Keep sources with recoverable task contracts and record every source decision.
+3. Convert each retained row to the common Harbor layout and replace its source grader with a
+   typed `tests/verifier.toml` contract executed by
+   [`tasktrove-verify`]({_VERIFIER_CODE_URL}).
+4. Deduplicate exact instructions within each source.
+5. Reject tasks with a malformed contract, missing verifier files, legacy grader dependencies,
+   exposed solutions or long gold answers, or an invalid mode-specific shape.
+6. For grader modes with safe probes, reject a nonzero score for an empty answer, a non-unit score
+   for the oracle answer, or a positive score for a negative perturbation.
+7. Write retained tasks to the `train` split and every rejected row to `ledger.parquet`.
+
+Conversion and cleanup are deterministic. Some published tasks declare an LLM judge for evaluation
+time. The release report below records the exact converters, grader modes, source decisions,
+rejection checks, and Docker environments in this build.
+
+## Row schema
+
+Each row represents one retained task:
+
+- `path` is the stable identifier from the upstream dataset.
+- `source`, `family`, `template_id`, `converter`, `mode`, `dockerfile_id`, `language`, `tags`, and
+  `has_solution` are selection and provenance fields.
+- `task_binary` is a gzip-compressed Harbor task archive.
+- `solution_binary` is an optional, separate gzip-compressed oracle-solution archive.
+
+The task archive contains `instruction.md`, `task.toml`, `environment/Dockerfile`,
+`tests/test.sh`, `tests/verifier.toml`, and the hidden files needed by its declared grader. The
+oracle solution is never included inside `task_binary`.
+
+## Loading the tasks
+
+```python
+from datasets import load_dataset
+
+tasks = load_dataset("{repo_id}", split="train")
+task = tasks[0]
+print(task["path"], task["source"], task["mode"])
+```
+
+Filter on the ordinary metadata columns before opening `task_binary` when selecting a source,
+grader, language, or tag cohort.
+
+## Audit metadata
+
+- `ledger.parquet` contains `source`, `path`, `status`, and `error` for every rejected input row.
+- `manifest.json` contains the pinned upstream revision, verifier commit, aggregate counts, source
+  policy, and Dockerfile inventory.
+- This card is regenerated from `manifest.json` and the release report for every publication.
+
+## License
+
+The pinned upstream TaskTrove dataset declares the Apache 2.0 license. The `source` column and
+release manifest retain source-level provenance for reviewing the terms that apply to a selected
+cohort.
+
+## Release report
+
+{report_body}"""
+    )
+
+
+def stage_huggingface_release(release_path: str, destination: Path, repo_id: str) -> None:
+    """Stage a release as one Hugging Face dataset split plus its audit metadata."""
+    release = StoragePath(release_path)
+    task_shards = sorted((release / "tasks" / "*.parquet").glob(), key=str)
+    if not task_shards:
+        raise FileNotFoundError(f"no task Parquet files under {release / 'tasks'}")
+
+    metadata = ("ledger.parquet", "manifest.json", "report.md")
+    missing = [name for name in metadata if not (release / name).exists()]
+    if missing:
+        raise FileNotFoundError(f"release {release_path} is missing {missing}")
+
+    for shard in task_shards:
+        _copy_to_local(shard, destination / "data" / Path(str(shard)).name)
+    for name in ("ledger.parquet", "manifest.json"):
+        _copy_to_local(release / name, destination / name)
+    manifest = json.loads((release / "manifest.json").read_text())
+    report = (release / "report.md").read_text()
+    (destination / "README.md").write_text(render_huggingface_card(manifest, report, repo_id))
+
+
+def publish_to_huggingface(
+    release_path: str,
+    repo_id: str = DEFAULT_HF_REPO_ID,
+    *,
+    private: bool = False,
+    api: HuggingFaceApi | None = None,
+) -> None:
+    """Upload a built release to a Hugging Face dataset repository."""
+    with tempfile.TemporaryDirectory(prefix="tasktrove-hf-") as staging_dir:
+        staging = Path(staging_dir)
+        stage_huggingface_release(release_path, staging, repo_id)
+        api = api or HfApi()
+        api.create_repo(repo_id, repo_type="dataset", private=private, exist_ok=True)
+        api.upload_folder(
+            repo_id=repo_id,
+            folder_path=staging,
+            repo_type="dataset",
+            commit_message="Publish TaskTrove release",
+            delete_patterns=_HF_DATA_GLOB,
+        )
+    logger.info("published %s to https://huggingface.co/datasets/%s", release_path, repo_id)
 
 
 def write_summary(filtered_path: str, output_path: str, tool_ref: str) -> None:
@@ -356,6 +536,14 @@ def export(tasks_dir: str, path: str, dest: Path) -> None:
 @click.argument("tool_ref")
 def summary(filtered_path: str, output_path: str, tool_ref: str) -> None:
     write_summary(filtered_path, output_path, tool_ref)
+
+
+@main.command(name="huggingface", help="Publish a built release to a Hugging Face dataset repository.")
+@click.argument("release_path")
+@click.option("--repo-id", default=DEFAULT_HF_REPO_ID, show_default=True)
+@click.option("--private", is_flag=True, help="Create the repository as private if it does not exist.")
+def huggingface(release_path: str, repo_id: str, private: bool) -> None:
+    publish_to_huggingface(release_path, repo_id, private=private)
 
 
 if __name__ == "__main__":
