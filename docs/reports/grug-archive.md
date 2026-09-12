@@ -67,3 +67,10 @@ goes stale on the next commit.
 - Status: deleted
 - Purpose: historical head-to-head comparison.
 - Superseded by: 8d752a775 — template-first workflow centered on `experiments/grug/base/`.
+
+### june-moe-context-parallel-sft
+- Path: `experiments/june_tpu_67b_a2b/moe/`
+- Origin: September 7 context-parallel experiment, revision `09989c43010e9fef0a5520cdc4af8bae90252a06`.
+- Status: active
+- Purpose: sequence-sharded Grug MoE SFT with gathered keys and values, used by `experiments/sft/datakit.py`.
+- Validation: CPU loss and gradient parity with packed segment masks; TPU Splash loss and gradient parity using JAX’s CPU TPU simulator. Full-context TPU execution is not covered by these checks.

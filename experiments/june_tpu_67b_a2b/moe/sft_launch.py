@@ -78,6 +78,7 @@ class GrugMoeSFTConfig:
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = None
     expert_parallel: int = 1
+    context_parallel: int = 1
     checkpointer: CheckpointerConfig | None = None
     checkpoint_keep: list[dict] | None = None
     save_interval_minutes: int = 30
@@ -109,13 +110,13 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
     # (``model`` cannot be declared in dcn_axes -- MeshConfig always seeds model into the ICI axes, which
     # would collide.) model_axis==1 keeps the original single-axis MeshConfig byte-identically.
     _model_axis = config.grug_trainer.model_axis_size
-    if _model_axis > 1:
+    if _model_axis > 1 or config.context_parallel > 1:
         mesh_config = MeshConfig(
-            axes={"expert": config.expert_parallel},
+            axes={"expert": config.expert_parallel, "context": config.context_parallel},
             compute_mapping={"batch": ["data", "expert"]},
         )
     else:
-        mesh_config = MeshConfig(axes={"expert": config.expert_parallel})
+        mesh_config = MeshConfig(axes={"expert": config.expert_parallel, "context": config.context_parallel})
 
     trainer = TrainerConfig(
         id=config.run_id,
@@ -149,6 +150,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
         config.grug_trainer,
         trainer=trainer,
         expert_axis_size=config.expert_parallel,
+        context_axis_size=config.context_parallel,
         sft_weights_only_init=True,
     )
 

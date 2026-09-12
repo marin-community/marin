@@ -414,41 +414,27 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
 
         sharding = _single_cpu_sharding()
 
-        if loss_weights_key is None:
-
-            @functools.partial(eqx.filter_jit)
-            def _create_lm_example(e: tuple[dict, dict]) -> GrugLmExample:
-                example, seg_ids = e
-                tokens = example["input_ids"]
-                loss_weight = jnp.ones_like(tokens, dtype=jnp.float32)
-                seg_ids_raw = seg_ids["input_ids"]
-                out = GrugLmExample.causal(
-                    tokens=tokens,
-                    loss_weight=loss_weight,
-                    segment_ids=seg_ids_raw,
-                    max_segments=max_segments_per_example + 1,
-                    block_cross_document_attention=block_cross_document_attention,
-                )
-                out = jax.lax.with_sharding_constraint(out, sharding)
-                return out
-
-        else:
-
-            @functools.partial(eqx.filter_jit)
-            def _create_lm_example(e: tuple[dict, dict]) -> GrugLmExample:
-                example, seg_ids = e
-                tokens = example["input_ids"]
-                loss_weight = example[loss_weights_key]
-                seg_ids_raw = seg_ids["input_ids"]
-                out = GrugLmExample.causal(
-                    tokens=tokens,
-                    loss_weight=loss_weight,
-                    segment_ids=seg_ids_raw,
-                    max_segments=max_segments_per_example + 1,
-                    block_cross_document_attention=block_cross_document_attention,
-                )
-                out = jax.lax.with_sharding_constraint(out, sharding)
-                return out
+        @functools.partial(eqx.filter_jit)
+        def _create_lm_example(e: tuple[dict, dict]) -> GrugLmExample:
+            example, seg_ids = e
+            tokens = example["input_ids"]
+            loss_weight = (
+                jnp.ones_like(tokens, dtype=jnp.float32) if loss_weights_key is None else example[loss_weights_key]
+            )
+            seg_ids_raw = seg_ids["input_ids"]
+            if block_cross_document_attention:
+                # Keep the target EOS, but do not predict the next document's BOS.
+                same_document = seg_ids_raw == jnp.roll(seg_ids_raw, -1)
+                loss_weight = loss_weight * same_document.astype(loss_weight.dtype)
+            out = GrugLmExample.causal(
+                tokens=tokens,
+                loss_weight=loss_weight,
+                segment_ids=seg_ids_raw,
+                max_segments=max_segments_per_example + 1,
+                block_cross_document_attention=block_cross_document_attention,
+            )
+            out = jax.lax.with_sharding_constraint(out, sharding)
+            return out
 
         super().__init__(self.packed, _create_lm_example)
 

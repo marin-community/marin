@@ -73,6 +73,8 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     model_axis_size: int = 1
+    context_axis_size: int = 1
+    """Shard queries and hidden activations across sequence; gather K/V for attention."""
 
     sft_weights_only_init: bool = False
     """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
@@ -516,6 +518,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
         model_axis_size=config.trainer.model_axis_size,
+        context_axis_size=config.trainer.context_axis_size,
     )
     with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule

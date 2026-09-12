@@ -20,6 +20,7 @@ from levanter.data.text.datasets import (
     ChatDataset,
     DatasetComponent,
     LmDataConfig,
+    PackedTokenDataset,
     UrlDatasetSourceConfig,
     count_corpus_sizes,
     dataset_for_component,
@@ -37,7 +38,7 @@ from levanter.tokenizers import load_tokenizer
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.schedule import BatchSchedule
-from levanter.store.cache import LEDGER_FILE_NAME, CacheCatalog, write_levanter_cache
+from levanter.store.cache import LEDGER_FILE_NAME, CacheCatalog, SerialCacheWriter, TreeCache, write_levanter_cache
 
 
 def test_dont_blow_up_without_validation_set():
@@ -968,3 +969,18 @@ def test_build_caches_rejects_required_component_missing_from_catalog(tmp_path):
 
     with pytest.raises(KeyError):
         config.build_caches("train")
+
+
+def test_packed_text_masks_cross_conversation_targets(tmp_path):
+    rows = [{"input_ids": np.array(tokens, dtype=np.int32)} for tokens in ([1, 11, 2], [1, 22, 2])]
+    with SerialCacheWriter(str(tmp_path), {"input_ids": np.zeros(0, dtype=np.int32)}) as writer:
+        writer.write_batch(rows)
+    cache = TreeCache.load(str(tmp_path), {"input_ids": np.zeros(0, dtype=np.int32)})
+    dataset = PackedTokenDataset(cache, hax.Axis("position", 8)).as_sync_dataset()
+    example = dataset[0]
+    np.testing.assert_array_equal(example.tokens, [1, 11, 2, 1, 22, 2, 0, 0])
+    np.testing.assert_array_equal(example.loss_weight, [1, 1, 0, 1, 1, 0, 0, 0])
+    segments = np.asarray(example.attn_mask.segment_ids[0])
+    assert segments[0] == segments[2]
+    assert segments[2] != segments[3]
+    assert segments[3] == segments[5]

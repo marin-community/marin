@@ -14,7 +14,7 @@ from haliax.partitioning import _get_mesh
 from jax import numpy as jnp
 from jax import shard_map
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
-from jax.sharding import NamedSharding, auto_axes
+from jax.sharding import NamedSharding, PartitionSpec, auto_axes
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
@@ -57,6 +57,15 @@ class ThdSegmentMetadata(eqx.Module):
 
     segment_lengths: Int[Array, "... M"]
     num_segments: Int[Array, "..."]
+
+
+def _segment_ids_pspec(token_pspec: PartitionSpec, segment_ids_ndim: int) -> PartitionSpec:
+    """Project a BHSD token sharding onto batch/sequence segment IDs."""
+    if segment_ids_ndim == 1:
+        return PartitionSpec(token_pspec[2])
+    if segment_ids_ndim == 2:
+        return PartitionSpec(token_pspec[0], token_pspec[2])
+    raise ValueError(f"Splash segment IDs must have rank 1 or 2, got rank {segment_ids_ndim}")
 
 
 def thd_segment_metadata_from_segment_ids(
@@ -414,13 +423,13 @@ def _tpu_splash_attention(
 
         if mask.segment_ids is not None:
             q_segment_ids, kv_segment_ids = mask.segment_ids
-            q_seg_sharding = _named_sharding_of(q_segment_ids, label="segment_ids.q")
-            kv_seg_sharding = _named_sharding_of(kv_segment_ids, label="segment_ids.kv")
+            q_segment_ids_axes = _segment_ids_pspec(q_pspec, q_segment_ids.ndim)
+            kv_segment_ids_axes = _segment_ids_pspec(k_pspec, kv_segment_ids.ndim)
             segment_id_lowering = lower_splash_segment_ids(
-                q_segment_ids=q_segment_ids,
-                kv_segment_ids=kv_segment_ids,
-                q_segment_ids_axes=q_seg_sharding.spec,
-                kv_segment_ids_axes=kv_seg_sharding.spec,
+                q_segment_ids=jax.sharding.reshard(q_segment_ids, q_segment_ids_axes),
+                kv_segment_ids=jax.sharding.reshard(kv_segment_ids, kv_segment_ids_axes),
+                q_segment_ids_axes=q_segment_ids_axes,
+                kv_segment_ids_axes=kv_segment_ids_axes,
                 q_segment_batch_axis=0 if q_segment_ids.ndim == 2 else None,
                 kv_segment_batch_axis=0 if kv_segment_ids.ndim == 2 else None,
             )
@@ -443,16 +452,23 @@ def _tpu_splash_attention(
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
+    kernel_sharding = NamedSharding(mesh, PartitionSpec(q_pspec[1], q_pspec[2]))
+    kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
+    kernel_shardings = jax.tree.map(lambda spec: NamedSharding(mesh, spec), kernel_specs)
+    splash_kernel = jax.sharding.reshard(splash_kernel, kernel_shardings)
 
     @functools.partial(
         shard_map,
         mesh=mesh,
-        in_specs=(q_pspec, k_pspec, v_pspec, segment_id_lowering.segment_ids_axes, None),
+        in_specs=(q_pspec, k_pspec, v_pspec, segment_id_lowering.segment_ids_axes, kernel_specs),
         out_specs=q_pspec,
         **_SHARD_MAP_CHECK_KWARGS,
     )
     def wrap(q_bhsd, k_bhsd, v_bhsd, seg_ids, kernel):
-        return jax.vmap(kernel, in_axes=(0, 0, 0, segment_id_lowering.segment_batch_axis))(
+        def call_kernel(q_b, k_b, v_b, segment_ids):
+            return kernel(q_b, k_b, v_b, segment_ids=segment_ids)
+
+        return jax.vmap(call_kernel, in_axes=(0, 0, 0, segment_id_lowering.segment_batch_axis))(
             q_bhsd,
             k_bhsd,
             v_bhsd,

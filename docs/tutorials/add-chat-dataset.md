@@ -253,3 +253,64 @@ therefore remains in assistant `content`; tool-enabled requests preserve its
 think markers. Returning a separate reasoning field in OpenAI chat-completion
 responses requires a MarinSkyRL wrapper change. Native Harmony wire tokens are not used by this
 renderer.
+
+## Proportional SFT token store and training
+
+`experiments.sft.datakit` combines the registered sources' normalized text into
+one token store. It retains each source's existing exact deduplication and adds
+no cross-source deduplication, benchmark decontamination, or conversation
+completeness filter. Each cache row contains one conversation, including BOS
+and the text tokenizer's space-plus-EOS separator. Conversations exceeding the
+configured context length are excluded and counted by source.
+
+A seeded shuffle mixes conversation rows across sources before packing. Every
+retained row appears once per pass, so source shares follow retained token
+volume without floors or resampling. The store artifact records retained and
+excluded conversation and token counts for each source.
+
+Training greedily packs whole rows, up to 64 conversations per example. If the
+next conversation does not fit, packing pads the current example and starts a
+new one. Attention stays within each conversation. All real next-token targets
+contribute to loss except transitions between conversations: predicting EOS is
+trained; predicting the next conversation's BOS from that EOS is masked.
+Padding and the last position are masked. Loss is normalized by the sum of
+valid target weights.
+
+The launcher uses the step-157k Grug 67B/A2B architecture, a 262,144-token
+context, and four-way context parallelism by default. It shards queries and
+hidden activations across sequence and gathers keys and values for attention.
+The context-parallel implementation was ported from revision
+`09989c43010e9fef0a5520cdc4af8bae90252a06`. The September 7 reference run also
+included pretraining replay and restored optimizer state; this launcher uses
+SFT data only and starts a fresh optimizer and step counter from checkpoint
+weights. Its `--steps` argument counts new SFT steps. Restarts resume this run's
+own checkpoints, including optimizer state.
+
+Supply a Marin tokenizer revision as an immutable commit SHA. The pipeline
+exports that tokenizer with the current chat template, and both preprocessing
+and training use the exported artifact. The tokenizer vocabulary must match
+the input checkpoint. `--init-checkpoint` accepts a native Levanter checkpoint
+directory (or a parent directory containing `step-N` checkpoints) with the
+architecture configured in `experiments/sft/datakit.py`: the 2,560-hidden-dimension
+67B/A2B model with array-stacked blocks, QK multiplier 1.75, and PKO and long
+RoPE disabled.
+
+```bash
+uv run python -m experiments.sft.datakit \
+  --init-checkpoint "$SFT_INIT_CHECKPOINT" \
+  --tokenizer marin-community/marin-tokenizer \
+  --tokenizer-revision "$SFT_TOKENIZER_COMMIT" \
+  --run-id datakit-proportional-sft \
+  --steps 2000 --batch-size 256 \
+  --tpu v5p-2048 --zone us-central2-b \
+  --sequence-length 262144 --context-parallel 4
+```
+
+`--batch-size` is the global number of packed examples per training step.
+
+Without `--run`, this prints the resolved artifact paths. Add `--run` to build
+only the tokenizer and token store, or `--stage train --run` to build the store
+and launch training. Repeat `--source NAME` to restrict the source set. List accepted names with
+`uv run python -c 'from marin.datakit.sft_sources import all_sft_sources; print("\n".join(sorted(all_sft_sources())))'`. Resource
+allocation and input checkpoint selection are explicit; the command does not
+select a checkpoint automatically.
