@@ -88,9 +88,13 @@ class MixtureDataset(AsyncDataset[T]):
         }
         self.dataset_index: list[str] = list(self.datasets.keys())
         self.block_size = block_size
-        # we pack index and ds id into a single 32 bit, so block size must be at most 2^16
-        if block_size >= 2**16:
-            raise ValueError(f"Block size must be at most 2^16, got {block_size}")
+        if block_size < 1:
+            raise ValueError("Block size must be positive")
+        # Keep existing block encodings while allowing larger blocks for rare sources.
+        # JAX block shuffling uses signed 32-bit IDs when x64 is disabled.
+        self._index_bits = max(16, (block_size - 1).bit_length())
+        if self._index_bits + (len(self.datasets) - 1).bit_length() > 31:
+            raise ValueError("Block size and dataset count exceed the 31-bit mixture index capacity")
 
         self.randomize_blocks = randomize_blocks
 
@@ -164,7 +168,7 @@ class MixtureDataset(AsyncDataset[T]):
         start = 0
         for i, dsname in enumerate(self.dataset_index):
             count = counts_per_block[i]
-            unpermuted_ids[start : start + count] = (i << 16) + np.arange(count)
+            unpermuted_ids[start : start + count] = (i << self._index_bits) + np.arange(count)
             start += count
         return unpermuted_ids
 
@@ -217,8 +221,8 @@ class MixtureDataset(AsyncDataset[T]):
 
     def _index_into_dataset_for_id(self, id: int, block_id: int) -> tuple[int, int]:
         stage = self._get_stage_for_block(block_id)
-        dataset_id = id >> 16
-        dataset_index = id & 0xFFFF
+        dataset_id = id >> self._index_bits
+        dataset_index = id & ((1 << self._index_bits) - 1)
 
         # Get the base offset from previous stages
         base_offset = self._counts_after_stage[stage - 1][dataset_id] if stage > 0 else 0
@@ -378,7 +382,7 @@ class MixtureDataset(AsyncDataset[T]):
             occurrence_in_block = target_count - count_before_block - 1
 
             block = self._get_block(block_id)
-            positions_for_dataset = np.nonzero((block >> 16) == dataset_id)[0]
+            positions_for_dataset = np.nonzero((block >> self._index_bits) == dataset_id)[0]
             if occurrence_in_block >= len(positions_for_dataset):
                 raise RuntimeError("Internal error computing exhaustion position")
 

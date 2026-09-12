@@ -72,5 +72,5 @@ goes stale on the next commit.
 - Path: `experiments/june_tpu_67b_a2b/moe/`
 - Origin: September 7 context-parallel experiment, revision `09989c43010e9fef0a5520cdc4af8bae90252a06`.
 - Status: active
-- Purpose: sequence-sharded Grug MoE SFT with gathered keys and values, available through `GrugMoeSFTConfig.context_parallel`, with independently weighted pretraining replay through `ReplayDataConfig`.
+- Purpose: sequence-sharded Grug MoE SFT with gathered keys and values, available through `GrugMoeSFTConfig.context_parallel`, with packed SFT and continuous pretraining components in the standard data mixture.
 - Validation: CPU loss and gradient parity with packed segment masks; TPU Splash loss and gradient parity using JAX’s CPU TPU simulator. Full-context TPU execution is not covered by these checks.

@@ -343,3 +343,23 @@ async def test_concat_with_permutation_nests_in_mixture_dataset():
     assert len(batch) == 20
     all_values = set(range(20)) | set(range(100, 110))
     assert all(item in all_values for item in batch)
+
+
+@pytest.mark.asyncio
+async def test_large_block_retains_rare_replay_and_source_offsets():
+    block_size = 245_760
+    # These ranges expose corruption of either the dataset ID or the row offset.
+    sft = ListAsyncDataset(list(range(196_608)))
+    common = ListAsyncDataset(list(range(1_000_000, 1_049_151)))
+    rare = ListAsyncDataset([2_000_000])
+    mixture = MixtureDataset(
+        {"sft": sft, "common": common, "rare": rare},
+        {"sft": 0.8, "common": 49_151 / block_size, "rare": 1 / block_size},
+        block_size=block_size,
+        key=jax.random.PRNGKey(42),
+    )
+    values = np.asarray(await mixture.get_batch(list(range(block_size))))
+    np.testing.assert_array_equal(
+        np.sort(values),
+        np.concatenate([np.arange(196_608), np.arange(1_000_000, 1_049_151), [2_000_000]]),
+    )

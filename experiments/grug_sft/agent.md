@@ -65,26 +65,41 @@ if __name__ == "__main__":
 
 For the June Grug model, reuse
 [GrugMoeSFTConfig and run_grug_moe_sft_trial](../june_tpu_67b_a2b/moe/sft_launch.py).
-Pass `sft_data_config(store)` as `data`. For 80% SFT and 20% pretraining replay,
-pass this as `replay`:
+Build one `LmDataConfig` for 80% SFT and 20% pretraining replay. Given the
+pretraining experiment's data config with fixed source weights:
 
 ```python
-from experiments.june_tpu_67b_a2b.moe.train import ReplayDataConfig
+from dataclasses import replace
 
-replay = ReplayDataConfig(data=pretraining_data, fraction=0.2)
+from marin.datakit.sft import sft_data_config
+
+sft = sft_data_config(store)
+pretraining_weights = pretraining_data.train_weights
+weight_sum = sum(pretraining_weights.values())
+data = replace(
+    sft,
+    components={
+        **sft.components,
+        **{f"pretrain/{name}": component for name, component in pretraining_data.components.items()},
+    },
+    train_weights={
+        "sft": 0.8,
+        **{f"pretrain/{name}": 0.2 * weight / weight_sum for name, weight in pretraining_weights.items()},
+    },
+    mixture_block_size=5 * pretraining_data.mixture_block_size,
+)
 ```
 
-`pretraining_data` is the pretraining experiment's `LmDataConfig`, using the same
-token IDs as the SFT store. Keep its source weights, cache grouping, continuous
-packing, and mixture block size. Replay is a nested mixture: applying its 20%
-share to every source before rounding can eliminate rare sources. The reference
-[LCR configuration](https://github.com/marin-community/marin/blob/09989c43010e9fef0a5520cdc4af8bae90252a06/experiments/june_tpu_67b_a2b/moe/sft_datakit_chat_mix.py)
-used a 49,152-sequence replay block and four copies of long-document
-caches. Reuse that configuration when reproducing the run.
+Pass `data` to `GrugMoeSFTConfig`. Pretraining caches must use the same token IDs
+as the SFT store. Keep their cache grouping and continuous packing; SFT keeps
+whole-conversation packing. Increasing the sampling block fivefold compensates
+for the 20% share so rare sources do not round to zero.
 
-The 80/20 split counts fixed-length training sequences; SFT padding means it is
-not an exact split of loss-bearing tokens. Replay does not enter the conversation
-store. Pass `replay=None` explicitly for SFT-only experiments.
+The [reference LCR configuration](https://github.com/marin-community/marin/blob/09989c43010e9fef0a5520cdc4af8bae90252a06/experiments/june_tpu_67b_a2b/moe/sft_datakit_chat_mix.py)
+used a 49,152-sequence pretraining block and four copies of long-document caches.
+The combined block is therefore 245,760 sequences. The 80/20 split counts
+fixed-length training sequences, not loss-bearing tokens: SFT sequences can
+contain padding. For SFT-only experiments, use `sft_data_config(store)` directly.
 
 Choose the remaining settings in the experiment. The launcher initializes
 checkpoint weights with a fresh optimizer and step counter; restarts resume the experiment's own full state.

@@ -50,13 +50,7 @@ from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
-from experiments.june_tpu_67b_a2b.moe.train import (
-    GrugEvalConfig,
-    GrugRunConfig,
-    GrugTrainerConfig,
-    ReplayDataConfig,
-    run_grug,
-)
+from experiments.june_tpu_67b_a2b.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.sft.launcher import SFTSpec
 
 
@@ -75,7 +69,6 @@ class GrugMoeSFTConfig:
     mp: str
     tracker: TrackerConfig
     optimizer: OptimizerConfig
-    replay: ReplayDataConfig | None
     init_from_path: str
     """Base checkpoint to initialise weights from (parent dir or a concrete ``step-N`` dir;
     the latest under it is loaded). Optimizer state and step are not taken from it -- SFT
@@ -155,7 +148,6 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
         GrugRunConfig(
             model=config.model,
             data=config.data,
-            replay=config.replay,
             resources=config.resources,
             optimizer=config.optimizer,
             trainer=grug_trainer,
@@ -191,7 +183,6 @@ class GrugModel:
     mp: str = "params=float32,compute=bfloat16,output=bfloat16"
     z_loss_weight: float = 1e-4
     ema_beta: float | None = None
-    replay: ReplayDataConfig | None = None
     log_every: int = 1
     seed: int = 0
     save_interval_minutes: int = 30
@@ -233,7 +224,6 @@ class GrugModel:
             name=run_id,
         )
         return GrugMoeSFTConfig(
-            replay=self.replay,
             # Pin the model's max_seq_len to the run's seq_len so arch and training length can't drift.
             model=dataclasses.replace(self.model, max_seq_len=spec.seq_len),
             data=data_config,

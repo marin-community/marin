@@ -19,7 +19,7 @@ from levanter.tokenizers import load_tokenizer
 from marin.datakit.sft import SftInput, SftTokenStore, build_sft_store, sft_data_config
 from marin.execution.artifact import read_artifact
 
-from experiments.june_tpu_67b_a2b.moe.train import ReplayDataConfig, build_train_dataset
+from experiments.june_tpu_67b_a2b.moe.train import build_train_dataset
 
 
 def test_sft_store_retains_conversations_and_packs_without_boundary_loss(tmp_path, gpt2_tokenizer_path):
@@ -92,12 +92,18 @@ async def test_replay_preserves_rare_sources_and_batches_with_packed_sft(tmp_pat
         auto_build_caches=False,
         block_cross_document_attention=True,
     )
-    dataset = build_train_dataset(
+    data = replace(
         sft,
+        components={**sft.components, **replay.components},
+        train_weights={"sft": 0.8, **{name: 0.2 * weight for name, weight in replay.train_weights.items()}},
+        # Five times the replay block preserves its rare-source counts at 20%.
+        mixture_block_size=5 * replay.mixture_block_size,
+    )
+    dataset = build_train_dataset(
+        data,
         max_seq_len=8,
         batch_schedule=BatchSchedule(10),
         key=jax.random.PRNGKey(42),
-        replay=ReplayDataConfig(data=replay, fraction=0.2),
     )
     examples = await dataset.get_batch(list(range(500)))
     counts = Counter()
