@@ -15,6 +15,17 @@ There is no established numerical baseline for this Datakit SFT pipeline yet.
 
 ## Prepare the data
 
+The [262k preparation recipe](prepare_data.py) builds all registered sources
+with a pinned Marin tokenizer and records packed sequence counts. Use the
+[Grug Iris submission pattern](../grug/moe/agent.md#job-submission) with CPU resources
+near the data, running this command inside the job:
+
+```bash
+python -m experiments.grug_sft.prepare_data --version 2026.09.12 --max-concurrent 2 --run
+```
+
+It prepares data only. Completed source stores are reused on restart.
+
 Select sources from `marin.datakit.sft_sources.all_sft_sources()` and build their
 `.normalized` steps. For a new source, follow
 [the chat dataset tutorial](../../docs/tutorials/add-chat-dataset.md).

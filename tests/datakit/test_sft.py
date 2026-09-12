@@ -17,7 +17,6 @@ from levanter.schedule import BatchSchedule
 from levanter.store.cache import SerialCacheWriter, TreeCache
 from levanter.tokenizers import load_tokenizer
 from marin.datakit.sft import SftInput, SftTokenStore, build_sft_store, sft_data_config
-from marin.execution.artifact import read_artifact
 
 from experiments.june_tpu_67b_a2b.moe.train import build_train_dataset
 
@@ -40,7 +39,7 @@ def test_sft_store_retains_conversations_and_packs_without_boundary_loss(tmp_pat
     result = build_sft_store(
         sources, output_path=output, tokenizer=gpt2_tokenizer_path, max_length=24, seed=42, num_shards=2, max_workers=2
     )
-    assert read_artifact(output, SftTokenStore) == result
+    assert SftTokenStore.raw_load(output) == result
     assert result.sources["a"].conversations == result.sources["b"].conversations == 2
     assert result.sources["a"].overlength_conversations == 1
     assert result.sources["a"].overlength_tokens == len(encoded[2]["input_ids"])
@@ -173,3 +172,25 @@ async def test_sft_mixture_pools_small_sources_without_losing_conversations(
     components = config.train_sets(Axis("position", 16), key=jax.random.PRNGKey(42))
     assert len(components["sft/source/large"].as_sync_dataset()) == 6
     assert len(components["sft/pooled"].as_sync_dataset()) == (2 if len(small_source_counts) == 2 else 3)
+
+
+def test_sft_store_records_sources_with_only_overlength_conversations(tmp_path, gpt2_tokenizer_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    pq.write_table(pa.Table.from_pylist([{"id": "long", "text": "x " * 100}]), source / "part.parquet")
+    store = build_sft_store(
+        [SftInput("long", str(source))],
+        output_path=str(tmp_path / "store"),
+        tokenizer=gpt2_tokenizer_path,
+        max_length=8,
+        seed=42,
+        num_shards=2,
+        max_workers=1,
+    )
+    saved = SftTokenStore.raw_load(str(tmp_path / "store"))
+    assert saved == store
+    assert saved.packed_sequences == 0
+    assert saved.sources["long"].conversations == 0
+    assert saved.sources["long"].overlength_conversations == 1
+    with pytest.raises(ValueError, match="No conversations fit"):
+        sft_data_config({"long": saved}, minimum_weight=0.01)

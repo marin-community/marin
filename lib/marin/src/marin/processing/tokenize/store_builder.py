@@ -167,8 +167,8 @@ def build_from_datasets(
     def _write_shard(records, shard_info):
         """Write one shard and emit ``(path, exemplar)``.
 
-        ``exemplar`` is ``None`` for empty shards and for skipped (already-written)
-        shards; the coordinator picks the first non-``None`` one for consolidation.
+        Empty shards have no ledger and are omitted. ``exemplar`` is ``None``
+        for skipped shards; the coordinator picks the first available template.
         """
         shard_path = format_shard_path(output_pattern, shard_info.shard_idx, shard_info.total_shards)
         if skip_existing:
@@ -177,6 +177,8 @@ def build_from_datasets(
                 yield (shard_path, None)
                 return
         result = write_levanter_cache(records, shard_path, **write_kwargs)
+        if result["count"] == 0:
+            return
         exemplar = result["exemplar"]
         yield (shard_path, _structural_exemplar(exemplar) if exemplar is not None else None)
 

@@ -31,7 +31,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.readers import load_parquet
 
-from marin.execution.artifact import write_artifact
+from marin.execution.artifact import Artifact, write_artifact
 from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
 
 MAX_SEGMENTS_PER_SEQUENCE = 64
@@ -50,7 +50,7 @@ class SftSourceCounts(BaseModel):
     overlength_tokens: int = 0
 
 
-class SftTokenStore(BaseModel):
+class SftTokenStore(Artifact):
     cache_path: str
     tokenizer: str
     max_length: int
@@ -142,8 +142,6 @@ def build_sft_store(
         batch_size=128,
         skip_existing=False,
     )
-    if ledger.total_num_rows == 0:
-        raise ValueError("No conversations fit the SFT context length")
     counts = {source.name: SftSourceCounts() for source in sources}
     for shard in range(num_shards):
         path = prefix_join(output_path, f"source-counts/{shard:05d}.json")
@@ -152,16 +150,19 @@ def build_sft_store(
             counts[name] = SftSourceCounts(**{key: getattr(previous, key) + value for key, value in values.items()})
     if sum(count.conversations for count in counts.values()) != ledger.total_num_rows:
         raise ValueError("SFT source counts do not match the token store")
-    if sum(count.tokens for count in counts.values()) != ledger.field_counts["input_ids"]:
+    if sum(count.tokens for count in counts.values()) != ledger.field_counts.get("input_ids", 0):
         raise ValueError("SFT token counts do not match the token store")
     write_stats_json(cache_path, ledger)
-    cache = TreeCache.load(cache_path, {"input_ids": np.zeros(0, dtype=np.int32)})
-    packed_sequences = len(
-        PackedTokenDataset(
-            cache, Axis("position", max_length), max_segments_per_example=MAX_SEGMENTS_PER_SEQUENCE
-        ).as_sync_dataset()
-    )
+    packed_sequences = 0
+    if ledger.total_num_rows:
+        cache = TreeCache.load(cache_path, {"input_ids": np.zeros(0, dtype=np.int32)})
+        packed_sequences = len(
+            PackedTokenDataset(
+                cache, Axis("position", max_length), max_segments_per_example=MAX_SEGMENTS_PER_SEQUENCE
+            ).as_sync_dataset()
+        )
     result = SftTokenStore(
+        path=output_path,
         cache_path=output_path,
         tokenizer=tokenizer,
         max_length=max_length,
@@ -169,7 +170,7 @@ def build_sft_store(
         sources=counts,
         packed_sequences=packed_sequences,
     )
-    write_artifact(result, output_path)
+    write_artifact(result.result_payload(), output_path)
     return result
 
 
