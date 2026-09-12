@@ -1522,6 +1522,7 @@ def never_ready_workers(monkeypatch):
 
 
 def _count_coordinator_launches(client: LocalClient) -> list[int]:
+    """Return a one-element list that counts coordinator groups as the client creates them."""
     launches = [0]
     original = client.create_actor_group
 

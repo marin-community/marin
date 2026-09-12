@@ -536,10 +536,9 @@ class ZephyrContext:
     ) -> _OwnedPool:
         """Start one coordinator job and its worker group.
 
-        The coordinator group is registered with the context before any wait, so
-        shutdown() on another thread can cancel it while the coordinator or its
-        workers are still scheduling. Cancelling the jobs makes the waits below fail
-        instead of running to their timeouts.
+        A concurrent shutdown() cancels the start while the coordinator or its
+        workers are still scheduling; the call then raises instead of waiting out
+        the scheduling timeouts.
         """
         assert self.client is not None
         assert self.resources is not None
@@ -745,17 +744,14 @@ class ZephyrContext:
         raise last_exception  # type: ignore[misc]
 
     def shutdown(self) -> None:
-        """Stop the owned shared pool and cancel in-flight execute() and start() calls.
-
-        Live dedicated pools are stopped before taking ``_state_lock``. A blocked
-        start() holds that lock until its pool start fails, and stopping the pool is
-        what makes it fail.
-        """
+        """Stop the owned shared pool and cancel in-flight execute() and start() calls."""
         # BORROWED is assigned only when a context is unpickled and never changes,
         # so it is safe to read without the lock.
         if self._state is _ContextState.BORROWED:
             raise RuntimeError("A borrowed ZephyrContext cannot stop its shared pool")
 
+        # Stop live pools before taking _state_lock: a blocked start() holds that
+        # lock until its pool start fails, and stopping the pool is what fails it.
         with self._live_lock:
             self._closing.set()
             live = list(self._live_pools.values())
