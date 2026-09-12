@@ -1,0 +1,11 @@
+{
+  "run_id": "hero-ragged_a2a-nccl2307-ep-step81k",
+  "version": "2026.08.19.2",
+  "target_cluster": "cw-us-east-08a",
+  "handoff_run_id": "hero-wd-gate-router-p02-step58k",
+  "handoff_checkpoint": "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/hero-wd-gate-router-p02-step58k/2026.08.19.2/checkpoints/step-81716",
+  "ancestors": [
+    {"run_id":"hero-12d8b6f0-dee637","version":"2026.08.19.2","max_step":58014},
+    {"run_id":"hero-wd-gate-router-p02-step58k","version":"2026.08.19.2","max_step":81716}
+  ]
+}

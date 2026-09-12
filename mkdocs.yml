@@ -101,6 +101,7 @@ nav:
       - Training Configuration: references/train-config.md
       - HBM Optimization: references/hbm-optimization.md
       - Perplexity Gap Analysis: references/perplexity-gap-analysis.md
+      - Hero Checkpoint Completions: references/hero-completions.md
       - Browsing Buckets with fsutil: references/fsutil.md
 
 markdown_extensions:
