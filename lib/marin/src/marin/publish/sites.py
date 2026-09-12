@@ -11,6 +11,7 @@ and code-resolvable via ``Artifact.raw_load``, and upserts a public discovery in
 location is a pure function of ``(user, slug, version)`` — so no registry is involved.
 """
 
+import html
 import json
 import logging
 import re
@@ -126,7 +127,7 @@ def _content_type(relpath: str) -> str:
     return CONTENT_TYPES.get(Path(relpath).suffix.lower(), DEFAULT_CONTENT_TYPE)
 
 
-def _write_object(uri: str, data: bytes, content_type: str) -> None:
+def _write_object(uri: str, data: bytes, content_type: str, *, cache_control: str | None = None) -> None:
     """Write ``data`` to ``uri`` with an explicit ``Content-Type`` on the stored object.
 
     Filesystems without content-type support (local test roots) ignore it.
@@ -135,8 +136,28 @@ def _write_object(uri: str, data: bytes, content_type: str) -> None:
     fs.makedirs(fs._parent(path), exist_ok=True)
     # Must go through fs.open: open_url/fsspec.open forward extra kwargs to the filesystem
     # constructor, silently dropping the content type; gcsfs honors it on the file handle.
-    with fs.open(path, "wb", content_type=content_type) as f:
+    metadata = {"cache_control": cache_control} if cache_control is not None else None
+    with fs.open(path, "wb", content_type=content_type, fixed_key_metadata=metadata) as f:
         f.write(data)
+
+
+def publish_site_alias(site: PublishedSite, *, user: str, slug: str) -> str:
+    """Point a stable ``latest`` URL at a fully published site, preserving browser selection.
+
+    Callers must serialize updates for this user and slug. The redirect is one object, so
+    readers see the old or new page, never a partially uploaded site directory.
+    """
+    if site.name != site_name(user, slug):
+        raise InvalidSiteError("Alias and published site must have the same owner and slug")
+    path = f"{_coerce_handle('user', user)}/{_coerce_handle('slug', slug)}/latest/{SITE_ENTRYPOINT}"
+    target = json.dumps(site.url).replace("<", "\\u003c")
+    page = (
+        '<!doctype html><meta charset="utf-8"><title>Latest report</title>'
+        f'<a href="{html.escape(site.url, quote=True)}">Open the latest report</a>'
+        f"<script>location.replace({target} + location.search + location.hash)</script>"
+    )
+    _write_object(f"{PUBLIC_ROOT}/{path}", page.encode(), "text/html; charset=utf-8", cache_control="no-store")
+    return f"{PUBLIC_URL_BASE}/{path}"
 
 
 def _collect_files(source: Path) -> list[tuple[str, Path]]:

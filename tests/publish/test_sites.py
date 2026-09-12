@@ -12,7 +12,7 @@ import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 from marin.execution.artifact import RECORD_FILENAME, Artifact
 from marin.publish import sites
-from marin.publish.sites import InvalidSiteError, publish_site, site_uri
+from marin.publish.sites import InvalidSiteError, publish_site, publish_site_alias, site_uri
 
 
 @pytest.fixture
@@ -82,6 +82,23 @@ def test_index_upserts_by_name_and_version(public_root, tmp_path):
     index = {(e["name"], e["version"]): e for e in json.loads((public_root / "index.json").read_text())}
     assert len(index) == 2
     assert index[("sites/held/ex", "2026.07.01")]["title"] == "Second"
+
+
+def test_site_alias_changes_target_without_overwriting_versioned_reports(public_root, tmp_path):
+    source = tmp_path / "report.html"
+    source.write_text("<h1>First report</h1>")
+    first = publish_site(source, user="hero", slug="completions", version="2026.09.12", title="Completions")
+    alias_url = publish_site_alias(first, user="hero", slug="completions")
+    alias = public_root / "hero/completions/latest/index.html"
+    assert f'href="{first.url}"' in alias.read_text()
+    source.write_text("<h1>Second report</h1>")
+    second = publish_site(source, user="hero", slug="completions", version="2026.09.13", title="Completions")
+    assert publish_site_alias(second, user="hero", slug="completions") == alias_url
+    assert f'href="{second.url}"' in alias.read_text()
+    assert (public_root / "hero/completions/2026.09.12/index.html").read_text() == "<h1>First report</h1>"
+    with pytest.raises(InvalidSiteError):
+        publish_site_alias(second, user="another-owner", slug="completions")
+    assert not (public_root / "another-owner").exists()
 
 
 def test_handles_are_coerced_to_kebab(public_root, tmp_path):
