@@ -679,3 +679,9 @@ author: benfeuer
 
 - Parallel read-only RNO2A inventory `/benfeuer/snowball-final-simpleqa-canonical-count-audit-20260912-0823` counted canonical one-level results only: qk157 3,551, qk175 3,608, skew2 3,098, skew4 2,941, and skew8 2,893 out of 4,326 each.
 - These are durable gains of 101, 154, 103, 97, and 97 since 06:44 EDT. All five recovery roots remain controller-running; no progress count is promoted to a score before its terminal record passes the coverage gate.
+
+### 2026-09-12 09:37 EDT - MMLU-Pro complete for all Bases
+
+- Qk157's evaluator completed all 12,032 sources in 21h35m; its old outer coordinator then OOMed during archive export. Exact-identity CPU recovery `/benfeuer/snowball-final-qk157-mmlupro-artifact-recovery-20260912-0933` reused the durable evaluator output and wrote record `…-c855` without repeating inference.
+- Independent reader `/benfeuer/snowball-final-qk157-mmlupro-record-audit-20260912-0936` verified `status=succeeded`, `accuracy_avg=0.609375`, 12,032/12,032 coverage, no errors, a sealed 12,032-row archive, and all immutable model/runtime/policy pins.
+- `RESULTS.md` now reports qk157 at 60.9375%. MMLU-Pro is complete across all five Bases, and campaign accounting is 350/355 with only five SimpleQA cells unfinished.
