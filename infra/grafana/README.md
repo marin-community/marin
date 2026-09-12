@@ -223,11 +223,15 @@ of repeating the Kubernetes object name.
 | Node | Node details | `nodes.json` | What is happening on one physical GPU node? | cluster, node |
 | Workload | Jobs | `jobs.json` | What is running, queued, and stuck? | cluster, job |
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
-| Workload | RL runs | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
+| Workload | RL Post-training | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
 | Workload | Inference overview | `inference_overview.json` | Is inference progressing, and are responses slow or queues growing? | identity kind, serve |
 | Workload | Inference diagnostics | `inference.json` | Which engines, request stages, or workload changes explain the slowdown? | identity kind, serve |
 | Services | Infra | `infra.json` | Are nightly runs, main CI, workers, and hero training healthy? | none |
+
+Getting a run onto the RL Post-training view is a MarinSkyRL-side question: which launch paths export
+the telemetry environment, what a run id should look like, and which panels a synchronous run
+leaves blank by design. MarinSkyRL documents it at `docs/grafana-rl-runs.md`.
 
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old

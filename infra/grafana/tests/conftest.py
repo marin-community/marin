@@ -3,8 +3,11 @@
 
 """Shared test helpers: the bridge config and a canned k8s API server."""
 
+import re
+
 import httpx
 from config import BridgeConfig, K8sClusterTarget
+from finelog.errors import StatsError
 from k8s_source import K8sSource
 
 KUEUE_DEPLOY = "/apis/apps/v1/namespaces/kueue-system/deployments/kueue-controller-manager"
@@ -194,3 +197,14 @@ def healthy_k8s_routes() -> dict:
         ],
         NODE_POOLS: [],
     }
+
+
+def absent_namespace_error(sql: str) -> StatsError:
+    """What DataFusion raises when a statement names a namespace the deployment has never held."""
+    namespace = re.search(r'FROM "([^"]+)"', sql).group(1)
+    return StatsError(f"Error during planning: table 'datafusion.public.{namespace}' not found")
+
+
+def queried_namespace(sql: str) -> str:
+    (namespace,) = re.findall(r'FROM "([^"]+)"', sql)
+    return namespace

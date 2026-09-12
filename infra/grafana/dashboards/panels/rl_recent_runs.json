@@ -1,0 +1,147 @@
+{
+  "type": "table",
+  "title": "Recent RL runs",
+  "description": "Reinforcement-learning runs that reported a policy step in the selected window, most recently active first. A row opens that run on the RL Post-training view, with its own start and end as the window, so the charts are already framed on the run rather than on whatever window Home was showing.\n\nRuns appear here once their trainer emits telemetry; a run that trained but exported none is absent, which is itself the signal. Attempts counts the distinct task attempts that reported, so more than one means the run restarted.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "align": "auto",
+        "cellOptions": {
+          "type": "auto"
+        }
+      }
+    },
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "run"
+        },
+        "properties": [
+          {
+            "id": "custom.width",
+            "value": 520
+          },
+          {
+            "id": "links",
+            "value": [
+              {
+                "targetBlank": false,
+                "title": "Open the RL Post-training view",
+                "url": "/d/marin-rl-runs?var-run=${__data.fields.run}&var-cluster=${__data.fields.cluster}&from=${__data.fields.started_ms}&to=${__data.fields.last_seen_ms}"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "last seen"
+        },
+        "properties": [
+          {
+            "id": "unit",
+            "value": "dateTimeAsIso"
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "started_ms"
+        },
+        "properties": [
+          {
+            "id": "custom.hidden",
+            "value": true
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "last_seen_ms"
+        },
+        "properties": [
+          {
+            "id": "custom.hidden",
+            "value": true
+          }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "showHeader": true,
+    "sortBy": []
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/query",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "sql",
+            "value": "SELECT run_id AS run, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, MAX(value) AS step, COUNT(DISTINCT execution_uid) AS attempts, MIN(timestamp_ms) AS started_ms, MAX(timestamp_ms) AS last_seen_ms, MAX(timestamp_ms) AS \"last seen\" FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step' AND run_id IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY last_seen_ms DESC LIMIT 20"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "run",
+          "text": "run",
+          "type": "string"
+        },
+        {
+          "selector": "cluster",
+          "text": "cluster",
+          "type": "string"
+        },
+        {
+          "selector": "step",
+          "text": "step",
+          "type": "number"
+        },
+        {
+          "selector": "attempts",
+          "text": "attempts",
+          "type": "number"
+        },
+        {
+          "selector": "started_ms",
+          "text": "started_ms",
+          "type": "number"
+        },
+        {
+          "selector": "last_seen_ms",
+          "text": "last_seen_ms",
+          "type": "number"
+        },
+        {
+          "selector": "last seen",
+          "text": "last seen",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}
