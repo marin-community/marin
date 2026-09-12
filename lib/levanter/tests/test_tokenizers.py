@@ -1498,3 +1498,17 @@ def test_stage_from_mirror_tolerates_broken_fs(tmp_path):
 
     assert result is False
     assert not list(local_dir.iterdir())
+
+
+def test_load_tokenizer_from_storage_url(tmp_path):
+    tokenizer_json = json.loads(json.dumps(_MINIMAL_TOKENIZER_JSON))
+    tokenizer_json["model"]["vocab"] = {"a": 0, "b": 1, "<eos>": 2}
+    (tmp_path / "tokenizer.json").write_text(json.dumps(tokenizer_json))
+    (tmp_path / "tokenizer_config.json").write_text(json.dumps({"eos_token": "<eos>"}))
+    (tmp_path / "chat_template.jinja").write_text("{{ messages[0]['content'] }}{{ eos_token }}")
+
+    tokenizer = load_tokenizer(tmp_path.as_uri())
+
+    assert tokenizer.encode("ab") == [0, 1]
+    assert tokenizer.eos_token_id == 2
+    assert tokenizer.apply_chat_template([{"role": "user", "content": "ab"}], tokenize=False) == "ab<eos>"
