@@ -46,8 +46,16 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HeroThroughputResult,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
+from experiments.grug.moe_hero_ep.launch_diagnostics import validated_batch_axis_size
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
-from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.moe_hero_ep.train import (
+    GrugEvalConfig,
+    GrugRunConfig,
+    GrugTrainerConfig,
+    TrainingDataMode,
+    grug_trainer_mesh_config,
+    run_grug,
+)
 from experiments.marin_tokenizer import marin_tokenizer
 
 # The EP sweep (issue #8062) settings: 4096-token sequences at batch 1024, 2048 sliding window with
@@ -62,7 +70,18 @@ TOKENS_PER_STEP = SMALL_BATCH_SIZE * SEQ_LEN
 _EP_CAPACITY_FACTOR = 1.15
 SLIDING_WINDOW = 2048
 GLOBAL_EVERY = 4
+# Capped by the training batch: 256 sequences at 262K exceed the batch-16 training step by 16x and
+# exhaust HBM. Every rung whose batch is at least 256 (all the 4K-16K ladder rungs) keeps its
+# historical eval sample, so earlier ablations stay comparable.
 EVAL_BATCH_SIZE = 256
+
+
+def eval_batch_size_for(*, batch_size: int, batch_axes_product: int) -> int:
+    """Return the capped evaluation batch size, rounded up to fit the batch shards."""
+    target = min(EVAL_BATCH_SIZE, batch_size)
+    return math.ceil(target / batch_axes_product) * batch_axes_product
+
+
 # These runs are hours long, so they checkpoint: the trainer restores from the latest committed
 # checkpoint, and an interrupted run would otherwise restart at step 0. A d1280 checkpoint is about
 # 38 GB, against 2.7 TiB at the d6144 hero shape.
@@ -105,6 +124,8 @@ class Target:
 # SM100 symmetric GEMM, so Hopper takes the plain vmapped path instead.
 TARGETS: dict[str, Target] = {
     "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t", "gpu_fa4_cute", True),
+    # One tray for context-parallel integration smokes.
+    "gb200-1node": Target("GB200", HERO_GPUS_PER_NODE, 1, 120, "850g", "1t", "gpu_fa4_cute", True),
     # 8 nodes, not 1: under pooled-wave the receiver cell pools over all senders and is
     # shard-count-independent, so only the sender pool tracks the fleet. The sender cell is per
     # (destination shard, wave) and shrinks as 1/shards^2 -- ~50,244 rows at EP8 against ~785 at EP64
@@ -280,6 +301,9 @@ def build_small_run(
     tokens_per_active_param: int = 750,
     num_train_steps_override: int | None = None,
     watch_interval: int = 10,
+    training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
+    context_axis_size: int = 1,
+    expert_axis_size_override: int | None = None,
     dp_racks: int = 1,
     steps_per_eval: int = 1000,
     version: str | None = None,
@@ -298,6 +322,12 @@ def build_small_run(
     expert-parallel within each rack), which the widest ladder rung needs to hold its batch.
     ``steps_per_eval`` sets both the eval cadence and the permanent-checkpoint cadence, so a
     checkpoint-reload eval job finds a saved state at every eval step.
+
+    ``context_axis_size`` shards the sequence over the ``context`` axis. It takes devices from the
+    axes around it, so a run that keeps expert parallelism as well has to name
+    ``expert_axis_size_override`` rather than let ``--flavor``/``--target`` span the whole fleet.
+    ``num_train_steps_override`` replaces the token budget with an explicit step count, which is
+    what a smoke wants.
     """
     if tokens_per_active_param <= 0:
         raise ValueError(f"tokens_per_active_param must be positive, got {tokens_per_active_param}")
@@ -324,7 +354,20 @@ def build_small_run(
     # rack count, so a wider rung on more racks keeps the same per-rack load as a one-rack rung.
     global_tokens_per_step = tokens_per_step * dp_racks
     batch_size = global_tokens_per_step // seq_len
-    expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
+    if expert_axis_size_override is not None:
+        expert_axis_size = expert_axis_size_override
+    else:
+        expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
+    device_count = fleet.gpus_per_node * fleet.nodes * dp_racks
+    batch_axes_product = validated_batch_axis_size(
+        device_count=device_count,
+        dp_racks=dp_racks,
+        batch_size=batch_size,
+        context_axis_size=context_axis_size,
+        expert_axis_size=expert_axis_size,
+    )
+    if seq_len % context_axis_size != 0:
+        raise ValueError(f"context_axis_size={context_axis_size} must divide seq_len={seq_len}")
     # ``--transport-capacity-factor`` overrides the Flavor's sender-pool cap; ``None`` keeps the paired
     # 1.15 default. The two pooled-wave gates cap independently, so a run that sweeps only the receiver
     # (``--capacity-factor``) flattens once the sender gate takes over -- vary this to move that gate.
@@ -368,12 +411,19 @@ def build_small_run(
         z_loss_weight=1e-4,
         offload_opt_state=False,  # small models fit HBM; host offload destabilized small runs
         save_checkpoints=True,
+        training_data_mode=training_data_mode,
         expert_axis_size=expert_axis_size,
+        context_axis_size=context_axis_size,
         replica_axis_size=dp_racks,
         sharding_dump_path=None,
     )
-    if model.num_experts % expert_axis_size != 0:
-        raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {expert_axis_size}")
+    # The bank is stored split over (expert, context), so parameter init needs the product to divide it.
+    bank_shards = expert_axis_size * context_axis_size
+    if model.num_experts % bank_shards != 0:
+        raise ValueError(
+            f"num_experts={model.num_experts} must divide expert ({expert_axis_size}) * "
+            f"context ({context_axis_size}) = {bank_shards}"
+        )
     # Fail fast here (before the fleet is allocated) on the same divisibility the pooled-wave transport
     # enforces at runtime, mirroring the hero launcher's pre-allocation check.
     local_experts = model.num_experts // expert_axis_size
@@ -400,6 +450,7 @@ def build_small_run(
             train_batch_size=batch_size,
             num_train_steps=num_steps,
             profiler=ProfilerConfig(enabled=False),
+            mesh=grug_trainer_mesh_config(context_axis_size),
             mp=jmp.get_policy(SMALL_SCALE_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",
@@ -419,6 +470,10 @@ def build_small_run(
                     flavor,
                     target,
                     "MHEP",
+                    # Only tagged off the fleet-spanning default, so a plain rung keeps the tag set
+                    # every earlier ablation carries.
+                    *((f"context-{context_axis_size}",) if context_axis_size != 1 else ()),
+                    *((f"expert-axis-{expert_axis_size}",) if expert_axis_size_override is not None else ()),
                 ],
                 group="moe-hero-ep-small-abl",
                 name=run_id,
@@ -452,7 +507,7 @@ def build_small_run(
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=GrugEvalConfig(
-                eval_batch_size=EVAL_BATCH_SIZE,
+                eval_batch_size=eval_batch_size_for(batch_size=batch_size, batch_axes_product=batch_axes_product),
                 steps_per_eval=steps_per_eval,
                 max_eval_batches=8,
                 eval_current=True,
@@ -572,6 +627,33 @@ def build_small_run(
     help="Steps between gradient and parameter norm logs. Zero disables norm logs.",
 )
 @click.option(
+    "--context-axis-size",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Context-parallel axis width. Must divide --seq-len and the fleet's device count.",
+)
+@click.option(
+    "--expert-axis-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Override the expert axis the --flavor and --target imply. Needed when --context-axis-size "
+    "claims devices the expert axis would otherwise span.",
+)
+@click.option(
+    "--num-steps",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Train this many steps instead of the --tokens-per-active-param budget. For smokes.",
+)
+@click.option(
+    "--training-data",
+    type=click.Choice([mode.value for mode in TrainingDataMode]),
+    default=TrainingDataMode.MIXTURE.value,
+    show_default=True,
+    help="Use the configured mixture or reuse a deterministic synthetic batch without opening TensorStore.",
+)
+@click.option(
     "--dp-racks",
     type=click.IntRange(min=1),
     default=1,
@@ -603,6 +685,10 @@ def main(
     qb_hist_bins: int,
     tokens_per_active_param: int,
     watch_interval: int,
+    context_axis_size: int,
+    expert_axis_size: int | None,
+    num_steps: int | None,
+    training_data: str,
     dp_racks: int,
     steps_per_eval: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -622,7 +708,11 @@ def main(
         qb_use_histogram=qb_histogram,
         qb_hist_bins=qb_hist_bins,
         tokens_per_active_param=tokens_per_active_param,
+        num_train_steps_override=num_steps,
         watch_interval=watch_interval,
+        training_data_mode=TrainingDataMode(training_data),
+        context_axis_size=context_axis_size,
+        expert_axis_size_override=expert_axis_size,
         dp_racks=dp_racks,
         steps_per_eval=steps_per_eval,
     )

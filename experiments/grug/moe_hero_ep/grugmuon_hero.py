@@ -24,6 +24,7 @@ import jax.numpy as jnp
 import optax
 from jax import shard_map
 from jax.sharding import NamedSharding, PartitionSpec, reshard
+from levanter.grug.sharding import _axis_names
 from levanter.optim.muon import ScaleByMuonState
 from levanter.optim.util import NEWTON_SCHULZ_COEFFICIENTS, CoefficientType
 from optax import tree_utils as otu
@@ -95,7 +96,15 @@ def _grug_scale_with_muon_hero(
                     target_sharding=_target_named_sharding(param),
                 )
             else:
-                updated = _newtonschulz_4d_distributed(path, x, steps, muon_eps, coefficient_type, use_syrk)
+                updated = _newtonschulz_4d_distributed(
+                    path,
+                    x,
+                    steps,
+                    muon_eps,
+                    coefficient_type,
+                    use_syrk,
+                    target_sharding=_target_named_sharding(param),
+                )
 
             fan_in, fan_out = updated.shape[-2:]
             scale = jnp.sqrt(jnp.maximum(1, fan_out / fan_in))
@@ -215,8 +224,13 @@ def _newtonschulz_4d_distributed(
     eps: float,
     coefficient_type: CoefficientType,
     use_syrk: bool,
+    target_sharding: NamedSharding | None = None,
 ) -> jax.Array:
-    """Run Newton-Schulz on a stacked 4D expert leaf without gathering matrix dims."""
+    """Run Newton-Schulz without gathering matrix dimensions.
+
+    Preserve the parameter layout in the update so a composite expert/context
+    bank does not become context-replicated with its master and momentum state.
+    """
 
     def local_ns(matrix):
         return _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
@@ -231,10 +245,16 @@ def _newtonschulz_4d_distributed(
     layers, expert_count, d, last = x.shape
     is_w_down = any(getattr(entry, "name", None) == "w_down" for entry in path)
     trailing = ("model", "data") if is_w_down else ("data", "model")
-    orig_4d_spec = PartitionSpec(None, "expert", *trailing)
+    orig_4d_spec = target_sharding.spec if target_sharding is not None else PartitionSpec(None, "expert", *trailing)
+    # The bank axis of the parameter's own spec, so the Newton-Schulz stack stays split exactly
+    # where the parameter is split instead of gathering the context shards back together.
+    expert_dim_axes = orig_4d_spec[1] if len(orig_4d_spec) > 1 else None
+    bank_axes = _axis_names(expert_dim_axes) or ("expert",)
 
-    if int(mesh.shape.get("expert", 1)) > 1:
-        distributed_4d_spec = PartitionSpec(None, "expert", None, None)
+    # Gate on the bank's own split, not on "expert" alone: an expert=1, context>1 mesh still
+    # splits the bank over context, and the merged 3-D path below would gather it whole.
+    if math.prod(int(mesh.shape.get(axis, 1)) for axis in bank_axes) > 1:
+        distributed_4d_spec = PartitionSpec(None, bank_axes if len(bank_axes) > 1 else bank_axes[0], None, None)
         x_distributed = reshard(x.astype(jnp.bfloat16), distributed_4d_spec)
         if use_syrk:
 
