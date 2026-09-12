@@ -27,7 +27,7 @@ CORRECTIONS = ("behavior_clip", "regular_no_tis", "regular_tis", "regular_mask",
 AGES = (1, 2)
 SEEDS = (17, 29)
 PREFIX = "s3://marin-us-east-02a/marin"
-OUTPUT = CACHE / "async-v2-e43-composition-v2.json"
+OUTPUT = CACHE / "async-v2-e43-composition-v3.json"
 
 
 def digest(value):
@@ -137,6 +137,7 @@ def stage_recipe():
                 assert result.exit_code == 0, (tag, result.output, result.exception)
                 preview = json.loads(result.output)["training"]["request"]
                 request = copy.deepcopy(preview)
+                request["overrides"].append("++trainer.resume_mode=none")
                 for key in ("model", "train_data", "validation_data"):
                     old_blocks = n2[key] if isinstance(n2[key], list) else [n2[key]]
                     new_blocks = preview[key] if isinstance(preview[key], list) else [preview[key]]
@@ -148,7 +149,7 @@ def stage_recipe():
                     request[key] = copy.deepcopy(n2[key])
                 guard_uri = (
                     f"{PREFIX}/users/ahmad/documents/math-eval-pool/1.0.0-candidate1"
-                    f"/qualification/e43-v2/measurement/{tag}.json"
+                    f"/qualification/e43-v3/measurement/{tag}.json"
                 )
                 config = yaml.safe_load(request["config_yaml"])
                 config["trainer"]["measurement_guard_uri"] = guard_uri
@@ -169,7 +170,7 @@ def stage_recipe():
                     )
                 }
                 science_sha = digest(science)
-                version = f"1.0.0-e43-v2-{tag}"
+                version = f"1.0.0-e43-v3-{tag}"
                 base = f"users/ahmad/checkpoints/async-rl/e43-{science_sha[:12]}-training"
                 output_path = f"{PREFIX}/{base}/{version}"
                 temporary_path = f"s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin-us-east-02a/marin/{base}/{version}"
@@ -183,7 +184,7 @@ def stage_recipe():
                 request["attempt_id"] = hashlib.sha256((science_sha + ":attempt0").encode()).hexdigest()[:12]
                 assert request["completion_mode"] == "checkpoint"
                 assert request["runtime"]["commit"] == MSR_SHA
-                job_stem = f"async-rl-v2-qwen-k12-p8-i8-{correction}-a{age}-{science_sha[:8]}-v2"
+                job_stem = f"async-rl-v2-qwen-k12-p8-i8-{correction}-a{age}-{science_sha[:8]}-v3"
                 execution = dict(
                     cluster="cw-rno2a",
                     cluster_config="lib/iris/config/cw-rno2a.yaml",
@@ -313,6 +314,7 @@ def stage_native():
             assert t.fully_async.max_staleness_steps == row["configured_age"]
             assert t.fully_async.num_parallel_generation_workers == 64
             assert t.measurement_guard_uri == row["measurement_guard_uri"]
+            assert t.resume_mode == "none"
             assert t.algorithm.grad_cosine.enabled and t.algorithm.loss_reduction == "token_mean"
             assert not t.algorithm.use_kl_loss and t.policy.optimizer_config.lr == 2e-6
             assert t.seed == row["seed"] and t.hf_hub_repo_id is None
@@ -346,7 +348,7 @@ def stage_native():
                 )
             )
             print("E43_N2_NATIVE_HYDRA_PASS " + row["tag"] + " args=" + str(len(generated)), flush=True)
-    destination = CACHE / "async-v2-e43-native-compose-v2.json"
+    destination = CACHE / "async-v2-e43-native-compose-v3.json"
     destination.write_text(json.dumps(evidence, indent=2) + "\n")
     packet["native_composed_count"] = len(evidence)
     packet["pending"] = [item for item in packet["pending"] if item != "Native/Hydra preview stage"]
