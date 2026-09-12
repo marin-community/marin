@@ -85,8 +85,8 @@ def _seq_spec_3d() -> P:
     return P(_BATCH_AXES, _seq_axis(), None)
 
 
-def _seq_spec_4d(head_axis: str | None = "model") -> P:
-    return P(_BATCH_AXES, _seq_axis(), head_axis, None)
+def _seq_spec_4d() -> P:
+    return P(_BATCH_AXES, _seq_axis(), "model", None)
 
 
 def _kv_spec_4d() -> P:
@@ -95,10 +95,6 @@ def _kv_spec_4d() -> P:
 
 def _token_spec() -> P:
     return P(_token_axes())
-
-
-def _batch_reshard(x: jax.Array) -> jax.Array:
-    return reshard(x, _seq_spec_3d())
 
 
 def _flatten_bs(x: jax.Array) -> jax.Array:
@@ -247,13 +243,7 @@ def _apply_half_rope(
     cos = jnp.cos(angles)[None, :, None, :]
     sin = jnp.sin(angles)[None, :, None, :]
 
-    # When Q/K have their seq axis sharded on "context" (CP), the compiler
-    # tries to lower the (cos, sin) * (q, k) multiply as a per-shard op --
-    # but cos/sin still carry the global seq extent and fail the per-shard
-    # broadcast (operand (S,) can't broadcast into target (S/context, ...)).
-    # Reshard cos/sin to match Q/K's context sharding on the seq dim; JAX
-    # will split the pre-computed cache across the "context" shards so the
-    # per-shard multiply lines up. No-op when seq axis is unsharded.
+    # RoPE caches must share Q/K sequence sharding for shard-local multiplication.
     seq_shard = _seq_axis()
     if seq_shard is not None:
         cos = reshard(cos, P(None, seq_shard, None, None))
@@ -363,13 +353,7 @@ class CausalSelfAttention(eqx.Module):
             q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
             k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
         q = q * cfg.qk_mult * qk_mult_scale
-        # Context parallelism: shard Q's seq axis on "context" (if the mesh
-        # carries it); K/V must be seq-replicated for splash. The splash entry
-        # in ``grug/attention/_core.py`` raises if K's seq axis is sharded, so
-        # we reshard K/V to seq=None before calling into attention -- this is
-        # the "all-gather KV" flavor of CP. When context_axis_size == 1 the
-        # ``"context"`` in ``_seq_spec_4d`` folds to a size-1 axis (no-op) and
-        # behavior matches the pre-CP fully-replicated seq case.
+        # Splash consumes sequence-sharded queries and gathered keys and values.
         q = reshard(q, _seq_spec_4d())
         k = reshard(k, _kv_spec_4d())
         v = reshard(v, _kv_spec_4d())
@@ -801,19 +785,6 @@ class Transformer(eqx.Module):
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        # Match segment_id shardings to the (Q on context, KV replicated) split
-        # that CausalSelfAttention applies to q/k/v before splash. The splash
-        # kernel reads each shard's segment_ids at per-shard shape; if Q is
-        # context-sharded but its segment_ids arrive seq-replicated (shape
-        # ``(S,)`` instead of ``(S/context,)``), splash rejects it. When
-        # context_axis_size == 1 both spec sides fold to ``None`` and behavior
-        # matches the pre-CP path.
-        if segment_ids is not None:
-            q_seg_raw, kv_seg_raw = segment_ids
-            batch_axes = _BATCH_AXES if q_seg_raw.ndim == 2 else None
-            q_seg_spec = P(batch_axes, _seq_axis()) if q_seg_raw.ndim == 2 else P(_seq_axis())
-            kv_seg_spec = P(batch_axes, None) if kv_seg_raw.ndim == 2 else P(None)
-            segment_ids = (reshard(q_seg_raw, q_seg_spec), reshard(kv_seg_raw, kv_seg_spec))
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 

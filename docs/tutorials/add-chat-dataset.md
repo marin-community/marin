@@ -276,8 +276,10 @@ trained; predicting the next conversation's BOS from that EOS is masked.
 Padding and the last position are masked. Loss is normalized by the sum of
 valid target weights.
 
-The launcher uses the step-157k Grug 67B/A2B architecture, a 262,144-token
-context, and four-way context parallelism by default. It shards queries and
+The launcher uses the Grug 67B/A2B architecture, a 262,144-token
+context, and four-way context parallelism by default. This recipe requires TPU
+resources and selects Splash attention explicitly. Each context shard must
+contain a multiple of 128 tokens. It shards queries and
 hidden activations across sequence and gathers keys and values for attention.
 The context-parallel implementation was ported from revision
 `09989c43010e9fef0a5520cdc4af8bae90252a06`. The September 7 reference run also

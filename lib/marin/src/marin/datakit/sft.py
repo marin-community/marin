@@ -57,7 +57,7 @@ def _shuffle_key(record: dict, seed: int) -> str:
 
 
 def _keep_rows(_key: str, rows: Iterator[dict]) -> Iterator[dict]:
-    # Equal text across sources is retained: this is a shuffle, not deduplication.
+    # Retain equal text across sources during the shuffle.
     yield from rows
 
 

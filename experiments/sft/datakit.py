@@ -9,7 +9,8 @@ import tempfile
 from dataclasses import dataclass
 
 import click
-from fray.types import ResourceConfig
+from fray.types import ResourceConfig, TpuConfig
+from levanter.kernels.pallas.splash_attention import SPLASH_BLOCK_GRANULARITY
 from levanter.tracker.wandb import WandbConfig
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.datakit.sft import SftInput, SftTokenStore, build_sft_store, sft_data_config
@@ -44,12 +45,14 @@ class DatakitSftConfig:
     max_workers: int = 128
 
     def __post_init__(self):
+        if not isinstance(self.resources.device, TpuConfig):
+            raise ValueError("The Datakit Grug recipe requires TPU resources")
         if not re.fullmatch(r"[0-9a-f]{40}", self.tokenizer_revision):
             raise ValueError("tokenizer_revision must be an immutable 40-character commit SHA")
         if min(self.steps, self.batch_size, self.num_shards, self.max_workers, self.context_parallel) < 1:
             raise ValueError("Training and preprocessing sizes must be positive")
-        if self.sequence_length % self.context_parallel:
-            raise ValueError("sequence_length must be divisible by context_parallel")
+        if self.sequence_length % (SPLASH_BLOCK_GRANULARITY * self.context_parallel):
+            raise ValueError(f"Splash requires a multiple of {SPLASH_BLOCK_GRANULARITY} tokens per context shard")
         if self.sequence_length < 2 or self.learning_rate <= 0:
             raise ValueError("sequence_length must be >= 2 and learning_rate must be positive")
 
@@ -86,6 +89,8 @@ def sft_training_config(config: DatakitSftConfig, store: SftTokenStore, output_p
     model = MoeMuonHHeuristic(min_lr_ratio=0.05).build_model_config(2560, seq_len=config.sequence_length)
     model = dataclasses.replace(
         model,
+        attention_implementation="tpu_splash",
+        moe_implementation="ring",
         disable_pko=True,
         disable_long_rope=True,
         sliding_window=2048,

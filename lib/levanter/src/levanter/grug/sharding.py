@@ -156,9 +156,8 @@ def compact_grug_mesh(
 
     The mesh is always ``(replica_dcn, data, context, expert, model)``; length-1
     axes are kept so downstream PartitionSpecs can name any axis unconditionally.
-    ``context_axis_size`` shards the sequence dimension (context parallelism);
-    K/V are still all-gathered inside the attention kernel, only Q participates
-    in the shard.
+    ``context_axis_size`` reserves devices for sequence sharding; these devices
+    do not contribute independent batch examples.
     """
     if replica_axis_size is None:
         replica_axis_size = jax.process_count()

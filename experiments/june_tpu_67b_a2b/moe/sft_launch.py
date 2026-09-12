@@ -98,17 +98,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
 
     initialize_from = latest_checkpoint_path(config.init_from_path)
 
-    # Trainer mesh bookkeeping. Grug builds its own compact (replica_dcn, data, expert, model) mesh for
-    # the actual compute (train.py, via set_mesh + raw PartitionSpecs -- not the Trainer's logical axis
-    # mapping), but the TrainerConfig still derives ``data_axis_size`` (and thus the batch-divisibility
-    # check + per_device_parallelism) from this MeshConfig. With only ``expert`` declared, the
-    # model-parallel slices get absorbed as ``replica_dcn`` and the default batch mapping
-    # (replica_dcn, replica, data) then counts them -> data_axis_size = num_slices, which rejects bs=8 on
-    # model_axis=5 ("train_batch_size (8) must be divisible by per_device_parallelism * data_axis_size
-    # (1, 5)"). For model_axis>1, bs=8 forces data=1, so the true batch shards only over ``expert``: map
-    # the batch axis to (data, expert) -> data_axis_size == expert_axis_size and per_device resolves to 1.
-    # (``model`` cannot be declared in dcn_axes -- MeshConfig always seeds model into the ICI axes, which
-    # would collide.) model_axis==1 keeps the original single-axis MeshConfig byte-identically.
+    # Trainer batch bookkeeping must exclude model and context shards.
     _model_axis = config.grug_trainer.model_axis_size
     if _model_axis > 1 or config.context_parallel > 1:
         mesh_config = MeshConfig(
