@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import tracemalloc
 from types import SimpleNamespace
 
 import pyarrow as pa
@@ -107,6 +108,41 @@ def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):
     sample = sample_from_archive_row(row)
     assert sample.prompt_messages is not None
     assert sample.prompt_messages[0].content == content
+
+
+def test_export_lm_eval_samples_bounds_peak_python_memory(tmp_path):
+    results = tmp_path / "run" / "results"
+    sample_path = results / "mmlu_pro" / "model" / "samples_mmlu_pro_20260807.jsonl"
+    sample_path.parent.mkdir(parents=True)
+    prompt = "Read the question and choose one answer. " + ("context " * 1_024)
+    rows = []
+    for doc_id in range(2_048):
+        rows.append(
+            json.dumps(
+                {
+                    "doc_id": doc_id,
+                    "doc": {"question": "Which answer is correct?", "choices": ["A", "B"]},
+                    "target": 0,
+                    "arguments": [[prompt, "A"], [prompt, "B"]],
+                    "resps": [[-1.0, True], [-2.0, True]],
+                    "filtered_resps": [0],
+                    "acc": 1.0,
+                }
+            )
+        )
+    sample_path.write_text("\n".join(rows) + "\n")
+    del rows
+
+    source_size = sample_path.stat().st_size
+    tracemalloc.start()
+    try:
+        exported = export_lm_eval_samples(str(results))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert exported.samples == 2_048
+    assert peak < source_size * 5 / 2
 
 
 def _lm_eval_row(doc_id: int, extraction_filter: str, score: float, response: str) -> dict:
