@@ -6,39 +6,30 @@ Retain the latent RMSNorm. Do not restore or compare the superseded gate-only sm
 Issue: https://github.com/marin-community/marin/issues/9110. Idea: Zihan Qiu.
 Worktree: `/Users/kaiyuew/Downloads/Project/marin-latent-gated-router`.
 Branch: `codex/moe-latent-gated-router`. Exact training source is in the state file.
-Owner: thread heartbeat `follow-gated-latent-moe-ablation-9110`, every 10 minutes.
+Monitoring completed; heartbeat `follow-gated-latent-moe-ablation-9110` was deleted.
 State: `scratch/20260911-1105_moe-lgr-9110-rmsgated_monitoring_state.json`.
 
-## Scope and current state
+## Final state
 
-**Never submit a control training job.** Reuse existing Agent MoE baseline runs.
-The control in code exists only for numerical tests and schedule calculation.
-The treatment computes `z = GatedNorm(RMSNorm(h @ latent_down))`; both router and
-routed experts consume z. Shared experts and outer norms retain hero behavior.
+Both RMSNorm-before-gate runs in the first, small-model experiment stage (Gate 1) completed successfully on September 12: d512 Iris attempt 3 and d768 attempt 2 exited 0, and both W&B runs are finished. Permanent checkpoint metadata is verified at steps 13,642 and 19,378. Routing overflow remained zero and recorded metrics were finite. Source: `edf9b2871`; architecture: `down(h) -> RMSNorm -> gate -> router + routed experts`. Idea: **Zihan Qiu**.
 
-Latest user instruction: “别smoke浪费卡了，直接跑”. **Skip all smoke runs.**
-The pending corrected smoke was cancelled before any attempt was allocated.
-The two full Gate 1 parents were submitted from `edf9b2871`:
+| Hidden width | Treatment Paloma loss | Reference Paloma loss | Tokens, treatment / reference | Last-100 mean tokens/sec, treatment / reference | Treatment non-embedding training FLOPs | Recentered compute ratio | Effective speedup |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 512 | 3.84245491 | 3.54216671 | 1,788,084,224 / 1,439,170,560 | 340,373.87 / 431,263.12 | 3.798955e+17 | 0.217010 | 0.137854 |
+| 768 | 3.55822515 | 3.22727251 | 5,079,826,432 / 4,423,680,000 | 200,154.66 / 291,668.98 | 2.798080e+18 | 0.139819 | 0.083556 |
 
-- `/kaiyuew/moe-lgr-9110-d512-rmsgated` at 18:53:16 UTC.
-- `/kaiyuew/moe-lgr-9110-d768-rmsgated` at 18:53:58 UTC.
+Both widths fail the >1 effective-speedup threshold. Gate 1 fails; no d1024/d1280 runs or Gate 2 scaling fit will be launched. No additional baseline or smoke was run.
 
-Each expected child is `<parent>/grug-train-<run-id>`. Read the `gate1` records in
-state for exact source, current status, checkpoint paths and recovery commands.
-At 21:34 UTC, both runs were pending automatic attempt 2 after scheduler
-preemption. Temporary checkpoint metadata is verified: d512 step 1921 and d768
-step 648, saved at 21:24 UTC. Expected retries resume these checkpoints.
-Last recorded global steps were 2492/659; metrics were finite with zero overflow.
-W&B may retain preemption-era values until replay catches up. Use attempt-specific
-Iris logs during recovery, and state for exact checkpoint paths and current status.
-Do not duplicate these submissions or restart either cancelled smoke.
+Using the [Agent MoE guide](https://github.com/marin-community/marin/blob/codex/moe-latent-gated-router/experiments/grug/moe/agent.md) scaling-law assumption (loss asymptote 1.6, exponent 0.0941), the compute ratio is `((L_reference - 1.6)/(L_treatment - 1.6))**(1/0.0941)`. Effective speedup is a model-based estimate, not a measured acceleration. It divides the estimated reference time to reach the treatment loss (`compute_ratio * reference_tokens / reference_TPS`) by treatment time (`treatment_tokens / treatment_TPS`). TPS is the mean of exactly the last 100 training steps. These times exclude queueing, preemption, compilation, evaluation and checkpoint overhead. Analytic non-embedding training FLOPs are `3 * (forward_FLOPs_per_token - 2*hidden_dim*vocab_size) * treatment_tokens`; they are distinct from the loss-derived compute ratio.
 
-Old `gated` identities are superseded: the gate-only smoke finished, and the
-full d512 parent plus child were cancelled. Old d768 was never submitted.
-Keep all corrected experiments under fresh `rmsgated` identities and output roots.
-The original user checkout is dirty and unrelated; work only in this worktree.
-All 32 pinned data caches already exist in us-central1. Do not alter production
-jobs, cluster settings, or shared data caches.
+The reused May references use a different architecture, optimizer/data recipe and v4-32 hardware; treatment uses the [scaled hero latent configuration](https://github.com/marin-community/marin/tree/codex/moe-latent-gated-router/experiments/grug/moe_latent_gated_router) on v5p-8. This comparison does not isolate the causal effect of adding the gate or changing router input.
+
+- [d512 treatment](https://wandb.ai/marin-community/marin_moe/runs/moe-lgr-9110-d512-rmsgated) / [reference](https://wandb.ai/marin-community/marin_moe/runs/moe_may_compute_opt_d512_ep1)
+- [d768 treatment](https://wandb.ai/marin-community/marin_moe/runs/moe-lgr-9110-d768-rmsgated) / [reference](https://wandb.ai/marin-community/marin_moe/runs/moe_may_compute_opt_d768_ep1)
+
+Final checkpoints: `gs://marin-us-central1/users/kaiyuew/grug/moe-lgr-9110-d512-rmsgated/dev/checkpoints/step-13642` and `gs://marin-us-central1/users/kaiyuew/grug/moe-lgr-9110-d768-rmsgated/dev/checkpoints/step-19378`.
+
+The experiment is complete. Do not submit or resume any cell.
 
 ## Startup, recovery and progression
 

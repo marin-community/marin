@@ -216,3 +216,55 @@ See the [plan](../projects/moe-latent-gated-router/plan.md) and
   Numeric metrics remain finite, overflow zero. Intermediate d512 step-2000
   Paloma macro loss is 4.25001; no final result or gate decision yet.
 - Checkpoint evidence: `scratch/9110-gate1-checkpoint-metadata.json`.
+
+### 2026-09-12 — Checkpoint restoration verified
+
+- At 09:17 UTC, Iris allocated d512 attempt 3 and d768 attempt 2 on new
+  us-central1 v5p-8 workers after the extended capacity wait.
+- Attempt-specific logs confirm successful restoration of corrected d512 step
+  1921 and d768 step 648 checkpoints. Source remains `edf9b2871`.
+- Both W&B runs are running again; their summaries still show preemption-era
+  steps 2492/659. New training advancement and evaluations remain unverified.
+- No manual recovery, smoke, baseline, or cluster change was performed.
+
+### 2026-09-12 — Resumed training advances
+
+- At 09:29 UTC, both current attempts had advanced beyond the preemption-era
+  steps: d512 global step 3284, d768 step 1070. Attempt logs corroborate progress.
+- W&B train losses are 3.95643/3.97246, with no nonfinite summary metrics and
+  zero routing overflow. Intermediate Paloma losses are 4.29929/4.32959.
+- Final evaluation and gate decisions remain pending; no additional jobs launched.
+
+### 2026-09-12 — d512 final result
+
+At 10:51 UTC on September 12, d512 finished successfully (Iris attempt 3 exit 0; W&B finished). Its permanent step-13642 checkpoint metadata is verified. d768 remains healthy on attempt 2, at approximately 4,600/19,378 updates with finite metrics and zero routing overflow.
+
+| d512 result | Gated latent treatment | Existing May reference |
+| --- | ---: | ---: |
+| Final Paloma macro loss | 3.84245491 | 3.54216671 |
+| Total tokens | 1,788,084,224 | 1,439,170,560 |
+| Mean tokens/sec, last 100 training steps | 340,373.87 | 431,263.12 |
+
+The recentered compute ratio is 0.217010 and the token/throughput-adjusted effective speedup is 0.137854. Thus d512 fails the required >1 threshold; no d1024/d1280 cells will launch. The existing d768 run will finish for the complete two-width report. These are comparisons against a different historical recipe on v4-32, versus this treatment on v5p-8; they do not isolate the effect of gating.
+
+Training source remains `edf9b2871`. No new baseline or smoke was run. Idea credit: **Zihan Qiu**. Detailed evidence is recorded in the experiment logbook and monitoring state.
+
+### 2026-09-12 — Final Gate 1 results
+
+Both RMSNorm-before-gate runs in the first, small-model experiment stage (Gate 1) completed successfully on September 12: d512 Iris attempt 3 and d768 attempt 2 exited 0, and both W&B runs are finished. Permanent checkpoint metadata is verified at steps 13,642 and 19,378. Routing overflow remained zero and recorded metrics were finite. Source: `edf9b2871`; architecture: `down(h) -> RMSNorm -> gate -> router + routed experts`. Idea: **Zihan Qiu**.
+
+| Hidden width | Treatment Paloma loss | Reference Paloma loss | Tokens, treatment / reference | Last-100 mean tokens/sec, treatment / reference | Treatment non-embedding training FLOPs | Recentered compute ratio | Effective speedup |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 512 | 3.84245491 | 3.54216671 | 1,788,084,224 / 1,439,170,560 | 340,373.87 / 431,263.12 | 3.798955e+17 | 0.217010 | 0.137854 |
+| 768 | 3.55822515 | 3.22727251 | 5,079,826,432 / 4,423,680,000 | 200,154.66 / 291,668.98 | 2.798080e+18 | 0.139819 | 0.083556 |
+
+Both widths fail the >1 effective-speedup threshold. Gate 1 fails; no d1024/d1280 runs or Gate 2 scaling fit will be launched. No additional baseline or smoke was run.
+
+Using the [Agent MoE guide](https://github.com/marin-community/marin/blob/codex/moe-latent-gated-router/experiments/grug/moe/agent.md) scaling-law assumption (loss asymptote 1.6, exponent 0.0941), the compute ratio is `((L_reference - 1.6)/(L_treatment - 1.6))**(1/0.0941)`. Effective speedup is a model-based estimate, not a measured acceleration. It divides the estimated reference time to reach the treatment loss (`compute_ratio * reference_tokens / reference_TPS`) by treatment time (`treatment_tokens / treatment_TPS`). TPS is the mean of exactly the last 100 training steps. These times exclude queueing, preemption, compilation, evaluation and checkpoint overhead. Analytic non-embedding training FLOPs are `3 * (forward_FLOPs_per_token - 2*hidden_dim*vocab_size) * treatment_tokens`; they are distinct from the loss-derived compute ratio.
+
+The reused May references use a different architecture, optimizer/data recipe and v4-32 hardware; treatment uses the [scaled hero latent configuration](https://github.com/marin-community/marin/tree/codex/moe-latent-gated-router/experiments/grug/moe_latent_gated_router) on v5p-8. This comparison does not isolate the causal effect of adding the gate or changing router input.
+
+- [d512 treatment](https://wandb.ai/marin-community/marin_moe/runs/moe-lgr-9110-d512-rmsgated) / [reference](https://wandb.ai/marin-community/marin_moe/runs/moe_may_compute_opt_d512_ep1)
+- [d768 treatment](https://wandb.ai/marin-community/marin_moe/runs/moe-lgr-9110-d768-rmsgated) / [reference](https://wandb.ai/marin-community/marin_moe/runs/moe_may_compute_opt_d768_ep1)
+
+Final checkpoints: `gs://marin-us-central1/users/kaiyuew/grug/moe-lgr-9110-d512-rmsgated/dev/checkpoints/step-13642` and `gs://marin-us-central1/users/kaiyuew/grug/moe-lgr-9110-d768-rmsgated/dev/checkpoints/step-19378`.
