@@ -667,3 +667,10 @@ author: benfeuer
 - The aggregate result independently reports `accuracy_avg=0.6139461436170213` and `total_examples=12032`. The repair excludes Evalchemy's `sample_*` and source-index fields from metrics and accepts an exact aggregate count as scoring evidence only when it matches the full attempted extent. Per-sample `correct` remains unknown rather than fabricated.
 - Regression tests cover both boundaries: numeric provenance cannot become grading, and a matching custom-task aggregate count converts an otherwise all-ungraded coverage summary to 12,032/12,032 without inventing `n_correct`.
 - Next action: rebuild the already sealed table from its preserved source under the corrected adapter, validate that all 12,032 rows have no fabricated grading, write the original immutable record, and independently audit it before reporting the score.
+
+### 2026-09-12 08:15 EDT - Qk175 MMLU-Pro recovered and independently audited
+
+- Result: recovery `/benfeuer/snowball-final-qk175-mmlupro-artifact-recovery3-20260912-0815` replaced only the logical sample table from preserved immutable source artifacts and wrote original record `20260911-154531-snowball-final-qk175-base-mmlupro-44ef`.
+- Audit: independent RNO2A reader `/benfeuer/snowball-final-qk175-mmlupro-record-audit-20260912-0817` verified `status=succeeded`, `accuracy_avg=0.6139461436170213`, 12,032/12,032 coverage with no errors, and a sealed 12,032-row archive whose rows carry no fabricated metrics, grading, or correctness.
+- Reproducibility: exact model revision `1934e71f2bb0fbeb19e5ce82372136e5297bf0a4`, zero shots, seed 42, `max_length=65536`, campaign provenance `ba2fef7443`, and Evalchemy `65c80022…` all match the original serialized batch. Campaign fixes are `91f957d475` and `82ff224f4f`; the affected-safe gate passed 1,842 tests with 47 skips.
+- Accounting: `RESULTS.md` now contains qk175 at 61.3946%; 349/355 target cells are complete. Qk157 MMLU-Pro and all five SimpleQA cells remain active.
