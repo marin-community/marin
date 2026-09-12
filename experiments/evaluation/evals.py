@@ -264,7 +264,7 @@ EVALS.update(
         "aider": harbor_definition("aider"),
         "medagentbench": harbor_definition("medagentbench"),
         "financeagent": harbor_definition("financeagent"),
-        "grug-opencode-id": harbor_definition("grug-opencode-id"),
+        "ot-tblite": harbor_definition("ot-tblite"),
     }
 )
 

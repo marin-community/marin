@@ -201,7 +201,7 @@ def checked_policies(tmp_path_factory):
 
 
 def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies):
-    path = _POLICIES / "grug-opencode-id.yaml"
+    path = _POLICIES / "ot-tblite.yaml"
 
     seeded = [json.loads(_preflight(tmp_path, [(path, {})], hash_seed=seed).stdout)[0] for seed in ("1", "8675309")]
 
@@ -379,7 +379,7 @@ datasets:
 
 def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(tmp_path, checked_policies):
     policy_path = tmp_path / "policy.json"
-    policy_path.write_text(checked_policies["grug-opencode-id.yaml"]["stable_policy_json"])
+    policy_path.write_text(checked_policies["ot-tblite.yaml"]["stable_policy_json"])
     overlay_path = tmp_path / "overlay.json"
     overlay_path.write_text(
         json.dumps(
