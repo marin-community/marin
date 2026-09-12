@@ -166,7 +166,7 @@ trainer:
   ckpt_interval: {MAX_STEPS}
   resume_mode: latest
   enable_db_registration: false
-  logger: wandb
+  logger: console
   project_name: {WANDB_PROJECT}
   policy:
     optimizer_config:
@@ -253,7 +253,7 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLModel]:
             disk="1TB",
             priority="interactive",
             max_retries=1,
-            wandb_entity="marin-community",
+            wandb_entity=None,
         ),
     )
 
