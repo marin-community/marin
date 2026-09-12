@@ -330,6 +330,64 @@ class PhysicalPlan:
 
 
 @dataclass
+class ExecutionStage:
+    stage_name: str
+    label: str
+    stage_type: str
+    has_reduce: bool
+    dependencies: list[str] = field(default_factory=list)
+
+
+def execution_stage_name(stage: PhysicalStage, index: int) -> str:
+    return f"stage{index}-{stage.stage_name(max_length=40)}"
+
+
+def join_stage_name(parent_index: int, operation_index: int, stage_index: int) -> str:
+    return f"join-right-{parent_index}-{operation_index}-stage{stage_index}"
+
+
+def execution_stages(plan: PhysicalPlan) -> list[ExecutionStage]:
+    """Describe stage data dependencies using the labels emitted by the coordinator.
+
+    Arrows describe data flow, not concurrent scheduling. Join right-hand stages
+    feed the join separately from the preceding left-hand stage.
+    """
+    stages = []
+    previous = []
+    for stage_index, stage in enumerate(plan.stages):
+        dependencies = list(previous)
+        for operation_index, operation in enumerate(stage.operations):
+            if not isinstance(operation, Join) or operation.right_plan is None:
+                continue
+            right_previous = []
+            for right_index, right_stage in enumerate(operation.right_plan.stages):
+                name = join_stage_name(stage_index, operation_index, right_index)
+                stages.append(
+                    ExecutionStage(
+                        name,
+                        right_stage.stage_name(),
+                        str(right_stage.stage_type),
+                        any(isinstance(operation, Reduce) for operation in right_stage.operations),
+                        right_previous,
+                    )
+                )
+                right_previous = [name]
+            dependencies.extend(right_previous)
+        name = execution_stage_name(stage, stage_index)
+        stages.append(
+            ExecutionStage(
+                name,
+                stage.stage_name(),
+                str(stage.stage_type),
+                any(isinstance(operation, Reduce) for operation in stage.operations),
+                dependencies,
+            )
+        )
+        previous = [name]
+    return stages
+
+
+@dataclass
 class FusionState:
     """Incremental state for fusing logical operations into physical stages."""
 
