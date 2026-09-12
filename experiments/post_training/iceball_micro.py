@@ -179,7 +179,7 @@ trainer:
   eval_interval: -1
   ckpt_interval: 2
   resume_mode: latest
-  logger: wandb
+  logger: console
   project_name: {ICEBALL_WANDB_PROJECT}
   policy:
     optimizer_config:
