@@ -14,8 +14,10 @@ from types import SimpleNamespace
 import click
 import pytest
 from click.testing import CliRunner
+from finestore.reader import ReadView
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
+from marin.evaluation.archive import sample_from_archive_row
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
@@ -306,6 +308,36 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
             errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
         ),
     }
+
+
+def test_evalchemy_executor_uses_aggregate_count_when_custom_task_omits_sample_scores(tmp_path, monkeypatch):
+    output_dir = f"file://{tmp_path / 'custom-with-aggregate-grades'}"
+    rows = []
+    for doc_id in range(3):
+        row = _lm_eval_generation(doc_id, "accuracy", float(doc_id > 0), "4")
+        row.pop("metrics")
+        row.pop("accuracy")
+        row.update({"source_id": doc_id, "sample_ordinal": doc_id})
+        rows.append(row)
+    _write_evalchemy_output(
+        output_dir,
+        "mmlu-pro",
+        {"MMLUPro": {"accuracy_avg": 2 / 3, "total_examples": 3}},
+        {"MMLUPro": rows},
+    )
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(name="mmlu-pro", tasks=(EvalTaskConfig(name="MMLUPro", num_fewshot=0),))
+    )
+
+    outcome = executor(_remote_session(), output_dir, {})
+
+    assert outcome.coverage == {"mmlu-pro": TaskCoverage(n_attempted=3, n_scored=3, n_correct=None, n_unanswered=0)}
+    [archived] = ReadView(output_dir).scan("samples").to_pylist(maps_as_pydicts="strict")[:1]
+    assert sample_from_archive_row(archived).metrics == {}
 
 
 def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):

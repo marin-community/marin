@@ -47,7 +47,7 @@ BINARY_METRICS = frozenset({"acc", "acc_norm", "exact_match", "accuracy"})
 # lm-eval records a task's graded-document count under this key, beside the metrics themselves.
 SAMPLE_COUNT_METRIC = "sample_len"
 # evalchemy's chat-native benchmarks and Harbor report counts directly instead.
-TOTAL_METRICS = ("num_total", "total")
+TOTAL_METRICS = ("num_total", "total", "total_examples")
 
 # Bisection bounds for the Imbens-Manski critical value: the two-sided normal quantile when nothing is
 # missing, the one-sided quantile in the limit where the unidentified width dominates.

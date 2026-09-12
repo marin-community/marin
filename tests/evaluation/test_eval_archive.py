@@ -203,6 +203,37 @@ def test_sample_metrics_exclude_the_row_format_stamp(tmp_path):
     assert sample_from_archive_row(row).metrics == {"exact_match": 1.0}
 
 
+def test_sample_metrics_exclude_evalchemy_provenance_indices(tmp_path):
+    # Custom Evalchemy tasks can omit per-sample metrics while adding numeric provenance fields.
+    # Treating those row indices as scores makes every item after the first look correct.
+    results = tmp_path / "run" / "results"
+    row = _lm_eval_row(0, "none", 1.0, "4")
+    row.pop("metrics")
+    row.pop("exact_match")
+    row.update(
+        {
+            "sample_id": "MMLUPro:0:0:0",
+            "sample_namespace": "MMLUPro",
+            "sample_ordinal": 17,
+            "sample_repeat": 0,
+            "sample_shard": 0,
+            "source_id": 17,
+        }
+    )
+    _write_jsonl(results, [row])
+
+    coverage = export_lm_eval_samples(str(results)).coverage
+
+    [archived] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    sample = sample_from_archive_row(archived)
+    assert sample.metrics == {}
+    assert sample.grading is None
+    assert sample.correct is None
+    assert coverage == {
+        "gsm8k_5shot": TaskCoverage(n_attempted=1, n_scored=0, n_correct=None, n_unanswered=0, errors={"ungraded": 1})
+    }
+
+
 def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
     # The archive keeps the bytes it normalized, so a later contract change can rebuild the tables
     # even if the surrounding results tree is gone.
