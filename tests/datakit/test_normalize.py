@@ -383,3 +383,22 @@ def test_no_input_files_raises(tmp_path: Path):
 
     with pytest.raises(FileNotFoundError):
         normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+
+
+def test_compressed_parquet_partitioning_uses_uncompressed_size(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    records = [{"text": f"{i}:" + "abcdefghij" * 10_000} for i in range(16)]
+    path = source / "data.parquet"
+    pq.write_table(pa.Table.from_pylist(records), path, compression="zstd", use_dictionary=False)
+    target_bytes = 128 * 1024
+    metadata = pq.read_metadata(path)
+    uncompressed_bytes = sum(metadata.row_group(i).total_byte_size for i in range(metadata.num_row_groups))
+    assert path.stat().st_size < target_bytes < uncompressed_bytes
+
+    output = tmp_path / "output"
+    normalize_to_parquet(input_path=str(source), output_path=str(output), target_partition_bytes=target_bytes)
+
+    shards = list((output / "outputs" / "main").glob("*.parquet"))
+    assert len(shards) == (uncompressed_bytes + target_bytes - 1) // target_bytes
+    assert sorted(row["text"] for row in _read_all_parquet(output)) == sorted(row["text"] for row in records)

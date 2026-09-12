@@ -17,15 +17,18 @@ All discovered files are merged into a single output: main records land in
 """
 
 import logging
+import math
 import os
 import re
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 import dupekit
 import pyarrow as pa
+import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from pydantic import BaseModel, ValidationInfo, model_validator
 from rigging.filesystem.factory import url_to_fs
@@ -33,7 +36,7 @@ from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
+from zephyr.readers import SUPPORTED_EXTENSIONS, load_file, open_file
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
 from marin.datakit import partition_filename
@@ -57,6 +60,7 @@ COMPACTED_WHITESPACE_COUNTER = "datakit_normalize_compacted_whitespace"
 # Default Zephyr worker cap. Sized well above Zephyr's own default (128) because
 # a single normalize spans thousands of shards over very large staged dumps.
 DEFAULT_MAX_WORKERS = 1024
+FILE_METADATA_WORKERS = 32
 NORMALIZED_DATA_VERSION = "v2"
 
 # The hash attributes every normalize step declares. They fix the identity of a
@@ -212,11 +216,12 @@ def _discover_files(
     input_path: str,
     file_extensions: tuple[str, ...] | None = None,
 ) -> dict[str, int]:
-    """Walk *input_path* recursively and return ``{data file: byte size}``, ordered by path.
+    """Return data files and estimated uncompressed sizes, ordered by path.
 
     Only files with matching extensions are included; dotfiles and hidden
-    directories are skipped. Sizes come from the walk's own ``detail=True``
-    listing, so sizing the input for sharding costs no per-file stat call. When
+    directories are skipped. Parquet sizes come from footer metadata to account
+    for file compression. Other formats use stored sizes from the directory
+    listing. When
     the ``FERRY_TEST_MAX_FILES`` env var is set to a positive integer, the
     sorted list is truncated to that many entries — a smoke/test-only knob that
     bypasses any caller's intent, used by the canary ferries to bound oversized
@@ -254,7 +259,18 @@ def _discover_files(
             cap,
         )
         discovered = discovered[:cap]
-    return dict(discovered)
+    with ThreadPoolExecutor(max_workers=FILE_METADATA_WORKERS) as executor:
+        return dict(executor.map(_normalization_file_size, discovered))
+
+
+def _normalization_file_size(entry: tuple[str, int]) -> tuple[str, int]:
+    path, stored_bytes = entry
+    if not path.endswith(".parquet"):
+        return entry
+    with open_file(path, "rb") as stream:
+        metadata = pq.read_metadata(stream)
+    uncompressed_bytes = sum(metadata.row_group(i).total_byte_size for i in range(metadata.num_row_groups))
+    return path, max(stored_bytes, uncompressed_bytes)
 
 
 def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[str, Any]], dict[str, Any]]:
@@ -430,8 +446,9 @@ def normalize_to_parquet(
         id_field: Name of the field containing the source ID (renamed to
             ``source_id``).  If the field is absent from a record, it is
             silently skipped.
-        target_partition_bytes: Target size in bytes per output partition.
-            Used to compute the number of output shards.
+        target_partition_bytes: Estimated uncompressed bytes per output partition
+            for Parquet inputs; stored bytes for other formats. Used to compute
+            the number of output shards.
         max_whitespace_run_chars: Compact any consecutive whitespace run
             longer than this many characters down to this length.
             Pathologically long whitespace runs (e.g. multi-MB runs from
@@ -467,7 +484,7 @@ def normalize_to_parquet(
 
     files = list(file_sizes)
     total_bytes = sum(file_sizes.values())
-    num_shards = max(1, total_bytes // target_partition_bytes)
+    num_shards = max(1, math.ceil(total_bytes / target_partition_bytes))
 
     logger.info(
         "Normalizing %s → %s: %d files, %d bytes, %d shards",

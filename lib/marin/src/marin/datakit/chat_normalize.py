@@ -4,6 +4,7 @@
 """Normalize structured conversations into Datakit's canonical chat artifact."""
 
 import json
+import math
 import re
 from collections import deque
 from collections.abc import Callable, Iterator
@@ -294,7 +295,7 @@ def normalize_chat_to_parquet(
     file_sizes = _discover_files(input_path, file_extensions=file_extensions)
     if not file_sizes:
         raise FileNotFoundError(f"No data files found under {input_path}")
-    num_shards = max(1, sum(file_sizes.values()) // target_partition_bytes)
+    num_shards = max(1, math.ceil(sum(file_sizes.values()) / target_partition_bytes))
     pipeline = _build_chat_pipeline(
         list(file_sizes), output_path, num_shards, messages_field, id_field, dedup_mode, output_schema
     )
