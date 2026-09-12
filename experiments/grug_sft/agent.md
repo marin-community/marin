@@ -21,17 +21,20 @@ Select sources from `marin.datakit.sft_sources.all_sft_sources()` and build thei
 
 Use `build_sft_store` from
 [marin.datakit.sft](../../lib/marin/src/marin/datakit/sft.py) in the experiment's
-data preparation. Pass `SftInput(name, path)` for each source's normalized
+data preparation. Build one store per source, passing `[SftInput(name, path)]`
+for its normalized
 Parquet directory (`<source.normalized.output_path>/outputs/main`), the frozen
 tokenizer path, context length, shuffle seed, shard count, and worker limit.
-Reuse the resulting store when comparing training changes.
+Keep the results in a `stores` mapping keyed by source name and reuse them
+when comparing training changes.
 
-The store keeps one row per conversation and reports retained and overlength
-counts per source. `sft_data_config(store)` returns the training `LmDataConfig`:
-whole-conversation packing, all-token loss, and attention and loss masked across
-conversation boundaries. Source shares follow retained token volume. Existing
-per-source exact deduplication remains; cross-source deduplication and benchmark
-decontamination are not part of this builder.
+Each store retains conversation rows and records retained, overlength, and
+packed-sequence counts. `sft_data_config` weights sources by their packed counts
+and concatenates sources below `minimum_weight` into a shared component. If that pool is still
+too small, it includes the smallest remaining source. Empty sources are omitted.
+Packing uses whole conversations, all-token loss, and attention and loss masks
+across conversation boundaries. Existing per-source exact deduplication remains;
+cross-source deduplication and benchmark decontamination are not part of this builder.
 
 Use the checkpoint's tokenizer vocabulary and export it with
 `marin.datakit.chat_template.MARIN_CHAT_TEMPLATE`. Pin the source revision and
@@ -73,7 +76,8 @@ from dataclasses import replace
 
 from marin.datakit.sft import sft_data_config
 
-sft = sft_data_config(store)
+block_size = 5 * pretraining_data.mixture_block_size
+sft = sft_data_config(stores, minimum_weight=1 / (0.8 * block_size))
 pretraining_weights = pretraining_data.train_weights
 weight_sum = sum(pretraining_weights.values())
 data = replace(
@@ -83,10 +87,10 @@ data = replace(
         **{f"pretrain/{name}": component for name, component in pretraining_data.components.items()},
     },
     train_weights={
-        "sft": 0.8,
+        **{name: 0.8 * weight for name, weight in sft.train_weights.items()},
         **{f"pretrain/{name}": 0.2 * weight / weight_sum for name, weight in pretraining_weights.items()},
     },
-    mixture_block_size=5 * pretraining_data.mixture_block_size,
+    mixture_block_size=block_size,
 )
 ```
 
@@ -99,7 +103,8 @@ The [reference LCR configuration](https://github.com/marin-community/marin/blob/
 used a 49,152-sequence pretraining block and four copies of long-document caches.
 The combined block is therefore 245,760 sequences. The 80/20 split counts
 fixed-length training sequences, not loss-bearing tokens: SFT sequences can
-contain padding. For SFT-only experiments, use `sft_data_config(store)` directly.
+contain padding. For SFT-only experiments, use `minimum_weight=1 / block_size`
+and set the returned config's `mixture_block_size` to that block size.
 
 Choose the remaining settings in the experiment. The launcher initializes
 checkpoint weights with a fresh optimizer and step counter; restarts resume the experiment's own full state.

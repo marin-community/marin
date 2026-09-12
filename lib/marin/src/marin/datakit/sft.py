@@ -1,19 +1,29 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build a proportional SFT store without splitting conversation rows."""
+"""Prepare conversation stores and mix them in proportion to packed sequence counts."""
 
 import hashlib
 import json
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 
 import fsspec
+import numpy as np
 from fray.types import ResourceConfig
+from haliax import Axis
 from levanter.data.text._batch_tokenizer import BatchTokenizer
-from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
+from levanter.data.text.datasets import (
+    ConcatDatasetComponent,
+    DatasetComponent,
+    DatasetComponentBase,
+    LmDataConfig,
+    PackedTokenDataset,
+    UrlDatasetSourceConfig,
+)
 from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.store.cache import TreeCache
 from levanter.tokenizers import load_tokenizer
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -23,6 +33,8 @@ from zephyr.readers import load_parquet
 
 from marin.execution.artifact import write_artifact
 from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
+
+MAX_SEGMENTS_PER_SEQUENCE = 64
 
 
 @dataclass(frozen=True)
@@ -44,6 +56,7 @@ class SftTokenStore(BaseModel):
     max_length: int
     seed: int
     sources: dict[str, SftSourceCounts]
+    packed_sequences: int
 
 
 def _read_source_file(source: SftInput) -> Iterator[dict]:
@@ -142,25 +155,79 @@ def build_sft_store(
     if sum(count.tokens for count in counts.values()) != ledger.field_counts["input_ids"]:
         raise ValueError("SFT token counts do not match the token store")
     write_stats_json(cache_path, ledger)
-    result = SftTokenStore(cache_path=output_path, tokenizer=tokenizer, max_length=max_length, seed=seed, sources=counts)
+    cache = TreeCache.load(cache_path, {"input_ids": np.zeros(0, dtype=np.int32)})
+    packed_sequences = len(
+        PackedTokenDataset(
+            cache, Axis("position", max_length), max_segments_per_example=MAX_SEGMENTS_PER_SEQUENCE
+        ).as_sync_dataset()
+    )
+    result = SftTokenStore(
+        cache_path=output_path,
+        tokenizer=tokenizer,
+        max_length=max_length,
+        seed=seed,
+        sources=counts,
+        packed_sequences=packed_sequences,
+    )
     write_artifact(result, output_path)
     return result
 
 
-def sft_data_config(store: SftTokenStore) -> LmDataConfig:
-    """Use every stored conversation with all-token loss and whole-row packing."""
+def sft_data_config(stores: Mapping[str, SftTokenStore], *, minimum_weight: float) -> LmDataConfig:
+    """Weight sources by packed sequences, pooling sources below ``minimum_weight``.
+
+    ``minimum_weight`` is relative to the SFT share, before adding pretraining.
+    Use at least ``1 / (sft_fraction * mixture_block_size)`` to retain each component.
+    Empty stores contribute no training examples. Pooling concatenates already
+    packed sources, preserving their conversation boundaries and sequence counts.
+    """
+    if not stores or not 0 < minimum_weight <= 1:
+        raise ValueError("SFT stores must be nonempty and minimum_weight must be in (0, 1]")
+    tokenizers = {store.tokenizer for store in stores.values()}
+    lengths = {store.max_length for store in stores.values()}
+    if len(tokenizers) != 1 or len(lengths) != 1:
+        raise ValueError("SFT stores must share a tokenizer and packing context length")
+    total = sum(store.packed_sequences for store in stores.values())
+    if total == 0:
+        raise ValueError("No conversations fit the SFT context length")
+    components: dict[str, DatasetComponent] = {}
+    weights: dict[str, float] = {}
+    pooled: dict[str, DatasetComponent] = {}
+    pooled_sequences = 0
+    for name, store in sorted(stores.items()):
+        if store.packed_sequences == 0:
+            continue
+        component = DatasetComponent(
+            source=UrlDatasetSourceConfig(train_urls=[], validation_urls=[]),
+            cache_dir=store.cache_path,
+            format=TextLmDatasetFormat(),
+            pack=MAX_SEGMENTS_PER_SEQUENCE,
+        )
+        if store.packed_sequences / total < minimum_weight:
+            pooled[name] = component
+            pooled_sequences += store.packed_sequences
+        else:
+            components[name] = component
+            weights[name] = store.packed_sequences / total
+    # A tiny tail can still round to zero. Include the smallest main source
+    # rather than increasing the tail's proportional weight.
+    if pooled and pooled_sequences / total < minimum_weight:
+        smallest = min(weights, key=weights.__getitem__)
+        pooled[smallest] = components.pop(smallest)
+        pooled_sequences += stores[smallest].packed_sequences
+        del weights[smallest]
+    mixture_components: dict[str, DatasetComponentBase] = {
+        f"sft/source/{name}": component for name, component in components.items()
+    }
+    mixture_weights = {f"sft/source/{name}": weight for name, weight in weights.items()}
+    if pooled:
+        mixture_components["sft/pooled"] = ConcatDatasetComponent(children=pooled)
+        mixture_weights["sft/pooled"] = pooled_sequences / total
     return LmDataConfig(
-        tokenizer=store.tokenizer,
+        tokenizer=next(iter(tokenizers)),
         cache_dir=None,
-        components={
-            "sft": DatasetComponent(
-                source=UrlDatasetSourceConfig(train_urls=[], validation_urls=[]),
-                cache_dir=store.cache_path,
-                format=TextLmDatasetFormat(),
-                pack=64,
-            )
-        },
-        train_weights={"sft": 1.0},
+        components=mixture_components,
+        train_weights=mixture_weights,
         auto_build_caches=False,
         shuffle=True,
         block_cross_document_attention=True,
