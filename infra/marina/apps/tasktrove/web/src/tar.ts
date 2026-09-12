@@ -70,10 +70,3 @@ export async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
   const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new DecompressionStream('gzip'))
   return new Uint8Array(await new Response(stream).arrayBuffer())
 }
-
-export function decodeBase64(encoded: string): Uint8Array {
-  const binary = atob(encoded)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return bytes
-}
