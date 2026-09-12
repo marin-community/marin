@@ -107,7 +107,8 @@ choose another repository. The command streams each release object into a tempor
 directory, uploads task shards under `data/`, and puts `ledger.parquet`, `manifest.json`, and a
 generated dataset card at the repository root. The card configures only `data/*.parquet` as the
 `train` split, so the rejection ledger remains downloadable metadata instead of becoming a second
-dataset split.
+dataset split. It documents the pinned input and verifier revisions, conversion and cleanup stages,
+row and archive schemas, loading example, audit files, and the complete generated release report.
 
 ## Add a converter
 
