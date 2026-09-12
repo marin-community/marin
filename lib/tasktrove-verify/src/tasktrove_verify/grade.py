@@ -69,6 +69,8 @@ def infra_error(message: str) -> Reward:
 def write_reward(logs_dir: Path, reward: Reward) -> None:
     """Write a verdict and, for a scored grade, Harbor's reward files."""
     logs_dir.mkdir(parents=True, exist_ok=True)
+    for name in (REWARD_JSON, REWARD_TXT):
+        (logs_dir / name).unlink(missing_ok=True)
     verdict = {"reward": reward.reward, "status": reward.status.value, "detail": reward.detail}
     (logs_dir / VERDICT_JSON).write_text(json.dumps(verdict) + "\n")
     if reward.status != Status.SCORED:

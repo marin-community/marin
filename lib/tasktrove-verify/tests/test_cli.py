@@ -46,3 +46,18 @@ def test_scored_reward_writes_the_verdict_and_harbor_reward_files(tmp_path, monk
     assert _verdict(logs) == {"reward": 1.0, "status": "scored", "detail": {"extracted": "C"}}
     assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
     assert (logs / "reward.txt").read_text() == "1.0\n"
+
+
+def test_unscored_rerun_removes_prior_harbor_reward_files(tmp_path, monkeypatch):
+    spec = tmp_path / "verifier.toml"
+    spec.write_text('mode = "mcq"\nexpected = "C"\n')
+    logs = tmp_path / "logs"
+    monkeypatch.setitem(grade_module.GRADERS, Mode.MCQ, lambda _spec, _tests_dir, _workspace: scored(1.0))
+    main([str(spec), "--logs-dir", str(logs)])
+
+    spec.write_text('mode = "mcq"\n')
+    main([str(spec), "--logs-dir", str(logs)])
+
+    assert _verdict(logs)["status"] == Status.INVALID_TASK
+    assert not (logs / "reward.json").exists()
+    assert not (logs / "reward.txt").exists()
