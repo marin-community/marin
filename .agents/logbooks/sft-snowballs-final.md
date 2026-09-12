@@ -674,3 +674,8 @@ author: benfeuer
 - Audit: independent RNO2A reader `/benfeuer/snowball-final-qk175-mmlupro-record-audit-20260912-0817` verified `status=succeeded`, `accuracy_avg=0.6139461436170213`, 12,032/12,032 coverage with no errors, and a sealed 12,032-row archive whose rows carry no fabricated metrics, grading, or correctness.
 - Reproducibility: exact model revision `1934e71f2bb0fbeb19e5ce82372136e5297bf0a4`, zero shots, seed 42, `max_length=65536`, campaign provenance `ba2fef7443`, and Evalchemy `65c80022…` all match the original serialized batch. Campaign fixes are `91f957d475` and `82ff224f4f`; the affected-safe gate passed 1,842 tests with 47 skips.
 - Accounting: `RESULTS.md` now contains qk175 at 61.3946%; 349/355 target cells are complete. Qk157 MMLU-Pro and all five SimpleQA cells remain active.
+
+### 2026-09-12 08:29 EDT - SimpleQA durable progress re-audited
+
+- Parallel read-only RNO2A inventory `/benfeuer/snowball-final-simpleqa-canonical-count-audit-20260912-0823` counted canonical one-level results only: qk157 3,551, qk175 3,608, skew2 3,098, skew4 2,941, and skew8 2,893 out of 4,326 each.
+- These are durable gains of 101, 154, 103, 97, and 97 since 06:44 EDT. All five recovery roots remain controller-running; no progress count is promoted to a score before its terminal record passes the coverage gate.
