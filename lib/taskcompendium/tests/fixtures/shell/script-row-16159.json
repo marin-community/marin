@@ -1,0 +1,26 @@
+{
+  "mode_requested": "script",
+  "row": {
+    "row": 16159,
+    "source": "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+    "path": "task_6068",
+    "family": "shell-cmd",
+    "converter": "nl2bash",
+    "mode": "script",
+    "dockerfile_id": "c730cdc68a27",
+    "environment": "ubuntu:24.04",
+    "language": "bash",
+    "tags": [
+      "shell",
+      "bash",
+      "nl2bash",
+      "terminal",
+      "dcagent2"
+    ],
+    "has_solution": true
+  },
+  "archive_path": "/tmp/tasktrove-pr9061.Cya2vg/samples/script-row-16159.tar.gz",
+  "metadata_path": "/tmp/tasktrove-pr9061.Cya2vg/samples/script-row-16159.json",
+  "archive_bytes": 3279,
+  "archive_sha256": "19c94a49427ddc5bab54c5c6b040b00904b2c5296ba4d826aa573cd30935850a"
+}

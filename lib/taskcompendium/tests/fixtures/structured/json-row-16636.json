@@ -1,0 +1,19 @@
+{
+  "row": 16636,
+  "source": "laion__nemotron-gym-structured-outputs-v4",
+  "path": "if-structured-v2-ee9a4d8b2f81.tar.gz",
+  "family": "other",
+  "converter": "nemotron_structured_outputs",
+  "mode": "json-schema",
+  "dockerfile_id": "c61b884d977a",
+  "environment": "python:3.11-slim-bookworm",
+  "language": "",
+  "tags": [
+    "structured-outputs",
+    "json-schema",
+    "nemotron",
+    "json"
+  ],
+  "has_solution": false,
+  "archive_sha256": "612d908288bd1447e37bb300a1f7148eebebbdc38b7508c53b43864f6c4931f0"
+}
