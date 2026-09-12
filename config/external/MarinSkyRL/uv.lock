@@ -1144,12 +1144,13 @@ wheels = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=73ee7fe5b43a8cef40e084d56acefca6d92642b5#73ee7fe5b43a8cef40e084d56acefca6d92642b5" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#6b981f54b3cbdc9c60493bc76d6090ff678229fd" }
 dependencies = [
     { name = "boto3" },
     { name = "datasets" },
     { name = "debugpy" },
     { name = "fastapi" },
+    { name = "filelock" },
     { name = "fsspec" },
     { name = "func-timeout" },
     { name = "hf-transfer" },
@@ -1166,6 +1167,7 @@ dependencies = [
     { name = "omegaconf" },
     { name = "pandas" },
     { name = "polars" },
+    { name = "pyarrow" },
     { name = "pyyaml" },
     { name = "ray" },
     { name = "reasoning-gym" },

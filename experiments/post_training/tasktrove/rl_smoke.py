@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Smoke-train Qwen3-0.6B on a TaskTrove release sample through MarinSkyRL's terminal-bench entrypoint.
+"""Smoke-train Qwen3-0.6B directly from a packed TaskTrove Clean release.
 
-The run proves the release drives a Harbor RL loop end to end: task directories are materialized
-from the task Parquet, Daytona builds each task's Dockerfile, terminus-2 drives the
-policy against ``instruction.md``, and ``tasktrove-verify`` inside the image produces the reward.
+The run proves the release drives a Harbor RL loop end to end without an exploded staging
+artifact. Each Iris node caches the clean Parquet file, and MarinSkyRL extracts a task only when
+its rollout batch is about to construct the Harbor trial.
 
 Plan or run::
 
@@ -24,24 +24,12 @@ so the Daytona key is resolved on the submit host and forwarded::
 
 from __future__ import annotations
 
-import logging
-import tempfile
-from collections import defaultdict
-from dataclasses import dataclass
-from itertools import zip_longest
-from pathlib import Path
-
 import click
-import pyarrow.parquet as pq
-from fray.types import ResourceConfig
-from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
-from marin.execution.remote import remote
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
-    ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
     SkyRLModel,
@@ -51,114 +39,47 @@ from marin.rl.skyrl import (
     SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
+    TaskTroveDataSource,
+    TaskTroveSelection,
     skyrl_step,
 )
-from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.curriculum_rl.launch import HF_EXPORT_SUBDIR, model_step
 from experiments.post_training.curriculum_rl.pool import QWEN3_MODEL, QWEN3_REVISION
 from experiments.post_training.tasktrove.pipeline import build_workflow, launch_commit
-from experiments.post_training.tasktrove.taskbinary import read_task_binary
 
-logger = logging.getLogger(__name__)
-
-SAMPLE_ARTIFACT_NAME = "tasktrove/rl-smoke-tasks"
 RL_ARTIFACT_NAME = "checkpoints/tasktrove-rl-smoke"
 # The curriculum experiment's mirrored Qwen3-0.6B snapshot; reused rather than mirrored again.
 MODEL_VERSION = "2026.08.29"
-TASKS_SUBDIR = "tasks"
-# The clean output is one file whose row groups retain the hash-shuffled working-shard order. Read
-# one row group instead of materializing the full multi-gigabyte file, then cap the export because
-# MarinSkyRL stages a task-directory data source one object at a time.
-SAMPLE_ROW_GROUPS = 1
-SAMPLE_TASKS = 160
+TASKTROVE_SOURCE = "DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
+SELECTED_TASKS = 8
 CLUSTER = "cw-rno2a"
 GPU_VARIANT = "H100"
 GPUS_PER_NODE = 8
-NUM_NODES = 2
+NUM_NODES = 1
 WANDB_PROJECT = "marin-tasktrove"
 SEED = 17
-MAX_STEPS = 2
-REQUEST_WINDOW_TOKENS = 16384
-MAX_NEW_TOKENS_PER_TURN = 2048
-MAX_TURNS = 10
+MAX_STEPS = 1
+REQUEST_WINDOW_TOKENS = 4096
+MAX_NEW_TOKENS_PER_TURN = 256
+MAX_TURNS = 1
 
-# One policy node, eight single-GPU vLLM engines on the second node (the curriculum smoke's plan).
+# One H100 node with colocated policy and inference actors. Qwen3-0.6B is the smallest mirrored
+# policy that exercises the real vLLM, Harbor, weight-sync, optimizer, checkpoint, and export path.
 ROLE_PLAN = SkyRLRolePlan(
-    colocate_all=False,
+    colocate_all=True,
     policy_num_nodes=1,
     policy_num_gpus_per_node=GPUS_PER_NODE,
     num_inference_engines=GPUS_PER_NODE,
     inference_engine_tensor_parallel_size=1,
-    train_batch_size=32,
-    policy_mini_batch_size=32,
-    micro_train_batch_size_per_gpu=4,
-    n_samples_per_prompt=4,
+    train_batch_size=SELECTED_TASKS,
+    policy_mini_batch_size=SELECTED_TASKS,
+    micro_train_batch_size_per_gpu=1,
+    n_samples_per_prompt=2,
 )
 
 # The launcher defaults trainer.hf_hub_repo_id to an org repo the export job cannot create.
 OVERRIDES = ("++trainer.hf_hub_repo_id=null",)
-
-
-@dataclass(frozen=True)
-class SampleConfig:
-    clean_path: str
-    output_path: str
-    row_group_count: int
-    task_count: int
-
-
-def round_robin_sample(rows: list[dict], count: int) -> list[dict]:
-    """Pick up to ``count`` rows, cycling over converters so every one is represented."""
-    by_converter: dict[str, list[dict]] = defaultdict(list)
-    for row in sorted(rows, key=lambda r: (r["converter"], r["source"], r["path"])):
-        by_converter[row["converter"]].append(row)
-    interleaved = [row for group in zip_longest(*by_converter.values()) for row in group if row is not None]
-    return interleaved[:count]
-
-
-def export_sample(config: SampleConfig) -> None:
-    """Materialize a sample of the first clean Parquet row groups as Harbor task directories.
-
-    Every task lands under ``tasks/<source>__<path>/`` with its ``instruction.md``, ``task.toml``,
-    ``environment/Dockerfile`` and ``tests/``; solutions stay out of the tree the policy sees.
-    """
-    clean_file = StoragePath(config.clean_path) / TASKS_SUBDIR / "part-00000.parquet"
-    with clean_file.open("rb") as handle:
-        parquet = pq.ParquetFile(handle)
-        row_groups = list(range(min(config.row_group_count, parquet.num_row_groups)))
-        rows = parquet.read_row_groups(row_groups, columns=["source", "path", "converter", "task_binary"]).to_pylist()
-    sample = round_robin_sample(rows, config.task_count)
-    with tempfile.TemporaryDirectory() as workdir:
-        root = Path(workdir) / TASKS_SUBDIR
-        for row in sample:
-            read_task_binary(row["task_binary"]).write_to(root / f"{row['source']}__{row['path']}")
-        destination = prefix_join(config.output_path, TASKS_SUBDIR)
-        StoragePath(destination).upload_from(f"{root}/", recursive=True)
-    logger.info(
-        "Exported %d of %d tasks from %d row group(s) to %s",
-        len(sample),
-        len(rows),
-        len(row_groups),
-        destination,
-    )
-
-
-def sample_step(clean: ArtifactStep) -> ArtifactStep[Artifact]:
-    name = user_owned_name(SAMPLE_ARTIFACT_NAME)
-    return ArtifactStep(
-        name=name,
-        version=resolve_version(name, None),
-        artifact_type=Artifact,
-        run=remote(export_sample, resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="32g")),
-        build_config=lambda ctx: SampleConfig(
-            clean_path=ctx.artifact_path(clean),
-            output_path=ctx.output_path,
-            row_group_count=SAMPLE_ROW_GROUPS,
-            task_count=SAMPLE_TASKS,
-        ),
-        deps=(clean,),
-    )
 
 
 def rl_config_yaml(plan: SkyRLRolePlan) -> str:
@@ -199,7 +120,7 @@ terminal_bench:
       - RewardFileNotFoundError
       - RewardFileEmptyError
       - VerifierOutputParseError
-    n_concurrent_trials: 64
+    n_concurrent_trials: 16
     log_level: INFO
     enable_reward_shaping: false
     # Harbor's exact-token continuation asks the inference server for /tokenize, which the SkyRL
@@ -231,7 +152,7 @@ trainer:
   use_sample_packing: false
   algorithm:
     advantage_estimator: grpo
-    use_kl_loss: true
+    use_kl_loss: false
   epochs: 1
   max_steps: {MAX_STEPS}
   update_epochs_per_batch: 1
@@ -245,7 +166,7 @@ trainer:
   ckpt_interval: {MAX_STEPS}
   resume_mode: latest
   enable_db_registration: false
-  logger: wandb
+  logger: console
   project_name: {WANDB_PROJECT}
   policy:
     optimizer_config:
@@ -287,7 +208,7 @@ trajectory_runner:
 """
 
 
-def smoke_step(sample: ArtifactStep) -> ArtifactStep[SkyRLModel]:
+def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLModel]:
     name = user_owned_name(RL_ARTIFACT_NAME)
     return skyrl_step(
         SkyRLSpec(
@@ -301,7 +222,18 @@ def smoke_step(sample: ArtifactStep) -> ArtifactStep[SkyRLModel]:
                 tokenizer_revision=QWEN3_REVISION,
                 relative_path=HF_EXPORT_SUBDIR,
             ),
-            train_data=(ArtifactDataSource(sample, relative_path=TASKS_SUBDIR),),
+            train_data=(
+                TaskTroveDataSource(
+                    release,
+                    TaskTroveSelection(
+                        sources=(TASKTROVE_SOURCE,),
+                        tags=("bash", "terminal"),
+                        modes=("script",),
+                        limit=SELECTED_TASKS,
+                        seed=SEED,
+                    ),
+                ),
+            ),
             validation_data=(),
             topology=SkyRLTopology(
                 num_nodes=NUM_NODES,
@@ -309,7 +241,7 @@ def smoke_step(sample: ArtifactStep) -> ArtifactStep[SkyRLModel]:
                 gpu_variant=GPU_VARIANT,
                 role_plan=ROLE_PLAN,
             ),
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
+            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1, temporary_storage_ttl_days=1),
             seed=SEED,
             overrides=OVERRIDES,
         ),
@@ -321,7 +253,7 @@ def smoke_step(sample: ArtifactStep) -> ArtifactStep[SkyRLModel]:
             disk="1TB",
             priority="interactive",
             max_retries=1,
-            wandb_entity="marin-community",
+            wandb_entity=None,
         ),
     )
 
@@ -330,7 +262,7 @@ def smoke_step(sample: ArtifactStep) -> ArtifactStep[SkyRLModel]:
 @build_options
 def main() -> ArtifactStep:
     release = build_workflow(launch_commit()).release
-    return smoke_step(sample_step(release))
+    return smoke_step(release)
 
 
 if __name__ == "__main__":
