@@ -34,8 +34,6 @@ from zephyr.readers import load_parquet
 from marin.execution.artifact import Artifact, write_artifact
 from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
 
-MAX_SEGMENTS_PER_SEQUENCE = 64
-
 
 @dataclass(frozen=True)
 class SftInput:
@@ -158,7 +156,7 @@ def build_sft_store(
         cache = TreeCache.load(cache_path, {"input_ids": np.zeros(0, dtype=np.int32)})
         packed_sequences = len(
             PackedTokenDataset(
-                cache, Axis("position", max_length), max_segments_per_example=MAX_SEGMENTS_PER_SEQUENCE
+                cache, Axis("position", max_length), max_segments_per_example=max_length
             ).as_sync_dataset()
         )
     result = SftTokenStore(
@@ -202,7 +200,8 @@ def sft_data_config(stores: Mapping[str, SftTokenStore], *, minimum_weight: floa
             source=UrlDatasetSourceConfig(train_urls=[], validation_urls=[]),
             cache_dir=store.cache_path,
             format=TextLmDatasetFormat(),
-            pack=MAX_SEGMENTS_PER_SEQUENCE,
+            # Every conversation has tokens, so context length imposes no extra packing limit.
+            pack=store.max_length,
         )
         if store.packed_sequences / total < minimum_weight:
             pooled[name] = component

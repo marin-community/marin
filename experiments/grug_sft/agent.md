@@ -43,8 +43,10 @@ Each store retains conversation rows and records retained, overlength, and
 packed-sequence counts. `sft_data_config` weights sources by their packed counts
 and concatenates sources below `minimum_weight` into a shared component. If that pool is still
 too small, it includes the smallest remaining source. Empty sources are omitted.
-Packing uses whole conversations, all-token loss, and attention and loss masks
-across conversation boundaries. Existing per-source exact deduplication remains;
+Packing greedily fills each context with whole conversations, without a conversation-count cap.
+Conversations cannot attend to one another. Loss includes all next-token targets within
+each conversation, including EOS, but excludes predicting the next conversation's BOS.
+Existing per-source exact deduplication remains;
 cross-source deduplication and benchmark decontamination are not part of this builder.
 
 Use the checkpoint's tokenizer vocabulary and export it with

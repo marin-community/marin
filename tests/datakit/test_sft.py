@@ -194,3 +194,32 @@ def test_sft_store_records_sources_with_only_overlength_conversations(tmp_path, 
     assert saved.sources["long"].overlength_conversations == 1
     with pytest.raises(ValueError, match="No conversations fit"):
         sft_data_config({"long": saved}, minimum_weight=0.01)
+
+
+def test_sft_packs_more_than_64_conversations_until_context_is_full(tmp_path, gpt2_tokenizer_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    pq.write_table(pa.Table.from_pylist([{"id": str(i), "text": "Hello"} for i in range(130)]), source / "part.parquet")
+    tokens = BatchTokenizer(load_tokenizer(gpt2_tokenizer_path))([{"text": "Hello"}])[0]["input_ids"]
+    context = 100 * len(tokens)
+    store = build_sft_store(
+        [SftInput("short", str(source))],
+        output_path=str(tmp_path / "store"),
+        tokenizer=gpt2_tokenizer_path,
+        max_length=context,
+        seed=0,
+        num_shards=1,
+        max_workers=1,
+    )
+    assert store.packed_sequences == 2
+    data = sft_data_config({"short": store}, minimum_weight=0.01)
+    packed = data.train_sets(Axis("position", context), key=jax.random.PRNGKey(0))["sft/source/short"]
+    examples = packed.as_sync_dataset()
+    assert len(examples) == 2
+    sizes = []
+    for example in examples:
+        segments = np.asarray(example.attn_mask.segment_ids[0])
+        count = len(np.unique(segments[segments >= 0]))
+        sizes.append(count)
+        assert np.asarray(example.loss_weight).sum() == count * (len(tokens) - 1)
+    assert sorted(sizes) == [30, 100]
