@@ -11,6 +11,7 @@ pinned to each data-parallel rank. The PP=2 vLLM case is a two-task Iris gang:
 task 0 owns pipeline stage 0 and task 1 owns pipeline stage 1.
 """
 
+import dataclasses
 import logging
 import re
 from collections import Counter
@@ -66,12 +67,30 @@ MAX_NUM_BATCHED_TOKENS = 512
 RETURNED_LOGPROBS = 50
 MOE_IMPLEMENTATION = "sonic"
 ATTENTION_IMPLEMENTATION = "gpu_fa4_cute"
+# Quadratic reference attention fits these production-shaped batches on eight H100s. Use it as the
+# independent short-context oracle; larger batches retain FA4 because reference attention cannot fit 32K.
+REFERENCE_ATTENTION_MAX_TOKENS = 4096
 GRUG_NUM_LAYERS = 26
 # Keep the Levanter gate at the shared 0.075 bound. vLLM's launch-scoped BF16
 # expert-reduction variation reached 0.1145 while preserving every greedy token
 # and exact same-rank recomputation, so its representative-only bound is scoped
 # to that measured serving behavior.
 VLLM_MAX_PROBABILITY_ERROR = 0.125
+
+
+def _with_attention_implementation(model: SnowballLMHeadModel, implementation: str) -> SnowballLMHeadModel:
+    """Reuse loaded arrays with a different static Snowball attention implementation."""
+    config = dataclasses.replace(model.config, attention_implementation=implementation)
+    blocks = tuple(
+        dataclasses.replace(
+            block,
+            attn=dataclasses.replace(block.attn, cfg=config),
+            mlp=dataclasses.replace(block.mlp, cfg=config),
+        )
+        for block in model.transformer.blocks
+    )
+    transformer = dataclasses.replace(model.transformer, blocks=blocks, config=config)
+    return dataclasses.replace(model, transformer=transformer, _config=config)
 
 
 def _log_parities(backend: str, parities: list[NextTokenParity]) -> None:
@@ -177,6 +196,7 @@ def score_levanter_against_goldens(goldens: tuple[RepresentativeGolden, ...]) ->
         assert model.transformer.token_embed.dtype == jnp.bfloat16
         assert loaded.trainer.data_axis_size == BATCH_SIZE
         assert loaded.tokenizer.eos_token_id is not None
+        reference_model = _with_attention_implementation(model, "reference")
         logger.info("Levanter compilation cache: %s", jax.config.jax_compilation_cache_dir)
 
         @hax.named_jit(axis_resources=loaded.trainer.compute_axis_mapping)
@@ -196,11 +216,18 @@ def score_levanter_against_goldens(goldens: tuple[RepresentativeGolden, ...]) ->
         Batch = Axis("batch", BATCH_SIZE)
         for batch_index, batch in enumerate(prompt_fixture.batches):
             assert len(batch.cases) == BATCH_SIZE
+            if batch.max_tokens <= REFERENCE_ATTENTION_MAX_TOKENS:
+                scoring_model = reference_model
+                attention_implementation = "reference"
+            else:
+                scoring_model = model
+                attention_implementation = ATTENTION_IMPLEMENTATION
             logger.info(
-                "Levanter batch %d/%d: max_tokens=%d cases=%s",
+                "Levanter batch %d/%d: max_tokens=%d attention=%s cases=%s",
                 batch_index + 1,
                 len(prompt_fixture.batches),
                 batch.max_tokens,
+                attention_implementation,
                 [case.id for case in batch.cases],
             )
             token_ids, last_token_indices = pad_prompt_batch(batch, loaded.tokenizer.eos_token_id)
@@ -208,7 +235,7 @@ def score_levanter_against_goldens(goldens: tuple[RepresentativeGolden, ...]) ->
             Pos = Axis("position", batch.max_tokens)
             input_ids = hax.named(jnp.asarray(token_ids), (Batch, Pos))
             last_positions = hax.named(jnp.asarray(last_token_indices), (Batch,))
-            logprobs = np.asarray(jax.device_get(next_token_logprobs(model, input_ids, last_positions)))
+            logprobs = np.asarray(jax.device_get(next_token_logprobs(scoring_model, input_ids, last_positions)))
             for row, case in enumerate(batch.cases):
                 parities.append(
                     parity_from_logprob_row(
