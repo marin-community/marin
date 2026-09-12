@@ -8,6 +8,7 @@ import io
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 from typing import IO, cast
@@ -22,7 +23,7 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
-    ResolvedDataLocator,
+    ResolvedDirectoryDataSource,
     ResolvedModelLocator,
     SkyRLEvaluationModel,
     SkyRLLaunchRequest,
@@ -35,6 +36,9 @@ from marin.rl.skyrl import (
     SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
+    TaskTroveDataSource,
+    TaskTroveSelection,
+    TaskTroveTagMatch,
     run_skyrl,
     skyrl_step,
 )
@@ -296,7 +300,7 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
             tokenizer_revision="da87bfb",
         ),
         train_data=(
-            ResolvedDataLocator(
+            ResolvedDirectoryDataSource(
                 uri="s3://test/gsm8k",
                 identity="gsm8k@version:fingerprint",
                 local_path="/tmp/data",
@@ -351,7 +355,52 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
         "commit": MARIN_SKYRL.commit,
         "profile": SkyRLRuntimeProfile.FSDP.value,
     }
+    assert launch_envelopes[0]["request"]["train_data"][0]["kind"] == "directory"
     assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
+
+
+def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:
+    release = ArtifactStep.adopt("tasktrove/clean", "2026.09.10", str(tmp_path))
+    (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "tasktrove-verify@abc123"}))
+    source = TaskTroveDataSource(
+        release,
+        TaskTroveSelection(
+            sources=("source-b", "source-a"),
+            tags=("terminal", "bash"),
+            modes=("script",),
+            tag_match=TaskTroveTagMatch.ALL,
+            limit=160,
+            seed=17,
+        ),
+    )
+    context = StepContext.for_run(
+        output_path=str(tmp_path / "output"),
+        prefix=str(tmp_path),
+        runtime_args={},
+        deps=(release,),
+    )
+
+    resolved = source.resolve(context)
+
+    assert resolved.uri == str(tmp_path / "tasks/part-00000.parquet")
+    assert resolved.relative_path == "part-00000.parquet"
+    assert resolved.verifier_ref == "tasktrove-verify@abc123"
+    assert resolved.selection.sources == ("source-a", "source-b")
+    assert resolved.selection.tags == ("bash", "terminal")
+    assert resolved.kind == "tasktrove_parquet"
+
+
+@pytest.mark.parametrize(
+    "selection, message",
+    [
+        (TaskTroveSelection, "requires at least one"),
+        (lambda: TaskTroveSelection(tags=("bash", "bash")), "duplicate"),
+        (lambda: TaskTroveSelection(sources=("source-a",), limit=0), "positive"),
+    ],
+)
+def test_tasktrove_selection_rejects_ambiguous_inputs(selection: Callable[[], TaskTroveSelection], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        selection()
 
 
 def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
