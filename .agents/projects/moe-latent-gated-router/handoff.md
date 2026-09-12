@@ -15,8 +15,8 @@ Launcher: `experiments.grug.moe_latent_gated_router.larry_launch`.
 
 | width | new identity | steps | batch | TPU |
 |---|---|---|---|---|
-| 512 | moe-lgr-9110-larry-d512 | 10980 | 32 | v5p-8, us-east5 |
-| 768 | moe-lgr-9110-larry-d768 | 16875 | 64 | v5p-8, us-east5 |
+| 512 | moe-lgr-9110-larry-d512-muonh | 10980 | 32 | v5p-8, us-east5 |
+| 768 | moe-lgr-9110-larry-d768-muonh | 16875 | 64 | v5p-8, us-east5 |
 
 Both use W&B `marin-community/dial_moe`, group `moe-lgr-9110-larry-router`.
 Reference IDs are
@@ -60,3 +60,15 @@ monitor after completion or a reported unrecoverable failure.
 The previous September treatments (suffix `rmsgated`) are finished but were
 compared to mismatched May full-width references. Their apparent causal
 regression is withdrawn. Do not reuse their checkpoints or monitoring state.
+
+## Optimizer correction, September 12
+
+The first Larry treatments accidentally decoded the recorded scalars into the
+library MuonHConfig instead of GrugMoeMuonHConfig. Raw Grug matrices, including
+the latent gate and experts, consequently went to Adam. Both old parents were
+cancelled and their results are invalid for this comparison. The corrected
+launcher uses experiments.grug.moe.optimizer.GrugMoeMuonHConfig, whose executable
+source matches Larry's artifact (only import path/docs differ). All GatedNorm
+matrices use MuonH; RMSNorm scales and router use Adam; lm_head uses AdamH.
+Corrected identities above end in -muonh and start from scratch. Never resume
+the pre-correction checkpoints. Added an optimizer-mask regression test.

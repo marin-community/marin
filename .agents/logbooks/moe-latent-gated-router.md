@@ -303,3 +303,34 @@ CPU probe verified baseline forward parity after API adaptation, unchanged
 shared initialization, latent null-space invariance, router logits, and a
 forward/backward optimizer update. Runtime dependencies are current; historical
 throughput and analytic FLOP estimates retain that limitation.
+
+### Submission confirmed
+
+Source 86e5826e4 pushed. Both parents /kaiyuew/moe-lgr-9110-larry-d{512,768}
+and expected grug-train children exist; TPU children pending capacity, zero
+failures. State: scratch/20260912-1033_larry-router-monitoring-state.json.
+Single monitoring owner: heartbeat follow-larry-gated-router-tpu-ablation,
+every ten minutes. Issue #9110 updated. No accelerator smoke was run.
+
+### 17:47 UTC startup verified
+
+Both children training on attempt0. Live W&B model/data/optimizer/eval and
+seed/batch/steps/precision match historical snapshots except router_input.
+Finite loss and advancing steps verified; no Paloma result yet.
+
+### 17:58 UTC first evaluation
+
+d512 Paloma7.1434 at logged999 versus Larry control4.5498 at1000.
+Large early gap; not a final verdict. Both treatments running, finite loss;
+d768 has no eval yet. Posted interim evidence to #9110; no recovery needed.
+
+## 18:01 UTC — optimizer class mismatch found and contained
+
+User asked which optimizer GatedNorm uses. Runtime inspection found that the
+launcher decoded scalars into library MuonHConfig, not GrugMoeMuonHConfig. The
+generic mask routes raw Grug arrays to Adam. Thus prior scalar-config matching
+was insufficient, and first-eval loss comparisons cannot isolate routing.
+Cancelled both /kaiyuew/moe-lgr-9110-larry-d{512,768} parents and descendants.
+Recovered Larry optimizer source: current experiments/grug/moe/optimizer.py
+executable behavior matches. Fix launcher class, test masks, and use new
+-muonh identities/checkpoint roots from scratch. No smoke or new baseline.

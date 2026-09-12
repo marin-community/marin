@@ -11,9 +11,9 @@ import click
 import draccus
 from fray.cluster import ResourceConfig
 from levanter.data.text.datasets import LmDataConfig
-from levanter.optim.muonh import MuonHConfig
 from levanter.trainer import TrainerConfig
 
+from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_latent_gated_router.larry_model import GrugModelConfig
 from experiments.grug.moe_latent_gated_router.larry_train import (
     GrugEvalConfig,
@@ -38,7 +38,7 @@ def build_config(dim: int, run_id: str) -> GrugRunConfig:
     return GrugRunConfig(
         model=model,
         data=draccus.decode(LmDataConfig, reference["data"]),
-        optimizer=draccus.decode(MuonHConfig, reference["optimizer"]),
+        optimizer=draccus.decode(GrugMoeMuonHConfig, reference["optimizer"]),
         resources=ResourceConfig.with_tpu("v5p-8", cpu=32, ram="128g", disk="50g", regions=["us-east5"]),
         trainer=GrugTrainerConfig(**(reference["trainer"] | {"trainer": draccus.decode(TrainerConfig, trainer)})),
         eval=draccus.decode(GrugEvalConfig, reference["eval"]),
