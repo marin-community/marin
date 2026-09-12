@@ -769,42 +769,52 @@ def _T(value: jax.Array) -> jax.Array:
     return jnp.swapaxes(value, -1, -2)
 
 
-def snowball_to_state_dict(model: SnowballTransformer, prefix: Optional[str] = None) -> StateDict:
-    tensors: dict[str, jax.Array] = {
+def snowball_embeddings_to_state_dict(model: SnowballTransformer, prefix: Optional[str] = None) -> StateDict:
+    """Export the embeddings boundary using canonical HF keys."""
+    tensors = {
         "model.embed_tokens.weight": model.token_embed,
         "model.embed_norm.weight": model.embed_norm.weight,
         "model.embed_gated_norm.down_proj.weight": _T(model.embed_gated_norm.w_down),
         "model.embed_gated_norm.up_proj.weight": _T(model.embed_gated_norm.w_up),
+    }
+    return {_with_prefix(prefix, name): value for name, value in tensors.items()}
+
+
+def snowball_final_to_state_dict(model: SnowballTransformer, prefix: Optional[str] = None) -> StateDict:
+    """Export the final boundary using canonical HF keys."""
+    tensors = {
         "model.norm.weight": model.final_norm.weight,
         "model.final_gated_norm.down_proj.weight": _T(model.final_gated_norm.w_down),
         "model.final_gated_norm.up_proj.weight": _T(model.final_gated_norm.w_up),
         "lm_head.weight": _T(model.output_proj),
     }
-    for i, block in enumerate(model.blocks):
-        p = f"model.layers.{i}"
-        tensors.update(
-            {
-                f"{p}.input_layernorm.weight": block.rms_attn.weight,
-                f"{p}.attn_gated_norm.down_proj.weight": _T(block.attn_gated_norm.w_down),
-                f"{p}.attn_gated_norm.up_proj.weight": _T(block.attn_gated_norm.w_up),
-                f"{p}.self_attn.q_proj.weight": _T(block.attn.w_q),
-                f"{p}.self_attn.k_proj.weight": _T(block.attn.w_k),
-                f"{p}.self_attn.v_proj.weight": _T(block.attn.w_v),
-                f"{p}.self_attn.o_proj.weight": _T(block.attn.w_o),
-                f"{p}.self_attn.attn_gate.weight": _T(block.attn.attn_gate),
-                f"{p}.post_attention_layernorm.weight": block.rms_mlp.weight,
-                f"{p}.mlp_gated_norm.down_proj.weight": _T(block.mlp_gated_norm.w_down),
-                f"{p}.mlp_gated_norm.up_proj.weight": _T(block.mlp_gated_norm.w_up),
-                f"{p}.mlp.router.weight": _T(block.mlp.router),
-                f"{p}.mlp.router.bias": block.mlp.router_bias,
-                f"{p}.mlp.experts.gate_proj.weight": _T(block.mlp.expert_mlp.w_gate),
-                f"{p}.mlp.experts.up_proj.weight": _T(block.mlp.expert_mlp.w_up),
-                f"{p}.mlp.experts.down_proj.weight": _T(block.mlp.expert_mlp.w_down),
-                f"{p}.shared_expert.gate_proj.weight": _T(block.shared.w_gate),
-                f"{p}.shared_expert.up_proj.weight": _T(block.shared.w_up),
-                f"{p}.shared_expert.down_proj.weight": _T(block.shared.w_down),
-            }
-        )
+    return {_with_prefix(prefix, name): value for name, value in tensors.items()}
+
+
+def snowball_block_to_state_dict(block: SnowballBlock, layer_index: int, prefix: Optional[str] = None) -> StateDict:
+    """Export one layer under its global HF layer index."""
+    p = f"model.layers.{layer_index}"
+    tensors = {
+        f"{p}.input_layernorm.weight": block.rms_attn.weight,
+        f"{p}.attn_gated_norm.down_proj.weight": _T(block.attn_gated_norm.w_down),
+        f"{p}.attn_gated_norm.up_proj.weight": _T(block.attn_gated_norm.w_up),
+        f"{p}.self_attn.q_proj.weight": _T(block.attn.w_q),
+        f"{p}.self_attn.k_proj.weight": _T(block.attn.w_k),
+        f"{p}.self_attn.v_proj.weight": _T(block.attn.w_v),
+        f"{p}.self_attn.o_proj.weight": _T(block.attn.w_o),
+        f"{p}.self_attn.attn_gate.weight": _T(block.attn.attn_gate),
+        f"{p}.post_attention_layernorm.weight": block.rms_mlp.weight,
+        f"{p}.mlp_gated_norm.down_proj.weight": _T(block.mlp_gated_norm.w_down),
+        f"{p}.mlp_gated_norm.up_proj.weight": _T(block.mlp_gated_norm.w_up),
+        f"{p}.mlp.router.weight": _T(block.mlp.router),
+        f"{p}.mlp.router.bias": block.mlp.router_bias,
+        f"{p}.mlp.experts.gate_proj.weight": _T(block.mlp.expert_mlp.w_gate),
+        f"{p}.mlp.experts.up_proj.weight": _T(block.mlp.expert_mlp.w_up),
+        f"{p}.mlp.experts.down_proj.weight": _T(block.mlp.expert_mlp.w_down),
+        f"{p}.shared_expert.gate_proj.weight": _T(block.shared.w_gate),
+        f"{p}.shared_expert.up_proj.weight": _T(block.shared.w_up),
+        f"{p}.shared_expert.down_proj.weight": _T(block.shared.w_down),
+    }
     return {_with_prefix(prefix, name): value for name, value in tensors.items()}
 
 
@@ -812,17 +822,11 @@ def _get(state_dict: StateDict, prefix: Optional[str], name: str) -> jax.Array:
     return jnp.asarray(state_dict[_with_prefix(prefix, name)])
 
 
-def snowball_from_state_dict(
+def snowball_embeddings_from_state_dict(
     template: SnowballTransformer, state_dict: StateDict, prefix: Optional[str] = None
 ) -> SnowballTransformer:
-    """Populate the template's leaves from canonical HF keys, resharding each to its Grug spec.
-
-    Each leaf must be resharded to its Grug partition spec on load: the generic loader only shards
-    NamedArray-keyed axes, so Snowball's raw-array leaves would otherwise load replicated (and the
-    67B would not fit).
-    """
+    """Load canonical HF embeddings weights into the current mesh."""
     g = lambda name: _get(state_dict, prefix, name)  # noqa: E731
-
     m = template
     m = eqx.tree_at(lambda t: t.token_embed, m, _reshard_for_init(g("model.embed_tokens.weight"), Pembed_vocab))
     m = eqx.tree_at(lambda t: t.embed_norm.weight, m, g("model.embed_norm.weight"))
@@ -832,6 +836,15 @@ def snowball_from_state_dict(
     m = eqx.tree_at(
         lambda t: t.embed_gated_norm.w_up, m, _reshard_replicated(_T(g("model.embed_gated_norm.up_proj.weight")))
     )
+    return m
+
+
+def snowball_final_from_state_dict(
+    template: SnowballTransformer, state_dict: StateDict, prefix: Optional[str] = None
+) -> SnowballTransformer:
+    """Load canonical HF final weights into the current mesh."""
+    g = lambda name: _get(state_dict, prefix, name)  # noqa: E731
+    m = template
     m = eqx.tree_at(lambda t: t.final_norm.weight, m, g("model.norm.weight"))
     m = eqx.tree_at(
         lambda t: t.final_gated_norm.w_down, m, _reshard_replicated(_T(g("model.final_gated_norm.down_proj.weight")))
@@ -841,78 +854,96 @@ def snowball_from_state_dict(
     )
     m = eqx.tree_at(lambda t: t.output_proj, m, _reshard_for_init(_T(g("lm_head.weight")), Plm_head))
 
-    for i in range(len(m.blocks)):
-        p = f"model.layers.{i}"
-        m = eqx.tree_at(lambda t, i=i: t.blocks[i].rms_attn.weight, m, g(f"{p}.input_layernorm.weight"))
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn_gated_norm.w_down,
-            m,
-            _reshard_replicated(_T(g(f"{p}.attn_gated_norm.down_proj.weight"))),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn_gated_norm.w_up,
-            m,
-            _reshard_replicated(_T(g(f"{p}.attn_gated_norm.up_proj.weight"))),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_q, m, _reshard(_T(g(f"{p}.self_attn.q_proj.weight")), P("data", "model"))
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_k, m, _reshard(_T(g(f"{p}.self_attn.k_proj.weight")), P("data", "model"))
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_v, m, _reshard(_T(g(f"{p}.self_attn.v_proj.weight")), P("data", "model"))
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_o, m, _reshard(_T(g(f"{p}.self_attn.o_proj.weight")), P("model", "data"))
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.attn_gate, m, _reshard_replicated(_T(g(f"{p}.self_attn.attn_gate.weight")))
-        )
-        m = eqx.tree_at(lambda t, i=i: t.blocks[i].rms_mlp.weight, m, g(f"{p}.post_attention_layernorm.weight"))
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].mlp_gated_norm.w_down,
-            m,
-            _reshard_replicated(_T(g(f"{p}.mlp_gated_norm.down_proj.weight"))),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].mlp_gated_norm.w_up,
-            m,
-            _reshard_replicated(_T(g(f"{p}.mlp_gated_norm.up_proj.weight"))),
-        )
-        m = eqx.tree_at(lambda t, i=i: t.blocks[i].mlp.router, m, _reshard_replicated(_T(g(f"{p}.mlp.router.weight"))))
-        m = eqx.tree_at(lambda t, i=i: t.blocks[i].mlp.router_bias, m, g(f"{p}.mlp.router.bias"))
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].mlp.expert_mlp.w_gate,
-            m,
-            _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].mlp.expert_mlp.w_up,
-            m,
-            _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].mlp.expert_mlp.w_down,
-            m,
-            _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].shared.w_gate,
-            m,
-            _reshard(_T(g(f"{p}.shared_expert.gate_proj.weight")), P("data", "model")),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].shared.w_up,
-            m,
-            _reshard(_T(g(f"{p}.shared_expert.up_proj.weight")), P("data", "model")),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].shared.w_down,
-            m,
-            _reshard(_T(g(f"{p}.shared_expert.down_proj.weight")), P("model", "data")),
-        )
     return m
+
+
+def snowball_block_from_state_dict(
+    template: SnowballBlock, state_dict: StateDict, layer_index: int, prefix: Optional[str] = None
+) -> SnowballBlock:
+    """Load canonical HF block weights into the current mesh."""
+    g = lambda name: _get(state_dict, prefix, name)  # noqa: E731
+    m = template
+    p = f"model.layers.{layer_index}"
+    m = eqx.tree_at(lambda t: t.rms_attn.weight, m, g(f"{p}.input_layernorm.weight"))
+    m = eqx.tree_at(
+        lambda t: t.attn_gated_norm.w_down,
+        m,
+        _reshard_replicated(_T(g(f"{p}.attn_gated_norm.down_proj.weight"))),
+    )
+    m = eqx.tree_at(
+        lambda t: t.attn_gated_norm.w_up,
+        m,
+        _reshard_replicated(_T(g(f"{p}.attn_gated_norm.up_proj.weight"))),
+    )
+    m = eqx.tree_at(lambda t: t.attn.w_q, m, _reshard(_T(g(f"{p}.self_attn.q_proj.weight")), P("data", "model")))
+    m = eqx.tree_at(lambda t: t.attn.w_k, m, _reshard(_T(g(f"{p}.self_attn.k_proj.weight")), P("data", "model")))
+    m = eqx.tree_at(lambda t: t.attn.w_v, m, _reshard(_T(g(f"{p}.self_attn.v_proj.weight")), P("data", "model")))
+    m = eqx.tree_at(lambda t: t.attn.w_o, m, _reshard(_T(g(f"{p}.self_attn.o_proj.weight")), P("model", "data")))
+    m = eqx.tree_at(lambda t: t.attn.attn_gate, m, _reshard_replicated(_T(g(f"{p}.self_attn.attn_gate.weight"))))
+    m = eqx.tree_at(lambda t: t.rms_mlp.weight, m, g(f"{p}.post_attention_layernorm.weight"))
+    m = eqx.tree_at(
+        lambda t: t.mlp_gated_norm.w_down,
+        m,
+        _reshard_replicated(_T(g(f"{p}.mlp_gated_norm.down_proj.weight"))),
+    )
+    m = eqx.tree_at(
+        lambda t: t.mlp_gated_norm.w_up,
+        m,
+        _reshard_replicated(_T(g(f"{p}.mlp_gated_norm.up_proj.weight"))),
+    )
+    m = eqx.tree_at(lambda t: t.mlp.router, m, _reshard_replicated(_T(g(f"{p}.mlp.router.weight"))))
+    m = eqx.tree_at(lambda t: t.mlp.router_bias, m, g(f"{p}.mlp.router.bias"))
+    m = eqx.tree_at(
+        lambda t: t.mlp.expert_mlp.w_gate,
+        m,
+        _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
+    )
+    m = eqx.tree_at(
+        lambda t: t.mlp.expert_mlp.w_up,
+        m,
+        _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
+    )
+    m = eqx.tree_at(
+        lambda t: t.mlp.expert_mlp.w_down,
+        m,
+        _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
+    )
+    m = eqx.tree_at(
+        lambda t: t.shared.w_gate,
+        m,
+        _reshard(_T(g(f"{p}.shared_expert.gate_proj.weight")), P("data", "model")),
+    )
+    m = eqx.tree_at(
+        lambda t: t.shared.w_up,
+        m,
+        _reshard(_T(g(f"{p}.shared_expert.up_proj.weight")), P("data", "model")),
+    )
+    m = eqx.tree_at(
+        lambda t: t.shared.w_down,
+        m,
+        _reshard(_T(g(f"{p}.shared_expert.down_proj.weight")), P("model", "data")),
+    )
+    return m
+
+
+def snowball_to_state_dict(model: SnowballTransformer, prefix: Optional[str] = None) -> StateDict:
+    tensors = snowball_embeddings_to_state_dict(model, prefix)
+    tensors.update(snowball_final_to_state_dict(model, prefix))
+    for index, block in enumerate(model.blocks):
+        tensors.update(snowball_block_to_state_dict(block, index, prefix))
+    return tensors
+
+
+def snowball_from_state_dict(
+    template: SnowballTransformer, state_dict: StateDict, prefix: Optional[str] = None
+) -> SnowballTransformer:
+    """Load HF weights with their Grug partition specs rather than replicating raw leaves."""
+    model = snowball_embeddings_from_state_dict(template, state_dict, prefix)
+    model = snowball_final_from_state_dict(model, state_dict, prefix)
+    blocks = tuple(
+        snowball_block_from_state_dict(block, state_dict, index, prefix) for index, block in enumerate(model.blocks)
+    )
+    return eqx.tree_at(lambda model: model.blocks, model, blocks)
 
 
 _EXPERT_GATE_UP_SPEC = P("expert", "data", "model")

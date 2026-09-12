@@ -99,6 +99,7 @@ nav:
       - Specifying Hardware Resources: references/resource-config.md
       - Default Steps: references/default-steps.md
       - Training Configuration: references/train-config.md
+      - Snowball Pipeline Stages: references/snowball-pipeline.md
       - HBM Optimization: references/hbm-optimization.md
       - Perplexity Gap Analysis: references/perplexity-gap-analysis.md
       - Browsing Buckets with fsutil: references/fsutil.md
