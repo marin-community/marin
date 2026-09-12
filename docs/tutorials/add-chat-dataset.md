@@ -87,33 +87,9 @@ converter. Run near the stored data to avoid cross-region reads. Inspect a few
 conversations in the printed directory against the originals, and investigate
 unexpected drops in the counters. Rendered text is at `source.normalized.output_path`.
 
-## Run an SFT experiment
+## Use it in an experiment
 
-This step requires a Grug 67B/A2B checkpoint and access to TPUs. Set
-`SFT_INIT_CHECKPOINT` to a compatible native Levanter checkpoint and
-`SFT_TOKENIZER_COMMIT` to the matching Marin tokenizer's commit SHA. The model
-configuration is in `experiments/sft/datakit.py`.
-Choose your TPU allocation, zone, and global batch size in `SFT_TPU`, `SFT_ZONE`,
-and `SFT_BATCH_SIZE`. Replace `superior-reasoning` with your source, then preview
-the run:
-
-```bash
-uv run python -m experiments.sft.datakit \
-  --source superior-reasoning \
-  --init-checkpoint "$SFT_INIT_CHECKPOINT" \
-  --tokenizer marin-community/marin-tokenizer \
-  --tokenizer-revision "$SFT_TOKENIZER_COMMIT" \
-  --run-id example-sft --steps 100 --batch-size "$SFT_BATCH_SIZE" \
-  --tpu "$SFT_TPU" --zone "$SFT_ZONE"
-```
-
-Add `--run` to prepare the token store, or `--stage train --run` to launch training.
-Repeat `--source` to mix sources in proportion to their retained token counts;
-omitting it selects all registered sources.
-
-The default context is 262,144 tokens with four context shards. Training packs
-whole conversations and trains on prompts and responses, keeping conversations
-separate. Overlength conversations are dropped and counted.
-The run starts from checkpoint weights with a fresh optimizer; `--steps` counts
-new SFT steps. This recipe has CPU parity tests but has not yet been validated
-in a full-context TPU run.
+Follow the [SFT experiment guide](https://github.com/marin-community/marin/blob/main/experiments/grug_sft/agent.md).
+Datakit prepares the conversations and token store. Your experiment chooses the
+checkpoint, model, optimizer, training budget, and evaluation suite, using the
+same experiment CLI as pretraining.
