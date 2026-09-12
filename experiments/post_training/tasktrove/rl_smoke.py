@@ -52,29 +52,30 @@ RL_ARTIFACT_NAME = "checkpoints/tasktrove-rl-smoke"
 # The curriculum experiment's mirrored Qwen3-0.6B snapshot; reused rather than mirrored again.
 MODEL_VERSION = "2026.08.29"
 TASKTROVE_SOURCE = "DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
-SELECTED_TASKS = 160
+SELECTED_TASKS = 8
 CLUSTER = "cw-rno2a"
 GPU_VARIANT = "H100"
 GPUS_PER_NODE = 8
-NUM_NODES = 2
+NUM_NODES = 1
 WANDB_PROJECT = "marin-tasktrove"
 SEED = 17
-MAX_STEPS = 2
-REQUEST_WINDOW_TOKENS = 16384
-MAX_NEW_TOKENS_PER_TURN = 2048
-MAX_TURNS = 10
+MAX_STEPS = 1
+REQUEST_WINDOW_TOKENS = 4096
+MAX_NEW_TOKENS_PER_TURN = 256
+MAX_TURNS = 1
 
-# One policy node, eight single-GPU vLLM engines on the second node (the curriculum smoke's plan).
+# One H100 node with colocated policy and inference actors. Qwen3-0.6B is the smallest mirrored
+# policy that exercises the real vLLM, Harbor, weight-sync, optimizer, checkpoint, and export path.
 ROLE_PLAN = SkyRLRolePlan(
-    colocate_all=False,
+    colocate_all=True,
     policy_num_nodes=1,
     policy_num_gpus_per_node=GPUS_PER_NODE,
     num_inference_engines=GPUS_PER_NODE,
     inference_engine_tensor_parallel_size=1,
-    train_batch_size=32,
-    policy_mini_batch_size=32,
-    micro_train_batch_size_per_gpu=4,
-    n_samples_per_prompt=4,
+    train_batch_size=SELECTED_TASKS,
+    policy_mini_batch_size=SELECTED_TASKS,
+    micro_train_batch_size_per_gpu=1,
+    n_samples_per_prompt=2,
 )
 
 # The launcher defaults trainer.hf_hub_repo_id to an org repo the export job cannot create.
@@ -119,7 +120,7 @@ terminal_bench:
       - RewardFileNotFoundError
       - RewardFileEmptyError
       - VerifierOutputParseError
-    n_concurrent_trials: 64
+    n_concurrent_trials: 16
     log_level: INFO
     enable_reward_shaping: false
     # Harbor's exact-token continuation asks the inference server for /tokenize, which the SkyRL
@@ -151,7 +152,7 @@ trainer:
   use_sample_packing: false
   algorithm:
     advantage_estimator: grpo
-    use_kl_loss: true
+    use_kl_loss: false
   epochs: 1
   max_steps: {MAX_STEPS}
   update_epochs_per_batch: 1
@@ -240,7 +241,7 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLModel]:
                 gpu_variant=GPU_VARIANT,
                 role_plan=ROLE_PLAN,
             ),
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
+            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1, temporary_storage_ttl_days=1),
             seed=SEED,
             overrides=OVERRIDES,
         ),
