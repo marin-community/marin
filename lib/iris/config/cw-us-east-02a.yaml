@@ -108,8 +108,11 @@ auth:
       -----BEGIN PUBLIC KEY-----
       MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
+  # Human operators use the OpenAthena domain. GitHub release qualification
+  # submits through the marin federation hub as the dedicated github-iris SA.
   allowed_submitters:
     - "*@openathena.ai"
+    - github-iris@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
 
 kubernetes_provider:
