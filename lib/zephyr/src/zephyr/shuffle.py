@@ -468,11 +468,15 @@ class ScatterReader:
         target_shard: int,
         avg_item_bytes: float,
         shard_payload_bytes: float = 0.0,
+        shard_payload_rows: int = 0,
+        contributing_sidecars: int = 0,
     ) -> None:
         self._chunk_files = chunk_files
         self._target_shard = target_shard
         self.avg_item_bytes = avg_item_bytes
         self.shard_payload_bytes = shard_payload_bytes
+        self.shard_payload_rows = shard_payload_rows
+        self.contributing_sidecars = contributing_sidecars
 
     @classmethod
     def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> "ScatterReader":
@@ -484,7 +488,7 @@ class ScatterReader:
         thousands of mappers.
         """
         chunk_files: list[_ChunkFile] = []
-        shard_payload_bytes = 0.0
+        shard_payload_bytes = 0
         shard_payload_rows = 0
 
         with log_time(
@@ -525,6 +529,8 @@ class ScatterReader:
             target_shard=target_shard,
             avg_item_bytes=avg_item_bytes,
             shard_payload_bytes=shard_payload_bytes,
+            shard_payload_rows=shard_payload_rows,
+            contributing_sidecars=contributing_sidecars,
         )
 
     def get_frames(self) -> list[pl.LazyFrame]:

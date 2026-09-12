@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 import cloudpickle
@@ -21,12 +22,13 @@ from fray.actor import ActorGroup, ActorHandle, current_actor
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
+from iris.cluster.client.job_info import get_job_info
 from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.memory_store import MemoryTableRegistration
-from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, SourceItem, StageType
+from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Reduce, Scatter, SourceItem, StageType
 from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_io import (
     ShardTask,
@@ -37,7 +39,7 @@ from zephyr.stage_io import (
     _ensure_picklable_exception,
     _stage_throughput,
 )
-from zephyr.stats import StatsWriter, ZephyrWorkerStatStatus, _push_iris_task_status
+from zephyr.stats import StatsConfig, StatsWriter, ZephyrShuffleStat, ZephyrWorkerStatStatus, _push_iris_task_status
 from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, merge_counter_entries
 from zephyr.writers import ensure_parent_dir
 
@@ -309,6 +311,7 @@ class ZephyrCoordinator:
         max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES,
         drain_idle_workers: bool = False,
         max_concurrent_pipelines: int = MAX_CONCURRENT_PIPELINES,
+        stats_config: StatsConfig | None = None,
     ) -> None:
         # Pipeline executions keyed by execution_id, insertion-ordered. All
         # per-pipeline state lives in the _PipelineExecution values.
@@ -334,6 +337,7 @@ class ZephyrCoordinator:
         self._max_shard_failures = max_shard_failures
         self._max_shard_infra_failures = max_shard_infra_failures
         self._max_concurrent_pipelines = max_concurrent_pipelines
+        self._stats_config = stats_config
         # Per-worker in-flight counter snapshots. Each snapshot carries a
         # monotonic generation so the coordinator can discard stale or
         # out-of-order heartbeats.
@@ -356,7 +360,9 @@ class ZephyrCoordinator:
         self._host_shutdown_event = actor_ctx.shutdown_event
         self._self_handle = actor_ctx.handle
 
-        self._stats_writer = StatsWriter.connect()
+        self._stats_writer = StatsWriter.connect(stats_config)
+        job_info = get_job_info()
+        self._job_id = str(job_info.job_id) if job_info is not None else ""
         self._result_executor = ThreadPoolExecutor(
             max_workers=MAX_CONCURRENT_RESULT_READS, thread_name_prefix="zephyr-result"
         )
@@ -394,6 +400,7 @@ class ZephyrCoordinator:
             self._self_handle,
             stage_runner_factory,
             task_resources,
+            stats_config=self._stats_config,
             name=f"{self._name}-workers",
             count=worker_count,
             resources=worker_resources,
@@ -1203,7 +1210,9 @@ class ZephyrCoordinator:
         try:
             shards = _build_source_shards(plan.source_items)
             if not shards:
-                self._persist_result(result_path, ZephyrExecutionResult(results=[], counters={}))
+                self._persist_result(
+                    result_path, ZephyrExecutionResult(results=[], counters={}, execution_id=execution_id)
+                )
                 return None
 
             last_worker_stage_idx = max(
@@ -1238,7 +1247,9 @@ class ZephyrCoordinator:
 
             with self._lock:
                 counters = {name: entry.value for name, entry in run.merged_counters().items()}
-            self._persist_result(result_path, ZephyrExecutionResult(results=flat_result, counters=counters))
+            self._persist_result(
+                result_path, ZephyrExecutionResult(results=flat_result, counters=counters, execution_id=execution_id)
+            )
             return None
         except Exception as e:
             # Persist the normalized exception so the driver can recover the
@@ -1350,6 +1361,25 @@ class ZephyrCoordinator:
         logger.info(
             "[%s] Starting stage %s (%s) with %d tasks", run.execution_id, stage_label, stage.stage_type, len(tasks)
         )
+        if tasks and any(isinstance(op, Reduce) for op in stage.operations):
+            timestamp = datetime.now(UTC).replace(tzinfo=None)
+            self._stats_writer.emit_shuffle_stats(
+                [
+                    ZephyrShuffleStat(
+                        execution_id=run.execution_id,
+                        stage_name=stage_label,
+                        target_shard=task.shard_idx,
+                        num_targets=task.total_shards,
+                        attempt=0,
+                        input_rows=None,
+                        payload_bytes=None,
+                        num_sources=None,
+                        ts=timestamp,
+                        job_id=self._job_id,
+                    )
+                    for task in tasks
+                ]
+            )
         self._start_stage(run, stage_label, stage_index_for_state, tasks, is_last_stage=is_last_stage)
         try:
             self._wait_for_stage(run)
@@ -1543,6 +1573,7 @@ class ZephyrExecutionResult:
 
     results: list
     counters: dict[str, int | float]
+    execution_id: str = ""
 
 
 def _read_coordinator_result(result_path: str) -> Any:
