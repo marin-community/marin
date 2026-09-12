@@ -24,10 +24,15 @@ has no accumulation to associate, still matches exactly. Running the interpreter
 therefore measures XLA:TPU rather than the kernel that ships.
 """
 
+import os
+import subprocess
+import sys
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.kernels.pallas.short_conv import (
     ShortConvBlockSizes,
@@ -327,6 +332,31 @@ def test_channel_axis_gate_consults_the_mesh_not_just_the_spec(model_size, shoul
             assert "shard_map" in str(jaxpr)
 
 
+@pytest.mark.parametrize(("model_size", "should_reject"), [(1, False), (2, True)])
+def test_context_parallel_path_keeps_the_channel_axis_gate(model_size, should_reject):
+    """The halo path shards the sequence by design, but a genuinely sharded channel axis must
+    still raise there, exactly as on the unsharded path, instead of being silently all-gathered."""
+    mesh = jax.sharding.AbstractMesh(
+        axis_sizes=(1, 1, 2, 1, model_size),
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(jax.sharding.AxisType.Explicit,) * 5,
+    )
+    weight, x, segment_ids, _ = _inputs(2, 32, 8, 4, seed=11, dtype=jnp.float32, packed=True)
+
+    def fn(w, xx, seg):
+        xx = jax.sharding.reshard(xx, jax.sharding.PartitionSpec(("data", "expert"), "context", "model"))
+        seg = jax.sharding.reshard(seg, jax.sharding.PartitionSpec(("data", "expert"), "context"))
+        return short_conv(w, xx, seg, implementation="reference", batch_axes=("data", "expert"))
+
+    with jax.sharding.use_abstract_mesh(mesh):
+        if should_reject:
+            with pytest.raises(ValueError, match="unsharded channel axis"):
+                jax.make_jaxpr(fn)(weight, x, segment_ids)
+        else:
+            jaxpr = jax.make_jaxpr(fn)(weight, x, segment_ids)
+            assert "ppermute" in str(jaxpr)
+
+
 def test_short_conv_rejects_mixed_dtypes():
     """Mixed weight/activation dtypes are rejected at the boundary. The reference promotes
     (fp32) while the Pallas kernel outputs ``x.dtype``, so accepting mixed inputs would make
@@ -335,3 +365,113 @@ def test_short_conv_rejects_mixed_dtypes():
     x = jnp.ones((1, 16, 8), dtype=jnp.bfloat16)
     with pytest.raises(ValueError, match="share a dtype"):
         short_conv(weight, x)
+
+
+_HALO_SCRIPT = """
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+from levanter.kernels.pallas.short_conv import short_conv, short_conv_reference
+
+CONTEXT, BATCH, SEQ, CHANNELS, WIDTH = __CONTEXT__, __BATCH__, 32, 8, __WIDTH__
+
+assert jax.device_count() == 8
+# `data` is sized to the batch so both axes are genuinely split; whatever is left over goes on a
+# spare axis nothing names, which keeps every device in the mesh.
+mesh = Mesh(
+    np.asarray(jax.devices()).reshape(BATCH, CONTEXT, 8 // (BATCH * CONTEXT)),
+    axis_names=("data", "context", "spare"),
+    axis_types=(AxisType.Explicit,) * 3,
+)
+
+rng = np.random.default_rng(0)
+weight = jnp.asarray(rng.normal(size=(WIDTH, CHANNELS)), jnp.float32)
+x = jnp.asarray(rng.normal(size=(BATCH, SEQ, CHANNELS)), jnp.float32)
+cot = jnp.asarray(rng.normal(size=(BATCH, SEQ, CHANNELS)), jnp.float32)
+if WIDTH == 17:
+    # Exact binary fractions isolate the maximum halo reach from reduction rounding.
+    weight = jnp.asarray(rng.integers(-8, 8, size=weight.shape), jnp.float32) / 8
+    x = jnp.asarray(rng.integers(-8, 8, size=x.shape), jnp.float32) / 8
+    cot = jnp.asarray(rng.integers(-8, 8, size=cot.shape), jnp.float32) / 8
+if __PACKED__:
+    # Include short runs and a document boundary inside the CP4 left halo.
+    seg = np.concatenate(
+        [np.zeros((BATCH, 5)), np.full((BATCH, 2), 7), np.full((BATCH, SEQ - 7), 9)], axis=1
+    )
+    segment_ids = jnp.asarray(seg, jnp.int32)
+else:
+    segment_ids = jnp.zeros((BATCH, SEQ), jnp.int32)
+
+
+def loss(w, xx, seg_arg):
+    return jnp.sum(short_conv(w, xx, seg_arg, implementation="reference", batch_axes=("data",)) * cot)
+
+
+with jax.set_mesh(mesh):
+    unsharded = jax.device_put(x, NamedSharding(mesh, P("data", None, None)))
+    sharded = jax.device_put(x, NamedSharding(mesh, P("data", "context", None)))
+    seg_un = jax.device_put(segment_ids, NamedSharding(mesh, P("data", None)))
+    seg_sh = jax.device_put(segment_ids, NamedSharding(mesh, P("data", "context")))
+
+    if WIDTH - 1 > SEQ // CONTEXT:
+        with np.testing.assert_raises(ValueError):
+            short_conv(weight, sharded, seg_sh, implementation="reference", batch_axes=("data",))
+    else:
+        want = short_conv_reference(weight, unsharded, seg_un)
+        got = short_conv(weight, sharded, seg_sh, implementation="reference", batch_axes=("data",))
+        np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
+
+        dw_want, dx_want = jax.grad(loss, argnums=(0, 1))(weight, unsharded, seg_un)
+        dw_got, dx_got = jax.grad(loss, argnums=(0, 1))(weight, sharded, seg_sh)
+        np.testing.assert_allclose(np.asarray(dx_got), np.asarray(dx_want), rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(np.asarray(dw_got), np.asarray(dw_want), rtol=1e-6, atol=1e-6)
+"""
+
+
+@pytest.mark.parametrize("context", [2, 4])
+@pytest.mark.parametrize("batch", [1, 2])
+@pytest.mark.parametrize("packed", [True, False], ids=["packed", "unpacked"])
+@pytest.mark.parametrize("width", [1, 4, 17])
+def test_context_parallel_halo_matches_the_unsharded_reference(context, batch, packed, width):
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+    script = (
+        _HALO_SCRIPT.replace("__CONTEXT__", str(context))
+        .replace("__BATCH__", str(batch))
+        .replace("__PACKED__", str(packed))
+        .replace("__WIDTH__", str(width))
+    )
+    result = subprocess.run([sys.executable, "-c", script], env=env, text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("width", [1, 4])
+def test_context_parallel_pallas_matches_reference(width):
+    if jax.default_backend() != "gpu" or jax.device_count() < 4:
+        pytest.skip("requires four GPUs for context-parallel Pallas convolution")
+    mesh = Mesh(np.asarray(jax.devices()[:4]), ("context",), axis_types=(AxisType.Explicit,))
+    weight, x, segment_ids, cotangent = _inputs(1, 256, 128, width, seed=17, dtype=jnp.float32, packed=True)
+    blocks = ShortConvBlockSizes(s_block_size=128, c_block_size=128)
+
+    def reference_loss(w, xx):
+        return jnp.sum(short_conv_reference(w, xx, segment_ids) * cotangent)
+
+    want = short_conv_reference(weight, x, segment_ids)
+    want_dw, want_dx = jax.grad(reference_loss, argnums=(0, 1))(weight, x)
+    with jax.set_mesh(mesh):
+        sharded_x = jax.device_put(x, NamedSharding(mesh, P(None, "context", None)))
+        sharded_seg = jax.device_put(segment_ids, NamedSharding(mesh, P(None, "context")))
+
+        def forward(w, xx):
+            return short_conv(w, xx, sharded_seg, implementation="pallas_gpu", block_sizes=blocks)
+
+        def loss(w, xx):
+            return jnp.sum(forward(w, xx) * cotangent)
+
+        got = forward(weight, sharded_x)
+        got_dw, got_dx = jax.grad(loss, argnums=(0, 1))(weight, sharded_x)
+    for actual, expected in ((got, want), (got_dw, want_dw), (got_dx, want_dx)):
+        np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
