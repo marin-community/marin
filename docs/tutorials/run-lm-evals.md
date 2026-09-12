@@ -31,7 +31,7 @@ uv run python -m experiments.evaluation.cli launch \
 
 Run the resolved plan before submitting an unfamiliar model or suite. `--dry-run` prints the model
 location, serving backend, accelerator, target cluster or region, priority band, task names, and
-records prefix:
+records and results paths:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
@@ -169,6 +169,19 @@ uv run python -m experiments.evaluation.cli launch \
 
 `agentic` runs seven full Harbor datasets and can consume substantial Daytona and inference
 capacity. Use `tb2-lite`, `swebench-lite`, `aime-smoke`, or `--limit N` for validation runs.
+
+Resume an interrupted Harbor evaluation from its existing results tree:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-32b \
+  --evals tb2 \
+  --resume-results-path s3://marin-us-east-02a/marin/evals/<run-id>/results \
+  --no-wait
+```
+
+The resume option accepts exactly one Harbor evaluation. Marin verifies the dataset identity before
+submission; Harbor keeps compatible completed trials and applies its resume policy to the rest.
 
 Run one Grug/OpenCode trial with the model and agent policy registered for that benchmark:
 
