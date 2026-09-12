@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compose E4.3 without submission; fail closed on the two frozen source mismatches."""
+"""Compose the repaired E4.3 source pair without submitting jobs."""
 
 # Each stage runs in a different environment with optional Marin or trainer dependencies.
 # ruff: noqa: PLC0415
@@ -19,15 +19,15 @@ from unittest.mock import patch
 import yaml
 
 CACHE = Path("/home/ahmad/.cache/oa")
-MARIN = Path("/home/ahmad/oa/worktrees/marin/async-v2-e43-compose")
-MSR = Path("/home/ahmad/oa/worktrees/MarinSkyRL/async-v2-e43-compose")
-MARIN_SHA = "a453edb92b14da9a8406c005f6bc4c76d72bc34b"
-MSR_SHA = "65fa9170dae2493960f365fe237ea5c5c5c71545"
+MARIN = Path("/home/ahmad/oa/worktrees/marin/async-v2-e43-m2-rno-repair")
+MSR = Path("/home/ahmad/oa/worktrees/MarinSkyRL/async-v2-e43-m2-rno-repair")
+MARIN_SHA = subprocess.check_output(["git", "-C", str(MARIN), "rev-parse", "HEAD"], text=True).strip()
+MSR_SHA = "6742714f4f6e8be75986bff06b68fe5fb9b49693"
 CORRECTIONS = ("behavior_clip", "regular_no_tis", "regular_tis", "regular_mask", "bc_mask", "regular_m2")
 AGES = (1, 2)
 SEEDS = (17, 29)
 PREFIX = "s3://marin-us-east-02a/marin"
-OUTPUT = CACHE / "async-v2-e43-composition-v1.json"
+OUTPUT = CACHE / "async-v2-e43-composition-v2.json"
 
 
 def digest(value):
@@ -113,11 +113,6 @@ def stage_recipe():
     n2 = json.loads(n2_path.read_text())["request"]
     coverage_path = Path("/home/ahmad/oa-data/captures/async-rl-v2-optimizer/qwen-input-coverage-receipt.json")
     rows = []
-    rno_refusal = CliRunner().invoke(async_rl.main, recipe_argv("behavior_clip", 1, 17, "cw-rno2a"))
-    assert rno_refusal.exit_code != 0
-    assert "Cross-region I/O is restricted to Qwen screening RL jobs on cw-rno2a" in rno_refusal.output
-    missing = CliRunner().invoke(async_rl.main, recipe_argv("regular_m2", 1, 17, "cw-us-east-02a"))
-    assert missing.exit_code != 0 and "regular_m2" in missing.output and "not one of" in missing.output
     for correction in CORRECTIONS:
         for age in AGES:
             for seed in SEEDS:
@@ -137,10 +132,7 @@ def stage_recipe():
                     eval_updates=[0, 32, 64, 96],
                 )
                 rows.append(row)
-                if correction == "regular_m2":
-                    row.update(status="blocked_missing_frozen_preset_and_runtime", envelope=None)
-                    continue
-                argv = recipe_argv(correction, age, seed, "cw-us-east-02a")
+                argv = recipe_argv(correction, age, seed, "cw-rno2a")
                 result = CliRunner().invoke(async_rl.main, argv)
                 assert result.exit_code == 0, (tag, result.output, result.exception)
                 preview = json.loads(result.output)["training"]["request"]
@@ -156,7 +148,7 @@ def stage_recipe():
                     request[key] = copy.deepcopy(n2[key])
                 guard_uri = (
                     f"{PREFIX}/users/ahmad/documents/math-eval-pool/1.0.0-candidate1"
-                    f"/qualification/e43-v1/measurement/{tag}.json"
+                    f"/qualification/e43-v2/measurement/{tag}.json"
                 )
                 config = yaml.safe_load(request["config_yaml"])
                 config["trainer"]["measurement_guard_uri"] = guard_uri
@@ -177,7 +169,7 @@ def stage_recipe():
                     )
                 }
                 science_sha = digest(science)
-                version = f"1.0.0-e43-v1-{tag}"
+                version = f"1.0.0-e43-v2-{tag}"
                 base = f"users/ahmad/checkpoints/async-rl/e43-{science_sha[:12]}-training"
                 output_path = f"{PREFIX}/{base}/{version}"
                 temporary_path = f"s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin-us-east-02a/marin/{base}/{version}"
@@ -191,10 +183,10 @@ def stage_recipe():
                 request["attempt_id"] = hashlib.sha256((science_sha + ":attempt0").encode()).hexdigest()[:12]
                 assert request["completion_mode"] == "checkpoint"
                 assert request["runtime"]["commit"] == MSR_SHA
-                job_stem = f"async-rl-v2-qwen-k12-p8-i8-{correction}-a{age}-{science_sha[:8]}-v1"
+                job_stem = f"async-rl-v2-qwen-k12-p8-i8-{correction}-a{age}-{science_sha[:8]}-v2"
                 execution = dict(
-                    cluster="cw-us-east-02a",
-                    cluster_config="lib/iris/config/cw-us-east-02a.yaml",
+                    cluster="cw-rno2a",
+                    cluster_config="lib/iris/config/cw-rno2a.yaml",
                     cpu=16,
                     memory="128GB",
                     disk="2TB",
@@ -208,7 +200,7 @@ def stage_recipe():
                 )
                 envelope = dict(schema_version=2, request=request, execution=execution)
                 row.update(
-                    status="east_cpu_composed_not_launch_ready",
+                    status="rno_cpu_composed_not_launch_ready",
                     recipe_argv=argv,
                     envelope=envelope,
                     envelope_sha256=digest(envelope),
@@ -221,7 +213,7 @@ def stage_recipe():
     assert len(rows) == 24
     assert len({r["tag"] for r in rows}) == 24
     manifest = dict(
-        status="E43_COMPOSITION_BLOCKED",
+        status="E43_REPAIRED_COMPOSITION_READY_FOR_COLD_REVIEW",
         lever_class="R",
         group_id="e43_correction_head_to_head",
         marin_sha=MARIN_SHA,
@@ -240,10 +232,9 @@ def stage_recipe():
             conditioning="two observed training seeds",
         ),
         inputs={str(n2_path): sha(n2_path), str(coverage_path): sha(coverage_path)},
-        counter_cases=dict(rno_checkpoint_refusal=rno_refusal.output, missing_m2_refusal=missing.output),
         pending=[
-            "REG+M2 absent from both approved pins; historical quality screen remains FAIL",
-            "RNO checkpoint completion rejected by frozen Marin; east alternative composed",
+            "Record historical M2 quality-screen FAIL and restored numerical qualification scope",
+            "Independent cold source and packet review",
             "Native/Hydra preview stage",
             "Fresh controller and regional output absence checks",
             "Bound coordinator and held-out export/evaluation packet",
@@ -252,7 +243,7 @@ def stage_recipe():
     )
     OUTPUT.write_text(json.dumps(manifest, indent=2) + "\n")
     print(
-        "E43_FROZEN_SOURCE_BLOCKERS_REPRODUCED missing_m2=true rno_checkpoint_rejected=true arms_preserved=24",
+        "E43_REPAIRED_ACTUAL_CLI_PASS m2_restored=true rno_checkpoint=true arms=24",
         flush=True,
     )
 
@@ -342,6 +333,10 @@ def stage_native():
             if masked:
                 assert t.algorithm.offpolicy_mask.low == 0.5 and t.algorithm.offpolicy_mask.high == 5.0
                 assert t.algorithm.offpolicy_mask.ratio == "mismatch" and not t.algorithm.offpolicy_mask.renormalize
+            assert t.algorithm.m2_mask.enabled == (row["correction"] == "regular_m2")
+            assert t.algorithm.m2_mask.ratio == "stale" and t.algorithm.m2_mask.mode == "mask"
+            assert t.algorithm.m2_mask.tau == 0.04 and not t.algorithm.m2_mask.renormalize
+            assert not t.algorithm.batch_invariant
             evidence.append(
                 dict(
                     tag=row["tag"],
@@ -351,13 +346,14 @@ def stage_native():
                 )
             )
             print("E43_N2_NATIVE_HYDRA_PASS " + row["tag"] + " args=" + str(len(generated)), flush=True)
-    destination = CACHE / "async-v2-e43-native-compose-v1.json"
+    destination = CACHE / "async-v2-e43-native-compose-v2.json"
     destination.write_text(json.dumps(evidence, indent=2) + "\n")
     packet["native_composed_count"] = len(evidence)
     packet["pending"] = [item for item in packet["pending"] if item != "Native/Hydra preview stage"]
     packet["native_receipt"] = dict(path=str(destination), sha256=sha(destination))
     OUTPUT.write_text(json.dumps(packet, indent=2) + "\n")
-    print("E43_PARTIAL_COMPOSITION_PASS configured=20 missing_method=4 declared=24 launch_ready=false", flush=True)
+    assert len(evidence) == 24
+    print("E43_REPAIRED_COMPOSITION_PASS configured=24 waves=2 members_per_wave=12 launch_ready=false", flush=True)
 
 
 if __name__ == "__main__":

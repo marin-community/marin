@@ -1039,7 +1039,8 @@ def test_pool_flag_rejects_legacy_window_or_insufficient_prompt_budget(changes):
         qwen_metrics_request(pool_artifact=POOL_ARGUMENT, **changes)
 
 
-def test_qwen_rno_exception_is_explicit_and_preserves_recipe(monkeypatch):
+@pytest.mark.parametrize("completion", ["metrics", "model"])
+def test_qwen_rno_exception_is_explicit_and_preserves_recipe(monkeypatch, completion):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
     args = [
         "--version",
@@ -1051,13 +1052,15 @@ def test_qwen_rno_exception_is_explicit_and_preserves_recipe(monkeypatch):
         "--stage",
         "rl",
         "--completion",
-        "metrics",
+        completion,
     ]
     before = CliRunner().invoke(async_rl.main, args)
     allowed = CliRunner().invoke(async_rl.main, [*args, "--allow-cross-region-io"])
     assert before.exit_code == allowed.exit_code == 0, allowed.output
-    before_request = json.loads(before.output)["request"]
-    allowed_request = json.loads(allowed.output)["request"]
+    before_preview = json.loads(before.output)
+    allowed_preview = json.loads(allowed.output)
+    before_request = (before_preview if completion == "metrics" else before_preview["training"])["request"]
+    allowed_request = (allowed_preview if completion == "metrics" else allowed_preview["training"])["request"]
     before_request.pop("attempt_id")
     allowed_request.pop("attempt_id")
     assert before_request == allowed_request
@@ -1138,11 +1141,13 @@ def test_rno_exception_rejects_other_buckets_and_snowball(monkeypatch):
         "identity",
     ],
 )
-def test_rno_resolved_request_guard_checks_model_and_every_io_surface(changed):
+@pytest.mark.parametrize("completion_mode", ["metrics", "checkpoint"])
+def test_rno_resolved_request_guard_checks_model_and_every_io_surface(changed, completion_mode):
     request = qwen_metrics_request()
     prefix = "s3://marin-us-east-02a/marin"
     request = replace(
         request,
+        completion_mode=completion_mode,
         model=replace(request.model, uri=prefix + "/users/ahmad/models/async-rl-qwen3-0.6b/2026.09.06.10/hf"),
         train_data=tuple(replace(item, uri=prefix + "/train") for item in request.train_data),
         validation_data=tuple(replace(item, uri=prefix + "/dev") for item in request.validation_data),
@@ -1177,15 +1182,18 @@ def test_rno_resolved_request_guard_checks_model_and_every_io_surface(changed):
         async_rl.validate_qwen_cross_region_request(request)
 
 
-def test_rno_guard_executes_when_actual_training_configuration_resolves():
+@pytest.mark.parametrize("completion", ["metrics", "model"])
+def test_rno_guard_executes_when_actual_training_configuration_resolves(completion):
     step, _ = async_rl.build_experiment(
         version="2026.09.06.16",
         cluster="cw-rno2a",
         runner=async_rl.Runner.ASYNC,
         scale=async_rl.Scale.SCREENING,
-        completion="metrics",
+        completion=completion,
         allow_cross_region_io=True,
     )
+    if completion == "model":
+        step = step.deps[0]
     prefix = "s3://marin-us-east-02a/marin"
     ctx = StepContext(
         output_path=prefix + "/output",

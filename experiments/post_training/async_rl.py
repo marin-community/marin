@@ -53,8 +53,9 @@ from marin.rl.skyrl import (
     SkyRLSpec,
     SkyRLTopology,
     SkyRLTrainingResult,
+    skyrl_checkpoint_step,
+    skyrl_export_step,
     skyrl_metrics_step,
-    skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.cluster_config import StoreType, load_cluster_config, marin_prefix
@@ -105,6 +106,7 @@ class Correction(StrEnum):
     REGULAR_NO_TIS = "regular_no_tis"
     REGULAR_MASK = "regular_mask"
     BC_MASK = "bc_mask"
+    REGULAR_M2 = "regular_m2"
 
 
 def apply_correction(algorithm: dict, correction: Correction) -> None:
@@ -115,6 +117,15 @@ def apply_correction(algorithm: dict, correction: Correction) -> None:
         algorithm.update(policy_loss_type="regular", require_rollout_logprobs=True)
     elif correction == Correction.REGULAR_TIS:
         algorithm.update(policy_loss_type="regular", use_tis=True, tis_imp_ratio_cap=2.0, require_rollout_logprobs=True)
+    elif correction == Correction.REGULAR_M2:
+        algorithm.update(policy_loss_type="regular", require_rollout_logprobs=True)
+        algorithm["m2_mask"] = {
+            "enabled": True,
+            "ratio": "stale",
+            "tau": 0.04,
+            "mode": "mask",
+            "renormalize": False,
+        }
     elif correction in (Correction.REGULAR_MASK, Correction.BC_MASK):
         regular = correction == Correction.REGULAR_MASK
         algorithm.update(policy_loss_type="regular" if regular else "behavior_clip", require_rollout_logprobs=True)
@@ -622,8 +633,13 @@ def validate_qwen_cross_region_request(request: SkyRLLaunchRequest) -> None:
             hub_repo = yaml.safe_load(value)
         if separator and key == "trainer.hf_save_interval":
             save_interval = yaml.safe_load(value)
-    if request.completion_mode != "metrics" or hub_repo is not None or save_interval is None or save_interval > 0:
-        raise ValueError("Cross-region I/O requires metrics completion with HF export disabled")
+    if (
+        request.completion_mode not in ("metrics", "checkpoint")
+        or hub_repo is not None
+        or save_interval is None
+        or save_interval > 0
+    ):
+        raise ValueError("Cross-region I/O requires metrics or native checkpoint completion with HF export disabled")
     paths = [model.uri, *(item.uri for item in request.train_data), *(item.uri for item in request.validation_data)]
     paths.extend(asdict(request.output).values())
     for path in paths:
@@ -703,8 +719,8 @@ def build_experiment(
         raise ValueError(f"Unknown completion mode: {completion}")
     if minibatches is None:
         minibatches = 2 if scale is Scale.SCREENING and updates is not None and not kl_loss else 1
-    if allow_cross_region_io and (cluster != "cw-rno2a" or scale is not Scale.SCREENING or completion != "metrics"):
-        raise ValueError("Cross-region I/O is restricted to Qwen screening metrics jobs on cw-rno2a")
+    if allow_cross_region_io and (cluster != "cw-rno2a" or scale is not Scale.SCREENING):
+        raise ValueError("Cross-region I/O is restricted to Qwen screening jobs on cw-rno2a")
     if not 0 <= seed < 2**32:
         raise ValueError("Seed must be between 0 and 2**32 - 1")
     validate_validation_window(validation_offset, validation_rows)
@@ -848,20 +864,20 @@ def build_experiment(
         max_retries=0,
         timeout_seconds=timeout_seconds,
     )
+    step = skyrl_metrics_step(spec, execution) if completion == "metrics" else skyrl_checkpoint_step(spec, execution)
+    if allow_cross_region_io:
+        original_build_config = step.build_config
+
+        def checked_build_config(ctx):
+            config = original_build_config(ctx)
+            if not ctx.is_fingerprint:
+                validate_qwen_cross_region_request(config.request)
+            return config
+
+        step = replace(step, build_config=checked_build_config)
     if completion == "metrics":
-        step = skyrl_metrics_step(spec, execution)
-        if allow_cross_region_io:
-            original_build_config = step.build_config
-
-            def checked_build_config(ctx):
-                config = original_build_config(ctx)
-                if not ctx.is_fingerprint:
-                    validate_qwen_cross_region_request(config.request)
-                return config
-
-            step = replace(step, build_config=checked_build_config)
         return step, None
-    training = skyrl_step(spec, execution)
+    training = skyrl_export_step(step, execution)
     evaluation = eval_step(
         SkyRLEvaluationModel(
             step=training,
@@ -1054,9 +1070,7 @@ def main(
     eval_on_installed_weights: bool,
     eval_mode: str,
 ) -> None:
-    if allow_cross_region_io and (
-        cluster != "cw-rno2a" or scale != Scale.SCREENING.value or stage != "rl" or completion != "metrics"
-    ):
+    if allow_cross_region_io and (cluster != "cw-rno2a" or scale != Scale.SCREENING.value or stage != "rl"):
         raise click.UsageError("Cross-region I/O is restricted to Qwen screening RL jobs on cw-rno2a")
     if completion == "metrics" and stage == "evaluation":
         raise click.UsageError("Metrics completion requires --stage rl; external evaluation requires a model export")
