@@ -65,9 +65,29 @@ if __name__ == "__main__":
 
 For the June Grug model, reuse
 [GrugMoeSFTConfig and run_grug_moe_sft_trial](../june_tpu_67b_a2b/moe/sft_launch.py).
-Pass `sft_data_config(store)` as `data` and choose the remaining settings in the
-experiment. That launcher initializes checkpoint weights with a fresh optimizer
-and step counter; restarts resume the experiment's own full state.
+Pass `sft_data_config(store)` as `data`. For 80% SFT and 20% pretraining replay,
+pass this as `replay`:
+
+```python
+from experiments.june_tpu_67b_a2b.moe.train import ReplayDataConfig
+
+replay = ReplayDataConfig(data=pretraining_data, fraction=0.2)
+```
+
+`pretraining_data` is the pretraining experiment's `LmDataConfig`, using the same
+token IDs as the SFT store. Keep its source weights, cache grouping, continuous
+packing, and mixture block size. Replay is a nested mixture: applying its 20%
+share to every source before rounding can eliminate rare sources. The reference
+[LCR configuration](https://github.com/marin-community/marin/blob/09989c43010e9fef0a5520cdc4af8bae90252a06/experiments/june_tpu_67b_a2b/moe/sft_datakit_chat_mix.py)
+used a 49,152-sequence replay block and four copies of long-document
+caches. Reuse that configuration when reproducing the run.
+
+The 80/20 split counts fixed-length training sequences; SFT padding means it is
+not an exact split of loss-bearing tokens. Replay does not enter the conversation
+store. Pass `replay=None` explicitly for SFT-only experiments.
+
+Choose the remaining settings in the experiment. The launcher initializes
+checkpoint weights with a fresh optimizer and step counter; restarts resume the experiment's own full state.
 
 On TPU, select `attention_implementation="tpu_splash"` and
 `moe_implementation="ring"`. Set `context_parallel` explicitly, make the model's
