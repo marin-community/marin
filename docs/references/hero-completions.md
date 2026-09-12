@@ -3,6 +3,8 @@
 The completion workflow samples every retained permanent checkpoint in the production hero
 lineage. It checks the queue each hour and updates a public report each day after 08:00 UTC.
 It also updates one GitHub Actions comment on [issue 8827](https://github.com/marin-community/marin/issues/8827).
+Scheduled operation is not yet active. Cluster access approval is necessary. See
+[Schedule and recovery](#schedule-and-recovery).
 
 The report's stable address is
 [`hero/completions/latest/index.html`](https://storage.googleapis.com/marin-public/hero/completions/latest/index.html).
@@ -15,6 +17,15 @@ pending and failed sample sets. Each completed set links to its raw JSON and gen
 `experiments/grug/moe_hero_ep/completion_prompts.json` holds the prompt bank. Each entry has a
 stable ID, exact prompt text, seed, and source link. Changes go through a normal pull request.
 Issue text is a source reference, not an executable or automatically changing input.
+
+The bank contains 34 prompts. The first ten retain the
+[original manual prompts and seeds](https://github.com/marin-community/marin/issues/8827#issuecomment-5489155657).
+Another 22 prompts provide tests of code, arithmetic, context tracking, logic, missing information,
+scientific explanations, patterns, Spanish translation, and narrative continuity.
+Two prompts add English-to-Polish and Polish-to-English translation. The English-to-Polish
+prompt contains a haiku about Rafal and a compiler. The 24 added prompts are specific to
+this bank, and their source links point to the JSON file. The examples use the supplied
+first names in fictional scenarios. Each added prompt has a distinct fixed seed.
 
 `experiments/grug/moe_hero_ep/production_run.json` is shared with `trigger_hero.sh`. It names
 the active production run, its version, cluster, and accepted ancestors with step boundaries.
