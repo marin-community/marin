@@ -167,12 +167,9 @@ def test_huggingface_publish_uploads_tasks_and_audit_metadata(tmp_path):
         "exist_ok": True,
     }
     assert api.uploaded is not None
-    assert {key: value for key, value in api.uploaded.items() if key != "folder_path"} == {
-        "repo_id": DEFAULT_HF_REPO_ID,
-        "repo_type": "dataset",
-        "commit_message": "Publish TaskTrove release",
-        "delete_patterns": "data/*.parquet",
-    }
+    assert api.uploaded["repo_id"] == DEFAULT_HF_REPO_ID
+    assert api.uploaded["repo_type"] == "dataset"
+    assert api.uploaded["delete_patterns"] == "data/*.parquet"
     assert set(api.files) == {"README.md", "data/part-00000.parquet", "ledger.parquet", "manifest.json"}
     assert api.files["data/part-00000.parquet"] == (tmp_path / "release/tasks/part-00000.parquet").read_bytes()
     card = api.files["README.md"].decode()

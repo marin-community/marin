@@ -86,14 +86,15 @@ FINAL_SHARDS = 1
 _FROM_LINE = re.compile(r"^FROM\s+(\S+)", re.MULTILINE | re.IGNORECASE)
 DEFAULT_HF_REPO_ID = "open-athena/task-trove"
 _COPY_BUFFER_BYTES = 8 * 1024 * 1024
-_DATASET_CARD_HEADER = """\
+_HF_DATA_GLOB = "data/*.parquet"
+_DATASET_CARD_HEADER = f"""\
 ---
 pretty_name: TaskTrove Clean
 configs:
   - config_name: default
     data_files:
       - split: train
-        path: data/*.parquet
+        path: {_HF_DATA_GLOB}
 ---
 
 """
@@ -294,7 +295,7 @@ def publish_to_huggingface(
             folder_path=staging,
             repo_type="dataset",
             commit_message="Publish TaskTrove release",
-            delete_patterns="data/*.parquet",
+            delete_patterns=_HF_DATA_GLOB,
         )
     logger.info("published %s to https://huggingface.co/datasets/%s", release_path, repo_id)
 

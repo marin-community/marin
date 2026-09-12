@@ -52,7 +52,7 @@ def test_unscored_rerun_removes_prior_harbor_reward_files(tmp_path, monkeypatch)
     spec = tmp_path / "verifier.toml"
     spec.write_text('mode = "mcq"\nexpected = "C"\n')
     logs = tmp_path / "logs"
-    monkeypatch.setitem(grade_module.GRADERS, Mode.MCQ, lambda spec, tests_dir, workspace: scored(1.0))
+    monkeypatch.setitem(grade_module.GRADERS, Mode.MCQ, lambda _spec, _tests_dir, _workspace: scored(1.0))
     main([str(spec), "--logs-dir", str(logs)])
 
     spec.write_text('mode = "mcq"\n')
