@@ -268,3 +268,38 @@ The reused May references use a different architecture, optimizer/data recipe an
 - [d768 treatment](https://wandb.ai/marin-community/marin_moe/runs/moe-lgr-9110-d768-rmsgated) / [reference](https://wandb.ai/marin-community/marin_moe/runs/moe_may_compute_opt_d768_ep1)
 
 Final checkpoints: `gs://marin-us-central1/users/kaiyuew/grug/moe-lgr-9110-d512-rmsgated/dev/checkpoints/step-13642` and `gs://marin-us-central1/users/kaiyuew/grug/moe-lgr-9110-d768-rmsgated/dev/checkpoints/step-19378`.
+
+### Comparison correction — September 12
+
+The May reference is not a matched control for this ablation. The previous Gate 1 failure wording must not be interpreted as evidence that RMSNorm-then-gate routing hurts quality. The measured losses remain valid for these runs, but the ablation conclusion is inconclusive.
+
+Actual W&B configuration differences include 256/top-4 versus 384/top-8 experts, a full-width MoE versus the hero latent bottleneck, different shared-expert structures, optimizer beta1 0.9062 versus 0.9, minimum LR ratio 0 versus 0.05, different learning rates and token budgets, and training z-loss weight 0 versus 1e-4. Evaluation batch size is 512 in the references versus 32/64 in treatment, with max_eval_batches=8 in both, so the evaluation sample budgets also differ. Hardware is v4-32 versus v5p-8; the estimated speedups do not isolate architectural efficiency.
+
+Tokenizer identity is the same (`meta-llama/Meta-Llama-3.1-8B`), and named training-source mixture weights agree after removing the treatment's `-llama3` suffix. Cache identity and exact evaluation examples have not been established as equivalent. Different cache paths alone do not prove different source data.
+
+No new runs are being launched. A valid gate ablation needs a reference with the same hero architecture, training recipe, and evaluation protocol, differing only in the intended gate/router intervention. Until such a matched existing reference is found or a new comparison is explicitly agreed, no causal pass/fail conclusion is warranted. Idea credit remains Zihan Qiu.
+
+### Existing baseline search — September 12
+
+Located the hero-shape scaling-ladder references:
+- d512: [h100-ladder-d512-ep8-bs1024-791tpp-20260824-rno2a](https://wandb.ai/marin-community/marin_moe/runs/h100-ladder-d512-ep8-bs1024-791tpp-20260824-rno2a), 16,483,614,720 tokens, batch 1024.
+- d768: [h100-ladder-d768-2xep8-bs1024-791tpp-20260824](https://wandb.ai/marin-community/marin_moe/runs/h100-ladder-d768-2xep8-bs1024-791tpp-20260824), 47,898,951,680 tokens, batch 1024. A batch-512 sibling also exists.
+
+These share the 384/top-8, hidden/2 latent and expert widths, two shared experts, 6/8 layers, SConv k/attn/mlp, HIST QB with 10k bins, and capacity 1.15 configuration. However, they use the Harrier mixture, top-level Marin tokenizer setting, H100 pooled EP transport, different LR/beta2, and different evaluation budgets. Treatment used the Agent MoE Nemotron/StarCoder/ProofPile recipe with the Llama-3.1 tokenizer setting and batch 32/64 on v5p-8. The ladder's evaluation cache names contain `-llama3`; actual cache-tokenizer equivalence requires further verification, so tokenizer config differences alone should not be interpreted as proven evaluation-token differences.
+
+Completed filtered W&B searches across `marin_moe`, `marin_moe_ragged`, `grug_latent_ablation`, and `qbb_latentmoe_ringEP` for hidden width 512/768, 384 experts, top-8, sequence length 4096, and the treatment's exact top-level tokenizer setting returned only the two treatment runs and the superseded smoke. No matched existing control was found in that scope. Issue #8227 and #8105 baselines use 192/top-4 and are excluded.
+
+The original experiment combined the hero architecture with a different training recipe instead of matching one of these existing hero baselines. To reuse an existing baseline, the treatment must be aligned to its full configuration and schedule. The completed treatment runs cannot currently support a controlled gate comparison. No new training was launched during this search.
+
+## 2026-09-12 — reuse Larry's gated TPU controls
+
+User approved matching #6822's already-finished RMSNorm + GatedNorm controls,
+changing only router input to gated latent. Recovered W&B config and code
+artifacts v698/v696; model/train files match across the two widths. New source
+uses larry_model/larry_train/larry_launch, recorded configs, steps 10980/16875,
+batches 32/64, eval batch512/max8, v5p-8 us-east5, project dial_moe. Superseded
+unsubmitted H100 launcher drafts moved to scratch. No smoke/new control planned.
+CPU probe verified baseline forward parity after API adaptation, unchanged
+shared initialization, latent null-space invariance, router logits, and a
+forward/backward optimizer update. Runtime dependencies are current; historical
+throughput and analytic FLOP estimates retain that limitation.

@@ -71,3 +71,24 @@ Report compute-equivalent gain separately from measured wall-clock comparison,
 using each run's own token count and throughput. This comparison does not isolate
 the gated-router intervention. A Gate 1 pass requires effective speedup >1 at both
 widths; only then run the two larger treatment cells and fit the scaling projection.
+
+## Matched Larry TPU comparison (#6822)
+
+`larry_launch.py` replays the recorded d512/d768 RMSNorm + GatedNorm recipes
+from Larry's completed runs in `marin-community/dial_moe`. The new intervention
+changes only the router input to the gated latent; experts already consumed it.
+`larry_model.py` and `larry_train.py` restore the identical model/trainer sources
+saved in W&B code artifacts v698/v696, with current import and expert API
+adaptations. Config snapshots preserve the original data caches, optimizer,
+10980/16875 steps, batches 32/64, and evaluation batch 512 with eight batches.
+The runtime is current, so historical throughput is not a controlled kernel
+comparison. The historical analytic FLOP logger is retained, not a validated
+MLA/latent FLOP estimate. Primary comparison is step/token-matched Paloma loss.
+
+```bash
+uv run --no-sync python -m experiments.grug.moe_latent_gated_router.larry_launch \
+  --dim 512 --run-id moe-lgr-9110-larry-d512
+```
+
+The default prints the config. `--run` dispatches one v5p-8 child in us-east5
+and trains directly, without a smoke or a new baseline.
