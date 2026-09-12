@@ -3,6 +3,7 @@
 
 import asyncio
 import gzip
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -49,6 +50,8 @@ def write_app(apps_dir: Path, name: str, manifest: str = TASKTROVE_MANIFEST, bui
 
 
 def write_api_app(apps_dir: Path, name: str) -> Path:
+    sys.modules.pop(f"{name}.app", None)
+    sys.modules.pop(name, None)
     root = write_app(apps_dir, name)
     (root / "__init__.py").write_text("")
     (root / "app.py").write_text(
@@ -122,6 +125,7 @@ def client(tmp_path: Path) -> TestClient:
     write_app(tmp_path / "apps", "unbuilt", built=False)
     config = config_for(tmp_path)
     (tmp_path / "data" / "tasktrove" / "sources.json").write_text('[{"source": "a"}]')
+    (tmp_path / "data" / "tasktrove" / "tasks.parquet").write_bytes(b"0123456789")
     with gzip.open(tmp_path / "data" / "tasktrove" / "labels.json.gz", "wt") as f:
         f.write("[1, 2]")
     return TestClient(create_app(config), client=("127.0.0.1", 40000))
@@ -419,6 +423,70 @@ def test_data_files_come_from_the_data_root(client: TestClient) -> None:
     assert compressed.headers["content-encoding"] == "gzip" and compressed.json() == [1, 2]
     assert client.get("/tasktrove/data/missing.json").status_code == 404
     assert client.get("/tasktrove/data/..%2Fother%2Fx").status_code == 404
+
+
+def test_data_files_come_from_the_manifest_url(tmp_path: Path) -> None:
+    app_data = tmp_path / "release"
+    app_data.mkdir()
+    (app_data / "manifest.json").write_text('{"clean_tasks": 1450969}')
+    write_app(
+        tmp_path / "apps",
+        "tasktrove",
+        manifest=TASKTROVE_MANIFEST + f'data_url = "{app_data}"\n',
+    )
+    config = MarinaConfig(
+        apps_dir=tmp_path / "apps",
+        data_root=str(tmp_path / "unused"),
+        iap_audience=None,
+    )
+
+    with TestClient(create_app(config), client=("127.0.0.1", 40000)) as app_client:
+        response = app_client.get("/tasktrove/data/manifest.json")
+
+    assert response.status_code == 200
+    assert response.json() == {"clean_tasks": 1450969}
+
+
+def test_data_files_support_head_and_byte_ranges(client: TestClient) -> None:
+    head = client.head("/tasktrove/data/tasks.parquet")
+    assert head.status_code == 200 and head.content == b""
+    assert head.headers["accept-ranges"] == "bytes" and head.headers["content-length"] == "10"
+
+    middle = client.get("/tasktrove/data/tasks.parquet", headers={"Range": "bytes=2-5"})
+    assert middle.status_code == 206 and middle.content == b"2345"
+    assert middle.headers["content-range"] == "bytes 2-5/10"
+
+    suffix = client.get("/tasktrove/data/tasks.parquet", headers={"Range": "bytes=-3"})
+    assert suffix.status_code == 206 and suffix.content == b"789"
+    assert client.get("/tasktrove/data/tasks.parquet", headers={"Range": "bytes=10-"}).status_code == 416
+
+
+def test_data_file_range_uses_s3_compatible_arguments(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    content = b"0123456789"
+
+    class S3Filesystem:
+        def isfile(self, _path: str) -> bool:
+            return True
+
+        def size(self, _path: str) -> int:
+            return len(content)
+
+        def cat_file(
+            self,
+            _path: str,
+            version_id: str | None = None,
+            start: int | None = None,
+            end: int | None = None,
+        ) -> bytes:
+            assert version_id is None
+            return content[start:end]
+
+    monkeypatch.setattr("marina.server.filesystem_for", lambda _url: (S3Filesystem(), "release"))
+
+    response = client.get("/tasktrove/data/tasks.parquet", headers={"Range": "bytes=2-5"})
+
+    assert response.status_code == 206
+    assert response.content == b"2345"
 
 
 def test_non_loopback_without_iap_is_denied(tmp_path: Path) -> None:

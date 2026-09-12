@@ -1,0 +1,111 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Canonical registry of Datakit sources that retain structured conversations."""
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from functools import cache, cached_property
+
+from marin.datakit.chat_render import render_chat_step
+from marin.datakit.download.agenttrove import agenttrove_chat_normalize_steps
+from marin.datakit.download.coderforge import coderforge_chat_normalize_steps
+from marin.datakit.download.davinci_dev import davinci_dev_env_native_chat_normalize_steps
+from marin.datakit.download.glm_kernelgym_rollouts import glm_kernelgym_rollouts_chat_normalize_steps
+from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_chat_normalize_steps
+from marin.datakit.download.massive import massive_chat_normalize_steps
+from marin.datakit.download.nemotron_terminal import nemotron_terminal_chat_normalize_steps
+from marin.datakit.download.nemotron_v2 import nemotron_sft_chat_normalize_steps
+from marin.datakit.download.numinamath_tir import numinamath_tir_chat_normalize_steps
+from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_chat_normalize_steps
+from marin.datakit.download.openthoughts4_code import openthoughts4_code_chat_normalize_steps
+from marin.datakit.download.penfever_rollouts import penfever_rollouts_chat_normalize_steps
+from marin.datakit.download.superior_reasoning import superior_reasoning_chat_normalize_steps
+from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_chat_normalize_steps
+from marin.datakit.download.swe_zero_12m import swe_zero_12m_chat_normalize_steps
+from marin.datakit.download.synthetic1 import synthetic1_chat_normalize_steps
+from marin.datakit.normalize import normalize_step
+from marin.datakit.sources import all_sources
+from marin.execution.step_spec import StepSpec
+
+
+@dataclass(frozen=True)
+class DatakitChatSource:
+    """An SFT source with structured chat and normalized rendered-text artifacts."""
+
+    name: str
+    chat_steps: tuple[StepSpec, ...]
+    rough_token_count_b: float
+
+    @property
+    def chat_normalized(self) -> StepSpec:
+        return self.chat_steps[-1]
+
+    @cached_property
+    def rendered(self) -> StepSpec:
+        return render_chat_step(name=f"rendered/sft/{self.name}", chat=self.chat_normalized)
+
+    @cached_property
+    def normalized(self) -> StepSpec:
+        return normalize_step(name=f"normalized/sft/{self.name}", download=self.rendered)
+
+    @property
+    def normalize_steps(self) -> tuple[StepSpec, ...]:
+        return (*self.chat_steps, self.rendered, self.normalized)
+
+
+_EXCLUDED_CHAT_SOURCES = frozenset(
+    {
+        # These exports omit the original user request and the literal prompts
+        # needed to recover it and the served tool definitions.
+        "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-workplace-v2",
+        "penfever-traces/qwen35-122b-131k-opencode/selfinstruct-naive-sandboxes-2-verified",
+    }
+)
+_ChatSourceRow = tuple[str, Callable[[], tuple[StepSpec, ...]]]
+
+
+@cache
+def all_sft_sources() -> dict[str, DatakitChatSource]:
+    """Return SFT sources with Harmony-to-text normalization pipelines."""
+    penfever_steps = cache(penfever_rollouts_chat_normalize_steps)
+    nemotron_steps = cache(nemotron_sft_chat_normalize_steps)
+    rows: list[_ChatSourceRow] = [
+        ("agenttrove", agenttrove_chat_normalize_steps),
+        ("coderforge", coderforge_chat_normalize_steps),
+        ("davinci-dev/env-native", davinci_dev_env_native_chat_normalize_steps),
+        ("glm-5.2-kernelgym-rollouts", glm_kernelgym_rollouts_chat_normalize_steps),
+        ("gpt-oss-rollouts", gpt_oss_rollouts_chat_normalize_steps),
+        ("massive_function_calling", massive_chat_normalize_steps),
+        ("nemotron-terminal", nemotron_terminal_chat_normalize_steps),
+        ("numinamath-1.5", numinamath_v1_5_chat_normalize_steps),
+        ("numinamath-tir", numinamath_tir_chat_normalize_steps),
+        ("openthoughts4-code-glm-5.2-n4", openthoughts4_code_chat_normalize_steps),
+        ("superior-reasoning", superior_reasoning_chat_normalize_steps),
+        ("swe-rebench-openhands", swe_rebench_openhands_chat_normalize_steps),
+        ("swe-zero-12m", swe_zero_12m_chat_normalize_steps),
+        ("synthetic-1", synthetic1_chat_normalize_steps),
+    ]
+    rows.extend(
+        (name, lambda source_name=name: penfever_steps()[source_name])
+        for name in all_sources()
+        if name.startswith("penfever-traces/") and name not in _EXCLUDED_CHAT_SOURCES
+    )
+    rows.extend(
+        (name, lambda source_name=name: nemotron_steps()[source_name])
+        for name in all_sources()
+        if name.startswith("nemotron_sft/")
+    )
+
+    token_counts = {name: source.rough_token_count_b for name, source in all_sources().items()}
+    # This chat-only source has 3,341,347,579 completion tokens in its pinned
+    # manifest. The rough weight excludes repeated prompts.
+    token_counts["openthoughts4-code-glm-5.2-n4"] = 3.341347579
+    return {
+        name: DatakitChatSource(
+            name=name,
+            chat_steps=factory(),
+            rough_token_count_b=token_counts[name],
+        )
+        for name, factory in rows
+    }
