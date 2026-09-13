@@ -317,7 +317,9 @@ def training_config(
         inference_engine_data_parallel_size=8,
         inference_engine_expert_parallel_size=8,
         inference_engine_node_local=True,
+        enforce_eager=False,
     )
+    config["generator"].setdefault("engine_init_kwargs", {}).update(moe_backend="triton")
     config["generator"]["sampling_params"]["logprobs"] = 0
     if eval_response_tokens is not None:
         config["generator"]["eval_sampling_params"] = {"max_generate_length": eval_response_tokens}
