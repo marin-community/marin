@@ -8,6 +8,8 @@ live backends, the ListPeers view, and the submit router's decision matrix
 (prefer-local, hand off when locally infeasible, explicit ``cluster`` pin).
 """
 
+import threading
+
 import pydantic
 import pytest
 from iris.cluster.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
@@ -209,10 +211,15 @@ def test_availability_from_a_newer_metric_version_is_treated_as_unsupplied():
 
 
 class _RecordingStub:
-    """A controller stub that records the deadline each on-demand RPC was given."""
+    """A controller stub that records the deadline each RPC was given."""
 
     def __init__(self):
         self.exec_timeout_ms = 0
+        self.list_backends_timeout_ms: int | None = None
+
+    def list_backends(self, request, timeout_ms=None):
+        self.list_backends_timeout_ms = timeout_ms
+        return controller_pb2.Controller.ListBackendsResponse()
 
     def exec_in_container(self, request, timeout_ms):
         self.exec_timeout_ms = timeout_ms
@@ -238,6 +245,56 @@ def test_exec_proxy_deadline_outlasts_the_peer(monkeypatch):
 
     connection.exec_in_container(controller_pb2.Controller.ExecInContainerRequest(task_id="/u/j/0", timeout_seconds=30))
     assert stub.exec_timeout_ms > 30 * 1000
+
+
+def test_heartbeat_rpc_has_a_finite_deadline(monkeypatch):
+    stub = _RecordingStub()
+    monkeypatch.setattr(peer_module, "ControllerServiceClientSync", lambda **kwargs: stub)
+    connection = peer_module._PeerRpcConnection("http://peer:10000", [])
+
+    connection.list_backends()
+
+    assert stub.list_backends_timeout_ms is not None
+
+
+class _BlockingStub(_StubConnection):
+    """A peer connection whose ListBackends call does not return until released."""
+
+    def __init__(self):
+        super().__init__((_backend("blocked"),))
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
+        self.entered.set()
+        self.release.wait()
+        return super().list_backends()
+
+
+def test_stalled_peer_does_not_stop_other_peer_heartbeats():
+    healthy_connection = _StubConnection((_backend("first"),))
+    healthy_peer = _peer("healthy", healthy_connection)
+    blocked_connection = _BlockingStub()
+    blocked_peer = _peer("blocked", blocked_connection)
+
+    with thread_container_scope() as threads:
+        manager = FederationManager(
+            [healthy_peer, blocked_peer],
+            threads=threads,
+            heartbeat_interval=Duration.from_seconds(0.02),
+        )
+        manager.start()
+        try:
+            assert blocked_connection.entered.wait(timeout=1.0)
+            healthy_connection.backends = (_backend("second"),)
+            refreshed = ExponentialBackoff(initial=0.01, maximum=0.05).wait_until(
+                lambda: manager.peer_summaries()[1].backends[0].backend_id == "second",
+                timeout=Duration.from_seconds(0.5),
+            )
+            assert refreshed
+        finally:
+            blocked_connection.release.set()
+            manager.stop()
 
 
 def test_heartbeat_loop_refreshes_backends_and_stop_releases_connections():
