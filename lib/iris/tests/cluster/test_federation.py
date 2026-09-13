@@ -217,7 +217,7 @@ class _RecordingStub:
         self.exec_timeout_ms = 0
         self.list_backends_timeout_ms: int | None = None
 
-    def list_backends(self, request, timeout_ms=None):
+    def list_backends(self, _request, timeout_ms=None):
         self.list_backends_timeout_ms = timeout_ms
         return controller_pb2.Controller.ListBackendsResponse()
 
