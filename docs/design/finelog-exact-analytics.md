@@ -181,9 +181,10 @@ sparse and evolve by producer. A JSON path should become a typed generated
 column only when a recurring query uses it, copied-shard profiling shows JSON
 extraction remains material after pruning, and the path has a stable type and
 meaning. Once promoted, indexes and projections treat it like any ordinary
-column. `AdaptiveGroupExtrema` is not an exception: it summarizes one declared
-top-level JSON key per segment without materializing that key as a column, and
-declines the section when the key set exceeds its cardinality or byte budget.
+column. `AdaptiveGroupExtrema` stays inside that boundary: it summarizes one
+declared top-level JSON key per segment without materializing the key as a
+column, and declines the section when the key set exceeds its cardinality or
+byte budget.
 
 ## Build, cache, and lifecycle
 
@@ -234,8 +235,8 @@ Parquet-footer cache.
 ## Benchmark and acceptance criteria
 
 These are the acceptance numbers for the original four-method family and the
-single `training-status` projection; the adaptive methods and the later
-projections landed after them and were not part of this run.
+single `training-status` projection. The adaptive methods and the later
+projections landed afterward and were not measured here.
 
 The completed `.fidx` implementation was measured on four copied production
 telemetry segments containing 29.2 million rows and 171.9 MB of source Parquet.
