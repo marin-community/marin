@@ -11,8 +11,6 @@ from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar, cast
 
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
 from fray.actor import ActorFuture, ActorHandle, ActorUnavailableError
 from rigging.timing import ExponentialBackoff
 
@@ -304,9 +302,7 @@ def actor_result_with_recovery(
             raise MemoryStoreUnavailable(
                 f"memory-store actor {actor_index} did not respond within {timeout:g} seconds"
             ) from exc
-        except (ActorUnavailableError, ConnectError) as exc:
-            if isinstance(exc, ConnectError) and exc.code is not Code.NOT_FOUND:
-                raise
+        except ActorUnavailableError as exc:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise MemoryStoreUnavailable(
