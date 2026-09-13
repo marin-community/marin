@@ -55,7 +55,11 @@ def resolve_model_config(model_key: str | None, config_path: Path | None) -> Mod
         except Exception as exc:
             raise click.BadParameter(str(exc), param_hint="--model-config") from exc
 
-    assert model_key is not None
+    if model_key is None:
+        raise click.BadParameter(
+            "specify exactly one of --model or --model-config",
+            param_hint="--model/--model-config",
+        )
     catalog = models()
     if model_key not in catalog:
         raise click.BadParameter(f"unknown model {model_key!r}; known: {sorted(catalog)}", param_hint="--model")
@@ -76,7 +80,11 @@ def resolve_judge_model_config(model_key: str | None, config_path: Path | None) 
             return load_model_config(config_path)
         except Exception as exc:
             raise click.BadParameter(str(exc), param_hint="--judge-model-config") from exc
-    assert model_key is not None
+    if model_key is None:
+        raise click.BadParameter(
+            "specify --judge-model or --judge-model-config",
+            param_hint="--judge-model/--judge-model-config",
+        )
     catalog = models()
     if model_key not in catalog:
         raise click.BadParameter(
