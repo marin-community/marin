@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
@@ -41,6 +42,9 @@ Route = Literal["coordinator", "direct"]
 QueueReader = Callable[[str], Mapping[str, Any]]
 ReceiptWriter = Callable[[str, Mapping[str, Any]], None]
 RETRYABLE_SUBMISSION_CODES = {Code.FAILED_PRECONDITION}
+NONTERMINAL_STATUS_BACKOFF_SECONDS = 1.0
+ENV_REFERENCE_PATTERN = re.compile(r"\$\{ENV:([A-Za-z_][A-Za-z0-9_]*)\}")
+ENV_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,7 @@ class GpuJobPacket:
     disk: str
     receipt_uri: str | None
     timeout_seconds: int
+    credential_placeholders: tuple[str, ...] = ()
     environment: Mapping[str, Any] | None = None
     processes_per_task: int = 1
     max_retries_failure: int = 0
@@ -86,6 +91,7 @@ class GpuJobPacket:
             disk=raw.get("disk", "64g"),
             receipt_uri=receipt_uri or raw.get("receipt_uri"),
             timeout_seconds=raw.get("timeout_seconds", 3600),
+            credential_placeholders=tuple(raw.get("credential_placeholders", ())),
             environment=raw.get("environment"),
             processes_per_task=raw.get("processes_per_task", 1),
             max_retries_failure=raw.get("max_retries_failure", 0),
@@ -129,11 +135,24 @@ class GpuJobPacket:
             raise ValueError("priority must be batch or interactive")
         if self.receipt_uri is not None and not self.receipt_uri.startswith(("s3://", "gs://", "file://", "/")):
             raise ValueError("receipt_uri must be an absolute local or object-store URI")
+        if len(set(self.credential_placeholders)) != len(self.credential_placeholders):
+            raise ValueError("credential_placeholders must not contain duplicates")
+        if any(
+            not isinstance(name, str) or ENV_NAME_PATTERN.fullmatch(name) is None
+            for name in self.credential_placeholders
+        ):
+            raise ValueError("credential_placeholders must contain valid environment variable names")
         if self.environment is not None:
             allowed = {"env_vars", "extras", "setup_scripts", "sync_packages"}
             unknown = sorted(set(self.environment) - allowed)
             if unknown:
                 raise ValueError(f"unknown environment fields: {unknown}")
+        references = self._environment_references()
+        if set(references) != set(self.credential_placeholders):
+            raise ValueError(
+                "credential_placeholders must exactly name the environment ${ENV:VAR} references; "
+                f"declared={sorted(self.credential_placeholders)}, referenced={sorted(references)}"
+            )
 
     def canonical_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
@@ -142,12 +161,37 @@ class GpuJobPacket:
     def sha256(self) -> str:
         return hashlib.sha256(self.canonical_json().encode()).hexdigest()
 
+    def _environment_references(self) -> dict[str, str]:
+        env_vars = self.environment.get("env_vars", {}) if self.environment is not None else {}
+        references: dict[str, str] = {}
+        for key, value in env_vars.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                raise ValueError("environment.env_vars keys and values must be strings")
+            match = ENV_REFERENCE_PATTERN.fullmatch(value)
+            if "${ENV:" in value and match is None:
+                raise ValueError(f"environment reference for {key} must use exact ${{ENV:VAR}} syntax")
+            if match is not None:
+                referenced_name = match.group(1)
+                if key != referenced_name:
+                    raise ValueError(f"environment reference {key} must name itself, not {referenced_name}")
+                references[key] = referenced_name
+        return references
+
+    def _resolved_credentials(self) -> dict[str, str]:
+        references = self._environment_references()
+        missing = sorted(name for name in references.values() if not os.environ.get(name))
+        if missing:
+            raise ValueError(f"GPU packet requires ambient environment variables: {', '.join(missing)}")
+        return {key: os.environ[name] for key, name in references.items()}
+
     def _environment_config(self) -> EnvironmentConfig | None:
         if self.environment is None:
             return None
+        env_vars = dict(self.environment.get("env_vars", {}))
+        env_vars.update(self._resolved_credentials())
         return EnvironmentConfig(
             workspace=".",
-            env_vars=dict(self.environment.get("env_vars", {})),
+            env_vars=env_vars,
             extras=tuple(self.environment.get("extras", ())),
             setup_scripts=self.environment.get("setup_scripts"),
             sync_packages=tuple(self.environment.get("sync_packages", ())),
@@ -215,6 +259,16 @@ def read_target_local_queue(job_id: str, *, timeout_seconds: float = 30) -> Mapp
         time.sleep(0.25)
 
 
+def _wait_for_terminal(child: Any) -> JobStatus:
+    """Wait through queue delay and transient nonterminal returns."""
+
+    while True:
+        status = child.wait(timeout=None, raise_on_failure=False, stream_logs=True)
+        if JobStatus.finished(status):
+            return status
+        time.sleep(NONTERMINAL_STATUS_BACKOFF_SECONDS)
+
+
 def coordinate_packet(
     packet: GpuJobPacket,
     *,
@@ -263,7 +317,7 @@ def coordinate_packet(
     )
     # Queue delay is not part of the child execution limit. Iris enforces the
     # packet timeout on the child after admission; the parent must outlive it.
-    terminal = child.wait(timeout=None, raise_on_failure=False, stream_logs=True)
+    terminal = _wait_for_terminal(child)
     receipt["terminal_result"] = terminal.value
     if packet.receipt_uri is None:
         raise ValueError("receipt_uri is required for coordinator execution")
@@ -291,6 +345,7 @@ def _coordinator_environment(
 ) -> EnvironmentSpec:
     if packet.receipt_uri is None:
         raise ValueError("receipt_uri is required for coordinator submission")
+    credential_env = packet._resolved_credentials()
     return EnvironmentSpec(
         env_vars={
             "GPU_PACKET_ROUTE": "coordinator",
@@ -300,6 +355,7 @@ def _coordinator_environment(
             "GPU_PACKET_SOURCE_SHA256": source_packet_sha256,
             "GPU_PACKET_JOB_NAME": packet.job_name,
             "GPU_PACKET_RECEIPT_URI": packet.receipt_uri,
+            **credential_env,
         },
         extras=[],
         setup_scripts=None,
@@ -408,7 +464,7 @@ def submit_packet(
     }
     if route == "direct":
         assert direct_job is not None
-        terminal = direct_job.wait(timeout=None, raise_on_failure=False, stream_logs=True)
+        terminal = _wait_for_terminal(direct_job)
         receipt.update(
             event="gpu_child_terminal",
             coordinator_job_id=None,
