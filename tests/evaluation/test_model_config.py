@@ -289,3 +289,6 @@ def test_explicit_gpu_override_respects_fleet_limits():
 
     with pytest.raises(ValueError, match="positive power of two"):
         MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="H100x3")
+
+    with pytest.raises(ValueError, match="unknown GPU type 'GB200'"):
+        MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="GB200x1")

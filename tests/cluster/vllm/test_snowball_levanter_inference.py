@@ -33,8 +33,8 @@ from marin.testing.inference.snowball import (
     RepresentativeGolden,
     RepresentativePromptFixture,
     pad_prompt_batch,
+    read_checkpoint_goldens,
     read_prompt_fixture,
-    read_representative_goldens,
 )
 from marin.testing.inference.snowball_checkpoint import (
     VendoredTransformer,
@@ -143,7 +143,7 @@ def assert_checkpoint_inference_matches_golden(
 
 
 def test_snowball_checkpoint_matches_levanter_inference_goldens(marin_gpu_client: IrisClient, run_test_job) -> None:
-    expected_cases = read_representative_goldens()
+    expected_cases = read_checkpoint_goldens()
     run_test_job(
         marin_gpu_client,
         JobRequest(

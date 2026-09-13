@@ -17,11 +17,13 @@ MARIN_EVAL_HARDWARE = HardwarePolicy(
             "v5p": "us-central1",
         }
     ),
-    gpu_preference=("H100", "GB200"),
+    # Keep the evaluation fleet aligned with the architectures in config/external/vllm/gpu.toml.
+    # The Marin fork is installed before the worker starts, so selecting a GPU without a verified
+    # wheel would fail during bootstrap rather than running the evaluation.
+    gpu_preference=("H100",),
     gpu_profiles=MappingProxyType(
         {
             "H100": GpuProfile(hbm_gb=80, max_count=8, cluster="cw-us-east-02a"),
-            "GB200": GpuProfile(hbm_gb=186, max_count=4, cluster="cw-us-east-08a"),
         }
     ),
 )

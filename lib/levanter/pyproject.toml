@@ -100,7 +100,9 @@ gpu = [
   "jax-triton==0.3.1; sys_platform == 'linux'",
   # This module imports Triton directly; stay on the tested minor without
   # forcing an exact patch version.
-  "triton>=3.6.0,<3.7; sys_platform == 'linux'",
+  "triton>=3.7.0,<3.8; sys_platform == 'linux'",
+  # Keep torch_test and other Torch consumers on the same CUDA component pins.
+  "torch==2.13.0; sys_platform == 'linux'",
 ]
 deepep = [
   # DeepEP itself remains an external source checkout addressed by DEEPEP_SRC_ROOT.
@@ -179,6 +181,14 @@ dev = [
 
 
 
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu132", extra = "gpu", marker = "sys_platform == 'linux'" }
+
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
 
 [tool.uv]
 conflicts = [

@@ -198,7 +198,7 @@ def test_checkout_free_setup_script_pins_marin_core_with_extras():
     assert "vllm" not in script
 
 
-@pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
+@pytest.mark.parametrize("machine", [wheel.architecture for wheel in VLLM_GPU_RELEASE.wheels])
 def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine):
     # uvx is the external install boundary. The direct wheel, digest-bearing URL, CUDA ABI,
     # entrypoint, and provenance payload are its immutable contract; entrypoint behavior is
@@ -214,7 +214,8 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert separator
     assert urlunsplit(parsed_url._replace(fragment="")) == wheel.url
     assert parse_qs(parsed_url.fragment) == {"sha256": [wheel.sha256]}
-    assert cmd[cmd.index("--torch-backend") + 1] == VLLM_GPU_RELEASE.torch_backend
+    assert "--torch-backend" not in cmd
+    assert f"https://download.pytorch.org/whl/{VLLM_GPU_RELEASE.torch_backend}" in cmd
     bootstrap_index = cmd.index("-c")
     wrapped_command = cmd[bootstrap_index + 2 :]
     assert wrapped_command[0] == "python"

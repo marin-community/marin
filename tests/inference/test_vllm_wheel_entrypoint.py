@@ -31,7 +31,6 @@ _CORE_SIBLINGS = ("vllm/_moe_C.abi3.so", "vllm/_C.pyi")
 
 VERSION = VLLM_GPU_RELEASE.version
 H100_WHEEL = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, "x86_64")
-GB200_WHEEL = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, "aarch64")
 PROBE_DISTRIBUTION = "marinuvxprobe"
 _LOOPBACK_HOSTS = "127.0.0.1,localhost,::1"
 _READ_DIRECT_URL = (
@@ -223,8 +222,11 @@ def test_verifier_accepts_the_record_a_real_uvx_install_writes(tmp_path):
 
 @pytest.mark.parametrize(
     ("wheel", "compute_capability"),
-    [(H100_WHEEL, (9, 0)), (GB200_WHEEL, (10, 0))],
-    ids=["h100", "gb200"],
+    [
+        (wheel, tuple(int(part) for part in target.split(".")))
+        for wheel in VLLM_GPU_RELEASE.wheels
+        for target in wheel.sm_targets
+    ],
 )
 def test_wheel_entrypoint_verifies_extension_and_records_provenance(tmp_path, wheel, compute_capability):
     result, marker = _run_entrypoint(tmp_path, wheel=wheel, compute_capability=compute_capability)
@@ -292,7 +294,7 @@ def _assert_refused_before_cli(result, marker) -> None:
 @pytest.mark.parametrize(
     ("direct_url", "compute_capability"),
     [
-        (_uvx_direct_url(GB200_WHEEL.url), (9, 0)),
+        (_uvx_direct_url(H100_WHEEL.url.replace("x86_64", "aarch64")), (9, 0)),
         (None, (8, 0)),
     ],
     ids=["other-architecture-wheel", "unsupported-gpu"],

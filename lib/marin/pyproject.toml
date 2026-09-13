@@ -130,9 +130,9 @@ gpu = [
   "jax-triton==0.3.1; sys_platform == 'linux'",
   # This module imports Triton directly; stay on the tested minor without
   # forcing an exact patch version.
-  "triton>=3.6.0,<3.7; sys_platform == 'linux'",
-  "torch==2.11.0",
-  "torchvision==0.26.0",
+  "triton>=3.7.0,<3.8; sys_platform == 'linux'",
+  "torch==2.13.0",
+  "torchvision==0.28.0",
 ]
 tpu = [
   "jax==0.11.1",
@@ -192,13 +192,12 @@ torchvision = [
     # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
-    # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
-    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    # CUDA 13.2 satisfies the cuBLAS guard without overriding PyTorch's dependencies.
+    { index = "pytorch-cu132", extra = "gpu", marker = "sys_platform == 'linux'" },
 ]
 resiliparse = { index = "marin-resiliparse" }
 torch = [
-    # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
-    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu132", extra = "gpu", marker = "sys_platform == 'linux'" },
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
 ]
@@ -209,8 +208,8 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
 explicit = true
 
 
