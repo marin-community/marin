@@ -584,15 +584,30 @@ def test_validate_harbor_resume_root_rejects_job_name_prefix_collision(tmp_path)
         validate_harbor_resume_root(str(output_dir), _validated_config(dataset_selector="aime"))
 
 
+def test_validate_harbor_resume_root_accepts_confirmed_long_dataset(tmp_path):
+    config = _validated_config(dataset_selector="terminal-bench/terminal-bench-2-1")
+    output_dir = tmp_path / "results"
+    output_dir.mkdir()
+    (output_dir / "harbor_result.json").write_text(json.dumps({"dataset": config.record_dataset}))
+    job_dir = Path(str(runner._jobs_dir(str(output_dir)))) / runner._job_name(config.record_dataset, ("legacy",))
+    job_dir.mkdir(parents=True)
+    (job_dir / "config.json").write_text("{}")
+
+    validate_harbor_resume_root(str(output_dir), config)
+
+
 def test_harbor_executor_explicit_recovery_prunes_only_unscored_trials(tmp_path, monkeypatch):
     executor = replace(
-        _harbor_executor(f"recover-unscored-{tmp_path.name}"),
-        prune_unscored_trials_before_run=True,
+        _harbor_executor("recover-unscored", n_benchmark=2),
+        retry_unscored_trials=True,
     )
     session = _inference_session()
     job_name = runner._job_name(
         executor.config.record_dataset,
         (executor.config.digest, session.model.endpoint.model, executor.task_limit),
+    )
+    (tmp_path / "harbor_resume_identity.json").write_text(
+        json.dumps({"schema_version": 1, "dataset": executor.config.record_dataset})
     )
     job_dir = Path(str(runner._jobs_dir(str(tmp_path)))) / job_name
     _write_job_record(job_dir, 2, executor.config)
@@ -640,7 +655,7 @@ def test_harbor_executor_explicit_recovery_prunes_only_unscored_trials(tmp_path,
     dataset = executor.config.record_dataset
     assert outcome.metrics[dataset]["total"] == 2.0
     assert outcome.canonical_metrics[dataset]["reward"] == 0.5
-    assert outcome.coverage[dataset].errors == {}
+    assert outcome.coverage[dataset].errors == {"AgentTimeoutError": 1}
 
 
 def _harbor_executor(dataset: str, *, n_benchmark: int = 1, trials_per_task: int = 1) -> HarborExecutor:

@@ -245,7 +245,8 @@ def validate_harbor_resume_root(output_dir: str, config: ValidatedHarborConfig) 
             f"Harbor results root {output_dir!r} has no dataset identity or resumable jobs. "
             "Choose the original results root, or omit --resume-results-path to start a clean run."
         )
-    incompatible = tuple(name for name in job_names if _dataset_from_job_name(name) != safe_dataset)
+    expected_job_dataset = safe_dataset[:_JOB_DATASET_LENGTH]
+    incompatible = tuple(name for name in job_names if _dataset_from_job_name(name) != expected_job_dataset)
     if incompatible:
         _raise_resume_identity_mismatch(output_dir, config, f"contains incompatible jobs {incompatible!r}")
 
@@ -535,7 +536,7 @@ class HarborExecutor:
     secret_env_keys: tuple[str, ...] = ()
     min_completion_rate: float = DEFAULT_MIN_COMPLETION_RATE
     """Minimum scoreable fraction of attempted trials for accepting the run."""
-    prune_unscored_trials_before_run: bool = False
+    retry_unscored_trials: bool = False
     """Re-run only durable trials for which the verifier never produced a result."""
 
     def _run(
@@ -567,7 +568,7 @@ class HarborExecutor:
             self.task_limit,
             Path(dataset_path).name if dataset_path is not None else None,
         )
-        if self.prune_unscored_trials_before_run:
+        if self.retry_unscored_trials:
             job_dir = _job_dir(output_dir, job_name)
             logger.info("removing unscored Harbor trials before explicit recovery: %s", job_dir)
             _remove_unscored_trials(job_dir, self.config.error_taxonomy)
