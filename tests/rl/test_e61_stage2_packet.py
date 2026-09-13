@@ -17,6 +17,17 @@ from experiments.post_training.e61_stage2 import stage2_packet
 from experiments.post_training.e61_stage2_preparation import check_process
 
 
+def test_stage2_retry_uses_fresh_unique_families_for_every_arm():
+    assert e61_stage2.FAMILIES == {
+        "parser_only": "2026.09.13.266",
+        "force_close": "2026.09.13.267",
+        "soft_overlong": "2026.09.13.268",
+        "negative_truncation_advantage": "2026.09.13.269",
+        "repetition_stop": "2026.09.13.270",
+    }
+    assert len(set(e61_stage2.FAMILIES.values())) == 5
+
+
 def test_wrong_input_receipt_rejected():
     with pytest.raises(ValueError, match="Original stage-2 input receipt differs"):
         stage2_packet({}, b"{}", "parser_only")
