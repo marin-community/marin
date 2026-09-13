@@ -37,6 +37,9 @@ def configure_nvrtc_linker_path(distribution: importlib.metadata.Distribution) -
     fails even though the runtime library is installed. Keep the installed wheel immutable: create
     the linker name in a process-private temporary directory and prepend that directory to the
     compile-time and runtime library search paths.
+
+    Returns the temporary shim directory, or ``None`` when the distribution has no versioned NVRTC
+    runtime.
     """
     candidates = sorted(
         Path(distribution.locate_file(file)).resolve()

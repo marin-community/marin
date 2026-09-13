@@ -42,6 +42,30 @@ def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
         raise click.BadParameter(str(error)) from error
 
 
+def _load_selected_model(
+    model_key: str | None,
+    config_path: Path | None,
+    *,
+    key_hint: str,
+    config_hint: str,
+    label: str,
+) -> ModelConfig:
+    if config_path is not None:
+        try:
+            return load_model_config(config_path)
+        except Exception as exc:
+            raise click.BadParameter(str(exc), param_hint=config_hint) from exc
+    if model_key is None:
+        raise click.BadParameter(f"missing {label} selector", param_hint=f"{key_hint}/{config_hint}")
+    catalog = models()
+    if model_key not in catalog:
+        raise click.BadParameter(
+            f"unknown {label} {model_key!r}; known: {sorted(catalog)}",
+            param_hint=key_hint,
+        )
+    return catalog[model_key]
+
+
 def resolve_model_config(model_key: str | None, config_path: Path | None) -> ModelConfig:
     """Resolve exactly one model registry key or catalog-schema file."""
     if (model_key is None) == (config_path is None):
@@ -49,21 +73,13 @@ def resolve_model_config(model_key: str | None, config_path: Path | None) -> Mod
             "specify exactly one of --model or --model-config",
             param_hint="--model/--model-config",
         )
-    if config_path is not None:
-        try:
-            return load_model_config(config_path)
-        except Exception as exc:
-            raise click.BadParameter(str(exc), param_hint="--model-config") from exc
-
-    if model_key is None:
-        raise click.BadParameter(
-            "specify exactly one of --model or --model-config",
-            param_hint="--model/--model-config",
-        )
-    catalog = models()
-    if model_key not in catalog:
-        raise click.BadParameter(f"unknown model {model_key!r}; known: {sorted(catalog)}", param_hint="--model")
-    return catalog[model_key]
+    return _load_selected_model(
+        model_key,
+        config_path,
+        key_hint="--model",
+        config_hint="--model-config",
+        label="model",
+    )
 
 
 def resolve_judge_model_config(model_key: str | None, config_path: Path | None) -> ModelConfig | None:
@@ -75,23 +91,13 @@ def resolve_judge_model_config(model_key: str | None, config_path: Path | None) 
             "specify at most one of --judge-model or --judge-model-config",
             param_hint="--judge-model/--judge-model-config",
         )
-    if config_path is not None:
-        try:
-            return load_model_config(config_path)
-        except Exception as exc:
-            raise click.BadParameter(str(exc), param_hint="--judge-model-config") from exc
-    if model_key is None:
-        raise click.BadParameter(
-            "specify --judge-model or --judge-model-config",
-            param_hint="--judge-model/--judge-model-config",
-        )
-    catalog = models()
-    if model_key not in catalog:
-        raise click.BadParameter(
-            f"unknown judge model {model_key!r}; known: {sorted(catalog)}",
-            param_hint="--judge-model",
-        )
-    return catalog[model_key]
+    return _load_selected_model(
+        model_key,
+        config_path,
+        key_hint="--judge-model",
+        config_hint="--judge-model-config",
+        label="judge model",
+    )
 
 
 def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
