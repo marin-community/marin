@@ -12,6 +12,8 @@ import threading
 
 import pydantic
 import pytest
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from iris.cluster.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
 from iris.cluster.config import PeerConfig, config_to_dict, parse_config, user_admitted
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
@@ -269,6 +271,37 @@ class _BlockingStub(_StubConnection):
         self.entered.set()
         self.release.wait()
         return super().list_backends()
+
+
+class _TimeoutOnceStub(_StubConnection):
+    """A peer connection whose first heartbeat exceeds its deadline."""
+
+    def __init__(self):
+        super().__init__((_backend("recovered"),))
+        self.timed_out = False
+
+    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
+        if not self.timed_out:
+            self.timed_out = True
+            raise ConnectError(Code.DEADLINE_EXCEEDED, "Request timed out")
+        return super().list_backends()
+
+
+def test_heartbeat_loop_retries_after_rpc_deadline_exceeded():
+    peer = _peer("recovering", _TimeoutOnceStub())
+
+    with thread_container_scope() as threads:
+        manager = FederationManager([peer], threads=threads, heartbeat_interval=Duration.from_seconds(0.02))
+        manager.start()
+        try:
+            recovered = ExponentialBackoff(initial=0.01, maximum=0.05).wait_until(
+                lambda: manager.peer_summaries()[0].reachable,
+                timeout=Duration.from_seconds(0.5),
+            )
+            assert recovered
+            assert manager.peer_summaries()[0].backends[0].backend_id == "recovered"
+        finally:
+            manager.stop()
 
 
 def test_stalled_peer_does_not_stop_other_peer_heartbeats():
