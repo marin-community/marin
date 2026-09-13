@@ -75,14 +75,14 @@ MARIN_SKYRL = ExternalDependency(
     distribution="marinskyrl",
     repository="https://github.com/marin-community/MarinSkyRL.git",
     version="0.1.0",
-    commit="32f87a9894f4c9ab47b345e16d461fb2cc9f241b",
+    commit="b32a182081dab50592eaca11fcdfcad29da7db0e",
     runtime_requirements=(),
 )
 
 VLLM_GPU_RELEASE = VllmGpuRelease(
-    release_tag="marin-vllm-gpu-20260912-177d960f5b43",
-    source_commit="177d960f5b437a813738b1d9544f150ba41dc200",
-    version="0.0.0.dev20260912+marin.177d960f5b43.cu132",
+    release_tag="marin-vllm-gpu-20260913-4c1c798a7b60",
+    source_commit="4c1c798a7b6072aab4f435b0fe0eb9e3ae9e5e19",
+    version="0.0.0.dev20260913+marin.4c1c798a7b60.cu132",
     torch_backend="cu132",
     wheels=(
         VllmGpuWheel(
@@ -90,10 +90,10 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
             sm_targets=("9.0",),
             url=(
                 "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-20260912-177d960f5b43/vllm-0.0.0.dev20260912%2Bmarin.177d960f5b43.cu132-"
+                "marin-vllm-gpu-20260913-4c1c798a7b60/vllm-0.0.0.dev20260913%2Bmarin.4c1c798a7b60.cu132-"
                 "cp38-abi3-manylinux_2_28_x86_64.whl"
             ),
-            sha256="93684330f606a830417431bf29b7cb47498d9ed723f86ed64694ee7b5d21c655",
+            sha256="771a1b8551ec2dd3a4739eda08383e48173f8b6d0935075b201d0cffa916d602",
         ),
     ),
 )
