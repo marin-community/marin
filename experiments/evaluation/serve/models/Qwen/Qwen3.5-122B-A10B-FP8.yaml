@@ -6,7 +6,7 @@ resource_hint:
   gpu:
     H100: 8
   cpu: 64
-  memory: 320g
+  memory: 512g
   disk: 200g
 serve:
   tensor_parallel_size: 8
