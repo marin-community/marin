@@ -1,0 +1,342 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import json
+from copy import deepcopy
+
+import pytest
+import reasoning_gym
+from tokenizers import AddedToken, Regex, Tokenizer
+from tokenizers.decoders import Fuse
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Split
+
+from experiments.post_training.math_eval.calibration_protocol import (
+    CalibrationProtocol,
+    calibration_request,
+    calibration_rows,
+)
+from experiments.post_training.math_eval.contract import QWEN, SNOWBALL
+from experiments.post_training.math_eval.pool import prompt_hash
+from experiments.post_training.math_eval.serving import MAX_FAILURE_RECEIPT_BYTES, completion_rows_with_failure_receipt
+from experiments.post_training.math_eval.serving_records import completion_request, completion_rows, serving_metrics
+from experiments.post_training.math_eval.snowball_checkpoint_protocol import (
+    SnowballHeldoutProtocol,
+    snowball_request,
+    snowball_rows,
+)
+
+
+def Decoder():
+    vocab = {chr(index): index for index in range(128)}
+    vocab.pop(chr(0))
+    vocab["<eos>"] = 0
+    decoder = Tokenizer(WordLevel(vocab, unk_token="?"))
+    decoder.pre_tokenizer = Split(Regex(""), behavior="isolated")
+    decoder.decoder = Fuse()
+    decoder.add_special_tokens([AddedToken("<eos>", special=True)])
+    return decoder
+
+
+def fixture(env="aime"):
+    decoder = Decoder()
+    item = {
+        "problem": "What is 2 + 3?",
+        "prompt_sha256": prompt_hash("What is 2 + 3?"),
+        "prompt_template_id_qwen": QWEN.template_id,
+        "gold": "5",
+        "env_class": env,
+        "bin": "fixture/math",
+    }
+    request = completion_request(item, decoder, model="qwen", samples=8, api_model="frozen-rating-model")
+    choices = []
+    for index in range(8):
+        text = ("#### " if env == "gsm8k" else "Answer: ") + ("5" if index < 4 else "7")
+        choices.append(
+            {
+                "index": index,
+                "text": text,
+                "token_ids": [*decoder.encode(text).ids, 0],
+                "prompt_token_ids": request["prompt"],
+                "finish_reason": "length" if index in {2, 3} else "stop",
+                "stop_reason": None,
+            }
+        )
+    prompt_count = len(request["prompt"])
+    response_count = sum(len(choice["token_ids"]) for choice in choices)
+    response = {
+        "id": "completion-fixture",
+        "model": request["model"],
+        "choices": choices,
+        "usage": {
+            "prompt_tokens": prompt_count,
+            "completion_tokens": response_count,
+            "total_tokens": prompt_count + response_count,
+        },
+    }
+    return decoder, item, request, response
+
+
+def test_renderer_mismatch_preserves_exact_failed_response_and_still_raises(tmp_path):
+    decoder, item, request, response = fixture()
+    response["choices"][3]["text"] += "\ufffd"
+    original = deepcopy(response)
+    path = tmp_path / "validation-failure.json"
+    with pytest.raises(ValueError, match="qualified token renderer"):
+        completion_rows_with_failure_receipt(
+            item,
+            request,
+            response,
+            decoder,
+            model="qwen",
+            question_index=13,
+            failure_uri=str(path),
+            provenance={"source_commit": "reviewed", "attempt_uid": "native-attempt"},
+        )
+    receipt = json.loads(path.read_text())
+    assert receipt["rating_valid"] is False
+    assert receipt["response"] == original
+    assert receipt["request"] == request and receipt["item"] == item
+    assert receipt["question_index"] == 13
+    assert receipt["provenance"]["attempt_uid"] == "native-attempt"
+    assert not (tmp_path / "dumped_evals").exists()
+    with pytest.raises(RuntimeError, match="overwrite"):
+        completion_rows_with_failure_receipt(
+            item,
+            request,
+            response,
+            decoder,
+            model="qwen",
+            question_index=13,
+            failure_uri=str(path),
+            provenance={},
+        )
+    assert json.loads(path.read_text()) == receipt
+
+
+def test_valid_responses_keep_scores_without_writing_failure_receipt(tmp_path):
+    decoder, item, request, response = fixture()
+    path = tmp_path / "validation-failure.json"
+    rows = completion_rows_with_failure_receipt(
+        item,
+        request,
+        response,
+        decoder,
+        model="qwen",
+        question_index=2,
+        failure_uri=str(path),
+        provenance={},
+    )
+    assert rows == completion_rows(item, request, response, decoder, model="qwen", question_index=2)
+    assert not path.exists()
+
+
+def test_oversized_failure_is_not_truncated_or_written_as_a_complete_receipt(tmp_path):
+    decoder, item, request, response = fixture()
+    response["choices"][0]["text"] = "x" * (MAX_FAILURE_RECEIPT_BYTES + 1)
+    path = tmp_path / "validation-failure.json"
+    with pytest.raises(RuntimeError, match="diagnostic bound"):
+        completion_rows_with_failure_receipt(
+            item,
+            request,
+            response,
+            decoder,
+            model="qwen",
+            question_index=0,
+            failure_uri=str(path),
+            provenance={},
+        )
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("env", ["gsm8k", "aime"])
+def test_serving_records_preserve_raw_tokens_and_signed_reward_while_gating_completion(env):
+    decoder, item, request, response = fixture(env)
+    rows = completion_rows(item, request, response, decoder, model="qwen", question_index=2)
+    assert [row["row_ordinal"] for row in rows] == list(range(16, 24))
+    assert all(row["token_provenance"] == "raw_engine_response" for row in rows)
+    assert all(row["output_response"].endswith("<eos>") for row in rows)
+    assert all(row["generator_engine_index"] is None for row in rows)
+    assert rows[-1]["score"] == (-1 if env == "aime" else 0)
+    metrics = serving_metrics(rows, samples=8)
+    assert metrics["eval/all/contract_correct"] == 0.5
+    assert metrics["eval/all/contract_completed"] == 0.25
+    assert metrics["eval/all/pass_at_8"] == 1
+    assert "seed" not in request and request["temperature"] == request["top_p"] == 1
+
+
+@pytest.mark.parametrize(
+    "poison", ["text", "prompt", "missing_tokens", "choice_index", "usage", "model", "stop", "protocol", "question"]
+)
+def test_serving_responses_fail_on_incomplete_or_mismatched_native_evidence(poison):
+    decoder, item, request, response = fixture()
+    if poison == "text":
+        response["choices"][0]["text"] += "<eos>"
+    elif poison == "prompt":
+        response["choices"][0]["prompt_token_ids"] = [4, 5]
+    elif poison == "missing_tokens":
+        del response["choices"][0]["token_ids"]
+    elif poison == "choice_index":
+        response["choices"][1]["index"] = 0
+    elif poison == "usage":
+        response["usage"]["completion_tokens"] -= 1
+    elif poison == "model":
+        response["model"] = "foreign-model"
+    elif poison == "stop":
+        response["choices"][0]["finish_reason"] = "abort"
+    elif poison == "protocol":
+        request["temperature"] = 0
+    else:
+        item["problem"] = "What is 2 + 4?"
+    with pytest.raises(ValueError):
+        completion_rows(item, request, response, decoder, model="qwen", question_index=0)
+
+
+def test_missing_sample_prevents_publishing_metrics():
+    decoder, item, request, response = fixture()
+    rows = completion_rows(item, request, response, decoder, model="qwen", question_index=0)
+    with pytest.raises(ValueError, match="sample count"):
+        serving_metrics(rows[:-1], samples=8)
+    altered = deepcopy(response)
+    altered["choices"].pop()
+    with pytest.raises(ValueError, match="sample count"):
+        completion_rows(item, request, altered, decoder, model="qwen", question_index=0)
+
+
+def test_fractional_native_reasoning_gym_credit_does_not_become_binary_correctness():
+    decoder, item, _request, _response = fixture()
+    entry = reasoning_gym.create_dataset("chain_sum", size=1, seed=101)[0]
+    item.update(
+        problem=entry["question"],
+        prompt_sha256=prompt_hash(entry["question"]),
+        env_class="reasoning_gym",
+        gold=json.dumps({"task": "chain_sum", "entry": entry}),
+    )
+    request = completion_request(item, decoder, model="qwen", samples=8, api_model="frozen-rating-model")
+    choices = []
+    for index in range(8):
+        text = "Answer: " + entry["answer"] + (" junk" if index >= 4 else "")
+        choices.append(
+            {
+                "index": index,
+                "text": text,
+                "token_ids": [*decoder.encode(text).ids, 0],
+                "prompt_token_ids": request["prompt"],
+                "finish_reason": "stop",
+                "stop_reason": None,
+            }
+        )
+    output_count = sum(len(choice["token_ids"]) for choice in choices)
+    response = {
+        "id": "rg-response",
+        "model": request["model"],
+        "choices": choices,
+        "usage": {
+            "prompt_tokens": len(request["prompt"]),
+            "completion_tokens": output_count,
+            "total_tokens": len(request["prompt"]) + output_count,
+        },
+    }
+    rows = completion_rows(item, request, response, decoder, model="qwen", question_index=0)
+    assert all(0 < row["score"] < 1 and not row["native_contract_correct"] for row in rows[4:])
+    metrics = serving_metrics(rows, samples=8)
+    assert metrics["eval/all/contract_correct"] == metrics["eval/all/contract_completed"] == 0.5
+
+
+def test_prompt_overflow_fails_before_requesting_generation():
+    decoder, item, _request, _response = fixture()
+    item["problem"] = "x" * 4096
+    item["prompt_sha256"] = prompt_hash(item["problem"])
+    with pytest.raises(ValueError, match="eligibility cap"):
+        completion_request(item, decoder, model="qwen", samples=8, api_model="frozen-rating-model")
+
+
+def test_calibration_protocol_keeps_native_renderer_and_scores_with_separate_request_identity():
+    decoder, item, original, response = fixture()
+    protocol = CalibrationProtocol("heldout_stochastic", 8)
+    issued = calibration_request(item, decoder, protocol=protocol, api_model=original["model"])
+    assert issued["temperature"] == 0.6 and issued["top_p"] == 0.95 and issued["max_tokens"] == 1024
+    assert original["temperature"] == 1.0 and original["max_tokens"] == 2048
+    before = completion_rows(item, original, response, decoder, model="qwen", question_index=0)
+    after = calibration_rows(item, issued, response, decoder, protocol=protocol, question_index=0)
+    assert [row["generation_request_sha256"] for row in before] != [row["generation_request_sha256"] for row in after]
+    assert [{k: v for k, v in row.items() if k != "generation_request_sha256"} for row in before] == [
+        {k: v for k, v in row.items() if k != "generation_request_sha256"} for row in after
+    ]
+    issued["max_tokens"] = 2048
+    with pytest.raises(ValueError, match="frozen"):
+        calibration_rows(item, issued, response, decoder, protocol=protocol, question_index=0)
+
+
+@pytest.mark.parametrize(
+    "panel,samples,temperature,top_p",
+    [
+        ("math_greedy", 1, 0.0, 1.0),
+        ("math_stochastic", 8, 0.6, 0.95),
+        ("platinum_greedy", 1, 0.0, 1.0),
+    ],
+)
+@pytest.mark.parametrize("seed", [17, 29, 43])
+def test_snowball_panels_preserve_sample_mapping_and_seed(panel, samples, temperature, top_p, seed):
+    decoder, item, _, response = fixture()
+    item["prompt_template_id_snowball"] = SNOWBALL.template_id
+    protocol = SnowballHeldoutProtocol(panel, seed)
+    request = snowball_request(item, decoder, protocol=protocol, api_model="trained-u100")
+    assert (request["n"], request["temperature"], request["top_p"], request["max_tokens"], request["seed"]) == (
+        samples,
+        temperature,
+        top_p,
+        4096,
+        seed,
+    )
+    response["model"] = request["model"]
+    response["choices"] = response["choices"][:samples][::-1]
+    for choice in response["choices"]:
+        choice["prompt_token_ids"] = request["prompt"]
+    count = sum(len(choice["token_ids"]) for choice in response["choices"])
+    response["usage"] = dict(
+        prompt_tokens=len(request["prompt"]), completion_tokens=count, total_tokens=len(request["prompt"]) + count
+    )
+    rows = snowball_rows(item, request, response, decoder, protocol=protocol, question_index=3)
+    assert [row["sample_index"] for row in rows] == list(range(samples))
+    assert [row["row_ordinal"] for row in rows] == list(range(3 * samples, 4 * samples))
+    assert all(row["evaluation_seed"] == seed and row["uid"] == item["prompt_sha256"] for row in rows)
+    request.pop("seed")
+    with pytest.raises(ValueError, match="frozen"):
+        snowball_rows(item, request, response, decoder, protocol=protocol, question_index=3)
+
+
+def test_snowball_prompt_and_response_limits_reject_one_token_overflow():
+    decoder, item, _, _ = fixture()
+    item["prompt_template_id_snowball"] = SNOWBALL.template_id
+    protocol = SnowballHeldoutProtocol("math_greedy", 17)
+    initial = snowball_request(item, decoder, protocol=protocol, api_model="trained-u100")
+    item["problem"] += "x" * (4096 - len(initial["prompt"]))
+    item["prompt_sha256"] = prompt_hash(item["problem"])
+    request = snowball_request(item, decoder, protocol=protocol, api_model="trained-u100")
+    assert len(request["prompt"]) + request["max_tokens"] == 8192
+    tokens = decoder.encode("x" * 4096).ids
+    response = {
+        "model": request["model"],
+        "id": "limit",
+        "choices": [
+            {
+                "index": 0,
+                "text": "x" * 4096,
+                "token_ids": tokens,
+                "prompt_token_ids": request["prompt"],
+                "finish_reason": "length",
+                "stop_reason": None,
+            }
+        ],
+        "usage": {"prompt_tokens": 4096, "completion_tokens": 4096, "total_tokens": 8192},
+    }
+    rows = snowball_rows(item, request, response, decoder, protocol=protocol, question_index=0)
+    assert rows[0]["response_length"] == 4096 and rows[0]["stop_reason"] == "length"
+    response["choices"][0]["token_ids"].append(120)
+    with pytest.raises(ValueError, match="count"):
+        snowball_rows(item, request, response, decoder, protocol=protocol, question_index=0)
+    item["problem"] += "x"
+    item["prompt_sha256"] = prompt_hash(item["problem"])
+    with pytest.raises(ValueError, match="eligibility cap"):
+        snowball_request(item, decoder, protocol=protocol, api_model="trained-u100")

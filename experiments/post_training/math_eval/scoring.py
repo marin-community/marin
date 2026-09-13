@@ -18,6 +18,7 @@ from tokenizers import Tokenizer
 from experiments.post_training.async_rl_quality import AnswerStatus, extract_numeric_answer, normalize_numeric_answer
 from experiments.post_training.async_rl_quality_audit import final_assistant_segment
 from experiments.post_training.math_eval.lm_eval_regex import scores as lm_eval_scores
+from experiments.post_training.math_eval.rendering import INCREMENTAL_RENDERING, render_serving_response
 
 ACCEPTED_STOPS = frozenset({"complete", "end_turn", "eos", "stop"})
 CONTRACT_RULES = {"gsm8k": "gsm8k_first_hash", "aime": "aime_last_answer_300", "reasoning_gym": "rg_last_answer"}
@@ -77,7 +78,7 @@ def semantic_answer(segment: str | None, boundary: str, gold: str) -> tuple[floa
     return float(verify(reference, prediction)), "parsed", f"math-verify=={MATH_VERIFY_VERSION}"
 
 
-def score_row(row: dict[str, Any], decoder: Tokenizer, *, model: str, thinking: bool) -> ScoredRow:
+def score_row(row: dict[str, Any], decoder: Tokenizer, *, model: str, thinking: bool, semantic_worker=None) -> ScoredRow:
     """Score a proven dump row; reject reward channels inconsistent with its verifier.
 
     The harness verifies token hashes and frozen prompt identity before this call.
@@ -93,7 +94,12 @@ def score_row(row: dict[str, Any], decoder: Tokenizer, *, model: str, thinking: 
         raise ValueError("Ground-truth channels disagree")
     # The inference engine sends special-token-stripped text to env.step. The
     # dump's output_response is a forensic decode retaining EOS and role tokens.
-    response = decoder.decode(row["response_ids"], skip_special_tokens=True)
+    rendering = "decode_skip_special_tokens"
+    if row.get("token_provenance") == "raw_engine_response":
+        rendering = INCREMENTAL_RENDERING
+        response = render_serving_response(decoder, row["prompt_token_ids"], row["response_ids"])
+    else:
+        response = decoder.decode(row["response_ids"], skip_special_tokens=True)
     correct = get_data_contract(env).is_correct(response, gold)
     native = score_response(response, gold) if env == "reasoning_gym" else float(correct)
     if env == "reasoning_gym":
@@ -113,7 +119,19 @@ def score_row(row: dict[str, Any], decoder: Tokenizer, *, model: str, thinking: 
         decoder, tokens, thinking=thinking, prompt_tokens=row["prompt_token_ids"]
     )
     semantic_gold = json.loads(gold)["entry"]["answer"] if env == "reasoning_gym" else gold
-    semantic, status, engine = semantic_answer(segment, boundary, semantic_gold)
+    if semantic_worker is None:
+        semantic, status, engine = semantic_answer(segment, boundary, semantic_gold)
+    else:
+        semantic, status, engine = semantic_worker.score(
+            segment,
+            boundary,
+            semantic_gold,
+            identity={
+                "uid": str(row["uid"]),
+                "prompt_sha256": extras["extra_info"]["prompt_sha256"],
+                "response_sha256": hashlib.sha256(json.dumps(tokens, separators=(",", ":")).encode()).hexdigest(),
+            },
+        )
     stop = row["stop_reason"]
     completed = float(correct and stop in ACCEPTED_STOPS)
     strict, flexible = lm_eval_scores(response, gold) if env == "gsm8k" else (None, None)
@@ -125,7 +143,7 @@ def score_row(row: dict[str, Any], decoder: Tokenizer, *, model: str, thinking: 
         native_reward_tokens=tuple(rewards) if isinstance(rewards, list) else None,
         native_reward_reduction="token_reward_sum" if isinstance(rewards, list) else "scalar_identity",
         contract_response_sha256=hashlib.sha256(response.encode()).hexdigest(),
-        contract_response_rendering="decode_skip_special_tokens",
+        contract_response_rendering=rendering,
         contract_correct=correct,
         score_contract_completed=completed,
         contract_rule=CONTRACT_RULES[env],
