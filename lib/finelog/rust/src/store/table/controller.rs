@@ -1165,9 +1165,22 @@ impl TableController {
             })?;
         let snapshot = published.as_ref().map(TableSnapshot::from_stored);
         let resolved =
-            resolve_publication(&self.table, attempted, self.fence, snapshot.as_ref(), error)?;
-        *self.selected.lock().unwrap() = published;
-        Ok(resolved)
+            resolve_publication(&self.table, attempted, self.fence, snapshot.as_ref(), error);
+        if let Some(published) = published {
+            let mut selected = self.selected.lock().unwrap();
+            let advances_selection = published.fence() == self.fence
+                && selected
+                    .as_ref()
+                    .is_none_or(|selected| published.revision() > selected.revision());
+            if resolved.is_ok() || advances_selection {
+                // A same-writer revision that does not settle this attempt is
+                // still the observed CAS base for its retry. The controller is
+                // this writer's only publisher, so retaining an older token
+                // would make every later publication fail against this HEAD.
+                *selected = Some(published);
+            }
+        }
+        resolved
     }
 
     async fn run_tombstone(&self) -> Result<(), StatsError> {
@@ -1473,6 +1486,48 @@ mod tests {
                 .catalog_generation,
             1
         );
+    }
+
+    #[tokio::test]
+    async fn deferred_publication_adopts_a_newer_head_from_the_same_writer() {
+        let (controller, states, _faults) =
+            faulted_controller("controller_adopt_newer_same_writer_head", 11);
+        let first = controller.publish_state().await.unwrap();
+        let selected = states.load(TABLE).await.unwrap().unwrap();
+
+        let mut remote = first.state().catalog().clone();
+        remote.catalog_generation = Some(2);
+        remote.forward_cursors.push(ForwardCursor {
+            target: Some("hub".to_string()),
+            cursor: Some(3),
+            ..Default::default()
+        });
+        states
+            .commit(TABLE, WriterFence::new(11), Some(&selected), remote)
+            .await
+            .unwrap();
+
+        controller
+            .catalog
+            .set_forward_cursor("hub", TABLE, 5)
+            .unwrap();
+        controller
+            .catalog
+            .set_forward_cursor("hub", TABLE, 9)
+            .unwrap();
+
+        let error = controller.publish_state().await.unwrap_err();
+        assert!(matches!(error, CommitError::PublicationDeferred(_)));
+        assert!(controller.publication_owed());
+        assert!(controller.writes_ready());
+
+        let published = controller.publish_state().await.unwrap();
+        assert_eq!(published.revision().get(), 3);
+        assert_eq!(
+            published.state().catalog().forward_cursors[0].cursor,
+            Some(9)
+        );
+        assert!(!controller.publication_owed());
     }
 
     /// Claiming a table another writer published takes ownership of exactly the
