@@ -103,7 +103,7 @@ behind it, the per-cause counts of items it attempted and never graded, and a 95
 reports an attempted count, the interval covers the ungraded items by Manski bounds with an
 Imbens-Manski critical value rather than imputing them; when it reports none, the interval is labelled
 `sampling_only`, because completeness is then unknown. Rankings sort on the interval's lower bound, so
-losing items cannot buy rank.
+losing items cannot buy rank. Each row's `last_updated` is the maximum `created_at` among its cells.
 
 Both runners establish that attempted count. Harbor reports the trials it dispatched; lm-eval publishes
 no such count in its aggregate results, so the evalchemy path derives it from the document indices in
