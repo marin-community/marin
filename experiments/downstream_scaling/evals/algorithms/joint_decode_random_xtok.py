@@ -1,48 +1,29 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cross-tokenizer joint-decode-avg completion algorithm (xregion worker pools).
+"""Cross-tokenizer random-gated joint-decode completion algorithm.
 
-Decodes from two models, jointly selecting each committed chunk. With
-**different tokenizers**, candidates are compared as byte strings: each
-decision round commits one byte chunk, forced on each side as that side's
-own token segmentation (the joint-decode package's variable-length forcing
-keeps the engines in sync). The byte-based rules and token-ID ``avg_logits``
-selector live in ``xtok_selection``:
+At each decision round, the selector draws a uniform value in [0, 1).
+The decoder supplies the candidate when the draw is below the configured
+decoder probability; otherwise the advisor supplies it. The winner is
+temperature-sampled from that side's own top-k and forced on both sides as
+their own token segmentations.
 
-- ``bytes_union``: the package's ``select_avg_logits`` re-keyed on bytes.
-- ``anchored_prefix_mass``: the decoder proposes its top-k; the advisor
-  scores each candidate by byte-prefix probability mass.
-- ``avg_logits``: a local copy of ``select_avg_logits`` on raw token ids —
-  same-tokenizer pairs only; retains the special and out-of-vocabulary
-  candidates the byte rules filter.
+The execution shape mirrors the entropy-gated sibling: a CPU coordinator
+fans out single-VM TPU worker pools via Zephyr, each pool worker supervises
+one child process per chip pair, and children claim chunks from a shared GCS
+ledger. Each child loads both tokenizers and both engines once.
 
-Scale-out shape is cloned from ``joint_decode_avg_xregion``: the executor
-step is a CPU coordinator that fans out single-VM TPU worker pools via
-Zephyr; each pool worker supervises one child process per chip pair, and
-children claim chunks from a shared GCS ledger. Each child loads both
-tokenizers from the checkpoint roots and builds its selector locally.
+One step sweeps ``decoder_probabilities``. Each ledger chunk carries one
+probability, and all probabilities land in one completions file with dense
+completion indices across the sweep.
 
-One step sweeps ``advisor_weights``: each ledger chunk carries the weight it
-decodes with, the child sets that weight on its selector before generating
-(engines load once per child, not once per weight), and all weights land in
-one completions file — per prompt, ``len(advisor_weights) * n_samples``
-completions with ``completion_index = weight_index * n_samples + sample``
-and ``advisor_weight`` in each completion's metadata. The unchanged grade
-step scores every completion; analysis groups by the metadata weight.
-
-Each chunk also writes a token-path sidecar (aggregated to
-``token_paths.jsonl.gz``): per completion, the step-aligned committed byte
-chunks and each side's exact forced token ids, recorded from the selector
-via the package's ``request_index`` seam. This is the only artifact from
-which the decoded path can be rescored — B's forced segmentation is
-noncanonical, so no post-hoc retokenization reproduces it. See
-.agents/projects/20260709_joint_decode_xtok_token_paths_plan.md.
-
-Plan: .agents/projects/20260708_joint_decode_avg_xtok_plan.md. Once
-experiments run, the config dataclasses, their defaults, and the step
-construction below are hash-frozen like the sibling modules'.
+Each chunk also writes a token-path sidecar containing the committed byte
+chunks, both sides' exact forced token ids, and the routing draw. The draw
+and the record's decoder probability are sufficient to recover which side
+won every decision round.
 """
+
 
 from __future__ import annotations
 
@@ -50,7 +31,6 @@ import argparse
 import functools
 import json
 import logging
-import math
 import os
 import signal
 import subprocess
@@ -60,7 +40,6 @@ import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict, dataclass
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -109,12 +88,6 @@ DEFAULT_POLL_BACKOFF = 10.0
 TOKEN_PATHS_FILENAME = "token_paths.jsonl.gz"
 
 
-class XtokSelectionRule(StrEnum):
-    BYTES_UNION = "bytes_union"
-    ANCHORED_PREFIX_MASS = "anchored_prefix_mass"
-    AVG_LOGITS = "avg_logits"
-
-
 @dataclass(frozen=True)
 class JointDecodeSamplingConfig:
     n_samples: int
@@ -126,15 +99,11 @@ class JointDecodeSamplingConfig:
     top_k_a: int
     top_k_b: int
     seed: int
-    selection_rule: XtokSelectionRule
-    # The sweep axis: one run decodes every prompt at every weight, engines
-    # loaded once. Versioned as a whole — extending the grid re-runs the sweep.
-    advisor_weights: tuple[float, ...]
+    # The sweep axis: probability that the decoder supplies each decision.
+    # Versioned as a whole: extending the grid re-runs the sweep.
+    decoder_probabilities: tuple[float, ...]
     temperature: float = 1.0
     stop: tuple[str, ...] | None = None
-    # anchored_prefix_mass only: per-byte credit for advisor tokens that are
-    # strict prefixes of a candidate (continuation logits are unobservable).
-    prefix_credit: float = 1.0
 
     def __post_init__(self) -> None:
         if self.max_tokens < 1 or self.advisor_max_tokens < 1:
@@ -143,17 +112,12 @@ class JointDecodeSamplingConfig:
             raise ValueError("top_k_a and top_k_b must both be >= 1")
         if self.temperature < 0.0:
             raise ValueError(f"temperature must be >= 0 (got {self.temperature})")
-        if not self.advisor_weights:
-            raise ValueError("advisor_weights must be non-empty")
-        if self.selection_rule in (XtokSelectionRule.AVG_LOGITS, XtokSelectionRule.BYTES_UNION):
-            if any(not math.isfinite(weight) for weight in self.advisor_weights):
-                raise ValueError(f"advisor_weights must all be finite (got {self.advisor_weights})")
-        elif any(not 0.0 <= weight <= 1.0 for weight in self.advisor_weights):
-            raise ValueError(f"advisor_weights must all be in [0, 1] (got {self.advisor_weights})")
-        if len(set(self.advisor_weights)) != len(self.advisor_weights):
-            raise ValueError(f"advisor_weights must be distinct (got {self.advisor_weights})")
-        if not 0.0 <= self.prefix_credit <= 1.0:
-            raise ValueError(f"prefix_credit must be in [0, 1] (got {self.prefix_credit})")
+        if not self.decoder_probabilities:
+            raise ValueError("decoder_probabilities must be non-empty")
+        if any(not 0.0 <= probability <= 1.0 for probability in self.decoder_probabilities):
+            raise ValueError(f"decoder_probabilities must all be in [0, 1] (got {self.decoder_probabilities})")
+        if len(set(self.decoder_probabilities)) != len(self.decoder_probabilities):
+            raise ValueError(f"decoder_probabilities must be distinct (got {self.decoder_probabilities})")
 
 
 @dataclass(frozen=True)
@@ -239,15 +203,15 @@ class JointDecodeCompletionStepConfig:
 
 @dataclass(frozen=True)
 class XtokChunkSpec:
-    """One ledger work unit: a request range decoded at one advisor weight.
+    """One ledger work unit at one decoder probability.
 
-    chunk_start/chunk_end index the per-weight request range
-    [0, num_prompts * n_samples); the same ranges repeat once per weight.
+    chunk_start/chunk_end index the per-probability request range
+    [0, num_prompts * n_samples); the same ranges repeat for each probability.
     """
 
     chunk_id: int
-    advisor_weight: float
-    weight_index: int
+    decoder_probability: float
+    decoder_probability_index: int
     chunk_start: int
     chunk_end: int
     output_path: str
@@ -333,19 +297,19 @@ def sweep_chunk_specs(
     chunks_dir: str,
     num_prompts: int,
     n_samples: int,
-    advisor_weights: tuple[float, ...],
+    decoder_probabilities: tuple[float, ...],
     chunk_size: int,
 ) -> list[XtokChunkSpec]:
     total_requests = num_prompts * n_samples
     specs: list[XtokChunkSpec] = []
-    for weight_index, advisor_weight in enumerate(advisor_weights):
+    for decoder_probability_index, decoder_probability in enumerate(decoder_probabilities):
         for start in range(0, total_requests, chunk_size):
             chunk_id = len(specs)
             specs.append(
                 XtokChunkSpec(
                     chunk_id=chunk_id,
-                    advisor_weight=advisor_weight,
-                    weight_index=weight_index,
+                    decoder_probability=decoder_probability,
+                    decoder_probability_index=decoder_probability_index,
                     chunk_start=start,
                     chunk_end=min(start + chunk_size, total_requests),
                     output_path=os.path.join(chunks_dir, f"chunk-{chunk_id:06d}.jsonl.gz"),
@@ -357,22 +321,33 @@ def sweep_chunk_specs(
 
 @dataclass(frozen=True)
 class XtokPathStep:
-    """One committed decision: the chunk's bytes (hex; special forced tokens,
-    EOS included, contribute no bytes) and each side's exact forced token
-    ids."""
+    """One committed decision and the random value that routed it."""
 
     bytes_hex: str
     tokens_a: list[int]
     tokens_b: list[int]
+    gate_value: float
 
 
-def _path_step(vocab_a: xtok_selection.Vocab, tokens_a: list[int], tokens_b: list[int]) -> XtokPathStep:
-    # Special forced tokens (EOS included) commit no text bytes: vLLM
-    # detokenizes with skip_special_tokens, and load_vocab's None entries are
-    # exactly the ids it skips, so the joined bytes match the output text.
-    pieces = [vocab_a.token_bytes[token_id] for token_id in tokens_a]
-    chunk = b"".join(piece for piece in pieces if piece is not None)
-    return XtokPathStep(bytes_hex=chunk.hex(), tokens_a=list(tokens_a), tokens_b=list(tokens_b))
+def _path_step(
+    vocab_a: xtok_selection.Vocab,
+    tokens_a: list[int],
+    tokens_b: list[int],
+    gate_value: float,
+) -> XtokPathStep:
+    if tokens_a == [vocab_a.eos_id]:
+        chunk = b""  # selector-chosen EOS commits no text bytes
+    else:
+        pieces = [vocab_a.token_bytes[token_id] for token_id in tokens_a]
+        if any(piece is None for piece in pieces):
+            raise ValueError(f"non-EOS forced tokens include a special id: {tokens_a}")
+        chunk = b"".join(piece for piece in pieces if piece is not None)
+    return XtokPathStep(
+        bytes_hex=chunk.hex(),
+        tokens_a=list(tokens_a),
+        tokens_b=list(tokens_b),
+        gate_value=gate_value,
+    )
 
 
 def write_sweep_chunk(
@@ -384,19 +359,19 @@ def write_sweep_chunk(
     n_samples: int,
     token_paths: dict[int, list[XtokPathStep]],
 ) -> None:
-    """Generate one chunk at its advisor weight (the caller has already set
-    the weight on the selector state and reset token_paths, which the
-    selector fills during generate) and write completion + token-path
+    """Generate one chunk at its decoder probability (the caller has already
+    set the probability on the selector state and reset token_paths, which
+    the selector fills during generate) and write completion + token-path
     records. Trace/output mismatches raise: they mean the request-index
     invariant broke, which must kill the run rather than write silently
     misaligned sidecars.
 
-    completion_index = weight_index * n_samples + sample keeps indices dense
-    per prompt across the whole sweep, so the standard sort-by-index
+    completion_index = decoder_probability_index * n_samples + sample keeps indices
+    dense per prompt across the whole sweep, so the standard sort-by-index
     aggregation and the positional grade alignment work unchanged."""
     request_indices = range(chunk.chunk_start, chunk.chunk_end)
     chunk_prompt_ids = [prompt_ids[i // n_samples] for i in request_indices]
-    completion_indices = [chunk.weight_index * n_samples + i % n_samples for i in request_indices]
+    completion_indices = [chunk.decoder_probability_index * n_samples + i % n_samples for i in request_indices]
     chunk_prompts = [prompts[i // n_samples] for i in request_indices]
 
     outputs = decoder.generate(chunk_prompts, chunk_prompts)
@@ -420,7 +395,7 @@ def write_sweep_chunk(
                     "text": output.text,
                     "metadata": {
                         "finish_reason": output.finish_reason,
-                        "advisor_weight": chunk.advisor_weight,
+                        "decoder_probability": chunk.decoder_probability,
                     },
                 },
             }
@@ -429,8 +404,8 @@ def write_sweep_chunk(
             {
                 "id": prompt_id,
                 "completion_index": completion_index,
-                "advisor_weight": chunk.advisor_weight,
-                "weight_index": chunk.weight_index,
+                "decoder_probability": chunk.decoder_probability,
+                "decoder_probability_index": chunk.decoder_probability_index,
                 "steps": [asdict(step) for step in steps],
             }
         )
@@ -465,8 +440,7 @@ def _child_config_from_file(path: str) -> JointDecodeLocalWorkerConfig:
     with open(path) as f:
         data = json.load(f)
     sampling_data = dict(data["sampling"])
-    sampling_data["selection_rule"] = XtokSelectionRule(sampling_data["selection_rule"])
-    sampling_data["advisor_weights"] = tuple(sampling_data["advisor_weights"])
+    sampling_data["decoder_probabilities"] = tuple(sampling_data["decoder_probabilities"])
     placement_data = data["placement"]
     return JointDecodeLocalWorkerConfig(
         decoder_model_path=data["decoder_model_path"],
@@ -500,7 +474,7 @@ class _SweepState:
     baked into the coordinator at engine spawn; chunks run serially, so
     setting these between generate() calls is race-free."""
 
-    advisor_weight: float
+    decoder_probability: float
     token_paths: dict[int, list[XtokPathStep]]  # request_index -> steps
 
 
@@ -510,43 +484,17 @@ def _make_select_token(
     vocab_b: xtok_selection.Vocab,
     state: _SweepState,
 ) -> Callable[..., tuple[list[int], list[int]]]:
-    if sampling.selection_rule is XtokSelectionRule.AVG_LOGITS:
-
-        def select_token(a_topk, b_topk, *, rng, request_index: int):
-            tokens_a, tokens_b = xtok_selection.select_avg_logits(
-                a_topk,
-                b_topk,
-                advisor_weight=state.advisor_weight,
-                temperature=sampling.temperature,
-                rng=rng,
-                request_index=request_index,
-            )
-            state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b))
-            return tokens_a, tokens_b
-
-        return select_token
-
-    if sampling.selection_rule is XtokSelectionRule.BYTES_UNION:
-        rule = xtok_selection.select_avg_bytes_union
-        rule_kwargs: dict[str, float] = {}
-    elif sampling.selection_rule is XtokSelectionRule.ANCHORED_PREFIX_MASS:
-        rule = xtok_selection.select_avg_anchored
-        rule_kwargs = {"prefix_credit": sampling.prefix_credit}
-    else:
-        raise ValueError(f"unknown selection rule: {sampling.selection_rule!r}")
-
     def select_token(a_topk, b_topk, *, rng, request_index: int):
-        tokens_a, tokens_b = rule(
+        tokens_a, tokens_b, gate_value = xtok_selection.select_random_gate(
             a_topk,
             b_topk,
-            advisor_weight=state.advisor_weight,
+            decoder_probability=state.decoder_probability,
             temperature=sampling.temperature,
             rng=rng,
             vocab_a=vocab_a,
             vocab_b=vocab_b,
-            **rule_kwargs,
         )
-        state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b))
+        state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b, gate_value))
         return tokens_a, tokens_b
 
     return select_token
@@ -569,7 +517,7 @@ def _run_joint_decode_local_worker(config: JointDecodeLocalWorkerConfig) -> None
 
     vocab_a = _load_vocab(config.decoder_model_path)
     vocab_b = _load_vocab(config.advisor_model_path)
-    state = _SweepState(advisor_weight=config.sampling.advisor_weights[0], token_paths={})
+    state = _SweepState(decoder_probability=config.sampling.decoder_probabilities[0], token_paths={})
 
     def engine_params(model_path: str, model: JointDecodeModelConfig) -> joint_decode_backend.EngineModelParams:
         return joint_decode_backend.EngineModelParams(
@@ -611,7 +559,7 @@ def _run_joint_decode_local_worker(config: JointDecodeLocalWorkerConfig) -> None
                     continue
 
                 chunk = XtokChunkSpec(**claim.chunk)
-                state.advisor_weight = chunk.advisor_weight
+                state.decoder_probability = chunk.decoder_probability
                 state.token_paths = {}
                 write_sweep_chunk(
                     chunk,
@@ -673,7 +621,7 @@ def _stream_child_output(proc: subprocess.Popen[str], *, label: str) -> list[thr
     def stream(pipe, stream_name: str) -> None:
         assert pipe is not None
         for line in pipe:
-            logger.info("joint-decode-avg-xtok local worker %s %s: %s", label, stream_name, line.rstrip())
+            logger.info("joint-decode-random-xtok local worker %s %s: %s", label, stream_name, line.rstrip())
 
     for pipe, stream_name in ((proc.stdout, "stdout"), (proc.stderr, "stderr")):
         thread = threading.Thread(target=stream, args=(pipe, stream_name), daemon=True)
@@ -719,11 +667,11 @@ def _spawn_child(
         sys.executable,
         "-u",
         "-m",
-        "experiments.downstream_scaling.evals.algorithms.joint_decode_avg_xtok",
+        "experiments.downstream_scaling.evals.algorithms.joint_decode_random_xtok",
         "--xregion-worker-child-config",
         str(config_path),
     ]
-    logger.info("Launching joint-decode-avg-xtok local worker shard=%d chips=%s", shard_idx, chip_label)
+    logger.info("Launching joint-decode-random-xtok local worker shard=%d chips=%s", shard_idx, chip_label)
     proc = subprocess.Popen(
         cmd,
         env=env,
@@ -769,13 +717,13 @@ def _wait_for_children(procs: list[subprocess.Popen[str]], threads: list[threadi
             if return_code != 0:
                 if ledger_complete:
                     logger.warning(
-                        "joint-decode-avg-xtok local worker exited after ledger completion with rc=%d",
+                        "joint-decode-random-xtok local worker exited after ledger completion with rc=%d",
                         return_code,
                     )
                     continue
                 _terminate_children(procs)
                 raise RuntimeError(
-                    f"joint-decode-avg-xtok local worker failed with rc={return_code}; "
+                    f"joint-decode-random-xtok local worker failed with rc={return_code}; "
                     f"ledger is {summary.done}/{summary.total} done"
                 )
 
@@ -783,7 +731,7 @@ def _wait_for_children(procs: list[subprocess.Popen[str]], threads: list[threadi
             break
         if all_done:
             raise RuntimeError(
-                f"joint-decode-avg-xtok local workers exited before completion: "
+                f"joint-decode-random-xtok local workers exited before completion: "
                 f"{summary.done}/{summary.total} chunks done"
             )
 
@@ -804,18 +752,18 @@ def _supervise_joint_decode_worker(
 ) -> Iterator[dict[str, object]]:
     if os.environ.get("TPU_VISIBLE_CHIPS") is not None:
         raise ValueError(
-            "joint decode avg xtok supervisor expects to own the full TPU VM; TPU_VISIBLE_CHIPS is already set"
+            "joint decode random xtok supervisor expects to own the full TPU VM; TPU_VISIBLE_CHIPS is already set"
         )
 
     logger.info(
-        "Starting joint-decode-avg-xtok supervisor pool=%s shard=%d chips_per_vm=%d placements=%s",
+        "Starting joint-decode-random-xtok supervisor pool=%s shard=%d chips_per_vm=%d placements=%s",
         pool.pool_id,
         shard_info.shard_idx,
         pool.chips_per_vm,
         placements,
     )
 
-    with tempfile.TemporaryDirectory(prefix="joint_decode_avg_xtok_local_workers_") as tmp:
+    with tempfile.TemporaryDirectory(prefix="joint_decode_random_xtok_local_workers_") as tmp:
         tmpdir = Path(tmp)
         procs: list[subprocess.Popen[str]] = []
         threads: list[threading.Thread] = []
@@ -841,14 +789,14 @@ def _supervise_joint_decode_worker(
 
 def run_joint_decode_completion_chunks(config: JointDecodeCompletionStepConfig) -> None:
     if not config.worker_pools:
-        raise ValueError("joint decode avg xtok requires at least one worker pool")
+        raise ValueError("joint decode random xtok requires at least one worker pool")
 
     chunks_dir = os.path.join(config.output_path, "chunks", f"chunk_size={config.chunk_size}")
     chunks = sweep_chunk_specs(
         chunks_dir,
         _num_prompts(config.prompts_path),
         config.sampling.n_samples,
-        config.sampling.advisor_weights,
+        config.sampling.decoder_probabilities,
         config.chunk_size,
     )
     ledger_path = ledger.convert_mirror_path(
@@ -879,7 +827,7 @@ def run_joint_decode_completion_chunks(config: JointDecodeCompletionStepConfig) 
 
     summary = ledger.summarize(ledger_path)
     if summary.done != summary.total:
-        raise RuntimeError(f"joint decode avg xtok incomplete: {summary.done}/{summary.total} chunks done")
+        raise RuntimeError(f"joint decode random xtok incomplete: {summary.done}/{summary.total} chunks done")
 
     path = completions_file(config.output_path)
     done_ids = set(ledger.done_chunk_ids(ledger_path))
@@ -893,7 +841,7 @@ def run_joint_decode_completion_chunks(config: JointDecodeCompletionStepConfig) 
                 "id": prompt_id,
                 "completions": [item["completion"] for item in items],
                 "metadata": {
-                    "completion_algorithm": "joint_decode_avg_xtok",
+                    "completion_algorithm": "joint_decode_random_xtok",
                     "decoder_model_path": config.decoder_model_path,
                     "advisor_model_path": config.advisor_model_path,
                 },
@@ -904,12 +852,12 @@ def run_joint_decode_completion_chunks(config: JointDecodeCompletionStepConfig) 
         .write_jsonl(path, skip_existing=True)
     )
     ZephyrContext(
-        name="joint-decode-avg-xtok-completions-aggregate",
+        name="joint-decode-random-xtok-completions-aggregate",
         max_workers=config.aggregate_workers,
         resources=ResourceConfig(cpu=1, ram="4g", preemptible=True),
         coordinator_resources=ResourceConfig(cpu=0.1, ram="1g", preemptible=True),
     ).execute(aggregate_pipeline)
-    logger.info("Wrote joint-decode-avg-xtok completion rows to %s", path)
+    logger.info("Wrote joint-decode-random-xtok completion rows to %s", path)
 
     token_paths_path = os.path.join(config.output_path, TOKEN_PATHS_FILENAME)
     token_paths_pipeline = (
@@ -919,12 +867,12 @@ def run_joint_decode_completion_chunks(config: JointDecodeCompletionStepConfig) 
         .write_jsonl(token_paths_path, skip_existing=True)
     )
     ZephyrContext(
-        name="joint-decode-avg-xtok-token-paths-aggregate",
+        name="joint-decode-random-xtok-token-paths-aggregate",
         max_workers=config.aggregate_workers,
         resources=ResourceConfig(cpu=1, ram="4g", preemptible=True),
         coordinator_resources=ResourceConfig(cpu=0.1, ram="1g", preemptible=True),
     ).execute(token_paths_pipeline)
-    logger.info("Wrote joint-decode-avg-xtok token paths to %s", token_paths_path)
+    logger.info("Wrote joint-decode-random-xtok token paths to %s", token_paths_path)
 
 
 def _main() -> None:

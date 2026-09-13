@@ -271,6 +271,44 @@ completion, where `rho` is their Spearman correlation across decision
 boundaries. `rho` is `null` for series with fewer than two steps or a constant
 side. The reducer needs no model and runs on CPU.
 
+`measurements/kl.py` teacher-forces the decoder and the advisor along the
+recorded paths with one plain vLLM engine per model on a chip pair, each under
+its own side's prompt, and emits `{"kl": [float, ...]}` per completion: at each
+decision boundary, KL(decoder || advisor) over the union of the two top-k
+token-id sets, each side's minimum top-k logprob standing in for ids it did not
+rank, both sides softmaxed over the union at the statistic's configured
+temperature (default 1).
+Same-tokenizer sweeps only; the
+coordinator rejects a sidecar whose two sides forced different ids. Nothing is
+materialized except the KL values.
+
+`measurements/joint_decode_avg_kl.py` replays the decoder and advisor paths in
+`token_paths.jsonl.gz` and emits `{"kl": [float, ...]}` per completion, with one
+value per recorded decision: KL in nats from the configured selection rule at
+weight zero to that rule at the sidecar's `advisor_weight`.
+Union rules retain advisor-only candidates at the decoder's minimum top-k
+score in the weight-zero baseline. Rule, top-k widths, positive finite
+temperature, and `prefix_credit` belong to the statistic. Optional
+`advisor_prompts_path` supplies separate advisor prompts; otherwise both sides
+use the decoder prompts. Interpreting the result as the original sampling
+rule's KL requires matching the source models, prompts, and sampling settings;
+replay recomputes logits and verifies the recorded path length and output text.
+
+`measurements/joint_decode_replay.py` measures a configured tuple of
+`ReplayStatistic` values in one replay of the weight-zero and
+recorded-weight distributions: `KL`, `REVERSE_KL`, `TOTAL_VARIATION`,
+`JENSEN_SHANNON`, and `HELLINGER_SQUARED`. `KL` measures
+KL(weight-zero || recorded-weight); `REVERSE_KL` measures the reverse direction.
+Each selected key stores one scalar
+per recorded decision in `statistics.jsonl.gz`; KL and Jensen-Shannon use
+natural logarithms. `JointDecodeReplayConfig.statistics` is required, and its
+sorted selection is versioned, so different combinations have separate outputs
+and ledgers. The GSM8K runner
+`run_delphi_gsm8k_joint_decode_replay_unnormalized_add_llama.py` selects all five
+through `STATISTICS`; each `ALPHA_SWEEPS` entry must match a source generation
+batch's exact alpha values and order. It uses normal blocking completion dependencies, which can run missing
+generation work. Existing KL measurements and outputs are unchanged.
+
 ## Versioning
 
 Version semantic inputs. Do not version pure execution topology.
@@ -328,6 +366,19 @@ class IIDConfig:
 
 `model_path` is passed to `make_completions_step`; it is not stored in
 `IIDConfig`.
+
+## One-Sided Log-Probability Averaging
+
+`algorithms/joint_decode_avg_v2.py` supports `one_sided_logprob_avg` for models
+sharing a token-ID vocabulary. Each model normalizes over the top-k token-ID
+union, filling missing logits with its own minimum returned logit. Use a
+finite, positive shared `temperature` for this normalization. Given student
+and advisor log probabilities `log_p` and `log_a`, sampling weights are
+proportional to `exp(log_p + strength * min(0, log_a - log_p))`, with no second
+temperature scaling. `advisor_weights` supplies the finite, nonnegative
+strengths, including values above 1. Strength zero gives the student
+distribution over the filled-in union, including advisor-only tokens;
+strength 1 gives weights proportional to the minimum of the two probabilities.
 
 ## Adding A Task
 

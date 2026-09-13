@@ -39,8 +39,20 @@ DELPHI_HF_REPOS: dict[str, str] = {
     "1e23": "marin-community/delphi-1e23-25Bparams-628Btokens",
 }
 
+DELPHI_SEED_HF_REPOS: dict[str, str] = {
+    "1e21_seed42": "marin-community/delphi-1e21-3.4Bparams-46.3Btokens-seed42",
+    "1e21_seed62746": "marin-community/delphi-1e21-3.4Bparams-46.3Btokens-seed62746",
+    "1e22_seed42": "marin-community/delphi-1e22-9.7Bparams-160Btokens-seed42",
+    "1e22_seed62746": "marin-community/delphi-1e22-9.7Bparams-160Btokens-seed62746",
+}
+
 DELPHI_HF_DOWNLOADS = {
     slug: download_model_step(ModelConfig(hf_repo_id=repo, hf_revision="main")) for slug, repo in DELPHI_HF_REPOS.items()
+}
+
+DELPHI_SEED_HF_DOWNLOADS = {
+    slug: download_model_step(ModelConfig(hf_repo_id=repo, hf_revision="main"))
+    for slug, repo in DELPHI_SEED_HF_REPOS.items()
 }
 
 # Region → marin GCS bucket. europe-west4's bucket is `marin-eu-west4`, not

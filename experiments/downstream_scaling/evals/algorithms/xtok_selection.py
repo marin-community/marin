@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cross-tokenizer selection rules for joint decoding.
+"""Same- and cross-tokenizer selection rules for joint decoding.
 
 Two models with different tokenizers share no id space, so candidates are
 compared as byte strings: ``load_vocab`` maps each vocab id to the exact
@@ -243,6 +243,40 @@ def prefix_mass(chunk: bytes, probs: dict[Key, float], *, credit: float) -> floa
         elif chunk.startswith(piece):
             mass += prob * credit ** (len(chunk) - len(piece))
     return mass
+
+
+def select_avg_logits(
+    a_topk: list[dict[str, Any]],
+    b_topk: list[dict[str, Any]],
+    *,
+    advisor_weight: float,
+    temperature: float,
+    rng: random.Random,
+    request_index: int,
+) -> tuple[list[int], list[int]]:
+    """Sample the token-ID union with finite advisor weight and per-side minimum floors."""
+    del request_index
+    if not math.isfinite(advisor_weight):
+        raise ValueError("advisor_weight must be finite")
+    if temperature < 0.0:
+        raise ValueError("temperature must be >= 0")
+    a_logits = {int(t["token_id"]): float(t["logit"]) for t in a_topk}
+    b_logits = {int(t["token_id"]): float(t["logit"]) for t in b_topk}
+    if not a_logits or not b_logits:
+        raise ValueError("both sides must provide at least one top-k logit")
+
+    a_floor = min(a_logits.values())
+    b_floor = min(b_logits.values())
+    w_a, w_b = 1.0 - advisor_weight, advisor_weight
+    union = list(set(a_logits) | set(b_logits))
+    scores = [w_a * a_logits.get(token_id, a_floor) + w_b * b_logits.get(token_id, b_floor) for token_id in union]
+    if temperature == 0.0:
+        token = union[scores.index(max(scores))]
+        return [token], [token]
+    max_score = max(scores)
+    weights = [math.exp((score - max_score) / temperature) for score in scores]
+    token = rng.choices(union, weights=weights, k=1)[0]
+    return [token], [token]
 
 
 def avg_bytes_union_scores(a: dict[Key, Candidate], b: dict[Key, Candidate], advisor_weight: float) -> dict[Key, float]:
