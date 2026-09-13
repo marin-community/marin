@@ -363,6 +363,7 @@ def training_config(
 def build_experiment(
     *,
     version: str,
+    data_version: str | None = None,
     scale: Scale,
     timeout_seconds: int,
     completion: str = "model",
@@ -396,8 +397,12 @@ def build_experiment(
     """Build Snowball training with the requested terminal artifact."""
     backend = Backend(backend)
     validate_version(version)
+    if data_version is not None:
+        validate_version(data_version)
     if is_mutable_version(version) or timeout_seconds <= 0:
         raise ValueError("Use an immutable version and positive training deadline")
+    if data_version is not None and is_mutable_version(data_version):
+        raise ValueError("Use an immutable data version")
     if type(seed) is not int or not 0 <= seed < 2**32:
         raise ValueError("Seed must be between 0 and 2**32 - 1")
     validate_validation_window(validation_offset, validation_rows)
@@ -408,7 +413,7 @@ def build_experiment(
             "documents/async-rl-snowball-gsm8k"
             + (f"-test{validation_offset}-{validation_rows}" if validation_offset else "")
         ),
-        version=version,
+        version=data_version or version,
         artifact_type=Artifact,
         deps=(SNOWBALL_MODEL,),
         run=remote(
@@ -509,6 +514,7 @@ def build_experiment(
 
 @click.command(help=__doc__)
 @click.option("--version", required=True)
+@click.option("--data-version", help="Immutable prepared-data version; defaults to the run version.")
 @click.option("--backend", type=click.Choice([b.value for b in Backend]), default="megatron", show_default=True)
 @click.option("--runner", type=click.Choice([r.value for r in Runner]), default="async", show_default=True)
 @click.option(
@@ -578,6 +584,7 @@ def build_experiment(
 @click.option("--run/--dry-run", "execute", default=False, show_default=True)
 def main(
     version: str,
+    data_version: str | None,
     backend: str,
     runner: str,
     inference_replicas: int,
@@ -611,6 +618,7 @@ def main(
 ) -> None:
     training = build_experiment(
         version=version,
+        data_version=data_version,
         backend=Backend(backend),
         runner=Runner(runner),
         inference_replicas=inference_replicas,

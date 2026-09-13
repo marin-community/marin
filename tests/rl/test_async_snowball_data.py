@@ -11,6 +11,40 @@ from marin.execution.lazy import StepContext
 from experiments.post_training import async_snowball
 
 
+def test_snowball_can_reuse_immutable_data_under_a_fresh_run_identity():
+    args = dict(
+        version="2026.09.13.276",
+        scale=async_snowball.Scale.CADENCE_GATE,
+        timeout_seconds=5400,
+        completion="metrics",
+    )
+    baseline = async_snowball.build_experiment(**args)
+    selected = async_snowball.build_experiment(**args, data_version="2026.09.06.15")
+
+    baseline_data = baseline.deps[1]
+    selected_data = selected.deps[1]
+    assert baseline_data.version == args["version"]
+    assert selected_data.version == "2026.09.06.15"
+    assert selected.fingerprint() != baseline.fingerprint()
+
+    request = selected.build_config(StepContext.for_fingerprint(selected.runtime_args, selected.deps)).request
+    old_run = async_snowball.build_experiment(**(args | {"version": "2026.09.06.15"}))
+    old_request = old_run.build_config(StepContext.for_fingerprint(old_run.runtime_args, old_run.deps)).request
+    assert request.run_id.endswith("-2026.09.13.276")
+    assert request.run_id != old_request.run_id
+    assert request.train_data[0].uri.endswith("@2026.09.06.15")
+    assert request.validation_data[0].uri.endswith("@2026.09.06.15")
+
+
+def test_snowball_cli_rejects_a_mutable_data_version():
+    result = CliRunner().invoke(
+        async_snowball.main,
+        ["--version", "2026.09.13.276", "--data-version", "dev", "--completion", "metrics"],
+    )
+    assert result.exit_code != 0
+    assert "immutable data version" in str(result.exception)
+
+
 def test_explicit_snowball_rows_reach_data_writer_and_identity():
     args = dict(
         version="2026.09.08.34", scale=async_snowball.Scale.CADENCE_GATE, timeout_seconds=1350, completion="metrics"
