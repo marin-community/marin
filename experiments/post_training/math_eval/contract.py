@@ -80,3 +80,16 @@ def render_prompt(question: str, env_class: str, template: PromptTemplate) -> st
 def prompt_metadata(template: PromptTemplate, env_class: str) -> dict[str, str]:
     """Fields emitted into each row's extra_info and the pool manifest."""
     return {"prompt_template_id": template.template_id, "contract": CONTRACT_IDS[env_class]}
+
+
+POST_THINKING_METRIC_CONTRACT = {
+    "version": "post-thinking-native-metrics-v1",
+    "parser_protocol": "post-thinking-native-v1",
+    "score_contract": "Verbatim dumped optimization reward, including enabled shaping; never remapped to accuracy.",
+    "corrected_verifier_reward": (
+        "Task-native verifier reward on the token-delimited post-thinking answer before shaping."
+    ),
+    "contract_correct": "Apply GSM == 1, AIME == 1, or reasoning-gym >= 1 to corrected_verifier_reward.",
+    "score_contract_completed": "contract_correct times accepted_stop; no thinking-closure multiplier.",
+    "scope": "Explicit K16 extension. Legacy KE8 unshaped verifier mapping and existing rows remain unchanged.",
+}

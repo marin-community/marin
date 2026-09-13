@@ -30,6 +30,21 @@ SCORER = "experiments/post_training/math_eval/scoring.py:34"
 CURRICULUM = "MarinSkyRL/skyrl-train/skyrl_train/curriculum.py:593"
 
 METRICS = (
+    _metric(
+        "corrected_verifier_reward",
+        "versioned_harness",
+        "experiments/post_training/math_eval/thinking_contract_audit.py:1",
+        "one response; sequence mean when aggregated",
+        "post-thinking-native-v1 reward before shaping supplies contract_correct; "
+        "score_contract preserves the dumped optimization reward.",
+    ),
+    _metric(
+        "metric_contract_version",
+        "versioned_harness",
+        "experiments/post_training/math_eval/contract.py:1",
+        "one protocol receipt",
+        "Versioned reward/correctness mapping; mixed parser contracts cannot be paired implicitly.",
+    ),
     *(
         _metric(
             f"eval/{{ds}}/{name}",
@@ -181,11 +196,16 @@ METRICS = (
     *(
         _metric(name, "harness", SCORER, denominator, notes)
         for name, denominator, notes in (
-            ("score_contract", "one response; sequence mean when aggregated", "Raw signed/fractional verifier score."),
+            (
+                "score_contract",
+                "one response; sequence mean when aggregated",
+                "Raw dumped signed/fractional optimization score. K16 shaping is retained verbatim.",
+            ),
             (
                 "contract_correct",
                 "one response; sequence mean when aggregated",
-                "Task-native correctness: GSM1, AIME+1, RG>=1.",
+                "Task-native full credit: GSM1, AIME+1, RG>=1. Under post-thinking-native-v1 "
+                "map corrected_verifier_reward before shaping.",
             ),
             (
                 "score_contract_completed",
