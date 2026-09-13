@@ -70,6 +70,7 @@ class LaunchSpec:
     submission_cluster: str
     federated_cluster: str | None
     priority_band: int
+    retry_unscored_harbor_trials: bool = False
     version: str | None = None
     description: str | None = None
 
@@ -146,6 +147,7 @@ def _resolve_definitions(
     definitions: tuple[tuple[str, EvaluationDefinition], ...],
     model: ModelConfig,
     limit: int | None,
+    retry_unscored_harbor_trials: bool,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
     evalchemy_definitions = [definition for _, definition in definitions if isinstance(definition, EvalchemyDefinition)]
     evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)
@@ -180,7 +182,12 @@ def _resolve_definitions(
                 _ResolvedDefinition(
                     record_ref=definition.record_ref_for(config, runtime_task_limit),
                     runtime_descriptor=definition.runtime_descriptor,
-                    executor=definition.executor_for(config, model, runtime_task_limit),
+                    executor=definition.executor_for(
+                        config,
+                        model,
+                        runtime_task_limit,
+                        retry_unscored_harbor_trials,
+                    ),
                     secret_env=dict(definition.secret_env_for(config)),
                 ),
             )
@@ -200,7 +207,12 @@ def build_evaluation_batch(
         if accelerator.platform is not Platform.GPU:
             raise ValueError("--federated_cluster requires a GPU accelerator")
         accelerator = replace(accelerator, target_cluster=spec.federated_cluster)
-    definitions = _resolve_definitions(_evaluation_definitions(spec), model, spec.limit)
+    definitions = _resolve_definitions(
+        _evaluation_definitions(spec),
+        model,
+        spec.limit,
+        spec.retry_unscored_harbor_trials,
+    )
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []

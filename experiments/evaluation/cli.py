@@ -112,6 +112,11 @@ def cli() -> None:
     help="Harbor JobConfig YAML or JSON. Repeatable and additive with --evals.",
 )
 @click.option(
+    "--retry-unscored-harbor-trials",
+    is_flag=True,
+    help="Before Harbor resumes, remove only trials that have no verifier result.",
+)
+@click.option(
     "--platform",
     type=click.Choice([p.value for p in Platform]),
     default=None,
@@ -150,6 +155,7 @@ def launch(
     evals_arg: str | None,
     evalchemy_config: tuple[Path, ...],
     harbor_config: tuple[Path, ...],
+    retry_unscored_harbor_trials: bool,
     platform: str | None,
     accelerator: str | None,
     limit: int | None,
@@ -195,6 +201,7 @@ def launch(
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,
         priority_band=(job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)),
+        retry_unscored_harbor_trials=retry_unscored_harbor_trials,
         version=version,
         description=description,
     )

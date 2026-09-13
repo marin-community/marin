@@ -483,7 +483,7 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
 def test_harbor_executor_explicit_recovery_prunes_only_unscored_trials(tmp_path, monkeypatch):
     executor = replace(
         _harbor_executor(f"recover-unscored-{tmp_path.name}"),
-        prune_unscored_trials_before_run=True,
+        retry_unscored_trials=True,
     )
     session = _inference_session()
     job_name = runner._job_name(

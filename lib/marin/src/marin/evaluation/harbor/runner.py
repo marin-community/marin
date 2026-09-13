@@ -470,7 +470,7 @@ class HarborExecutor:
     secret_env_keys: tuple[str, ...] = ()
     min_completion_rate: float = DEFAULT_MIN_COMPLETION_RATE
     """The fraction of attempted trials a verifier must grade for the run to be accepted."""
-    prune_unscored_trials_before_run: bool = False
+    retry_unscored_trials: bool = False
     """Re-run only durable trials for which the verifier never produced a result."""
 
     def _run(
@@ -501,7 +501,7 @@ class HarborExecutor:
             task_limit=self.task_limit,
             model_agent_kwargs=self.model_agent_kwargs,
         )
-        if self.prune_unscored_trials_before_run:
+        if self.retry_unscored_trials:
             job_dir = _job_dir(output_dir, job_name)
             logger.info("removing unscored Harbor trials before explicit recovery: %s", job_dir)
             _remove_unscored_trials(job_dir)
