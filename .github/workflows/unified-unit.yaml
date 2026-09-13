@@ -214,9 +214,17 @@ jobs:
             "https://download.pytorch.org/whl/cpu/torch-${TORCH_CPU_VERSION/+/%2B}-${CP_TAG}-${CP_TAG}-manylinux_2_28_x86_64.whl"
 
       - name: Install FFmpeg runtime
+        # torchcodec, which datasets uses to decode the audio fixtures, dlopens FFmpeg's
+        # shared libraries at import time. It needs neither the ffmpeg CLI nor headers,
+        # so install just those libraries and skip recommends: the full `ffmpeg` package
+        # pulls in a far larger dependency set and has taken over 13 minutes of this
+        # job's 15-minute budget.
+        timeout-minutes: 5
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y --no-install-recommends \
+            libavcodec60 libavformat60 libavutil58 \
+            libavfilter9 libswresample4 libswscale7
 
       - name: Test torch-marked suite
         # Run directly on CPU to avoid GPU dependency issues.
@@ -329,9 +337,15 @@ jobs:
       - name: Install Playwright browsers
         # Always run: `playwright install` only downloads browsers it does not already
         # have, so a warm cache stays fast, while a partial or stale cache self-heals
-        # instead of leaving a missing browser binary. `--with-deps` reinstalls the system
-        # libraries that the browser cache cannot hold.
-        run: uv run --package marin-iris playwright install --with-deps chromium
+        # instead of leaving a missing browser binary.
+        #
+        # No `--with-deps`: it shells out to apt-get, which contends with the runner's
+        # unattended-upgrades dpkg lock and can stall past the whole-job timeout. The
+        # ubuntu-24.04 image already ships Chrome and Chromium, so Chromium's system
+        # libraries are present. If a future image drops them, chromium fails to launch
+        # with a missing-shared-library error rather than hanging here.
+        timeout-minutes: 3
+        run: uv run --package marin-iris playwright install chromium
 
       - name: Run E2E smoke tests
         env:
