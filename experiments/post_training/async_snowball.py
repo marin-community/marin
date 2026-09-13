@@ -215,6 +215,8 @@ def training_config(
     eval_mode: str = "blocking",
     first_token_admission: bool | None = None,
     study_steps: int | None = None,
+    minibatches: int = 1,
+    updates: int | None = None,
     eval_interval: int | None = None,
 ) -> str:
     backend = Backend(backend)
@@ -230,11 +232,31 @@ def training_config(
     if correction not in Correction:
         raise ValueError(f"Unknown correction mode: {correction}")
     steps = {Scale.GATE: 2, Scale.CADENCE_GATE: 5, Scale.QUALIFICATION: 25}[scale]
+    if type(minibatches) is not int or minibatches not in (1, 2, 4):
+        raise ValueError("Snowball minibatches must be one of 1, 2 or 4")
+    if minibatches > 1 and runner is not Runner.ASYNC:
+        raise ValueError("Snowball multi-update cohorts require the async runner")
+    if minibatches > 1 and backend is not Backend.MEGATRON:
+        raise ValueError("Snowball multi-update cohorts require the Megatron backend")
+    if minibatches > 1 and updates is None:
+        raise ValueError("Snowball multi-update cohorts require explicit total updates")
     if study_steps is not None:
         if scale is not Scale.QUALIFICATION or type(study_steps) is not int or study_steps <= 0:
             raise ValueError("study_steps must be positive and is only supported by the qualification scale")
         steps = study_steps
-    validate_eval_interval(eval_interval, steps, enabled=not gate)
+    if updates is not None:
+        if study_steps is not None:
+            raise ValueError("Use updates or study_steps, not both")
+        if scale is not Scale.QUALIFICATION or type(updates) is not int or updates <= 0:
+            raise ValueError("updates must be positive and is only supported by the qualification scale")
+        if updates % minibatches:
+            raise ValueError("Snowball updates must end at a complete prepared cohort")
+        steps = updates
+    if updates is not None and eval_interval is not None:
+        if type(eval_interval) is not int or eval_interval <= 0 or gate:
+            raise ValueError("Explicit eval_interval must be positive and use an evaluation schedule")
+    else:
+        validate_eval_interval(eval_interval, steps, enabled=not gate)
     if weight_sync_interval < 1 or max_staleness_steps < 0 or weight_sync_interval > max_staleness_steps + 1:
         raise ValueError("Weight sync interval must be positive and at most max_staleness_steps + 1")
     if runner is Runner.SYNC and weight_sync_interval != 1:
@@ -248,7 +270,12 @@ def training_config(
         raise ValueError("Context budget must fit the validated prompt limit plus either response budget")
     preset = replace(
         SNOWBALL_SMOKE,
-        role_plan=replace(ROLE_PLAN, policy_num_nodes=policy_nodes, num_inference_engines=inference_replicas),
+        role_plan=replace(
+            ROLE_PLAN,
+            policy_num_nodes=policy_nodes,
+            num_inference_engines=inference_replicas,
+            train_batch_size=ROLE_PLAN.policy_mini_batch_size * minibatches,
+        ),
         max_steps=steps,
         ckpt_interval=steps,
         eval_interval=eval_interval if eval_interval is not None else (-1 if gate else steps),
@@ -387,6 +414,8 @@ def build_experiment(
     eval_mode: str = "blocking",
     first_token_admission: bool | None = None,
     study_steps: int | None = None,
+    minibatches: int = 1,
+    updates: int | None = None,
     eval_interval: int | None = None,
     seed: int = SEED,
     validation_offset: int = 0,
@@ -456,9 +485,16 @@ def build_experiment(
         eval_mode=eval_mode,
         first_token_admission=first_token_admission,
         study_steps=study_steps,
+        minibatches=minibatches,
+        updates=updates,
         eval_interval=eval_interval,
     )
-    role_plan = replace(ROLE_PLAN, policy_num_nodes=policy_nodes, num_inference_engines=inference_replicas)
+    role_plan = replace(
+        ROLE_PLAN,
+        policy_num_nodes=policy_nodes,
+        num_inference_engines=inference_replicas,
+        train_batch_size=ROLE_PLAN.policy_mini_batch_size * minibatches,
+    )
     topology = SkyRLTopology(role_plan.policy_num_nodes + inference_replicas, 8, "H100", role_plan)
     identity = fingerprint_hash(
         canonical_json(
@@ -571,7 +607,11 @@ def build_experiment(
 @click.option("--eval-mode", type=click.Choice(["blocking", "background"]), default="blocking", show_default=True)
 @click.option("--train-rows", type=click.IntRange(min=1, max=7473), default=1024, show_default=True)
 @click.option("--study-steps", type=click.IntRange(min=1), help="Qualification-only update count; defaults to 25.")
-@click.option("--eval-interval", type=click.IntRange(min=1), help="Evaluation cadence; must divide the update count.")
+@click.option("--minibatches", type=click.IntRange(min=1, max=4), default=1, show_default=True)
+@click.option("--updates", type=click.IntRange(min=1), help="Qualification-only optimizer-update count.")
+@click.option(
+    "--eval-interval", type=click.IntRange(min=1), help="Periodic evaluation cadence; final evaluation is retained."
+)
 @click.option("--seed", type=click.IntRange(min=0, max=2**32 - 1), default=SEED, show_default=True)
 @click.option("--validation-offset", type=click.IntRange(min=0), default=0, show_default=True)
 @click.option("--validation-rows", type=click.IntRange(min=1), default=VALIDATION_ROWS, show_default=True)
@@ -603,6 +643,8 @@ def main(
     first_token_admission: bool | None,
     train_rows: int,
     study_steps: int | None,
+    minibatches: int,
+    updates: int | None,
     eval_interval: int | None,
     seed: int,
     validation_offset: int,
@@ -635,6 +677,8 @@ def main(
         eval_mode=eval_mode,
         first_token_admission=first_token_admission,
         study_steps=study_steps,
+        minibatches=minibatches,
+        updates=updates,
         eval_interval=eval_interval,
         seed=seed,
         validation_offset=validation_offset,

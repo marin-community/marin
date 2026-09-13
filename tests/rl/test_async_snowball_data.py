@@ -30,10 +30,98 @@ def test_snowball_row_and_worker_defaults_are_cli_equivalent():
     args = ["--version", "2026.09.08.34", "--scale", "cadence-gate", "--completion", "metrics"]
     default = CliRunner().invoke(async_snowball.main, args)
     explicit = CliRunner().invoke(
-        async_snowball.main, [*args, "--train-rows", "1024", "--validation-rows", "128", "--dataloader-workers", "0"]
+        async_snowball.main,
+        [
+            *args,
+            "--train-rows",
+            "1024",
+            "--validation-rows",
+            "128",
+            "--dataloader-workers",
+            "0",
+            "--minibatches",
+            "1",
+        ],
     )
     assert default.exit_code == explicit.exit_code == 0
     assert json.loads(default.output) == json.loads(explicit.output)
+
+
+@pytest.mark.parametrize("minibatches", [1, 2, 4])
+def test_snowball_explicit_update_geometry_reaches_request(minibatches):
+    step = async_snowball.build_experiment(
+        version="2026.09.13.1",
+        scale=async_snowball.Scale.QUALIFICATION,
+        timeout_seconds=3600,
+        completion="metrics",
+        minibatches=minibatches,
+        updates=28,
+        eval_interval=5,
+    )
+    request = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).request
+    config = yaml.safe_load(request.config_yaml)
+    assert config["entrypoint"] == "fully_async"
+    assert config["trainer"]["max_steps"] == config["trainer"]["ckpt_interval"] == 28
+    assert config["trainer"]["eval_interval"] == 5
+    assert config["trainer"]["train_batch_size"] == request.topology.role_plan.train_batch_size == 32 * minibatches
+    assert config["trainer"]["policy_mini_batch_size"] == request.topology.role_plan.policy_mini_batch_size == 32
+    assert config["trainer"]["update_epochs_per_batch"] == 1
+
+
+def test_snowball_n4_update_geometry_reaches_request_through_cli():
+    result = CliRunner().invoke(
+        async_snowball.main,
+        [
+            "--version",
+            "2026.09.13.1",
+            "--scale",
+            "qualification",
+            "--completion",
+            "metrics",
+            "--minibatches",
+            "4",
+            "--updates",
+            "28",
+            "--eval-interval",
+            "5",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    request = json.loads(result.output)["request"]
+    config = yaml.safe_load(request["config_yaml"])
+    assert config["trainer"]["max_steps"] == 28
+    assert config["trainer"]["eval_interval"] == 5
+    assert request["topology"]["role_plan"]["train_batch_size"] == 128
+    assert request["topology"]["role_plan"]["policy_mini_batch_size"] == 32
+
+
+@pytest.mark.parametrize("minibatches", [2, 4])
+def test_snowball_incomplete_prepared_cohort_rejects_before_request(minibatches):
+    with pytest.raises(ValueError, match="complete prepared cohort"):
+        async_snowball.build_experiment(
+            version="2026.09.13.1",
+            scale=async_snowball.Scale.QUALIFICATION,
+            timeout_seconds=3600,
+            completion="metrics",
+            minibatches=minibatches,
+            updates=25,
+            eval_interval=5,
+        )
+
+
+@pytest.mark.parametrize(
+    "changes,message",
+    [
+        ({"minibatches": 3, "updates": 24}, "one of 1, 2 or 4"),
+        ({"runner": async_snowball.Runner.SYNC, "minibatches": 2, "updates": 24}, "async runner"),
+        ({"backend": async_snowball.Backend.FSDP2, "minibatches": 2, "updates": 24}, "Megatron backend"),
+        ({"minibatches": 2}, "explicit total updates"),
+        ({"updates": 24, "study_steps": 24}, "updates or study_steps"),
+    ],
+)
+def test_snowball_rejects_unsupported_update_geometry(changes, message):
+    with pytest.raises(ValueError, match=message):
+        async_snowball.training_config(async_snowball.Scale.QUALIFICATION, **changes)
 
 
 @pytest.mark.parametrize("value", [-1, True, 1.5])
