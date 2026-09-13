@@ -1320,6 +1320,7 @@ mod tests {
     };
 
     const TABLE: &str = "iris.worker";
+    const TARGET: &str = "hub";
 
     /// The HEAD pointer every table-state commit swaps.
     fn head_swap() -> (ObjectOp, ObjectPattern) {
@@ -1498,7 +1499,7 @@ mod tests {
         let mut remote = first.state().catalog().clone();
         remote.catalog_generation = Some(2);
         remote.forward_cursors.push(ForwardCursor {
-            target: Some("hub".to_string()),
+            target: Some(TARGET.to_string()),
             cursor: Some(3),
             ..Default::default()
         });
@@ -1509,11 +1510,11 @@ mod tests {
 
         controller
             .catalog
-            .set_forward_cursor("hub", TABLE, 5)
+            .set_forward_cursor(TARGET, TABLE, 5)
             .unwrap();
         controller
             .catalog
-            .set_forward_cursor("hub", TABLE, 9)
+            .set_forward_cursor(TARGET, TABLE, 9)
             .unwrap();
 
         let error = controller.publish_state().await.unwrap_err();
@@ -1580,7 +1581,7 @@ mod tests {
         replacement.claim_writer().await.unwrap();
 
         // The stale writer advances its local revision and republishes.
-        catalog.set_forward_cursor("hub", TABLE, 7).unwrap();
+        catalog.set_forward_cursor(TARGET, TABLE, 7).unwrap();
         let error = stale.publish_state().await.unwrap_err();
 
         assert!(matches!(error, CommitError::Fenced(_)));
@@ -1621,7 +1622,7 @@ mod tests {
         assert!(matching.boot_reconciled.load(Ordering::SeqCst));
 
         let ahead_catalog = registered_catalog();
-        ahead_catalog.set_forward_cursor("hub", TABLE, 5).unwrap();
+        ahead_catalog.set_forward_cursor(TARGET, TABLE, 5).unwrap();
         let ahead = object_controller(remote_dir, ahead_catalog, remote, states, 11);
         ahead.adopt_claimed(selected).unwrap();
         assert!(!ahead.boot_reconciled.load(Ordering::SeqCst));
@@ -1656,7 +1657,7 @@ mod tests {
             12,
         );
         replacement.claim_writer().await.unwrap();
-        catalog.set_forward_cursor("hub", TABLE, 7).unwrap();
+        catalog.set_forward_cursor(TARGET, TABLE, 7).unwrap();
         stale.publish_state().await.unwrap_err();
 
         assert!(!stale.writes_ready());
@@ -1771,7 +1772,7 @@ mod tests {
 
         let first = controller
             .commit(|| {
-                let revision = catalog.set_forward_cursor("hub", TABLE, 5)?;
+                let revision = catalog.set_forward_cursor(TARGET, TABLE, 5)?;
                 Ok((revision, ()))
             })
             .await
@@ -1787,7 +1788,7 @@ mod tests {
 
         controller
             .commit(|| {
-                let revision = catalog.set_forward_cursor("hub", TABLE, 9)?;
+                let revision = catalog.set_forward_cursor(TARGET, TABLE, 9)?;
                 Ok((revision, ()))
             })
             .await
@@ -1824,7 +1825,7 @@ mod tests {
 
         controller
             .catalog
-            .set_forward_cursor("hub", TABLE, 5)
+            .set_forward_cursor(TARGET, TABLE, 5)
             .unwrap();
         let second = {
             let controller = Arc::clone(&controller);
@@ -1833,7 +1834,7 @@ mod tests {
         tokio::task::yield_now().await;
         controller
             .catalog
-            .set_forward_cursor("hub", TABLE, 9)
+            .set_forward_cursor(TARGET, TABLE, 9)
             .unwrap();
         let third = {
             let controller = Arc::clone(&controller);
@@ -1847,7 +1848,7 @@ mod tests {
 
         controller
             .commit_owing_publication(|| {
-                let revision = controller.catalog.set_forward_cursor("hub", TABLE, 13)?;
+                let revision = controller.catalog.set_forward_cursor(TARGET, TABLE, 13)?;
                 Ok((revision, ()))
             })
             .unwrap();
@@ -1897,7 +1898,7 @@ mod tests {
         gate.entered().await;
         controller
             .commit_owing_publication(|| {
-                let revision = controller.catalog.set_forward_cursor("hub", TABLE, 5)?;
+                let revision = controller.catalog.set_forward_cursor(TARGET, TABLE, 5)?;
                 Ok((revision, ()))
             })
             .unwrap();
@@ -1928,7 +1929,7 @@ mod tests {
                     .commit_owing_publication(|| {
                         entered_send.send(()).unwrap();
                         release_receive.recv().unwrap();
-                        let revision = controller.catalog.set_forward_cursor("hub", TABLE, 5)?;
+                        let revision = controller.catalog.set_forward_cursor(TARGET, TABLE, 5)?;
                         Ok((revision, ()))
                     })
                     .unwrap();
@@ -1970,7 +1971,7 @@ mod tests {
 
         let mut divergent = first.state().catalog().clone();
         divergent.forward_cursors.push(ForwardCursor {
-            target: Some("hub".to_string()),
+            target: Some(TARGET.to_string()),
             cursor: Some(5),
             ..Default::default()
         });
@@ -2026,7 +2027,7 @@ mod tests {
 
         let committed = controller
             .commit_maintenance(&lease, || {
-                let revision = controller.catalog.set_forward_cursor("hub", TABLE, 5)?;
+                let revision = controller.catalog.set_forward_cursor(TARGET, TABLE, 5)?;
                 Ok((revision, ()))
             })
             .unwrap();
@@ -2082,7 +2083,7 @@ mod tests {
 
         controller
             .catalog
-            .set_forward_cursor("hub", TABLE, 5)
+            .set_forward_cursor(TARGET, TABLE, 5)
             .unwrap();
         let published = tokio::time::timeout(
             std::time::Duration::from_secs(1),
@@ -2135,7 +2136,7 @@ mod tests {
 
         controller
             .catalog
-            .set_forward_cursor("hub", TABLE, 5)
+            .set_forward_cursor(TARGET, TABLE, 5)
             .unwrap();
         let published = tokio::time::timeout(
             std::time::Duration::from_secs(1),
@@ -2166,7 +2167,7 @@ mod tests {
 
         controller
             .commit_owing_publication(|| {
-                let revision = catalog.set_forward_cursor("hub", TABLE, 9)?;
+                let revision = catalog.set_forward_cursor(TARGET, TABLE, 9)?;
                 Ok((revision, ()))
             })
             .unwrap();
