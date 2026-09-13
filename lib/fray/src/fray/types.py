@@ -710,6 +710,8 @@ class JobRequest:
             fails (0 = fail on the first failure). Counts across retries.
         priority: Forwarded to the underlying backend if supported. 0 leaves
             the backend to use its default priority.
+        timeout_seconds: Optional Iris job lifetime. Backends that do not enforce
+            remote job lifetimes may ignore it.
     """
 
     name: str
@@ -722,6 +724,7 @@ class JobRequest:
     max_retries_preemption: int = 100
     max_task_failures: int = 0
     priority: int = 0
+    timeout_seconds: int | None = None
 
     def __post_init__(self):
         if " " in self.name:

@@ -50,7 +50,7 @@ from iris.resources.state import JobState as IrisJobState
 from iris.resources.state import is_job_finished
 from iris.rpc import actor_pb2, job_pb2
 from iris.rpc.errors import is_retryable_error
-from rigging.timing import ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff
 
 from fray.actor import (
     ActorContext,
@@ -693,6 +693,7 @@ class FrayIrisClient:
                 existing_job_policy=policy,
                 task_image=request.resources.image,
                 priority_band=request.priority,
+                timeout=None if request.timeout_seconds is None else Duration.from_seconds(request.timeout_seconds),
             )
         except IrisJobAlreadyExists as e:
             raise FrayJobAlreadyExists(request.name) from e

@@ -35,7 +35,6 @@ from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.cluster.types import EnvironmentSpec, JobName
 from iris.rpc import job_pb2
 from rigging.filesystem.storage_path import StoragePath
-from rigging.timing import Duration
 
 PACKET_FILENAME = "gpu-packet.json"
 Route = Literal["coordinator", "direct"]
@@ -175,6 +174,7 @@ class GpuJobPacket:
             max_retries_preemption=self.max_retries_preemption,
             max_task_failures=self.max_task_failures,
             priority=priority,
+            timeout_seconds=self.timeout_seconds,
         )
 
 
@@ -261,7 +261,9 @@ def coordinate_packet(
         "capacity_source=cluster_queue",
         flush=True,
     )
-    terminal = child.wait(timeout=packet.timeout_seconds, raise_on_failure=False, stream_logs=True)
+    # Queue delay is not part of the child execution limit. Iris enforces the
+    # packet timeout on the child after admission; the parent must outlive it.
+    terminal = child.wait(timeout=None, raise_on_failure=False, stream_logs=True)
     receipt["terminal_result"] = terminal.value
     if packet.receipt_uri is None:
         raise ValueError("receipt_uri is required for coordinator execution")
@@ -325,7 +327,9 @@ def _submit_coordinator(
         max_retries_failure=0,
         max_retries_preemption=0,
         max_task_failures=0,
-        timeout=Duration.from_seconds(packet.timeout_seconds + 600),
+        # The GPU child owns the packet's execution timeout. Bounding this CPU
+        # parent by that duration would kill a child that waited in Kueue first.
+        timeout=None,
         scheduling_timeout=None,
         priority_band=job_pb2.PRIORITY_BAND_BATCH,
     )
@@ -404,7 +408,7 @@ def submit_packet(
     }
     if route == "direct":
         assert direct_job is not None
-        terminal = direct_job.wait(timeout=packet.timeout_seconds, raise_on_failure=False, stream_logs=True)
+        terminal = direct_job.wait(timeout=None, raise_on_failure=False, stream_logs=True)
         receipt.update(
             event="gpu_child_terminal",
             coordinator_job_id=None,

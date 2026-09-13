@@ -61,7 +61,8 @@ def test_minimal_experimentctl_packet_uses_one_h100_defaults():
 class _Child:
     job_id = "/atqamar/e61-coordinator-0/e61-stage2"
 
-    def wait(self, **_kwargs):
+    def wait(self, *, timeout, **_kwargs):
+        assert timeout is None
         return JobStatus.SUCCEEDED
 
 
@@ -112,6 +113,7 @@ def test_coordinator_submits_unpinned_gpu_child_and_records_target_local_queue(c
     assert request.resources.device.variant == "H100"
     assert request.resources.device.count == 8
     assert request.replicas == 5
+    assert request.timeout_seconds == 21600
     assert request.resources.target_cluster is None
     assert receipt["route"] == "coordinator"
     assert receipt["target_cluster"] == "cw-rno2a"
@@ -221,6 +223,7 @@ def test_coordinator_envelope_pins_cpu_parent_and_preserves_packet():
     assert captured["constraints"][0].key == "cluster"
     assert captured["constraints"][0].values[0].value == "cw-rno2a"
     assert captured["entrypoint"].workdir_files["gpu-packet.json"] == b'{"command":["echo","pass"],"fixture":true}'
+    assert captured["timeout"] is None
     assert captured["environment"].env_vars == {
         "GPU_PACKET_ROUTE": "coordinator",
         "GPU_PACKET_TARGET_CLUSTER": "cw-rno2a",
