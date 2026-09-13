@@ -62,6 +62,30 @@ def resolve_model_config(model_key: str | None, config_path: Path | None) -> Mod
     return catalog[model_key]
 
 
+def resolve_judge_model_config(model_key: str | None, config_path: Path | None) -> ModelConfig | None:
+    """Resolve an optional hosted judge from the same model catalog schema."""
+    if model_key is None and config_path is None:
+        return None
+    if model_key is not None and config_path is not None:
+        raise click.BadParameter(
+            "specify at most one of --judge-model or --judge-model-config",
+            param_hint="--judge-model/--judge-model-config",
+        )
+    if config_path is not None:
+        try:
+            return load_model_config(config_path)
+        except Exception as exc:
+            raise click.BadParameter(str(exc), param_hint="--judge-model-config") from exc
+    assert model_key is not None
+    catalog = models()
+    if model_key not in catalog:
+        raise click.BadParameter(
+            f"unknown judge model {model_key!r}; known: {sorted(catalog)}",
+            param_hint="--judge-model",
+        )
+    return catalog[model_key]
+
+
 def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
     click.echo(
         f"model: {spec.model.name}  platform: {spec.platform.value}  "
@@ -69,6 +93,12 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
         f"target_cluster={batch.accelerator.target_cluster or 'none'}  "
         f"priority={priority_band_name(batch.priority_band)}"
     )
+    if batch.judge is not None:
+        click.echo(
+            f"judge: {batch.judge.model.name}  location={batch.judge.model.location}  "
+            f"accel={batch.judge.accelerator.label}  "
+            f"region_or_cluster={batch.judge.accelerator.target_cluster or batch.judge.accelerator.region}"
+        )
     for evaluation in batch.evaluations:
         tasks = [task.name for task in evaluation.identity.eval_ref.tasks]
         click.echo(
@@ -93,6 +123,14 @@ def cli() -> None:
     default=None,
     help="Model catalog YAML or JSON. Mutually exclusive with --model.",
 )
+@click.option("--judge-model", default=None, help="Optional hosted judge model registry key.")
+@click.option(
+    "--judge-model-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Optional hosted judge model catalog YAML or JSON.",
+)
+@click.option("--judge-accelerator", default=None, help="Hosted judge slice override, e.g. 'H100x8'.")
 @click.option(
     "--evals",
     "evals_arg",
@@ -147,6 +185,9 @@ def cli() -> None:
 def launch(
     model: str | None,
     model_config: Path | None,
+    judge_model: str | None,
+    judge_model_config: Path | None,
+    judge_accelerator: str | None,
     evals_arg: str | None,
     evalchemy_config: tuple[Path, ...],
     harbor_config: tuple[Path, ...],
@@ -163,6 +204,7 @@ def launch(
 ) -> None:
     """Submit one serve group for MODEL: serve once, run every selected eval, record each one."""
     selected_model = resolve_model_config(model, model_config)
+    selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
     resolved_platform = Platform(platform) if platform else default_platform(selected_model)
     evalchemy_definitions = [
         EvalchemyDefinition(
@@ -195,6 +237,8 @@ def launch(
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,
         priority_band=(job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)),
+        judge_model=selected_judge,
+        judge_accelerator=judge_accelerator,
         version=version,
         description=description,
     )

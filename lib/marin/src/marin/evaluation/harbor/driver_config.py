@@ -128,6 +128,7 @@ class HarborRuntimeOverlay:
     served_model: str
     task_limit: int | None
     model_agent_kwargs: Mapping[str, object]
+    verifier_env: Mapping[str, str]
 
 
 def _driver_command(command: str, *paths: Path) -> list[str]:

@@ -24,7 +24,7 @@ from marin.evaluation.harbor.driver_config import (
     preflight_harbor_configs,
 )
 from marin.evaluation.harbor.runner import canonical_served_name
-from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
@@ -36,6 +36,7 @@ from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
     EvaluationIdentity,
+    HostedJudge,
     LaunchProvenance,
     SubmittedEvaluationBatch,
     submit_evaluation_batch,
@@ -70,6 +71,8 @@ class LaunchSpec:
     submission_cluster: str
     federated_cluster: str | None
     priority_band: int
+    judge_model: ModelConfig | None = None
+    judge_accelerator: str | None = None
     version: str | None = None
     description: str | None = None
 
@@ -196,10 +199,35 @@ def build_evaluation_batch(
     """Resolve experiment names into one model-serving evaluation batch."""
     model = spec.model
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
+    if spec.judge_model is None and spec.judge_accelerator is not None:
+        raise ValueError("--judge-accelerator requires --judge-model or --judge-model-config")
     if spec.federated_cluster is not None:
         if accelerator.platform is not Platform.GPU:
             raise ValueError("--federated_cluster requires a GPU accelerator")
         accelerator = replace(accelerator, target_cluster=spec.federated_cluster)
+    judge = None
+    if spec.judge_model is not None:
+        judge_accelerator = MARIN_EVAL_HARDWARE.select(
+            spec.judge_model,
+            default_platform(spec.judge_model),
+            spec.judge_accelerator,
+        )
+        if spec.federated_cluster is not None:
+            if judge_accelerator.platform is not Platform.GPU:
+                raise ValueError("a federated hosted judge requires a GPU accelerator")
+            judge_accelerator = replace(judge_accelerator, target_cluster=spec.federated_cluster)
+        candidate_location = accelerator.target_cluster or accelerator.region
+        judge_location = judge_accelerator.target_cluster or judge_accelerator.region
+        if candidate_location != judge_location:
+            raise ValueError(
+                "the evaluated model and hosted judge must run in the same cluster or region; "
+                f"got {candidate_location!r} and {judge_location!r}"
+            )
+        judge = HostedJudge(
+            model=spec.judge_model,
+            accelerator=judge_accelerator,
+            api_model=canonical_served_name(spec.judge_model.name),
+        )
     definitions = _resolve_definitions(_evaluation_definitions(spec), model, spec.limit)
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
@@ -241,6 +269,7 @@ def build_evaluation_batch(
         evaluations=tuple(evaluations),
         provenance=provenance,
         submission_cluster=spec.submission_cluster,
+        judge=judge,
         secret_env=secret_env,
     )
 

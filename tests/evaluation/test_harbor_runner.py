@@ -29,18 +29,24 @@ from rigging.filesystem.conditional_object import ConditionalWriteError, Version
 from rigging.filesystem.storage_path import StoragePath
 
 
-def _running_model() -> RunningModel:
+def _running_model(
+    base_url: str = "https://iris.example/proxy/t/token/serve.model/v1",
+    model: str = "qwen3-0.6b",
+) -> RunningModel:
     return RunningModel(
         endpoint=OpenAIEndpoint(
-            base_url="https://iris.example/proxy/t/token/serve.model/v1",
-            model="qwen3-0.6b",
+            base_url=base_url,
+            model=model,
         )
     )
 
 
-def _inference_session() -> RemoteInferenceSession:
+def _inference_session(
+    base_url: str = "https://iris.example/proxy/t/token/serve.model/v1",
+    model: str = "qwen3-0.6b",
+) -> RemoteInferenceSession:
     return RemoteInferenceSession(
-        model=_running_model(),
+        model=_running_model(base_url, model),
         jobs=(),
         endpoint_name="/serve/test",
         endpoint_health_timeout_seconds=1800.0,
@@ -400,6 +406,7 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
                 served_model="model",
                 task_limit=1,
                 model_agent_kwargs={},
+                verifier_env={},
             ),
             {},
             backend_state,
@@ -426,6 +433,7 @@ def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_p
                 served_model="model",
                 task_limit=1,
                 model_agent_kwargs={},
+                verifier_env={},
             ),
             {},
             backend_state,
@@ -453,6 +461,7 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-harbor")
     session = _inference_session()
+    judge = _inference_session("https://iris.example/proxy/t/judge/serve.judge/v1", "qwen-judge")
     model = session.model
 
     executor = HarborExecutor(
@@ -467,6 +476,7 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
         session,
         str(tmp_path),
         {"DAYTONA_API_KEY": "daytona-key"},
+        judge=judge,
     )
 
     assert captured["config"] is executor.config
@@ -474,6 +484,11 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     assert captured["overlay"].served_model == "qwen3-0.6b"
     assert captured["overlay"].task_limit == 7
     assert captured["overlay"].model_agent_kwargs == {"extra_body": "{}"}
+    assert captured["overlay"].verifier_env == {
+        "OPENAI_API_KEY": "EMPTY",
+        "OPENAI_BASE_URL": judge.model.endpoint.base_url,
+        "MODEL_NAME": "qwen-judge",
+    }
     assert captured["env"]["DAYTONA_API_KEY"] == "daytona-key"
     assert "OPENAI_API_KEY" not in captured["env"]
     assert outcome.metrics[f"toy-{tmp_path.name}"]["accuracy"] == 1.0

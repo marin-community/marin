@@ -58,6 +58,7 @@ class RuntimeOverlay(BaseModel):
     served_model: str
     task_limit: int | None
     model_agent_kwargs: dict[str, Any]
+    verifier_env: dict[str, str]
 
 
 class _DatasetKind(StrEnum):
@@ -287,6 +288,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             "jobs_dir": UPath(overlay.jobs_dir),
             "agents": [agent],
             "datasets": [dataset],
+            "verifier": config.verifier.model_copy(update={"env": {**config.verifier.env, **overlay.verifier_env}}),
         }
     )
     return effective
@@ -355,6 +357,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
             served_model=_STABLE_MODEL,
             task_limit=None,
             model_agent_kwargs=dict(model_agent_kwargs),
+            verifier_env={},
         ),
     )
     return {
