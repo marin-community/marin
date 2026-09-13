@@ -224,7 +224,10 @@ corrupt-section counters.
 Planner debug events report covered or pruned segments, retained rows, and
 high-selectivity posting fallbacks. Exact aggregate substitution is visible in
 `EXPLAIN` as `FinelogIndexAggregate` and `FinelogGroupExtrema`, each naming the
-table and the substituted segment count. These signals distinguish incomplete
+table and the number of candidate segments the rewrite snapshotted. Both print
+`coverage=runtime` because the split between summary and fallback segments is
+decided during execution, so the count is not the substituted-segment count.
+Together with the planner debug events these signals distinguish incomplete
 backfill, an unsupported query shape, poor selectivity, corruption, and a
 planner regression.
 
