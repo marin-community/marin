@@ -17,7 +17,8 @@ from iris.client.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC, TOTAL_METRICS
+from marin.evaluation.eval_measurements import task_item_count
+from marin.evaluation.eval_stats import UNGRADED_ERROR
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
 from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS
 from marin.evaluation.evalchemy.result import EvalchemyResult
@@ -151,14 +152,11 @@ def _coverage_with_aggregate_counts(
     """
     reconciled = dict(coverage)
     for task, entry in coverage.items():
-        if entry.n_scored != 0 or entry.n_attempted is None or entry.errors != {"ungraded": entry.n_attempted}:
+        if entry.n_scored != 0 or entry.n_attempted is None or entry.errors != {UNGRADED_ERROR: entry.n_attempted}:
             continue
         task_metrics = metrics.get(task, {})
-        reported = next(
-            (task_metrics[key] for key in (SAMPLE_COUNT_METRIC, *TOTAL_METRICS) if key in task_metrics),
-            None,
-        )
-        if reported is None or not float(reported).is_integer() or int(reported) != entry.n_attempted:
+        reported = task_item_count(task_metrics)
+        if reported is None or reported != entry.n_attempted:
             continue
         reconciled[task] = TaskCoverage(
             n_attempted=entry.n_attempted,

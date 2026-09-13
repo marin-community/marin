@@ -256,7 +256,7 @@ def sample_to_archive_row(sample: EvalSample, *, trial_id: str = "", extraction_
     """One archive ``samples`` row plus its ``trial_id`` and extraction-filter merge keys.
 
     The explicit source filter supports custom lm-eval tasks that emit a filtered response without
-    a per-sample grade. Other producers derive it from :class:`Grading` as before.
+    a per-sample grade. Other producers derive it from :class:`Grading`.
     """
     row = sample.model_dump(mode="json")
     row[TRIAL_ID_COLUMN] = trial_id

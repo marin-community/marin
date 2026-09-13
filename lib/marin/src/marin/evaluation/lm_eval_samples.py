@@ -45,7 +45,7 @@ from marin.evaluation.archive import (
     primary_filter,
     primary_metric,
 )
-from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC
+from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC, UNGRADED_ERROR
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, TaskCoverage
 
 logger = logging.getLogger(__name__)
@@ -376,7 +376,7 @@ class _TaskCoverageAccumulator:
         scored = [summary for summary in graded_samples if not summary.infrastructure_error]
         ungraded = len(self.seen) - len(graded_samples)
         binary = all(summary.score in (0.0, 1.0) for summary in scored)
-        errors = {"ungraded": ungraded} if ungraded else {}
+        errors = {UNGRADED_ERROR: ungraded} if ungraded else {}
         if infrastructure_errors:
             errors[EVALCHEMY_INFRASTRUCTURE_ERROR] = len(infrastructure_errors)
         coverage = TaskCoverage(
@@ -392,19 +392,6 @@ class _TaskCoverageAccumulator:
             if recovered_metrics:
                 recovered_metrics[SAMPLE_COUNT_METRIC] = float(len(self.recovered_doc_ids))
         return coverage, recovered_metrics
-
-
-def task_coverage_and_metrics(samples: Sequence[EvalSample]) -> tuple[TaskCoverage, dict[str, float]]:
-    """Compute one task's coverage and metrics recovered after request failures.
-
-    Ungraded documents and failed requests are unscored. Empty model completions remain scored and
-    count as unanswered. For tasks with several extraction filters, coverage uses the filter chosen
-    by :func:`~marin.evaluation.archive.primary_filter`. Recovered metrics retain every filter.
-    """
-    accumulator = _TaskCoverageAccumulator()
-    for sample in samples:
-        accumulator.add(sample)
-    return accumulator.result()
 
 
 def _task_keys(sources: Sequence[str]) -> dict[str, str]:
@@ -472,6 +459,15 @@ class SampleExport:
     """Metrics rebuilt from successful samples for tasks with request failures."""
 
 
+@dataclass(frozen=True)
+class _SampleFileExport:
+    """Rows and task-level evidence normalized from one lm-eval sample file."""
+
+    samples: int
+    coverage: TaskCoverage | None
+    recovered_metrics: dict[str, float]
+
+
 def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> SampleExport:
     """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
 
@@ -504,13 +500,13 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> Sa
             store.flush()
             if relative not in keys:
                 continue
-            samples, task_coverage_result, task_metrics = _add_lm_eval_rows(store, relative.rsplit("/", 1)[-1], payload)
-            count += samples
-            if task_coverage_result is not None:
+            sample_file = _add_lm_eval_rows(store, relative.rsplit("/", 1)[-1], payload)
+            count += sample_file.samples
+            if sample_file.coverage is not None:
                 task_key = keys[relative]
-                coverage[task_key] = task_coverage_result
-                if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
-                    recovered_metrics[task_key] = task_metrics
+                coverage[task_key] = sample_file.coverage
+                if sample_file.coverage.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
+                    recovered_metrics[task_key] = sample_file.recovered_metrics
         store.seal()
     finally:
         store.close()
@@ -537,9 +533,7 @@ def _task_from_filename(name: str, suffix: str) -> str:
     return name[len(SAMPLES_PREFIX) : -len(suffix)].rsplit("_", 1)[0]
 
 
-def _add_lm_eval_rows(
-    store: EvaluationStore, filename: str, payload: bytes
-) -> tuple[int, TaskCoverage | None, dict[str, float]]:
+def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> _SampleFileExport:
     """Normalize one ``samples_*.jsonl`` payload into ``store`` and summarize its coverage.
 
     Physical LF bytes delimit records. Literal U+2028/U+2029 characters remain inside JSON strings.
@@ -564,9 +558,9 @@ def _add_lm_eval_rows(
         count += 1
     if not count:
         logger.warning("samples file %s is empty; skipping archive export", filename)
-        return 0, None, {}
+        return _SampleFileExport(samples=0, coverage=None, recovered_metrics={})
     coverage, metrics = accumulator.result()
-    return count, coverage, metrics
+    return _SampleFileExport(samples=count, coverage=coverage, recovered_metrics=metrics)
 
 
 def preserved_sample_sources(out_path: str) -> tuple[str, ...]:
@@ -610,8 +604,7 @@ def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int
             payload = reader.read_blob(name)
             if payload is None:
                 raise FileNotFoundError(f"archive at {out_path!r} lists source blob {name!r} but cannot read it")
-            samples, _, _ = _add_lm_eval_rows(store, name.rsplit("/", 1)[-1], payload)
-            count += samples
+            count += _add_lm_eval_rows(store, name.rsplit("/", 1)[-1], payload).samples
         store.seal()
     finally:
         store.close()
