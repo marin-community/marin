@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Preview or submit the exact two-H100 E3.0 publication instrumentation gate."""
+"""Preview the retired direct-submit command for the two-H100 E3.0 gate."""
 
 import argparse
 import hashlib
@@ -116,8 +116,10 @@ exec /tmp/oa-publication-env/bin/python -m pytest -s -q '{NODEID}'
     }
     print(json.dumps(preview, indent=2), flush=True)
     if args.execute:
-        assert os.environ["IRIS_USER"] == "atqamar"
-        subprocess.run(command, check=True)
+        raise RuntimeError(
+            "direct devbox GPU submission is retired; encode this request as a JSON packet and use "
+            "experiments.post_training.gpu_packet_submitter with --route coordinator"
+        )
 
 
 if __name__ == "__main__":
