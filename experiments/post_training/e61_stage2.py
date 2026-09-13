@@ -13,14 +13,14 @@ import yaml
 from experiments.post_training.async_snowball import Scale, training_config
 
 SKELETON = Path(__file__).with_name("e61_stage2_packet_skeleton.json")
-RUNTIME = "5ceb506edcab1c7f2f8da4a56e76c60dd030fd25"
-FAMILIES = dict(
-    zip(
-        ("parser_only", "force_close", "soft_overlong", "negative_truncation_advantage", "repetition_stop"),
-        (f"2026.09.09.{n}" for n in range(261, 266)),
-        strict=True,
-    )
-)
+RUNTIME = "862615b4a853f5ac993f4f6748bc3f9ed199d572"
+FAMILIES = {
+    "parser_only": "2026.09.13.266",
+    "force_close": "2026.09.09.262",
+    "soft_overlong": "2026.09.09.263",
+    "negative_truncation_advantage": "2026.09.09.264",
+    "repetition_stop": "2026.09.09.265",
+}
 EAST = "s3://marin-us-east-02a/"
 TRAIN = EAST + "marin/users/ahmad/documents/async-rl-snowball-gsm8k/2026.09.06.13"
 DEV = EAST + "marin/users/ahmad/documents/math-eval-pool/1.0.0-candidate1/batteries/mechanical-v1/snowball"

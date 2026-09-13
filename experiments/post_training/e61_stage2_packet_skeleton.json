@@ -59,7 +59,7 @@
     ],
     "generator.engine_init_kwargs.logprobs_mode": "raw_logprobs",
     "generator.engine_init_kwargs.logits_processors": [
-      "skyrl_train.inference_engines.non_agentic_logits_processor.NonAgenticTokenProcessor"
+      "skyrl_train.inference_engines.non_agentic_logits_processor:NonAgenticTokenProcessor"
     ],
     "trainer.fully_async.eval_mode": "blocking",
     "trainer.fully_async.eval_on_installed_weights": false
