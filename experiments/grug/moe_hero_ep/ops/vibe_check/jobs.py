@@ -31,7 +31,9 @@ MAX_ATTEMPTS = 3
 class Jobs(Protocol):
     def states(self) -> dict[str, JobState]: ...
 
-    def submit(self, request: SampleRequest, name: str) -> None: ...
+    def submit(self, request: SampleRequest, name: str) -> None:
+        """Submit with ERROR-on-exists. Never replace an existing job."""
+        ...
 
 
 def submit_pending(store: SampleStore, jobs: Jobs, requests: list[SampleRequest]) -> None:
@@ -40,25 +42,32 @@ def submit_pending(store: SampleStore, jobs: Jobs, requests: list[SampleRequest]
         store.save_request(request)
     # Read job states before results. Process zero can save a result during this RPC.
     states = jobs.states()
-    if any(state not in TERMINAL_JOB_STATES for state in states.values()):
+    active = [name for name, state in states.items() if state not in TERMINAL_JOB_STATES]
+    if active:
+        logger.info("Waiting for active jobs: %s", active)
         return  # Wait for teardown even if the active job already wrote its result.
+    completed = store.completed_ids()
+    attempts = store.attempt_names()
     pending = []
     for request in sorted(store.requests(), key=lambda row: (row.checkpoint.step, row.sample_id), reverse=True):
-        if store.result(request) is not None or store.failed(request):
+        if request.sample_id in completed or store.retries_exhausted(request):
             continue
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            name = f"hero-completions-{request.sample_id}-a{attempt}"
-            if name not in states:
+        names = [f"hero-completions-{request.sample_id}-a{attempt}" for attempt in range(1, MAX_ATTEMPTS + 1)]
+        for name in names:
+            if name not in attempts and name not in states:
                 pending.append((request, name))
                 break
         else:
-            error = f"All {MAX_ATTEMPTS} attempts ended without a completed result"
+            error = "\n".join(f"{name}: {states.get(name, 'missing')}" for name in names)
             store.save_failure(request, error)  # Retain the stop marker after Iris prunes terminal jobs.
             logger.error("Sample %s: %s", request.sample_id, error)
     if pending:
         request, name = pending[0]
+        store.save_attempt(name)  # A lost or pruned job still consumes this attempt.
         jobs.submit(request, name)
         logger.info("Submitted %s for step %d", name, request.checkpoint.step)
+    else:
+        logger.info("No pending sample sets; %d completed", len(completed))
 
 
 class IrisSamplingJobs:
@@ -83,7 +92,9 @@ class IrisSamplingJobs:
         self.sampler_module = sampler_module
 
     def states(self) -> dict[str, JobState]:
-        return {job.job_id.name: job.state for job in self.client.list_jobs(prefix=f"/{JOB_USER}/")}
+        return {
+            job.job_id.name: job.state for job in self.client.list_jobs(prefix=f"/{JOB_USER}/") if job.job_id.is_root
+        }
 
     def submit(self, request: SampleRequest, name: str) -> None:
         resources = replace(self.resources, target_cluster=request.target_cluster)
@@ -149,6 +160,6 @@ class IrisSamplingJobs:
                         )
                     except JobAlreadyExists:
                         # A lost submit response can address this same attempt.
-                        logger.info("Attempt already exists: %s", name)
+                        logger.warning("Attempt already exists: %s", name)
             finally:
                 subprocess.run(["git", "worktree", "remove", "--force", str(snapshot)], cwd=self.repository, check=True)

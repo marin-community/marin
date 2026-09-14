@@ -32,7 +32,7 @@ for completed sample sets. The first successful publication creates this URL.
 
 | Data | Location |
 | --- | --- |
-| Requests, results, and failure markers | `s3://marin-us-east-02a/marin/users/rav/hero-completions/` |
+| Requests, attempts, results, and failure markers | `s3://marin-us-east-02a/marin/users/rav/hero-completions/` |
 | Public result JSON | `gs://marin-public/rav/hero-completions/results/` |
 | Daily HTML reports | `gs://marin-public/rav/hero-completions/YYYY.MM.DD/` |
 | Latest report redirect | `gs://marin-public/rav/hero-completions/latest/index.html` |
@@ -74,12 +74,12 @@ Report retries reuse the day's saved snapshot and do not start GPU jobs.
 The report reads completed result files, including results from previous prompt banks.
 Check Actions and Iris for workflow failures and active jobs.
 
-Each sample set gets three total job attempts. Failures, preemptions, and scheduling
-timeouts use this budget. Requests keep their original source commit for retries.
+Each sample set gets three total job attempts. Failures, preemptions, missing jobs,
+and scheduling timeouts use this budget. Requests keep their original source commit for retries.
 Service errors stop the controller. An active job blocks new submissions, even after its result arrives.
 After three attempts without a result, `failures/<sample-id>.txt` stops retries.
-Iris retains terminal jobs for seven days. Longer gaps between attempts can reset
-the count until the failure marker exists.
+The controller saves `attempts/<job-name>.txt` before submission. These markers keep
+the retry limit after Iris deletes job history. A lost submission also consumes an attempt.
 
 After correcting a failed sampler or an access problem, change `release` in
 [config.py](config.py) to retry exhausted requests. This creates new requests for

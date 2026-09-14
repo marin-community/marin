@@ -122,9 +122,18 @@ class SampleStore:
         return [SampleRequest.model_validate_json(path.read_bytes()) for path in (self.root / "requests/*.json").glob()]
 
     def results(self) -> list[SampleResult]:
-        return [SampleResult.model_validate_json(path.read_bytes()) for path in (self.root / "results/*.json").glob()]
+        return [self.result(sample_id) for sample_id in self.completed_ids()]
 
-    def failed(self, request: SampleRequest) -> bool:
+    def completed_ids(self) -> set[str]:
+        return {path.name.removesuffix(".json") for path in (self.root / "results/*.json").glob()}
+
+    def attempt_names(self) -> set[str]:
+        return {path.name.removesuffix(".txt") for path in (self.root / "attempts/*.txt").glob()}
+
+    def save_attempt(self, name: str) -> None:
+        conditional_object(str(self.root / f"attempts/{name}.txt")).write(b"", expected_version=None)
+
+    def retries_exhausted(self, request: SampleRequest) -> bool:
         return conditional_object(str(self.root / f"failures/{request.sample_id}.txt")).version() is not None
 
     def save_failure(self, request: SampleRequest, error: str) -> None:
@@ -135,13 +144,10 @@ class SampleStore:
     def result_uri(self, sample_id: str) -> str:
         return str(self.root / f"results/{sample_id}.json")
 
-    def result(self, request: SampleRequest) -> SampleResult | None:
-        value = conditional_object(self.result_uri(request.sample_id)).read()
-        if value is None:
-            return None
-        result = SampleResult.model_validate_json(value.data)
-        if result.request.sample_id != request.sample_id:
-            raise ValueError(f"Result provenance does not match request {request.sample_id}")
+    def result(self, sample_id: str) -> SampleResult:
+        result = SampleResult.model_validate_json(StoragePath(self.result_uri(sample_id)).read_bytes())
+        if result.request.sample_id != sample_id:
+            raise ValueError(f"Result provenance does not match request {sample_id}")
         return result
 
     def save_result(self, result: SampleResult) -> None:
@@ -150,5 +156,4 @@ class SampleStore:
             target.write(result.model_dump_json().encode(), expected_version=None)
         except ConditionalWriteError:
             # A previous attempt may have committed its result before its acknowledgement was lost.
-            if self.result(result.request) is None:
-                raise ValueError("Committed result disappeared during recovery") from None
+            self.result(result.request.sample_id)

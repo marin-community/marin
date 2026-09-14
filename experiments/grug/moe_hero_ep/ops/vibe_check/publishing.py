@@ -67,8 +67,9 @@ def publish_latest(url: str) -> str:
         f'<a href="{html.escape(url)}">Open the latest report</a>'
         f"<script>location.replace({target} + location.search + location.hash)</script>"
     )
-    fs, path = url_to_fs(prefix_join(sites.PUBLIC_ROOT, LATEST_REPORT_KEY))
-    fs.makedirs(fs._parent(path), exist_ok=True)
+    target_path = StoragePath(sites.PUBLIC_ROOT) / LATEST_REPORT_KEY
+    target_path.parent.mkdirs()
+    fs, path = url_to_fs(str(target_path))
     # fs.open passes content-type and cache metadata to GCS; open_url does not.
     with fs.open(
         path, "wb", content_type="text/html; charset=utf-8", fixed_key_metadata={"cache_control": "no-store"}
@@ -131,7 +132,7 @@ def publish_daily(store: SampleStore, day: date, comment: Callable[[str], None])
         target = conditional_object(prefix_join(sites.PUBLIC_ROOT, public_result_key(key)))
         if target.version() is not None:
             continue
-        target.write(StoragePath(store.result_uri(key)).read_bytes(), expected_version=None)
+        target.write(store.result(key).model_dump_json().encode(), expected_version=None)
     with TemporaryDirectory(prefix="hero-completion-report-") as directory:
         source = Path(directory) / "index.html"
         source.write_text(render_report(manifest))

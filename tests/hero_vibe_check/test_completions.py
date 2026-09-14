@@ -145,11 +145,14 @@ def test_all_permanent_requests_survive_missed_ticks_and_retry_budget(tmp_path, 
     submit_pending(store, jobs, requests)
     assert {row.sample_id for row in store.requests()} == {row.sample_id for row in requests}
     for state in [JobState.FAILED, JobState.UNSCHEDULABLE, JobState.SUCCEEDED]:
-        active = next(name for name, state in jobs.jobs.items() if state == JobState.RUNNING)
+        active = next(name for name, job_state in jobs.jobs.items() if job_state == JobState.RUNNING)
         assert jobs.requests[active] == requests[-1]
         jobs.jobs[active] = state
+        if state == JobState.UNSCHEDULABLE:
+            jobs.jobs.clear()  # History deletion between attempts must not reset the budget.
         submit_pending(store, jobs, [newest] if state == JobState.SUCCEEDED else [])
-    assert store.failed(requests[-1])
+    assert store.retries_exhausted(requests[-1])
+    assert sum(row == requests[-1] for row in jobs.requests.values()) == 3
     assert list(jobs.requests.values())[-1] == newest
     store.save_result(completed(newest))
     store.save_result(completed(requests[1]))
@@ -172,8 +175,8 @@ def test_result_written_during_status_read_completes_last_attempt(tmp_path, monk
 
     monkeypatch.setattr(jobs, "states", finish_job)
     submit_pending(store, jobs, [])
-    assert store.result(sample_request) == completed(sample_request)
-    assert not store.failed(sample_request)
+    assert store.result(sample_request.sample_id) == completed(sample_request)
+    assert not store.retries_exhausted(sample_request)
     assert len(jobs.jobs) == 3
 
 
@@ -184,15 +187,15 @@ def test_prompt_changes_add_samples_and_source_changes_reuse_results(tmp_path, s
     new_main = request.model_copy(update={"source_revision": "d" * 40})
     submit_pending(store, jobs, [new_main])
     assert jobs.jobs == {}
-    assert store.result(request) == completed(request)
+    assert store.result(request.sample_id) == completed(request)
 
     changed_prompt = request.spec.prompts[0].model_copy(update={"text": "def subtract(a, b):"})
     changed = new_main.model_copy(update={"spec": request.spec.model_copy(update={"prompts": (changed_prompt,)})})
     submit_pending(store, jobs, [new_main, changed])
     assert len(store.requests()) == 2
     assert len(jobs.jobs) == 1
-    assert store.result(request) == completed(request)
-    assert store.result(changed) is None
+    assert store.result(request.sample_id) == completed(request)
+    assert changed.sample_id not in store.completed_ids()
 
 
 def test_results_require_the_full_bank_and_keep_the_first_success(tmp_path, sample_request):
@@ -209,7 +212,7 @@ def test_results_require_the_full_bank_and_keep_the_first_success(tmp_path, samp
     store = SampleStore(str(tmp_path))
     store.save_result(result)
     store.save_result(result.model_copy(update={"completed_at": "2026-09-13T10:00:00+00:00"}))
-    assert store.result(request) == result
+    assert store.result(request.sample_id) == result
 
 
 def test_issue_update_recovers_lost_response_and_preserves_human_comments(monkeypatch):
