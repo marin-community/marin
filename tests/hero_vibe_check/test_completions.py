@@ -2,29 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 
 import httpx
 import numpy as np
 import pytest
+from iris.resources.state import JobState
 from marin.publish import sites
 
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     Checkpoint,
     Completion,
-    Entry,
-    JobStatus,
-    Phase,
     Prompt,
-    Queue,
     SampleRequest,
     SampleResult,
     SampleStore,
     SamplingSpec,
     StopReason,
-    reconcile,
 )
 from experiments.grug.moe_hero_ep.ops.vibe_check.generation import generate
+from experiments.grug.moe_hero_ep.ops.vibe_check.jobs import submit_pending
 from experiments.grug.moe_hero_ep.ops.vibe_check.publishing import (
     COMMENT_MARKER,
     publish_daily,
@@ -79,55 +76,58 @@ class JobService:
     """External job service with unique names and retained terminal states."""
 
     def __init__(self):
-        self.jobs: dict[str, JobStatus] = {}
+        self.jobs: dict[str, JobState] = {}
         self.requests: dict[str, SampleRequest] = {}
         self.lose_submit_response = False
         self.unavailable = False
 
-    def status(self, name):
+    def states(self):
         if self.unavailable:
             raise ConnectionError("job service unavailable")
-        return self.jobs.get(name, JobStatus.MISSING)
+        return dict(self.jobs)
 
-    def submit(self, entry):
-        if entry.job_name in self.jobs:
+    def submit(self, request, name):
+        if name in self.jobs:
             return
-        self.jobs[entry.job_name] = JobStatus.RUNNING
-        self.requests[entry.job_name] = entry.request
+        self.jobs[name] = JobState.RUNNING
+        self.requests[name] = request
         if self.lose_submit_response:
             raise ConnectionError("response lost after submission")
 
 
-def test_queue_recovers_service_errors_without_overlapping_jobs(tmp_path, sample_request):
+def test_retries_recover_service_errors_without_overlapping_jobs(tmp_path, sample_request):
     request = sample_request
     store = SampleStore(str(tmp_path))
     jobs = JobService()
     jobs.lose_submit_response = True
     with pytest.raises(ConnectionError):
-        reconcile(store, jobs, [request], NOW)
+        submit_pending(store, jobs, [request])
     # A fresh invocation has a different main revision, but must keep the submitted request.
     changed_main = request.model_copy(update={"source_revision": "c" * 40})
     older = request.model_copy(
         update={"checkpoint": request.checkpoint.model_copy(update={"step": 3000, "uri": "s3://checkpoints/step-3000"})}
     )
     jobs.lose_submit_response = False
-    store.save_result(completed(request))
-    queue = reconcile(store, jobs, [changed_main, older], NOW + timedelta(hours=1))
-    assert queue.entries[request.sample_id].phase == Phase.ACTIVE
+    submit_pending(store, jobs, [changed_main, older])
     assert len(jobs.jobs) == 1
     name = next(iter(jobs.jobs))
     assert jobs.requests[name].source_revision == request.source_revision
     jobs.unavailable = True
     with pytest.raises(ConnectionError):
-        reconcile(store, jobs, [changed_main, older], NOW + timedelta(days=3))
+        submit_pending(store, jobs, [changed_main, older])
     assert len(jobs.jobs) == 1
-    assert store.read_queue()[0].entries[request.sample_id].attempt == 1
     jobs.unavailable = False
-    jobs.jobs[name] = JobStatus.SUCCEEDED
-    queue = reconcile(store, jobs, [changed_main, older], NOW + timedelta(days=3, hours=1))
-    assert queue.entries[request.sample_id].phase == Phase.COMPLETE
-    assert queue.entries[older.sample_id].phase == Phase.ACTIVE
+    jobs.jobs[name] = JobState.FAILED
+    submit_pending(store, jobs, [changed_main, older])
     assert len(jobs.jobs) == 2
+    retry = list(jobs.jobs)[-1]
+    assert jobs.requests[retry] == request
+    store.save_result(completed(request))
+    submit_pending(store, jobs, [])
+    assert len(jobs.jobs) == 2  # A saved result does not mean GPU teardown finished.
+    jobs.jobs[retry] = JobState.SUCCEEDED
+    submit_pending(store, jobs, [])
+    assert list(jobs.requests.values())[-1] == older
 
 
 def test_all_permanent_requests_survive_missed_ticks_and_retry_budget(tmp_path, sample_request):
@@ -141,69 +141,40 @@ def test_all_permanent_requests_survive_missed_ticks_and_retry_budget(tmp_path, 
         )
         for step in [6000, 12000, 18000]
     ]
-    queue = reconcile(store, jobs, requests, NOW)
-    assert len(queue.entries) == 3
-    assert queue.entries[requests[-1].sample_id].phase == Phase.ACTIVE
-    for attempt in range(3):
-        active = next(entry for entry in queue.entries.values() if entry.phase == Phase.ACTIVE)
-        jobs.jobs[active.job_name] = JobStatus.FAILED
-        queue = reconcile(store, jobs, [], NOW + timedelta(days=attempt + 1))
-    assert queue.entries[requests[-1].sample_id].phase == Phase.FAILED
-    assert queue.entries[requests[-1].sample_id].attempt == 3
-    assert queue.entries[requests[1].sample_id].phase == Phase.ACTIVE
-    assert queue.entries[requests[0].sample_id].phase == Phase.QUEUED
+    newest = request.model_copy(update={"checkpoint": request.checkpoint.model_copy(update={"step": 24000})})
+    submit_pending(store, jobs, requests)
+    assert {row.sample_id for row in store.requests()} == {row.sample_id for row in requests}
+    for state in [JobState.FAILED, JobState.UNSCHEDULABLE, JobState.SUCCEEDED]:
+        active = next(name for name, state in jobs.jobs.items() if state == JobState.RUNNING)
+        assert jobs.requests[active] == requests[-1]
+        jobs.jobs[active] = state
+        submit_pending(store, jobs, [newest] if state == JobState.SUCCEEDED else [])
+    assert store.failed(requests[-1])
+    assert list(jobs.requests.values())[-1] == newest
+    store.save_result(completed(newest))
+    store.save_result(completed(requests[1]))
+    jobs.jobs.clear()  # Iris prunes terminal job history.
+    submit_pending(store, jobs, [])
+    assert len(jobs.jobs) == 1
+    assert jobs.requests[next(iter(jobs.jobs))] == requests[0]
 
 
 def test_result_written_during_status_read_completes_last_attempt(tmp_path, monkeypatch, sample_request):
     store, jobs = SampleStore(str(tmp_path)), JobService()
-    queue = reconcile(store, jobs, [sample_request], NOW)
-    for hour in [1, 2]:
-        entry = queue.entries[sample_request.sample_id]
-        jobs.jobs[entry.job_name] = JobStatus.FAILED
-        queue = reconcile(store, jobs, [], NOW + timedelta(hours=hour))
+    submit_pending(store, jobs, [sample_request])
+    for _ in range(2):
+        jobs.jobs[list(jobs.jobs)[-1]] = JobState.FAILED
+        submit_pending(store, jobs, [])
 
-    def finish_job(name):
+    def finish_job():
         store.save_result(completed(sample_request))
-        return JobStatus.SUCCEEDED
+        return dict.fromkeys(jobs.jobs, JobState.SUCCEEDED)
 
-    monkeypatch.setattr(jobs, "status", finish_job)
-    reconcile(store, jobs, [], NOW + timedelta(hours=3))
-
-    saved, _ = store.read_queue()
-    assert saved.entries[sample_request.sample_id].phase == Phase.COMPLETE
-    assert saved.entries[sample_request.sample_id].failures == 2
+    monkeypatch.setattr(jobs, "states", finish_job)
+    submit_pending(store, jobs, [])
+    assert store.result(sample_request) == completed(sample_request)
+    assert not store.failed(sample_request)
     assert len(jobs.jobs) == 3
-
-
-def test_capacity_waits_do_not_use_the_sampling_failure_budget(tmp_path, sample_request):
-    store, jobs = SampleStore(str(tmp_path)), JobService()
-    queue = reconcile(store, jobs, [sample_request], NOW)
-    for hour in [0, 6, 12, 18]:
-        entry = queue.entries[sample_request.sample_id]
-        jobs.jobs[entry.job_name] = JobStatus.DEFERRED
-        queue = reconcile(store, jobs, [], NOW + timedelta(hours=hour))
-        assert queue.entries[sample_request.sample_id].phase == Phase.QUEUED
-        queue = reconcile(store, jobs, [], NOW + timedelta(hours=hour + 6))
-        assert queue.entries[sample_request.sample_id].phase == Phase.ACTIVE
-    entry = queue.entries[sample_request.sample_id]
-    assert entry.failures == 0
-    jobs.jobs[entry.job_name] = JobStatus.FAILED
-    queue = reconcile(store, jobs, [], NOW + timedelta(hours=25))
-    assert queue.entries[sample_request.sample_id].failures == 1
-    assert queue.entries[sample_request.sample_id].phase == Phase.ACTIVE
-
-
-def test_absent_attempt_recovers_before_deadline_and_fails_after_it(tmp_path, sample_request):
-    store, jobs = SampleStore(str(tmp_path)), JobService()
-    queue = reconcile(store, jobs, [sample_request], NOW)
-    jobs.jobs.clear()  # The service lost the logical job after the queue committed the request.
-    recovered = reconcile(store, jobs, [], NOW + timedelta(hours=2))
-    assert recovered.entries[sample_request.sample_id].job_name == queue.entries[sample_request.sample_id].job_name
-    assert len(jobs.jobs) == 1
-    jobs.jobs.clear()
-    expired = reconcile(store, jobs, [], NOW + timedelta(hours=49))
-    assert expired.entries[sample_request.sample_id].phase == Phase.FAILED
-    assert jobs.jobs == {}
 
 
 def test_prompt_changes_add_samples_and_source_changes_reuse_results(tmp_path, sample_request):
@@ -211,18 +182,34 @@ def test_prompt_changes_add_samples_and_source_changes_reuse_results(tmp_path, s
     store, jobs = SampleStore(str(tmp_path)), JobService()
     store.save_result(completed(request))
     new_main = request.model_copy(update={"source_revision": "d" * 40})
-    queue = reconcile(store, jobs, [new_main], NOW)
+    submit_pending(store, jobs, [new_main])
     assert jobs.jobs == {}
-    assert queue.entries[request.sample_id].phase == Phase.COMPLETE
-    assert queue.entries[request.sample_id].request.source_revision == request.source_revision
+    assert store.result(request) == completed(request)
 
     changed_prompt = request.spec.prompts[0].model_copy(update={"text": "def subtract(a, b):"})
     changed = new_main.model_copy(update={"spec": request.spec.model_copy(update={"prompts": (changed_prompt,)})})
-    queue = reconcile(store, jobs, [new_main, changed], NOW + timedelta(hours=1))
-    assert len(queue.entries) == 2
+    submit_pending(store, jobs, [new_main, changed])
+    assert len(store.requests()) == 2
     assert len(jobs.jobs) == 1
     assert store.result(request) == completed(request)
     assert store.result(changed) is None
+
+
+def test_results_require_the_full_bank_and_keep_the_first_success(tmp_path, sample_request):
+    prompt = sample_request.spec.prompts[0].model_copy(update={"id": "other"})
+    request = sample_request.model_copy(
+        update={"spec": sample_request.spec.model_copy(update={"prompts": (*sample_request.spec.prompts, prompt)})}
+    )
+    partial = completed(sample_request).model_dump()
+    partial["request"] = request.model_dump()
+    with pytest.raises(ValueError):
+        SampleResult.model_validate(partial)
+    partial["completions"] += ({**partial["completions"][0], "prompt_id": "other"},)
+    result = SampleResult.model_validate(partial)
+    store = SampleStore(str(tmp_path))
+    store.save_result(result)
+    store.save_result(result.model_copy(update={"completed_at": "2026-09-13T10:00:00+00:00"}))
+    assert store.result(request) == result
 
 
 def test_issue_update_recovers_lost_response_and_preserves_human_comments(monkeypatch):
@@ -296,6 +283,8 @@ def test_sampling_streams_do_not_depend_on_prompt_order_or_early_eos(sample_requ
     alone = generate(
         spec.model_copy(update={"prompts": (other,), "batch_size": 1}), [[2]], eos_token_id=0, logits=logits, decode=str
     )
+    batches = generate(spec.model_copy(update={"batch_size": 1}), [[1], [2]], eos_token_id=0, logits=logits, decode=str)
+    assert batches == pair
     assert pair[0].token_ids == reverse[1].token_ids
     assert pair[1].token_ids == reverse[0].token_ids == alone[0].token_ids
 
@@ -315,9 +304,6 @@ def test_daily_publication_preserves_history_across_retries_and_new_days(tmp_pat
     monkeypatch.setattr(sites, "PUBLIC_ROOT", str(public))
     store = SampleStore(str(tmp_path / "private"))
     store.save_result(completed(request))
-    store.save_queue(
-        Queue(entries={request.sample_id: Entry(request=request, phase=Phase.COMPLETE)}, inventory_at=NOW), None
-    )
     comments = []
 
     def fail_comment(body):
@@ -327,10 +313,11 @@ def test_daily_publication_preserves_history_across_retries_and_new_days(tmp_pat
         publish_daily(store, date(2026, 9, 12), fail_comment)
     page = public / "rav/hero-completions/2026.09.12/index.html"
     first_page = page.read_text()
-    queue, version = store.read_queue()
-    store.save_queue(queue.model_copy(update={"inventory_at": NOW + timedelta(hours=3)}), version)
+    newer = request.model_copy(update={"checkpoint": request.checkpoint.model_copy(update={"step": 24000})})
+    store.save_result(completed(newer))
     url = publish_daily(store, date(2026, 9, 12), comments.append)
     assert page.read_text() == first_page
+    assert newer.sample_id not in first_page
     assert SampleResult.model_validate_json(
         (public / f"rav/hero-completions/results/{request.sample_id}.json").read_bytes()
     ) == completed(request)
@@ -345,6 +332,9 @@ def test_daily_publication_preserves_history_across_retries_and_new_days(tmp_pat
     assert page.read_text() == first_page
     assert len(comments) == 2
     assert next_url in comments[1]
+    next_page = (public / "rav/hero-completions/2026.09.13/index.html").read_text()
+    assert request.sample_id in next_page and newer.sample_id in next_page
+    assert url in next_page
 
 
 def test_report_data_cannot_close_its_script_element(sample_request):
@@ -352,7 +342,7 @@ def test_report_data_cannot_close_its_script_element(sample_request):
     poisoned = request.model_copy(
         update={"checkpoint": request.checkpoint.model_copy(update={"run_id": "</script><script>alert(1)</script>"})}
     )
-    manifest = report_manifest(Queue(entries={poisoned.sample_id: Entry(request=poisoned)}), "2026-09-12")
+    manifest = report_manifest([completed(poisoned)], "2026-09-12", "")
     html = render_report(manifest)
     embedded = html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0]
     assert json.loads(embedded)["entries"][0]["run_id"] == poisoned.checkpoint.run_id

@@ -23,11 +23,34 @@ def generate(
     ``logits`` receives padded token rows and the index of each row's last input token.
     The model backend must be dropless so filler rows cannot change prompt routing.
     """
-    batch_size = spec.batch_size
-    if len(prompt_ids) != len(spec.prompts) or batch_size < len(prompt_ids):
-        raise ValueError("Prompt count does not fit the batch")
+    if len(prompt_ids) != len(spec.prompts):
+        raise ValueError("Tokenized prompt count differs from the prompt bank")
     if any(not ids or len(ids) > spec.context_length for ids in prompt_ids):
         raise ValueError("Each prompt must contain 1..context_length tokens")
+    results = []
+    for start in range(0, len(prompt_ids), spec.batch_size):
+        batch = slice(start, start + spec.batch_size)
+        results.extend(
+            _generate_batch(
+                spec.model_copy(update={"prompts": spec.prompts[batch]}),
+                prompt_ids[batch],
+                eos_token_id=eos_token_id,
+                logits=logits,
+                decode=decode,
+            )
+        )
+    return tuple(results)
+
+
+def _generate_batch(
+    spec: SamplingSpec,
+    prompt_ids: Sequence[Sequence[int]],
+    *,
+    eos_token_id: int,
+    logits: Callable[[np.ndarray, np.ndarray], np.ndarray],
+    decode: Callable[[list[int]], str],
+) -> tuple[Completion, ...]:
+    batch_size = spec.batch_size
     tokens = np.full((batch_size, spec.context_length), eos_token_id, dtype=np.int32)
     positions = np.zeros(batch_size, dtype=np.int32)
     for row in range(batch_size):

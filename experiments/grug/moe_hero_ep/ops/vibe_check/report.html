@@ -9,7 +9,7 @@
     body { max-width: 1500px; margin: auto; padding: 24px; }
     h1 { margin-bottom: 0; } h2 { font-size: 1.1rem; }
     a { color: light-dark(#154a95, #94c5ff); }
-    .muted { opacity: .75; } #warning { color: light-dark(#933a00, #ffc085); }
+    .muted { opacity: .75; }
     .controls, .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
     label { display: block; } select { width: 100%; padding: 10px; margin-top: 6px; }
     article { min-width: 0; border: 1px solid #8886; border-radius: 8px; padding: 18px; }
@@ -25,8 +25,8 @@
 <body>
   <header>
     <h1>Hero checkpoint completions</h1>
-    <p class="muted">Every retained permanent checkpoint · Native base-model continuations · Daily report</p>
-    <p id="summary"></p><p id="warning" role="status"></p>
+    <p class="muted">Completed sample sets · Native base-model continuations · Daily report</p>
+    <p id="summary"></p>
     <p><a href="https://github.com/marin-community/marin/issues/8827">Discussion and prompt sources</a>
        · <a id="previous" hidden>Previous daily report</a></p>
   </header>
@@ -37,8 +37,8 @@
   <label id="prompt-control">Prompt<select id="prompt"></select></label>
   <p id="error" role="alert"></p>
   <div class="comparison"><article id="a"></article><article id="b"></article></div>
-  <details><summary>All checkpoints and sampling status</summary>
-    <table><thead><tr><th>Checkpoint</th><th>Sample set</th><th>Status</th><th>Details</th></tr></thead><tbody id="inventory"></tbody></table>
+  <details><summary>All completed sample sets</summary>
+    <table><thead><tr><th>Checkpoint</th><th>Sample set</th></tr></thead><tbody id="inventory"></tbody></table>
   </details>
   <p class="muted">Generated text can be incorrect or harmful. It is shown as plain text. These are fixed-seed samples, not quality scores.</p>
   <script id="report-data" type="application/json">__REPORT_DATA__</script>
@@ -51,22 +51,19 @@
     const cache = new Map();
     let draw = 0;
     function element(tag, text) { const node = document.createElement(tag); node.textContent = text; return node; }
-    function label(entry) { return `${entry.step.toLocaleString()} · ${entry.run_id} · ${entry.id.slice(0, 8)} · ${entry.phase}`; }
-    document.getElementById('summary').textContent = `Report: ${report.date} UTC. ${report.counts.complete} complete, ${report.counts.active} active, ${report.counts.queued} queued, ${report.counts.failed} failed. Inventory: ${report.inventory_at || 'not yet available'}.`;
-    if (!report.inventory_at || Date.now() - Date.parse(report.inventory_at) > 36 * 3600000) {
-      document.getElementById('warning').textContent = 'Checkpoint inventory is stale. Check the scheduled workflow before treating this as the latest history.';
-    }
+    function label(entry) { return `${entry.step.toLocaleString()} · ${entry.run_id} · ${entry.id.slice(0, 8)}`; }
+    document.getElementById('summary').textContent = `Report: ${report.date} UTC. ${report.entries.length} completed sample sets.`;
     if (report.previous_url) {
       const previous = document.getElementById('previous'); previous.href = report.previous_url; previous.hidden = false;
     }
     for (const entry of report.entries) {
       for (const select of [left, right]) { const option = element('option', label(entry)); option.value = entry.id; select.append(option); }
       const row = document.createElement('tr');
-      for (const value of [`${entry.step} · ${entry.run_id}`, entry.id.slice(0, 12), entry.phase, entry.error]) row.append(element('td', value));
+      for (const value of [`${entry.step} · ${entry.run_id}`, entry.id.slice(0, 12)]) row.append(element('td', value));
       document.getElementById('inventory').append(row);
     }
     async function result(id) {
-      if (!id || !byId[id].url) return null;
+      if (!id) return null;
       if (!cache.has(id)) {
         const response = await fetch(byId[id].url);
         if (!response.ok) throw new Error(`Cannot load sample ${id}: HTTP ${response.status}`);
@@ -76,9 +73,8 @@
     }
     function panel(target, id, data, promptId) {
       target.replaceChildren();
-      if (!id) { target.append(element('p', 'No checkpoints have been discovered.')); return; }
+      if (!id) { target.append(element('p', 'No completed sample sets.')); return; }
       const entry = byId[id]; target.append(element('h2', label(entry)));
-      if (!data) { target.append(element('p', entry.error || `Sampling status: ${entry.phase}`)); return; }
       const source = data.request.spec.prompts.find(item => item.id === promptId);
       const completion = data.completions.find(item => item.prompt_id === promptId);
       if (!source || !completion) { target.append(element('p', 'This prompt is not in this sample set.')); return; }
@@ -108,9 +104,8 @@
       } catch (error) { if (ticket === draw) document.getElementById('error').textContent = String(error); }
     }
     const selection = new URLSearchParams(location.hash.slice(1));
-    const complete = report.entries.filter(entry => entry.phase === 'complete');
-    left.value = byId[selection.get('a')] ? selection.get('a') : (complete[0]?.id || report.entries[0]?.id || '');
-    right.value = byId[selection.get('b')] ? selection.get('b') : (complete[1]?.id || left.value);
+    left.value = byId[selection.get('a')] ? selection.get('a') : (report.entries[0]?.id || '');
+    right.value = byId[selection.get('b')] ? selection.get('b') : (report.entries[1]?.id || left.value);
     for (const select of [left, right, prompt]) select.addEventListener('change', render);
     render();
   </script>

@@ -16,7 +16,7 @@ from iris.client.client import IrisClient
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.grug.moe_hero_ep.hero_recipe import HERO_PROCESSES_PER_TASK
-from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleStore, reconcile
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleStore
 from experiments.grug.moe_hero_ep.ops.vibe_check.config import (
     CHECKPOINT_RUNS,
     STORE_ROOT,
@@ -25,7 +25,7 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.config import (
     sampling_resources,
     sampling_spec,
 )
-from experiments.grug.moe_hero_ep.ops.vibe_check.jobs import IrisSamplingJobs
+from experiments.grug.moe_hero_ep.ops.vibe_check.jobs import IrisSamplingJobs, submit_pending
 from experiments.grug.moe_hero_ep.ops.vibe_check.publishing import publish_daily, update_issue_comment
 
 logger = logging.getLogger(__name__)
@@ -64,8 +64,7 @@ def main(action: str, store_root: str) -> None:
                 HERO_PROCESSES_PER_TASK,
                 sampler_module="experiments.grug.moe_hero_ep.ops.vibe_check.sample",
             )
-            queue = reconcile(store, jobs, requests, now)
-    logger.info("Checkpoint history contains %d sample sets", len(queue.entries))
+            submit_pending(store, jobs, requests)
 
 
 if __name__ == "__main__":

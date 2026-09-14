@@ -13,11 +13,13 @@ from tempfile import TemporaryDirectory
 
 import httpx
 from marin.publish import sites
-from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
+from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.factory import url_to_fs
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.grug.moe_hero_ep.ops.vibe_check.completions import Phase, Queue, SampleStore
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleResult, SampleStore
+
+logger = logging.getLogger(__name__)
 
 REPORT_USER = "rav"
 REPORT_SLUG = "hero-completions"
@@ -26,32 +28,27 @@ COMMENT_MARKER = "<!-- hero-checkpoint-completions-v1 -->"
 ISSUES_API = "https://api.github.com/repos/marin-community/marin/issues"
 ISSUE_API = f"{ISSUES_API}/8827"
 COMMENT_PAGE_SIZE = 100
-logger = logging.getLogger(__name__)
 
 
 def public_result_key(sample_id: str) -> str:
     return f"{REPORT_USER}/{REPORT_SLUG}/results/{sample_id}.json"
 
 
-def report_manifest(queue: Queue, report_date: str) -> dict:
-    entries = sorted(queue.entries.items(), key=lambda pair: (pair[1].request.checkpoint.step, pair[0]), reverse=True)
+def report_manifest(results: list[SampleResult], report_date: str, previous_url: str) -> dict:
+    requests = sorted(
+        (result.request for result in results), key=lambda row: (row.checkpoint.step, row.sample_id), reverse=True
+    )
     return {
         "date": report_date,
-        "inventory_at": queue.inventory_at.isoformat() if queue.inventory_at else None,
-        "previous_url": queue.report_url,
-        "counts": {phase.value: sum(entry.phase == phase for _, entry in entries) for phase in Phase},
+        "previous_url": previous_url,
         "entries": [
             {
-                "id": key,
-                "run_id": entry.request.checkpoint.run_id,
-                "step": entry.request.checkpoint.step,
-                "phase": entry.phase.value,
-                "error": entry.error,
-                "url": (
-                    prefix_join(sites.PUBLIC_URL_BASE, public_result_key(key)) if entry.phase == Phase.COMPLETE else None
-                ),
+                "id": request.sample_id,
+                "run_id": request.checkpoint.run_id,
+                "step": request.checkpoint.step,
+                "url": prefix_join(sites.PUBLIC_URL_BASE, public_result_key(request.sample_id)),
             }
-            for key, entry in entries
+            for request in requests
         ],
     }
 
@@ -118,30 +115,23 @@ def publish_daily(store: SampleStore, day: date, comment: Callable[[str], None])
     snapshot, so a retry cannot change an already linked daily report.
     """
     report_date = day.isoformat()
-    queue, version = store.read_queue()
-    if queue.published_date >= report_date:
-        return queue.report_url
-    snapshot = conditional_object(prefix_join(store.root, f"reports/{report_date}.json"))
+    published = sorted((store.root / "reports/*.url").glob(), key=lambda path: path.name)
+    previous_url = published[-1].read_text() if published else ""
+    if published and published[-1].name >= f"{report_date}.url":
+        return previous_url
+    snapshot = conditional_object(str(store.root / f"reports/{report_date}.json"))
     saved = snapshot.read()
     if saved is None:
-        snapshot.write(queue.model_dump_json().encode(), expected_version=None)
-        frozen = queue
+        manifest = report_manifest(store.results(), report_date, previous_url)
+        snapshot.write(json.dumps(manifest).encode(), expected_version=None)
     else:
-        frozen = Queue.model_validate_json(saved.data)
-    for key, entry in frozen.entries.items():
-        if entry.phase != Phase.COMPLETE:
-            continue
+        manifest = json.loads(saved.data)
+    for entry in manifest["entries"]:
+        key = entry["id"]
         target = conditional_object(prefix_join(sites.PUBLIC_ROOT, public_result_key(key)))
         if target.version() is not None:
             continue
-        result = store.result(entry.request)
-        if result is None:
-            raise FileNotFoundError(f"Completed sample has no result: {key}")
-        try:
-            target.write(result.model_dump_json().encode(), expected_version=None)
-        except ConditionalWriteError:
-            raise RuntimeError(f"Another publisher wrote sample {key}") from None
-    manifest = report_manifest(frozen, report_date)
+        target.write(StoragePath(store.result_uri(key)).read_bytes(), expected_version=None)
     with TemporaryDirectory(prefix="hero-completion-report-") as directory:
         source = Path(directory) / "index.html"
         source.write_text(render_report(manifest))
@@ -151,18 +141,16 @@ def publish_daily(store: SampleStore, day: date, comment: Callable[[str], None])
             slug=REPORT_SLUG,
             version=day.strftime("%Y.%m.%d"),
             title="Hero checkpoint completions",
-            summary="Every permanent checkpoint, with a daily history report.",
+            summary="Completed hero samples, with a daily history report.",
         )
     latest = publish_latest(site.url)
-    counts = manifest["counts"]
     comment(
         f"🤖 Hero checkpoint completions · {report_date} UTC\n\n"
         f"[Full checkpoint history]({latest}) · [This daily report]({site.url})\n\n"
-        f"{counts['complete']} complete, {counts['active']} active, "
-        f"{counts['queued']} queued, {counts['failed']} failed. "
+        f"{len(manifest['entries'])} completed sample sets. "
         "Select two checkpoints and a prompt to compare the samples. "
         "The report includes raw results and generation settings.\n\n"
-        f"Inventory checked: {manifest['inventory_at'] or 'not yet available'}.\n\n{COMMENT_MARKER}"
+        f"{COMMENT_MARKER}"
     )
-    store.save_queue(queue.model_copy(update={"published_date": report_date, "report_url": site.url}), version)
+    conditional_object(str(store.root / f"reports/{report_date}.url")).write(site.url.encode(), expected_version=None)
     return site.url

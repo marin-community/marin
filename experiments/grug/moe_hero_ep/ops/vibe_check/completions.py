@@ -1,21 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Persistent hero checkpoint requests and a restart-safe, single-job queue."""
+"""Immutable requests and completed sample sets for hero checkpoints."""
 
 import hashlib
 import json
-from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Protocol, Self
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
-from rigging.filesystem.storage_path import prefix_join
-
-ABSENT_ATTEMPT_TIMEOUT = timedelta(hours=48)
-CAPACITY_RETRY_DELAY = timedelta(hours=6)
-MAX_SAMPLING_FAILURES = 3
+from rigging.filesystem.storage_path import StoragePath
 
 
 class Record(BaseModel):
@@ -45,8 +40,6 @@ class SamplingSpec(Record):
     def validate_prompt_bank(self) -> Self:
         if len({prompt.id for prompt in self.prompts}) != len(self.prompts):
             raise ValueError("Prompt IDs must be unique")
-        if len(self.prompts) > self.batch_size:
-            raise ValueError("Prompt bank exceeds the sampling batch size")
         return self
 
 
@@ -111,73 +104,36 @@ class SampleResult(Record):
                 raise ValueError("Context-limit result does not fill the context")
             if row.stop_reason == StopReason.MAX_NEW_TOKENS and len(row.token_ids) != spec.max_new_tokens:
                 raise ValueError("Token-limit result does not reach the limit")
-            if row.stop_reason == StopReason.EOS and not row.token_ids:
-                raise ValueError("EOS result has no generated token")
         return self
 
 
-class Phase(StrEnum):
-    QUEUED = "queued"
-    ACTIVE = "active"
-    COMPLETE = "complete"
-    FAILED = "failed"
-
-
-class Entry(Record):
-    request: SampleRequest
-    phase: Phase = Phase.QUEUED
-    attempt: int = 0
-    failures: int = 0
-    retry_after: datetime | None = None
-    started_at: datetime | None = None
-    error: str = ""
-
-    @property
-    def job_name(self) -> str:
-        return f"hero-completions-{self.request.sample_id}-a{self.attempt}"
-
-
-class Queue(Record):
-    entries: dict[str, Entry] = Field(default_factory=dict)
-    inventory_at: datetime | None = None
-    published_date: str = ""
-    report_url: str = ""
-
-
-class JobStatus(StrEnum):
-    MISSING = "missing"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    DEFERRED = "deferred"
-
-
-class Jobs(Protocol):
-    def status(self, name: str) -> JobStatus: ...
-
-    def submit(self, entry: Entry) -> None:
-        """Submit the deterministic name with ERROR-on-exists, never replacement."""
-        ...
-
-
 class SampleStore:
-    """Store queue state and immutable results through the shared conditional-object API."""
+    """Store requests, completed results, and exhausted retry markers."""
 
     def __init__(self, root: str):
-        self.root = root
-        self.state = conditional_object(prefix_join(root, "queue.json"))
+        self.root = StoragePath(root)
 
-    def read_queue(self) -> tuple[Queue, str | None]:
-        value = self.state.read()
-        if value is None:
-            return Queue(), None
-        return Queue.model_validate_json(value.data), value.version
+    def save_request(self, request: SampleRequest) -> None:
+        target = conditional_object(str(self.root / f"requests/{request.sample_id}.json"))
+        if target.version() is None:
+            target.write(request.model_dump_json().encode(), expected_version=None)
 
-    def save_queue(self, queue: Queue, version: str | None) -> None:
-        self.state.write(queue.model_dump_json().encode(), expected_version=version)
+    def requests(self) -> list[SampleRequest]:
+        return [SampleRequest.model_validate_json(path.read_bytes()) for path in (self.root / "requests/*.json").glob()]
+
+    def results(self) -> list[SampleResult]:
+        return [SampleResult.model_validate_json(path.read_bytes()) for path in (self.root / "results/*.json").glob()]
+
+    def failed(self, request: SampleRequest) -> bool:
+        return conditional_object(str(self.root / f"failures/{request.sample_id}.txt")).version() is not None
+
+    def save_failure(self, request: SampleRequest, error: str) -> None:
+        conditional_object(str(self.root / f"failures/{request.sample_id}.txt")).write(
+            error.encode(), expected_version=None
+        )
 
     def result_uri(self, sample_id: str) -> str:
-        return prefix_join(self.root, f"results/{sample_id}.json")
+        return str(self.root / f"results/{sample_id}.json")
 
     def result(self, request: SampleRequest) -> SampleResult | None:
         value = conditional_object(self.result_uri(request.sample_id)).read()
@@ -196,74 +152,3 @@ class SampleStore:
             # A previous attempt may have committed its result before its acknowledgement was lost.
             if self.result(result.request) is None:
                 raise ValueError("Committed result disappeared during recovery") from None
-
-
-def reconcile(store: SampleStore, jobs: Jobs, requests: list[SampleRequest], now: datetime) -> Queue:
-    """Discover all requests, recover an active attempt, and start at most one job.
-
-    Concurrent callers either address the same persisted attempt or fail a conditional write.
-    A service error propagates. It is not evidence that a job has stopped.
-    """
-    queue, version = store.read_queue()
-    entries = dict(queue.entries)
-    for request in requests:
-        entries.setdefault(request.sample_id, Entry(request=request))
-    active = [(key, entry) for key, entry in entries.items() if entry.phase == Phase.ACTIVE]
-    if len(active) > 1:
-        raise ValueError("Queue contains more than one active allocation")
-    for key, entry in active:
-        status = jobs.status(entry.job_name)
-        if status == JobStatus.RUNNING:
-            continue  # Wait for teardown even when process zero has written the result.
-        result = store.result(entry.request)
-        if result is not None:
-            entries[key] = entry.model_copy(update={"phase": Phase.COMPLETE, "request": result.request, "error": ""})
-        elif status == JobStatus.MISSING:
-            assert entry.started_at is not None
-            if now - entry.started_at < ABSENT_ATTEMPT_TIMEOUT:
-                continue  # Retry submission below, using the same name and pinned request.
-            entries[key] = entry.model_copy(
-                update={"phase": Phase.FAILED, "error": "Attempt absent past recovery deadline"}
-            )
-        elif status == JobStatus.DEFERRED:
-            entries[key] = entry.model_copy(
-                update={
-                    "phase": Phase.QUEUED,
-                    "retry_after": now + CAPACITY_RETRY_DELAY,
-                    "error": "Waiting for capacity",
-                }
-            )
-        else:
-            failures = entry.failures + 1
-            phase = Phase.QUEUED if failures < MAX_SAMPLING_FAILURES else Phase.FAILED
-            entries[key] = entry.model_copy(
-                update={"phase": phase, "failures": failures, "error": f"Job {status} without a result"}
-            )
-
-    if not any(entry.phase == Phase.ACTIVE for entry in entries.values()):
-        pending = [
-            (key, entry)
-            for key, entry in entries.items()
-            if entry.phase == Phase.QUEUED and (entry.retry_after is None or entry.retry_after <= now)
-        ]
-        for key, entry in sorted(pending, key=lambda pair: (pair[1].request.checkpoint.step, pair[0]), reverse=True):
-            result = store.result(entry.request)
-            if result is not None:
-                entries[key] = entry.model_copy(update={"phase": Phase.COMPLETE, "request": result.request, "error": ""})
-                continue
-            entries[key] = entry.model_copy(
-                update={
-                    "phase": Phase.ACTIVE,
-                    "attempt": entry.attempt + 1,
-                    "started_at": now,
-                    "error": "",
-                    "retry_after": None,
-                }
-            )
-            break
-    queue = queue.model_copy(update={"entries": entries, "inventory_at": now})
-    store.save_queue(queue, version)  # The attempt is durable before any submission side effect.
-    for entry in entries.values():
-        if entry.phase == Phase.ACTIVE and jobs.status(entry.job_name) == JobStatus.MISSING:
-            jobs.submit(entry)
-    return queue
