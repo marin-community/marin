@@ -249,7 +249,7 @@ under its unpacked workspace. Absolute paths, unknown fields, malformed provider
 file extensions fail before Iris submission.
 
 The checked-in `swebench-recovery`, `ot-tblite-recovery`, `tb2-recovery`,
-`simpleqa-recovery`, and `ds-1000-local` files preserve the Snowball evaluation campaign policies.
+`simpleqa-recovery`, and `ds-1000-local` files preserve retry and resume policies for longer agentic runs.
 They are file-backed policies rather than registry entries. A `recovery` name denotes an exact-identity
 resume policy; each benchmark retains its own retry count and exception taxonomy. `ds-1000-local`
 expects the generated Harbor task tree at `experiments/evaluation/local_datasets/ds1000`; create that
