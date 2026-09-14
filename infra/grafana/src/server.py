@@ -76,6 +76,7 @@ import logging
 from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
+from functools import partial
 
 import pyarrow as pa
 import uvicorn
@@ -92,7 +93,7 @@ from config import (
     ClusterTarget,
 )
 from errors import UpstreamError
-from finelog.errors import QueryResultTooLargeError, RetryableStatsError
+from finelog.errors import FinelogUnavailableError, QueryResultTooLargeError
 from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth
@@ -372,6 +373,25 @@ def _query(request: Request, config: BridgeConfig, sources: Mapping[str, MetricS
     return cache.get_or_compute(key, run)
 
 
+def _finelog_alert_query(
+    request: Request,
+    *,
+    config: BridgeConfig,
+    sources: Mapping[str, MetricSource],
+    cache: TtlCache,
+) -> JSONResponse:
+    """Run alert SQL while treating only transient Finelog failures as no data."""
+    try:
+        return JSONResponse(_query(request, config, sources, cache))
+    except FinelogUnavailableError as err:
+        logger.warning("Finelog alert query unavailable: %s", err)
+        return JSONResponse([])
+    except _BadRequest as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    except QueryResultTooLargeError as err:
+        return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
+
+
 def _iris_for(name: str, sources: Mapping[str, IrisSource]) -> IrisSource:
     if name not in sources:
         raise _BadRequest(f"unknown cluster {name!r}; configured: {sorted(sources)}")
@@ -395,22 +415,16 @@ def create_app(
     github_cache: TtlCache = TtlCache(config.github_cache_ttl)
     k8s_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     wandb_cache: TtlCache = TtlCache(config.github_cache_ttl)
+    finelog_alert_query = partial(
+        _finelog_alert_query,
+        config=config,
+        sources=finelog_sources,
+        cache=finelog_cache,
+    )
 
     def query(request: Request) -> JSONResponse:
         try:
             return JSONResponse(_query(request, config, finelog_sources, finelog_cache))
-        except _BadRequest as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-        except QueryResultTooLargeError as err:
-            return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
-
-    def finelog_alert_query(request: Request) -> JSONResponse:
-        """Run alert SQL while treating only transient Finelog failures as no data."""
-        try:
-            return JSONResponse(_query(request, config, finelog_sources, finelog_cache))
-        except RetryableStatsError as err:
-            logger.warning("Finelog alert query unavailable: %s", err)
-            return JSONResponse([])
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
         except QueryResultTooLargeError as err:
@@ -565,7 +579,7 @@ def create_app(
             target = _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
             key = (name, _bucket(now, config.cache_ttl))
             return JSONResponse(finelog_cache.get_or_compute(key, lambda: project(target, now)))
-        except RetryableStatsError as err:
+        except FinelogUnavailableError as err:
             logger.warning("Finelog alert endpoint %s unavailable: %s", name, err)
             return JSONResponse(unavailable(now))
         except _BadRequest as err:

@@ -30,10 +30,10 @@ from finelog.client import (
 )
 from finelog.client import log_client as log_client_mod
 from finelog.errors import (
+    FinelogUnavailableError,
     InvalidNamespaceError,
     NamespaceNotFoundError,
     QueryResultTooLargeError,
-    RetryableStatsError,
     SchemaValidationError,
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
@@ -939,7 +939,7 @@ def test_query_translates_retryable_rpc_failure(tracked_clients):
     try:
         client.query("SELECT 1")
         tracked_clients[0].errors.append(ConnectError(Code.UNAVAILABLE, "down"))
-        with pytest.raises(RetryableStatsError):
+        with pytest.raises(FinelogUnavailableError):
             client.query("SELECT 1")
     finally:
         client.close()

@@ -18,7 +18,7 @@ import pyarrow as pa
 from config import FINELOG_PORT, ClusterTarget
 from discovery import InstanceResolutionError, resolve_internal_ip
 from finelog.client.log_client import LogClient
-from finelog.errors import RetryableStatsError, StatsError
+from finelog.errors import FinelogUnavailableError, StatsError
 from finelog_health import FinelogHealth, FinelogRole
 from google.api_core.exceptions import GoogleAPIError
 from relay_health import RelaySenderStatus, relay_sender_statuses
@@ -75,14 +75,14 @@ class FinelogSource:
         try:
             return self._client.query(sql, max_rows=max_rows)
         except (GoogleAPIError, InstanceResolutionError, OSError) as err:
-            raise RetryableStatsError(str(err)) from err
+            raise FinelogUnavailableError(str(err)) from err
 
     def health(self) -> FinelogHealth:
         """Probe the query path and return a dashboard-safe health row."""
         started = time.monotonic()
         try:
             self.query('SELECT * FROM "log" LIMIT 1', max_rows=1)
-        except (GoogleAPIError, InstanceResolutionError, OSError, StatsError) as err:
+        except StatsError as err:
             logger.warning("finelog health query failed for %s: %s", self._target.name, err)
             return FinelogHealth(
                 cluster=self._target.name,

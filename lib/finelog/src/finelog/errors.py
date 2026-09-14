@@ -12,8 +12,8 @@ class StatsError(Exception):
     """Base error for stats-service operations."""
 
 
-class RetryableStatsError(StatsError):
-    """A transient stats-service failure that may succeed on retry."""
+class FinelogUnavailableError(StatsError):
+    """A transient Finelog service failure that may succeed on retry."""
 
 
 class SchemaConflictError(StatsError):

@@ -13,7 +13,7 @@ import pytest
 from cache import TtlCache
 from config import ClusterTarget
 from conftest import FINELOG_DEPLOYMENTS_PATH, bridge_config, deployment, healthy_k8s_routes, k8s_api, make_k8s_source
-from finelog.errors import QueryResultTooLargeError, RetryableStatsError
+from finelog.errors import FinelogUnavailableError, QueryResultTooLargeError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from hero_health import (
@@ -180,7 +180,7 @@ def test_oversized_result_is_a_400_with_guidance():
 
 
 def test_alert_endpoints_return_non_firing_results_when_finelog_is_unavailable():
-    source = FakeSource(raises=RetryableStatsError("unavailable"))
+    source = FakeSource(raises=FinelogUnavailableError("unavailable"))
     client = _client(source)
 
     assert client.get("/finelog/marin/alerts/query", params={"sql": "SELECT 1"}).json() == []

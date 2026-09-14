@@ -16,11 +16,11 @@ from finelog.client.log_client import FlushResult, LogClient, NamespaceInfo, Tab
 from finelog.client.object_query_client import ObjectQueryClient
 from finelog.client.remote_log_handler import RemoteLogHandler
 from finelog.errors import (
+    FinelogUnavailableError,
     InvalidNamespaceError,
     NamespaceNotFoundError,
     QueryResultTooLargeError,
     QueryTimeoutError,
-    RetryableStatsError,
     SchemaConflictError,
     SchemaValidationError,
     StatsError,

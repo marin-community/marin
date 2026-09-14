@@ -27,10 +27,10 @@ from rigging.log_setup import LOG_DATEFMT, LOG_FORMAT, LevelPrefixFormatter
 from rigging.timing import ExponentialBackoff, RateLimiter
 
 from finelog.errors import (
+    FinelogUnavailableError,
     InvalidNamespaceError,
     NamespaceNotFoundError,
     QueryResultTooLargeError,
-    RetryableStatsError,
     SchemaConflictError,
     SchemaValidationError,
     StatsError,
@@ -1046,7 +1046,7 @@ def _log_entries_to_rows(key: str, messages: Sequence[logging_pb2.LogEntry]) -> 
 def _translate_connect_error(exc: ConnectError) -> Exception:
     msg = str(exc)
     if is_retryable_error(exc):
-        return RetryableStatsError(msg)
+        return FinelogUnavailableError(msg)
     if exc.code == Code.NOT_FOUND:
         return NamespaceNotFoundError(msg)
     if exc.code == Code.INVALID_ARGUMENT:
