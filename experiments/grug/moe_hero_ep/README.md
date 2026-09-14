@@ -218,7 +218,7 @@ storage with the shared 14-day lifecycle TTL. One temporary checkpoint is kept. 
 host out-of-memory, or a preemption thus costs at most one hour of training. The training job
 retries 1000 times on failure and 100 times on preemption.
 
-The [new mixture](../../../docs/reports/hero-mixture-phases.md) starts at ~27.7%
+The [new mixture](../../../docs/reports/hero-mixture-log.md) starts at ~27.7%
 of training, with cooldown weights at ~80% (hero steps 108,000 and 312,192).
 Before using `trigger_hero.sh`, wait for permanent `step-108000` to finish and stop the old run.
 
