@@ -189,9 +189,10 @@ Watch for and eliminate these patterns in generated code:
   changes. Resolve context from the repository and prior work first; ask only
   when a missing decision would materially change the implementation.
 - In answer mode, investigate and reply directly. Do not manufacture a plan or
-  `.agents/projects/` artifact.
-- When a change request is too large for one pass, capture a plan in
-  `.agents/projects/` before pausing.
+  repository artifact.
+- Keep plans in the conversation or an existing issue, PR, or durable session
+  channel. When a change request is too large for one pass, narrow the scope and
+  record the remaining work there instead of adding a repository planning file.
 
 ## Code Reuse
 

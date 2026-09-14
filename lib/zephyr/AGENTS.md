@@ -9,7 +9,6 @@ Lazy dataset processing library. Start with the shared instructions in `/AGENTS.
 - Echo — live infrastructure incident records; use `write-ops-log` when an
   investigation diagnoses a service, production run, or shared operational
   system failure or degradation
-- Archived: `.agents/projects/20260130_fray_lite_design.md` — Fray backend design (implemented; read `lib/fray/src/fray/` instead)
 
 ## Source Layout
 

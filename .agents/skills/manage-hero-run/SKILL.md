@@ -24,10 +24,11 @@ Classify the run before loading supporting workflows:
   1e22 FLOP guideline. It requires the full run record below.
 - A **bounded diagnostic** has a small fixed step or time limit, lifecycle-managed output, no
   canonical export, and one monitoring owner. Record its launch contract in the originating
-  conversation or durable session channel. Do not create an issue or logbook solely to submit it.
+  conversation or durable session channel. Do not create a separate repository artifact solely to
+  submit it.
 
-Do not load `run-research`, `task-logbook`, `task-snapshot`, `file-issue`, or their writing guides
-for a bounded diagnostic. Load them only when the run requires the artifact they govern.
+Do not load publication workflows for a bounded diagnostic. Use `research` only when the user asks
+for a research program or prior-work brief.
 
 ## Launch
 
@@ -76,19 +77,18 @@ If any value is inferred, label it as inferred. If code lineage, checkpoint poli
 
 ## Run Record
 
-For a production run, create or use a dedicated experiment issue and an append-only logbook at
-`.agents/logbooks/<run>.md`. Follow `task-logbook` for their format and publication rules. Bootstrap
-and push both links before launch.
+For a production run, create or use one durable record in the existing experiment issue, W&B
+report, or durable session channel. Do not add a repository logbook solely for the run.
 
 Record each production instance's command, source SHA and bundle, dirty-tree status, DRI,
 hardware/topology, tracker identity, output and checkpoint roots, retention and projected bytes,
-`initialize_from`, final step, and monitoring owner. Update the logbook at material events. Post
-concise issue updates for launches, failures, relaunches, retention changes, milestones, and final
-seal; post a routine status at least every 24 hours.
+`initialize_from`, final step, and monitoring owner. Update the record at material events. When an
+issue exists, post concise updates for launches, failures, relaunches, retention changes,
+milestones, and final seal; post a routine status at least every 24 hours.
 
 For a bounded diagnostic, record the same applicable fields in the durable session channel or
-originating conversation. Add an issue or logbook when the diagnostic needs a handoff, lasts more
-than one day, changes production lineage, or produces an artifact that must remain discoverable.
+originating conversation. If it needs a handoff, lasts more than one day, changes production
+lineage, or produces a discoverable artifact, keep using that durable channel or an existing issue.
 
 ## Babysitting
 
@@ -159,8 +159,8 @@ When a hero run finishes or reaches a handoff milestone:
   W&B run id/display name when enabled.
 - Stop or delete heartbeat/monitor automations that are no longer needed.
 - If approved dirty-tree changes were used, create a seal commit and tag immediately so the actual operational state is recoverable.
-- For a production run, create and push a seal tag. Update its GitHub issue and logbook with the
-  tracker, checkpoint, commit/tag, final metrics, launch command, and caveats.
+- For a production run, create and push a seal tag. Update its durable record with the tracker,
+  checkpoint, commit/tag, final metrics, launch command, and caveats.
 - For a bounded diagnostic, post the final result in the originating conversation or durable
   session channel. Include the command, source SHA, terminal status, final step and metrics, output
   and checkpoint paths, tracker identity when enabled, and caveats.
@@ -169,5 +169,5 @@ When a hero run finishes or reaches a handoff milestone:
 ## References
 
 - change-grug skill
-- run-research skill
+- research skill
 - use-iris skill
