@@ -40,23 +40,39 @@ def _mesh_axis_size(mesh: Mesh | jax.sharding.AbstractMesh | None, axis_name: st
     return int(mesh.shape.get(axis_name, 1))
 
 
-def _batch_axes(mesh: Mesh | jax.sharding.AbstractMesh | None) -> tuple[str, ...]:
-    axes = tuple(axis for axis in ("replica_dcn", "data", "expert") if _mesh_has_axis(mesh, axis))
+def _token_axes(mesh: Mesh | jax.sharding.AbstractMesh | None) -> tuple[str, ...]:
+    """Mesh axes available to partition a flattened batch-by-sequence token dimension."""
+    axes = tuple(axis for axis in ("replica_dcn", "data", "expert", "context") if _mesh_has_axis(mesh, axis))
     if axes:
         return axes
     return ("data",)
 
 
-def _batch_spec(mesh: Mesh | jax.sharding.AbstractMesh | None) -> PartitionSpec:
-    return P(_batch_axes(mesh))
+def _token_spec(mesh: Mesh | jax.sharding.AbstractMesh | None) -> PartitionSpec:
+    return P(_token_axes(mesh))
 
 
-def _batch_spec_from_x(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None) -> PartitionSpec:
-    sharding = getattr(x, "sharding", None)
-    spec = getattr(sharding, "spec", None)
-    if spec is not None and len(spec) > 0 and spec[0] is not None:
+def _axis_names(entry) -> tuple[str, ...]:
+    """Flatten one PartitionSpec entry into the mesh axis names it covers."""
+    if entry is None:
+        return ()
+    return tuple(str(name) for name in entry) if isinstance(entry, tuple) else (str(entry),)
+
+
+def _spec_of(x: jax.Array) -> PartitionSpec | None:
+    """Read explicit sharding from either a traced or concrete array."""
+    for candidate in (jax.typeof(x), x):
+        spec = getattr(getattr(candidate, "sharding", None), "spec", None)
+        if spec is not None and len(spec) > 0:
+            return spec
+    return None
+
+
+def _token_spec_from_x(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None) -> PartitionSpec:
+    spec = _spec_of(x)
+    if spec is not None and spec[0] is not None:
         return P(spec[0])
-    return _batch_spec(mesh)
+    return _token_spec(mesh)
 
 
 def _is_replicated_spec(spec: PartitionSpec) -> bool:
@@ -64,8 +80,7 @@ def _is_replicated_spec(spec: PartitionSpec) -> bool:
 
 
 def _value_spec_or_default(x: jax.Array, default: PartitionSpec, *, replace_replicated: bool = False) -> PartitionSpec:
-    sharding = getattr(x, "sharding", None)
-    spec = getattr(sharding, "spec", None)
+    spec = _spec_of(x)
     if spec is not None and not (replace_replicated and _is_replicated_spec(spec)):
         return spec
     return default
@@ -74,9 +89,9 @@ def _value_spec_or_default(x: jax.Array, default: PartitionSpec, *, replace_repl
 def _drop_absent_mesh_axes(mesh: Mesh | jax.sharding.AbstractMesh, spec: PartitionSpec) -> PartitionSpec:
     """Replace mesh-absent axes in ``spec`` with ``None`` (replicated).
 
-    Compact meshes drop size-1 axes (e.g. "expert" when expert_axis_size == 1), so a
-    spec that names such an axis would raise. An absent axis has size 1, so replicating
-    along it is equivalent to sharding over it.
+    ``compact_grug_mesh`` keeps every axis, but meshes built by tests and other tools name
+    only the axes they use, and a spec naming an absent one would raise. An absent axis has
+    size 1, so replicating along it is equivalent to sharding over it.
     """
 
     def keep(entry):
@@ -106,7 +121,7 @@ def _reshard_for_shard_map(
     return x
 
 
-_GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("replica_dcn", "data", "expert", "model")
+_GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("replica_dcn", "data", "context", "expert", "model")
 
 
 def _compact_grug_mesh_shape(
@@ -116,6 +131,7 @@ def _compact_grug_mesh_shape(
     expert_axis_size: int,
     replica_axis_size: int,
     model_axis_size: int,
+    context_axis_size: int = 1,
 ) -> tuple[int, ...]:
     if process_count <= 0:
         raise ValueError(f"process_count must be positive, got {process_count}")
@@ -127,18 +143,20 @@ def _compact_grug_mesh_shape(
         raise ValueError(f"replica_axis_size must be positive, got {replica_axis_size}")
     if model_axis_size <= 0:
         raise ValueError(f"model_axis_size must be positive, got {model_axis_size}")
+    if context_axis_size <= 0:
+        raise ValueError(f"context_axis_size must be positive, got {context_axis_size}")
 
     global_device_count = process_count * local_device_count
-    fixed_axes = replica_axis_size * expert_axis_size * model_axis_size
+    fixed_axes = replica_axis_size * expert_axis_size * model_axis_size * context_axis_size
     if global_device_count % fixed_axes != 0:
         raise ValueError(
             f"global_device_count ({global_device_count}) must be divisible by "
-            f"replica_axis_size ({replica_axis_size}) * expert_axis_size ({expert_axis_size}) * "
-            f"model_axis_size ({model_axis_size})"
+            f"replica_axis_size ({replica_axis_size}) * context_axis_size ({context_axis_size}) * "
+            f"expert_axis_size ({expert_axis_size}) * model_axis_size ({model_axis_size})"
         )
 
     data_axis_size = global_device_count // fixed_axes
-    return (replica_axis_size, data_axis_size, expert_axis_size, model_axis_size)
+    return (replica_axis_size, data_axis_size, context_axis_size, expert_axis_size, model_axis_size)
 
 
 def compact_grug_mesh(
@@ -146,14 +164,16 @@ def compact_grug_mesh(
     expert_axis_size: int = 1,
     replica_axis_size: int | None = None,
     model_axis_size: int = 1,
+    context_axis_size: int = 1,
 ) -> Mesh:
     """Return the compact explicit mesh used by raw Grug PartitionSpecs.
 
-    The mesh is always ``(replica_dcn, data, expert, model)``; length-1 axes are
-    kept so downstream PartitionSpecs can name "expert" unconditionally. Unlike
-    the old local-only layout, ``expert_axis_size`` may span multiple processes,
-    e.g. a 32-process job with 4 local devices can build an effective
-    ``(4, 2, 16, 1)`` Grug mesh.
+    The mesh is always ``(replica_dcn, data, context, expert, model)``; length-1
+    axes are kept so downstream PartitionSpecs can name any axis unconditionally.
+    ``data`` absorbs whatever the other axes leave free, so a 32-process job with
+    4 local devices can build an effective ``(4, 2, 1, 16, 1)`` Grug mesh.
+
+    Sequence placement on ``context`` is the responsibility of the model.
     """
     if replica_axis_size is None:
         replica_axis_size = jax.process_count()
@@ -164,6 +184,7 @@ def compact_grug_mesh(
         expert_axis_size=expert_axis_size,
         replica_axis_size=replica_axis_size,
         model_axis_size=model_axis_size,
+        context_axis_size=context_axis_size,
     )
     devices = np.array(jax.devices(), dtype=object).reshape(shape)
     axis_types = tuple(AxisType.Explicit for _ in _GRUG_MESH_AXIS_NAMES)
