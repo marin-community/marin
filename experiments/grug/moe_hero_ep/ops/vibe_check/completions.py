@@ -208,10 +208,10 @@ def reconcile(store: SampleStore, jobs: Jobs, requests: list[SampleRequest], now
     if len(active) > 1:
         raise ValueError("Queue contains more than one active allocation")
     for key, entry in active:
-        result = store.result(entry.request)
         status = jobs.status(entry.job_name)
         if status == JobStatus.RUNNING:
             continue  # Wait for teardown even when process zero has written the result.
+        result = store.result(entry.request)
         if result is not None:
             entries[key] = entry.model_copy(update={"phase": Phase.COMPLETE, "request": result.request, "error": ""})
         elif status == JobStatus.MISSING:

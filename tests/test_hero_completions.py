@@ -148,6 +148,27 @@ def test_all_permanent_requests_survive_missed_ticks_and_retry_budget(tmp_path, 
     assert queue.entries[requests[0].sample_id].phase == Phase.QUEUED
 
 
+def test_result_written_during_status_read_completes_last_attempt(tmp_path, monkeypatch, sample_request):
+    store, jobs = SampleStore(str(tmp_path)), JobService()
+    queue = reconcile(store, jobs, [sample_request], NOW)
+    for hour in [1, 2]:
+        entry = queue.entries[sample_request.sample_id]
+        jobs.jobs[entry.job_name] = JobStatus.FAILED
+        queue = reconcile(store, jobs, [], NOW + timedelta(hours=hour))
+
+    def finish_job(name):
+        store.save_result(completed(sample_request))
+        return JobStatus.SUCCEEDED
+
+    monkeypatch.setattr(jobs, "status", finish_job)
+    reconcile(store, jobs, [], NOW + timedelta(hours=3))
+
+    saved, _ = store.read_queue()
+    assert saved.entries[sample_request.sample_id].phase == Phase.COMPLETE
+    assert saved.entries[sample_request.sample_id].failures == 2
+    assert len(jobs.jobs) == 3
+
+
 def test_service_error_does_not_start_another_allocation(tmp_path, sample_request):
     request = sample_request
     store, jobs = SampleStore(str(tmp_path)), JobService()
