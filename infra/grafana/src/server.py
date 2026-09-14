@@ -562,7 +562,7 @@ def create_app(
             lambda: source.query(loss_window_query(now, runs, executions), max_rows=config.max_rows),
         )
 
-    def finelog_alert_endpoint(name: str, project, unavailable) -> JSONResponse:
+    def finelog_alert_endpoint(name: str, project, unavailable_rows) -> JSONResponse:
         """Serve one finelog-backed alert projection under the hub's cache and error contract."""
         now = datetime.now(UTC)
         try:
@@ -571,7 +571,7 @@ def create_app(
             return JSONResponse(finelog_cache.get_or_compute(key, lambda: project(target, now)))
         except FinelogUnavailableError as err:
             logger.warning("Finelog alert endpoint %s unavailable: %s", name, err)
-            return JSONResponse(unavailable(now))
+            return JSONResponse(unavailable_rows(now))
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
         except QueryResultTooLargeError as err:
