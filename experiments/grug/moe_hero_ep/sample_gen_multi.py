@@ -47,9 +47,12 @@ logger = logging.getLogger(__name__)
 
 HERO_RUN_ID = "hero-12d8b6f0-dee637"
 HERO_VERSION = "2026.08.19.2"
-RUN_ID_BASE = "hero-12d8b6f0-samplemulti"  # step + temperature/seed suffix added in main()
+# Write the executor output/lock and sample JSONs OUTSIDE the grug/hero-* prefix: the hero checkpoint
+# tree is delete-protected on marin-us-east-02a, so the executor step-lock release (DeleteObjects)
+# fails with AccessDenied there. Reads from the hero checkpoints (CKPT_DIR / --ckpt-dir) are fine.
+RUN_ID_BASE = "samplegen-hero"  # step + temperature/seed suffix added in main()
 CKPT_DIR = f"s3://marin-us-east-02a/marin/grug/{HERO_RUN_ID}/{HERO_VERSION}/checkpoints"
-OUT_DIR = f"s3://marin-us-east-02a/marin/grug/{HERO_RUN_ID}/analysis"
+OUT_DIR = "s3://marin-us-east-02a/marin/grug/samplegen-hero/analysis"
 
 ONE_RACK_NODES = 16
 _ONE_RACK_RESOURCES = ResourceConfig.with_gpu(
