@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import msgspec
+from coverage_labels import label
 from tasktrove_verify.spec import Mode
 
 from taskcompendium.execution import (
@@ -178,6 +179,7 @@ def build(output: Path, runtime_image: str | None, r2e_runtimes: dict[str, Conta
     if runtime_image is not None:
         specs.append(greeting_task(runtime_image))
     specs.append(sentence_revision_task())
+    specs = [label(specification) for specification in specs]
     (output / "specifications").mkdir()
     exports = []
     for spec in specs:

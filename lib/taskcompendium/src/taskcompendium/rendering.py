@@ -10,10 +10,12 @@ import msgspec
 from taskcompendium.extraction import rendering_instruction, validate_extractor
 from taskcompendium.grading_paths import submission_relative
 from taskcompendium.models import (
+    AssistantFinal,
     Capability,
     FileSubmission,
     FinalActionSubmission,
     FinalState,
+    JsonPath,
     PlainText,
     PublicResource,
     Rejected,
@@ -23,6 +25,7 @@ from taskcompendium.models import (
     Task,
     TaskSpecification,
     TaskStep,
+    XmlPath,
 )
 from taskcompendium.serialization import specification_hash
 
@@ -50,6 +53,21 @@ def render_instruction(specification: TaskSpecification, protocol: Rendering, st
     if isinstance(submission, FileSubmission):
         suffix += f" Write your submission to {submission.path}."
     return f"{specification.steps[step_index].instructions.rstrip()}\n\n{suffix}\n"
+
+
+def result_tags(renderings: tuple[Rendering, ...]) -> tuple[str, ...]:
+    """Return output-encoding tags contributed by rendered submission contracts."""
+    tags: set[str] = set()
+    for rendering in renderings:
+        submission = rendering.submission
+        if isinstance(submission, FileSubmission):
+            tags.add("result:file")
+        if isinstance(submission, (FileSubmission, AssistantFinal)):
+            if isinstance(submission.extractor, JsonPath):
+                tags.add("result:json")
+            elif isinstance(submission.extractor, XmlPath):
+                tags.add("result:xml")
+    return tuple(sorted(tags))
 
 
 def render_task(specification: TaskSpecification, renderings: tuple[Rendering, ...]) -> Task:
@@ -99,4 +117,5 @@ def render_task(specification: TaskSpecification, renderings: tuple[Rendering, .
         requirements=msgspec.structs.replace(specification.requirements, capabilities=tuple(sorted(capabilities))),
         resources=public_resources(specification.resources),
         metadata=specification.metadata,
+        coverage_tags=tuple(sorted((*specification.coverage_tags, *result_tags(renderings)))),
     )

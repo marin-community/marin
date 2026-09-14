@@ -163,6 +163,28 @@ def test_format_is_semantic_and_cannot_be_replaced_by_wrapper(math_task):
         )
 
 
+def test_rendered_task_keeps_semantic_coverage_and_adds_result_encoding(math_task):
+    specification = msgspec.structs.replace(
+        math_task,
+        coverage_tags=("competency:math", "difficulty:easy", "shape:answer"),
+    )
+    task = render_task(specification, (Rendering("json", AssistantFinal(JsonPath())),))
+    assert task.coverage_tags == ("competency:math", "difficulty:easy", "result:json", "shape:answer")
+    file_task = render_task(specification, (Rendering("file", FileSubmission("/app/answer.json", JsonPath())),))
+    assert file_task.coverage_tags == (
+        "competency:math",
+        "difficulty:easy",
+        "result:file",
+        "result:json",
+        "shape:answer",
+    )
+
+
+def test_coverage_tags_reject_rendering_tags_on_semantic_specification(math_task):
+    with pytest.raises(ValueError, match="Unsupported coverage tag"):
+        msgspec.structs.replace(math_task, coverage_tags=("result:json",))
+
+
 def test_export_materializes_only_agent_projection(math_task, tmp_path):
     spec = msgspec.structs.replace(
         math_task,

@@ -156,13 +156,21 @@ exercise another output convention.
 
 ## Contracts
 
-Schema 0.6 stores ordered `StepSpecification` entries in a pinned semantic
+Schema 0.7 stores ordered `StepSpecification` entries in a pinned semantic
 `TaskSpecification`. `taskcompendium.rendering.TaskSpec` defines the source/family
 interface `instantiate(key) -> TaskSpecification | Rejected`. Instantiating one source row
 fixes its identity before rendering. Each step records
 instructions, intrinsic answer requirements, verifier, resources, and context
 requirements. Shared requirements, resources, source provenance, and the success
 policy belong to the concrete specification.
+
+`TaskSpecification.coverage_tags` records reviewed semantic coverage labels:
+competency, shape, domain, artifact, interaction, state, context, and one
+Snowball-calibrated `difficulty:easy`, `difficulty:medium`, or `difficulty:hard`.
+`Task.coverage_tags` carries those labels forward and adds result-encoding labels
+from its rendering: `result:json`, `result:xml`, or `result:file`. Result tags
+describe only how the answer is submitted. A task that substantively produces or
+consumes structured data uses semantic competency or artifact tags as well.
 
 `TaskRequirements` declares `Capability.FILESYSTEM`, `SHELL`, and/or `PROCESS`, plus
 `WorkspaceState`: workdir, setup commands, additional directories, and an optional

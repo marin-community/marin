@@ -8,6 +8,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from coverage_labels import label
+
 from taskcompendium.execution import Chat, HarborTaskBinding, NoEnvironment
 from taskcompendium.importers import nemo, nemo_predicted_action, nemo_workplace, nemo_workplace_multistep
 from taskcompendium.lowering import lower_to_harbor
@@ -61,6 +63,7 @@ def build(output: Path, runtime_image: str) -> None:
     sequence = nemo_workplace_multistep.build_multistep_sample(FIXTURES)
     variants.append((sequence.specification, sequence.renderings, sequence.binding))
 
+    variants = [(label(spec), renderings, binding) for spec, renderings, binding in variants]
     specifications = {spec.id: spec for spec, _, _ in variants}
     for spec in specifications.values():
         (output / "specifications" / f"{spec.id.replace('/', '-')}.json").write_bytes(to_json(spec))

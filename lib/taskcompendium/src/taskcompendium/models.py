@@ -11,7 +11,23 @@ from typing import Any, Literal
 import msgspec
 from tasktrove_verify.spec import Mode
 
-SCHEMA_VERSION = "0.6"
+SCHEMA_VERSION = "0.7"
+
+_SEMANTIC_COVERAGE_TAG_PREFIXES = frozenset(
+    {"competency", "shape", "domain", "artifact", "interaction", "state", "context", "difficulty"}
+)
+_TASK_COVERAGE_TAG_PREFIXES = _SEMANTIC_COVERAGE_TAG_PREFIXES | {"result"}
+
+
+def _validate_coverage_tags(tags: tuple[str, ...], allowed_prefixes: frozenset[str]) -> None:
+    if tuple(sorted(set(tags))) != tags:
+        raise ValueError("Coverage tags must be sorted and unique")
+    for tag in tags:
+        prefix, separator, value = tag.partition(":")
+        if not separator or prefix not in allowed_prefixes or not value.replace("_", "").isalnum():
+            raise ValueError(f"Unsupported coverage tag: {tag}")
+
+
 VERIFIER_REVISION = "b76d03131cd88bd9fc711dba206659027edba3a8"
 LEGACY_VERIFIER_REVISION = "b2b68d8b0a770cdc0ab3903780172c4b3eea81b1"
 SUPPORTED_VERIFIER_REVISIONS = frozenset({LEGACY_VERIFIER_REVISION, VERIFIER_REVISION})
@@ -433,6 +449,7 @@ class TaskSpecification(msgspec.Struct, frozen=True, forbid_unknown_fields=True,
     requirements: TaskRequirements
     resources: tuple[Resource, ...]
     metadata: TaskMetadata
+    coverage_tags: tuple[str, ...] = ()
     success_policy: TaskSuccessPolicy = TaskSuccessPolicy.ALL_REQUIRED_STEPS
     schema_version: str = SCHEMA_VERSION
 
@@ -441,6 +458,7 @@ class TaskSpecification(msgspec.Struct, frozen=True, forbid_unknown_fields=True,
             raise ValueError(f"Unsupported task schema: {self.schema_version}")
         if not self.id or not self.steps:
             raise ValueError("Task id and at least one step are required")
+        _validate_coverage_tags(self.coverage_tags, _SEMANTIC_COVERAGE_TAG_PREFIXES)
         for step in self.steps:
             occupied: set[tuple[ResourceRole, str]] = set()
             for resource in (*self.resources, *step.resources):
@@ -579,3 +597,7 @@ class Task(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     requirements: TaskRequirements
     resources: tuple[PublicResource, ...]
     metadata: TaskMetadata
+    coverage_tags: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _validate_coverage_tags(self.coverage_tags, _TASK_COVERAGE_TAG_PREFIXES)

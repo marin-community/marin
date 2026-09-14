@@ -1,0 +1,347 @@
+{
+  "gsm8k-train/0": [
+    "competency:math",
+    "difficulty:easy",
+    "domain:arithmetic",
+    "shape:answer"
+  ],
+  "gsm8k-train/1": [
+    "competency:math",
+    "difficulty:easy",
+    "domain:personal_finance",
+    "shape:answer"
+  ],
+  "gsm8k-train/2": [
+    "competency:math",
+    "difficulty:easy",
+    "domain:personal_finance",
+    "shape:answer"
+  ],
+  "nemo-predicted-action-100006de9c5795f992b54542d6368012170b333990b37202780ab19f60d2185f": [
+    "competency:function_calling",
+    "context:customer_service",
+    "difficulty:medium",
+    "domain:event_ticketing",
+    "interaction:single_tool_call",
+    "shape:predicted_action"
+  ],
+  "nemo/code-answer/c69268d8bdb4da0685d7b187c88296c1": [
+    "artifact:source_code",
+    "competency:competitive_programming",
+    "difficulty:hard",
+    "domain:algorithms",
+    "shape:code_generation"
+  ],
+  "nemo/ifeval/17616/binary": [
+    "artifact:prose",
+    "competency:instruction_following",
+    "context:creative_writing",
+    "difficulty:medium",
+    "shape:constrained_generation"
+  ],
+  "nemo/ifeval/17616/fraction": [
+    "artifact:prose",
+    "competency:instruction_following",
+    "context:creative_writing",
+    "difficulty:medium",
+    "shape:constrained_generation"
+  ],
+  "nemo/workplace/0": [
+    "competency:stateful_tool_use",
+    "context:workplace_assistant",
+    "difficulty:medium",
+    "domain:email",
+    "interaction:single_tool_call",
+    "shape:stateful_domain"
+  ],
+  "nemo/workplace/0-derived-multistep": [
+    "competency:multi_step_workflow",
+    "competency:stateful_tool_use",
+    "context:workplace_assistant",
+    "difficulty:hard",
+    "domain:email",
+    "interaction:multi_action_workflow",
+    "shape:derived_stateful_domain"
+  ],
+  "r2egym/269e2a176b9b2b8e00be46f5a59e840625879bf9": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:medium",
+    "domain:data_type_inference",
+    "shape:environment_modification"
+  ],
+  "r2egym/2d9617bd0cb1f0ba61771258410ab8fae8e7e24d": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:hard",
+    "domain:orange_context_management",
+    "shape:environment_modification"
+  ],
+  "r2egym/3758d8594d8738e51b3a738e06858ae7fc3cbdf1": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:medium",
+    "domain:orange_data_conversion",
+    "shape:environment_modification"
+  ],
+  "r2egym/4651e73c8ea9a502d4fd6ee25f33ece07b693b37": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:hard",
+    "domain:orange_widgets",
+    "shape:environment_modification"
+  ],
+  "r2egym/70a4df334835bcb9ea7c6b0eb11b4f5f7e117f36": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:easy",
+    "domain:numeric_formatting",
+    "shape:environment_modification"
+  ],
+  "r2egym/74ffccc1d4a1dbb877490c9d6b59e6f501d5e438": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:easy",
+    "domain:numpy_type_consistency",
+    "shape:environment_modification"
+  ],
+  "r2egym/7c9de553a279791535aa8ec927bef47801b819f1": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:medium",
+    "domain:orange_serialization",
+    "shape:environment_modification"
+  ],
+  "r2egym/7f5c9dace89a846e6fb7aed86e4ff7eb05e01dc0": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:medium",
+    "domain:feature_selection",
+    "shape:environment_modification"
+  ],
+  "r2egym/9764be4fa30b1ae85db3b875039f0a2983531a9d": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:medium",
+    "domain:orange_data_conversion",
+    "shape:environment_modification"
+  ],
+  "r2egym/9b5494e26f407b75e79699c9d40be6df1d80a040": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:medium",
+    "domain:machine_learning",
+    "shape:environment_modification"
+  ],
+  "r2egym/a95245e37f35446f9870feb68f5ebb97d1c279ce": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:medium",
+    "domain:orange_serialization",
+    "shape:environment_modification"
+  ],
+  "r2egym/aae8c47f823197a04010a74570793464eb7352fe": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:medium",
+    "domain:orange_widgets",
+    "shape:environment_modification"
+  ],
+  "r2egym/ad202ae0d526f208bfde4ed9ef47190f078be7de": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:medium",
+    "domain:orange_widgets",
+    "shape:environment_modification"
+  ],
+  "r2egym/b0d83c555eda061014ae1d04dc0af07a569650e6": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:hard",
+    "domain:sympy_units",
+    "shape:environment_modification"
+  ],
+  "r2egym/b983e25212aa3c006c37089ef970688e3c01c369": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:medium",
+    "domain:orange_context_management",
+    "shape:environment_modification"
+  ],
+  "r2egym/d61803f7181e7ad525d4bb1dd71ca500bb41617e": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:easy",
+    "domain:data_summary",
+    "shape:environment_modification"
+  ],
+  "r2egym/df34d9081e1fbe25466980b17a082ce210e821b5": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:medium",
+    "domain:discretization",
+    "shape:environment_modification"
+  ],
+  "r2egym/e48a32f29bd3736e53efb7290cae64d5688357d6": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:medium",
+    "domain:name_generation",
+    "shape:environment_modification"
+  ],
+  "r2egym/ea8c3b0ce9ff87f849b1462aab0b34bd3e35d4ed": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:medium",
+    "domain:orange_data_model",
+    "shape:environment_modification"
+  ],
+  "r2egym/ef8363b650134f6415704b064573707a6d304ca3": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:easy",
+    "domain:time_binning",
+    "shape:environment_modification"
+  ],
+  "r2egym/f5b986b11e518191441420df8f8b84154c92e81c": [
+    "artifact:source_code",
+    "competency:debugging",
+    "difficulty:easy",
+    "domain:time_binning",
+    "shape:environment_modification"
+  ],
+  "synthetic/conversational-revision": [
+    "competency:instruction_following",
+    "difficulty:easy",
+    "interaction:conversation_revision",
+    "shape:sequential_requirements"
+  ],
+  "synthetic/sequential-greeting": [
+    "artifact:source_code",
+    "competency:software_engineering",
+    "difficulty:easy",
+    "shape:sequential_requirements"
+  ],
+  "tasktrove-0": [
+    "artifact:program",
+    "competency:algorithm_design",
+    "difficulty:hard",
+    "domain:computational_geometry",
+    "shape:algorithmic_programming"
+  ],
+  "tasktrove-1": [
+    "artifact:program",
+    "competency:graph_algorithms",
+    "difficulty:hard",
+    "domain:graph_theory",
+    "shape:algorithmic_programming"
+  ],
+  "tasktrove-114": [
+    "artifact:numeric_answer",
+    "competency:geometric_reasoning",
+    "difficulty:medium",
+    "domain:euclidean_geometry",
+    "shape:calculation"
+  ],
+  "tasktrove-115": [
+    "competency:number_theoretic_reasoning",
+    "difficulty:medium",
+    "domain:number_theory",
+    "shape:calculation"
+  ],
+  "tasktrove-11676": [
+    "competency:legal_reasoning",
+    "difficulty:medium",
+    "domain:real_estate_law",
+    "shape:explanation"
+  ],
+  "tasktrove-11677": [
+    "competency:physics_reasoning",
+    "context:experimental_measurement",
+    "difficulty:hard",
+    "domain:particle_physics",
+    "shape:explanation"
+  ],
+  "tasktrove-11678": [
+    "artifact:formula",
+    "competency:physics_reasoning",
+    "difficulty:medium",
+    "domain:optics",
+    "shape:calculation"
+  ],
+  "tasktrove-119": [
+    "competency:causal_reasoning",
+    "context:experimental_observations",
+    "difficulty:medium",
+    "domain:causal_inference",
+    "shape:classification"
+  ],
+  "tasktrove-1487": [
+    "artifact:python_package",
+    "competency:software_implementation",
+    "difficulty:medium",
+    "domain:python",
+    "shape:code_implementation"
+  ],
+  "tasktrove-1488": [
+    "artifact:python_module",
+    "competency:software_implementation",
+    "difficulty:easy",
+    "domain:python",
+    "shape:code_implementation"
+  ],
+  "tasktrove-1489": [
+    "artifact:python_module",
+    "competency:machine_learning_software",
+    "competency:software_implementation",
+    "difficulty:hard",
+    "domain:python",
+    "shape:code_implementation"
+  ],
+  "tasktrove-16159": [
+    "artifact:shell_output",
+    "competency:shell_scripting",
+    "difficulty:easy",
+    "domain:filesystem",
+    "interaction:terminal",
+    "shape:shell_workflow"
+  ],
+  "tasktrove-16160": [
+    "artifact:shell_output",
+    "competency:shell_scripting",
+    "difficulty:easy",
+    "domain:filesystem",
+    "interaction:terminal",
+    "shape:shell_workflow"
+  ],
+  "tasktrove-1972": [
+    "competency:knowledge_recall",
+    "difficulty:easy",
+    "domain:lighting_design",
+    "shape:multiple_choice"
+  ],
+  "tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz": [
+    "competency:medical_science_reasoning",
+    "difficulty:hard",
+    "domain:oncology",
+    "shape:multiple_choice"
+  ],
+  "tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz": [
+    "competency:scientific_reasoning",
+    "difficulty:hard",
+    "domain:catalysis",
+    "shape:multiple_choice"
+  ],
+  "tasktrove-openqa-80f6c461ebcf.tar.gz": [
+    "competency:calculus_reasoning",
+    "difficulty:medium",
+    "domain:multivariable_calculus",
+    "shape:explanation"
+  ],
+  "tasktrove-openqa-c7e9374b56ea.tar.gz": [
+    "competency:biology_reasoning",
+    "difficulty:medium",
+    "domain:microbiology",
+    "shape:explanation"
+  ]
+}

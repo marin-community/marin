@@ -33,10 +33,16 @@ for source templates that leak evaluation details. Keep source archives unchange
 
 ## Ordered steps
 
-Schema 0.6 stores all requests in `TaskSpecification.steps`. Keep step-specific
+Schema 0.7 stores all requests in `TaskSpecification.steps`. Keep step-specific
 answer requirements, private resources, verifier dependencies, and context needs
 on each step. A `TaskSpecification` is a pinned semantic instance; `TaskSpec` is the
 source/family instantiation interface. Instantiate once before rendering variants.
+`TaskSpecification.coverage_tags` records semantic competency, task shape, domain,
+artifact, interaction, state, context, and Snowball-calibrated difficulty.
+`render_task` carries those tags into the public `Task` and may add only result
+encoding tags: `result:json`, `result:xml`, and `result:file`. Do not use those
+tags to claim substantive JSON/XML production or consumption work; use semantic
+competency and artifact tags for that.
 `Rendering` controls submission conventions; `HarborTaskBinding`
 in `execution.py` controls the required environment shape, public tools, and conversation mode; Harbor selects the agent at launch.
 Pass one rendering per step to `lower_to_harbor`.
