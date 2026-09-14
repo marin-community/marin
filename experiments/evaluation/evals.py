@@ -197,7 +197,14 @@ def harbor_definition(
     )
 
 
-def _task_protocol(task_name: str, options: EvalchemyTaskOptions | None) -> tuple[str, MetricKind, int | None]:
+@dataclass(frozen=True)
+class TaskProtocol:
+    primary_metric: str
+    metric_kind: MetricKind
+    expected_items: int | None
+
+
+def _task_protocol(task_name: str, options: EvalchemyTaskOptions | None) -> TaskProtocol:
     primary_metric = options.primary_metric if options is not None else None
     if primary_metric is None:
         raise ValueError(f"Evalchemy task {task_name!r} must declare primary_metric")
@@ -211,7 +218,7 @@ def _task_protocol(task_name: str, options: EvalchemyTaskOptions | None) -> tupl
         raise ValueError(f"Evalchemy chat-native task {task_name!r} must declare expected_items")
     if task_name not in _CHAT_NATIVE_TASKS and expected_items is not None:
         raise ValueError(f"Evalchemy lm-eval task {task_name!r} must not declare expected_items")
-    return primary_metric, metric_kind, expected_items
+    return TaskProtocol(primary_metric, metric_kind, expected_items)
 
 
 def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConfig:
@@ -222,7 +229,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         num_fewshot = config.num_fewshot
         if options is not None and options.num_fewshot is not None:
             num_fewshot = options.num_fewshot
-        primary_metric, metric_kind, expected_items = _task_protocol(task_name, options)
+        protocol = _task_protocol(task_name, options)
         tasks.append(
             EvalTaskConfig(
                 name=task_name,
@@ -231,9 +238,9 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
                 generation=options.generation if options is not None else False,
                 unsafe_code=options.unsafe_code if options is not None else False,
                 completion_only=options.completion_only if options is not None else False,
-                primary_metric=primary_metric,
-                metric_kind=metric_kind,
-                expected_items=expected_items,
+                primary_metric=protocol.primary_metric,
+                metric_kind=protocol.metric_kind,
+                expected_items=protocol.expected_items,
             )
         )
 

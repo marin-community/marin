@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter, defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from enum import StrEnum
@@ -82,6 +82,14 @@ class SweepOutcome:
     detail: str
 
 
+@dataclass(frozen=True)
+class ArchiveSweep:
+    """Records and display labels for one archive visited by a sweep."""
+
+    records: tuple[EvalRunRecord, ...] = ()
+    run_ids: tuple[str, ...] = ()
+
+
 @cli.command("upgrade-format")
 @click.argument("results_paths", nargs=-1)
 @click.option(
@@ -123,7 +131,7 @@ def upgrade_format(results_paths: tuple[str, ...], prefixes: tuple[str, ...], wo
         )
         _raise_for_selection_blockers(selection)
         unsealed = set(selection.unsealed_v1)
-        targets = {source: [] for source in selection.sources if source not in unsealed}
+        targets = {source: ArchiveSweep() for source in selection.sources if source not in unsealed}
     _sweep_archives(targets, workers, _upgrade_one)
 
 
@@ -321,24 +329,27 @@ def _backfill_one(results_path: str, records: list[EvalRunRecord]) -> SweepOutco
     return SweepOutcome("exported", f"{written} sample(s)")
 
 
-def selected_archives(prefixes: tuple[str, ...], results_paths: tuple[str, ...]) -> dict[str, list[EvalRunRecord]]:
+def selected_archives(prefixes: tuple[str, ...], results_paths: tuple[str, ...]) -> dict[str, ArchiveSweep]:
     """Group records by archive path, over explicit paths and every record under each prefix.
 
     Grouping is what keeps a sweep correct: several runs can be recorded against one results tree,
     and letting two workers write the same archive concurrently makes one of them compact shards the
     other is still reading.
     """
-    runs_by_path: dict[str, list[EvalRunRecord]] = defaultdict(list)
+    records_by_path: dict[str, list[EvalRunRecord]] = defaultdict(list)
     for path in results_paths:
-        runs_by_path[path.rstrip("/")] = []
+        records_by_path[path.rstrip("/")] = []
     for prefix in prefixes:
         for record in list_records(prefix):
-            runs_by_path[record.results_path.rstrip("/")].append(record)
-    return runs_by_path
+            records_by_path[record.results_path.rstrip("/")].append(record)
+    return {
+        path: ArchiveSweep(records=tuple(records), run_ids=tuple(record.run_id for record in records))
+        for path, records in records_by_path.items()
+    }
 
 
 def _sweep_archives(
-    runs_by_path: Mapping[str, Sequence[str | EvalRunRecord]],
+    runs_by_path: Mapping[str, ArchiveSweep],
     workers: int,
     work: Callable[[str, list[EvalRunRecord]], SweepOutcome],
     /,
@@ -346,15 +357,11 @@ def _sweep_archives(
     """Apply ``work`` once per archive, reporting each outcome and a final tally."""
     tally: Counter[str] = Counter()
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(work, path, [run for run in runs if isinstance(run, EvalRunRecord)]): path
-            for path, runs in runs_by_path.items()
-        }
+        futures = {pool.submit(work, path, list(sweep.records)): path for path, sweep in runs_by_path.items()}
         for future in as_completed(futures):
             path = futures[future]
             # A path named directly has no record to take a run id from; the tree names it well enough.
-            run_names = sorted(run.run_id if isinstance(run, EvalRunRecord) else str(run) for run in runs_by_path[path])
-            runs = " ".join(run_names) or path.rstrip("/").rsplit("/", 2)[-2]
+            runs = " ".join(sorted(runs_by_path[path].run_ids)) or path.rstrip("/").rsplit("/", 2)[-2]
             try:
                 outcome = future.result()
             except Exception as exc:
