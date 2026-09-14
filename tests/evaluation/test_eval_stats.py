@@ -240,7 +240,8 @@ def test_difference_accepts_legacy_filters_and_interval_kinds_for_one_metric():
 
     interval = difference_interval(binary, continuous)
 
-    assert interval.low <= interval.high
+    assert interval.low == pytest.approx(-0.409513)
+    assert interval.high == pytest.approx(0.608142)
 
 
 # --------------------------------------------------------------------------------------------------

@@ -110,6 +110,7 @@ def test_record_json_uses_eval_alias_and_plain_string_enum(tmp_path):
                 "completion_only": False,
                 "primary_metric": None,
                 "metric_kind": None,
+                "expected_items": None,
             }
         ],
         "evalchemy": None,

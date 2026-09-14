@@ -167,6 +167,9 @@ class EvalTaskRef(BaseModel):
     metric_kind: MetricKind | None = None
     """Uncertainty model declared for the headline metric."""
 
+    expected_items: int | None = None
+    """Items in a chat-native task whose harness does not report its dataset size."""
+
 
 class EvalchemyRef(BaseModel):
     """The normalized Evalchemy launch configuration recorded for a run.

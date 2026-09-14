@@ -57,6 +57,7 @@ _JOB_DIGEST_LENGTH = 12
 # The reward at or above which a Harbor trial counts as solved (rewards are typically 0.0 / 1.0; the
 # margin tolerates float noise).
 SOLVED_REWARD = 0.99
+HARBOR_ACCURACY_METRIC = "accuracy"
 
 # Fraction of attempted trials that must be scoreable under the Harbor taxonomy. Agent failures
 # remain scoreable, while infrastructure failures and passthrough failures without verifier results
@@ -127,7 +128,7 @@ class HarborRunResult:
     def task_metrics(self) -> dict[str, dict[str, float]]:
         """Metrics keyed like the evalchemy reader: ``{dataset: {metric: value}}``."""
         metrics = {
-            "accuracy": self.accuracy,
+            HARBOR_ACCURACY_METRIC: self.accuracy,
             "mean_reward": self.mean_reward,
             "solved": float(self.solved_trials),
             "total": float(self.scored_trials),
@@ -400,7 +401,7 @@ def _run_harbor_job(
                 "unscored_trials": result.unscored_trials,
                 "errors": dict(result.errors),
                 "mean_reward": result.mean_reward,
-                "accuracy": result.accuracy,
+                HARBOR_ACCURACY_METRIC: result.accuracy,
             },
             indent=2,
         )

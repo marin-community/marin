@@ -174,6 +174,24 @@ def test_evalchemy_run_config_defaults_binary_kind_and_honors_override():
     assert [task.metric_kind for task in config.tasks] == [MetricKind.BINARY, MetricKind.BINARY]
 
 
+def test_evalchemy_record_keeps_chat_native_benchmark_size():
+    source = EvalchemyConfig(
+        tasks=("AIME24",),
+        task_options={
+            "AIME24": EvalchemyTaskOptions(
+                primary_metric="accuracy_avg",
+                metric_kind=MetricKind.CONTINUOUS,
+                expected_items=30,
+            )
+        },
+    )
+    config = evalchemy_run_config("aime24", source)
+
+    record_ref = EvalchemyDefinition("aime24", Path("unused.yaml")).record_ref_for(config)
+
+    assert record_ref.tasks[0].expected_items == 30
+
+
 def _successful_evaluation(
     session: RemoteInferenceSession,
     output_dir: str,

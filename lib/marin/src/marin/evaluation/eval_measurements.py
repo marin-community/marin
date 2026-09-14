@@ -16,7 +16,12 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from marin.evaluation.archive import base_metric, declared_metric, primary_metric
+from marin.evaluation.archive import (
+    AGGREGATE_AVERAGE_SUFFIX,
+    AGGREGATE_STDERR_SUFFIX,
+    base_metric,
+    declared_metric,
+)
 from marin.evaluation.eval_stats import (
     BINARY_METRICS,
     SAMPLE_COUNT_METRIC,
@@ -51,13 +56,13 @@ def stderr_for(metrics: Mapping[str, float], metric_key: str) -> float | None:
     """The standard error paired with ``metric_key``: its ``<base>_stderr,<filter>`` value, or None.
 
     lm-eval names the stderr for ``acc,none`` as ``acc_stderr,none``; a filterless ``acc`` pairs with
-    ``acc_stderr``.
+    ``acc_stderr``. Chat-native ``<metric>_avg`` keys fall back to ``<metric>_std_err``.
     """
     base, _, metric_filter = metric_key.partition(",")
     key = f"{base}_stderr,{metric_filter}" if metric_filter else f"{base}_stderr"
     value = metrics.get(key)
-    if value is None and not metric_filter and base.endswith("_avg"):
-        value = metrics.get(f"{base.removesuffix('_avg')}_std_err")
+    if value is None and not metric_filter and base.endswith(AGGREGATE_AVERAGE_SUFFIX):
+        value = metrics.get(f"{base.removesuffix(AGGREGATE_AVERAGE_SUFFIX)}{AGGREGATE_STDERR_SUFFIX}")
     return float(value) if value is not None else None
 
 
@@ -87,16 +92,15 @@ def _task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], bool]:
     A record can carry the same task twice under different evalchemy task directories (a real record
     holds the whole 62-entry mmlu panel under both ``mmlu_5shot`` and a ``tmp...`` directory, scoring
     0.63502 and 0.63488). Those entries measure the same items, so keeping both would double the item
-    count and average a benchmark against itself; the first wins and the rest are dropped.
+    count and average a benchmark against itself; the first wins and the rest are dropped. The
+    boolean reports whether a non-empty task row omitted its declared metric.
     """
     scores: dict[str, _TaskScore] = {}
     missing_declared_metric = False
     for task_key, metrics in (record.metrics or {}).items():
         task = _task_ref(record, task_key)
         declared = task is not None and task.primary_metric is not None and task.metric_kind is not None
-        picked = (
-            declared_metric(metrics, task.primary_metric) if declared and task is not None else primary_metric(metrics)
-        )
+        picked = declared_metric(metrics, task.primary_metric if declared and task is not None else None)
         if picked is None:
             missing_declared_metric |= declared and bool(metrics)
             continue
