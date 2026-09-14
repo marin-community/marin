@@ -142,11 +142,6 @@ serve:
         ("arc_easy", EvalchemyTaskOptions(), "arc_easy.*primary_metric"),
         ("drop", EvalchemyTaskOptions(primary_metric="f1"), "drop.*metric_kind"),
         (
-            "arc_easy",
-            EvalchemyTaskOptions(primary_metric="acc", expected_items=100),
-            "arc_easy.*must not declare expected_items",
-        ),
-        (
             "AIME24",
             EvalchemyTaskOptions(primary_metric="accuracy_avg", metric_kind=MetricKind.CONTINUOUS),
             "AIME24.*expected_items",
@@ -190,6 +185,23 @@ def test_evalchemy_record_keeps_chat_native_benchmark_size():
     record_ref = EvalchemyDefinition("aime24", Path("unused.yaml")).record_ref_for(config)
 
     assert record_ref.tasks[0].expected_items == 30
+
+
+def test_evalchemy_run_config_accepts_size_for_file_backed_task():
+    source = EvalchemyConfig(
+        tasks=("ExternalChatTask",),
+        task_options={
+            "ExternalChatTask": EvalchemyTaskOptions(
+                primary_metric="accuracy_avg",
+                metric_kind=MetricKind.CONTINUOUS,
+                expected_items=100,
+            )
+        },
+    )
+
+    config = evalchemy_run_config("external-chat", source)
+
+    assert config.tasks[0].expected_items == 100
 
 
 def _successful_evaluation(
