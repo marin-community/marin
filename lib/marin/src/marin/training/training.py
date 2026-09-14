@@ -7,7 +7,6 @@ import json
 import logging
 import math
 import os
-import urllib.parse
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -142,38 +141,32 @@ def _cli_helpers_module():
     return importlib.import_module("levanter.infra.cli_helpers")
 
 
-def _output_path_temp_component(output_path: str) -> str:
-    parsed = urllib.parse.urlparse(output_path)
-    if parsed.scheme:
-        return parsed.path.strip("/")
-    return output_path.strip("/")
-
-
-def _checkpoint_temp_component(output_path: str) -> str:
-    parsed = urllib.parse.urlparse(output_path)
-    if parsed.scheme and parsed.netloc:
-        return f"{parsed.netloc}{parsed.path}".strip("/")
-    if parsed.scheme:
-        return f"{parsed.scheme}{parsed.path}".strip("/")
-    return output_path.strip("/")
+def _checkpoint_storage_key(output_path: str) -> str:
+    """Preserve the bucket-qualified key used by existing temporary checkpoints."""
+    path = StoragePath(output_path)
+    if path.bucket:
+        return prefix_join(path.bucket, path.key)
+    if path.scheme:
+        return prefix_join(path.scheme, path.key)
+    return path.key
 
 
 def temporary_storage_base_path(output_path: str, *, ttl_days: int, category: str) -> str:
     """Return region-local temporary storage keyed by an executor output path."""
-    output_component = _output_path_temp_component(output_path)
+    output_key = StoragePath(output_path).key
     return marin_temp_bucket(
         ttl_days=ttl_days,
-        prefix=prefix_join(category, output_component),
+        prefix=prefix_join(category, output_key),
         source_prefix=output_path,
     )
 
 
 def temporary_checkpoint_base_path(output_path: str) -> str:
     """Return the region-local temporary checkpoint base for an executor output path."""
-    output_component = _checkpoint_temp_component(output_path)
+    output_key = _checkpoint_storage_key(output_path)
     temporary_root = marin_temp_bucket(
         ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        prefix=prefix_join(TEMPORARY_CHECKPOINTS_PATH, output_component),
+        prefix=prefix_join(TEMPORARY_CHECKPOINTS_PATH, output_key),
         source_prefix=output_path,
     )
     return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
@@ -181,10 +174,10 @@ def temporary_checkpoint_base_path(output_path: str) -> str:
 
 def data_local_temporary_checkpoint_base_path(output_path: str) -> str:
     """Return the legacy data-local checkpoint path, bypassing the cluster temp override."""
-    output_component = _checkpoint_temp_component(output_path)
+    output_key = _checkpoint_storage_key(output_path)
     temporary_root = marin_temp_bucket(
         ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        prefix=prefix_join(TEMPORARY_CHECKPOINTS_PATH, output_component),
+        prefix=prefix_join(TEMPORARY_CHECKPOINTS_PATH, output_key),
         source_prefix=output_path,
         use_env_override=False,
     )
