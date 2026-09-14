@@ -4,9 +4,9 @@
   "training_blends_excluded": 3,
   "sampled_rows": 58,
   "disposition": {
-    "accepted": 6,
+    "accepted": 17,
     "rejected": 6,
-    "deferred": 46
+    "deferred": 35
   },
   "accepted": [
     {
@@ -50,6 +50,83 @@
       "split": "train",
       "offset": 1163,
       "task_id": "nemo/workplace/1163"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-knowledge-mcqa",
+      "revision": "62a1eec1f952723eab2ee3832222f533b8138067",
+      "split": "train",
+      "offset": 441248,
+      "task_id": "nemo/mcqa/0dfcf12c-bc99-535f-9c8c-6687a545f35d"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-knowledge-mcqa",
+      "revision": "62a1eec1f952723eab2ee3832222f533b8138067",
+      "split": "train",
+      "offset": 132738,
+      "task_id": "nemo/mcqa/abb2b851-363c-54fa-890c-44d67c37c9b8"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-math-OpenMathReasoning",
+      "revision": "5ef69384b65f13f08c35b73ddd5e7bf5e4621043",
+      "split": "train",
+      "offset": 0,
+      "task_id": "nemo/open_math/0"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-math-OpenMathReasoning",
+      "revision": "5ef69384b65f13f08c35b73ddd5e7bf5e4621043",
+      "split": "train",
+      "offset": 1,
+      "task_id": "nemo/open_math/1"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-knowledge-openqa",
+      "revision": "3604d4119623f2961c9cd0a3a5365e0cff0dd393",
+      "split": "train",
+      "offset": 25704,
+      "task_id": "nemo/open_qa/ae045132-7beb-5f97-bf65-a27d7d86b998"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-knowledge-openqa",
+      "revision": "3604d4119623f2961c9cd0a3a5365e0cff0dd393",
+      "split": "train",
+      "offset": 86898,
+      "task_id": "nemo/open_qa/bd761808-13a7-5faf-9852-961422532fbe"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-ReasoningGym-v1",
+      "revision": "ad2c929b2dfd64ca30afb4d60e2f69a5a1919c4d",
+      "split": "train",
+      "offset": 1,
+      "task_id": "nemo/reasoning_gym/cf876b7f-0007-40a4-ab3a-f49fe8cdd8e2"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-ReasoningGym-v1",
+      "revision": "ad2c929b2dfd64ca30afb4d60e2f69a5a1919c4d",
+      "split": "train",
+      "offset": 0,
+      "task_id": "nemo/reasoning_gym/d06d0d00-6b32-4ed1-9a73-1ee720d4aa42"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-Science-v1",
+      "revision": "a7f55756f14bdd16c6469b94601d86be15e4c4fc",
+      "split": "so_openq",
+      "offset": 144924,
+      "task_id": "nemo/science/c0d8dc56ce5d485bb989483047fa661c"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-math-stack_overflow",
+      "revision": "be489b25f36ef92864546a7ace22edec4e053ac3",
+      "split": "train",
+      "offset": 0,
+      "task_id": "nemo/stack_math/0"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-math-stack_overflow",
+      "revision": "be489b25f36ef92864546a7ace22edec4e053ac3",
+      "split": "train",
+      "offset": 1,
+      "task_id": "nemo/stack_math/1"
     }
   ],
   "superseded_findings": [
@@ -69,6 +146,18 @@
       "review": "reviews/agent-corpora.json",
       "corpus": "nvidia/Nemotron-RL-agent-workplace_assistant",
       "resolution": "The importer now preserves sampled source rows against the existing shared Workplace seed and authoritative-state provider; both rows are accepted."
+    },
+    {
+      "review": "reviews/answer-corpora.json and reviews/viewer-fallback.json",
+      "corpora": [
+        "nvidia/Nemotron-RL-ReasoningGym-v1",
+        "nvidia/Nemotron-RL-Science-v1",
+        "nvidia/Nemotron-RL-knowledge-mcqa",
+        "nvidia/Nemotron-RL-knowledge-openqa",
+        "nvidia/Nemotron-RL-math-OpenMathReasoning",
+        "nvidia/Nemotron-RL-math-stack_overflow"
+      ],
+      "resolution": "Eleven reviewed answer-only rows now use shared MCQA, math, and reference-answer verifier contracts; their source rewards and references remain private."
     }
   ]
 }

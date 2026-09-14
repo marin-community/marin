@@ -97,27 +97,15 @@
       "samples": [
         {
           "offset": 4039,
-          "disposition": "accepted",
+          "disposition": "deferred",
           "evidence": "The row has one user request, explicit tools companybusinessscope/openbankaccount/querystock/etc., and expected_action function_call querystock with arguments {stock_code: DELL}.",
-          "mapping": {
-            "TaskSpecification": "one answer step containing the source conversation",
-            "verifier": "PredictedActionVerifier",
-            "rendering": "FinalActionSubmission using only the advertised native functions",
-            "environment": "none; prediction records the native call and does not execute it",
-            "capabilities": []
-          }
+          "blocker": "Correct next actions depend on hidden tool results or authentication state; a bare action target would change the source task."
         },
         {
           "offset": 8849,
-          "disposition": "accepted",
+          "disposition": "deferred",
           "evidence": "The row has a multi-turn user conversation, explicit calculate_similarity tool, and expected_action message content; no environment state is needed to submit the requested native final response.",
-          "mapping": {
-            "TaskSpecification": "one answer step containing the source conversation",
-            "verifier": "PredictedActionVerifier",
-            "rendering": "FinalActionSubmission using calculate_similarity, with message output permitted by the source expected action",
-            "environment": "none; the predicted action is submitted and no tool is dispatched",
-            "capabilities": []
-          }
+          "blocker": "Correct next actions depend on hidden tool results or authentication state; a bare action target would change the source task."
         }
       ]
     },
@@ -133,27 +121,15 @@
       "samples": [
         {
           "offset": 43611,
-          "disposition": "accepted",
+          "disposition": "deferred",
           "evidence": "The row has an explicit customer-support policy, advertised native tools including get_user_profile, and expected_action get_user_profile for PlayerOne_77.",
-          "mapping": {
-            "TaskSpecification": "one answer step with the source conversation",
-            "verifier": "PredictedActionVerifier",
-            "rendering": "FinalActionSubmission from the row's advertised functions",
-            "environment": "none; tool calls are predicted rather than executed",
-            "capabilities": []
-          }
+          "blocker": "Correct next actions depend on hidden tool results or authentication state; a bare action target would change the source task."
         },
         {
           "offset": 92095,
-          "disposition": "accepted",
+          "disposition": "deferred",
           "evidence": "The row has an explicit construction-support policy, advertised native tools including get_project_status, and expected_action get_project_status for CTR-0123.",
-          "mapping": {
-            "TaskSpecification": "one answer step with the source conversation",
-            "verifier": "PredictedActionVerifier",
-            "rendering": "FinalActionSubmission from the row's advertised functions",
-            "environment": "none; tool calls are predicted rather than executed",
-            "capabilities": []
-          }
+          "blocker": "Correct next actions depend on hidden tool results or authentication state; a bare action target would change the source task."
         }
       ]
     },
