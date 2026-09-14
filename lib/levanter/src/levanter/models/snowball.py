@@ -670,7 +670,10 @@ class SnowballTransformer(eqx.Module):
             layer, use_long = layer_and_flag
             return layer(carry, short_mask, long_mask, use_long), None
 
-        hidden, _ = jax.lax.scan(_scan_layer, hidden, (stacked, long_schedule))
+        # The scan bounds forward memory to one layer, but reverse mode otherwise retains each
+        # layer's routed-expert activations. Rematerializing the body makes backward recompute one
+        # layer at a time as well, which keeps activation memory independent of model depth.
+        hidden, _ = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule))
         return self.final_gated_norm(self.final_norm(hidden))
 
 
