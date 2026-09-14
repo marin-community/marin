@@ -7,7 +7,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 import google.api_core.exceptions
 import google.auth
@@ -212,7 +212,12 @@ class CloudGcpService:
         self._token = self._creds.token
         now = time.monotonic()
         if self._creds.expiry is not None:
-            self._expires_at = now + (self._creds.expiry.timestamp() - time.time()) - _REFRESH_MARGIN
+            # google.auth reports expiry as a *naive* datetime holding UTC (it
+            # compares against a tz-stripped utcnow). Calling .timestamp() on it
+            # directly would read it as local time and skew the cache window by
+            # the host's UTC offset — caching a dead token for hours west of UTC.
+            expiry_epoch = self._creds.expiry.replace(tzinfo=UTC).timestamp()
+            self._expires_at = now + (expiry_epoch - time.time()) - _REFRESH_MARGIN
         else:
             self._expires_at = now + _REFRESH_MARGIN
 

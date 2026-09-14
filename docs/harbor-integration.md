@@ -135,6 +135,28 @@ Runtime values do not change the source-policy digest. Policy kwargs override mo
 the served endpoint/model, output paths, materialized source, and explicit `--limit` override both.
 Temporary policy and overlay files are owner-readable and removed after each isolated call.
 
+### Trial error taxonomy
+
+Preflight snapshots Harbor's infrastructure, agent, passthrough, and undecided error categories from
+the pinned `harbor-config` environment. Marin uses that snapshot to classify trial results and records
+the Harbor commit SHA in `record.json`. Undecided errors are known to Harbor but have no default scoring
+policy; Marin leaves them ungraded and counts them against the completion gate. Names absent from all
+four categories fail the run as an infrastructure failure, so taxonomy changes cannot silently alter
+scoring or completion coverage.
+
+## Agent context limits
+
+The agent's `model_info.max_input_tokens` comes from the model's resolved `serve.max_model_len` and its
+`model_info.max_output_tokens` from `generation.max_gen_toks`, so the agent compacts against the
+window the server actually offers. With `auto_overrides`, explicit context limits are clamped to the
+checkpoint's native window before Harbor preflight; the batch retains that resolved serving configuration.
+A policy may state a lower limit to keep headroom under that window, and the lower limit wins:
+`grug-opencode-id.yaml` asks for 64512 input tokens against a
+model serving 65536. A policy limit above the served one fails preflight, before Iris opens, with
+both values named. A limit neither the model nor the policy states falls back to Harbor's own
+default, 32768 input and 8192 output tokens. `--dry-run` prints the resolved pair per Harbor eval
+and `record.json` keeps it under `eval.harbor`.
+
 ## Results
 
 Each Harbor evaluation writes:

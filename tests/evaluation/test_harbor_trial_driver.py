@@ -201,7 +201,7 @@ def checked_policies(tmp_path_factory):
 
 
 def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies):
-    path = _POLICIES / "grug-opencode-id.yaml"
+    path = _POLICIES / "ot-tblite.yaml"
 
     seeded = [json.loads(_preflight(tmp_path, [(path, {})], hash_seed=seed).stdout)[0] for seed in ("1", "8675309")]
 
@@ -239,6 +239,48 @@ verifier:
         "OPENAI_BASE_URL": "https://api.together.xyz/v1",
     }
     assert stable_policy["agents"][0]["env"] == {}
+
+
+def test_preflight_exports_pinned_harbor_error_taxonomy(checked_policies):
+    taxonomies = [payload["error_taxonomy"] for payload in checked_policies.values()]
+
+    assert all(taxonomy == taxonomies[0] for taxonomy in taxonomies)
+    assert "LLMRequestTimeoutError" in taxonomies[0]["infrastructure"]
+    assert {"AgentTimeoutError", "ContextLengthExceededError"} <= set(taxonomies[0]["agent"])
+    assert "OutputLengthExceededError" in taxonomies[0]["passthrough"]
+    assert set(taxonomies[0]["undecided"]) == {
+        "TrialNotScoredError",
+        "VerificationNotCompletedError",
+        "VerifierTimeoutError",
+    }
+    assert taxonomies[0]["commit"] == "06139137912c5764a889e7613c1d5a5eb0704448"
+
+
+def test_preflight_reports_agent_context_resolved_from_the_served_model(tmp_path):
+    served = {"model_info": {"max_input_tokens": 1048576, "max_output_tokens": 393216}}
+
+    (result,) = json.loads(_preflight(tmp_path, [(_POLICIES / "tb2.yaml", served)]).stdout)
+
+    assert result["max_input_tokens"] == 1048576
+    assert result["max_output_tokens"] == 393216
+
+
+def test_preflight_keeps_a_policy_agent_context_below_the_served_window(tmp_path):
+    served = {"model_info": {"max_input_tokens": 65536}}
+
+    (result,) = json.loads(_preflight(tmp_path, [(_POLICIES / "ot-tblite.yaml", served)]).stdout)
+
+    assert result["max_input_tokens"] == 64512
+
+
+def test_preflight_rejects_a_policy_agent_context_above_the_served_window(tmp_path):
+    served = {"model_info": {"max_input_tokens": 32768}}
+
+    completed = _preflight(tmp_path, [(_POLICIES / "ot-tblite.yaml", served)], check=False)
+
+    assert completed.returncode == 2
+    assert "64512" in completed.stderr
+    assert "32768" in completed.stderr
 
 
 @pytest.mark.parametrize(
@@ -410,7 +452,7 @@ datasets:
 
 def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(tmp_path, checked_policies):
     policy_path = tmp_path / "policy.json"
-    policy_path.write_text(checked_policies["grug-opencode-id.yaml"]["stable_policy_json"])
+    policy_path.write_text(checked_policies["ot-tblite.yaml"]["stable_policy_json"])
     overlay_path = tmp_path / "overlay.json"
     overlay_path.write_text(
         json.dumps(
@@ -423,7 +465,7 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
                 "task_limit": 3,
                 "model_agent_kwargs": {
                     "extra_body": '{"chat_template_kwargs":{"enable_thinking":true}}',
-                    "model_info": {"max_input_tokens": 123},
+                    "model_info": {"max_input_tokens": 64512, "max_output_tokens": 16384},
                     "trajectory_config": {"raw_content": True},
                 },
             }

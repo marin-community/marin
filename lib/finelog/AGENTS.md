@@ -1,9 +1,7 @@
 # Finelog Agent Notes
 
 Standalone log store + log service. Originally lifted out of `lib/iris`
-(`iris/cluster/log_store/` and `iris/log_server/`); see the
-[worked Finelog proposal](../../.agents/projects/design-template.md#worked-example)
-or the original extraction PR for context.
+(`iris/cluster/log_store/` and `iris/log_server/`).
 
 Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 
@@ -184,14 +182,32 @@ alongside the queries moves every number by 2-4x.
 10001 (`FINELOG_DEV_SERVER` to point elsewhere), so frontend work does not need
 a `npm run build` round trip into the `dist/` the Rust server reads from disk.
 
-Two surfaces are plain axum JSON rather than proto, because they describe this
+Three surfaces are plain axum JSON rather than proto, because they describe this
 process and its files rather than the wire contract: `GET /api/server` (build
-revision, uptime, store paths, cache diagnostics, the writer's format policy)
-and `GET /api/segments?namespace=NS` (catalog rows, plus footer and index-bundle
-detail under `physical=true`). Both sit behind the same default-deny
-auth gate as the RPCs. `build.rs` stamps the git commit, its tree hash, and a
-dirty flag into the binary; all three are empty when the build had no checkout
-to read, as in a wheel built from an sdist.
+revision, uptime, store paths, cache diagnostics, the writer's format policy),
+`GET /api/segments?namespace=NS` (catalog rows, plus footer and index-bundle
+detail under `physical=true`), and `GET /api/forwarding?namespace=NS` (the configured
+target and durable progress). All three sit behind the same default-deny auth
+gate as the RPCs. `build.rs` stamps the git commit, its tree hash, and a dirty
+flag into the binary; all three are empty when the build had no checkout to
+read, as in a wheel built from an sdist.
+
+Forwarding introspection reports the table's visible and published high-water
+marks separately. Publication lag is their nonnegative difference. The target
+reports a settled cursor and its nonnegative lag behind the published high-water
+mark. A settled cursor can include positions skipped after a permanent
+rejection, so it does not prove that the hub accepted every row. A null cursor
+means the target has not seeded the table. A null target with `configured=false`
+means forwarding is disabled.
+
+Regional forwarders also send `ReportRelayStatus` directly to the hub every 30
+seconds. The forwarding JWT determines the cluster identity, and each report is
+a complete namespace snapshot with visible, published, and settled positions.
+The hub keeps the latest report in memory, rejects stale report sequences, and
+uses its own clock to record publication and cursor progress. `ListRelayStatus`
+is the monitoring read surface. This heartbeat must remain independent of
+`WriteRows`: its purpose is to expose a stuck data path without relying on data
+that would have to traverse that path.
 
 The SQL editor completes identifiers from `ListNamespaces`, so the vocabulary is
 this store's namespaces and columns rather than a general SQL dictionary.

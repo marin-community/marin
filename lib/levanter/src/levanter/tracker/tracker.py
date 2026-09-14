@@ -73,6 +73,10 @@ class Tracker(abc.ABC):
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         pass
 
+    def validate_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None) -> None:
+        """Validate an artifact before a tracker stages or uploads it."""
+        del artifact_path, name, type
+
     def log_html(self, key: str, html_path, *, step: Optional[int], commit: Optional[bool] = None):
         pass
 

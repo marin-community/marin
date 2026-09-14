@@ -19,6 +19,7 @@ from marin.evaluation.evalchemy.runner import (
     EvalchemyRuntimeConfig,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
@@ -41,17 +42,22 @@ _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
     }
 )
 
+# Capped ``-smoke`` variants remain unfamilied because scoring surfaces exclude them.
+_EVAL_FAMILIES: Mapping[str, str] = MappingProxyType({"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"})
+
 
 @dataclass(frozen=True)
 class EvalchemyDefinition:
     name: str
     config_path: Path
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
+    family: str | None = None
 
     def record_ref_for(self, config: EvalchemyRunConfig) -> EvalRef:
         return EvalRef(
             name=config.name,
             mechanism="evalchemy",
+            family=self.family,
             tasks=tuple(
                 EvalTaskRef(
                     name=task.name,
@@ -113,6 +119,7 @@ class HarborDefinition:
     name: str
     config_path: Path
     max_eval_instances: int | None = None
+    family: str | None = None
 
     def secret_env_for(self, config: ValidatedHarborConfig) -> Mapping[str, SecretSpec]:
         secret_env = dict(_DAYTONA_SECRET_ENV) if config.environment == _DAYTONA_ENVIRONMENT_TYPE else {}
@@ -124,6 +131,7 @@ class HarborDefinition:
         return EvalRef(
             name=self.name,
             mechanism="harbor",
+            family=self.family,
             harbor=HarborRef(
                 dataset=config.record_dataset,
                 version=config.record_revision,
@@ -131,6 +139,9 @@ class HarborDefinition:
                 env=config.environment,
                 task_limit=runtime_task_limit,
                 config_digest=config.digest,
+                harbor_config_commit=config.error_taxonomy.commit,
+                max_input_tokens=config.max_input_tokens,
+                max_output_tokens=config.max_output_tokens,
             ),
         )
 
@@ -148,9 +159,17 @@ class HarborDefinition:
         return HarborExecutor(
             config=config,
             task_limit=runtime_task_limit,
-            model_agent_kwargs=model.agent.agent_kwargs,
+            model_agent_kwargs=harbor_model_agent_kwargs(model),
             secret_env_keys=tuple(secret_env),
         )
+
+
+def harbor_model_agent_kwargs(model: ModelConfig) -> dict[str, object]:
+    """Omit unset catalog limits so the policy or Harbor defaults can supply them."""
+    return {
+        **model.agent.agent_kwargs,
+        MODEL_INFO_KEY: served_model_info(model.serve.max_model_len, model.generation.max_gen_toks),
+    }
 
 
 def harbor_definition(
@@ -162,6 +181,7 @@ def harbor_definition(
         name=name,
         config_path=_HARBOR_CONFIG_DIR / f"{name}.yaml",
         max_eval_instances=max_eval_instances,
+        family=_EVAL_FAMILIES.get(name),
     )
 
 
@@ -244,7 +264,11 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
 )
 
 EVALS: dict[str, EvaluationDefinition] = {
-    name: EvalchemyDefinition(name=name, config_path=_EVALCHEMY_CONFIG_DIR / f"{name}.yaml")
+    name: EvalchemyDefinition(
+        name=name,
+        config_path=_EVALCHEMY_CONFIG_DIR / f"{name}.yaml",
+        family=_EVAL_FAMILIES.get(name),
+    )
     for name in _STANDARD_EVALCHEMY_EVALS
 }
 EVALS.update(
@@ -265,7 +289,7 @@ EVALS.update(
         "aider": harbor_definition("aider"),
         "medagentbench": harbor_definition("medagentbench"),
         "financeagent": harbor_definition("financeagent"),
-        "grug-opencode-id": harbor_definition("grug-opencode-id"),
+        "ot-tblite": harbor_definition("ot-tblite"),
     }
 )
 

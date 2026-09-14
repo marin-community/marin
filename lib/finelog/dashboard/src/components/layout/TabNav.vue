@@ -2,9 +2,8 @@
 import { RouterLink } from 'vue-router'
 
 const tabs = [
-  { to: '/', label: 'Namespaces' },
-  { to: '/query', label: 'Query' },
-  { to: '/dashboards', label: 'Dashboards' },
+  { to: '/', label: 'Tables' },
+  { to: '/query', label: 'SQL' },
   { to: '/logs', label: 'Logs' },
   { to: '/system', label: 'System' },
 ]

@@ -12,14 +12,12 @@ On GCS, we use generation-based conditional writes for atomicity.
 """
 
 import contextlib
-import functools
 import json
 import logging
 import os
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from threading import Event, Thread
 from time import sleep
-from typing import TypeVar
 
 from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem.distributed_lock import (
@@ -33,8 +31,6 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 STATUS_RUNNING = "RUNNING"
 STATUS_FAILED = "FAILED"
@@ -231,12 +227,12 @@ def should_run(
 
 
 # ---------------------------------------------------------------------------
-# Step-level distributed lock decorator
+# Step-level distributed lock
 # ---------------------------------------------------------------------------
 
 
 class StepAlreadyDone(Exception):
-    """Raised by ``step_lock`` / ``distributed_lock`` when the step has already succeeded."""
+    """Raised by ``step_lock`` when the step has already succeeded."""
 
 
 @contextlib.contextmanager
@@ -282,27 +278,3 @@ def step_lock(
         if lease_lost_event.is_set():
             raise LeaseLostError(f"Lease was lost during execution of {output_path}")
         status_file.release_lock()
-
-
-def distributed_lock(fn: Callable[[str], T], *, force_run_failed: bool = True) -> Callable[[str], T]:
-    """Decorator: wrap *fn* with lease-based distributed locking.
-
-    The lock is keyed on the *output_path* argument passed to *fn*.  If
-    another worker already completed the step (``STATUS_SUCCESS``),
-    ``StepAlreadyDone`` is raised so that the caller (typically
-    ``disk_cached``) can load the cached artifact instead.
-
-    While *fn* is executing a heartbeat thread refreshes the lock so that
-    other workers see it as active.
-
-    This decorator does **not** write status or save artifacts — that is the
-    responsibility of the caller.
-    """
-
-    @functools.wraps(fn)
-    def wrapper(output_path: str) -> T:
-        step_label = output_path.rsplit("/", 1)[-1]
-        with step_lock(output_path, step_label, force_run_failed=force_run_failed):
-            return fn(output_path)
-
-    return wrapper

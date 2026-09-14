@@ -153,3 +153,87 @@ test('SM raster hover matches the painted time bucket', () => {
   expect(screen.getByRole('tooltip')).toHaveTextContent('node-1');
   contextSpy.mockRestore();
 });
+
+function wandbFrame(chart: string, samples: Array<{ tokens: number; value: number; run?: string }>) {
+  return frame('A', samples.map((sample) => ({
+    chart, report_title: 'Hero run', report_url: 'https://example/report', run: 'hero', ...sample,
+  })));
+}
+
+test('MFU starts at zero and expands above 30 percent without clipping samples', () => {
+  const { rerender } = render(<WandbChart frames={[wandbFrame('MFU (%)', [
+    { tokens: 1e9, value: 21 }, { tokens: 2e9, value: 24 },
+  ])]} width={480} height={260} />);
+  for (const tick of ['0%', '10%', '20%', '30%']) {
+    expect(screen.getByText(tick)).toBeInTheDocument();
+  }
+  rerender(<WandbChart frames={[wandbFrame('MFU (%)', [
+    { tokens: 1e9, value: 0 }, { tokens: 2e9, value: 35 }, { tokens: 3e9, value: 45 },
+  ])]} width={480} height={260} />);
+  const axis = Array.from(screen.getByRole('img').querySelectorAll('g text'), (label) => parseFloat(label.textContent!));
+  expect(Math.max(...axis)).toBeGreaterThanOrEqual(45);
+  const plotted = screen.getByRole('img').querySelector('polyline')!.getAttribute('points')!.split(' ');
+  const heights = plotted.map((point) => Number(point.split(',')[1]));
+  expect(heights[0]).toBe(240);
+  expect(heights[1]).toBeGreaterThan(heights[2]);
+  expect(heights[2]).toBeGreaterThan(56);
+});
+
+test('train loss uses the preferred range and expands for rare extremes', () => {
+  const samples = Array.from({ length: 100 }, (_, index) => ({ tokens: index * 1e9, value: 1.3 }));
+  const { rerender } = render(<WandbChart frames={[wandbFrame('Train cross-entropy loss', samples)]} width={480} height={260} />);
+  for (const tick of ['1.2', '1.3', '1.4', '1.5', '1.6']) {
+    expect(screen.getByText(tick)).toBeInTheDocument();
+  }
+  samples[0].value = 1.1;
+  samples[99].value = 1.8;
+  rerender(<WandbChart frames={[wandbFrame('Train cross-entropy loss', samples)]} width={480} height={260} />);
+  const svg = screen.getByRole('img');
+  const axis = Array.from(svg.querySelectorAll('g text'), (label) => Number(label.textContent));
+  expect(Math.min(...axis)).toBeLessThanOrEqual(1.1);
+  expect(Math.max(...axis)).toBeGreaterThanOrEqual(1.8);
+  const plotted = svg.querySelector('polyline')!.getAttribute('points')!.split(' ');
+  const heights = plotted.map((point) => Number(point.split(',')[1]));
+  expect(heights[0]).toBeGreaterThan(heights[1]);
+  expect(heights[99]).toBeLessThan(heights[1]);
+});
+
+test('eval excludes the first percent of tokens and restores all runs with the same colors', () => {
+  const samples = [
+    { tokens: 0, value: 11.8, run: 'initial' },
+    { tokens: 99, value: 10, run: 'initial' },
+    { tokens: 10000, value: 2.22, run: 'resumed' },
+    { tokens: 100, value: 2.24, run: 'resumed' },
+    { tokens: 5000, value: 2.23, run: 'resumed' },
+  ];
+  render(<WandbChart frames={[wandbFrame('Paloma macro loss (dropless)', samples)]} width={480} height={260} />);
+  const control = screen.getByRole('combobox', { name: 'Evaluation range' });
+  const svg = screen.getByRole('img');
+  expect(Array.from(svg.querySelectorAll('g text'), (label) => label.textContent)).toEqual(['2.218', '2.230', '2.242']);
+  const resumed = svg.querySelectorAll('polyline')[1];
+  const color = resumed.getAttribute('stroke');
+  const plotted = resumed.getAttribute('points')!.split(' ').map((point) => point.split(',').map(Number));
+  expect(plotted).toHaveLength(3);
+  expect(plotted[0][0]).toBe(60);
+  expect(plotted[2][0]).toBe(470);
+  expect(plotted[0][1]).toBeGreaterThan(56);
+  expect(plotted[2][1]).toBeLessThan(240);
+  expect(svg.querySelectorAll('polyline')[0]).toHaveAttribute('points', '');
+
+  fireEvent.change(control, { target: { value: 'full-run' } });
+  expect(svg.querySelectorAll('polyline')[0].getAttribute('points')!.split(' ')).toHaveLength(2);
+  expect(svg.querySelectorAll('polyline')[1]).toHaveAttribute('stroke', color);
+  expect(Math.max(...Array.from(svg.querySelectorAll('g text'), (label) => Number(label.textContent)))).toBeGreaterThan(11.8);
+
+  fireEvent.change(control, { target: { value: 'after-initialization' } });
+  expect(screen.getByText('2.242')).toBeInTheDocument();
+});
+
+test('a single eval at zero tokens stays visible with a finite axis', () => {
+  render(<WandbChart frames={[wandbFrame('Paloma macro loss (dropless)', [
+    { tokens: 0, value: 2.23 },
+  ])]} width={280} height={260} />);
+  const point = screen.getByRole('img').querySelector('circle')!;
+  expect(Number(point.getAttribute('cy'))).toBeGreaterThan(76);
+  expect(Number(point.getAttribute('cy'))).toBeLessThan(240);
+});

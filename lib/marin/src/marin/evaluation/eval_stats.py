@@ -26,7 +26,7 @@ it beside ``records.py``.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -204,6 +204,9 @@ class Measurement:
     it identity would split a benchmark's history in two whenever a cap changed."""
 
     flags: frozenset[ResultFlag] = frozenset()
+    num_fewshot: int | None = None
+    """Few-shot setting shared by the eval's tasks, or None when unspecified or mixed."""
+
     run_id: str = ""
     created_at: str = ""
     version: str | None = None
@@ -568,6 +571,10 @@ def select(
 
     benchmarks = tuple(sorted({name for cells in chosen.values() for name in cells}))
     panel = request.panel if request.panel is not None else benchmarks
-    if request.completeness is Completeness.COMPLETE_PANEL and panel:
-        chosen = {model: cells for model, cells in chosen.items() if all(name in cells for name in panel)}
+    if request.completeness is Completeness.COMPLETE_PANEL:
+        chosen = {model: cells for model, cells in chosen.items() if covers_panel(cells, panel)}
     return Selection(cells=chosen, rejections=tuple(rejections), benchmarks=benchmarks)
+
+
+def covers_panel(cells: Mapping[str, Measurement], panel: Sequence[str]) -> bool:
+    return all(name in cells for name in panel)
