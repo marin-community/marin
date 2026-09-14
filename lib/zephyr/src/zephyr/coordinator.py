@@ -993,6 +993,8 @@ class ZephyrCoordinator:
         (an error report, a requeue) leave it at 0 and keep whatever watermark
         the worker already reached. Lock must be held.
         """
+        if execution_id not in self._executions:
+            return
         counter_key = (worker_id, execution_id)
         existing = self._worker_counters.get(counter_key)
         watermark = max(generation, existing.generation) if existing is not None else generation
@@ -1041,6 +1043,9 @@ class ZephyrCoordinator:
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
             for execution_id, counter_snapshot in (counter_snapshots or {}).items():
+                run = self._executions.get(execution_id)
+                if run is None or run.done:
+                    continue
                 counter_key = (worker_id, execution_id)
                 existing = self._worker_counters.get(counter_key)
                 if existing is None or counter_snapshot.generation > existing.generation:

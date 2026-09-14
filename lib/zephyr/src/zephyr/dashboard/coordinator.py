@@ -116,7 +116,8 @@ class CoordinatorDashboard:
     def _run_locked(self, execution_id: str) -> DashboardExecution | None:
         if execution_id:
             return self._coordinator._executions.get(execution_id)
-        return next((run for run in reversed(tuple(self._coordinator._executions.values())) if not run.done), None)
+        runs = tuple(self._coordinator._executions.values())
+        return next((run for run in reversed(runs) if not run.done), runs[-1] if runs else None)
 
     def _phase_locked(self, run: DashboardExecution) -> PipelinePhase:
         if run.fatal_error is not None or run.terminal_error is not None:
@@ -129,7 +130,7 @@ class CoordinatorDashboard:
 
     def pipelines(self) -> PipelineList:
         with self._coordinator._lock:
-            active = [run for run in self._coordinator._executions.values() if not run.done]
+            runs = list(self._coordinator._executions.values())
             return PipelineList(
                 pipelines=tuple(
                     PipelineSummary(
@@ -137,7 +138,7 @@ class CoordinatorDashboard:
                         pipeline_name=run.pipeline_name or run.execution_id,
                         current_stage=run.stage_name,
                     )
-                    for run in reversed(active)
+                    for run in reversed(runs)
                 )
             )
 

@@ -87,7 +87,7 @@ class ZephyrWorker:
         self._coordinator = coordinator_handle
         self._stage_runner_factory = stage_runner_factory
         self._shutdown_event = threading.Event()
-        self._counter_generations: dict[str, int] = defaultdict(int)
+        self._counter_generation = 0
         self._last_reported_counters: dict[str, dict[str, CounterEntry]] = {}
         self._active_shards: list[_ActiveShard] = []
 
@@ -337,7 +337,8 @@ class ZephyrWorker:
             self._finish_active_shard(active_shard, ZephyrWorkerStatStatus.END, task_counters)
             logger.info("[%s] Shard %d done in %.2fs", self._worker_id, task.shard_idx, time.monotonic() - task_start)
             # Block until coordinator records result — prevents _in_flight races.
-            counter_generation = self._next_counter_generation(work.execution_id)
+            with self._resources_lock:
+                counter_generation = self._next_counter_generation_locked()
             self._coordinator.report_result.remote(
                 self._worker_id,
                 work.execution_id,
@@ -393,10 +394,9 @@ class ZephyrWorker:
         stage = active[-1].task.stage_name if active else ""
         return _format_worker_status_md(len(active), stage)
 
-    def _next_counter_generation(self, execution_id: str) -> int:
-        with self._resources_lock:
-            self._counter_generations[execution_id] += 1
-            return self._counter_generations[execution_id]
+    def _next_counter_generation_locked(self) -> int:
+        self._counter_generation += 1
+        return self._counter_generation
 
     def _heartbeat_counter_snapshots(self) -> dict[str, CounterSnapshot] | None:
         """Return changed live counters, grouped by pipeline execution."""
@@ -416,17 +416,20 @@ class ZephyrWorker:
                         active_shard.attempt_id,
                     )
                 entries_by_execution[active_shard.execution_id].extend(counters.items())
-        snapshots: dict[str, CounterSnapshot] = {}
-        execution_ids = entries_by_execution.keys() | self._last_reported_counters.keys()
-        for execution_id in execution_ids:
-            current, _ = merge_counter_entries(entries_by_execution.get(execution_id, []))
-            if current == self._last_reported_counters.get(execution_id, {}):
-                continue
-            self._last_reported_counters[execution_id] = current
-            snapshots[execution_id] = CounterSnapshot(
-                counters=current,
-                generation=self._next_counter_generation(execution_id),
-            )
+            snapshots: dict[str, CounterSnapshot] = {}
+            execution_ids = entries_by_execution.keys() | self._last_reported_counters.keys()
+            for execution_id in execution_ids:
+                current, _ = merge_counter_entries(entries_by_execution.get(execution_id, []))
+                if current == self._last_reported_counters.get(execution_id, {}):
+                    continue
+                if current:
+                    self._last_reported_counters[execution_id] = current
+                else:
+                    self._last_reported_counters.pop(execution_id, None)
+                snapshots[execution_id] = CounterSnapshot(
+                    counters=current,
+                    generation=self._next_counter_generation_locked(),
+                )
         return snapshots or None
 
     def _heartbeat_loop(

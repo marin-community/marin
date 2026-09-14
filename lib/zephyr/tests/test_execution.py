@@ -9,7 +9,6 @@ import os
 import threading
 import time
 import uuid
-from collections import defaultdict
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -1575,7 +1574,7 @@ def test_heartbeat_failures_fail_actor_context():
     worker._active_shards = []
     worker._resources_lock = threading.Lock()
     worker._last_reported_counters = {}
-    worker._counter_generations = defaultdict(int)
+    worker._counter_generation = 0
     worker._worker_id = "test-worker-0"
     worker._report_worker_iris_status = lambda: None
 
