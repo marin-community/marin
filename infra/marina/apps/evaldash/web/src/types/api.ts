@@ -76,6 +76,7 @@ export interface PanelCell {
   errors: Record<string, number>
   item_cap: number | null
   flags: string[]
+  num_fewshot: number | null
   run_id: string
   created_at: string
   version: string | null
@@ -129,9 +130,17 @@ export interface PanelRequest {
   statuses: string[]
 }
 
+export interface PanelFamily {
+  family: string
+  variants: string[]
+  /** The variant with the most admitted cells under this request; ties go to the first eval name. */
+  default: string
+}
+
 export interface Panel {
   benchmarks: string[]
   panel: string[]
+  families: PanelFamily[]
   rows: PanelRow[]
   request: PanelRequest
 }
@@ -167,10 +176,17 @@ export interface EvalSuite {
   evals: string[]
 }
 
+// Meta includes variants omitted from a narrowed panel.
+export interface EvalFamily {
+  family: string
+  variants: string[]
+}
+
 export interface Meta {
   models: string[]
   evals: string[]
   suites: EvalSuite[]
+  families: EvalFamily[]
   archived_models: string[]
   users: string[]
   statuses: string[]

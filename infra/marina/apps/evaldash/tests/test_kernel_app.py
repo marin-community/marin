@@ -73,7 +73,7 @@ def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, d
         assert triggered == ["projects/hai-gcp-models/locations/us-central1/jobs/marina-evaldash"]
 
         runs = client.get("/runs?limit=100").json()
-        assert len(runs) == 15
+        assert len(runs) == 17
         assert client.get("/runs/snowball-2026.07.20-mmlu").json()["status"] == "succeeded"
         assert client.get("/status").json()["store"]["catalog_generation"] > 0
 

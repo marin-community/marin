@@ -158,6 +158,22 @@ def test_serving_round_trips_and_defaults_to_none(tmp_path):
     assert read_record(path) == served
 
 
+def test_eval_family_is_optional_and_absent_from_a_record_that_declares_none(tmp_path):
+    path = write_record(_RECORD, str(tmp_path))
+    with open(path) as f:
+        raw = json.load(f)
+    assert "family" not in raw["eval"]
+    assert read_record(path).evaluation.family is None
+
+    familied = _RECORD.model_copy(update={"evaluation": _RECORD.evaluation.model_copy(update={"family": "gsm8k"})})
+    familied_path = write_record(familied, str(tmp_path / "familied"))
+    with open(familied_path) as f:
+        raw = json.load(f)
+
+    assert raw["eval"]["family"] == "gsm8k"
+    assert read_record(familied_path) == familied
+
+
 def test_read_records_collects_parse_failures_without_dropping_good_ones(tmp_path):
     """A malformed record.json alongside a valid one is reported as a failure (path + error) rather
     than silently skipped, and the valid record still comes back."""

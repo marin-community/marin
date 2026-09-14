@@ -133,6 +133,7 @@ class PanelCellResponse(BaseModel):
     errors: dict[str, int]
     item_cap: int | None
     flags: list[str]
+    num_fewshot: int | None
     run_id: str
     created_at: str
     version: str | None
@@ -180,9 +181,18 @@ class PanelRequestResponse(BaseModel):
     statuses: list[str]
 
 
+class PanelFamilyResponse(BaseModel):
+    """One leaderboard column: a benchmark, the settings it was run under, and the one to show."""
+
+    family: str
+    variants: list[str]
+    default: str
+
+
 class PanelResponse(BaseModel):
     benchmarks: list[str]
     panel: list[str]
+    families: list[PanelFamilyResponse]
     rows: list[PanelRowResponse]
     request: PanelRequestResponse
 
