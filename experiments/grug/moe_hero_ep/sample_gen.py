@@ -92,7 +92,7 @@ def _make_local(prompt: str, max_new_tokens: int, temperature: float, seed: int)
                 mesh=mesh,
                 allow_partial=True,
             )
-            model = state.params
+            model = trainer.mp.cast_to_compute(state.params)  # bf16 forward; FA4 attention rejects fp32
             rep = NamedSharding(mesh, PartitionSpec())
 
             @jax.jit
