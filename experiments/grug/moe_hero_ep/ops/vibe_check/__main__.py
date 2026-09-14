@@ -40,7 +40,7 @@ def main() -> None:
     store = SampleStore(args.store_root)
     now = datetime.now(UTC)
     if args.action == "report":
-        # An invocation missed at 08:17 can publish later that day. Before 08:00 it finishes yesterday.
+        # The report day starts at 08:00 UTC.
         report_day = (now - timedelta(hours=8)).date()
         url = publish_daily(store, report_day, partial(update_issue_comment, token=os.environ["GH_TOKEN"]))
         logger.info("Daily report: %s", url)

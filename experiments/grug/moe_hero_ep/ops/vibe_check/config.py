@@ -11,6 +11,7 @@ from pathlib import Path
 import draccus
 from fray.types import GpuConfig, ResourceConfig
 from levanter.checkpoint import discover_checkpoint_candidates
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.moe_hero_ep import hero_recipe
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
@@ -86,7 +87,7 @@ def discover_requests(run: ProductionRun, spec: SamplingSpec, revision: str) -> 
     for run_id, version, max_step in roots:
         additional = (run.handoff_checkpoint,) if run_id == run.handoff_run_id else ()
         candidates = discover_checkpoint_candidates(
-            f"{CHECKPOINT_ROOT}/{run_id}/{version}/checkpoints", *additional, max_step=max_step
+            prefix_join(CHECKPOINT_ROOT, f"{run_id}/{version}/checkpoints"), *additional, max_step=max_step
         )
         if not candidates:
             logger.warning("No complete checkpoints found for declared run %s at version %s", run_id, version)

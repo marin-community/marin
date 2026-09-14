@@ -7,8 +7,8 @@ A "site" is a single ``.html`` file or a directory whose ``index.html`` is the e
 multi-file SPA). ``publish_site`` uploads it to ``gs://marin-public/<user>/<slug>/<version>/``,
 writes an :class:`~marin.execution.artifact.ArtifactRecord` next to it so it is self-describing
 and code-resolvable via ``Artifact.raw_load``, and upserts a public discovery index at
-``gs://marin-public/index.json``. Resolution is by deterministic address — a public page's
-location is a pure function of ``(user, slug, version)`` — so no registry is involved.
+``gs://marin-public/index.json``. A versioned page's address follows ``(user, slug, version)``.
+``publish_site_alias`` updates a ``latest/`` redirect to a published version.
 """
 
 import html

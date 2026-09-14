@@ -26,6 +26,10 @@ COMMENT_PAGE_SIZE = 100
 logger = logging.getLogger(__name__)
 
 
+def public_result_key(sample_id: str) -> str:
+    return f"{REPORT_USER}/{REPORT_SLUG}/results/{sample_id}.json"
+
+
 def report_manifest(queue: Queue, report_date: str) -> dict:
     entries = sorted(queue.entries.items(), key=lambda pair: (pair[1].request.checkpoint.step, pair[0]), reverse=True)
     return {
@@ -41,9 +45,7 @@ def report_manifest(queue: Queue, report_date: str) -> dict:
                 "phase": entry.phase.value,
                 "error": entry.error,
                 "url": (
-                    f"{sites.PUBLIC_URL_BASE}/{REPORT_USER}/{REPORT_SLUG}/results/{key}.json"
-                    if entry.phase == Phase.COMPLETE
-                    else None
+                    prefix_join(sites.PUBLIC_URL_BASE, public_result_key(key)) if entry.phase == Phase.COMPLETE else None
                 ),
             }
             for key, entry in entries
@@ -108,7 +110,7 @@ def publish_daily(store: SampleStore, day: date, comment: Callable[[str], None])
     for key, entry in frozen.entries.items():
         if entry.phase != Phase.COMPLETE:
             continue
-        target = conditional_object(prefix_join(sites.PUBLIC_ROOT, f"{REPORT_USER}/{REPORT_SLUG}/results/{key}.json"))
+        target = conditional_object(prefix_join(sites.PUBLIC_ROOT, public_result_key(key)))
         if target.version() is not None:
             continue
         result = store.result(entry.request)
