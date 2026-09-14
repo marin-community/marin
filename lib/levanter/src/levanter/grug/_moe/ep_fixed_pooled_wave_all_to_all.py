@@ -10,9 +10,9 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
-from levanter.grug._moe.common import CapacityOverflow
+from levanter.grug._moe.common import _assignment_validity, _scaled_capacity, CapacityOverflow
 from levanter.grug._moe.ep_common import (
     _assignment_sources,
     _ranks_within_groups,
@@ -361,6 +361,7 @@ def _dispatch_pooled(
     expert_shards: int,
     pool_capacity: int,
     receiver_capacity: int,
+    receiver_limit: Int[Array, ""],
     assignments_per_shard: int,
     topk: int,
 ) -> _PooledDispatch:
@@ -419,7 +420,7 @@ def _dispatch_pooled(
             pool_capacity=pool_capacity,
         )
         receiver_valid = received_experts >= 0
-        receiver_keep = receiver_valid & (receiver_ranks < receiver_capacity)
+        receiver_keep = receiver_valid & (receiver_ranks < receiver_limit)
         compact_size = local_experts * receiver_capacity
         receiver_linear_indices = jnp.where(
             receiver_keep,
@@ -505,6 +506,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
     combine_weights_local: Float[Array, "Tlocal K"],
+    token_valid_local: Bool[Array, "Tlocal"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
     *,
@@ -534,24 +536,42 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     topk = selected_experts_local.shape[1]
     assignments_per_shard = tokens_per_shard * topk
     num_waves = num_expert_waves
-    pool_capacity = max(
+    physical_pool_capacity = max(
         math.ceil(transport_capacity_factor * assignments_per_shard / (expert_shards * num_waves)),
         1,
     )
-    receiver_capacity = max(
+    physical_receiver_capacity = max(
         math.ceil(capacity_factor * assignments_per_shard / (local_experts * num_waves)),
         1,
     )
 
     flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
-    local_expert_indices = (flat_experts % local_experts).astype(jnp.int32)
-    destination_shards = (flat_experts // local_experts).astype(jnp.int32)
+    assignment_valid = _assignment_validity(token_valid_local, tokens=tokens_per_shard, topk=topk)
+    valid_assignments = jnp.sum(assignment_valid, dtype=jnp.int32)
+    safe_experts = jnp.where(assignment_valid, flat_experts, 0)
+    local_expert_indices = (safe_experts % local_experts).astype(jnp.int32)
+    destination_shards = (safe_experts // local_experts).astype(jnp.int32)
+    logical_pool_capacity = _scaled_capacity(
+        valid_assignments,
+        capacity_factor=transport_capacity_factor,
+        divisor=expert_shards * num_waves,
+    )
+    global_valid_assignments = jax.lax.psum(valid_assignments, "expert")
+    logical_receiver_capacity = _scaled_capacity(
+        global_valid_assignments,
+        capacity_factor=capacity_factor,
+        divisor=num_experts * num_waves,
+    )
     # The quotient keeps one logical capacity pool per destination. The remainder
     # stripes that pool over equal static waves without a metadata collective.
-    destination_ranks = _ranks_within_groups(destination_shards, num_groups=expert_shards)
+    destination_ranks = _ranks_within_groups(
+        destination_shards,
+        num_groups=expert_shards,
+        valid=assignment_valid,
+    )
     assignment_waves = destination_ranks % num_waves
     pool_ranks = destination_ranks // num_waves
-    sender_keep = pool_ranks < pool_capacity
+    sender_keep = assignment_valid & (pool_ranks < logical_pool_capacity)
 
     remat = partial(
         jax.checkpoint,
@@ -571,8 +591,9 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
             sender_keep=wave_sender_keep,
             local_experts=local_experts,
             expert_shards=expert_shards,
-            pool_capacity=pool_capacity,
-            receiver_capacity=receiver_capacity,
+            pool_capacity=physical_pool_capacity,
+            receiver_capacity=physical_receiver_capacity,
+            receiver_limit=logical_receiver_capacity,
             assignments_per_shard=assignments_per_shard,
             topk=topk,
         )
@@ -586,15 +607,16 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
             _combine_pooled,
             combine_weights_local=combine_weights_local,
             expert_shards=expert_shards,
-            pool_capacity=pool_capacity,
+            pool_capacity=physical_pool_capacity,
         )
         pooled_dispatch = dispatch()
         pooled_output = remat(compute)(pooled_dispatch)
         out_local = out_local + remat(combine)(pooled_output)
         receiver_dropped = receiver_dropped + pooled_dispatch.receiver_dropped
 
-    sender_dropped = assignments_per_shard - jnp.sum(sender_keep, dtype=jnp.int32)
-    dropped_by_stage_local = jnp.stack((sender_dropped, receiver_dropped))
+    sender_dropped = valid_assignments - jnp.sum(sender_keep, dtype=jnp.int32)
+    skipped = assignments_per_shard - valid_assignments
+    dropped_by_stage_local = jnp.stack((sender_dropped, receiver_dropped, skipped))
     dropped_by_stage = jax.lax.psum(dropped_by_stage_local, _batch_axes(jax.sharding.get_abstract_mesh()))
-    overflow = CapacityOverflow(sender=dropped_by_stage[0], receiver=dropped_by_stage[1])
+    overflow = CapacityOverflow(sender=dropped_by_stage[0], receiver=dropped_by_stage[1], skipped=dropped_by_stage[2])
     return out_local.astype(x_local.dtype), overflow

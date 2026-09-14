@@ -28,7 +28,7 @@ try:
     from jax.shard_map import shard_map
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
-from jaxtyping import Array, Float, Int, PRNGKeyArray
+from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug._moe.common import _zero_dropped_assignments
 from levanter.grug.attention import (
@@ -39,6 +39,7 @@ from levanter.grug.attention import (
     apply_rotary_embedding,
     attention,
     fa4_cute_segment_bounds,
+    token_validity_from_attention_mask,
 )
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
@@ -689,6 +690,7 @@ def _local_routing_stats(
     selected_experts: Int[Array, "T K"],
     router_probs: Float[Array, "T E"],
     router_logits: Float[Array, "T E"],
+    token_valid: jax.Array,
     mesh: jax.sharding.AbstractMesh,
     *,
     num_experts: int,
@@ -710,27 +712,33 @@ def _local_routing_stats(
     the replicated per-layer metrics they replace.
     """
 
-    def _local(sel: jax.Array, probs: jax.Array, logits: jax.Array) -> dict[str, jax.Array]:
+    def _local(sel: jax.Array, probs: jax.Array, logits: jax.Array, valid: jax.Array) -> dict[str, jax.Array]:
         probs_f = probs.astype(jnp.float32)
         logits_f = logits.astype(jnp.float32)
-        counts = jnp.sum(jax.nn.one_hot(sel, num_experts, dtype=jnp.float32), axis=(0, 1))
+        valid_f = valid.astype(jnp.float32)
+        counts = jnp.sum(
+            jax.nn.one_hot(sel, num_experts, dtype=jnp.float32) * valid_f[:, None, None],
+            axis=(0, 1),
+        )
         z = jsp.special.logsumexp(logits_f, axis=-1)
         return {
             "routing_counts_local": counts[None, :],
-            "router_prob_sum_local": jnp.sum(probs_f, axis=0)[None, :],
-            "router_z_sq_sum_local": jnp.sum(z**2)[None],
+            "router_prob_sum_local": jnp.sum(probs_f * valid_f[:, None], axis=0)[None, :],
+            "router_z_sq_sum_local": jnp.sum(z**2 * valid_f)[None],
+            "valid_tokens_local": jnp.sum(valid_f)[None],
         }
 
     return shard_map(
         _local,
         mesh=mesh,
-        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None), P(_BATCH_AXES, None)),
+        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None), P(_BATCH_AXES, None), P(_BATCH_AXES)),
         out_specs={
             "routing_counts_local": P(_BATCH_AXES, None),
             "router_prob_sum_local": P(_BATCH_AXES, None),
             "router_z_sq_sum_local": P(_BATCH_AXES),
+            "valid_tokens_local": P(_BATCH_AXES),
         },
-    )(selected_experts, router_probs, router_logits)
+    )(selected_experts, router_probs, router_logits, token_valid)
 
 
 def _reduce_router_stats(
@@ -738,7 +746,6 @@ def _reduce_router_stats(
     *,
     num_experts: int,
     num_experts_per_token: int,
-    num_tokens: int,
 ) -> dict[str, jax.Array]:
     """Reduce the stacked per-shard router partials across devices once, after the layer scan.
 
@@ -748,30 +755,35 @@ def _reduce_router_stats(
     tupled collective, so the layer scan emits none at all. The pointwise algebra below is
     identical to what the old per-layer ``_routing_stats`` did, just vectorized over the layer axis.
 
-    ``num_tokens`` is the global (batch x seq) token count, the denominator the per-layer
-    ``jnp.mean(..., axis=0)`` used to carry.
+    The reduced valid-token count supplies the metric denominators, so padding does not
+    affect routing distributions or router losses.
     """
     counts = jnp.sum(stacked["routing_counts_local"], axis=1)
     prob_sum = jnp.sum(stacked["router_prob_sum_local"], axis=1)
     z_sq_sum = jnp.sum(stacked["router_z_sq_sum_local"], axis=1)
+    valid_tokens = jnp.maximum(jnp.sum(stacked["valid_tokens_local"], axis=1), 1.0)
 
     total_assignments = jnp.maximum(jnp.sum(counts, axis=-1, keepdims=True), 1.0)
     assignment_fraction = counts / total_assignments
     routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6), axis=-1)
     token_fraction = assignment_fraction * num_experts_per_token
-    p = prob_sum / num_tokens
+    p = prob_sum / valid_tokens[:, None]
     load_balancing_loss = num_experts * jnp.sum(token_fraction * p, axis=-1)
 
     out = {
         "routing_counts": counts,
         "routing_entropy": routing_entropy,
         "load_balancing_loss": load_balancing_loss,
-        "router_z_loss": z_sq_sum / num_tokens,
+        "router_z_loss": z_sq_sum / valid_tokens,
     }
     # The TOPK estimator defers its `pmean`; the HIST estimator cannot (its bin grid needs a global
     # pmin/pmax before binning), so it arrives already reduced.
     if "qb_beta_local" in stacked:
-        out["qb_beta"] = jnp.mean(stacked["qb_beta_local"], axis=1)
+        qb_weights = stacked["qb_beta_weight_local"].astype(jnp.float32)
+        out["qb_beta"] = jnp.sum(stacked["qb_beta_local"] * qb_weights[:, :, None], axis=1) / jnp.maximum(
+            jnp.sum(qb_weights, axis=1)[:, None],
+            1,
+        )
     else:
         out["qb_beta"] = stacked["qb_beta"]
     return out
@@ -785,6 +797,7 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     capacity_overflow = router_metrics["capacity_overflow_per_layer"]
     sender_capacity_overflow = router_metrics["sender_capacity_overflow_per_layer"]
     receiver_capacity_overflow = router_metrics["receiver_capacity_overflow_per_layer"]
+    skipped_assignments = router_metrics["skipped_assignments_per_layer"]
     margin_min = router_metrics["margin_min_per_layer"]  # HIST estimator's live grid lo per layer (0 under TOPK)
     margin_max = router_metrics["margin_max_per_layer"]  # HIST estimator's live grid hi per layer (0 under TOPK)
     qb_beta = router_metrics.get("qb_beta_per_layer")  # per-layer per-expert beta; router_bias = -qb_beta
@@ -795,6 +808,8 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     capacity_overflow_rate = capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
     sender_overflow_rate = sender_capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
     receiver_overflow_rate = receiver_capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
+    total_positions_per_layer = assignments_per_layer + skipped_assignments.astype(jnp.float32)
+    skipped_fraction = skipped_assignments.astype(jnp.float32) / jnp.maximum(total_positions_per_layer, 1.0)
 
     out: dict[str, jax.Array | SummaryStats] = {
         "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
@@ -804,6 +819,7 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
         "train/router/sender_overflow_rate_mean": jnp.mean(sender_overflow_rate),
         "train/router/receiver_overflow_rate_mean": jnp.mean(receiver_overflow_rate),
+        "train/router/skipped_padding_fraction_mean": jnp.mean(skipped_fraction),
         # QB HIST margin range: min over layers and max over layers, plus per-layer below.
         "train/router/margin_min": jnp.min(margin_min),
         "train/router/margin_max": jnp.max(margin_max),
@@ -851,12 +867,13 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
 
 def _bincount_upper_quantile(
     s_local: jax.Array,
+    token_valid_local: jax.Array,
     *,
     num_experts: int,
     n_bins: int,
     lo: jax.Array,
     hi: jax.Array,
-    target_rank: float,
+    target_rank: jax.Array | float,
 ) -> jax.Array:
     """Per-expert (1-K/E) upper quantile of ``s_local`` via one fused bincount over ``[lo, hi]``.
 
@@ -867,7 +884,11 @@ def _bincount_upper_quantile(
     bin_width = (hi - lo) / n_bins
     expert_ids = jnp.arange(num_experts, dtype=jnp.int32)[None, :]
     idx = jnp.clip(((s_local - lo) / bin_width).astype(jnp.int32), 0, n_bins - 1)
-    flat = (expert_ids * n_bins + idx).reshape(-1)
+    flat = jnp.where(
+        token_valid_local[:, None],
+        expert_ids * n_bins + idx,
+        num_experts * n_bins,
+    ).reshape(-1)
     local_counts = jnp.bincount(flat, length=num_experts * n_bins).reshape(num_experts, n_bins)
     counts = jax.lax.psum(local_counts, axis_name=_BATCH_AXES).astype(jnp.float32)
     cum_from_top = jnp.cumsum(counts[:, ::-1], axis=-1)[:, ::-1]  # #{margins in bins >= b}
@@ -880,6 +901,7 @@ def _bincount_upper_quantile(
 
 def _qb_beta_hist(
     s_ma: jax.Array,
+    token_valid: jax.Array,
     mesh: jax.sharding.AbstractMesh,
     *,
     num_experts_per_token: int,
@@ -892,23 +914,46 @@ def _qb_beta_hist(
     ``_bincount_upper_quantile`` reads the per-expert threshold. Replaces the per-device ``top_k`` +
     ``pmean`` estimate with a smoother global quantile at the cost of the per-expert count reduction.
 
-    Returns ``(beta, margin_min, margin_max)``: the per-expert threshold plus the live margin range
-    (the grid ``lo``/``hi``), surfaced for logging.
+    Padding is omitted from the histogram and from the dynamic target rank. Returns
+    ``(beta, margin_min, margin_max)``: the per-expert threshold plus the live margin
+    range (the grid ``lo``/``hi``), surfaced for logging.
     """
-    target_rank = float(s_ma.shape[0]) * num_experts_per_token / num_experts  # tokens at/above beta per expert
 
-    def _fn(s_local: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
+    def _fn(s_local: jax.Array, valid_local: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
         # pmin/pmax have no autodiff rule and the range is a control quantity, so detach their inputs;
         # the bincount path drops tangents at the integer bin cast, so it needs none downstream either.
-        lo = jax.lax.pmin(jax.lax.stop_gradient(jnp.min(s_local)), axis_name=_BATCH_AXES)
-        hi = jax.lax.pmax(jax.lax.stop_gradient(jnp.max(s_local)), axis_name=_BATCH_AXES)
-        hi_grid = jnp.maximum(hi, lo + 1e-6)  # guard a degenerate all-equal range
-        beta = _bincount_upper_quantile(
-            s_local, num_experts=num_experts, n_bins=n_bins, lo=lo, hi=hi_grid, target_rank=target_rank
+        valid_margin = valid_local[:, None]
+        lo = jax.lax.pmin(
+            jax.lax.stop_gradient(jnp.min(jnp.where(valid_margin, s_local, jnp.inf))),
+            axis_name=_BATCH_AXES,
         )
+        hi = jax.lax.pmax(
+            jax.lax.stop_gradient(jnp.max(jnp.where(valid_margin, s_local, -jnp.inf))),
+            axis_name=_BATCH_AXES,
+        )
+        valid_tokens = jax.lax.psum(jnp.sum(valid_local, dtype=jnp.int32), axis_name=_BATCH_AXES)
+        lo = jnp.where(valid_tokens > 0, lo, 0)
+        hi = jnp.where(valid_tokens > 0, hi, 0)
+        hi_grid = jnp.maximum(hi, lo + 1e-6)  # guard a degenerate all-equal range
+        target_rank = valid_tokens.astype(jnp.float32) * num_experts_per_token / num_experts
+        beta = _bincount_upper_quantile(
+            s_local,
+            valid_local,
+            num_experts=num_experts,
+            n_bins=n_bins,
+            lo=lo,
+            hi=hi_grid,
+            target_rank=target_rank,
+        )
+        beta = jnp.where(valid_tokens > 0, beta, 0)
         return beta, lo, hi  # surface the live margin range for logging
 
-    return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=(P(), P(), P()))(s_ma)
+    return shard_map(
+        _fn,
+        mesh=mesh,
+        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES)),
+        out_specs=(P(), P(), P()),
+    )(s_ma, token_valid)
 
 
 class MoEMLP(eqx.Module):
@@ -970,9 +1015,11 @@ class MoEMLP(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
+        token_valid: Bool[Array, "B S"],
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
+        token_valid_flat = rearrange(token_valid, "b s -> (b s)")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
@@ -994,6 +1041,7 @@ class MoEMLP(eqx.Module):
             reshard(selected_experts, P(_BATCH_AXES, None)),
             reshard(router_probs, P(_BATCH_AXES, None)),
             reshard(router_logits, P(_BATCH_AXES, None)),
+            reshard(token_valid_flat, P(_BATCH_AXES)),
             mesh,
             num_experts=self.cfg.num_experts,
         )
@@ -1002,6 +1050,7 @@ class MoEMLP(eqx.Module):
         if self.cfg.qb_estimator == QbEstimator.HIST:
             beta, margin_min, margin_max = _qb_beta_hist(
                 s_minus_alpha,
+                reshard(token_valid_flat, P(_BATCH_AXES)),
                 mesh,
                 num_experts_per_token=self.cfg.num_experts_per_token,
                 num_experts=self.cfg.num_experts,
@@ -1017,19 +1066,26 @@ class MoEMLP(eqx.Module):
             local_tokens = s_minus_alpha.shape[0] // num_devices
             qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
 
-            def _local_qb_beta(s_ma):
-                topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
-                # The `pmean` that used to live here is deferred to `_reduce_router_stats`: the
-                # mean of the per-shard betas is the same number whether it is taken per layer or
-                # once over the stacked layers, and beta is not read until the *next* step.
-                return topk_vals[:, -1][None, :]
+            def _local_qb_beta(s_ma, valid):
+                valid_count = jnp.sum(valid, dtype=jnp.int32)
+                topk_vals, _ = jax.lax.top_k(jnp.where(valid[None, :], s_ma.T, -jnp.inf), qb_count)
+                logical_qb_count = jnp.clip(
+                    valid_count * self.cfg.num_experts_per_token // self.cfg.num_experts,
+                    1,
+                    qb_count,
+                )
+                # The cross-shard weighted mean is deferred to `_reduce_router_stats`, and beta is
+                # not read until the next step.
+                beta = jnp.take(topk_vals, logical_qb_count - 1, axis=1)
+                beta = jnp.where(valid_count > 0, beta, 0)
+                return beta[None, :], valid_count[None]
 
-            router_stats["qb_beta_local"] = shard_map(
+            router_stats["qb_beta_local"], router_stats["qb_beta_weight_local"] = shard_map(
                 _local_qb_beta,
                 mesh=mesh,
-                in_specs=(P(_BATCH_AXES, None),),
-                out_specs=P(_BATCH_AXES, None),
-            )(s_minus_alpha)
+                in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES)),
+                out_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES)),
+            )(s_minus_alpha, reshard(token_valid_flat, P(_BATCH_AXES)))
             # TOPK has no histogram grid, so no live margin range to surface. Reshard the
             # placeholder onto the run's mesh: a bare constant carries an empty-mesh sharding,
             # and stacking that through the router stats leaves the train step's inputs placed
@@ -1055,6 +1111,7 @@ class MoEMLP(eqx.Module):
             routed_input,
             selected_experts.astype(jnp.int32),
             combine_weights,
+            token_valid=token_valid_flat,
             mesh=get_abstract_mesh(),
             report_capacity_overflow=self.cfg.report_capacity_overflow,
         )
@@ -1063,14 +1120,17 @@ class MoEMLP(eqx.Module):
             dropped_assignments = capacity_overflow.total
             sender_dropped_assignments = capacity_overflow.sender
             receiver_dropped_assignments = capacity_overflow.receiver
+            skipped_assignments = capacity_overflow.skipped
         else:
             routed_flat = moe_out
             dropped_assignments = _zero_dropped_assignments()
             sender_dropped_assignments = _zero_dropped_assignments()
             receiver_dropped_assignments = _zero_dropped_assignments()
+            skipped_assignments = jnp.sum(~token_valid_flat, dtype=jnp.int32) * self.cfg.num_experts_per_token
         router_stats["capacity_overflow"] = dropped_assignments
         router_stats["sender_capacity_overflow"] = sender_dropped_assignments
         router_stats["receiver_capacity_overflow"] = receiver_dropped_assignments
+        router_stats["skipped_assignments"] = skipped_assignments
 
         # Expand after the combine: `expert_mlp` already returns the weight-summed expert output,
         # which is the vector the paper's W_up acts on.
@@ -1149,7 +1209,8 @@ class Block(eqx.Module):
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
+        token_valid = token_validity_from_attention_mask(mask, batch_size=x.shape[0], sequence_length=x.shape[1])
+        mlp_out, router_stats = self.mlp(mlp_in, token_valid)
         if self.shared is not None:
             for shared_expert in self.shared:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -1303,7 +1364,6 @@ class Transformer(eqx.Module):
             stacked_router_stats,
             num_experts=cfg.num_experts,
             num_experts_per_token=cfg.num_experts_per_token,
-            num_tokens=batch_size * seq_len,
         )
         router_metrics = {
             "routing_entropy_per_layer": reduced_router_stats["routing_entropy"],
@@ -1314,6 +1374,7 @@ class Transformer(eqx.Module):
             "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
             "sender_capacity_overflow_per_layer": stacked_router_stats["sender_capacity_overflow"],
             "receiver_capacity_overflow_per_layer": stacked_router_stats["receiver_capacity_overflow"],
+            "skipped_assignments_per_layer": stacked_router_stats["skipped_assignments"],
             "margin_min_per_layer": stacked_router_stats["margin_min"],
             "margin_max_per_layer": stacked_router_stats["margin_max"],
         }
@@ -1392,6 +1453,10 @@ class Transformer(eqx.Module):
                 summarized_metrics["moe/receiver_dropped_assignments"] = router_metrics[
                     "receiver_capacity_overflow_per_layer"
                 ]
+                summarized_metrics["moe/skipped_padding_assignments"] = router_metrics["skipped_assignments_per_layer"]
+                summarized_metrics["moe/valid_assignments"] = jnp.sum(
+                    router_metrics["routing_counts_per_layer"], axis=-1, dtype=jnp.int32
+                )
             return loss, summarized_metrics
         return loss
 

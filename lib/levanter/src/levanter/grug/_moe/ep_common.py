@@ -7,7 +7,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
 
 def _sort_activations(inputs: Float[Array, "N *tail"], sort_indices: Int[Array, "N"]) -> Float[Array, "N *tail"]:
@@ -39,13 +39,22 @@ def _sort_activations_custom_bwd(
 _sort_activations_custom.defvjp(_sort_activations_custom_fwd, _sort_activations_custom_bwd)
 
 
-def _ranks_within_groups(group_ids: Int[Array, "N"], *, num_groups: int) -> Int[Array, "N"]:
+def _ranks_within_groups(
+    group_ids: Int[Array, "N"],
+    *,
+    num_groups: int,
+    valid: Bool[Array, "N"] | None = None,
+) -> Int[Array, "N"]:
     """Return the zero-based rank of each item in its group."""
-    order = jnp.argsort(group_ids, stable=True)
+    if valid is None:
+        valid = jnp.ones(group_ids.shape, dtype=jnp.bool_)
+    sortable_groups = jnp.where(valid, group_ids, num_groups)
+    safe_groups = jnp.where(valid, group_ids, 0)
+    order = jnp.argsort(sortable_groups, stable=True)
     inverse_order = jnp.argsort(order)
-    counts = jnp.bincount(group_ids, length=num_groups).astype(jnp.int32)
+    counts = jnp.bincount(sortable_groups, length=num_groups).astype(jnp.int32)
     starts = jnp.cumsum(counts) - counts
-    sorted_ranks = jnp.arange(group_ids.shape[0], dtype=jnp.int32) - starts[group_ids[order]]
+    sorted_ranks = jnp.arange(group_ids.shape[0], dtype=jnp.int32) - starts[safe_groups[order]]
     return sorted_ranks[inverse_order]
 
 

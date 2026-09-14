@@ -17,7 +17,7 @@ import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
 from jax.typing import DTypeLike
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
@@ -355,6 +355,7 @@ def _moe_mlp_local_sonic(
     x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
+    token_valid: Bool[Array, "T"],
     moe_w13: Float[Array, "E H I2"],
     moe_w2: Float[Array, "E I H"],
     *,
@@ -365,6 +366,7 @@ def _moe_mlp_local_sonic(
     token_ids_sort, dispatch_positions, group_sizes, _sorted_assignment_ids = (
         _prepare_moe_dispatch_indices_with_assignment_ids(
             selected_experts,
+            token_valid,
             num_experts=num_experts,
         )
     )
@@ -377,7 +379,7 @@ def _moe_mlp_local_sonic(
         hidden = activation_fn(gate) * up
         out_dispatch = ragged_dot(hidden, moe_w2, group_sizes)
         out = tree_checkpoint_name(
-            sonic_gather_sum(out_dispatch, dispatch_positions, combine_weights),
+            sonic_gather_sum(out_dispatch, dispatch_positions, jnp.where(token_valid[:, None], combine_weights, 0)),
             _CHECKPOINT_MOE_OUTPUT,
         )
 

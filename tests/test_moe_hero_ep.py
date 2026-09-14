@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import math
 import os
 import subprocess
@@ -26,6 +27,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.checkpoint import save_checkpoint
+from levanter.grug.attention import AttentionMask
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
@@ -802,6 +804,45 @@ def _latent_config(latent_dim=None):
     )
 
 
+def test_block_threads_attention_padding_into_moe_metrics():
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    cfg = _latent_config()
+    hidden = jax.random.normal(jax.random.key(57), (1, 8, cfg.hidden_dim))
+    segment_ids = jnp.array([[0, 0, 1, 1, -1, -1, -1, -1]], dtype=jnp.int32)
+    mask = (
+        AttentionMask.causal()
+        .with_segment_ids(segment_ids)
+        .with_fa4_bounds(jnp.zeros_like(segment_ids), segment_ids >= 0)
+    )
+
+    with set_mesh(mesh):
+        block = model.Block.init(cfg, key=jax.random.key(58))
+        _, metrics = jax.jit(lambda x: block(x, mask))(hidden)
+
+    np.testing.assert_array_equal(jnp.sum(metrics["routing_counts_local"]), jnp.array(4.0))
+    np.testing.assert_array_equal(metrics["skipped_assignments"], jnp.array(4, dtype=jnp.int32))
+
+
+@pytest.mark.parametrize("qb_estimator", [model.QbEstimator.HIST, model.QbEstimator.TOPK])
+def test_moe_qb_estimator_ignores_padding(qb_estimator: model.QbEstimator):
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    cfg = dataclasses.replace(_latent_config(), qb_estimator=qb_estimator)
+    hidden = jax.random.normal(jax.random.key(59), (1, 8, cfg.hidden_dim))
+    token_valid = jnp.array([[True, False, True, True, False, False, True, False]])
+    valid_indices = jnp.array([0, 2, 3, 6], dtype=jnp.int32)
+
+    with set_mesh(mesh):
+        mlp = model.MoEMLP.init(cfg, key=jax.random.key(60))
+        _, padded_stats = mlp(hidden, token_valid)
+        _, compact_stats = mlp(
+            hidden[:, valid_indices],
+            jnp.ones((1, valid_indices.shape[0]), dtype=jnp.bool_),
+        )
+
+    beta_key = "qb_beta" if qb_estimator == model.QbEstimator.HIST else "qb_beta_local"
+    np.testing.assert_allclose(padded_stats[beta_key], compact_stats[beta_key], rtol=1e-5, atol=1e-5)
+
+
 def test_latent_moe_shrinks_the_dispatched_width_but_not_the_token():
     # The point of LatentMoE is that the all-to-all payload narrows while the residual stream does
     # not, so the expert weights must be latent-wide and the layer output hidden-wide.
@@ -1091,6 +1132,8 @@ def test_drop_metrics_reports_sender_and_receiver_fractions():
         jnp.array(5, dtype=jnp.int32),
         jnp.array(2, dtype=jnp.int32),
         jnp.array(3, dtype=jnp.int32),
+        jnp.array(4, dtype=jnp.int32),
+        jnp.array(12, dtype=jnp.int32),
         batch_size=2,
         sequence_length=4,
         top_k=2,
@@ -1099,12 +1142,15 @@ def test_drop_metrics_reports_sender_and_receiver_fractions():
 
     assert metrics == {
         "moe/dropped_assignments": 5,
-        "moe/drop_fraction": 5 / 16,
+        "moe/drop_fraction": 5 / 12,
         "moe/sender_dropped_assignments": 2,
-        "moe/sender_drop_fraction": 2 / 16,
+        "moe/sender_drop_fraction": 2 / 12,
         "moe/receiver_dropped_assignments": 3,
-        "moe/receiver_drop_fraction": 3 / 16,
-        "moe/receiver_drop_fraction_of_received": 3 / 14,
+        "moe/receiver_drop_fraction": 3 / 12,
+        "moe/receiver_drop_fraction_of_received": 3 / 10,
+        "moe/skipped_padding_assignments": 4,
+        "moe/skipped_padding_fraction": 4 / 16,
+        "moe/valid_assignments": 12,
     }
 
 
@@ -1115,6 +1161,8 @@ def test_drop_metrics_sums_per_layer_counts_in_int64_without_overflow():
     per_layer_sender = jnp.full((num_layers,), 40_000_000, dtype=jnp.int32)  # 48 * 40M = 1.92e9
     per_layer_receiver = jnp.full((num_layers,), 60_000_000, dtype=jnp.int32)  # 48 * 60M = 2.88e9 > int32
     per_layer_total = per_layer_sender + per_layer_receiver
+    per_layer_valid = jnp.full((num_layers,), 4096 * 4096 * 8, dtype=jnp.int32)
+    per_layer_skipped = jnp.zeros((num_layers,), dtype=jnp.int32)
     sender_total = 48 * 40_000_000
     receiver_total = 48 * 60_000_000
 
@@ -1122,6 +1170,8 @@ def test_drop_metrics_sums_per_layer_counts_in_int64_without_overflow():
         per_layer_total,
         per_layer_sender,
         per_layer_receiver,
+        per_layer_skipped,
+        per_layer_valid,
         batch_size=4096,
         sequence_length=4096,
         top_k=8,

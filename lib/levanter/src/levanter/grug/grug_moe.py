@@ -23,7 +23,7 @@ import jax.numpy as jnp
 from haliax.jax_utils import named_call
 from jax import shard_map
 from jax.sharding import PartitionSpec as P
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.common import (
     _DEFAULT_EP_CAPACITY_FACTOR,
@@ -121,6 +121,7 @@ class MoEExpertMlp(eqx.Module):
         selected_experts: Int[Array, "T K"],
         combine_weights: Float[Array, "T K"],
         *,
+        token_valid: Bool[Array, "T"] | None = None,
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
     ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], CapacityOverflow]:
@@ -131,6 +132,7 @@ class MoEExpertMlp(eqx.Module):
             combine_weights,
             w_gate_up,
             self.w_down,
+            token_valid=token_valid,
             activation=self.activation,
             implementation=self.implementation,
             mesh=mesh,
@@ -150,6 +152,7 @@ def moe_mlp(
     w_up_gate: Float[Array, "E D I2"],
     w_down: Float[Array, "E I D"],
     *,
+    token_valid: Bool[Array, "T"] | None = None,
     activation: MoeActivation = ActivationFunctionEnum.silu,
     implementation: MoeImplementation | str | None = None,
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
@@ -165,8 +168,11 @@ def moe_mlp(
     precomputed token-to-expert assignments. Routing logits/top-k selection
     stays in the caller (e.g. model MLP block).
 
+    `token_valid` excludes invalid positions from dispatch, capacity accounting,
+    and expert gradients. Omitted validity treats every token as valid.
+
     Set `report_capacity_overflow=True` to also return sender and receiver
-    counts for expert assignments dropped by EP capacity clipping.
+    capacity drops plus padding-skipped assignment counts.
 
     `expert_chunks` applies only to the local `sonic_cute` FSDP path. Values
     greater than one split the expert bank into equal, statically sized chunks.
@@ -199,6 +205,12 @@ def moe_mlp(
             f"selected_experts/combine_weights token dim ({selected_experts.shape[0]}) must match x token "
             f"dim ({x.shape[0]})"
         )
+    if token_valid is None:
+        token_valid = jnp.ones((x.shape[0],), dtype=jnp.bool_)
+    elif token_valid.ndim != 1 or token_valid.shape[0] != x.shape[0]:
+        raise ValueError(f"token_valid must have shape [{x.shape[0]}], got shape={token_valid.shape}")
+    elif token_valid.dtype != jnp.bool_:
+        raise ValueError(f"token_valid must have boolean dtype, got dtype={token_valid.dtype}")
 
     num_experts = int(w_up_gate.shape[0])
     if w_down.shape[0] != num_experts:
@@ -214,6 +226,7 @@ def moe_mlp(
             x,
             selected_experts,
             combine_weights,
+            token_valid,
             w_up_gate,
             w_down,
             activation_fn=activation_fn,
@@ -222,7 +235,8 @@ def moe_mlp(
             expert_chunks=expert_chunks,
         )
         if report_capacity_overflow:
-            return out, CapacityOverflow(sender=dropped, receiver=jnp.zeros_like(dropped))
+            skipped = jnp.sum(~token_valid, dtype=jnp.int32) * selected_experts.shape[1]
+            return out, CapacityOverflow(sender=dropped, receiver=jnp.zeros_like(dropped), skipped=skipped)
         return out
 
     batch_spec = _batch_spec_from_x(x, mesh)
@@ -264,6 +278,7 @@ def moe_mlp(
         x = _reshard_for_shard_map(x, mesh, batch_spec)
         selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
         combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
+        token_valid = _reshard_for_shard_map(token_valid, mesh, batch_spec)
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
@@ -279,13 +294,14 @@ def moe_mlp(
                 batch_spec,
                 batch_spec,
                 batch_spec,
+                batch_spec,
                 w_up_gate_spec,
                 w_down_spec,
             ),
-            out_specs=(batch_spec, CapacityOverflow(sender=P(), receiver=P())),
+            out_specs=(batch_spec, CapacityOverflow(sender=P(), receiver=P(), skipped=P())),
             check_vma=False,
         )
-        out, overflow = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        out, overflow = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
         if report_capacity_overflow:
             return out, overflow
         return out
@@ -297,6 +313,7 @@ def moe_mlp(
     x_spec = _value_spec_or_default(x, batch_spec, replace_replicated=True)
     selected_experts_spec = _value_spec_or_default(selected_experts, batch_spec, replace_replicated=True)
     combine_weights_spec = _value_spec_or_default(combine_weights, batch_spec, replace_replicated=True)
+    token_valid_spec = _value_spec_or_default(token_valid, batch_spec, replace_replicated=True)
     if expert_chunks > 1 and resolved_implementation == "sonic_cute":
         # The chunked sonic_cute path all-gathers the hidden dim per expert-chunk over ``data``, so it
         # needs a real data axis; without one the local kernel hits an unbound-axis error.
@@ -317,14 +334,16 @@ def moe_mlp(
     x = _reshard_for_shard_map(x, mesh, x_spec)
     selected_experts = _reshard_for_shard_map(selected_experts, mesh, selected_experts_spec)
     combine_weights = _reshard_for_shard_map(combine_weights, mesh, combine_weights_spec)
+    token_valid = _reshard_for_shard_map(token_valid, mesh, token_valid_spec)
     w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
     w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
-    def local_moe(x, selected_experts, combine_weights, w_up_gate, w_down):
+    def local_moe(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down):
         out, dropped = _moe_mlp_local(
             x,
             selected_experts,
             combine_weights,
+            token_valid,
             w_up_gate,
             w_down,
             activation_fn=activation_fn,
@@ -332,10 +351,11 @@ def moe_mlp(
             implementation=resolved_implementation,
             expert_chunks=expert_chunks,
         )
+        skipped = jnp.sum(~token_valid, dtype=jnp.int32) * selected_experts.shape[1]
         batch_axis_names = x_spec[0]
         if report_capacity_overflow and batch_axis_names is not None:
-            dropped = jax.lax.psum(dropped, axis_name=batch_axis_names)
-        return out, dropped
+            dropped, skipped = jax.lax.psum((dropped, skipped), axis_name=batch_axis_names)
+        return out, CapacityOverflow(sender=dropped, receiver=jnp.zeros_like(dropped), skipped=skipped)
 
     shard_fn = shard_map(
         local_moe,
@@ -344,15 +364,16 @@ def moe_mlp(
             x_spec,
             selected_experts_spec,
             combine_weights_spec,
+            token_valid_spec,
             w_up_gate_spec,
             w_down_spec,
         ),
-        out_specs=(x_spec, P()),
+        out_specs=(x_spec, CapacityOverflow(sender=P(), receiver=P(), skipped=P())),
         check_vma=False,
     )
-    out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+    out, overflow = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
     if report_capacity_overflow:
-        return out, CapacityOverflow(sender=dropped, receiver=jnp.zeros_like(dropped))
+        return out, overflow
     return out
 
 

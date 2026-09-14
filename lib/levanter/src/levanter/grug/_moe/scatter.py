@@ -8,7 +8,7 @@ from collections.abc import Callable
 import jax
 import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug._moe.common import (
@@ -25,6 +25,7 @@ def _moe_mlp_local_scatter(
     x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
+    token_valid: Bool[Array, "T"],
     moe_w13: Float[Array, "E H I2"],
     moe_w2: Float[Array, "E I H"],
     *,
@@ -36,6 +37,7 @@ def _moe_mlp_local_scatter(
         x,
         selected_experts,
         combine_weights,
+        token_valid,
         num_experts=num_experts,
     )
     x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)

@@ -5,6 +5,8 @@ import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import jax.numpy as jnp
+
 from experiments.grug.moe_hero_fsdp import launch, train
 
 
@@ -19,6 +21,26 @@ def test_build_hero_run_uses_run_id_argument(monkeypatch):
     )
 
     assert step.name == "grug/cli-run"
+
+
+def test_drop_metrics_separates_padding_from_capacity_drops():
+    metrics = train._drop_metrics(
+        jnp.array([2], dtype=jnp.int32),
+        jnp.array([4], dtype=jnp.int32),
+        jnp.array([12], dtype=jnp.int32),
+        batch_size=2,
+        sequence_length=4,
+        top_k=2,
+        num_layers=1,
+    )
+
+    assert metrics == {
+        "moe/dropped_assignments": 2,
+        "moe/drop_fraction": 2 / 12,
+        "moe/skipped_padding_assignments": 4,
+        "moe/skipped_padding_fraction": 4 / 16,
+        "moe/valid_assignments": 12,
+    }
 
 
 def test_run_grug_applies_runtime_defaults_and_keeps_overrides(monkeypatch):

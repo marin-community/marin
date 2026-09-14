@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 from haliax.jax_utils import named_call
 from jax.sharding import PartitionSpec as P
-from jaxtyping import Array, Float, Int, Key
+from jaxtyping import Array, Bool, Float, Int, Key
 
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -128,10 +128,11 @@ MOE_REMAT_SAVE_NAMES = (
 
 
 class CapacityOverflow(NamedTuple):
-    """Expert assignments dropped before and after transport."""
+    """Expert assignments dropped by capacity and skipped as padding."""
 
     sender: Int[Array, ""]
     receiver: Int[Array, ""]
+    skipped: Int[Array, ""]
 
     @property
     def total(self) -> Int[Array, ""]:
@@ -185,6 +186,7 @@ def _prepare_moe_dispatch(
     x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
+    token_valid: Bool[Array, "T"] | None = None,
     *,
     num_experts: int,
 ) -> tuple[
@@ -197,8 +199,9 @@ def _prepare_moe_dispatch(
     # #2704: keep argsort-grouped dispatch as the canonical compact routing
     # strategy, matching the behavior carried forward from 89318a910.
     tokens, topk = selected_experts.shape
-    expert_ids = selected_experts.reshape(tokens * topk)
-    dispatch_weights = combine_weights.reshape(tokens * topk)
+    assignment_valid = _assignment_validity(token_valid, tokens=tokens, topk=topk)
+    expert_ids = jnp.where(assignment_valid, selected_experts.reshape(tokens * topk), num_experts)
+    dispatch_weights = jnp.where(assignment_valid, combine_weights.reshape(tokens * topk), 0)
 
     sort_idx = jnp.argsort(expert_ids, axis=0)
     token_ids = jnp.arange(tokens * topk, dtype=jnp.int32) // topk
@@ -212,6 +215,7 @@ def _prepare_moe_dispatch(
 @named_call
 def _prepare_moe_dispatch_indices_with_assignment_ids(
     selected_experts: Int[Array, "T K"],
+    token_valid: Bool[Array, "T"] | None = None,
     *,
     num_experts: int,
 ) -> tuple[
@@ -223,7 +227,8 @@ def _prepare_moe_dispatch_indices_with_assignment_ids(
     """Prepare expert-sorted token ids plus reverse positions without gathering x."""
     tokens, topk = selected_experts.shape
     assignments = tokens * topk
-    expert_ids = selected_experts.reshape(assignments)
+    assignment_valid = _assignment_validity(token_valid, tokens=tokens, topk=topk)
+    expert_ids = jnp.where(assignment_valid, selected_experts.reshape(assignments), num_experts)
 
     sort_idx = jnp.argsort(expert_ids, axis=0)
     assignment_ids = jnp.arange(assignments, dtype=jnp.int32)
@@ -236,6 +241,30 @@ def _prepare_moe_dispatch_indices_with_assignment_ids(
 
     group_sizes = jnp.bincount(expert_ids, length=num_experts).astype(jnp.int32)
     return token_ids_sort, dispatch_positions, group_sizes, sorted_assignment_ids
+
+
+def _assignment_validity(
+    token_valid: Bool[Array, "T"] | None,
+    *,
+    tokens: int,
+    topk: int,
+) -> Bool[Array, "TK"]:
+    """Broadcast per-token validity over routed assignments."""
+    if token_valid is None:
+        return jnp.ones((tokens * topk,), dtype=jnp.bool_)
+    return jnp.broadcast_to(token_valid[:, None], (tokens, topk)).reshape(tokens * topk)
+
+
+def _scaled_capacity(
+    assignments: Int[Array, ""],
+    *,
+    capacity_factor: float,
+    divisor: int = 1,
+    minimum: int = 1,
+) -> Int[Array, ""]:
+    """Return a JIT-safe logical capacity derived from dynamic assignment demand."""
+    scaled = jnp.ceil(assignments.astype(jnp.float32) * capacity_factor / divisor).astype(jnp.int32)
+    return jnp.maximum(scaled, minimum)
 
 
 def _zero_dropped_assignments() -> Int[Array, ""]:

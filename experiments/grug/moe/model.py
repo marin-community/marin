@@ -26,7 +26,7 @@ try:
     from jax.shard_map import shard_map
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
-from jaxtyping import Array, Float, Int, PRNGKeyArray
+from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug.attention import (
     AttentionMask,
@@ -35,6 +35,7 @@ from levanter.grug.attention import (
     align_kv_heads,
     apply_rotary_embedding,
     attention,
+    token_validity_from_attention_mask,
 )
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
@@ -454,21 +455,27 @@ def _routing_stats(
     selected_experts: Int[Array, "T K"],
     router_probs: Float[Array, "T E"],
     router_logits: Float[Array, "T E"],
+    token_valid: jax.Array,
     *,
     num_experts: int,
     num_experts_per_token: int,
 ) -> dict[str, jax.Array]:
     router_probs_f = router_probs.astype(jnp.float32)
     router_logits_f = router_logits.astype(jnp.float32)
-    expert_counts = jnp.sum(jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32), axis=(0, 1))
+    valid_f = token_valid.astype(jnp.float32)
+    expert_counts = jnp.sum(
+        jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32) * valid_f[:, None, None],
+        axis=(0, 1),
+    )
     total_assignments = jnp.maximum(jnp.sum(expert_counts), 1.0)
     assignment_fraction = expert_counts / total_assignments
     routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6))
     token_fraction = assignment_fraction * num_experts_per_token
-    p = jnp.mean(router_probs_f, axis=0)
+    valid_tokens = jnp.maximum(jnp.sum(valid_f), 1.0)
+    p = jnp.sum(router_probs_f * valid_f[:, None], axis=0) / valid_tokens
     load_balancing_loss = num_experts * jnp.sum(token_fraction * p)
     z = jsp.special.logsumexp(router_logits_f, axis=-1)
-    router_z_loss = jnp.mean(z**2)
+    router_z_loss = jnp.sum(z**2 * valid_f) / valid_tokens
 
     return {
         "routing_counts": expert_counts,
@@ -484,11 +491,14 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
     capacity_overflow = router_metrics["capacity_overflow_per_layer"]
+    skipped_assignments = router_metrics["skipped_assignments_per_layer"]
     num_layers = int(routing_entropy.shape[0])
 
     # Per-layer total assignments = sum of routing_counts over experts (= tokens * k).
     assignments_per_layer = jnp.sum(routing_counts.astype(jnp.float32), axis=-1)
     capacity_overflow_rate = capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
+    total_positions_per_layer = assignments_per_layer + skipped_assignments.astype(jnp.float32)
+    skipped_fraction = skipped_assignments.astype(jnp.float32) / jnp.maximum(total_positions_per_layer, 1.0)
 
     out: dict[str, jax.Array | SummaryStats] = {
         "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
@@ -496,6 +506,7 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         "train/router/router_z_loss": jnp.mean(router_z_loss),
         "train/router/routing_counts_per_layer": routing_counts,
         "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
+        "train/router/skipped_padding_fraction_mean": jnp.mean(skipped_fraction),
         "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
     }
     for i in range(num_layers):
@@ -570,9 +581,11 @@ class MoEMLP(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
+        token_valid: Bool[Array, "B S"],
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
+        token_valid_flat = rearrange(token_valid, "b s -> (b s)")
         with jax.named_scope("moe_route"):
             # Keep the router path in fp32 before top-k, softmax, and QB statistics.
             router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
@@ -595,6 +608,7 @@ class MoEMLP(eqx.Module):
                 selected_experts,
                 router_probs,
                 router_logits,
+                token_valid_flat,
                 num_experts=self.cfg.num_experts,
                 num_experts_per_token=self.cfg.num_experts_per_token,
             )
@@ -609,27 +623,38 @@ class MoEMLP(eqx.Module):
             local_tokens = s_minus_alpha.shape[0] // num_devices
             qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
 
-            def _local_qb_beta(s_ma):
-                topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
-                beta = topk_vals[:, -1]
-                return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+            def _local_qb_beta(s_ma, valid):
+                valid_count = jnp.sum(valid, dtype=jnp.int32)
+                topk_vals, _ = jax.lax.top_k(jnp.where(valid[None, :], s_ma.T, -jnp.inf), qb_count)
+                logical_qb_count = jnp.clip(
+                    valid_count * self.cfg.num_experts_per_token // self.cfg.num_experts,
+                    1,
+                    qb_count,
+                )
+                beta = jnp.take(topk_vals, logical_qb_count - 1, axis=1)
+                beta = jnp.where(valid_count > 0, beta, 0)
+                weighted_beta = jax.lax.psum(beta * valid_count, axis_name=_BATCH_AXES)
+                global_valid_count = jax.lax.psum(valid_count, axis_name=_BATCH_AXES)
+                return weighted_beta / jnp.maximum(global_valid_count, 1)
 
             router_stats["qb_beta"] = shard_map(
                 _local_qb_beta,
                 mesh=mesh,
-                in_specs=(P(_BATCH_AXES, None),),
+                in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES)),
                 out_specs=P(),
-            )(s_minus_alpha)
+            )(s_minus_alpha, reshard(token_valid_flat, P(_BATCH_AXES)))
 
         with jax.named_scope("moe_experts"):
             routed_flat, capacity_overflow = self.expert_mlp(
                 x_flat,
                 selected_experts.astype(jnp.int32),
                 combine_weights,
+                token_valid=token_valid_flat,
                 mesh=get_abstract_mesh(),
                 report_capacity_overflow=True,
             )
         router_stats["capacity_overflow"] = capacity_overflow.total.astype(jnp.float32)
+        router_stats["skipped_assignments"] = capacity_overflow.skipped.astype(jnp.float32)
 
         with jax.named_scope("moe_output"):
             routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
@@ -677,7 +702,8 @@ class Block(eqx.Module):
             x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
         with jax.named_scope("routed_moe"):
             mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-            mlp_out, router_stats = self.mlp(mlp_in)
+            token_valid = token_validity_from_attention_mask(mask, batch_size=x.shape[0], sequence_length=x.shape[1])
+            mlp_out, router_stats = self.mlp(mlp_in, token_valid)
         if self.shared is not None:
             with jax.named_scope("shared_expert"):
                 mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -780,6 +806,7 @@ class Transformer(eqx.Module):
             "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
             "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
             "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
+            "skipped_assignments_per_layer": jnp.stack([s["skipped_assignments"] for s in moe_router_stats], axis=0),
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
@@ -830,6 +857,11 @@ class Transformer(eqx.Module):
             summarized_metrics = _summarize_router_metrics(router_metrics)
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
+            summarized_metrics["moe/dropped_assignments"] = router_metrics["capacity_overflow_per_layer"]
+            summarized_metrics["moe/skipped_padding_assignments"] = router_metrics["skipped_assignments_per_layer"]
+            summarized_metrics["moe/valid_assignments"] = jnp.sum(
+                router_metrics["routing_counts_per_layer"], axis=-1, dtype=jnp.int32
+            )
             return loss, summarized_metrics
         return loss
 
