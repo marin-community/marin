@@ -37,10 +37,11 @@ from enum import StrEnum
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.schema import arrow_schema
-from finestore.store import DataStore
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import prefix_join
+
+from finestore.schema import arrow_schema
+from finestore.store import DataStore
 
 logger = logging.getLogger(__name__)
 
@@ -301,7 +302,6 @@ def _correct(metrics: dict[str, float]) -> bool | None:
 
 
 def _lm_eval_grading(metrics: dict[str, float], extraction_filter: str | None) -> Grading | None:
-    """Build the explicit grading for one lm-eval sample."""
     picked = primary_metric(metrics)
     if picked is None:
         return None
