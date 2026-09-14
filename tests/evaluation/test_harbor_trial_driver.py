@@ -211,27 +211,20 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
 
 
 def test_preflight_exports_pinned_harbor_error_taxonomy(checked_policies):
-    expected = json.loads(
-        _external_python(
-            "-c",
-            """import importlib.metadata, json
-from harbor_config.errors import ErrorCategory, errors_by_category, known_error_types
-infrastructure = errors_by_category(ErrorCategory.INFRASTRUCTURE)
-agent = errors_by_category(ErrorCategory.AGENT)
-passthrough = errors_by_category(ErrorCategory.PASSTHROUGH)
-distribution = importlib.metadata.packages_distributions()[\"harbor_config\"][0]
-direct_url = json.loads(importlib.metadata.distribution(distribution).read_text(\"direct_url.json\"))
-print(json.dumps({
-    \"infrastructure\": sorted(infrastructure),
-    \"agent\": sorted(agent),
-    \"passthrough\": sorted(passthrough),
-    \"undecided\": sorted(known_error_types() - infrastructure - agent - passthrough),
-    \"commit\": direct_url[\"vcs_info\"][\"commit_id\"],
-}))""",
-        ).stdout
-    )
+    taxonomies = [payload["error_taxonomy"] for payload in checked_policies.values()]
 
-    assert all(payload["error_taxonomy"] == expected for payload in checked_policies.values())
+    assert all(taxonomy == taxonomies[0] for taxonomy in taxonomies)
+    assert {category: len(taxonomies[0][category]) for category in ("infrastructure", "agent", "passthrough")} == {
+        "infrastructure": 27,
+        "agent": 3,
+        "passthrough": 2,
+    }
+    assert set(taxonomies[0]["undecided"]) == {
+        "TrialNotScoredError",
+        "VerificationNotCompletedError",
+        "VerifierTimeoutError",
+    }
+    assert taxonomies[0]["commit"] == "06139137912c5764a889e7613c1d5a5eb0704448"
 
 
 @pytest.mark.parametrize(

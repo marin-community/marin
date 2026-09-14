@@ -113,7 +113,7 @@ class HarborRunResult:
     archive_path: str | None
 
     @property
-    def failed_trials(self) -> int | None:
+    def unscored_trials(self) -> int | None:
         """Unscored trials, or None when the attempted count is unknown."""
         if self.attempted_trials is None:
             return None
@@ -218,7 +218,7 @@ def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> Harb
 
 
 def _read_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy) -> list[HarborTrial]:
-    """Read all finished trials under ``job_dir`` concurrently."""
+    """Read all finished trials under ``job_dir``."""
     result_files = sorted((job_dir / _TRIAL_RESULT_GLOB).glob(), key=lambda path: path.parent.name)
     if not result_files:
         return []
@@ -395,7 +395,7 @@ def _run_harbor_job(
                 "attempted_trials": result.attempted_trials,
                 "scored_trials": result.scored_trials,
                 "solved_trials": result.solved_trials,
-                "failed_trials": result.failed_trials,
+                "failed_trials": result.unscored_trials,
                 "errors": dict(result.errors),
                 "mean_reward": result.mean_reward,
                 "accuracy": result.accuracy,

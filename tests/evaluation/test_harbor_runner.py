@@ -567,8 +567,7 @@ def test_harbor_executor_fails_when_too_few_trials_were_graded(tmp_path, monkeyp
     with pytest.raises(EvaluationError) as exc_info:
         executor(_inference_session(), str(tmp_path), {})
 
-    # A trial that errored is an ungraded item, not a wrong answer: the only trial here is ungraded,
-    # so the run graded 0% of what it attempted and is rejected as an infrastructure failure.
+    # Infrastructure errors are ungraded: the run scored 0% of its attempted trials and fails the gate.
     assert exc_info.value.status is RunStatus.INFRA_FAILED
     assert exc_info.value.coverage["failed-" + tmp_path.name].errors == {"InfrastructureError": 1}
     result = json.loads((tmp_path / "harbor_result.json").read_text())
