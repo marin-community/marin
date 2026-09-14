@@ -60,7 +60,11 @@ def _axis_names(entry) -> tuple[str, ...]:
 
 
 def _partitioning_axes(entry, mesh: Mesh | jax.sharding.AbstractMesh | None) -> tuple[str, ...]:
-    """Return nontrivial mesh axes in one PartitionSpec entry."""
+    """Mesh axes in one PartitionSpec entry that partition it.
+
+    ``compact_grug_mesh`` keeps length-1 axes so specs can name them unconditionally;
+    those axes partition nothing and are dropped here.
+    """
     return tuple(name for name in _axis_names(entry) if _mesh_axis_size(mesh, name) > 1)
 
 

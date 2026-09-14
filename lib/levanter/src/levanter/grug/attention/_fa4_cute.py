@@ -219,7 +219,11 @@ def _head_axis(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> str | Non
 def _partitioned_dims(
     x: jax.Array, mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh
 ) -> tuple[tuple[str, ...], ...] | None:
-    """Return the effective partitioning axes for each dimension of ``x``."""
+    """Per-dimension mesh axes that partition ``x``, or None without an explicit sharding.
+
+    Size-1 axes are dropped, so a spec that merely names ``context`` on an unpartitioned
+    mesh reads as replicated.
+    """
     spec = _spec_of(x)
     if spec is None:
         return None
