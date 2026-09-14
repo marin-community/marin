@@ -19,11 +19,11 @@ import yaml
 from config import CLUSTERS, K8S_CLUSTERS, ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
-from finelog.client import RelaySenderStatus
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from hero_health import DROP_FRACTION_MAX, ROUTER_BIAS_MAX, ROUTER_ENTROPY_MIN
 from k8s_source import K8sFleet
+from relay_health import RelaySenderStatus
 from server import create_app
 from starlette.testclient import TestClient
 from wandb_source import WandbSource

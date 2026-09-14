@@ -1,8 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from finelog.client import RelayNamespaceStatus, RelaySenderStatus
-from relay_health import relay_alert_rows
+from relay_health import RelayNamespaceStatus, RelaySenderStatus, relay_alert_rows, relay_sender_statuses
 
 NOW_MS = 1_000_000
 NAMESPACE = "telemetry_v1.node_agent"
@@ -58,3 +57,30 @@ def test_relay_alert_allows_recent_progress_and_returns_an_explicit_zero():
             "value": 0,
         }
     ]
+
+
+def test_relay_status_parser_preserves_an_absent_cursor_and_protobuf_integers():
+    (status,) = relay_sender_statuses(
+        {
+            "senders": [
+                {
+                    "cluster": "cw-a",
+                    "bootId": "boot",
+                    "reportSequence": "2",
+                    "target": "https://hub",
+                    "receivedAtMs": "1000",
+                    "namespaces": [
+                        {
+                            "namespace": NAMESPACE,
+                            "visibleHighWater": "12",
+                            "publishedHighWater": "10",
+                            "publicationProgressAtMs": "900",
+                            "cursorProgressAtMs": "800",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    assert status.report_sequence == 2
+    assert status.namespaces[0].settled_cursor is None

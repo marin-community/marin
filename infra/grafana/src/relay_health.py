@@ -4,13 +4,61 @@
 """Alert projection for Finelog's direct relay heartbeat."""
 
 from collections.abc import Iterable, Sequence
-
-from finelog.client import RelaySenderStatus
+from dataclasses import dataclass
+from typing import cast
 
 REQUIRED_RELAY_NAMESPACES = ("telemetry_v1.node_agent",)
 RELAY_HEARTBEAT_MAX_AGE_MS = 2 * 60 * 1000
 RELAY_PROGRESS_MAX_AGE_MS = 10 * 60 * 1000
 HEALTHY_RELAY_STATE = "healthy"
+
+
+@dataclass(frozen=True)
+class RelayNamespaceStatus:
+    namespace: str
+    visible_high_water: int
+    published_high_water: int
+    settled_cursor: int | None
+    publication_progress_at_ms: int
+    cursor_progress_at_ms: int
+
+
+@dataclass(frozen=True)
+class RelaySenderStatus:
+    cluster: str
+    boot_id: str
+    report_sequence: int
+    target: str
+    received_at_ms: int
+    namespaces: tuple[RelayNamespaceStatus, ...]
+
+
+def relay_sender_statuses(payload: dict[str, object]) -> tuple[RelaySenderStatus, ...]:
+    """Parse a protobuf-JSON ListRelayStatus response."""
+    senders = cast(list[dict[str, object]], payload.get("senders", []))
+    return tuple(
+        RelaySenderStatus(
+            cluster=str(sender["cluster"]),
+            boot_id=str(sender["bootId"]),
+            report_sequence=int(str(sender["reportSequence"])),
+            target=str(sender["target"]),
+            received_at_ms=int(str(sender["receivedAtMs"])),
+            namespaces=tuple(_namespace_status(item) for item in cast(list[dict[str, object]], sender["namespaces"])),
+        )
+        for sender in senders
+    )
+
+
+def _namespace_status(item: dict[str, object]) -> RelayNamespaceStatus:
+    settled_cursor = item.get("settledCursor")
+    return RelayNamespaceStatus(
+        namespace=str(item["namespace"]),
+        visible_high_water=int(str(item["visibleHighWater"])),
+        published_high_water=int(str(item["publishedHighWater"])),
+        settled_cursor=None if settled_cursor is None else int(str(settled_cursor)),
+        publication_progress_at_ms=int(str(item["publicationProgressAtMs"])),
+        cursor_progress_at_ms=int(str(item["cursorProgressAtMs"])),
+    )
 
 
 def relay_alert_rows(

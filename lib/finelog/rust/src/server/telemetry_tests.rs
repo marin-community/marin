@@ -83,6 +83,33 @@ async fn get_text(client: &TestHttpClient, addr: SocketAddr, path: &str) -> Stri
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 
+#[tokio::test]
+async fn list_relay_status_accepts_connect_json_for_independent_consumers() {
+    let (addr, _) = serve(
+        disk_store("relay-status-connect-json"),
+        AuthPolicy::allow_localhost(),
+    )
+    .await;
+    let response = http_client()
+        .request(
+            Request::post(format!(
+                "http://{addr}/finelog.stats.StatsService/ListRelayStatus"
+            ))
+            .header("connect-protocol-version", "1")
+            .header("content-type", "application/json")
+            .body(full_body(Bytes::from_static(b"{}")))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&payload).unwrap(),
+        json!({})
+    );
+}
+
 async fn serve_with_config(store: Arc<Store>, config: ServerConfig) -> SocketAddr {
     let app = build_app_with_config(store, config);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

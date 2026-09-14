@@ -9,19 +9,24 @@ cluster's controller is down.
 """
 
 import logging
+import threading
 import time
 from typing import Protocol
 
+import httpx
 import pyarrow as pa
 from config import FINELOG_PORT, ClusterTarget
 from discovery import InstanceResolutionError, resolve_internal_ip
-from finelog.client import RelaySenderStatus
 from finelog.client.log_client import LogClient
 from finelog.errors import StatsError
 from finelog_health import FinelogHealth, FinelogRole
 from google.api_core.exceptions import GoogleAPIError
+from relay_health import RelaySenderStatus, relay_sender_statuses
 
 logger = logging.getLogger(__name__)
+
+_LIST_RELAY_STATUS_PATH = "/finelog.stats.StatsService/ListRelayStatus"
+_CONNECT_HEADERS = {"Connect-Protocol-Version": "1", "Content-Type": "application/json"}
 
 
 class MetricSource(Protocol):
@@ -51,6 +56,9 @@ class FinelogSource:
             resolver=self._resolve_address,
             timeout_ms=timeout_ms,
         )
+        self._relay_http = httpx.Client(timeout=timeout_ms / 1000)
+        self._relay_address: str | None = None
+        self._relay_address_lock = threading.Lock()
 
     @property
     def target(self) -> ClusterTarget:
@@ -97,4 +105,18 @@ class FinelogSource:
         )
 
     def relay_status(self) -> tuple[RelaySenderStatus, ...]:
-        return self._client.list_relay_status()
+        address = self._relay_server_address()
+        try:
+            response = self._relay_http.post(f"{address}{_LIST_RELAY_STATUS_PATH}", headers=_CONNECT_HEADERS, json={})
+            response.raise_for_status()
+        except httpx.TransportError:
+            with self._relay_address_lock:
+                self._relay_address = None
+            raise
+        return relay_sender_statuses(response.json())
+
+    def _relay_server_address(self) -> str:
+        with self._relay_address_lock:
+            if self._relay_address is None:
+                self._relay_address = self._resolve_address(self._target.name)
+            return self._relay_address
