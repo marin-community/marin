@@ -52,13 +52,18 @@ def _measurement(
     status: RunStatus = RunStatus.SUCCEEDED,
     run_id: str = "run",
     flags: frozenset[ResultFlag] = frozenset(),
+    metric: str = "exact_match,flexible-extract",
+    kind: MetricKind = MetricKind.BINARY,
+    declared: bool = False,
+    n_benchmark: int | None = None,
+    item_cap: int | None = None,
 ) -> Measurement:
     return Measurement(
         benchmark=benchmark,
-        metric="exact_match,flexible-extract",
-        kind=MetricKind.BINARY,
+        metric=metric,
+        kind=kind,
         value=n_correct / n_scored,
-        coverage=Coverage(n_scored=n_scored, n_attempted=n_attempted),
+        coverage=Coverage(n_scored=n_scored, n_benchmark=n_benchmark, n_attempted=n_attempted),
         n_correct=n_correct,
         run_id=run_id,
         created_at=created_at,
@@ -66,6 +71,8 @@ def _measurement(
         model=model,
         status=status,
         flags=flags,
+        declared=declared,
+        item_cap=item_cap,
     )
 
 
@@ -218,6 +225,11 @@ def test_difference_widening_is_asymmetric_in_which_run_lost_items():
     assert (a_lost.low, a_lost.high) != (b_lost.low, b_lost.high)
 
 
+def test_difference_requires_one_metric_protocol():
+    with pytest.raises(AssertionError, match="same metric protocol"):
+        difference_interval(_measurement(metric="acc"), _measurement(metric="f1", kind=MetricKind.CONTINUOUS))
+
+
 # --------------------------------------------------------------------------------------------------
 # Panel aggregation
 # --------------------------------------------------------------------------------------------------
@@ -331,6 +343,47 @@ def test_selection_rejects_below_gate_coverage_and_says_why():
     assert "coverage 0.800" in rejection.reason
 
 
+def test_selection_rejects_a_cap_that_covers_too_little_of_the_benchmark():
+    capped = _measurement(n_benchmark=1000, n_attempted=100, n_scored=100, item_cap=100)
+
+    selection = select([capped], SelectionRequest(min_coverage=0, min_benchmark_coverage=0.9))
+
+    assert selection.cells == {}
+    assert selection.rejections[0].reason == "benchmark coverage 0.100 below 0.90"
+
+
+def test_zero_benchmark_gate_admits_known_caps_but_never_unknown_caps():
+    known = _measurement(run_id="known", n_benchmark=1000, n_attempted=100, n_scored=100, item_cap=100)
+    unknown = _measurement(run_id="unknown", n_attempted=100, n_scored=100, item_cap=100)
+
+    selection = select([known, unknown], SelectionRequest(min_benchmark_coverage=0))
+
+    assert selection.cells["m"]["gsm8k"].run_id == "known"
+    assert selection.rejections[0].reason == "capped run with unreported benchmark size"
+
+
+def test_newest_declared_protocol_excludes_legacy_metrics_for_the_column():
+    legacy = _measurement(
+        benchmark="drop",
+        run_id="legacy",
+        metric="exact_match,none",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    declared = _measurement(
+        benchmark="drop",
+        run_id="declared",
+        metric="f1,none",
+        kind=MetricKind.CONTINUOUS,
+        declared=True,
+        created_at="2026-02-01T00:00:00+00:00",
+    )
+
+    selection = select([legacy, declared], SelectionRequest())
+
+    assert selection.cells["m"]["drop"].run_id == "declared"
+    assert selection.rejections[0].reason == "metric exact_match differs from declared f1"
+
+
 def test_selection_rejects_failed_runs_but_keeps_them_explainable():
     measurements = [_measurement(status=RunStatus.INFRA_FAILED, run_id="broken")]
 
@@ -423,6 +476,8 @@ def _record(
     mechanism: str = "evalchemy",
     harbor: HarborRef | None = None,
     evalchemy: EvalchemyRef | None = None,
+    primary_metric: str | None = None,
+    metric_kind: MetricKind | None = None,
 ) -> EvalRunRecord:
     return EvalRunRecord(
         run_id="run-1",
@@ -433,7 +488,14 @@ def _record(
         eval=EvalRef(
             name=eval_name,
             mechanism=mechanism,
-            tasks=(EvalTaskRef(name=eval_name, num_fewshot=5),),
+            tasks=(
+                EvalTaskRef(
+                    name=eval_name,
+                    num_fewshot=5,
+                    primary_metric=primary_metric,
+                    metric_kind=metric_kind,
+                ),
+            ),
             harbor=harbor,
             evalchemy=evalchemy,
         ),
@@ -472,6 +534,66 @@ def test_record_adapter_recovers_the_item_counts_lm_eval_records():
     assert measurement.n_correct == 54
     assert measurement.kind is MetricKind.BINARY
     assert ResultFlag.ATTRITION_UNREPORTED in measurement.flags
+
+
+def test_record_adapter_uses_the_declared_metric_and_filter_priority():
+    record = _record(
+        metrics={
+            "drop_3shot": {
+                "exact_match,none": 0.2,
+                "f1,strict-match": 0.4,
+                "f1,flexible-extract": 0.6,
+                "f1_stderr,flexible-extract": 0.03,
+                "sample_len": 100,
+            }
+        },
+        primary_metric="f1",
+        metric_kind=MetricKind.CONTINUOUS,
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.metric == "f1,flexible-extract"
+    assert measurement.value == 0.6
+    assert measurement.kind is MetricKind.CONTINUOUS
+    assert measurement.declared
+
+
+def test_record_adapter_pairs_chat_average_with_its_recorded_standard_error():
+    record = _record(
+        metrics={"aime24": {"accuracy_avg": 0.5, "accuracy_std_err": 0.04, "num_total": 30}},
+        primary_metric="accuracy_avg",
+        metric_kind=MetricKind.CONTINUOUS,
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.recorded_stderr == 0.04
+
+
+def test_record_adapter_rejects_results_missing_the_declared_metric():
+    record = _record(
+        metrics={"drop_3shot": {"exact_match,none": 0.2, "sample_len": 100}},
+        primary_metric="f1",
+        metric_kind=MetricKind.CONTINUOUS,
+    )
+
+    assert measurement_from_record(record) is None
+
+
+def test_record_adapter_reads_benchmark_coverage_and_flags_inconsistent_counts():
+    record = _record(
+        metrics={"gsm8k_5shot": {"exact_match,none": 0.5, "sample_len": 20}},
+        coverage={"gsm8k_5shot": TaskCoverage(n_benchmark=10, n_attempted=12, n_scored=20)},
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.coverage.benchmark_rate == 1.0
+    assert ResultFlag.INCONSISTENT_COVERAGE in measurement.flags
 
 
 def test_record_adapter_scores_a_group_task_from_its_aggregate_row():
