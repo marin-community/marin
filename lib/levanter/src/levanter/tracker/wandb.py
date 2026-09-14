@@ -326,10 +326,6 @@ def _convert_summary_stats_to_loggable(prefix: str, value: SummaryStats, *, incl
     return out
 
 
-def is_wandb_available():
-    return wandb.run is not None
-
-
 @TrackerConfig.register_subclass("wandb")
 @dataclass
 class WandbConfig(TrackerConfig):
@@ -355,9 +351,6 @@ class WandbConfig(TrackerConfig):
     save_code: Union[bool, str] = True
     """If string, will save code from that directory. If True, will attempt to sniff out the main directory (since we
     typically don't run from the root of the repo)."""
-
-    save_xla_dumps: bool = False
-    """If True, will save the XLA code to wandb (as configured by XLA_FLAGS). This is useful for debugging."""
 
     replicate_path: Optional[str] = None
     """If set, write config and summary to this path (local or GCS) on finish()."""
