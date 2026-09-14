@@ -3,7 +3,8 @@
 
 """Controller operations that serve federation peers."""
 
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from connectrpc.code import Code
@@ -11,6 +12,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from rigging.server_auth import require_identity
 from rigging.timing import Duration, Timestamp
+from sqlalchemy import Row
 
 from iris.cluster.controller import jobs, reads, tasks
 from iris.cluster.controller.codec import resource_spec_from_job_row
@@ -75,8 +77,7 @@ def _job_delta(
     q: Tx,
     job_id: JobName,
     *,
-    all_tasks: bool,
-    task_indexes: set[int],
+    task_indexes: set[int] | None,
 ) -> controller_pb2.Controller.FederationJobDelta | None:
     job = reads.get_job_detail(q, job_id)
     if job is None:
@@ -84,7 +85,7 @@ def _job_delta(
     task_rows = [
         row
         for row in q.execute(reads.task_detail_query().where(tasks_table.c.job_id == job_id)).all()
-        if all_tasks or row.task_id.task_index in task_indexes
+        if task_indexes is None or row.task_id.task_index in task_indexes
     ]
     attempts_by_task = reads.all_attempts_for_tasks(q, [row.task_id for row in task_rows])
     changed_tasks = [
@@ -133,6 +134,29 @@ def _authorize_sync(requester_id: str) -> None:
         raise ConnectError(Code.PERMISSION_DENIED, "federation_sync requires a federation-peer or admin identity")
 
 
+@dataclass(slots=True)
+class _FederationChange:
+    job_id: JobName
+    tombstone: bool = False
+    task_indexes: set[int] | None = field(default_factory=set)
+
+
+def _fold_changelog(rows: Iterable[Row]) -> list[_FederationChange]:
+    changes_by_job: dict[JobName, _FederationChange] = {}
+    for row in rows:
+        change = changes_by_job.setdefault(row.job_id, _FederationChange(job_id=row.job_id))
+        if row.tombstone:
+            change.tombstone = True
+        elif change.tombstone:
+            change.tombstone = False
+            change.task_indexes = None
+        elif row.task_index is None:
+            change.task_indexes = None
+        elif change.task_indexes is not None:
+            change.task_indexes.add(row.task_index)
+    return list(changes_by_job.values())
+
+
 def federation_sync(
     dependencies: FederationDependencies,
     request: controller_pb2.Controller.FederationSyncRequest,
@@ -152,7 +176,7 @@ def federation_sync(
         stale = not cursor or (min_seq > 0 and cursor_seq < min_seq - 1)
         if stale:
             for job_id in reads.received_jobs_for_requester(q, requester_id):
-                delta = _job_delta(q, job_id, all_tasks=True, task_indexes=set())
+                delta = _job_delta(q, job_id, task_indexes=None)
                 if delta is not None:
                     deltas.append(delta)
             return controller_pb2.Controller.FederationSyncResponse(
@@ -162,31 +186,14 @@ def federation_sync(
                 endpoints=endpoints,
             )
 
-        tombstoned: dict[JobName, bool] = {}
-        all_tasks: dict[JobName, bool] = {}
-        indexes: dict[JobName, set[int]] = {}
-        order: list[JobName] = []
-        for row in reads.changelog_rows_since(q, requester_id, cursor_seq):
-            if row.job_id not in tombstoned:
-                tombstoned[row.job_id] = False
-                all_tasks[row.job_id] = False
-                indexes[row.job_id] = set()
-                order.append(row.job_id)
-            if row.tombstone:
-                tombstoned[row.job_id] = True
-            elif tombstoned[row.job_id]:
-                tombstoned[row.job_id] = False
-                all_tasks[row.job_id] = True
-            elif row.task_index is None:
-                all_tasks[row.job_id] = True
-            else:
-                indexes[row.job_id].add(row.task_index)
-
-        for job_id in order:
-            if tombstoned[job_id]:
-                deltas.append(controller_pb2.Controller.FederationJobDelta(job_id=job_id.to_wire(), tombstone=True))
+        changes = _fold_changelog(reads.changelog_rows_since(q, requester_id, cursor_seq))
+        for change in changes:
+            if change.tombstone:
+                deltas.append(
+                    controller_pb2.Controller.FederationJobDelta(job_id=change.job_id.to_wire(), tombstone=True)
+                )
                 continue
-            delta = _job_delta(q, job_id, all_tasks=all_tasks[job_id], task_indexes=indexes[job_id])
+            delta = _job_delta(q, change.job_id, task_indexes=change.task_indexes)
             if delta is not None:
                 deltas.append(delta)
 

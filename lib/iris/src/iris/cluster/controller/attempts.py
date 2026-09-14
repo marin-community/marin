@@ -101,53 +101,68 @@ def profile_task(
         raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
 
     if request.target in (_SYSTEM_CONTROLLER_TARGET, SYSTEM_PROCESS_TARGET):
-        try:
-            duration = _profile_duration(request)
-            data = profile_local_process(duration, request.profile_type)
-            dependencies.profile_table.write(
-                [
-                    build_profile_row(
-                        source=_SYSTEM_CONTROLLER_TARGET,
-                        attempt_id=None,
-                        vm_id="controller-self",
-                        duration_seconds=duration,
-                        profile_type=request.profile_type,
-                        profile_data=data,
-                    )
-                ]
-            )
-            return job_pb2.ProfileTaskResponse(profile_data=data)
-        except Exception as error:
-            return job_pb2.ProfileTaskResponse(error=str(error))
+        return _profile_controller(dependencies, request)
 
     worker_id = workers.parse_worker_target(request.target)
     if worker_id is not None:
-        worker = workers.read_worker(dependencies.db, WorkerId(worker_id))
-        if worker is None:
-            raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
-        if not dependencies.runtime.liveness_for_worker(worker.worker_id).healthy:
-            raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
-        forwarded = job_pb2.ProfileTaskRequest(
-            target=SYSTEM_PROCESS_TARGET,
-            duration_seconds=request.duration_seconds,
-            profile_type=request.profile_type,
+        return _profile_worker(dependencies, WorkerId(worker_id), request)
+
+    return _profile_attempt(dependencies, request)
+
+
+def _profile_controller(
+    dependencies: AttemptDependencies,
+    request: job_pb2.ProfileTaskRequest,
+) -> job_pb2.ProfileTaskResponse:
+    try:
+        duration = _profile_duration(request)
+        data = profile_local_process(duration, request.profile_type)
+        dependencies.profile_table.write(
+            [
+                build_profile_row(
+                    source=_SYSTEM_CONTROLLER_TARGET,
+                    attempt_id=None,
+                    vm_id="controller-self",
+                    duration_seconds=duration,
+                    profile_type=request.profile_type,
+                    profile_data=data,
+                )
+            ]
         )
-        response = dependencies.runtime.backend.profile_task(
-            TaskTarget(task_id="", attempt_id=0, worker_id=worker.worker_id, address=worker.address),
-            forwarded,
-            _profile_rpc_timeout_ms(request),
-        )
-        return job_pb2.ProfileTaskResponse(profile_data=response.profile_data, error=response.error)
+        return job_pb2.ProfileTaskResponse(profile_data=data)
+    except Exception as error:
+        return job_pb2.ProfileTaskResponse(error=str(error))
+
+
+def _profile_worker(
+    dependencies: AttemptDependencies,
+    worker_id: WorkerId,
+    request: job_pb2.ProfileTaskRequest,
+) -> job_pb2.ProfileTaskResponse:
+    forwarded = job_pb2.ProfileTaskRequest(
+        target=SYSTEM_PROCESS_TARGET,
+        duration_seconds=request.duration_seconds,
+        profile_type=request.profile_type,
+    )
+    response = dependencies.runtime.backend.profile_task(
+        _worker_target(dependencies, worker_id),
+        forwarded,
+        _profile_rpc_timeout_ms(request),
+    )
+    return job_pb2.ProfileTaskResponse(profile_data=response.profile_data, error=response.error)
+
+
+def _profile_attempt(
+    dependencies: AttemptDependencies,
+    request: job_pb2.ProfileTaskRequest,
+) -> job_pb2.ProfileTaskResponse:
 
     try:
         target = TaskAttempt.from_wire(request.target)
         target.task_id.require_task()
     except ValueError as error:
         raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
-    _authorize_federated_debug_target(dependencies, target.task_id.root_job)
-    task = tasks.read_task_with_attempts(dependencies.db, target.task_id)
-    if task is None:
-        raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found")
+    task = _task_with_attempts(dependencies, target.task_id, request.target)
 
     proxied = _proxy_if_federated(dependencies, target.task_id, lambda peer: peer.profile_task(request))
     if proxied is not None:
@@ -176,14 +191,9 @@ def get_process_status(
     worker_id = workers.parse_worker_target(target)
     if worker_id is None:
         return _task_process_status(dependencies, target, request)
-    worker = workers.read_worker(dependencies.db, WorkerId(worker_id))
-    if worker is None:
-        raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
-    if not dependencies.runtime.liveness_for_worker(worker.worker_id).healthy:
-        raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
     try:
         return dependencies.runtime.backend.get_process_status(
-            TaskTarget(task_id="", attempt_id=0, worker_id=WorkerId(worker_id), address=worker.address),
+            _worker_target(dependencies, WorkerId(worker_id)),
             request,
         )
     except ProviderError as error:
@@ -232,10 +242,7 @@ def exec_in_container(
     except ValueError as error:
         raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
 
-    _authorize_federated_debug_target(dependencies, task_id.root_job)
-    task = tasks.read_task_with_attempts(dependencies.db, task_id)
-    if task is None:
-        raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+    task = _task_with_attempts(dependencies, task_id, request.task_id)
     proxied = _proxy_if_federated(dependencies, task_id, lambda peer: peer.exec_in_container(request))
     if proxied is not None:
         return proxied
@@ -266,10 +273,7 @@ def _task_process_status(
         task_id.require_task()
     except ValueError as error:
         raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}") from error
-    _authorize_federated_debug_target(dependencies, task_id.root_job)
-    task = tasks.read_task_with_attempts(dependencies.db, task_id)
-    if task is None:
-        raise ConnectError(Code.NOT_FOUND, f"Task {target} not found")
+    task = _task_with_attempts(dependencies, task_id, target)
     proxied = _proxy_if_federated(dependencies, task_id, lambda peer: peer.get_process_status(request))
     if proxied is not None:
         return proxied
@@ -278,6 +282,27 @@ def _task_process_status(
         return dependencies.runtime.backend.get_process_status(task_target, request)
     except ProviderError as error:
         raise ConnectError(Code.UNAVAILABLE, str(error)) from error
+
+
+def _worker_target(dependencies: AttemptDependencies, worker_id: WorkerId) -> TaskTarget:
+    worker = workers.read_worker(dependencies.db, worker_id)
+    if worker is None:
+        raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
+    if not dependencies.runtime.liveness_for_worker(worker.worker_id).healthy:
+        raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
+    return TaskTarget(task_id="", attempt_id=0, worker_id=worker.worker_id, address=worker.address)
+
+
+def _task_with_attempts(
+    dependencies: AttemptDependencies,
+    task_id: JobName,
+    wire_name: str,
+) -> tasks.TaskWithAttempts:
+    _authorize_federated_debug_target(dependencies, task_id.root_job)
+    task = tasks.read_task_with_attempts(dependencies.db, task_id)
+    if task is None:
+        raise ConnectError(Code.NOT_FOUND, f"Task {wire_name} not found")
+    return task
 
 
 def _authorize_federated_debug_target(dependencies: AttemptDependencies, root_job: JobName) -> None:

@@ -314,12 +314,6 @@ def _get_autoscaler_pending_hints(dependencies: JobDependencies) -> dict[str, Pe
     return dependencies.runtime.backend_observation.pending_hints
 
 
-def _job_state(db: ControllerDB, job_id: JobName) -> int | None:
-    with db.read_snapshot() as tx:
-        row = tx.execute(select(jobs_table.c.state).where(jobs_table.c.job_id == job_id)).first()
-    return int(row.state) if row else None
-
-
 def _profile_is_elevated(profile: int) -> bool:
     return resolve_container_profile(profile) in (
         job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
@@ -373,10 +367,10 @@ def _authorize_job_actor(dependencies: JobDependencies, job_id: JobName) -> None
         return
     identity = get_verified_identity()
     if identity is not None and identity.role == FEDERATION_PEER_ROLE:
-        with dependencies.db.read_snapshot() as snap:
-            handoff = reads.received_handoff(snap, job_id)
-            if handoff is not None and handoff.requester_id == identity.user_id:
-                return
+        with dependencies.db.read_snapshot() as snapshot:
+            handoff = reads.received_handoff(snapshot, job_id)
+        if handoff is not None and handoff.requester_id == identity.user_id:
+            return
         raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {job_id}")
     authorize_resource_owner(job_id.user)
 
@@ -470,21 +464,26 @@ def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest
     return JobName.from_wire(request.name)
 
 
-def _launch_identity(
+def _authorize_launch(
     dependencies: JobDependencies,
+    identity: VerifiedIdentity | None,
     request: controller_pb2.Controller.LaunchJobRequest,
     context: RequestContext | None,
     requested_job_id: JobName,
-) -> LaunchIdentity:
-    """Authorize the caller and resolve the owner and budget identities."""
-    identity = get_verified_identity()
-    received_handoff = request.HasField("federation")
+    received_handoff: bool,
+) -> None:
     if received_handoff and dependencies.auth.provider:
         _authorize_federation_handoff(dependencies, identity, request, requested_job_id)
-
     if requested_job_id.is_root and context is not None and not received_handoff:
         _check_client_freshness(request.client_revision_date, client_revision_date(), date.today())
 
+
+def _launch_job_id(
+    dependencies: JobDependencies,
+    identity: VerifiedIdentity | None,
+    requested_job_id: JobName,
+    received_handoff: bool,
+) -> JobName:
     job_id = requested_job_id
     if (
         dependencies.auth.provider
@@ -496,13 +495,37 @@ def _launch_identity(
         job_id = JobName.root(identity.user_id, job_id.name)
     if dependencies.auth.provider and identity is not None and not job_id.is_root:
         authorize_owner_if_configured(dependencies.auth, job_id.user)
+    return job_id
 
+
+def _launch_submitting_user(
+    dependencies: JobDependencies,
+    identity: VerifiedIdentity | None,
+    request: controller_pb2.Controller.LaunchJobRequest,
+    job_id: JobName,
+) -> str:
     submitting_user = submitting_user_for_root(identity, request)
-    if job_id.parent is not None:
-        with dependencies.db.read_snapshot() as snapshot:
-            root_submitting_user = reads.get_job_submitting_user(snapshot, job_id.root_job)
-        if root_submitting_user is not None:
-            submitting_user = root_submitting_user
+    if job_id.parent is None:
+        return submitting_user
+    with dependencies.db.read_snapshot() as snapshot:
+        root_submitting_user = reads.get_job_submitting_user(snapshot, job_id.root_job)
+    if root_submitting_user is not None:
+        return root_submitting_user
+    return submitting_user
+
+
+def _launch_identity(
+    dependencies: JobDependencies,
+    request: controller_pb2.Controller.LaunchJobRequest,
+    context: RequestContext | None,
+    requested_job_id: JobName,
+) -> LaunchIdentity:
+    """Authorize the caller and resolve the owner and budget identities."""
+    identity = get_verified_identity()
+    received_handoff = request.HasField("federation")
+    _authorize_launch(dependencies, identity, request, context, requested_job_id, received_handoff)
+    job_id = _launch_job_id(dependencies, identity, requested_job_id, received_handoff)
+    submitting_user = _launch_submitting_user(dependencies, identity, request, job_id)
     return LaunchIdentity(
         job_id=job_id,
         received_handoff=received_handoff,
@@ -605,7 +628,8 @@ def _validate_launch_capacity(
 
     if launch.job_id.parent is None:
         return
-    parent_state = _job_state(dependencies.db, launch.job_id.parent)
+    with dependencies.db.read_snapshot() as snapshot:
+        parent_state = reads.get_job_state(snapshot, launch.job_id.parent)
     if parent_state is None:
         raise ConnectError(
             Code.FAILED_PRECONDITION,
@@ -915,7 +939,8 @@ def terminate_job(
     """Cancel a job tree or route cancellation to its execution peer."""
     del ctx
     job_id = JobName.from_wire(request.job_id)
-    state = _job_state(dependencies.db, job_id)
+    with dependencies.db.read_snapshot() as snapshot:
+        state = reads.get_job_state(snapshot, job_id)
     if state is None:
         raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
@@ -958,7 +983,8 @@ def complete_job(
 ) -> job_pb2.Empty:
     """Complete a running job successfully and stop its unfinished tasks."""
     job_id = JobName.from_wire(request.job_id)
-    state = _job_state(dependencies.db, job_id)
+    with dependencies.db.read_snapshot() as snapshot:
+        state = reads.get_job_state(snapshot, job_id)
     if state is None:
         raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 

@@ -41,7 +41,7 @@ class ControllerServiceImpl:
     Args:
         controller: Controller runtime for scheduling and worker management
         bundle_store: Bundle store for zip storage.
-        log_client: Finelog client for task summaries and profile records.
+        log_client: Finelog client for profiles, task events, and diagnostics.
         db: Underlying database connection.
     """
 
@@ -57,48 +57,41 @@ class ControllerServiceImpl:
         user_budget_defaults: UserBudgetDefaults | None = None,
         capability_url_config: attempts.CapabilityUrlConfig | None = None,
     ):
-        # Every cursor this DB mints carries the per-controller cache registry as
-        # ``tx.caches``, so cache-touching reads/writes reach the derived-count memo
-        # and the endpoint projection through the cursor — no cache reference held.
         self._db = db
         self._controller = controller
         self._endpoint_service = endpoint_service
         self._bundle_store = bundle_store
-        self._log_client = log_client
-        self._timer = Timer()
-        self._auth = auth or ControllerAuth()
-        self._accounts = accounts.AccountDependencies(db=self._db, auth=self._auth)
-        self._diagnostics = diagnostics.DiagnosticDependencies(db=self._db)
+        resolved_auth = auth or ControllerAuth()
+        resolved_budget_defaults = user_budget_defaults or UserBudgetDefaults()
+        self._accounts = accounts.AccountDependencies(db=db, auth=resolved_auth)
+        self._diagnostics = diagnostics.DiagnosticDependencies(db=db)
         self._checkpoint = checkpoint.CheckpointDependencies(runtime=controller)
-        self._workers = workers.WorkerDependencies(db=self._db, runtime=controller, auth=self._auth)
-        self._tasks = tasks.TaskDependencies(db=self._db, logs=self._log_client, runtime=controller, auth=self._auth)
-        self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
+        self._workers = workers.WorkerDependencies(db=db, runtime=controller, auth=resolved_auth)
+        self._tasks = tasks.TaskDependencies(db=db, logs=log_client, runtime=controller, auth=resolved_auth)
         self._backend_status = backend_status.BackendStatusDependencies(
-            db=self._db,
+            db=db,
             runtime=controller,
-            user_budget_defaults=self._user_budget_defaults,
+            user_budget_defaults=resolved_budget_defaults,
         )
         self._jobs = jobs.JobDependencies(
-            db=self._db,
+            db=db,
             runtime=controller,
-            bundles=self._bundle_store,
-            auth=self._auth,
-            user_budget_defaults=self._user_budget_defaults,
+            bundles=bundle_store,
+            auth=resolved_auth,
+            user_budget_defaults=resolved_budget_defaults,
         )
-        self._federation = federation_service.FederationDependencies(db=self._db, runtime=controller)
-        self._capability_url_config = capability_url_config or attempts.CapabilityUrlConfig()
-        self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
+        self._federation = federation_service.FederationDependencies(db=db, runtime=controller)
         self._attempts = attempts.AttemptDependencies(
-            db=self._db,
+            db=db,
             runtime=controller,
-            auth=self._auth,
+            auth=resolved_auth,
             endpoints=endpoint_service,
-            profile_table=self._profile_table,
-            capability_urls=self._capability_url_config,
-            timer=self._timer,
+            profile_table=log_client.get_table(PROFILE_NAMESPACE, IrisProfile),
+            capability_urls=capability_url_config or attempts.CapabilityUrlConfig(),
+            timer=Timer(),
         )
-        self._db.attach_task_event_table(
-            self._log_client.get_table(
+        db.attach_task_event_table(
+            log_client.get_table(
                 TASK_EVENT_NAMESPACE,
                 TaskEventRow,
                 storage_policy=TASK_EVENT_STORAGE_POLICY,

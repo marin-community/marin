@@ -4,7 +4,7 @@
 """Controller operations and projections for worker resources."""
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -133,6 +133,27 @@ class WorkerDetail:
     running_tasks: frozenset[JobName]
 
 
+def _worker_health_status(
+    worker: WorkerRecord,
+    attributes: dict[str, str | int | float],
+    liveness: WorkerLiveness,
+    running_tasks: Iterable[JobName],
+    backend_id: str,
+) -> controller_pb2.Controller.WorkerHealthStatus:
+    return controller_pb2.Controller.WorkerHealthStatus(
+        worker_id=worker.worker_id,
+        healthy=liveness.healthy,
+        consecutive_failures=liveness.consecutive_failures,
+        last_heartbeat=timestamp_to_proto(Timestamp.from_ms(liveness.last_heartbeat_ms)),
+        running_job_ids=[task_id.to_wire() for task_id in running_tasks],
+        address=worker.address,
+        metadata=worker_metadata_to_proto(worker, attributes),
+        status_message=status_message(liveness),
+        backend_id=backend_id,
+        scale_group=str(worker.scale_group or ""),
+    )
+
+
 def register(
     dependencies: WorkerDependencies,
     request: controller_pb2.Controller.RegisterRequest,
@@ -207,17 +228,12 @@ def list_workers(
     for worker, attributes in page_rows:
         liveness = liveness_by_id[worker.worker_id]
         workers.append(
-            controller_pb2.Controller.WorkerHealthStatus(
-                worker_id=worker.worker_id,
-                healthy=liveness.healthy,
-                consecutive_failures=liveness.consecutive_failures,
-                last_heartbeat=timestamp_to_proto(Timestamp.from_ms(liveness.last_heartbeat_ms)),
-                running_job_ids=[task_id.to_wire() for task_id in running.get(worker.worker_id, set())],
-                address=worker.address,
-                metadata=worker_metadata_to_proto(worker, attributes),
-                status_message=status_message(liveness),
-                backend_id=backend.descriptor.backend_id,
-                scale_group=str(worker.scale_group or ""),
+            _worker_health_status(
+                worker,
+                attributes,
+                liveness,
+                running.get(worker.worker_id, set()),
+                backend.descriptor.backend_id,
             )
         )
     return controller_pb2.Controller.ListWorkersResponse(
@@ -245,17 +261,12 @@ def get_worker_status(
         raise ConnectError(Code.NOT_FOUND, f"No worker found for '{request.id}'")
     worker = detail.worker
     liveness = dependencies.runtime.liveness_for_worker(worker.worker_id)
-    worker_health = controller_pb2.Controller.WorkerHealthStatus(
-        worker_id=worker.worker_id,
-        healthy=liveness.healthy,
-        consecutive_failures=liveness.consecutive_failures,
-        last_heartbeat=timestamp_to_proto(Timestamp.from_ms(liveness.last_heartbeat_ms)),
-        running_job_ids=[task_id.to_wire() for task_id in detail.running_tasks],
-        address=worker.address,
-        metadata=worker_metadata_to_proto(worker, detail.attributes),
-        status_message=status_message(liveness),
-        scale_group=str(worker.scale_group or ""),
-        backend_id=backend.descriptor.backend_id,
+    worker_health = _worker_health_status(
+        worker,
+        detail.attributes,
+        liveness,
+        detail.running_tasks,
+        backend.descriptor.backend_id,
     )
     response = controller_pb2.Controller.GetWorkerStatusResponse(
         recent_attempts=_attempts_for_worker(dependencies.db, worker.worker_id, limit=50)
