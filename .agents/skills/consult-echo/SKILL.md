@@ -67,9 +67,10 @@ Run this search sequence before adding or editing a wiki note.
 
 ## Choose the durable home
 
-Every incident gets a standalone Echo record through `write-ops-log`, linked
-from its associated PR or issue. Also use the narrowest reusable home when the
-incident or other work changes durable guidance:
+Every live infrastructure incident, as defined by `write-ops-log`, gets a
+standalone Echo record linked from its associated PR or issue. Also use the
+narrowest reusable home when the incident or other work changes durable
+guidance:
 
 - Update `OPS.md` for a recurring operational procedure, diagnostic workflow,
   or guardrail in one subsystem.
