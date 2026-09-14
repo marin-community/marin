@@ -50,6 +50,13 @@ MAX_CONCURRENT_PIPELINES = 16
 MAX_CONCURRENT_RESULT_READS = 16
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
 
+# Seconds between worker-job liveness probes. Each probe is a GetJobState RPC to
+# the Iris controller, and the coordinator loop ticks every 0.5s, so probing once
+# per tick costs 7,200 controller calls per idle hour per pool. Iris caps its own
+# long-running job-state polling at 30s, and the heartbeat timeout already bounds
+# how long a dead pool goes unnoticed, so a slower probe loses nothing.
+WORKER_GROUP_CHECK_INTERVAL = 5.0
+
 _SNAPSHOT_ATTRIBUTES = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
 
 
@@ -348,6 +355,7 @@ class ZephyrCoordinator:
         # Throttle Iris task-status pushes; the coordinator loop ticks more
         # frequently than the UI needs to refresh.
         self._task_stats_limiter = RateLimiter(interval_seconds=10.0)
+        self._worker_group_check_limiter = RateLimiter(interval_seconds=WORKER_GROUP_CHECK_INTERVAL)
 
         # Capture the actor context while its ContextVar is still set. Methods called
         # later run on other threads, where current_actor() is unset.
@@ -468,7 +476,8 @@ class ZephyrCoordinator:
                 return
             try:
                 self.check_heartbeats(self._heartbeat_timeout)
-                self._check_worker_group()
+                if self._worker_group_check_limiter.should_run():
+                    self._check_worker_group()
 
                 now = time.monotonic()
                 if self._has_active_execution() and now - last_log_time > 5.0:
