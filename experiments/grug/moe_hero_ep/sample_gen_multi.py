@@ -87,7 +87,7 @@ def _make_local(
                     key=model_rng,
                     ema_beta=None,
                     offload_opt_state=False,
-                    master_param_mode=MasterParamMode.DISABLED,
+                    master_param_mode=MasterParamMode.DEVICE,
                 )
 
             state = _init_state(jax.random.PRNGKey(trainer.seed))
@@ -184,7 +184,12 @@ def _make_run(local_entrypoint):
         trainer = config.trainer.trainer
         if trainer.id is None:
             raise ValueError("trainer.id must be set before dispatching.")
-        _apply_hero_ep_runtime_defaults(inline_watch_enabled=False, processes_per_task=config.processes_per_task)
+        _apply_hero_ep_runtime_defaults(
+            inline_watch_enabled=False,
+            processes_per_task=config.processes_per_task,
+            moe_implementation=config.model.moe_implementation,
+            remat_mode=config.model.remat_mode,
+        )
         dispatch_grug_training_run(
             run_id=trainer.id,
             config=config,
