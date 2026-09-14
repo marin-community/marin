@@ -3,11 +3,12 @@
 
 """The per-sample contract: one typed record per evaluated question, with its writer and reader.
 
-Every eval mechanism normalizes its native per-question output into :class:`EvalSample` at export
-time, and every consumer (the dashboard's sample browser, ad-hoc parquet analysis) reads that
-contract back through this module -- the producer and consumer share one schema definition, so a
-format change is a change to this file and its round-trip test, never a guessing game in a viewer.
-The conversion from a mechanism's native output lives with that mechanism, not here.
+Every eval mechanism normalizes its native per-question output into :class:`EvalSample` when the
+mechanism produces it, and every consumer (the dashboard's sample browser, ad-hoc parquet analysis)
+reads that contract back through this module. The producer and consumer share one schema definition,
+so a format change is a change to this file and its round-trip test, never a guessing game in a
+viewer. The adapters for evaluator-native row shapes live here so Harbor and Evalchemy can write the
+contract without depending on ``marin-core``.
 
 A sample is either ``multiple_choice`` (the model scored a fixed choice list by loglikelihood;
 ``choices`` carries the per-choice scores with the model's pick and the gold index resolved at
@@ -185,6 +186,235 @@ def primary_metric(metrics: dict[str, float]) -> tuple[str, float] | None:
         return name, matches[name]
     name = min(candidates)
     return name, candidates[name]
+
+
+# --------------------------------------------------------------------------------------------------
+# lm-eval adapter: normalize one --log_samples row into the contract.
+# --------------------------------------------------------------------------------------------------
+
+# Structural lm-eval fields excluded from metric extraction. ``schema_version`` is the row-format
+# stamp and ``metrics`` is the list of metric names. Evalchemy may coalesce a document's extraction
+# filters into ``filter_variants``; :func:`samples_from_lm_eval` expands those before normalizing.
+_LM_EVAL_STRUCTURAL_KEYS = frozenset(
+    {
+        "doc",
+        "doc_id",
+        "target",
+        "arguments",
+        "resps",
+        "filtered_resps",
+        "filter",
+        "filter_variants",
+        "metrics",
+        "schema_version",
+        "task_name",
+        "doc_hash",
+        "prompt_hash",
+        "target_hash",
+    }
+)
+
+
+def _loglikelihood_pair(entry) -> tuple[float, bool] | None:
+    """Unwrap a response entry to ``(loglikelihood, is_greedy)``, tolerating a singleton wrapper."""
+    if isinstance(entry, list) and len(entry) == 1:
+        entry = entry[0]
+    if (
+        isinstance(entry, list)
+        and len(entry) == 2
+        and isinstance(entry[0], int | float)
+        and not isinstance(entry[0], bool)
+        and isinstance(entry[1], bool)
+    ):
+        return float(entry[0]), entry[1]
+    return None
+
+
+def _is_multiple_choice(arguments, responses) -> bool:
+    if not isinstance(arguments, list) or len(arguments) <= 1:
+        return False
+    if not isinstance(responses, list) or len(responses) != len(arguments):
+        return False
+    return all(_loglikelihood_pair(entry) is not None for entry in responses)
+
+
+def _choice_labels(doc, count: int) -> list[str]:
+    # arc-style docs carry {"choices": {"label": [...], "text": [...]}}; other tasks (mmlu,
+    # hellaswag) store choices as a plain list, which gets the A/B/C default.
+    choices = doc.get("choices") if isinstance(doc, dict) else None
+    labels = choices.get("label") if isinstance(choices, dict) else None
+    if isinstance(labels, list) and len(labels) == count and all(isinstance(label, str) for label in labels):
+        return labels
+    return [chr(ord("A") + i) for i in range(count)]
+
+
+def _resolve_target_choice(target, choices: list[Choice]) -> int | None:
+    if isinstance(target, bool):
+        return None
+    if isinstance(target, int):
+        return target if 0 <= target < len(choices) else None
+    if isinstance(target, str):
+        trimmed = target.strip()
+        for i, choice in enumerate(choices):
+            if choice.label == trimmed or choice.text.strip() == trimmed:
+                return i
+        if trimmed.isdigit():
+            index = int(trimmed)
+            return index if 0 <= index < len(choices) else None
+    return None
+
+
+def _parse_chat_messages(text: str) -> list[Message] | None:
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, list) or not parsed:
+        return None
+    messages = []
+    for item in parsed:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("role"), str)
+            or not isinstance(item.get("content"), str)
+        ):
+            return None
+        messages.append(Message(role=item["role"], content=item["content"]))
+    return messages
+
+
+def _sample_metrics(raw: dict) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    for key, value in raw.items():
+        if key in _LM_EVAL_STRUCTURAL_KEYS or isinstance(value, bool):
+            continue
+        if isinstance(value, int | float):
+            metrics[key] = float(value)
+    return metrics
+
+
+def _correct(metrics: dict[str, float]) -> bool | None:
+    picked = primary_metric(metrics)
+    if picked is None:
+        return None
+    return picked[1] >= 1.0
+
+
+def _lm_eval_grading(metrics: dict[str, float], extraction_filter: str | None) -> Grading | None:
+    """Build the explicit grading for one lm-eval sample."""
+    picked = primary_metric(metrics)
+    if picked is None:
+        return None
+    name, value = picked
+    metric_filter = extraction_filter or (name.split(",", 1)[1] if "," in name else None)
+    return Grading(
+        method=f"lm-eval:{base_metric(name)}",
+        metric=name,
+        filter=metric_filter,
+        score=value,
+        passed=value >= 1.0,
+    )
+
+
+def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
+    """Normalize one lm-eval ``--log_samples`` filter row into an :class:`EvalSample`.
+
+    Multiple-choice rows carry one ``arguments`` entry per choice (``[context, continuation]``)
+    and per-choice ``[loglikelihood, is_greedy]`` responses. Generation rows carry a single prompt,
+    either raw text or a JSON-encoded chat message list.
+    """
+    arguments = raw.get("arguments")
+    responses = raw.get("resps")
+    doc = raw.get("doc")
+    target = raw.get("target")
+    metrics = _sample_metrics(raw)
+    extraction_filter = raw.get("filter")
+    common = {
+        "task": task,
+        "doc_id": str(raw.get("doc_id")),
+        "metrics": metrics,
+        "correct": _correct(metrics),
+        "grading": _lm_eval_grading(metrics, extraction_filter if isinstance(extraction_filter, str) else None),
+        "target_text": target if isinstance(target, str) else json.dumps(target, ensure_ascii=False),
+        "doc": doc if isinstance(doc, str) else json.dumps(doc, ensure_ascii=False),
+    }
+
+    if isinstance(arguments, list) and isinstance(responses, list) and _is_multiple_choice(arguments, responses):
+        labels = _choice_labels(doc, len(arguments))
+        choices = []
+        for i, entry in enumerate(arguments):
+            text = entry[1] if isinstance(entry, list) and len(entry) > 1 and isinstance(entry[1], str) else ""
+            pair = _loglikelihood_pair(responses[i])
+            loglikelihood, is_greedy = pair if pair is not None else (None, None)
+            choices.append(Choice(label=labels[i], text=text, loglikelihood=loglikelihood, is_greedy=is_greedy))
+        scored = [(choice.loglikelihood, i) for i, choice in enumerate(choices) if choice.loglikelihood is not None]
+        context = arguments[0][0] if isinstance(arguments[0], list) and isinstance(arguments[0][0], str) else ""
+        return EvalSample(
+            kind=SampleKind.MULTIPLE_CHOICE,
+            prompt_text=context,
+            choices=choices,
+            model_choice=max(scored)[1] if scored else None,
+            target_choice=_resolve_target_choice(target, choices),
+            **common,
+        )
+
+    prompt = ""
+    if isinstance(arguments, list) and arguments:
+        first = arguments[0]
+        candidate = first[0] if isinstance(first, list) and first else first
+        if isinstance(candidate, str):
+            prompt = candidate
+    output = ""
+    if isinstance(responses, list) and responses:
+        first = responses[0]
+        if isinstance(first, list) and first and isinstance(first[0], str):
+            output = first[0]
+        elif isinstance(first, str):
+            output = first
+    filtered = raw.get("filtered_resps")
+    if isinstance(filtered, list) and filtered:
+        filtered = filtered[0]
+    messages = _parse_chat_messages(prompt)
+    return EvalSample(
+        kind=SampleKind.GENERATION,
+        prompt_text=None if messages else prompt,
+        prompt_messages=messages,
+        output=output,
+        extracted=filtered if isinstance(filtered, str) else json.dumps(filtered, ensure_ascii=False),
+        **common,
+    )
+
+
+def samples_from_lm_eval(task: str, raw: dict) -> list[EvalSample]:
+    """Normalize one Evalchemy record into all of its extraction-filter samples.
+
+    Evalchemy coalesces a document's complete lm-eval filter cohort into ``filter_variants`` so its
+    native JSONL has one record per document. FineStore keeps one normalized row per
+    ``(document, filter)`` because each filter has its own response and score.
+    """
+    variants = raw.get("filter_variants")
+    if not isinstance(variants, list) or not variants:
+        return [sample_from_lm_eval(task, raw)]
+
+    samples = []
+    for variant in variants:
+        if not isinstance(variant, dict):
+            raise ValueError("lm-eval filter_variants entries must be mappings")
+        metrics = variant.get("metrics", {})
+        if not isinstance(metrics, dict):
+            raise ValueError("lm-eval filter_variants metrics must be a mapping")
+        samples.append(
+            sample_from_lm_eval(
+                task,
+                {
+                    **raw,
+                    **metrics,
+                    "filter": variant.get("filter"),
+                    "filtered_resps": variant.get("filtered_resps", []),
+                },
+            )
+        )
+    return samples
 
 
 # --------------------------------------------------------------------------------------------------

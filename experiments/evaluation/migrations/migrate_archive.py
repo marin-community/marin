@@ -29,8 +29,7 @@ from urllib.parse import urlsplit
 
 import click
 import pyarrow.parquet as pq
-from finestore.reader import ReadView
-from marin.evaluation.archive import (
+from finestore.eval import (
     ARCHIVE_SAMPLES_TABLE,
     ARCHIVE_STEPS_TABLE,
     SAMPLES_PREFIX,
@@ -44,6 +43,7 @@ from marin.evaluation.archive import (
     sample_from_archive_row,
     trajectory_step_rows,
 )
+from finestore.reader import ReadView
 from marin.evaluation.records import list_records
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3

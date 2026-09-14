@@ -6,17 +6,18 @@ import json
 import pyarrow as pa
 import pyarrow.parquet as pq
 from evaldash.samples import fetch_artifact, fetch_samples, list_sample_tasks
-from fsspec.core import url_to_fs
-from marin.evaluation.archive import (
+from finestore.eval import (
     SAMPLES_MERGE_KEY,
     Choice,
     EvalSample,
     EvaluationStore,
     SampleKind,
+    sample_from_lm_eval,
     sample_to_archive_row,
     write_sample_parquet,
 )
-from marin.evaluation.lm_eval_samples import export_lm_eval_samples, sample_from_lm_eval
+from fsspec.core import url_to_fs
+from marin.evaluation.lm_eval_samples import export_lm_eval_samples
 
 
 def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:
