@@ -25,8 +25,8 @@ from marin.evaluation.eval_stats import (
     MetricKind,
     ResultFlag,
 )
-from marin.evaluation.metric_selection import base_metric, primary_metric
-from marin.evaluation.records import EvalRunRecord
+from marin.evaluation.metric_selection import FILTER_PRIORITY, base_metric, primary_metric
+from marin.evaluation.records import EvalRunRecord, EvalTaskRef, TaskCoverage as RecordTaskCoverage
 
 # A value derived from n items is integral in k to within this tolerance when it really is k/n.
 _INTEGRALITY_TOLERANCE = 1e-6
@@ -41,6 +41,8 @@ class _TaskScore:
     metric: str
     stderr: float | None
     n_scored: int | None
+    kind: MetricKind | None = None
+    declared: bool = False
 
 
 def stderr_for(metrics: Mapping[str, float], metric_key: str) -> float | None:
@@ -52,6 +54,8 @@ def stderr_for(metrics: Mapping[str, float], metric_key: str) -> float | None:
     base, _, metric_filter = metric_key.partition(",")
     key = f"{base}_stderr,{metric_filter}" if metric_filter else f"{base}_stderr"
     value = metrics.get(key)
+    if value is None and not metric_filter and base.endswith("_avg"):
+        value = metrics.get(f"{base.removesuffix('_avg')}_std_err")
     return float(value) if value is not None else None
 
 
@@ -64,7 +68,32 @@ def _task_item_count(metrics: Mapping[str, float]) -> int | None:
     return None
 
 
-def _task_scores(record: EvalRunRecord) -> list[_TaskScore]:
+def _task_ref(record: EvalRunRecord, task_key: str) -> EvalTaskRef | None:
+    """Match a metrics row to its recorded task declaration."""
+    if len(record.evaluation.tasks) == 1:
+        return record.evaluation.tasks[0]
+    directory = task_key.split("/", 1)[0]
+    for task in record.evaluation.tasks:
+        shots = "default" if task.num_fewshot is None else str(task.num_fewshot)
+        if directory == (task.task_alias or f"{task.name}_{shots}shot"):
+            return task
+    return None
+
+
+def _declared_metric(metrics: Mapping[str, float], declared: str) -> tuple[str, float] | None:
+    candidates = {name: value for name, value in metrics.items() if base_metric(name) == declared}
+    for metric_filter in FILTER_PRIORITY:
+        filtered = sorted(name for name in candidates if name.endswith(f",{metric_filter}"))
+        if filtered:
+            name = filtered[0]
+            return name, candidates[name]
+    if not candidates:
+        return None
+    name = min(candidates)
+    return name, candidates[name]
+
+
+def _task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], bool]:
     """Each task entry's primary metric, deduplicated by leaf task name.
 
     A record can carry the same task twice under different evalchemy task directories (a real record
@@ -73,9 +102,17 @@ def _task_scores(record: EvalRunRecord) -> list[_TaskScore]:
     count and average a benchmark against itself; the first wins and the rest are dropped.
     """
     scores: dict[str, _TaskScore] = {}
+    missing_declared_metric = False
     for task_key, metrics in (record.metrics or {}).items():
-        picked = primary_metric(metrics)
+        task = _task_ref(record, task_key)
+        declared = task is not None and task.primary_metric is not None and task.metric_kind is not None
+        picked = (
+            _declared_metric(metrics, task.primary_metric)
+            if declared and task is not None
+            else primary_metric(metrics)
+        )
         if picked is None:
+            missing_declared_metric |= declared and bool(metrics)
             continue
         name, value = picked
         leaf = task_key.rsplit("/", 1)[-1]
@@ -87,8 +124,10 @@ def _task_scores(record: EvalRunRecord) -> list[_TaskScore]:
             metric=name,
             stderr=stderr_for(metrics, name),
             n_scored=_task_item_count(metrics),
+            kind=task.metric_kind if declared and task is not None else None,
+            declared=declared,
         )
-    return list(scores.values())
+    return list(scores.values()), missing_declared_metric
 
 
 def _rollup_scores(scores: list[_TaskScore]) -> list[_TaskScore]:
@@ -112,20 +151,25 @@ def _mechanism_coverage(record: EvalRunRecord, n_scored: int | None) -> Coverage
     with an unknown attempted count makes the whole benchmark's count unknown -- a partial sum would
     understate what the run set out to grade -- and the same holds for the pass count.
     """
-    reported = record.coverage or {}
+    reported_by_leaf: dict[str, RecordTaskCoverage] = {}
+    for task_key, entry in (record.coverage or {}).items():
+        reported_by_leaf.setdefault(task_key.rsplit("/", 1)[-1], entry)
+    reported = list(reported_by_leaf.values())
     if not reported:
         return Coverage(n_scored=n_scored or 0)
-    attempted = [entry.n_attempted for entry in reported.values()]
-    correct = [entry.n_correct for entry in reported.values()]
+    benchmark = [entry.n_benchmark for entry in reported]
+    attempted = [entry.n_attempted for entry in reported]
+    correct = [entry.n_correct for entry in reported]
     errors: dict[str, int] = {}
-    for entry in reported.values():
+    for entry in reported:
         for name, count in entry.errors.items():
             errors[name] = errors.get(name, 0) + count
     return Coverage(
-        n_scored=sum(entry.n_scored for entry in reported.values()),
+        n_scored=sum(entry.n_scored for entry in reported),
+        n_benchmark=None if any(c is None for c in benchmark) else sum(c for c in benchmark if c is not None),
         n_attempted=None if any(c is None for c in attempted) else sum(c for c in attempted if c is not None),
         n_correct=None if any(c is None for c in correct) else sum(c for c in correct if c is not None),
-        n_unanswered=sum(entry.n_unanswered for entry in reported.values()),
+        n_unanswered=sum(entry.n_unanswered for entry in reported),
         errors=errors,
     )
 
@@ -145,8 +189,9 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     The benchmark is the registry eval name (the leaderboard column); a record's task entries roll up
     to it exactly as the dashboard has always rolled them up, with the group-aggregate rule preserved.
     """
-    scores = _rollup_scores(_task_scores(record))
-    if not scores:
+    task_scores, missing_declared_metric = _task_scores(record)
+    scores = _rollup_scores(task_scores)
+    if not scores or missing_declared_metric:
         return None
     value = sum(score.value for score in scores) / len(scores)
     labels = {score.metric for score in scores}
@@ -155,7 +200,13 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     n_scored = sum(counts) if len(counts) == len(scores) else None
 
     coverage = _mechanism_coverage(record, n_scored)
-    kind = MetricKind.BINARY if base_metric(metric) in BINARY_METRICS else MetricKind.CONTINUOUS
+    declared = all(score.declared for score in scores)
+    declared_kinds = {score.kind for score in scores if score.kind is not None}
+    kind = (
+        next(iter(declared_kinds))
+        if declared and len(declared_kinds) == 1
+        else MetricKind.BINARY if base_metric(metric) in BINARY_METRICS else MetricKind.CONTINUOUS
+    )
     stderr = _combined_stderr([score.stderr for score in scores])
     n_correct = _successes(value, coverage) if kind is MetricKind.BINARY else None
     if n_correct is None and kind is MetricKind.BINARY:
@@ -183,6 +234,7 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
         git_sha=record.provenance.git_sha,
         eval_runtime=record.provenance.eval_runtime,
         status=record.status,
+        declared=declared,
     )
 
 
@@ -232,6 +284,17 @@ def _flags(coverage: Coverage, kind: MetricKind, stderr: float | None, item_cap:
         flags.add(ResultFlag.ATTRITION)
     if item_cap is not None:
         flags.add(ResultFlag.CAPPED)
+    if (
+        coverage.n_scored < 0
+        or (coverage.n_attempted is not None and coverage.n_scored > coverage.n_attempted)
+        or (coverage.n_benchmark is not None and coverage.n_benchmark <= 0)
+        or (
+            coverage.n_benchmark is not None
+            and coverage.n_attempted is not None
+            and coverage.n_attempted > coverage.n_benchmark
+        )
+    ):
+        flags.add(ResultFlag.INCONSISTENT_COVERAGE)
     if coverage.n_scored > 0 and coverage.n_unanswered >= coverage.n_scored:
         flags.add(ResultFlag.NO_ANSWERS)
     if kind is MetricKind.CONTINUOUS:

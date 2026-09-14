@@ -95,10 +95,12 @@ class ResultFlag(StrEnum):
     zero -- but a run in this state is as consistent with a broken grader or a mis-served prompt as
     with a model that cannot do the task, so it is evidence rather than a verdict."""
 
+    INCONSISTENT_COVERAGE = "inconsistent_coverage"
+
 
 # Flags a panel excludes unless a caller asks otherwise. Kept here beside the flags themselves so
 # producers and the dashboard cannot disagree on what counts as suspect.
-DEFAULT_EXCLUDE_FLAGS = frozenset({ResultFlag.NO_ANSWERS})
+DEFAULT_EXCLUDE_FLAGS = frozenset({ResultFlag.NO_ANSWERS, ResultFlag.INCONSISTENT_COVERAGE})
 
 
 @dataclass(frozen=True)
@@ -142,6 +144,7 @@ class Coverage:
     """
 
     n_scored: int
+    n_benchmark: int | None = None
     n_attempted: int | None = None
     n_correct: int | None = None
     n_unanswered: int = 0
@@ -163,6 +166,13 @@ class Coverage:
         if self.n_attempted is None:
             return None
         return max(0, self.n_attempted - self.n_scored)
+
+    @property
+    def benchmark_rate(self) -> float | None:
+        """``n_attempted / n_benchmark``, or None when either count is unreported."""
+        if self.n_benchmark is None or self.n_benchmark <= 0 or self.n_attempted is None:
+            return None
+        return min(1.0, self.n_attempted / self.n_benchmark)
 
 
 @dataclass(frozen=True)
@@ -204,6 +214,7 @@ class Measurement:
     git_sha: str = ""
     eval_runtime: str = ""
     status: RunStatus = RunStatus.SUCCEEDED
+    declared: bool = False
 
 
 # --------------------------------------------------------------------------------------------------
@@ -315,6 +326,7 @@ def difference_interval(a: Measurement, b: Measurement, alpha: float = ALPHA) ->
     are equal -- at a 90% coverage gate the unidentified width alone is 0.2, so ordering claims need a
     much stricter coverage threshold than display does.
     """
+    assert (a.metric, a.kind) == (b.metric, b.kind), "measurements must use the same metric protocol"
     rate_a = a.coverage.rate if a.coverage.rate is not None else 1.0
     rate_b = b.coverage.rate if b.coverage.rate is not None else 1.0
     unidentified = (1.0 - rate_a) + (1.0 - rate_b)
@@ -462,6 +474,7 @@ class SelectionRequest:
 
     statuses: frozenset[RunStatus] = frozenset({RunStatus.SUCCEEDED})
     min_coverage: float = DEFAULT_MIN_COVERAGE
+    min_benchmark_coverage: float = DEFAULT_MIN_COVERAGE
 
     exclude_flags: frozenset[ResultFlag] = DEFAULT_EXCLUDE_FLAGS
     """Flags that make a result inadmissible. A run whose grader extracted no answer from any item
@@ -497,6 +510,27 @@ class Selection:
     benchmarks: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class MetricProtocol:
+    """The headline metric and uncertainty model for a benchmark column."""
+
+    metric: str
+    kind: MetricKind
+
+
+def declared_protocols(measurements: Iterable[Measurement]) -> Mapping[str, MetricProtocol]:
+    """Return each benchmark's protocol from its newest declared measurement."""
+    newest: dict[str, Measurement] = {}
+    for measurement in measurements:
+        current = newest.get(measurement.benchmark)
+        if measurement.declared and (current is None or measurement.created_at > current.created_at):
+            newest[measurement.benchmark] = measurement
+    return {
+        benchmark: MetricProtocol(metric=measurement.metric.split(",", 1)[0], kind=measurement.kind)
+        for benchmark, measurement in newest.items()
+    }
+
+
 def _admission_reason(measurement: Measurement, request: SelectionRequest) -> str | None:
     """Why ``measurement`` is inadmissible under ``request``, or None when it is admissible."""
     if measurement.status not in request.statuses:
@@ -509,6 +543,11 @@ def _admission_reason(measurement: Measurement, request: SelectionRequest) -> st
     rate = measurement.coverage.rate
     if rate is not None and rate < request.min_coverage:
         return f"coverage {rate:.3f} below {request.min_coverage:.2f}"
+    benchmark_rate = measurement.coverage.benchmark_rate
+    if benchmark_rate is not None and benchmark_rate < request.min_benchmark_coverage:
+        return f"benchmark coverage {benchmark_rate:.3f} below {request.min_benchmark_coverage:.2f}"
+    if benchmark_rate is None and measurement.item_cap is not None:
+        return "capped run with unreported benchmark size"
     if request.cohort is CohortMode.SINGLE_COHORT and measurement.version != request.cohort_version:
         return f"cohort {measurement.version}"
     return None
@@ -530,19 +569,39 @@ def select(
     measurements: Iterable[Measurement],
     request: SelectionRequest,
     metadata: Mapping[str, Mapping[str, str]] | None = None,
+    protocols: Mapping[str, MetricProtocol] | None = None,
 ) -> Selection:
     """Choose one measurement per (model, benchmark) under ``request``.
 
     ``metadata`` supplies each run's filterable properties keyed by run id (accelerator, backend, user
     and so on), so metadata filtering stays a property of the request rather than of the measurement.
     """
+    measurements = list(measurements)
     metadata = metadata or {}
+    protocols = declared_protocols(measurements) if protocols is None else protocols
     chosen: dict[str, dict[str, Measurement]] = {}
     rejections: list[Rejection] = []
     for measurement in measurements:
         if not matches_filters(measurement.model, metadata.get(measurement.run_id, {}), request):
             continue
         if request.panel is not None and measurement.benchmark not in request.panel:
+            continue
+        protocol = protocols.get(measurement.benchmark)
+        metric = measurement.metric.split(",", 1)[0]
+        if protocol is not None and (metric, measurement.kind) != (protocol.metric, protocol.kind):
+            reason = (
+                f"metric {metric} differs from declared {protocol.metric}"
+                if metric != protocol.metric
+                else f"metric kind {measurement.kind.value} differs from declared {protocol.kind.value}"
+            )
+            rejections.append(
+                Rejection(
+                    model=measurement.model,
+                    benchmark=measurement.benchmark,
+                    run_id=measurement.run_id,
+                    reason=reason,
+                )
+            )
             continue
         reason = _admission_reason(measurement, request)
         if reason is not None:
