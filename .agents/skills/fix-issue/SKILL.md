@@ -33,7 +33,7 @@ Implement on `agent/{YYYYMMDD}-fix-{issue-id}`.
 
 ## Testing
 
-Follow `write-tests` and `TESTING.md`. Prefer a regression test that fails before
+Follow `write-tests`. Prefer a regression test that fails before
 the fix, extend an existing file, run the narrow test and affected safe suite,
 then run `./infra/pre-commit.py --all-files --fix`. Do not override the configured
 marker expression.

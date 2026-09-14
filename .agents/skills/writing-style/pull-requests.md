@@ -31,8 +31,8 @@ Prefer `[sft] Add the OpenCode chat template` over
   explain the change or affect the review decision. State them once and link
   detailed evidence when the full record belongs elsewhere.
 - End with `Fixes #NNNN` or `Part of #NNNN` when applicable.
-- Put extended raw benchmark output and research history in an issue, logbook,
-  or artifact and link it. Keep the reproduction detail and result summary
+- Put extended raw benchmark output and research history in an issue or source
+  artifact and link it. Keep the reproduction detail and result summary
   needed to evaluate the change.
 
 The body must stand alone, but it does not need to reproduce the diff. Delete:

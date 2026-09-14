@@ -155,7 +155,7 @@ known failure family (#8861, #8870).
 ## References
 
 - `manage-hero-run` for the run record, babysitting, retention, and seal.
-- `wandb-reporting` for report conventions.
+- `research` for requested research programs and dense-result reporting.
 - `experiments/grug/moe_hero_ep/trigger_hero.sh`, `launch_scaling_ladder.py`
   (`--initialize-from-checkpoint`, #8868).
 - `docs/ops/training-stall-alert-contract.md` for the RAS query.

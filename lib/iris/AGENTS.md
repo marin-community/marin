@@ -15,8 +15,6 @@ Distributed job orchestration for Marin. Start with the shared instructions in `
 - `docs/federation.md` — peer routing, root-job-only handoff, and cross-cluster storage
 - `docs/image-push.md` — multi-region image push/pull architecture
 
-Archived design docs (implemented, read code instead): `.agents/projects/2026*_iris_*.md`
-
 ## Source Layout
 
 - `src/iris/cli/` — CLI entry point (`main.py` has all commands including `login`, `submit`, `status`)
