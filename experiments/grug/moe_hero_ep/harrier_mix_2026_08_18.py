@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Harrier data mixture on the fuzzy-deduplicated store built 2026.08.18.
+"""Harrier followed by the selected September mixture on the 2026.08.18 data store.
 
-The phase weights are the evaluated 2026.08.17.1 fit, reused unchanged. Only the store and its
+Training starts with the evaluated 2026.08.17.1 weights, then switches to the mixture in
+https://github.com/marin-community/marin/issues/9126. The store and its
 per-cell token counts differ: ``store_4d2e363d`` rebuilds ``store_81e7e39a`` with 16 sources exempt
 from fuzzy dedup instead of one (``dna/functional-regions``). The two builds are otherwise the same,
 with 40 clusters, 5 quality levels, 200 cells, and 384 tasks. Every cell keeps or increases its
-token count, 23.01T to 23.11T overall, and maximum cell exposure stays at 2.09 epochs, so the
-eight-epoch cap still holds.
+token count, 23.01T to 23.11T overall. The original Harrier weights reached at most 2.09 epochs.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig
@@ -36,7 +36,7 @@ from experiments.marin_tokenizer import marin_tokenizer
 PRETRAIN_TOKENS = 15_000_000_000_000
 COOLDOWN_TOKENS = 3_750_000_000_000
 TOTAL_TOKENS = PRETRAIN_TOKENS + COOLDOWN_TOKENS
-HARRIER_MIX_2026_08_18_TAG = "harrier-mix-2026.08.18"
+HARRIER_MIX_2026_08_18_TAG = "harrier-mix-2026.08.18-to-996f4891"
 # Simulated epoching stretches a short run's mixture as if it were a larger budget. Above this analytic
 # training-FLOP budget the run is expensive enough that we want maximally-real data over a simulated
 # larger run, so it trains on the raw mixture instead.
@@ -70,6 +70,9 @@ def _load_spec() -> _HarrierMixSpec:
 
 
 _SPEC = _load_spec()
+_SELECTED_MIX = json.loads(Path(__file__).with_name("best_mixture_996f489106c7b922.json").read_text())
+# Same relative switch for every rung; the 390251-step hero switches after checkpoint 108000.
+_MIXTURE_SWITCH_FRACTION = 108_000 / 390_251
 
 
 def _validate_spec(spec: _HarrierMixSpec) -> None:
@@ -108,7 +111,9 @@ def harrier_mix_2026_08_18_data_config(
     experiment_flops: float,
     validation: Sequence[ArtifactStep[TokenizedCache]],
 ) -> LmDataConfig:
-    """Build the evaluated two-phase mixture.
+    """Start on Harrier, switch to the selected September mixture at 108000/390251 of training.
+
+    Both transitions align to mixture blocks; the selected cooldown still starts around 80%.
 
     Simulated epoching is on by default; it is dropped once ``experiment_flops`` (the run's analytic
     training-FLOP budget) exceeds ``SIMULATED_EPOCHING_MAX_FLOPS``, so an expensive run trains on the
@@ -144,7 +149,7 @@ def harrier_mix_2026_08_18_data_config(
         enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
     )
 
-    return _two_phase_data_config(
+    data = _two_phase_data_config(
         tokenizer=marin_tokenizer,
         components=components,
         phase_weights=phase_weights,
@@ -153,3 +158,16 @@ def harrier_mix_2026_08_18_data_config(
         target_budget=target_budget,
         experiment_budget=experiment_budget,
     )
+
+    step_multiple = data.mixture_block_size // math.gcd(data.mixture_block_size, batch_size)
+    switch_step = math.ceil(total_steps * _MIXTURE_SWITCH_FRACTION / step_multiple) * step_multiple
+    cooldown_step = _phase_1_start_step(total_steps, batch_size)
+    val_zero_weights = {name: 0.0 for name in val_components}
+    assert isinstance(data.train_weights, list)
+    # A short diagnostic can round both transitions to the same block; cooldown wins there.
+    stages = {
+        0: data.train_weights[0][1],
+        switch_step: {**_SELECTED_MIX["phase0_weights"], **val_zero_weights},
+        cooldown_step: {**_SELECTED_MIX["phase1_weights"], **val_zero_weights},
+    }
+    return replace(data, train_weights=sorted(stages.items()))

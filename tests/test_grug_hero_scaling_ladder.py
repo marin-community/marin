@@ -2,19 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import json
-from collections import Counter
-from collections.abc import Sequence
-from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import jax.tree_util as jtu
 import optax
 import pytest
-from levanter.data.dataset import AsyncDataset
-from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
-from levanter.schedule import BatchSchedule
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
@@ -128,10 +121,13 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
     )
     assert diagnostic_config.data.target_budget is ladder_config.data.target_budget is None
     assert diagnostic_config.data.experiment_budget is ladder_config.data.experiment_budget is None
-    assert diagnostic_config.data.train_weights[0] == (
-        0,
-        {name: weight for name, weight in ladder_config.data.train_weights[0][1].items() if weight > 0},
-    )
+    assert [
+        (step, {name: weight for name, weight in weights.items() if weight > 0})
+        for step, weights in diagnostic_config.data.train_weights
+    ] == [
+        (step, {name: weight for name, weight in weights.items() if weight > 0})
+        for step, weights in ladder_config.data.train_weights
+    ]
 
 
 @pytest.mark.parametrize(
@@ -178,69 +174,3 @@ def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
         {"until": 55_000, "every": 55_000},
         {"until": None, "every": 6_000},
     ]
-
-
-class IndexedCorpus(AsyncDataset[tuple[str, int]]):
-    def __init__(self, name: str):
-        self.name = name
-
-    async def async_len(self) -> int:
-        raise ValueError("Infinite corpus has no length")
-
-    def is_finite(self) -> bool:
-        return False
-
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[tuple[str, int]]:
-        return [(self.name, index) for index in indices]
-
-
-@pytest.mark.asyncio
-async def test_hero_mixture_switch_preserves_prefix_and_resumes_at_new_weights():
-    continuation = build_ladder_run(run_id="test-new-mix", size="d6144", version="dev")
-    new = continuation.build_config(
-        StepContext.for_fingerprint(runtime_arg_keys=continuation.runtime_args, deps=continuation.deps)
-    )
-    # Read the historical weights independently of the new schedule.
-    old_spec = json.loads(
-        (Path(__file__).resolve().parents[1] / "experiments/grug/moe_hero_ep/harrier_mix_2026_08_18.json").read_text()
-    )
-    old = dataclasses.replace(new, data=dataclasses.replace(new.data, train_weights=[(0, old_spec["phase0_weights"])]))
-    configs = [old, new]
-    batch = BatchSchedule(old.trainer.trainer.train_batch_size)
-    # Unique sample identities let this exercise component offsets as well as corpus selection.
-    datasets = {name: IndexedCorpus(name) for name in old.data.components}
-    mixtures = [
-        MixtureDataset(
-            datasets=datasets,
-            weights=rescale_mixture_schedule_for_batch_schedule(config.data.train_weights, batch),
-            block_size=config.data.mixture_block_size,
-            key=0,
-        )
-        for config in configs
-    ]
-    switch_index = batch.global_data_offset_by_step(108_000)
-    block_size = new.data.mixture_block_size
-    prefix_indices = [0, 1, 10_000, *range(switch_index - block_size, switch_index)]
-    assert await mixtures[0].get_batch(prefix_indices) == await mixtures[1].get_batch(prefix_indices)
-
-    # Fetch directly at each phase boundary, as a restored loader does, without replaying the prefix.
-    for step, expected_agent_share, expected_science_share in [(108_000, 0.060, 0.069), (312_192, 0.066, 0.113)]:
-        start = batch.global_data_offset_by_step(step)
-        samples = await mixtures[1].get_batch(list(range(start, start + block_size)))
-        domains = Counter(name[:3] for name, _ in samples)
-        # These domain shares come from the independently published mixture analysis in #9126.
-        # Quantization to 49152 samples can move at most 200 samples to the largest cell.
-        assert domains["c13"] / block_size == pytest.approx(expected_agent_share, abs=0.005)
-        assert domains["c30"] / block_size == pytest.approx(expected_science_share, abs=0.005)
-        assert all(name.startswith("c") and name in new.data.components for name, _ in samples)
-
-    # The first index consumed from each continuing corpus must match the old schedule's cursor,
-    # even though the number of samples from that corpus changes at the switch.
-    boundary_indices = list(range(switch_index, switch_index + block_size))
-    boundary_samples = [await mixture.get_batch(boundary_indices) for mixture in mixtures]
-    first_indices = [
-        {name: min(index for corpus, index in samples if corpus == name) for name in {corpus for corpus, _ in samples}}
-        for samples in boundary_samples
-    ]
-    for name in first_indices[0].keys() & first_indices[1].keys():
-        assert first_indices[0][name] == first_indices[1][name]

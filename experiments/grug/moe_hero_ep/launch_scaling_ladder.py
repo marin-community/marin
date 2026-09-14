@@ -3,11 +3,11 @@
 
 """Hero-shape scaling ladder: one recipe, five widths.
 
-Every rung trains the same EP hero model and optimizer recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
-hidden/2 latent, ragged all-to-all transport, the Marin tokenizer, offloaded MuonH state, the QB
-histogram estimator, and a dropless held-out eval. Narrow rungs use Harrier 2026.08.18; d6144 switches
-to the selected September mixture after 108000 updates, with its cooldown at step 312192.
-``d6144`` is the hero itself.
+Every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
+hidden/2 latent, ragged all-to-all transport, the Harrier 2026.08.18 two-phase mixture on the
+Marin tokenizer, offloaded MuonH state, the QB histogram estimator, and a dropless held-out eval --
+and differs only in width and the rack count it spans. Behaviour is uniform across the ladder so a
+rung predicts the d6144 hero. ``d6144`` is the hero itself.
 
     size   racks  batch    steps  eval        checkpoints  tokens  active  total   FLOPs
     d768     1     1024    11420  every 5%    final only     48B     61M    1.6B    5.5e19
@@ -33,10 +33,8 @@ Changelog:
 """
 
 import dataclasses
-import json
 import os
 from datetime import timedelta
-from pathlib import Path
 
 import click
 from fray.cluster import ResourceConfig
@@ -121,9 +119,6 @@ RESUME_SAVE_INTERVAL = timedelta(hours=1)
 LADDER_MAX_RETRIES_FAILURE = 1000
 LADDER_MAX_TASK_FAILURES = 1000
 
-BEST_MIXTURE_TAG = "best-mixture-996f489106c7b922"
-BEST_MIXTURE = json.loads(Path(__file__).with_name("best_mixture_996f489106c7b922.json").read_text())
-
 
 def _ladder_model(size: str):
     """The GrugModelConfig for ``size`` at the hero routing geometry with the QB histogram estimator."""
@@ -168,9 +163,6 @@ def build_ladder_run(
     resumes from the newest checkpoint it finds. ``initialize_from_checkpoint`` is another run's
     checkpoint directory, added as the resume fallback so a relaunch under a new run id continues
     that lineage's full state from exactly that step while writing only to its own tree.
-
-    The d6144 data schedule keeps Harrier through 108000 completed updates, then uses the selected
-    September mixture, with its second phase starting at step 312192. Narrow rungs keep Harrier.
 
     ``gate_router_weight_decay`` is on by default (see ``GrugMoeMuonHConfig``): the recipe decays the
     attn_gate and router weights, and because the decay reads the Adam step count it also applies at
@@ -276,7 +268,6 @@ def build_ladder_run(
                     f"racks-{dp_racks}",
                     "gb200",
                     HARRIER_MIX_2026_08_18_TAG,
-                    *([BEST_MIXTURE_TAG] if size == "d6144" else []),
                 ],
                 group="moe-hero-ep-scaling-ladder",
                 name=run_id,
@@ -305,28 +296,16 @@ def build_ladder_run(
                 keep_last_temporary_checkpoints=1,
             ),
         )
-        data = harrier_mix_2026_08_18_data_config(
-            ctx=ctx,
-            total_steps=num_steps,
-            batch_size=batch_size,
-            max_seq_len=model.max_seq_len,
-            experiment_flops=run_flops,
-            validation=validation,
-        )
-        if size == "d6144":
-            assert isinstance(data.train_weights, list)
-            val_zero_weights = {item.name: 0.0 for item in validation}
-            data = dataclasses.replace(
-                data,
-                train_weights=[
-                    data.train_weights[0],
-                    (108_000, {**BEST_MIXTURE["phase0_weights"], **val_zero_weights}),
-                    (312_192, {**BEST_MIXTURE["phase1_weights"], **val_zero_weights}),
-                ],
-            )
         return GrugRunConfig(
             model=model,
-            data=data,
+            data=harrier_mix_2026_08_18_data_config(
+                ctx=ctx,
+                total_steps=num_steps,
+                batch_size=batch_size,
+                max_seq_len=model.max_seq_len,
+                experiment_flops=run_flops,
+                validation=validation,
+            ),
             resources=ctx.runtime_arg("train_resources"),
             tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
             optimizer=optimizer,
