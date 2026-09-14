@@ -34,6 +34,7 @@ _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
+SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 
 
 def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
@@ -91,7 +92,7 @@ class SkyRLRetentionPolicy:
     """
 
     resume_checkpoint_count: int = 2
-    temporary_storage_ttl_days: int = 14
+    temporary_storage_ttl_days: int = SKYRL_TEMPORARY_STORAGE_TTL_DAYS
 
     def __post_init__(self) -> None:
         if not 1 <= self.resume_checkpoint_count <= 5:
