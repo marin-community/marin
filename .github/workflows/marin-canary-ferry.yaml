@@ -23,6 +23,8 @@ jobs:
   canary-ferry:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    outputs:
+      resource_exhausted: ${{ steps.wait.outputs.resource_exhausted }}
     concurrency:
       group: canary-ferry
       cancel-in-progress: true
@@ -223,12 +225,18 @@ jobs:
           retention-days: 1
           if-no-files-found: ignore
 
+      - name: Mark resource exhaustion as failure
+        if: steps.wait.outputs.resource_exhausted == 'true'
+        run: |
+          echo "The TPU canary did not run because Iris could not admit TPU capacity." >&2
+          exit 1
+
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. `needs.canary-ferry.result` reflects the main job
   # outcome; failure()/cancelled() context functions only see this job's steps.
   notify-slack:
     needs: canary-ferry
-    if: always() && (needs.canary-ferry.result == 'failure' || needs.canary-ferry.result == 'cancelled') && github.event_name == 'schedule'
+    if: always() && (needs.canary-ferry.result == 'failure' || needs.canary-ferry.result == 'cancelled') && needs.canary-ferry.outputs.resource_exhausted != 'true' && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
