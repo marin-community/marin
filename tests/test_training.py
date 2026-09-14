@@ -88,7 +88,8 @@ def test_temporary_checkpoint_base_path_uses_cluster_local_scratch():
         },
     ):
         assert temporary_checkpoint_base_path("s3://marin-us-east-02a/experiments/grug/base-trial") == (
-            "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/experiments/grug/base-trial/checkpoints"
+            "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/"
+            "marin-us-east-02a/experiments/grug/base-trial/checkpoints"
         )
 
 
@@ -117,7 +118,7 @@ def test_apply_output_path_sets_run_specific_temp_checkpoints(trainer_config):
     checkpointer = updated.trainer.checkpointer
     assert checkpointer.base_path == "gs://marin-us-east5/experiments/grug/base-trial/checkpoints"
     assert checkpointer.temporary_base_path == (
-        "gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/experiments/grug/base-trial/checkpoints"
+        "gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
     )
     assert checkpointer.append_run_id_to_base_path is False
     assert updated.hf_save_path == "gs://marin-us-east5/experiments/grug/base-trial/hf"

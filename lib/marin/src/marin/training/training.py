@@ -150,14 +150,23 @@ def temporary_storage_base_path(output_path: str, *, ttl_days: int, category: st
     return str(StoragePath(temporary_root) / category / StoragePath(output_path).key)
 
 
+def _temporary_checkpoint_key(output_path: str) -> str:
+    path = StoragePath(output_path)
+    return str(StoragePath(path.bucket) / path.key) if path.bucket else path.key
+
+
 def temporary_checkpoint_base_path(output_path: str) -> str:
     """Return the region-local temporary checkpoint base for an executor output path."""
-    temporary_root = temporary_storage_base_path(
-        output_path,
+    temporary_root = marin_temp_bucket(
         ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        category=TEMPORARY_CHECKPOINTS_PATH,
+        source_prefix=output_path,
     )
-    return str(StoragePath(temporary_root) / DEFAULT_CHECKPOINTS_PATH)
+    return str(
+        StoragePath(temporary_root)
+        / TEMPORARY_CHECKPOINTS_PATH
+        / _temporary_checkpoint_key(output_path)
+        / DEFAULT_CHECKPOINTS_PATH
+    )
 
 
 def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_path: str) -> CheckpointerConfig:
