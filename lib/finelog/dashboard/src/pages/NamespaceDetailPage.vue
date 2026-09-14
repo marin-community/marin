@@ -363,19 +363,20 @@ watch(() => props.name, loadAll)
           </div>
         </div>
 
-        <div class="divide-y divide-surface-border-subtle border-t border-surface-border-subtle">
+        <div
+          v-if="forwarding.target"
+          class="border-t border-surface-border-subtle"
+        >
           <div
-            v-for="target in forwarding.targets"
-            :key="target.target"
             class="grid gap-2 py-2.5 text-sm md:grid-cols-[minmax(0,1fr)_10rem_minmax(13rem,auto)] md:items-baseline"
           >
-            <div class="font-mono text-xs break-all">{{ target.target }}</div>
+            <div class="font-mono text-xs break-all">{{ forwarding.target.target }}</div>
             <div class="tabular-nums text-text-secondary">
-              settled {{ target.settledCursor === null ? '—' : formatNumber(target.settledCursor) }}
+              settled {{ forwarding.target.settledCursor === null ? '—' : formatNumber(forwarding.target.settledCursor) }}
             </div>
             <div
-              :class="target.forwardingLagSeqPositions ? 'text-status-warning' : 'text-text-secondary'"
-            >{{ targetState(target) }}</div>
+              :class="forwarding.target.forwardingLagSeqPositions ? 'text-status-warning' : 'text-text-secondary'"
+            >{{ targetState(forwarding.target) }}</div>
           </div>
         </div>
       </template>

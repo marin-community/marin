@@ -97,5 +97,4 @@ class FinelogSource:
         )
 
     def relay_status(self) -> tuple[RelaySenderStatus, ...]:
-        """Return direct regional relay heartbeats held by this hub."""
         return self._client.list_relay_status()

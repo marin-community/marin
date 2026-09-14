@@ -63,9 +63,9 @@ pub struct ServerConfig {
     pub telemetry_dedupe_capacity: usize,
     /// Default per-method slow-RPC threshold (ms); `<= 0` disables.
     pub slow_rpc_threshold_ms: i64,
-    /// Downstream forwarding targets exposed by the authenticated operator
-    /// introspection routes. Production currently configures at most one.
-    pub forwarding: Vec<ForwardingConfig>,
+    /// Downstream forwarding target exposed by the authenticated operator
+    /// introspection routes.
+    pub forwarding: Option<ForwardingConfig>,
     /// The authenticated-ingress policy. Always enforced — the
     /// interceptor gates every RPC and the policy is default-deny. The default
     /// ([`AuthPolicy::allow_localhost`]) admits loopback only, so a bare finelog
@@ -83,7 +83,7 @@ impl Default for ServerConfig {
             max_concurrent_telemetry: telemetry::DEFAULT_MAX_CONCURRENT_REQUESTS,
             telemetry_dedupe_capacity: telemetry::DEFAULT_DEDUPE_CAPACITY,
             slow_rpc_threshold_ms: DEFAULT_SLOW_RPC_THRESHOLD_MS,
-            forwarding: Vec::new(),
+            forwarding: None,
             auth: Arc::new(AuthPolicy::allow_localhost()),
         }
     }
@@ -107,7 +107,7 @@ impl ServerConfig {
 
     /// Add a configured downstream target to operator introspection.
     pub fn with_forwarding(mut self, forwarding: ForwardingConfig) -> Self {
-        self.forwarding.push(forwarding);
+        self.forwarding = Some(forwarding);
         self
     }
 }

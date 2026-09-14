@@ -629,25 +629,25 @@ async fn forwarding_introspection_distinguishes_unseeded_lag_caught_up_and_uncon
     assert_eq!(unseeded["visibleHighWater"], 2);
     assert_eq!(unseeded["publishedHighWater"], 0);
     assert_eq!(unseeded["publicationLagSeqPositions"], 2);
-    assert_eq!(unseeded["targets"][0]["target"], TARGET);
-    assert!(unseeded["targets"][0]["settledCursor"].is_null());
-    assert!(unseeded["targets"][0]["forwardingLagSeqPositions"].is_null());
+    assert_eq!(unseeded["target"]["target"], TARGET);
+    assert!(unseeded["target"]["settledCursor"].is_null());
+    assert!(unseeded["target"]["forwardingLagSeqPositions"].is_null());
 
     store
         .set_forward_cursor(TARGET, NAMESPACE, 0)
         .await
         .unwrap();
     let caught_up: Value = serde_json::from_str(&get_text(&client, addr, &path).await).unwrap();
-    assert_eq!(caught_up["targets"][0]["settledCursor"], 0);
-    assert_eq!(caught_up["targets"][0]["forwardingLagSeqPositions"], 0);
+    assert_eq!(caught_up["target"]["settledCursor"], 0);
+    assert_eq!(caught_up["target"]["forwardingLagSeqPositions"], 0);
 
     store
         .set_forward_cursor(TARGET, NAMESPACE, 1)
         .await
         .unwrap();
     let cursor_ahead: Value = serde_json::from_str(&get_text(&client, addr, &path).await).unwrap();
-    assert_eq!(cursor_ahead["targets"][0]["settledCursor"], 1);
-    assert_eq!(cursor_ahead["targets"][0]["forwardingLagSeqPositions"], 0);
+    assert_eq!(cursor_ahead["target"]["settledCursor"], 1);
+    assert_eq!(cursor_ahead["target"]["forwardingLagSeqPositions"], 0);
 
     let unconfigured_addr = serve_with_config(Arc::clone(&store), ServerConfig::default()).await;
     let unconfigured: Value =
@@ -657,7 +657,7 @@ async fn forwarding_introspection_distinguishes_unseeded_lag_caught_up_and_uncon
     assert_eq!(unconfigured["visibleHighWater"], 2);
     assert_eq!(unconfigured["publishedHighWater"], 0);
     assert_eq!(unconfigured["publicationLagSeqPositions"], 2);
-    assert_eq!(unconfigured["targets"], json!([]));
+    assert!(unconfigured["target"].is_null());
 }
 
 #[tokio::test]

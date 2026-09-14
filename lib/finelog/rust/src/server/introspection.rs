@@ -44,7 +44,7 @@ use crate::store::Store;
 struct IntrospectionState {
     store: Arc<Store>,
     health: Arc<IngestHealth>,
-    forwarding: Vec<ForwardingConfig>,
+    forwarding: Option<ForwardingConfig>,
 }
 
 /// When this process started, stamped at router-build time so uptime counts
@@ -263,8 +263,8 @@ struct ForwardingTargetInfo {
     forwarding_lag_seq_positions: Option<i64>,
 }
 
-/// Per-table forwarding state. `configured=false` and an empty target list is
-/// distinct from a configured target whose cursor equals the high-water mark.
+/// Per-table forwarding state. `configured=false` and no target is distinct
+/// from a configured target whose cursor equals the high-water mark.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ForwardingResponse {
@@ -274,7 +274,7 @@ struct ForwardingResponse {
     visible_high_water: i64,
     published_high_water: i64,
     publication_lag_seq_positions: i64,
-    targets: Vec<ForwardingTargetInfo>,
+    target: Option<ForwardingTargetInfo>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -527,22 +527,22 @@ async fn get_forwarding(
     let loaded = tokio::task::spawn_blocking(move || {
         let visible_high_water = store.namespace_visible_seq(&namespace)?;
         let published_high_water = store.namespace_published_seq(&namespace)?;
-        let targets = forwarding
-            .iter()
+        let target = forwarding
+            .as_ref()
             .map(|config| {
                 let cursor = store.forward_cursor(&config.target, &namespace)?;
-                Ok(ForwardingTargetInfo {
+                Ok::<_, crate::errors::StatsError>(ForwardingTargetInfo {
                     target: config.target.clone(),
                     settled_cursor: cursor,
                     forwarding_lag_seq_positions: cursor
                         .map(|value| nonnegative_lag(published_high_water, value)),
                 })
             })
-            .collect::<Result<Vec<_>, crate::errors::StatsError>>()?;
-        let cluster = forwarding.first().map(|config| config.cluster.clone());
+            .transpose()?;
+        let cluster = forwarding.as_ref().map(|config| config.cluster.clone());
         Ok::<_, crate::errors::StatsError>(ForwardingResponse {
             namespace: response_namespace,
-            configured: !forwarding.is_empty(),
+            configured: forwarding.is_some(),
             cluster,
             visible_high_water,
             published_high_water,
@@ -550,7 +550,7 @@ async fn get_forwarding(
                 visible_high_water,
                 published_high_water,
             ),
-            targets,
+            target,
         })
     })
     .await;
@@ -569,7 +569,7 @@ async fn get_forwarding(
 pub fn introspection_router(
     store: Arc<Store>,
     health: Arc<IngestHealth>,
-    forwarding: Vec<ForwardingConfig>,
+    forwarding: Option<ForwardingConfig>,
 ) -> Router {
     process_started();
     Router::new()

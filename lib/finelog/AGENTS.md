@@ -186,19 +186,19 @@ Three surfaces are plain axum JSON rather than proto, because they describe this
 process and its files rather than the wire contract: `GET /api/server` (build
 revision, uptime, store paths, cache diagnostics, the writer's format policy),
 `GET /api/segments?namespace=NS` (catalog rows, plus footer and index-bundle
-detail under `physical=true`), and `GET /api/forwarding?namespace=NS` (configured
-targets and durable progress). All three sit behind the same default-deny auth
+detail under `physical=true`), and `GET /api/forwarding?namespace=NS` (the configured
+target and durable progress). All three sit behind the same default-deny auth
 gate as the RPCs. `build.rs` stamps the git commit, its tree hash, and a dirty
 flag into the binary; all three are empty when the build had no checkout to
 read, as in a wheel built from an sdist.
 
 Forwarding introspection reports the table's visible and published high-water
-marks separately. Publication lag is their nonnegative difference. Each target
+marks separately. Publication lag is their nonnegative difference. The target
 reports a settled cursor and its nonnegative lag behind the published high-water
 mark. A settled cursor can include positions skipped after a permanent
 rejection, so it does not prove that the hub accepted every row. A null cursor
-means that target has not seeded the table. An empty target list with
-`configured=false` means forwarding is disabled.
+means the target has not seeded the table. A null target with `configured=false`
+means forwarding is disabled.
 
 Regional forwarders also send `ReportRelayStatus` directly to the hub every 30
 seconds. The forwarding JWT determines the cluster identity, and each report is

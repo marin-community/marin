@@ -133,5 +133,5 @@ export interface ForwardingResponse {
   visibleHighWater: number
   publishedHighWater: number
   publicationLagSeqPositions: number
-  targets: ForwardingTargetInfo[]
+  target: ForwardingTargetInfo | null
 }

@@ -10,6 +10,7 @@ from finelog.client import RelaySenderStatus
 REQUIRED_RELAY_NAMESPACES = ("telemetry_v1.node_agent",)
 RELAY_HEARTBEAT_MAX_AGE_MS = 2 * 60 * 1000
 RELAY_PROGRESS_MAX_AGE_MS = 10 * 60 * 1000
+HEALTHY_RELAY_STATE = "healthy"
 
 
 def relay_alert_rows(
@@ -29,7 +30,7 @@ def relay_alert_rows(
                     "cluster": cluster,
                     "namespace": namespace,
                     "state": state,
-                    "value": 0 if state == "healthy" else 1,
+                    "value": 0 if state == HEALTHY_RELAY_STATE else 1,
                 }
             )
     return rows
@@ -54,4 +55,4 @@ def _relay_state(sender: RelaySenderStatus | None, namespace: str, now_ms: int) 
         and now_ms - status.cursor_progress_at_ms >= RELAY_PROGRESS_MAX_AGE_MS
     ):
         return "forwarding_stalled"
-    return "healthy"
+    return HEALTHY_RELAY_STATE
