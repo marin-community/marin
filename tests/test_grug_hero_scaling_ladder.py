@@ -121,7 +121,10 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
     )
     assert diagnostic_config.data.target_budget is ladder_config.data.target_budget is None
     assert diagnostic_config.data.experiment_budget is ladder_config.data.experiment_budget is None
-    assert diagnostic_config.data.train_weights == [
+    assert [
+        (step, {name: weight for name, weight in weights.items() if weight > 0})
+        for step, weights in diagnostic_config.data.train_weights
+    ] == [
         (step, {name: weight for name, weight in weights.items() if weight > 0})
         for step, weights in ladder_config.data.train_weights
     ]
