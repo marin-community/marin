@@ -32,10 +32,16 @@ from marin.evaluation.lm_eval_samples import (
     rebuild_lm_eval_samples,
     run_artifacts,
 )
-from marin.evaluation.records import EvalTaskRef, MetricKind, TaskCoverage
+from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, MetricKind, TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.evaluation.migrations.cli import ArchiveSweep, SweepOutcome, _sweep_archives, selected_archives
+from experiments.evaluation.migrations.cli import (
+    ArchiveSweep,
+    SweepOutcome,
+    _resolve_prefixes,
+    _sweep_archives,
+    selected_archives,
+)
 from experiments.evaluation.migrations.cli import cli as migrations_cli
 from experiments.evaluation.migrations.format_smoke import smoke_upgrade, smoke_upgrade_fleet
 from experiments.evaluation.migrations.migrate_archive import (
@@ -601,10 +607,20 @@ def test_sweep_visits_an_archive_shared_by_several_runs_once(tmp_path):
     assert sorted(visited) == sorted([shared, own])
 
 
-def test_naming_an_archive_directly_does_not_pull_in_the_fleet(tmp_path):
+def test_naming_an_archive_directly_recovers_only_its_records(tmp_path, monkeypatch):
     # Targeting a handful of damaged archives must not re-sweep every recorded run beside them.
     named = str(tmp_path / "one" / "results")
-    assert selected_archives((), (named + "/",)) == {named: ArchiveSweep()}
+    matching = SimpleNamespace(results_path=named, run_id="run-a")
+    other = SimpleNamespace(results_path=str(tmp_path / "other" / "results"), run_id="run-b")
+    monkeypatch.setattr(
+        "experiments.evaluation.migrations.cli.list_records",
+        lambda prefix: (matching, other) if prefix == DEFAULT_SCAN_PREFIXES[0] else (),
+    )
+
+    prefixes = _resolve_prefixes((), (named + "/",))
+
+    assert prefixes == tuple(DEFAULT_SCAN_PREFIXES)
+    assert selected_archives(prefixes, (named + "/",)) == {named: ArchiveSweep(records=(matching,), run_ids=("run-a",))}
 
 
 def test_upgrade_format_prefix_migrates_only_sealed_archives(tmp_path, monkeypatch):

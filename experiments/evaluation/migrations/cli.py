@@ -310,9 +310,9 @@ def backfill_samples(results_paths: tuple[str, ...], prefixes: tuple[str, ...], 
     _sweep_archives(selected_archives(_resolve_prefixes(prefixes, results_paths), results_paths), workers, _backfill_one)
 
 
-def _resolve_prefixes(prefixes: tuple[str, ...], results_paths: tuple[str, ...]) -> tuple[str, ...]:
-    """Fall back to the whole fleet only when the caller named neither a prefix nor a path."""
-    if prefixes or results_paths:
+def _resolve_prefixes(prefixes: tuple[str, ...], _results_paths: tuple[str, ...]) -> tuple[str, ...]:
+    """Use the default record fleet when the caller did not name record prefixes."""
+    if prefixes:
         return prefixes
     return tuple(DEFAULT_SCAN_PREFIXES)
 
@@ -336,12 +336,16 @@ def selected_archives(prefixes: tuple[str, ...], results_paths: tuple[str, ...])
     and letting two workers write the same archive concurrently makes one of them compact shards the
     other is still reading.
     """
+    selected_paths = {path.rstrip("/") for path in results_paths}
     records_by_path: dict[str, list[EvalRunRecord]] = defaultdict(list)
-    for path in results_paths:
-        records_by_path[path.rstrip("/")] = []
+    for path in selected_paths:
+        records_by_path[path] = []
     for prefix in prefixes:
         for record in list_records(prefix):
-            records_by_path[record.results_path.rstrip("/")].append(record)
+            results_path = record.results_path.rstrip("/")
+            if selected_paths and results_path not in selected_paths:
+                continue
+            records_by_path[results_path].append(record)
     return {
         path: ArchiveSweep(records=tuple(records), run_ids=tuple(record.run_id for record in records))
         for path, records in records_by_path.items()

@@ -217,8 +217,6 @@ def _task_protocol(task_name: str, options: EvalchemyTaskOptions | None) -> Task
     expected_items = options.expected_items if options is not None else None
     if task_name in _CHAT_NATIVE_TASKS and expected_items is None:
         raise ValueError(f"Evalchemy chat-native task {task_name!r} must declare expected_items")
-    if task_name not in _CHAT_NATIVE_TASKS and expected_items is not None:
-        raise ValueError(f"Evalchemy lm-eval task {task_name!r} must not declare expected_items")
     return TaskProtocol(primary_metric, metric_kind, expected_items)
 
 
