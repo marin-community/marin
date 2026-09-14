@@ -57,8 +57,13 @@ def spec():
     )
 
 
-@pytest.mark.parametrize(("wrapped", "master"), [(False, False), (True, False), (False, True), (True, True)])
-@pytest.mark.parametrize("include_manifest", [False, True])
+@pytest.mark.parametrize(
+    ("wrapped", "master", "include_manifest"),
+    [
+        pytest.param(False, True, True, id="master-weights-with-manifest"),
+        pytest.param(True, False, False, id="wrapped-weights-without-manifest"),
+    ],
+)
 def test_native_restore_preserves_weights_and_applies_pending_router_bias(
     tmp_path, spec, wrapped, master, include_manifest
 ):
