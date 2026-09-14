@@ -204,6 +204,9 @@ class Measurement:
     it identity would split a benchmark's history in two whenever a cap changed."""
 
     flags: frozenset[ResultFlag] = frozenset()
+    num_fewshot: int | None = None
+    """Few-shot setting shared by the eval's tasks, or None when unspecified or mixed."""
+
     run_id: str = ""
     created_at: str = ""
     version: str | None = None

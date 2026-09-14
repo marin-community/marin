@@ -133,6 +133,7 @@ class PanelCellResponse(BaseModel):
     errors: dict[str, int]
     item_cap: int | None
     flags: list[str]
+    num_fewshot: int | None
     run_id: str
     created_at: str
     version: str | None

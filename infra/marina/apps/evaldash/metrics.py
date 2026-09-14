@@ -189,6 +189,7 @@ def cell_payload(measurement: Measurement) -> dict:
         "errors": dict(coverage.errors),
         "item_cap": measurement.item_cap,
         "flags": sorted(flag.value for flag in measurement.flags),
+        "num_fewshot": measurement.num_fewshot,
         "run_id": measurement.run_id,
         "created_at": measurement.created_at,
         "version": measurement.version,

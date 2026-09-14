@@ -32,6 +32,7 @@ def _record(
     accelerator: str = "v6e-8",
     family: str | None = None,
     eval_runtime: str = "i",
+    num_fewshot: int | None = 0,
 ) -> EvalRunRecord:
     succeeded = value is not None
     metrics = {eval_name: {"acc,none": value, "acc_stderr,none": 0.01, "sample_len": float(ITEMS)}} if succeeded else {}
@@ -46,7 +47,7 @@ def _record(
             name=eval_name,
             mechanism="evalchemy",
             family=family,
-            tasks=(EvalTaskRef(name=eval_name, num_fewshot=0),),
+            tasks=(EvalTaskRef(name=eval_name, num_fewshot=num_fewshot),),
         ),
         hardware=HardwareRef(platform="tpu", accelerator=accelerator, region_or_cluster="us-central2"),
         status=RunStatus.SUCCEEDED if succeeded else RunStatus.INFRA_FAILED,
@@ -352,9 +353,25 @@ def test_variants_with_equally_many_results_default_to_the_first_eval_name():
 
 def test_a_variant_in_a_family_keeps_its_own_cell_name_and_provenance():
     records = [
-        _record("a", "gsm8k", "v1", "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k", eval_runtime="evalchemy==1"),
         _record(
-            "a", "gsm8k-0shot", "v2", "2026-02-01T00:00:00+00:00", 0.40, family="gsm8k", eval_runtime="evalchemy==2"
+            "a",
+            "gsm8k",
+            "v1",
+            "2026-01-01T00:00:00+00:00",
+            0.50,
+            family="gsm8k",
+            eval_runtime="evalchemy==1",
+            num_fewshot=8,
+        ),
+        _record(
+            "a",
+            "gsm8k-0shot",
+            "v2",
+            "2026-02-01T00:00:00+00:00",
+            0.40,
+            family="gsm8k",
+            eval_runtime="evalchemy==2",
+            num_fewshot=0,
         ),
     ]
 
@@ -365,6 +382,8 @@ def test_a_variant_in_a_family_keeps_its_own_cell_name_and_provenance():
     assert row["cells"]["gsm8k-0shot"]["eval_runtime"] == "evalchemy==2"
     assert row["cells"]["gsm8k"]["version"] == "v1"
     assert row["cells"]["gsm8k-0shot"]["version"] == "v2"
+    assert row["cells"]["gsm8k"]["num_fewshot"] == 8
+    assert row["cells"]["gsm8k-0shot"]["num_fewshot"] == 0
     assert row["cells"]["gsm8k-0shot"]["run_id"] == "a-gsm8k-0shot-2026-02-01T00:00:00+00:00"
 
 

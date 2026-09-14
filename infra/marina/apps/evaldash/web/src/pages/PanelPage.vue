@@ -9,7 +9,7 @@
  * that graded them.
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
@@ -31,6 +31,7 @@ import EvalRail from '@/components/charts/EvalRail.vue'
 import HistoryModal from '@/components/charts/HistoryModal.vue'
 
 const router = useRouter()
+const route = useRoute()
 
 // --- Request state. Everything the server needs to resolve a panel goes in the query, so a panel is
 // a shareable URL and the filters that produced a number travel with it. ---
@@ -46,6 +47,7 @@ const SELECTED_KEY = 'evaldash.selectedEvals'
 const KNOWN_KEY = 'evaldash.knownEvals'
 const selectedEvals = reactive(new Set<string>())
 const knownEvals = ref<string[]>([])
+const selectionReady = ref(false)
 
 // The selection every panel-backed endpoint shares. Compare takes the same one, so a head-to-head
 // launched from a narrowed panel scores the benchmarks and cohort the reader was looking at.
@@ -161,18 +163,32 @@ function readStored(key: string): string[] | null {
     return null
   }
 }
-function persistSelection(present: string[]) {
+function routeBenchmarks(): string[] | null {
+  const value = route.query.benchmarks
+  if (value == null) return null
+  const values = Array.isArray(value) ? value : [value]
+  return values.flatMap((entry) => entry?.split(',') ?? []).filter(Boolean)
+}
+function persistSelection(present: string[], updateRoute = true) {
   localStorage.setItem(SELECTED_KEY, JSON.stringify([...selectedEvals]))
   localStorage.setItem(KNOWN_KEY, JSON.stringify(present))
+  if (!updateRoute) return
+  const selected = [...selectedEvals]
+  const benchmarks = selected.length > 0 && selected.length !== present.length ? selected.join(',') : undefined
+  void router.replace({ query: { ...route.query, benchmarks } })
 }
 function syncSelection(present: string[]) {
+  const fromRoute = routeBenchmarks()
   const stored = readStored(SELECTED_KEY)
   const known = new Set(readStored(KNOWN_KEY) ?? [])
   selectedEvals.clear()
   for (const name of present) {
-    if (stored === null || stored.includes(name) || !known.has(name)) selectedEvals.add(name)
+    if (fromRoute ? fromRoute.includes(name) : stored === null || stored.includes(name) || !known.has(name)) {
+      selectedEvals.add(name)
+    }
   }
   knownEvals.value = present
+  selectionReady.value = true
   persistSelection(present)
 }
 // Driven by meta rather than the panel: the panel reflects the current selection, so syncing off it
@@ -183,6 +199,18 @@ watch(
     if (evals) syncSelection(evals.filter((name) => !isSmokeEval(name)))
   },
   { immediate: true },
+)
+watch(
+  () => route.query.benchmarks,
+  () => {
+    if (!selectionReady.value) return
+    const requested = routeBenchmarks()
+    selectedEvals.clear()
+    for (const name of knownEvals.value) {
+      if (requested === null || requested.includes(name)) selectedEvals.add(name)
+    }
+    persistSelection(knownEvals.value, false)
+  },
 )
 
 interface SuiteNode {
@@ -355,8 +383,9 @@ function cellTitle(cell: PanelCell): string {
     cell.interval_kind === INTERVAL_KIND.IDENTIFIED
       ? formatCoverage(cell.coverage)
       : 'attempted count not reported, so completeness is unknown'
+  const shotSetting = cell.num_fewshot === null ? 'default shots' : `${cell.num_fewshot}-shot`
   return [
-    `${cell.metric} · ${cell.n_scored} items graded`,
+    `${cell.metric} · ${shotSetting} · ${cell.n_scored} items graded`,
     `95% ${formatInterval(cell.low, cell.high)} · ${scope}`,
     ...cell.flags.filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
     `run ${cell.run_id} · ${formatTimestamp(cell.created_at)}`,

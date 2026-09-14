@@ -76,6 +76,7 @@ export interface PanelCell {
   errors: Record<string, number>
   item_cap: number | null
   flags: string[]
+  num_fewshot: number | null
   run_id: string
   created_at: string
   version: string | null
