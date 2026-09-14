@@ -19,7 +19,6 @@ from levanter.grug._moe.common import (
     CapacityDrops,
 )
 from levanter.grug._moe.ep_common import _ranks_within_groups
-from levanter.grug.sharding import _batch_axes
 
 
 @jax.custom_vjp
@@ -92,6 +91,7 @@ def _moe_mlp_ep_fixed_a2a_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    token_sharding_axes: tuple[str, ...],
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Run fixed-capacity all-to-all dispatch, expert MLPs, and combine.
 
@@ -188,5 +188,5 @@ def _moe_mlp_ep_fixed_a2a_local(
             preferred_element_type=jnp.float32,
         ).astype(x_local.dtype)
         dropped_local = valid_assignments - jnp.sum(keep, dtype=jnp.int32)
-        dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+        dropped_total = jax.lax.psum(dropped_local, token_sharding_axes)
     return out_local, CapacityDrops(sender_dropped=dropped_total, receiver_dropped=jnp.zeros_like(dropped_total))
