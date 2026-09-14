@@ -44,6 +44,7 @@ class _TaskScore:
     n_scored: int | None
     kind: MetricKind | None = None
     declared: bool = False
+    protocol_metric: str | None = None
 
 
 def stderr_for(metrics: Mapping[str, float], metric_key: str) -> float | None:
@@ -111,6 +112,7 @@ def _task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], bool]:
             n_scored=_task_item_count(metrics),
             kind=task.metric_kind if declared and task is not None else None,
             declared=declared,
+            protocol_metric=task.primary_metric if declared and task is not None else None,
         )
     return list(scores.values()), missing_declared_metric
 
@@ -187,6 +189,7 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     coverage = _mechanism_coverage(record, n_scored)
     declared = all(score.declared for score in scores)
     declared_kinds = {score.kind for score in scores if score.kind is not None}
+    declared_metrics = {score.protocol_metric for score in scores if score.protocol_metric is not None}
     kind = (
         next(iter(declared_kinds))
         if declared and len(declared_kinds) == 1
@@ -220,6 +223,8 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
         eval_runtime=record.provenance.eval_runtime,
         status=record.status,
         declared=declared,
+        protocol_metric=next(iter(declared_metrics)) if declared and len(declared_metrics) == 1 else None,
+        protocol_kind=next(iter(declared_kinds)) if declared and len(declared_kinds) == 1 else None,
     )
 
 

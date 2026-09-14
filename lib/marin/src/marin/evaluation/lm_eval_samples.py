@@ -48,7 +48,9 @@ from marin.evaluation.archive import (
 )
 from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
-from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, TaskCoverage
+from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalTaskRef, TaskCoverage
+
+TaskDeclaration = EvalTaskConfig | EvalTaskRef
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +198,12 @@ def _sample_metrics(raw: dict) -> dict[str, float]:
 def _picked_metric(metrics: dict[str, float], primary_metric_name: str | None) -> tuple[str, float] | None:
     if primary_metric_name is None:
         return primary_metric(metrics)
-    return declared_metric(metrics, primary_metric_name)
+    picked = declared_metric(metrics, primary_metric_name)
+    if picked is not None:
+        return picked
+    if primary_metric_name.endswith("_avg"):
+        return declared_metric(metrics, primary_metric_name.removesuffix("_avg"))
+    return None
 
 
 def _correct(metrics: dict[str, float], primary_metric_name: str | None) -> bool | None:
@@ -431,22 +438,18 @@ def _task_keys(sources: Sequence[str], benchmark_sizes: Mapping[str, Mapping[str
 
 
 def _benchmark_sizes(
-    root: StoragePath,
-    artifacts: Sequence[str],
-    tasks: Sequence[EvalTaskConfig],
+    result_payloads: Mapping[str, bytes],
+    tasks: Sequence[TaskDeclaration],
 ) -> dict[str, dict[str, int]]:
     """Read each task's full benchmark size from its harness result or task declaration."""
     configs = {eval_task_directory(task.name, task.num_fewshot, task.task_alias): task for task in tasks}
     sizes: dict[str, dict[str, int]] = {}
-    for relative in artifacts:
-        name = PurePosixPath(relative).name
-        if not (name.startswith("results_") and name.endswith(".json")) or is_scratch_artifact(relative):
-            continue
+    for relative, payload in result_payloads.items():
         directory = PurePosixPath(relative).parent.parent.name
         task = configs.get(directory)
         if task is None:
             continue
-        result = json.loads(StoragePath(prefix_join(str(root), relative)).read_text())
+        result = json.loads(payload)
         reported = result.get("n-samples") or {}
         if reported:
             for leaf, count in reported.items():
@@ -455,13 +458,14 @@ def _benchmark_sizes(
                     raise ValueError(f"Evalchemy task {leaf!r} reported invalid benchmark size {original!r}")
                 sizes.setdefault(directory, {})[leaf] = original
             continue
-        if task.expected_items is None:
+        expected_items = task.expected_items if isinstance(task, EvalTaskConfig) else None
+        if expected_items is None:
             raise ValueError(f"Evalchemy task {task.name!r} did not report n-samples")
         result_tasks = result.get("results") or {}
         if len(result_tasks) != 1:
             raise ValueError(f"Evalchemy task {task.name!r} with expected_items must produce one result row")
         [leaf] = result_tasks
-        sizes.setdefault(directory, {})[leaf] = task.expected_items
+        sizes.setdefault(directory, {})[leaf] = expected_items
     for task in tasks:
         directory = eval_task_directory(task.name, task.num_fewshot, task.task_alias)
         if directory not in sizes:
@@ -477,6 +481,11 @@ def _benchmark_sizes(
 def _is_sample_source(relative: str) -> bool:
     """Whether a preserved artifact is an lm-eval per-sample jsonl this module can normalize."""
     return relative.rsplit("/", 1)[-1].startswith(SAMPLES_PREFIX) and relative.endswith(".jsonl")
+
+
+def _is_result_source(relative: str) -> bool:
+    name = PurePosixPath(relative).name
+    return name.startswith("results_") and name.endswith(".json") and not is_scratch_artifact(relative)
 
 
 def run_artifacts(out_path: str) -> list[str]:
@@ -518,7 +527,7 @@ class SampleExport:
 def export_lm_eval_samples(
     out_path: str,
     *,
-    tasks: Sequence[EvalTaskConfig] = (),
+    tasks: Sequence[TaskDeclaration] = (),
     max_eval_instances: int | None = None,
     writer_id: str = "evalchemy",
 ) -> SampleExport:
@@ -540,7 +549,12 @@ def export_lm_eval_samples(
         # already stored, so a run evaluated by another mechanism keeps the archive it has.
         return SampleExport(samples=0)
     require_current_samples(out_path)
-    benchmark_sizes = _benchmark_sizes(root, artifacts, tasks) if tasks else {}
+    result_payloads = {
+        relative: StoragePath(prefix_join(str(root), relative)).read_bytes()
+        for relative in artifacts
+        if _is_result_source(relative)
+    }
+    benchmark_sizes = _benchmark_sizes(result_payloads, tasks) if tasks else {}
     task_configs = {eval_task_directory(task.name, task.num_fewshot, task.task_alias): task for task in tasks}
     keys = _task_keys(sources, benchmark_sizes)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
@@ -549,7 +563,9 @@ def export_lm_eval_samples(
     recovered_metrics: dict[str, dict[str, float]] = {}
     try:
         for relative in artifacts:
-            payload = StoragePath(prefix_join(str(root), relative)).read_bytes()
+            payload = result_payloads.get(relative)
+            if payload is None:
+                payload = StoragePath(prefix_join(str(root), relative)).read_bytes()
             store.add_source_artifact(relative, payload, content_type=_content_type(relative))
             # One shard per artifact keeps a multi-hundred-megabyte results tree from buffering whole.
             store.flush()
@@ -578,8 +594,11 @@ def export_lm_eval_samples(
                 coverage[task_key] = task_coverage_result
                 if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
                     recovered_metrics[task_key] = task_metrics
+        grouped_directories = {
+            PurePosixPath(relative).parent.parent.name for relative, task_key in keys.items() if "/" in task_key
+        }
         for directory, leaf_sizes in benchmark_sizes.items():
-            grouped = len(leaf_sizes) > 1
+            grouped = directory in grouped_directories
             for leaf, n_benchmark in leaf_sizes.items():
                 task_key = f"{directory}/{leaf}" if grouped else directory
                 if task_key in coverage:
@@ -648,7 +667,7 @@ def preserved_sample_sources(out_path: str) -> tuple[str, ...]:
     )
 
 
-def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int:
+def rebuild_lm_eval_samples(out_path: str, *, tasks: Sequence[TaskDeclaration] = (), writer_id: str = "rebuild") -> int:
     """Rebuild a run's ``samples`` table from the source artifacts preserved inside its archive.
 
     The inputs are the ``sources/`` blobs written by :func:`export_lm_eval_samples`, so this repairs
@@ -663,6 +682,7 @@ def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int
         raise FileNotFoundError(f"archive at {out_path!r} preserves no sample sources to rebuild from")
     require_current_samples(out_path)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
+    task_configs = {eval_task_directory(task.name, task.num_fewshot, task.task_alias): task for task in tasks}
     count = 0
     try:
         for name in names:
@@ -671,7 +691,16 @@ def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int
             payload = reader.read_blob(name)
             if payload is None:
                 raise FileNotFoundError(f"archive at {out_path!r} lists source blob {name!r} but cannot read it")
-            count += len(_add_lm_eval_rows(store, name.rsplit("/", 1)[-1], payload))
+            directory = PurePosixPath(name).parent.parent.name
+            task = task_configs.get(directory)
+            count += len(
+                _add_lm_eval_rows(
+                    store,
+                    name.rsplit("/", 1)[-1],
+                    payload,
+                    primary_metric_name=task.primary_metric if task is not None else None,
+                )
+            )
         store.seal()
     finally:
         store.close()

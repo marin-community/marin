@@ -55,6 +55,8 @@ def _measurement(
     metric: str = "exact_match,flexible-extract",
     kind: MetricKind = MetricKind.BINARY,
     declared: bool = False,
+    protocol_metric: str | None = None,
+    protocol_kind: MetricKind | None = None,
     n_benchmark: int | None = None,
     item_cap: int | None = None,
 ) -> Measurement:
@@ -72,6 +74,8 @@ def _measurement(
         status=status,
         flags=flags,
         declared=declared,
+        protocol_metric=protocol_metric or (metric.split(",", 1)[0] if declared else None),
+        protocol_kind=protocol_kind or (kind if declared else None),
         item_cap=item_cap,
     )
 
@@ -226,8 +230,17 @@ def test_difference_widening_is_asymmetric_in_which_run_lost_items():
 
 
 def test_difference_requires_one_metric_protocol():
-    with pytest.raises(AssertionError, match="same metric protocol"):
+    with pytest.raises(ValueError, match="different metrics"):
         difference_interval(_measurement(metric="acc"), _measurement(metric="f1", kind=MetricKind.CONTINUOUS))
+
+
+def test_difference_accepts_legacy_filters_and_interval_kinds_for_one_metric():
+    binary = _measurement(metric="exact_match,flexible-extract")
+    continuous = _measurement(metric="exact_match,none", kind=MetricKind.CONTINUOUS, n_correct=50)
+
+    interval = difference_interval(binary, continuous)
+
+    assert interval.low <= interval.high
 
 
 # --------------------------------------------------------------------------------------------------
