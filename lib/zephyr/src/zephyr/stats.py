@@ -122,6 +122,7 @@ class ZephyrWorkerStat:
     execution_id: str
     stage_name: str
     shard_idx: int
+    attempt_id: str
     status: str  # ZephyrWorkerStatStatus value; str because LogClient cannot serialize StrEnum
     ts: datetime
     items: int
@@ -254,6 +255,7 @@ class StatsWriter:
         status: ZephyrWorkerStatStatus,
         start_time: float,
         counters: dict[str, int | float],
+        attempt_id: str,
     ) -> None:
         """Build and emit a ZephyrWorkerStat row from the runner's counter dict."""
         if self._worker_table is None:
@@ -267,6 +269,7 @@ class StatsWriter:
             execution_id=execution_id,
             stage_name=stage_name,
             shard_idx=shard_idx,
+            attempt_id=attempt_id,
             status=status,
             ts=datetime.now(UTC).replace(tzinfo=None),
             items=items,
@@ -286,41 +289,61 @@ class StatsWriter:
             logger.warning("Failed to write worker stat to finelog", exc_info=True)
 
     def query_pipeline_metrics(self, execution_id: str, max_points: int) -> PipelineMetricsResult:
-        """Return bounded 15-second pipeline metrics from worker samples."""
+        """Return 15-second averages from intervals within each shard attempt.
+
+        Counter deltas and sampled memory contribute only for their interval's
+        overlap with each bin. Failed attempts include work up to their last
+        sample. No usage extends beyond the last sample of an attempt.
+        """
         if self._log_client is None:
             return PipelineMetricsResult((), "Finelog is not available for this coordinator.")
 
         escaped_execution_id = execution_id.replace("'", "''")
         sql = f"""
-WITH recent_bins AS (
-  SELECT DISTINCT date_bin(INTERVAL '{METRIC_BIN_SECONDS} seconds', ts) AS time_bin
+WITH samples AS (
+  SELECT stage_name, status, mem_current_bytes,
+         extract(epoch FROM ts) AS sample_time,
+         lag(extract(epoch FROM ts)) OVER attempt AS previous_time,
+         items - lag(items) OVER attempt AS items,
+         bytes_processed - lag(bytes_processed) OVER attempt AS bytes_processed,
+         cpu_time_total - lag(cpu_time_total) OVER attempt AS cpu_time
   FROM "{ZEPHYR_WORKER_STATS_NAMESPACE}"
   WHERE execution_id = '{escaped_execution_id}'
-    AND status = '{ZephyrWorkerStatStatus.RUNNING}'
-  ORDER BY 1 DESC
-  LIMIT {max_points}
-), per_shard AS (
-  SELECT date_bin(INTERVAL '{METRIC_BIN_SECONDS} seconds', samples.ts) AS time_bin,
-         samples.stage_name,
-         samples.shard_idx,
-         avg(samples.item_rate) AS item_rate,
-         avg(samples.byte_rate) AS byte_rate,
-         avg(samples.cpu_current_pct) / 100.0 AS cpu_cores,
-         avg(samples.mem_current_bytes) AS memory_bytes
-  FROM "{ZEPHYR_WORKER_STATS_NAMESPACE}" AS samples
-  INNER JOIN recent_bins
-    ON date_bin(INTERVAL '{METRIC_BIN_SECONDS} seconds', samples.ts) = recent_bins.time_bin
-  WHERE samples.execution_id = '{escaped_execution_id}'
-    AND samples.status = '{ZephyrWorkerStatStatus.RUNNING}'
-  GROUP BY 1, 2, 3
+    AND attempt_id IS NOT NULL
+  WINDOW attempt AS (PARTITION BY stage_name, shard_idx, attempt_id ORDER BY ts, seq)
+), intervals AS (
+  SELECT * FROM samples
+  WHERE sample_time > previous_time AND status != '{ZephyrWorkerStatStatus.START}'
+), bounds AS (
+  SELECT CAST(floor(min(previous_time) / {METRIC_BIN_SECONDS}) AS BIGINT) AS first_bin,
+         CAST(ceil(max(sample_time) / {METRIC_BIN_SECONDS}) AS BIGINT) - 1 AS last_bin
+  FROM intervals
+), bins AS (
+  SELECT unnest(generate_series(greatest(first_bin, last_bin - {max_points} + 1), last_bin))
+         * {METRIC_BIN_SECONDS} AS bin_start
+  FROM bounds
+  WHERE first_bin IS NOT NULL
+), stages AS (
+  SELECT DISTINCT stage_name FROM intervals
+  WHERE sample_time > (SELECT min(bin_start) FROM bins)
+  ORDER BY stage_name
+  LIMIT {MAX_METRIC_STAGE_SERIES}
+), overlaps AS (
+  SELECT bins.bin_start, stages.stage_name, sample_time, previous_time,
+         items, bytes_processed, cpu_time, mem_current_bytes,
+         least(sample_time, bin_start + {METRIC_BIN_SECONDS})
+           - greatest(previous_time, bin_start) AS duration
+  FROM bins CROSS JOIN stages
+  LEFT JOIN intervals ON intervals.stage_name = stages.stage_name
+    AND sample_time > bin_start AND previous_time < bin_start + {METRIC_BIN_SECONDS}
 )
-SELECT time_bin,
+SELECT to_timestamp_millis(bin_start * 1000) AS time_bin,
        stage_name,
-       sum(item_rate) AS item_rate,
-       sum(byte_rate) AS byte_rate,
-       sum(cpu_cores) AS cpu_cores,
-       sum(memory_bytes) AS memory_bytes
-FROM per_shard
+       sum(items * duration / (sample_time - previous_time)) / {METRIC_BIN_SECONDS} AS item_rate,
+       sum(bytes_processed * duration / (sample_time - previous_time)) / {METRIC_BIN_SECONDS} AS byte_rate,
+       sum(cpu_time * duration / (sample_time - previous_time)) / {METRIC_BIN_SECONDS} AS cpu_cores,
+       sum(mem_current_bytes * duration) / {METRIC_BIN_SECONDS} AS memory_bytes
+FROM overlaps
 GROUP BY 1, 2
 ORDER BY 1 DESC, 2
 LIMIT {max_points + MAX_METRIC_STAGE_SERIES}

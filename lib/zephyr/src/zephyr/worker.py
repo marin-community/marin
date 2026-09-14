@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 import traceback
+import uuid
 from collections import defaultdict
 from collections.abc import Callable, Hashable
 from contextlib import suppress
@@ -50,6 +51,7 @@ class _ActiveShard:
     task: ShardTask
     execution_id: str
     start_time: float
+    attempt_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     last_counters: dict[str, CounterEntry] = field(default_factory=dict)
 
 
@@ -264,6 +266,7 @@ class ZephyrWorker:
                     ZephyrWorkerStatStatus.START,
                     active_shard.start_time,
                     {},
+                    active_shard.attempt_id,
                 )
             t = threading.Thread(
                 target=self._task_thread,
@@ -375,6 +378,7 @@ class ZephyrWorker:
                 status,
                 active_shard.start_time,
                 _counter_values(counters),
+                active_shard.attempt_id,
             )
             self._active_shards.remove(active_shard)
 
@@ -409,6 +413,7 @@ class ZephyrWorker:
                         ZephyrWorkerStatStatus.RUNNING,
                         active_shard.start_time,
                         _counter_values(counters),
+                        active_shard.attempt_id,
                     )
                 entries_by_execution[active_shard.execution_id].extend(counters.items())
         snapshots: dict[str, CounterSnapshot] = {}

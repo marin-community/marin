@@ -49,7 +49,6 @@ class DashboardExecution(Protocol):
     plan: PhysicalPlan | None
     dashboard_plan: PipelinePlan | None
     stage_name: str
-    current_stage_index: int
     completed_shards: int
     total_shards: int
     retries: int
@@ -58,6 +57,9 @@ class DashboardExecution(Protocol):
     fatal_error: str | None
     terminal_error: Exception | None
     done: bool
+
+    @property
+    def node_states(self) -> Mapping[str, PlanNodeState]: ...
 
     @property
     def in_flight(self) -> Mapping[int, InFlightTask]: ...
@@ -188,25 +190,13 @@ class CoordinatorDashboard:
             cpu_capacity = active_workers * self._coordinator._worker_resources.cpu
             memory_capacity = active_workers * self._coordinator._worker_resources.memory
             safe_plan = self._plan_locked(run)
-            nodes_by_id = {node.node_id: node for node in safe_plan.nodes}
             node_statuses: list[PlanNodeStatus] = []
             phase = self._phase_locked(run)
             for node in safe_plan.nodes:
                 if node.stage_type == SOURCE_STAGE_TYPE:
                     state = PlanNodeState.SUCCEEDED
                 else:
-                    parent = nodes_by_id.get(node.parent_node_id)
-                    stage_index = parent.stage_index if parent is not None else node.stage_index
-                    if stage_index < run.current_stage_index:
-                        state = PlanNodeState.SUCCEEDED
-                    elif phase is PipelinePhase.FAILED and stage_index == run.current_stage_index:
-                        state = PlanNodeState.FAILED
-                    elif stage_index > run.current_stage_index or not run.stage_name:
-                        state = PlanNodeState.PENDING
-                    elif run.done or (run.total_shards > 0 and run.completed_shards >= run.total_shards):
-                        state = PlanNodeState.SUCCEEDED
-                    else:
-                        state = PlanNodeState.RUNNING
+                    state = run.node_states.get(node.node_id, PlanNodeState.PENDING)
                 node_statuses.append(PlanNodeStatus(node_id=node.node_id, state=state))
 
             return PipelineStatus(

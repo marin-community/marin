@@ -242,7 +242,11 @@ function startDashboard() {
       chart(data.points, 'cpu_cores', 'CPU cores', number),
       chart(data.points, 'memory_bytes', 'Memory', bytes),
     );
-    byId('content').replaceChildren(element('p', data.warning), charts);
+    byId('content').replaceChildren(
+      element('p', data.warning),
+      element('p', '15-second averages, including work from failed attempts. Memory is estimated between samples.'),
+      charts,
+    );
   }
 
   async function refresh() {

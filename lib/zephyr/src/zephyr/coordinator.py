@@ -10,9 +10,9 @@ import sys
 import threading
 import time
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -27,7 +27,13 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, log_time
 from starlette.types import ASGIApp
 
-from zephyr.dashboard.app import PipelinePlan, create_dashboard_application
+from zephyr.dashboard.app import (
+    PipelinePlan,
+    PlanNodeState,
+    create_dashboard_application,
+    join_right_prefix,
+    stage_node_id,
+)
 from zephyr.dashboard.coordinator import CoordinatorDashboard
 from zephyr.memory_store import MemoryTableRegistration
 from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, SourceItem, StageType
@@ -164,6 +170,7 @@ class _PipelineExecution:
     plan: PhysicalPlan | None = None
     pipeline_name: str = ""
     dashboard_plan: PipelinePlan | None = None
+    node_states: dict[str, PlanNodeState] = field(default_factory=dict)
     started_at_ms: int = 0
     finished_at_ms: int = 0
     task_queue: deque[ShardTask] = field(default_factory=deque)
@@ -1266,20 +1273,23 @@ class ZephyrCoordinator:
                 run.plan_stages = list(plan.stages)
 
             for stage_idx, stage in enumerate(plan.stages):
+                node_id = stage_node_id("main", stage_idx)
                 if stage.stage_type == StageType.RESHARD:
-                    shards = _reshard_refs(shards, stage.output_shards or len(shards))
+                    with self._track_plan_node(run, node_id):
+                        shards = _reshard_refs(shards, stage.output_shards or len(shards))
                     continue
 
                 aux_per_shard = self._compute_join_aux(run, stage.operations, shards, stage_idx)
-                shards = self._run_worker_stage(
-                    run,
-                    stage,
-                    shards,
-                    stage_label=f"stage{stage_idx}-{stage.stage_name(max_length=40)}",
-                    stage_index_for_state=stage_idx,
-                    aux_per_shard=aux_per_shard,
-                    is_last_stage=(stage_idx == last_worker_stage_idx),
-                )
+                with self._track_plan_node(run, node_id):
+                    shards = self._run_worker_stage(
+                        run,
+                        stage,
+                        shards,
+                        stage_label=f"stage{stage_idx}-{stage.stage_name(max_length=40)}",
+                        stage_index_for_state=stage_idx,
+                        aux_per_shard=aux_per_shard,
+                        is_last_stage=(stage_idx == last_worker_stage_idx),
+                    )
 
             materialized = self._result_executor.map(list, shards)
 
@@ -1375,6 +1385,20 @@ class ZephyrCoordinator:
         ensure_parent_dir(result_path)
         StoragePath(result_path).write_bytes(cloudpickle.dumps(payload))
 
+    @contextmanager
+    def _track_plan_node(self, run: _PipelineExecution, node_id: str) -> Iterator[None]:
+        with self._lock:
+            run.node_states[node_id] = PlanNodeState.RUNNING
+        try:
+            yield
+        except Exception:
+            with self._lock:
+                run.node_states[node_id] = PlanNodeState.FAILED
+            raise
+        else:
+            with self._lock:
+                run.node_states[node_id] = PlanNodeState.SUCCEEDED
+
     def _run_worker_stage(
         self,
         run: _PipelineExecution,
@@ -1432,19 +1456,21 @@ class ZephyrCoordinator:
                 continue
 
             right_refs = _build_source_shards(op.right_plan.source_items)
+            prefix = join_right_prefix(stage_node_id("main", parent_stage_idx), i)
 
             for stage_idx, right_stage in enumerate(op.right_plan.stages):
-                if right_stage.stage_type == StageType.RESHARD:
-                    right_refs = _reshard_refs(right_refs, right_stage.output_shards or len(right_refs))
-                    continue
+                with self._track_plan_node(run, stage_node_id(prefix, stage_idx)):
+                    if right_stage.stage_type == StageType.RESHARD:
+                        right_refs = _reshard_refs(right_refs, right_stage.output_shards or len(right_refs))
+                        continue
 
-                right_refs = self._run_worker_stage(
-                    run,
-                    right_stage,
-                    right_refs,
-                    stage_label=f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}",
-                    stage_index_for_state=parent_stage_idx,
-                )
+                    right_refs = self._run_worker_stage(
+                        run,
+                        right_stage,
+                        right_refs,
+                        stage_label=f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}",
+                        stage_index_for_state=parent_stage_idx,
+                    )
 
             if len(shard_refs) != len(right_refs):
                 raise ValueError(
