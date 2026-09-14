@@ -27,6 +27,7 @@ AdvancedProfileOptionValue = bool | int | str
 DEFAULT_XPROF_SERVICE_URL = "https://iris.oa.dev/proxy/xprof"
 _XPROF_RUN_PATH = "plugins/profile"
 _XPROF_TTL_SEGMENT = re.compile(r"ttl=[1-9]\d*d")
+_XPROF_TTL_PREFIX = "xprof"
 _XLA_DUMP_TTL_PREFIX = "xla-dumps"
 
 
@@ -74,7 +75,7 @@ class XprofUploadConfig:
 
     def destination_for_run(self, run_id: str) -> str:
         """Resolve the run's upload root."""
-        return marin_temp_bucket(self.ttl_days, prefix=f"xprof/{run_id}")
+        return marin_temp_bucket(self.ttl_days, prefix=f"{_XPROF_TTL_PREFIX}/{run_id}")
 
 
 @dataclass(frozen=True)
@@ -151,7 +152,7 @@ class ProfilerConfig:
         if num_steps is None:
             num_steps = self.num_steps
         upload_uri = self.upload.destination_for_run(run_id) if self.upload.enabled else None
-        if upload_uri is not None and not _is_ttl_root(StoragePath(upload_uri), "xprof"):
+        if upload_uri is not None and not _is_ttl_root(StoragePath(upload_uri), _XPROF_TTL_PREFIX):
             logger.info("MARIN_PREFIX has no remote XProf TTL store; keeping the profile at %s", path)
             upload_uri = None
         service_url = None
@@ -193,7 +194,7 @@ def xla_dump_path(xla_flags: str | None = None) -> Path | None:
 
 
 def upload_xla_dumps(dump_path: Path, upload_uri: str, started_at: float) -> None:
-    """Upload XLA dump files produced after ``started_at`` without staging them in W&B."""
+    """Upload XLA dump files produced after ``started_at``."""
     if not dump_path.is_dir():
         logger.warning("XLA dump directory %s does not exist; skipping upload.", dump_path)
         return
