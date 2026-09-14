@@ -40,8 +40,9 @@ The HTML page loads result JSON from public GCS. Checkpoint tensors stay in Core
 The [Actions workflow](../../../../../.github/workflows/hero-completions.yaml) runs from `main`.
 It needs repository secrets `CW_ACCESS_KEY_ID`, `CW_SECRET_ACCESS_KEY`, and
 `IRIS_CI_GCP_SA_KEY`, plus issue-write permission for its GitHub token.
-Before deployment, approve the service account for Iris IAP, federation, target-cluster
-submission, and writes to `marin-public`. Access changes require separate approval.
+Before deployment, approve the account in `IRIS_CI_GCP_SA_KEY` for Iris IAP,
+federation, writes to `marin-public`, and submission to `TARGET_CLUSTER` in [config.py](config.py).
+Access changes require separate approval.
 The workflow does not change the hero run or cluster.
 
 ## Operation and recovery

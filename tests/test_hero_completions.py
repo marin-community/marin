@@ -355,6 +355,8 @@ def test_daily_publication_preserves_history_across_retries_and_new_days(tmp_pat
     assert next_url != url
     assert f'href="{next_url}"' in latest.read_text()
     assert page.read_text() == first_page
+    assert len(comments) == 2
+    assert next_url in comments[1]
 
 
 def test_report_data_cannot_close_its_script_element(sample_request):

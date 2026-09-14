@@ -47,7 +47,7 @@ def main() -> None:
         logger.info("Daily report: %s", url)
         return
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    requests = discover_requests(CHECKPOINT_RUNS, sampling_spec(), revision, TARGET_CLUSTER)
+    requests = discover_requests(CHECKPOINT_RUNS, sampling_spec(), revision, target_cluster=TARGET_CLUSTER)
     if args.action == "inventory":
         for request in sorted(requests, key=lambda value: value.checkpoint.step):
             logger.info("%s step=%d %s", request.sample_id, request.checkpoint.step, request.checkpoint.uri)

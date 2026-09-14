@@ -13,6 +13,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.storage_path import prefix_join
 
+ABSENT_ATTEMPT_TIMEOUT = timedelta(hours=48)
+CAPACITY_RETRY_DELAY = timedelta(hours=6)
+MAX_SAMPLING_FAILURES = 3
+
 
 class Record(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -216,16 +220,22 @@ def reconcile(store: SampleStore, jobs: Jobs, requests: list[SampleRequest], now
             entries[key] = entry.model_copy(update={"phase": Phase.COMPLETE, "request": result.request, "error": ""})
         elif status == JobStatus.MISSING:
             assert entry.started_at is not None
-            if now - entry.started_at < timedelta(hours=48):
+            if now - entry.started_at < ABSENT_ATTEMPT_TIMEOUT:
                 continue  # Retry submission below, using the same name and pinned request.
-            entries[key] = entry.model_copy(update={"phase": Phase.FAILED, "error": "Attempt absent after 48 hours"})
+            entries[key] = entry.model_copy(
+                update={"phase": Phase.FAILED, "error": "Attempt absent past recovery deadline"}
+            )
         elif status == JobStatus.DEFERRED:
             entries[key] = entry.model_copy(
-                update={"phase": Phase.QUEUED, "retry_after": now + timedelta(hours=6), "error": "Waiting for capacity"}
+                update={
+                    "phase": Phase.QUEUED,
+                    "retry_after": now + CAPACITY_RETRY_DELAY,
+                    "error": "Waiting for capacity",
+                }
             )
         else:
             failures = entry.failures + 1
-            phase = Phase.QUEUED if failures < 3 else Phase.FAILED
+            phase = Phase.QUEUED if failures < MAX_SAMPLING_FAILURES else Phase.FAILED
             entries[key] = entry.model_copy(
                 update={"phase": phase, "failures": failures, "error": f"Job {status} without a result"}
             )

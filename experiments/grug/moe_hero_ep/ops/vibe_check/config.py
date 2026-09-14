@@ -82,7 +82,7 @@ def sampling_resources() -> ResourceConfig:
 
 
 def discover_requests(
-    runs: tuple[CheckpointRun, ...], spec: SamplingSpec, revision: str, target_cluster: str
+    runs: tuple[CheckpointRun, ...], spec: SamplingSpec, revision: str, *, target_cluster: str
 ) -> list[SampleRequest]:
     """Read committed permanent checkpoints in the declared production lineage, without tensor reads."""
     checkpoints: dict[str, Checkpoint] = {}
@@ -96,7 +96,7 @@ def discover_requests(
             logger.warning("No complete checkpoints found for run %s at version %s", run.run_id, run.version)
         for checkpoint in run.additional_checkpoints:
             if not any(candidate.path == checkpoint for candidate in candidates):
-                logger.warning("Configured checkpoint is unavailable: %s", checkpoint)
+                logger.warning("Configured checkpoint was not selected: %s", checkpoint)
         for candidate in candidates:
             if candidate.metadata.get("is_temporary") is not False:
                 continue

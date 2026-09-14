@@ -115,7 +115,7 @@ def test_discovery_excludes_temporary_incomplete_and_non_lineage_checkpoints(tmp
         CheckpointRun("old", "v1", max_step=7000, additional_checkpoints=(str(handoff),)),
         CheckpointRun("active", "v1"),
     )
-    requests = discover_requests(runs, spec, "a" * 40, "test")
+    requests = discover_requests(runs, spec, "a" * 40, target_cluster="test")
     assert {(row.checkpoint.run_id, row.checkpoint.step) for row in requests} == {
         ("old", 6000),
         ("old", 7000),

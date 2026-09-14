@@ -31,6 +31,7 @@ from experiments.grug.checkpointing import LEGACY_STATE_KEY, MASTER_PARAMS_KEY
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleRequest, SampleResult, SampleStore, digest
 from experiments.grug.moe_hero_ep.ops.vibe_check.generation import generate
+from experiments.grug.moe_hero_ep.train import _apply_qb_betas
 
 COMPUTE_POLICY = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
 
@@ -74,10 +75,7 @@ def restore_model(request: SampleRequest, mesh: jax.sharding.Mesh) -> Transforme
     if wrapped:
         state = state[LEGACY_STATE_KEY]
     jax.block_until_ready(state)
-    model = state[weights_key]
-    bias = -state["pending_qb_betas"]
-    bias -= jnp.mean(bias, axis=-1, keepdims=True)
-    return eqx.tree_at(lambda tree: tree.stacked_blocks.stacked.mlp.router_bias, model, bias)
+    return _apply_qb_betas(state[weights_key], state["pending_qb_betas"])
 
 
 @eqx.filter_jit
