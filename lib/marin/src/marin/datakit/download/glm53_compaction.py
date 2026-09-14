@@ -14,6 +14,7 @@ import fsspec
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from openai_harmony import Message, Role
+from rigging.filesystem.storage_path import prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
@@ -30,6 +31,7 @@ from marin.execution.step_spec import StepSpec
 AGENTTROVE_NAME = "agenttrove-glm53-compactions"
 AGENTTROVE_REPO = "open-athena/" + AGENTTROVE_NAME
 AGENTTROVE_REVISION = "6daf898de0743872e972c2bfb7c399bd052bd31f"
+NUM_SHARDS = 32
 SOURCE_REPO = "open-thoughts/AgentTrove"
 SOURCE_REVISION = "b395a4307a2bc9950a90dc899438f149e115fc60"
 OPENCODE_REVISION = "0033bb35599a359def31b53d73e885eb4c44d815"
@@ -103,7 +105,7 @@ def compaction_document(row: dict, source: dict) -> dict:
 
 
 def resolve_reference_file(filename: str, rows: Iterator[dict], *, source_root: str) -> Iterator[dict]:
-    """Read each referenced Parquet row group once, projecting only source prompt columns."""
+    """Yield chat documents after validating their source references."""
     if re.fullmatch(r"data/train-[0-9]{5}-of-[0-9]{5}\.parquet", filename) is None:
         raise ValueError("Invalid source filename")
     groups: dict[int, list[dict]] = defaultdict(list)
@@ -118,7 +120,7 @@ def resolve_reference_file(filename: str, rows: Iterator[dict], *, source_root: 
         if row["source_row_group"] < 0 or row["source_row_in_group"] < 0:
             raise ValueError("Negative source row coordinate")
         groups[row["source_row_group"]].append(row)
-    with fsspec.open(f"{source_root}/{filename}", "rb", block_size=1024 * 1024) as stream:
+    with fsspec.open(prefix_join(source_root, filename), "rb", block_size=1024 * 1024) as stream:
         parquet = pq.ParquetFile(stream)
         for group, references in sorted(groups.items()):
             sources = parquet.read_row_group(group, columns=["conversations"]).to_pylist()
@@ -134,13 +136,15 @@ def transform_chat(input_path: str, output_path: str) -> None:
         .group_by(
             key=lambda row: row["source_file"],
             reducer=partial(resolve_reference_file, source_root=source_root),
-            num_output_shards=32,
+            num_output_shards=NUM_SHARDS,
         )
         .write_parquet(
             f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", schema=CHAT_SCHEMA, skip_existing=True
         )
     )
-    ZephyrContext(name=AGENTTROVE_NAME, resources=ResourceConfig(cpu=1, ram="8g"), max_workers=32).execute(pipeline)
+    ZephyrContext(name=AGENTTROVE_NAME, resources=ResourceConfig(cpu=1, ram="8g"), max_workers=NUM_SHARDS).execute(
+        pipeline
+    )
 
 
 def glm53_compaction_chat_normalize_steps() -> tuple[StepSpec, ...]:
