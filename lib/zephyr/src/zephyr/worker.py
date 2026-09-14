@@ -56,7 +56,6 @@ class _ActiveShard:
     execution_id: str
     start_time: float
     attempt: int
-    shuffle_reported: bool = False
     attempt_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     last_counters: dict[str, CounterEntry] = field(default_factory=dict)
 
@@ -405,8 +404,6 @@ class ZephyrWorker:
         return _format_worker_status_md(len(active), stage)
 
     def _report_shuffle_sizes(self, active: _ActiveShard, counters: dict[str, CounterEntry]) -> None:
-        if active.shuffle_reported:
-            return
         keys = (
             stage_counters.SHUFFLE_INPUT_ROWS,
             stage_counters.SHUFFLE_PAYLOAD_BYTES,
@@ -439,7 +436,6 @@ class ZephyrWorker:
             record.num_sources,
         )
         self._stats_writer.emit_shuffle_stats([record])
-        active.shuffle_reported = True
 
     def _next_counter_generation_locked(self) -> int:
         self._counter_generation += 1
@@ -452,7 +448,6 @@ class ZephyrWorker:
             for active_shard in self._active_shards:
                 counters = active_shard.runner.live_counters()
                 active_shard.last_counters = dict(counters)
-                self._report_shuffle_sizes(active_shard, counters)
                 if ZEPHYR_WORKER_MEM_CURRENT_KEY in counters:
                     self._stats_writer.emit_worker_stat(
                         active_shard.task.stage_name,

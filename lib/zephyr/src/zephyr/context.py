@@ -257,7 +257,7 @@ class ZephyrContext:
         max_concurrent_pipelines: Maximum pipelines one pool runs at the same
             time. A pipeline past the limit is rejected, not queued. Raise it
             for a driver that fans many pipelines onto one shared pool.
-        stats_config: Explicit Finelog endpoint and authentication for local reporting.
+        stats_config: Explicit Finelog endpoint for local reporting.
             When absent, discover Finelog through the Iris context.
     """
 

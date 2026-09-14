@@ -12,58 +12,9 @@ after the driver reads the result and releases coordinator state.
 See `lib/iris/OPS.md` → "Cluster Lifecycle" for `iris cluster dashboard` and
 `dashboard-proxy` commands.
 
-## Shuffle input reports
+## Shuffle inputs
 
-Zephyr records the input size of every reducer in a `group_by` stage. Each
-reducer sets three counters after its existing sidecar read: input rows,
-encoded payload bytes, and contributing mappers. The worker publishes one
-row per reduce attempt to the Finelog table `zephyr.shuffle`. Before a
-reduce stage starts, the coordinator writes one placeholder row per target
-with null counts. Reporting is always on. It adds no sidecar or Parquet
-reads.
-
-Run the local demo. It starts an embedded Finelog server and writes an HTML
-report:
-
-```bash
-uv run python lib/zephyr/scripts/shuffle_diagnostics_demo.py --output /tmp/shuffle.html
-```
-
-Run the same demo against the hosted Finelog:
-
-```bash
-uv run python lib/zephyr/scripts/shuffle_diagnostics_demo.py \
-  --stats-url https://iris.oa.dev/proxy/system.log-server \
-  --auth-profile marin --output /tmp/shuffle-hosted.html
-```
-
-Query one run. Use `result.execution_id` from `ctx.execute`:
-
-```sql
-SELECT target_shard, input_rows, payload_bytes, num_sources
-FROM (
-  SELECT *, ROW_NUMBER() OVER (
-    PARTITION BY execution_id, stage_name, target_shard
-    ORDER BY attempt DESC, (input_rows IS NOT NULL) DESC, ts DESC, seq DESC) AS rn
-  FROM "zephyr.shuffle"
-  WHERE execution_id = '<id>' AND stage_name = '<reduce stage>'
-) WHERE rn = 1
-ORDER BY payload_bytes DESC NULLS LAST
-```
-
-The Grafana dashboard is `infra/grafana/dashboards/zephyr.json`. It must be
-deployed before its links work.
-
-How to read the rows:
-
-- A null count means unreported. The reducer can be queued, reading, or its
-  row can be delayed or lost. Null is not a task state.
-- A measured zero means an empty target.
-- A row appears some time after the sidecar read. There is no fixed delay.
-- Set the query time range to include the run start. A narrow range drops
-  rows of reducers that still run.
-- The report shows target sizes only. It cannot tell one large key from
-  many keys.
+Zephyr reports reducer input rows, encoded payload bytes, and mapper counts to `zephyr.shuffle` in Finelog when each reducer attempt finishes. Use the [Zephyr Grafana dashboard](https://grafana.oa.dev/d/marin-zephyr) to debug slow shuffles; null sizes mean unreported and numeric zero means an empty target.
 
 ## Architecture
 

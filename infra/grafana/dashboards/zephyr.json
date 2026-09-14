@@ -1,7 +1,7 @@
 {
-  "uid": "marin-zephyr-shuffle",
-  "title": "Zephyr shuffle inputs",
-  "description": "Reducer input diagnostics with coordinator target announcements and incremental measurements. Null sizes are unreported; numeric zero means measured empty.",
+  "uid": "marin-zephyr",
+  "title": "Zephyr",
+  "description": "Zephyr pipeline diagnostics. Null sizes are unreported; numeric zero means measured empty.",
   "tags": [
     "marin",
     "zephyr"
@@ -139,7 +139,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Select one execution and its **reduce stage**. The coordinator announces each target with null sizes. Reducers fill in measurements after reading mapper metadata; transport can delay publication. **Coverage is measurement coverage, not task completion.** UNREPORTED targets may be queued, loading, or missing/delayed telemetry. The target table lists persisted announcements and measurements. Incomplete telemetry can temporarily omit IDs; the offline HTML report also infers missing IDs from the announced target count. Histograms and summaries exclude null sizes; numeric zero means measured empty. Queries prefer the greatest attempt, then a measurement over a placeholder, then timestamp and ingestion sequence. This does not establish which attempt succeeded. Encoded bytes exclude Parquet overhead and do not measure RAM or network traffic."
+        "content": "Select one execution and its **reduce stage**. The coordinator announces each target with null sizes. Reducer attempts publish their input totals when they finish; transport can delay publication. **Coverage is measurement coverage, not task completion.** UNREPORTED targets may be queued, running, or missing telemetry. The target table lists persisted announcements and measurements. Incomplete telemetry can temporarily omit IDs. Histograms and summaries exclude null sizes; numeric zero means measured empty. Queries prefer the greatest attempt, then a measurement over a placeholder, then timestamp and ingestion sequence. This does not establish which attempt succeeded. Encoded bytes exclude Parquet overhead and do not measure RAM or network traffic."
       }
     },
     {

@@ -28,8 +28,6 @@ from finelog.client import LogClient, Table
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
-from rigging.connect import IapAuth
-from rigging.credentials import iap_provider_for
 from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -163,10 +161,9 @@ class PipelineMetricsResult:
 
 @dataclass(frozen=True)
 class StatsConfig:
-    """Explicit Finelog URL and optional Marin cluster name for IAP credentials."""
+    """Explicit Finelog endpoint for local reporting."""
 
     url: str
-    auth_profile: str | None = None
 
 
 @dataclass
@@ -222,12 +219,7 @@ class StatsWriter:
         if resolved is None:
             return cls(None)
         try:
-            interceptors = (
-                IapAuth(iap_provider_for(config.auth_profile)).interceptors()
-                if config is not None and config.auth_profile is not None
-                else ()
-            )
-            return cls(LogClient.connect(resolved, interceptors=interceptors))
+            return cls(LogClient.connect(resolved))
         except Exception:
             logger.warning("Could not connect to finelog at %s; stats disabled", resolved, exc_info=True)
             return cls(None)

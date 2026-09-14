@@ -21,7 +21,6 @@ from zephyr import counters, runners, worker
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.runners import InlineRunner, SubprocessRunner
-from zephyr.shard_keys import deterministic_hash
 from zephyr.stage_io import ZephyrWorkerError
 from zephyr.stats import (
     ZEPHYR_STAGE_STATS_NAMESPACE,
@@ -404,51 +403,6 @@ def test_shuffle_diagnostics_persist_target_sizes(local_client, tmp_path, finelo
         assert {row["stage_name"] for row in targets} == {
             row["stage_name"] for row in stage_rows if "Reduce" in row["stage_name"]
         }
-
-
-def test_shuffle_diagnostics_visible_before_reducer_completes(local_client, tmp_path, finelog_server, runner_factory):
-    key = next(value for value in range(100) if deterministic_hash(value) % 8 == 0)
-
-    def reduce_after_observation(key, items):
-        query_client = LogClient.connect(finelog_server)
-        reports = []
-
-        def input_size_visible():
-            nonlocal reports
-            if "zephyr.shuffle" not in {info.namespace for info in query_client.list_namespaces()}:
-                return False
-            reports = query_client.query('SELECT * FROM "zephyr.shuffle"').to_pylist()
-            return any(row["target_shard"] == 0 and row["input_rows"] is not None for row in reports)
-
-        try:
-            assert ExponentialBackoff().wait_until(input_size_visible, timeout=Duration.from_seconds(25))
-            placeholders = [row for row in reports if row["input_rows"] is None]
-            measured = [row for row in reports if row["input_rows"] is not None]
-            assert sorted(row["target_shard"] for row in placeholders) == list(range(8))
-            assert all(row["payload_bytes"] is None and row["num_sources"] is None for row in placeholders)
-            assert len(measured) == 1
-            assert measured[0]["input_rows"] == 10
-            assert measured[0]["num_targets"] == 8
-            assert measured[0]["num_sources"] == 2
-            return key, sum(row["value"] for row in items)
-        finally:
-            query_client.close()
-
-    dataset = (
-        Dataset.from_list([{"key": key, "value": 1}] * 10)
-        .reshard(2)
-        .group_by(key=lambda row: row["key"], reducer=reduce_after_observation, num_output_shards=8)
-    )
-    with ZephyrContext(
-        client=local_client,
-        max_workers=1,
-        resources=ResourceConfig(cpu=1, ram="512m"),
-        chunk_storage_prefix=str(tmp_path / "chunks"),
-        stats_config=StatsConfig(finelog_server),
-        stage_runner_factory=runner_factory,
-    ) as context:
-        result = context.execute(dataset)
-    assert result.results == [(key, 10)]
 
 
 def test_shuffle_diagnostics_do_not_add_storage_reads(local_client, tmp_path, monkeypatch):
