@@ -153,12 +153,11 @@ def _checkpoint_storage_key(output_path: str) -> str:
 
 def temporary_storage_base_path(output_path: str, *, ttl_days: int, category: str) -> str:
     """Return region-local temporary storage keyed by an executor output path."""
-    output_key = StoragePath(output_path).key
-    return marin_temp_bucket(
+    temporary_root = marin_temp_bucket(
         ttl_days=ttl_days,
-        prefix=prefix_join(category, output_key),
         source_prefix=output_path,
     )
+    return str(StoragePath(temporary_root) / category / StoragePath(output_path).key)
 
 
 def temporary_checkpoint_base_path(output_path: str) -> str:
@@ -166,10 +165,9 @@ def temporary_checkpoint_base_path(output_path: str) -> str:
     output_key = _checkpoint_storage_key(output_path)
     temporary_root = marin_temp_bucket(
         ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        prefix=prefix_join(TEMPORARY_CHECKPOINTS_PATH, output_key),
         source_prefix=output_path,
     )
-    return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
+    return str(StoragePath(temporary_root) / TEMPORARY_CHECKPOINTS_PATH / output_key / DEFAULT_CHECKPOINTS_PATH)
 
 
 def data_local_temporary_checkpoint_base_path(output_path: str) -> str:
@@ -177,11 +175,10 @@ def data_local_temporary_checkpoint_base_path(output_path: str) -> str:
     output_key = _checkpoint_storage_key(output_path)
     temporary_root = marin_temp_bucket(
         ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        prefix=prefix_join(TEMPORARY_CHECKPOINTS_PATH, output_key),
         source_prefix=output_path,
         use_env_override=False,
     )
-    return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
+    return str(StoragePath(temporary_root) / TEMPORARY_CHECKPOINTS_PATH / output_key / DEFAULT_CHECKPOINTS_PATH)
 
 
 def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_path: str) -> CheckpointerConfig:
