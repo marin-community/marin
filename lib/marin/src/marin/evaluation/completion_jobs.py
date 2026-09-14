@@ -36,6 +36,7 @@ class IrisSamplingJobs:
         store_root: str,
         resources: ResourceConfig,
         processes_per_task: int,
+        sampler_module: str,
     ):
         self.client = client
         self.endpoint = endpoint
@@ -43,6 +44,7 @@ class IrisSamplingJobs:
         self.store_root = store_root
         self.resources = resources
         self.processes_per_task = processes_per_task
+        self.sampler_module = sampler_module
 
     def status(self, name: str) -> JobStatus:
         try:
@@ -70,7 +72,7 @@ class IrisSamplingJobs:
             command=[
                 "python",
                 "-m",
-                "experiments.grug.moe_hero_ep.sample_completions",
+                self.sampler_module,
                 "--request",
                 "completion-request.json",
                 "--store-root",

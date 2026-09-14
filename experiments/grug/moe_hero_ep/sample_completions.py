@@ -26,10 +26,10 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.tensorstore_serialization import build_kvstore_spec
 from marin.evaluation.completion_generation import generate
 from marin.evaluation.completions import SampleRequest, SampleResult, SampleStore, digest
-from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoTokenizer
 
+from experiments.grug.checkpointing import LEGACY_STATE_KEY, MASTER_PARAMS_KEY
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 
 COMPUTE_POLICY = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
@@ -38,41 +38,41 @@ COMPUTE_POLICY = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16
 def restore_model(request: SampleRequest, mesh: jax.sharding.Mesh) -> Transformer:
     """Restore authoritative weights and pending router bias, with no optimizer or fallback checkpoint."""
     checkpoint = request.checkpoint.uri
-    metadata = json.loads(StoragePath(f"{checkpoint}/metadata.json").read_text())
+    checkpoint_path = StoragePath(checkpoint)
+    metadata = json.loads((checkpoint_path / "metadata.json").read_text())
     if digest(metadata) != request.checkpoint.metadata_digest or metadata.get("is_temporary") is not False:
         raise ValueError("Checkpoint metadata changed or checkpoint is not permanent")
     config = draccus.decode(GrugModelConfig, request.spec.model)
     template = eqx.filter_eval_shape(Transformer.init, config, key=jax.random.PRNGKey(0))
     manifest = read_manifest(checkpoint)
     if manifest is not None:
-        wrapped = any(path.startswith("train_state/") for path in manifest.array_paths)
-        prefix = "train_state/" if wrapped else ""
-        master = any(path.startswith(f"{prefix}master_params/") for path in manifest.array_paths)
-    elif StoragePath(f"{checkpoint}/manifest.ocdbt").exists():
+        wrapped = any(path.startswith(f"{LEGACY_STATE_KEY}/") for path in manifest.array_paths)
+        prefix = f"{LEGACY_STATE_KEY}/" if wrapped else ""
+        master = any(path.startswith(f"{prefix}{MASTER_PARAMS_KEY}/") for path in manifest.array_paths)
+    elif (checkpoint_path / "manifest.ocdbt").exists():
         # Probe known metadata keys inside the database. Filesystem directories cannot reveal this layout.
         kvstore = ts.KvStore.open({"driver": "ocdbt", "base": build_kvstore_spec(checkpoint)}).result()
-        wrapped = kvstore.read("train_state/pending_qb_betas/zarr.json").result().state == "value"
-        prefix = "train_state/" if wrapped else ""
-        master = kvstore.read(f"{prefix}master_params/token_embed/zarr.json").result().state == "value"
+        wrapped = kvstore.read(f"{LEGACY_STATE_KEY}/pending_qb_betas/zarr.json").result().state == "value"
+        prefix = f"{LEGACY_STATE_KEY}/" if wrapped else ""
+        master = kvstore.read(f"{prefix}{MASTER_PARAMS_KEY}/token_embed/zarr.json").result().state == "value"
     else:
         # Pre-manifest checkpoints use directory-backed arrays. Probe layout directories only.
-        fs, path = url_to_fs(checkpoint)
-        wrapped = fs.exists(f"{path}/train_state")
-        prefix = "train_state/" if wrapped else ""
-        master = fs.exists(f"{path}/{prefix}master_params")
-    weights_key = "master_params" if master else "params"
+        wrapped = (checkpoint_path / LEGACY_STATE_KEY).exists()
+        prefix = f"{LEGACY_STATE_KEY}/" if wrapped else ""
+        master = (checkpoint_path / f"{prefix}{MASTER_PARAMS_KEY}").exists()
+    weights_key = MASTER_PARAMS_KEY if master else "params"
     state_template: dict[str, Any] = {
         weights_key: template,
         "pending_qb_betas": jax.ShapeDtypeStruct((config.num_layers, config.num_experts), jnp.float32),
     }
     state = load_checkpoint(
-        {"train_state": state_template} if wrapped else state_template,
+        {LEGACY_STATE_KEY: state_template} if wrapped else state_template,
         checkpoint,
         mesh=mesh,
         allow_partial=False,
     )
     if wrapped:
-        state = state["train_state"]
+        state = state[LEGACY_STATE_KEY]
     jax.block_until_ready(state)
     model = state[weights_key]
     bias = -state["pending_qb_betas"]

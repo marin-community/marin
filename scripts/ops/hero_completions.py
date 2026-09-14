@@ -56,7 +56,13 @@ def main() -> None:
     with connect_controller(cluster_name="marin") as endpoint:
         with IrisClient.remote(endpoint.url, credentials=endpoint.credentials) as client:
             jobs = IrisSamplingJobs(
-                client, endpoint, Path.cwd(), args.store_root, sampling_resources(), HERO_PROCESSES_PER_TASK
+                client,
+                endpoint,
+                Path.cwd(),
+                args.store_root,
+                sampling_resources(),
+                HERO_PROCESSES_PER_TASK,
+                sampler_module="experiments.grug.moe_hero_ep.sample_completions",
             )
             queue = reconcile(store, jobs, requests, now)
     logger.info("Checkpoint history contains %d sample sets", len(queue.entries))

@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 
 import httpx
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
+from rigging.filesystem.storage_path import prefix_join
 
 from marin.evaluation.completions import Phase, Queue, SampleStore
 from marin.publish import sites
@@ -19,7 +20,9 @@ from marin.publish import sites
 REPORT_USER = "hero"
 REPORT_SLUG = "completions"
 COMMENT_MARKER = "<!-- hero-checkpoint-completions-v1 -->"
-ISSUE_API = "https://api.github.com/repos/marin-community/marin/issues/8827"
+ISSUES_API = "https://api.github.com/repos/marin-community/marin/issues"
+ISSUE_API = f"{ISSUES_API}/8827"
+COMMENT_PAGE_SIZE = 100
 logger = logging.getLogger(__name__)
 
 
@@ -62,7 +65,7 @@ def update_issue_comment(body: str, token: str) -> None:
         comment_ids = []
         page = 1
         while True:
-            response = client.get(f"{ISSUE_API}/comments", params={"per_page": 100, "page": page})
+            response = client.get(f"{ISSUE_API}/comments", params={"per_page": COMMENT_PAGE_SIZE, "page": page})
             response.raise_for_status()
             comments = response.json()
             comment_ids.extend(
@@ -70,14 +73,14 @@ def update_issue_comment(body: str, token: str) -> None:
                 for comment in comments
                 if comment["user"]["login"] == "github-actions[bot]" and COMMENT_MARKER in comment["body"]
             )
-            if len(comments) < 100:
+            if len(comments) < COMMENT_PAGE_SIZE:
                 break
             page += 1
         if len(comment_ids) > 1:
             logger.warning("Multiple managed comments %s; updating the newest", comment_ids)
         if comment_ids:
             response = client.patch(
-                f"https://api.github.com/repos/marin-community/marin/issues/comments/{max(comment_ids)}",
+                f"{ISSUES_API}/comments/{max(comment_ids)}",
                 json={"body": body},
             )
         else:
@@ -95,7 +98,7 @@ def publish_daily(store: SampleStore, day: date, comment: Callable[[str], None])
     queue, version = store.read_queue()
     if queue.published_date >= report_date:
         return queue.report_url
-    snapshot = conditional_object(f"{store.root}/reports/{report_date}.json")
+    snapshot = conditional_object(prefix_join(store.root, f"reports/{report_date}.json"))
     saved = snapshot.read()
     if saved is None:
         snapshot.write(queue.model_dump_json().encode(), expected_version=None)
@@ -105,7 +108,7 @@ def publish_daily(store: SampleStore, day: date, comment: Callable[[str], None])
     for key, entry in frozen.entries.items():
         if entry.phase != Phase.COMPLETE:
             continue
-        target = conditional_object(f"{sites.PUBLIC_ROOT}/{REPORT_USER}/{REPORT_SLUG}/results/{key}.json")
+        target = conditional_object(prefix_join(sites.PUBLIC_ROOT, f"{REPORT_USER}/{REPORT_SLUG}/results/{key}.json"))
         if target.version() is not None:
             continue
         result = store.result(entry.request)

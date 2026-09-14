@@ -3,12 +3,11 @@
 The completion workflow samples every retained permanent checkpoint in the production hero
 lineage. It checks the queue each hour and updates a public report each day after 08:00 UTC.
 It also updates one GitHub Actions comment on [issue 8827](https://github.com/marin-community/marin/issues/8827).
-Scheduled operation is not yet active. Cluster access approval is necessary. See
-[Schedule and recovery](#schedule-and-recovery).
+For the access requirements, see [Schedule and recovery](#schedule-and-recovery).
 
 The report's stable address is
 [`hero/completions/latest/index.html`](https://storage.googleapis.com/marin-public/hero/completions/latest/index.html).
-This address becomes available after the first successful scheduled publication.
+The first successful scheduled publication creates this address.
 Select two checkpoints and a prompt to compare their completions. The inventory includes
 pending and failed sample sets. Each completed set links to its raw JSON and generation settings.
 
@@ -90,16 +89,16 @@ secrets. The service account needs Iris IAP and federation access plus write acc
 `marin-public`. The workflow token needs issue-write permission. No daily operator step is needed.
 The workflow does not start, stop, or change the hero or its cluster.
 
-The checked-in `cw-us-east-08a` allowlist currently excludes `iris-ci-smoke`. Deployment needs
-an approved identity or allowlist change before this account can submit sampling jobs. This
-implementation does not change cluster access or restart a controller.
+Before deployment, confirm that the workflow's service account is an approved submitter in
+the target cluster's allowlist. Access changes require separate approval. The workflow does
+not change cluster access or restart a controller.
 
 The queue records an attempt before submission. A lost submit response is recovered through
 the same deterministic Iris job name, with replacement disabled. Retries bundle the request's
 original Git commit. The queue checks for a committed result before it retries a terminal job.
 It waits for the active job to stop before it starts another allocation.
 
-The controller discovers checkpoints and checks job status each hour. Report publication is
+The workflow's queue controller discovers checkpoints and checks job status each hour. Report publication is
 a separate workflow step. It can read the saved queue even if the controller step fails.
 Its first attempt saves the queue's requests and statuses as that day's snapshot.
 A publication retry reuses that snapshot and existing result objects. It never
@@ -118,7 +117,7 @@ uv run --no-sync python -m scripts.ops.hero_completions inventory
 ```
 
 Failed requests remain visible after their failure budget is exhausted. Correct the cause
-before starting another sample set. For a sampler correction, change `release="hero-native-v1"`
+before another attempt. To retry after a sampler, access, or service correction, change `release="hero-native-v1"`
 in `experiments/grug/moe_hero_ep/completion_config.py` to a new release. This creates new
 requests for every retained checkpoint, including checkpoints that succeeded before.
 Change the release when restore or decoding behavior changes. Requests keep the source

@@ -11,6 +11,7 @@ from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
+from rigging.filesystem.storage_path import prefix_join
 
 
 class Record(BaseModel):
@@ -37,7 +38,7 @@ class SamplingSpec(Record):
     context_length: int = Field(gt=0)
 
     @model_validator(mode="after")
-    def unique_prompts(self) -> Self:
+    def validate_prompt_bank(self) -> Self:
         if len({prompt.id for prompt in self.prompts}) != len(self.prompts):
             raise ValueError("Prompt IDs must be unique")
         if len(self.prompts) > self.batch_size:
@@ -159,8 +160,8 @@ class SampleStore:
     """Store queue state and immutable results through the shared conditional-object API."""
 
     def __init__(self, root: str):
-        self.root = root.rstrip("/")
-        self.state = conditional_object(f"{self.root}/queue.json")
+        self.root = root
+        self.state = conditional_object(prefix_join(root, "queue.json"))
 
     def read_queue(self) -> tuple[Queue, str | None]:
         value = self.state.read()
@@ -168,11 +169,11 @@ class SampleStore:
             return Queue(), None
         return Queue.model_validate_json(value.data), value.version
 
-    def save_queue(self, queue: Queue, version: str | None) -> str:
-        return self.state.write(queue.model_dump_json().encode(), expected_version=version)
+    def save_queue(self, queue: Queue, version: str | None) -> None:
+        self.state.write(queue.model_dump_json().encode(), expected_version=version)
 
     def result_uri(self, sample_id: str) -> str:
-        return f"{self.root}/results/{sample_id}.json"
+        return prefix_join(self.root, f"results/{sample_id}.json")
 
     def result(self, request: SampleRequest) -> SampleResult | None:
         value = conditional_object(self.result_uri(request.sample_id)).read()
