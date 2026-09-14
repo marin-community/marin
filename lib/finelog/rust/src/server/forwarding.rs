@@ -342,7 +342,6 @@ where
     T: connectrpc::client::ClientTransport,
     <T::ResponseBody as http_body::Body>::Error: std::fmt::Display,
 {
-    /// The validated target and sender identity this process is using.
     pub fn config(&self) -> &ForwardingConfig {
         &self.config
     }

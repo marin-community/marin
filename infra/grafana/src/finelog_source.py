@@ -26,7 +26,7 @@ from relay_health import RelaySenderStatus, relay_sender_statuses
 logger = logging.getLogger(__name__)
 
 _LIST_RELAY_STATUS_PATH = "/finelog.stats.StatsService/ListRelayStatus"
-_CONNECT_HEADERS = {"Connect-Protocol-Version": "1", "Content-Type": "application/json"}
+_CONNECT_HEADERS = (("Connect-Protocol-Version", "1"), ("Content-Type", "application/json"))
 
 
 class MetricSource(Protocol):
@@ -105,6 +105,8 @@ class FinelogSource:
         )
 
     def relay_status(self) -> tuple[RelaySenderStatus, ...]:
+        # Grafana is deployed from an independent lockfile, so this wire call cannot
+        # depend on a LogClient method released from the same repository revision.
         address = self._relay_server_address()
         try:
             response = self._relay_http.post(f"{address}{_LIST_RELAY_STATUS_PATH}", headers=_CONNECT_HEADERS, json={})

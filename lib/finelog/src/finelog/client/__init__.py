@@ -12,15 +12,7 @@ The error types live in :mod:`finelog.errors` and are re-exported here so
 callers can ``from finelog.client import SchemaConflictError`` etc.
 """
 
-from finelog.client.log_client import (
-    FlushResult,
-    LogClient,
-    NamespaceInfo,
-    RelayNamespaceStatus,
-    RelaySenderStatus,
-    Table,
-    schema_from_dataclass,
-)
+from finelog.client.log_client import FlushResult, LogClient, NamespaceInfo, Table, schema_from_dataclass
 from finelog.client.object_query_client import ObjectQueryClient
 from finelog.client.remote_log_handler import RemoteLogHandler
 from finelog.errors import (
