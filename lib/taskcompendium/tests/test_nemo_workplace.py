@@ -13,8 +13,8 @@ from threading import Thread
 import msgspec
 import pytest
 
-from taskcompendium.harbor.runner import run_trial
 from taskcompendium.execution import HarborExecutionConfig, HarborLaunchConfig
+from taskcompendium.harbor.runner import run_trial
 from taskcompendium.importers.nemo_workplace import FIXTURE_NAME, build_sample
 from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import ActionInterface, Outcome, ProviderStateVerifier

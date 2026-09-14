@@ -10,8 +10,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
-from taskcompendium.harbor.runner import run_trial
 from taskcompendium.execution import HarborExecutionConfig, HarborLaunchConfig
+from taskcompendium.harbor.runner import run_trial
 from taskcompendium.importers.nemo_workplace_multistep import build_multistep_sample
 from taskcompendium.lowering import lower_to_harbor
 
