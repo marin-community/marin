@@ -424,7 +424,7 @@ class TestPreemptionReassignment:
         ctrl = make_controller(remote_state_dir="file:///tmp/iris-5470-test")
         state = ControllerTestState(
             ctrl._db,
-            health=ctrl.backend.health,
+            health=ctrl.worker_health,
         )
 
         job_a_id, job_b_id = self._setup_two_gangs_running(ctrl, state)
@@ -470,7 +470,7 @@ class TestPreemptionReassignment:
             apply_task_observations(
                 cur,
                 [fail_request],
-                health=ctrl.backend.health,
+                health=ctrl.worker_health,
                 now=Timestamp.now(),
             )
         ctrl._run_scheduling()

@@ -43,7 +43,6 @@ class _LocalWorkerHandle:
     _vm_id: str
     _internal_address: str
     _port: int = 0
-    _bootstrap_log_lines: list[str] = field(default_factory=list)
 
     @property
     def worker_id(self) -> str:
@@ -96,20 +95,13 @@ class _LocalWorkerHandle:
         )
 
     def bootstrap(self, script: str) -> None:
-        self._bootstrap_log_lines.clear()
         result = subprocess.run(
             ["bash", "-c", script],
             capture_output=True,
             text=True,
         )
-        self._bootstrap_log_lines.extend(result.stdout.splitlines())
         if result.returncode != 0:
-            self._bootstrap_log_lines.extend(result.stderr.splitlines())
             raise RuntimeError(f"Bootstrap failed on {self._vm_id}: exit code {result.returncode}\n{result.stderr}")
-
-    @property
-    def bootstrap_log(self) -> str:
-        return "\n".join(self._bootstrap_log_lines)
 
     def restart_worker(self, bootstrap_script: str) -> None:
         logger.info("Worker restart requested for local VM %s (no-op)", self._vm_id)

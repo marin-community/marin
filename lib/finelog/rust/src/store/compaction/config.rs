@@ -46,6 +46,11 @@ pub struct CompactionConfig {
     /// promoted by rename instead of merged, so an oversized segment costs no
     /// merge memory and never wedges its level.
     pub max_merge_arrow_bytes: i64,
+    /// Most sources coalesced into one migration-backfill rewrite per
+    /// maintenance tick. One tick runs one multi-input job checkpointed by one
+    /// fenced commit, so a table of tens of thousands of tiny segments
+    /// migrates in hundreds of commits rather than tens of thousands.
+    pub migration_batch_sources: usize,
     /// Whole-namespace segment cap (eviction trigger).
     pub max_segments_per_namespace: usize,
     /// Whole-namespace byte cap on locally-retained segments (eviction trigger).
@@ -66,6 +71,7 @@ impl Default for CompactionConfig {
             // ~2x this in peak merge RSS. Sized for the 32 GiB hub box, whose
             // query pool may hold 21 GiB concurrently.
             max_merge_arrow_bytes: 4 * GIB,
+            migration_batch_sources: 1024,
             max_segments_per_namespace: 1000,
             max_bytes_per_namespace: 15 * 1024 * 1024 * 1024,
             check_interval: Duration::from_secs(30),

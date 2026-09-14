@@ -31,6 +31,7 @@ pub(crate) const IRIS_RPC_NAMESPACE: &str = "telemetry_v1.iris.rpc";
 pub(crate) const IRIS_NAMESPACE: &str = "telemetry_v1.iris";
 pub(crate) const VLLM_NAMESPACE: &str = "telemetry_v1.vllm";
 pub(crate) const ZEPHYR_NAMESPACE: &str = "telemetry_v1.zephyr";
+pub(crate) const FINELOG_NAMESPACE: &str = "telemetry_v1.finelog";
 const LEGACY_STEP_METRIC_NAMES: [&str; 2] = ["step", "global_step"];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -241,6 +242,7 @@ impl NamespaceStoragePolicy for TelemetryPolicy {
             IRIS_NAMESPACE,
             VLLM_NAMESPACE,
             ZEPHYR_NAMESPACE,
+            FINELOG_NAMESPACE,
         ]
     }
 }
@@ -871,6 +873,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
+    use crate::levanter_metrics_policy::LEVANTER_METRICS_POLICY;
     use crate::server::telemetry::telemetry_schema;
 
     fn telemetry_batch(services: &[&str], kinds: &[&str], names: &[&str]) -> RecordBatch {
@@ -1201,5 +1204,12 @@ mod tests {
                 .value(0),
             72.0
         );
+        LEVANTER_METRICS_POLICY
+            .route_batch(
+                IngestionBatchSource::Stored(LEVANTER_METRICS_NAMESPACE),
+                metrics,
+                &mut IngestionState::default(),
+            )
+            .expect("migrated metrics must satisfy live typed ingestion");
     }
 }

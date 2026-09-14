@@ -9,10 +9,12 @@ storage all agree on one shape: ``eval`` (not the Python attribute name ``evalua
 These tests pin that shape independently of the pydantic model that produces it.
 """
 
+import dataclasses
 import json
 from pathlib import Path
 
 import pytest
+from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.records import (
     EvalchemyRef,
     EvalRef,
@@ -20,7 +22,12 @@ from marin.evaluation.records import (
     EvalTaskRef,
     HarborRef,
     HardwareRef,
+    ModelAgentConfig,
+    ModelConfigRef,
+    ModelGenerationConfig,
     ModelRef,
+    ModelResourceConfig,
+    ModelServeConfig,
     Provenance,
     RunStatus,
     RunTiming,
@@ -151,6 +158,22 @@ def test_serving_round_trips_and_defaults_to_none(tmp_path):
     assert read_record(path) == served
 
 
+def test_eval_family_is_optional_and_absent_from_a_record_that_declares_none(tmp_path):
+    path = write_record(_RECORD, str(tmp_path))
+    with open(path) as f:
+        raw = json.load(f)
+    assert "family" not in raw["eval"]
+    assert read_record(path).evaluation.family is None
+
+    familied = _RECORD.model_copy(update={"evaluation": _RECORD.evaluation.model_copy(update={"family": "gsm8k"})})
+    familied_path = write_record(familied, str(tmp_path / "familied"))
+    with open(familied_path) as f:
+        raw = json.load(f)
+
+    assert raw["eval"]["family"] == "gsm8k"
+    assert read_record(familied_path) == familied
+
+
 def test_read_records_collects_parse_failures_without_dropping_good_ones(tmp_path):
     """A malformed record.json alongside a valid one is reported as a failure (path + error) rather
     than silently skipped, and the valid record still comes back."""
@@ -224,6 +247,7 @@ def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_pat
                     env="daytona",
                     task_limit=2,
                     config_digest="sha256:" + "a" * 64,
+                    harbor_config_commit="b" * 40,
                 ),
             )
         }
@@ -240,6 +264,7 @@ def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_pat
         "env": "daytona",
         "task_limit": 2,
         "config_digest": "sha256:" + "a" * 64,
+        "harbor_config_commit": "b" * 40,
     }
 
 
@@ -329,3 +354,52 @@ def test_read_record_parses_a_previously_written_record_json(tmp_path, runtime_k
         "eval_runtime": "evalchemy:old",
         "launch_host": "ci-runner",
     }
+
+
+CONFIG_MIRRORS = (
+    (ModelConfigRef, ModelConfig),
+    (ModelResourceConfig, ResourceHint),
+    (ModelServeConfig, ServeConfig),
+    (ModelGenerationConfig, GenerationConfig),
+    (ModelAgentConfig, AgentConfig),
+)
+
+
+@pytest.mark.parametrize("mirror,launcher", CONFIG_MIRRORS, ids=[m.__name__ for m, _ in CONFIG_MIRRORS])
+def test_record_config_mirror_covers_every_launcher_field(mirror, launcher):
+    """A field the launcher records is a field the record schema keeps.
+
+    The mirrors drop what they do not name, so this is where drift has to fail; a record written
+    by a launcher ahead of the schema would otherwise silently lose the new field.
+    """
+    missing = {field.name for field in dataclasses.fields(launcher)} - set(mirror.model_fields)
+
+    assert not missing, f"{mirror.__name__} does not mirror {launcher.__name__} fields {sorted(missing)}"
+
+
+def test_a_serve_field_the_schema_has_not_learned_does_not_discard_the_run(tmp_path):
+    """An unknown key under model.config.serve costs that key, not the whole record."""
+    configured = _RECORD.model_copy(
+        update={
+            "model": ModelRef(
+                name="qwen3-8b",
+                location="gs://marin-models/qwen3-8b",
+                backend="vllm",
+                config=ModelConfigRef.model_validate(
+                    dataclasses.asdict(ModelConfig(name="qwen3-8b", location="gs://marin-models/qwen3-8b"))
+                ),
+            )
+        }
+    )
+    path = Path(write_record(configured, str(tmp_path)))
+    raw = json.loads(path.read_text())
+    raw["model"]["config"]["serve"]["pipeline_parallel_size"] = 2
+    path.write_text(json.dumps(raw))
+
+    record = read_record(str(path))
+
+    assert record.run_id == _RECORD.run_id
+    assert record.metrics == _RECORD.metrics
+    assert record.model.config is not None
+    assert record.model.config.serve.tensor_parallel_size is None
+    assert not hasattr(record.model.config.serve, "pipeline_parallel_size")

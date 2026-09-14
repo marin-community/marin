@@ -126,6 +126,16 @@ def test_resolve_model_path_includes_revision_in_cache_key(monkeypatch):
     assert observed == [("Qwen/Qwen3-0.6B@abc123", 14, "quick-serve-models")]
 
 
+@pytest.mark.parametrize("revision", [None, "abc123"])
+def test_resolve_model_path_returns_filesystem_path_for_local_cache(monkeypatch, revision):
+    monkeypatch.setattr(
+        "marin.inference.model_preparation.resolve_cached_model_path",
+        lambda *_args, **_kwargs: "file:///models/cached%20model",
+    )
+
+    assert resolve_model_path("Qwen/Qwen3-0.6B", 14, revision) == "/models/cached model"
+
+
 def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
     observed: dict[str, object] = {}
 

@@ -11,7 +11,7 @@ import type {
   LogEntry,
   FetchLogsResponse,
 } from '@/types/rpc'
-import { timestampMs, formatBytes, formatDuration, formatRelativeTime, formatRate, logLevelClass, formatLogTime, formatWorkerDevice } from '@/utils/formatting'
+import { timestampMs, formatBytes, formatAttemptDuration, formatRelativeTime, formatRate, logLevelClass, formatLogTime, formatWorkerDevice } from '@/utils/formatting'
 import { formatProvenance } from '@/utils/provenance'
 import { decodeArrowIpc } from '@/utils/arrow'
 
@@ -573,10 +573,7 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
             </template>
             <template #cell-duration="{ row }">
               <span class="font-mono text-xs">
-                {{ formatDuration(
-                  timestampMs((row as AttemptRow).attempt?.startedAt),
-                  timestampMs((row as AttemptRow).attempt?.finishedAt) || undefined,
-                ) }}
+                {{ formatAttemptDuration((row as AttemptRow).attempt) }}
               </span>
             </template>
           </DataTable>

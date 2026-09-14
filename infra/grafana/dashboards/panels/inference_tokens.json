@@ -1,0 +1,90 @@
+{
+  "type": "timeseries",
+  "title": "Prompt and generated tokens/s",
+  "description": "Fleet throughput, not tokens/s per request. Counter deltas are computed per producer before summing. A falling rate can reflect fewer active requests, slower decoding, or rollout phase changes. Missing samples are not filled with zero.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "tps",
+      "min": 0,
+      "noValue": "No samples",
+      "displayName": "${__field.labels.series}",
+      "custom": {
+        "drawStyle": "line",
+        "showPoints": "auto",
+        "spanNulls": false
+      }
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "timeseries",
+      "parser": "backend",
+      "url": "/v1/vllm/overview",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "identity_kind",
+            "value": "${identity_kind}"
+          },
+          {
+            "key": "identity",
+            "value": "${identity}"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "${__interval_ms}"
+          },
+          {
+            "key": "view",
+            "value": "token_rate"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "t",
+          "text": "time",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "series",
+          "text": "series",
+          "type": "string"
+        },
+        {
+          "selector": "value",
+          "text": "value",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

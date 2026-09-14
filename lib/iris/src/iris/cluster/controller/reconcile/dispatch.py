@@ -22,6 +22,7 @@ from sqlalchemy import select
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.budget import (
     UserTask,
+    budget_user_id,
     compute_effective_band,
     compute_user_spend,
     interleave_by_user,
@@ -140,6 +141,7 @@ class _RankRow:
 
     task_id: JobName
     job_id: JobName
+    budget_user: str
     num_tasks: int
     has_coscheduling: bool
     sort_key: _PriorityKey
@@ -154,6 +156,7 @@ def _ranking_rows(cur: Tx, *predicates) -> list[_RankRow]:
         select(
             local_tasks.c.task_id,
             local_tasks.c.job_id,
+            jobs_table.c.submitting_user,
             jobs_table.c.num_tasks,
             job_config_table.c.has_coscheduling,
             local_tasks.c.priority_neg_depth,
@@ -168,6 +171,7 @@ def _ranking_rows(cur: Tx, *predicates) -> list[_RankRow]:
         _RankRow(
             task_id=r.task_id,
             job_id=r.job_id,
+            budget_user=budget_user_id(r.job_id, str(r.submitting_user)),
             num_tasks=int(r.num_tasks),
             has_coscheduling=bool(r.has_coscheduling),
             sort_key=_PriorityKey(
@@ -221,7 +225,7 @@ def _rank_promotion_units(
     ranked: list[list[_RankRow]] = []
     for band in sorted(by_band, key=priority_band_rank):
         band_units = sorted(by_band[band], key=lambda unit: min(row.sort_key for row in unit))
-        user_units = [UserTask(user_id=unit[0].task_id.user, task=unit) for unit in band_units]
+        user_units = [UserTask(user_id=unit[0].budget_user, task=unit) for unit in band_units]
         ranked.extend(interleave_by_user(user_units, user_spend))
     return ranked
 
@@ -315,9 +319,10 @@ def drain_for_dispatch(
             resolved_bands = reads.get_priority_bands(cur, job_ids)
             user_spend = compute_user_spend(cur)
             user_budget_limits = reads.get_all_user_budget_limits(cur)
+            budget_users = {row.job_id: row.budget_user for row in candidates}
             effective_bands = {
                 job_id: compute_effective_band(
-                    resolved_bands[job_id], job_id.user, user_spend, user_budget_limits, defaults
+                    resolved_bands[job_id], budget_users[job_id], user_spend, user_budget_limits, defaults
                 )
                 for job_id in job_ids
             }

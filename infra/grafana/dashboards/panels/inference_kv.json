@@ -1,0 +1,122 @@
+{
+  "type": "timeseries",
+  "title": "KV-cache usage: mean and busiest engine",
+  "description": "Mean is the unweighted average of observed per-engine fractions; peak is the maximum raw engine sample in each bin. No capacity-weighted fleet percentage is available. Compare with waiting and preemptions; cache pressure alone does not identify the cause of latency.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "percentunit",
+      "min": 0,
+      "noValue": "No samples",
+      "displayName": "${__field.labels.series}",
+      "custom": {
+        "drawStyle": "line",
+        "showPoints": "auto",
+        "spanNulls": false
+      },
+      "max": 1
+    },
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "kv_cache_usage"
+        },
+        "properties": [
+          {
+            "id": "displayName",
+            "value": "Engine mean"
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "kv_cache_usage_peak"
+        },
+        "properties": [
+          {
+            "id": "displayName",
+            "value": "Busiest engine"
+          }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "legend": {
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "timeseries",
+      "parser": "backend",
+      "url": "/v1/vllm/overview",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "identity_kind",
+            "value": "${identity_kind}"
+          },
+          {
+            "key": "identity",
+            "value": "${identity}"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "${__interval_ms}"
+          },
+          {
+            "key": "view",
+            "value": "saturation"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "t",
+          "text": "time",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "series",
+          "text": "series",
+          "type": "string"
+        },
+        {
+          "selector": "value",
+          "text": "value",
+          "type": "number"
+        },
+        {
+          "selector": "metric",
+          "text": "metric",
+          "type": "string"
+        }
+      ],
+      "filterExpression": "metric == 'kv_cache_usage' || metric == 'kv_cache_usage_peak'"
+    }
+  ]
+}

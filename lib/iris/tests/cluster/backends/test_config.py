@@ -1933,9 +1933,7 @@ class TestBackendAttributes:
                         device_variant="H100",
                         capacity_type=CapacityType.ON_DEMAND,
                     ),
-                    slice_template=SliceConfig(
-                        num_vms=1, coreweave=CoreweaveSliceConfig(region="US-EAST-02A", gpu_class="H100")
-                    ),
+                    slice_template=SliceConfig(num_vms=1, coreweave=CoreweaveSliceConfig(region="US-EAST-02A")),
                 )
             }
         )
@@ -1972,7 +1970,6 @@ def test_make_task_backend_requires_kueue_for_k8s_backend():
         make_task_backend(
             config,
             descriptor=k8s_backend_descriptor(),
-            unreachable_grace=Duration.from_seconds(1),
         )
 
 
@@ -1990,7 +1987,6 @@ def test_k8s_backend_uses_canonical_default_task_image():
     backend = make_task_backend(
         config,
         descriptor=k8s_backend_descriptor(),
-        unreachable_grace=Duration.from_seconds(1),
     )
 
     assert isinstance(backend, K8sTaskProvider)

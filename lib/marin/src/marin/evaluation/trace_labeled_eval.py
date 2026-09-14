@@ -17,8 +17,6 @@ import jax
 import jmp
 import levanter
 import levanter.tracker
-from fray.current_client import current_client
-from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from levanter.data.sharded_datasource import FirstRowsShardedDataSource, ShardedDataSource
@@ -35,7 +33,6 @@ from levanter.tokenizers import load_tokenizer as load_marin_tokenizer
 from levanter.trainer import TrainerConfig
 
 from marin.evaluation.model_loading import load_eval_model
-from marin.training.run_environment import extras_for_resources
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +50,7 @@ TRACE_LABELED_EVAL_DATASET_STATUS_COMPLETED = "completed"
 DEFAULT_DATASET_EVAL_MAX_ATTEMPTS = 3
 DEFAULT_DATASET_EVAL_RETRY_INITIAL_DELAY = 30.0
 DEFAULT_DATASET_EVAL_RETRY_MAX_DELAY = 300.0
-DEFAULT_HF_HUB_TIMEOUT = "60"
 DEFAULT_TRACE_LABELED_EVAL_TOKENIZER = "marin-community/marin-tokenizer"
-HF_HUB_TIMEOUT_ENV_VARS = (
-    "HF_HUB_ETAG_TIMEOUT",
-    "HF_HUB_DOWNLOAD_TIMEOUT",
-    "HF_HUB_REQUEST_TIMEOUT",
-)
 
 
 @dataclass(frozen=True)
@@ -107,22 +98,6 @@ class TraceLabeledEvalConfig:
     dataset_eval_max_attempts: int = DEFAULT_DATASET_EVAL_MAX_ATTEMPTS
     dataset_eval_retry_initial_delay: float = DEFAULT_DATASET_EVAL_RETRY_INITIAL_DELAY
     dataset_eval_retry_max_delay: float = DEFAULT_DATASET_EVAL_RETRY_MAX_DELAY
-    job_failure_max_retries: int = 1
-
-
-@dataclass(frozen=True)
-class TraceLabeledEvalOutput:
-    """Output produced by a completed trace-labeled evaluation run."""
-
-    results_path: str
-
-
-@dataclass(frozen=True)
-class TraceLabeledEvalOnPodConfig:
-    """Wrapper config for running trace-labeled evaluation on a TPU pod via fray."""
-
-    trace_labeled_eval_config: TraceLabeledEvalConfig
-    resources: ResourceConfig
 
 
 def _lookup_field(row: Mapping[str, Any], field_path: str) -> Any:
@@ -504,8 +479,6 @@ def _validate_eval_config(config: TraceLabeledEvalConfig) -> None:
         raise ValueError("dataset_eval_retry_initial_delay must be non-negative")
     if config.dataset_eval_retry_max_delay < config.dataset_eval_retry_initial_delay:
         raise ValueError("dataset_eval_retry_max_delay must be at least dataset_eval_retry_initial_delay")
-    if config.job_failure_max_retries < 0:
-        raise ValueError("job_failure_max_retries must be non-negative")
     for dataset_name, dataset_config in config.datasets.items():
         if dataset_config.row_prefix_fraction is not None and dataset_config.row_adapter is None:
             raise ValueError(f"Dataset {dataset_name!r} requires row_adapter when row_prefix_fraction is set")
@@ -614,32 +587,3 @@ def trace_labeled_eval(config: TraceLabeledEvalConfig) -> None:
                 _write_results(config.output_path, results)
     finally:
         levanter.tracker.current_tracker().finish()
-
-
-def run_trace_labeled_eval_on_pod(config: TraceLabeledEvalOnPodConfig) -> TraceLabeledEvalOutput:
-    """Submit trace-labeled evaluation as a fray job and wait for completion."""
-
-    client = current_client()
-
-    extras = extras_for_resources(config.resources)
-
-    job_name = "trace-labeled-eval"
-    if config.trace_labeled_eval_config.name:
-        job_name = f"{job_name}-{_safe_name(config.trace_labeled_eval_config.name)}"
-
-    job_request = JobRequest(
-        name=job_name,
-        entrypoint=Entrypoint.from_callable(trace_labeled_eval, args=[config.trace_labeled_eval_config]),
-        resources=config.resources,
-        environment=create_environment(
-            env_vars={name: os.getenv(name, DEFAULT_HF_HUB_TIMEOUT) for name in HF_HUB_TIMEOUT_ENV_VARS},
-            extras=extras,
-        ),
-        max_retries_failure=config.trace_labeled_eval_config.job_failure_max_retries,
-        max_task_failures=config.trace_labeled_eval_config.job_failure_max_retries,
-    )
-    job = client.submit(job_request)
-    job.wait(raise_on_failure=True)
-    return TraceLabeledEvalOutput(
-        results_path=os.path.join(config.trace_labeled_eval_config.output_path, RESULTS_FILENAME),
-    )

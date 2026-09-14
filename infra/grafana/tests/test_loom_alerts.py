@@ -100,7 +100,7 @@ def client_for(
         if request.url.path == "/api/auth/federate":
             assert json.loads(request.content) == {"token": "google-id-token"}
             return httpx.Response(200, json={"token": "short-lived-loom-token"})
-        if request.url.path == "/api/runs":
+        if request.url.path == "/api/runs/create":
             assert request.headers["Authorization"] == "Bearer short-lived-loom-token"
             if runs is not None:
                 runs.append(json.loads(request.content))

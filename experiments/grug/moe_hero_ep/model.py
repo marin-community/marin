@@ -18,7 +18,7 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 from einops import rearrange
 from haliax import Axis
-from haliax.jax_utils import named_call
+from haliax.jax_utils import named_call, tree_checkpoint_name
 from haliax.nn import ArrayStacked
 from jax import core, random
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
@@ -93,7 +93,12 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
-RematMode = Literal["recompute_all", "save_moe"]
+RematMode = Literal["recompute_all", "save_moe", "offload_carry"]
+OFFLOAD_CARRY_REMAT_MODE: RematMode = "offload_carry"
+
+# The per-layer residual-stream input. Plain remat holds it as the checkpoint argument, which
+# pins about 39 GiB of HBM across the hero's 48 layers.
+LAYER_CARRY_REMAT_NAME = "grug_layer_carry"
 
 
 def _batch_spec() -> P:
@@ -194,7 +199,9 @@ class GrugModelConfig:
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
-    backward skips re-running expert dispatch and its EP collectives."""
+    backward skips re-running expert dispatch and its EP collectives; "offload_carry"
+    recomputes everything but stages the layer-input residual on pinned host, which
+    releases its HBM between forward and backward."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
 
@@ -1129,6 +1136,9 @@ class Block(eqx.Module):
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        # A remat policy acts on named intermediates, and a block argument is not one. This
+        # reassignment routes every use below through the name, which lets the policy offload it.
+        x = tree_checkpoint_name(x, LAYER_CARRY_REMAT_NAME)
         # segment_ids (packed-document boundaries) for the branch-output SConvs; None when unpacked.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = _seg[0] if _seg is not None else None
@@ -1237,6 +1247,16 @@ class Transformer(eqx.Module):
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+        elif cfg.remat_mode == OFFLOAD_CARRY_REMAT_MODE:
+            # XLA stacks each offloaded name's scan residuals into one pinned allocation.
+            # Adding names is therefore not free. The carry alone fits. The carry plus the
+            # attention residuals exceeds the host memory the run has.
+            remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+                names_which_can_be_saved=[],
+                names_which_can_be_offloaded=[LAYER_CARRY_REMAT_NAME],
+                offload_src="device",
+                offload_dst="pinned_host",
+            )
         else:
             remat_policy = None
 

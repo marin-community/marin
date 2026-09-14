@@ -38,8 +38,15 @@ from iac.config import (
 )
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
 from iac.coreweave.dns import FederationDns, FederationDnsArgs
-from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
-from iac.coreweave.rbac import GrafanaObserverRbac, GrafanaObserverRbacArgs, IrisRbac, IrisRbacArgs
+from iac.coreweave.kueue import KueueAddon, KueueAddonArgs, accelerator_nominal_quotas
+from iac.coreweave.rbac import (
+    GrafanaObserverRbac,
+    GrafanaObserverRbacArgs,
+    IrisRbac,
+    IrisRbacArgs,
+    LoomSessionRbac,
+    LoomSessionRbacArgs,
+)
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
 from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
 from iac.gcp.gclb import ControllerIngress, FinelogIngress, GcpGclbIap, GcpGclbIapArgs
@@ -153,6 +160,16 @@ def _build_coreweave(cluster: str, *, imports: ImportRegistrar) -> None:
             k8s_provider=k8s_provider,
             imports=imports,
         )
+    if loom_session := coreweave_provisioning.loom_session_rbac:
+        LoomSessionRbac(
+            "loom-session-rbac",
+            LoomSessionRbacArgs(
+                namespace=namespace,
+                usernames=loom_session.usernames,
+                namespace_dependency=rbac.namespace,
+            ),
+            k8s_provider=k8s_provider,
+        )
 
     kueue_config = kubernetes_provider.kueue if kubernetes_provider else None
     if kueue_config is None or not kueue_config.cluster_queue:
@@ -166,6 +183,7 @@ def _build_coreweave(cluster: str, *, imports: ImportRegistrar) -> None:
             namespace=namespace,
             cluster_queue=kueue_config.cluster_queue,
             spec=coreweave_provisioning.kueue,
+            nominal_quotas=accelerator_nominal_quotas(iris_config),
         ),
         k8s_provider=k8s_provider,
         imports=imports,

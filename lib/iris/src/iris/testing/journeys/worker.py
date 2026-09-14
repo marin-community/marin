@@ -154,13 +154,13 @@ class WorkerJourney:
                 kind=BackendKind.WORKER,
             ),
             stub_factory=self.fleet,
-            unreachable_grace=Duration.from_ms(100),
         )
         state_dir = root / "controller"
         config = ControllerConfig(
             cluster_id="worker-journey",
             remote_state_dir=f"file://{root / 'remote'}",
             local_state_dir=state_dir,
+            worker_unreachable_grace=Duration.from_ms(100),
         )
         self.controller = Controller(
             config=config,
@@ -212,12 +212,14 @@ class WorkerJourney:
         cpu_millicores: int = 1000,
         priority_band: int = job_pb2.PRIORITY_BAND_BATCH,
         preemption_retries: int = 1,
+        parent: WorkerJob | None = None,
     ) -> WorkerJob:
+        job_name = JobName.from_wire(parent.job_id).child(name) if parent is not None else JobName.root("journey", name)
         entrypoint = job_pb2.RuntimeEntrypoint()
         entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
         response = self.controller.launch_job(
             controller_pb2.Controller.LaunchJobRequest(
-                name=JobName.root("journey", name).to_wire(),
+                name=job_name.to_wire(),
                 entrypoint=entrypoint,
                 environment=job_pb2.EnvironmentConfig(),
                 resources=job_pb2.ResourceSpecProto(

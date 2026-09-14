@@ -1,0 +1,37 @@
+schema_version: 1
+code: ml-data-clump-threaded
+lane: meta
+title: A parameter group / threaded knob wants one shape
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Three fields always passed together are a concept missing its
+  name; a knob plumbed verbatim through N forwarding layers means every future knob
+  repeats the N-site edit and each intermediate layer lies about what it needs
+  ("accept only what's necessary"). The local rules see each added param in
+  isolation; only the whole-diff view sees the same group threaded repeatedly and
+  that an existing config already rides the path.
+
+  Fire on EITHER: (a) the same ≥3-value group in ≥2 new/edited signatures in the same
+  order and meaning; OR (b) the same new parameter in ≥3 changed signatures where ≥1
+  intermediate frame only forwards it AND a dataclass/config already travels the full
+  path (name it). Name the carrier and show it removes construction sites, not just
+  signature slots — if every site builds the group fresh from distinct sources, a
+  shared dataclass saves nothing; suppress. Distinct from `ml-config-not-threaded` (a
+  knob set then *ignored*): here the value reaches its consumer, just in the wrong
+  shape.
+
+  **When allowed:** Numeric axis/shape/coordinate tuples — `(batch, seq, embed)`,
+  `(start, end, step)`, einsum dims — are intentionally positional in
+  JAX/Haliax/Pallas code; a dataclass there is ceremony that hurts `jit`/`vmap`
+  ergonomics. Genuine plumbing where every layer consumes the value.
+
+  **Bad example:**
+  ```python
+  def submit(region, ...): ...        # region: str
+  def _schedule(region, ...): ...     # only forwards region
+  def _reserve(region, ...): ...      # only forwards region
+  def _build_spec(region, ...): ...   # finally reads it
+  # → put region on the RequestContext already flowing the chain; drop it from 3 signatures.
+  ```
+
+  ## Diff topology

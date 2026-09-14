@@ -1,0 +1,87 @@
+{
+  "type": "barchart",
+  "title": "Finished requests by outcome",
+  "description": "Window totals by the stored finish reason, including stop, length limit, abort, or error when emitted. request_success_total is a metric name, not proof that every finish was successful. Missing error/timeout families cannot prove zero failures. These are engine finishes, not upstream arrivals.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "lineWidth": 1,
+        "fillOpacity": 80,
+        "gradientMode": "none",
+        "axisPlacement": "auto"
+      }
+    },
+    "overrides": []
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/v1/vllm/overview",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "identity_kind",
+            "value": "${identity_kind}"
+          },
+          {
+            "key": "identity",
+            "value": "${identity}"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "${__interval_ms}"
+          },
+          {
+            "key": "view",
+            "value": "request_outcome"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "series",
+          "text": "outcome",
+          "type": "string"
+        },
+        {
+          "selector": "value",
+          "text": "requests",
+          "type": "number"
+        }
+      ]
+    }
+  ],
+  "options": {
+    "orientation": "horizontal",
+    "xTickLabelRotation": 0,
+    "showValue": "auto",
+    "stacking": "none",
+    "legend": {
+      "showLegend": false,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "single",
+      "sort": "none"
+    }
+  }
+}

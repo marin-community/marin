@@ -99,9 +99,13 @@ class GcpBackendServiceIapIam:
 
 @dataclass(frozen=True)
 class GcpCloudRunIapIam:
+    """IAP grants on a Cloud Run service, plus grants on the service itself (the IAP service
+    agent's ``roles/run.invoker``, which IAP needs to forward admitted requests)."""
+
     location: str
     service: str
     iap_grants: tuple[GcpRoleGrant, ...]
+    service_grants: tuple[GcpRoleGrant, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -497,6 +501,28 @@ def _grant_cloud_run_iap(context: _GcpIamContext) -> None:
             context.register(resource, declaration.provider_id)
 
 
+def _grant_cloud_run_services(context: _GcpIamContext) -> None:
+    targets = _group_target_grants(
+        ((service.location, service.service), service.service_grants) for service in context.args.cloud_run_iap
+    )
+    for (location, service), grants in targets:
+        service_id = f"projects/{context.args.project}/locations/{location}/services/{service}"
+        prefix = f"run-service-{resource_slug(location)}-{resource_slug(service)}"
+        for grant in _role_bindings(grants):
+            declaration = _binding_declaration(prefix, service_id, grant)
+            resource = gcp.cloudrunv2.ServiceIamBinding(
+                declaration.logical_name,
+                project=context.args.project,
+                location=location,
+                name=service,
+                role=grant.role,
+                members=list(declaration.members),
+                condition=_condition_args(grant.condition, gcp.cloudrunv2.ServiceIamBindingConditionArgs),
+                opts=context.options(),
+            )
+            context.register(resource, declaration.provider_id)
+
+
 def _grant_backend_service_iap(context: _GcpIamContext) -> None:
     targets = _group_target_grants((service.service, service.iap_grants) for service in context.args.backend_service_iap)
     for service, grants in targets:
@@ -567,5 +593,6 @@ class GcpIam(pulumi.ComponentResource):
         _grant_service_account_iam(grant_context)
         _grant_backend_service_iap(grant_context)
         _grant_cloud_run_iap(grant_context)
+        _grant_cloud_run_services(grant_context)
 
         self.register_outputs({})

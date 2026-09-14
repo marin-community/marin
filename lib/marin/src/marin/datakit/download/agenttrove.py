@@ -26,22 +26,37 @@ the pinned revision: ``teacher`` (the model that generated the rollout, e.g.
 values normalize to the empty string so the columns stay non-nullable strings.
 """
 
+import pyarrow as pa
 from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.opencode import INLINE_TOOL_CALL, opencode_protocol_messages, prompt_tool_definitions
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
     TRAJECTORY_UNVERIFIED_TAG,
+    checked_openai_chat_document,
     load_parquet_batched,
     render_role_message,
     text_document,
 )
+from marin.datakit.download.terminus import TASK_DESCRIPTION_MARKER, terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
+
+SOURCE_CHAT_SCHEMA = pa.schema(
+    [
+        *CHAT_SCHEMA,
+        pa.field("teacher", pa.string()),
+        pa.field("task_source", pa.string()),
+        pa.field("result", pa.string()),
+    ]
+)
 
 HF_DATASET_ID = "open-thoughts/AgentTrove"
 HF_REVISION = "b395a43"
@@ -109,6 +124,47 @@ def row_to_doc(row: dict) -> list[dict]:
     ]
 
 
+def row_to_chat_doc(row: dict) -> list[dict]:
+    if is_excluded_teacher(row):
+        return []
+    conversations = row.get("conversations")
+    if not conversations:
+        return []
+    if any(INLINE_TOOL_CALL.search(message.get("content") or "") for message in conversations):
+        tools = prompt_tool_definitions("\n".join(message.get("content") or "" for message in conversations[:2]))
+        if tools is None:
+            counters.pipeline.update_counter("agenttrove/chat/missing_tool_definitions_filtered", 1)
+            return []
+        converted = opencode_protocol_messages(conversations, tools)
+    else:
+        first = conversations[0]
+        content = first.get("content")
+        if first.get("role") == "user" and isinstance(content, str) and TASK_DESCRIPTION_MARKER in content:
+            conversations = [{**first, "content": content[content.index(TASK_DESCRIPTION_MARKER) :]}, *conversations[1:]]
+        converted = terminus_protocol_messages(conversations)
+    if converted is None:
+        return []
+    messages, metadata = converted
+    merged_messages: list[dict] = []
+    for message in messages:
+        if merged_messages and message.get("role") == "user" and merged_messages[-1].get("role") == "user":
+            previous = merged_messages[-1]
+            previous["content"] = f"{previous.get('content') or ''}\n\n{message.get('content') or ''}".strip()
+        else:
+            merged_messages.append(dict(message))
+    if merged_count := len(messages) - len(merged_messages):
+        counters.pipeline.update_counter("agenttrove/chat/adjacent_user_merged", merged_count)
+    return checked_openai_chat_document(
+        merged_messages,
+        HF_DATASET_ID,
+        counter_prefix="agenttrove/chat",
+        teacher=row.get("original_teacher") or "",
+        task_source=row.get("original_source") or "",
+        result=row.get("result") or "",
+        **metadata,
+    )
+
+
 def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/**/*.parquet")
@@ -119,6 +175,20 @@ def transform(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="agenttrove-transform", resources=ResourceConfig(cpu=1, ram="32g"))
     ctx.execute(pipeline)
+
+
+def transform_chat(input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet_batched)
+        .flat_map(row_to_chat_doc)
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+            schema=SOURCE_CHAT_SCHEMA,
+            skip_existing=True,
+        )
+    )
+    ZephyrContext(name="agenttrove-chat-transform", resources=ResourceConfig(cpu=1, ram="32g")).execute(pipeline)
 
 
 def download_agenttrove_step() -> StepSpec:
@@ -146,4 +216,18 @@ def agenttrove_normalize_steps() -> tuple[StepSpec, ...]:
     return (
         processed,
         normalize_step(name="normalized/agenttrove", download=processed),
+    )
+
+
+def agenttrove_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the structured-chat normalization chain for AgentTrove."""
+    download = download_hf_step("raw/agenttrove", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION)
+    processed = StepSpec(
+        name="processed-chat/agenttrove",
+        deps=[download],
+        fn=lambda output_path: transform_chat(download.output_path, output_path),
+        hash_attrs={"version": "2026.09.11.review-fixes"},
+    )
+    return processed, normalize_chat_step(
+        output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/agenttrove", download=processed
     )

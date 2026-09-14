@@ -201,13 +201,86 @@ def checked_policies(tmp_path_factory):
 
 
 def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies):
-    path = _POLICIES / "grug-opencode-id.yaml"
+    path = _POLICIES / "ot-tblite.yaml"
 
     seeded = [json.loads(_preflight(tmp_path, [(path, {})], hash_seed=seed).stdout)[0] for seed in ("1", "8675309")]
 
     expected = checked_policies[path.name]
     assert all(result["stable_policy_json"] == expected["stable_policy_json"] for result in seeded)
     assert all(result["digest"] == expected["digest"] for result in seeded)
+
+
+def test_preflight_reports_only_verifier_host_environment_dependencies(tmp_path):
+    policy_path = tmp_path / "external-judge.yaml"
+    policy_path.write_text(
+        """
+environment:
+  type: daytona
+agents:
+  - name: terminus-2
+datasets:
+  - name: simpleqa
+    version: "1.0"
+verifier:
+  env:
+    OPENAI_API_KEY: "${TOGETHER_API_KEY}"
+    OPENAI_BASE_URL: "https://api.together.xyz/v1"
+    MODEL_NAME: "openai/gpt-oss-120b"
+"""
+    )
+
+    payload = json.loads(_preflight(tmp_path, [(policy_path, {})]).stdout)[0]
+    stable_policy = json.loads(payload["stable_policy_json"])
+
+    assert payload["verifier_env_keys"] == ["TOGETHER_API_KEY"]
+    assert stable_policy["verifier"]["env"] == {
+        "MODEL_NAME": "openai/gpt-oss-120b",
+        "OPENAI_API_KEY": "${TOGETHER_API_KEY}",
+        "OPENAI_BASE_URL": "https://api.together.xyz/v1",
+    }
+    assert stable_policy["agents"][0]["env"] == {}
+
+
+def test_preflight_exports_pinned_harbor_error_taxonomy(checked_policies):
+    taxonomies = [payload["error_taxonomy"] for payload in checked_policies.values()]
+
+    assert all(taxonomy == taxonomies[0] for taxonomy in taxonomies)
+    assert "LLMRequestTimeoutError" in taxonomies[0]["infrastructure"]
+    assert {"AgentTimeoutError", "ContextLengthExceededError"} <= set(taxonomies[0]["agent"])
+    assert "OutputLengthExceededError" in taxonomies[0]["passthrough"]
+    assert set(taxonomies[0]["undecided"]) == {
+        "TrialNotScoredError",
+        "VerificationNotCompletedError",
+        "VerifierTimeoutError",
+    }
+    assert taxonomies[0]["commit"] == "06139137912c5764a889e7613c1d5a5eb0704448"
+
+
+def test_preflight_reports_agent_context_resolved_from_the_served_model(tmp_path):
+    served = {"model_info": {"max_input_tokens": 1048576, "max_output_tokens": 393216}}
+
+    (result,) = json.loads(_preflight(tmp_path, [(_POLICIES / "tb2.yaml", served)]).stdout)
+
+    assert result["max_input_tokens"] == 1048576
+    assert result["max_output_tokens"] == 393216
+
+
+def test_preflight_keeps_a_policy_agent_context_below_the_served_window(tmp_path):
+    served = {"model_info": {"max_input_tokens": 65536}}
+
+    (result,) = json.loads(_preflight(tmp_path, [(_POLICIES / "ot-tblite.yaml", served)]).stdout)
+
+    assert result["max_input_tokens"] == 64512
+
+
+def test_preflight_rejects_a_policy_agent_context_above_the_served_window(tmp_path):
+    served = {"model_info": {"max_input_tokens": 32768}}
+
+    completed = _preflight(tmp_path, [(_POLICIES / "ot-tblite.yaml", served)], check=False)
+
+    assert completed.returncode == 2
+    assert "64512" in completed.stderr
+    assert "32768" in completed.stderr
 
 
 @pytest.mark.parametrize(
@@ -379,7 +452,7 @@ datasets:
 
 def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(tmp_path, checked_policies):
     policy_path = tmp_path / "policy.json"
-    policy_path.write_text(checked_policies["grug-opencode-id.yaml"]["stable_policy_json"])
+    policy_path.write_text(checked_policies["ot-tblite.yaml"]["stable_policy_json"])
     overlay_path = tmp_path / "overlay.json"
     overlay_path.write_text(
         json.dumps(
@@ -392,7 +465,7 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
                 "task_limit": 3,
                 "model_agent_kwargs": {
                     "extra_body": '{"chat_template_kwargs":{"enable_thinking":true}}',
-                    "model_info": {"max_input_tokens": 123},
+                    "model_info": {"max_input_tokens": 64512, "max_output_tokens": 16384},
                     "trajectory_config": {"raw_content": True},
                 },
             }
@@ -425,6 +498,48 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
     assert agent["kwargs"]["opencode_config"]["provider"]["hosted_vllm"]["options"] == {
         "baseURL": "https://iris.example/capability/v1"
     }
+
+
+def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_dump(tmp_path, checked_policies):
+    capability_token = "dummy-capability-token"
+    capability_url = f"https://iris.example/proxy/t/{capability_token}/serve.inference-test/v1"
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(checked_policies["aime-smoke.yaml"]["stable_policy_json"])
+    overlay_path = tmp_path / "overlay.json"
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "job_name": "runtime-job",
+                "jobs_dir": str(tmp_path / "jobs"),
+                "dataset_path": str(tmp_path / "tasks"),
+                "endpoint_url": capability_url,
+                "served_model": "served-qwen",
+                "task_limit": 3,
+                "model_agent_kwargs": {},
+            }
+        )
+    )
+    script = (
+        "import json; "
+        "from pathlib import Path; "
+        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
+        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
+        'print(json.dumps({"api_base": config.agents[0].kwargs["api_base"], '
+        '"job_dir": str(config.jobs_dir / config.job_name), '
+        '"serialized": config.model_dump(mode="json")}))'
+    )
+
+    result = json.loads(_external_python("-c", script).stdout)
+
+    assert result["api_base"] == capability_url
+    assert result["job_dir"] == str(tmp_path / "jobs" / "runtime-job")
+    serialized = result["serialized"]
+    assert serialized["agents"][0]["kwargs"]["api_base"] == (
+        "https://iris.example/proxy/t/<redacted>/serve.inference-test/v1"
+    )
+    serialized_json = json.dumps(serialized)
+    assert capability_token not in serialized_json
+    assert "<redacted>" in serialized_json
 
 
 @pytest.mark.parametrize(

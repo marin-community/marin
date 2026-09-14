@@ -13,7 +13,6 @@ from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.platforms.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.types import JobName
@@ -124,7 +123,6 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
             local_queue="iris-lq",
         ),
         cluster_scan_interval=0.0,
-        transition_reader=DbTransitionReader(db),
     )
 
     ctrl = MockController()
@@ -149,7 +147,7 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     ctrl = MockController()
     # Share the harness tracker so the service registers into and reads liveness
     # through the same object this harness's ControllerTestState exposes.
-    ctrl.backend.health = health
+    ctrl.worker_health = health
 
     service = ControllerServiceImpl(
         controller=ctrl,

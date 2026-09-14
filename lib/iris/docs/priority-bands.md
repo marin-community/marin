@@ -53,9 +53,10 @@ on every pod. How that band turns into actual preemption depends on the backend:
 - **K8s GPU clusters (CoreWeave).** Every pod is admitted through Kueue. Kueue reads
   the pod's PriorityClass as the Workload priority and, with the ClusterQueue's
   `preemption.withinClusterQueue: LowerPriority` policy, evicts lower-priority
-  Workloads to admit a higher-priority one — including when Topology-Aware
-  Scheduling can't otherwise place it on full nodes. This is what lets a
-  higher-priority multi-host gang reclaim capacity from running `batch` gangs.
+  Workloads when binding GPU or RDMA quota is exhausted. Topology-Aware
+  Scheduling checks that those victims make a compatible placement available.
+  This is what lets a higher-priority multi-host gang reclaim full nodes from
+  running `batch` gangs instead of waiting behind non-binding quota.
   Preemption is whole-Workload (gang-aware): Kueue evicts a full lower-priority gang,
   not a stray pod out of it.
 - **VM/TPU clusters.** There is no Kueue; the Iris controller's own scheduler ranks
@@ -99,15 +100,23 @@ config at startup are:
   default budget; jobs run INTERACTIVE while within budget and degrade to
   BATCH once exceeded. SYSTEM and PRODUCTION submissions are rejected.
 
+Budget rows are keyed by the authenticated principal stored in
+`jobs.submitting_user`. IAP and JWT submissions use the verified email or
+service-account identity. The friendly owner in a job path remains independent:
+an admin may submit `/power/train` while Iris accounts the job to
+`russell.power@openathena.ai`. Child jobs inherit the root submitter, and a
+federated handoff carries the same principal to the receiving cluster. Trusted
+local submissions (`local_admin`) and rows with an empty `submitting_user` use the
+job-path owner as a fallback budget key.
+
 If a higher-band submission is rejected:
 
 1. **Use the appropriate lower band.** Ordinary research should run at
    INTERACTIVE or BATCH.
-2. **Check your username.** The `max_band` cap is keyed on the verified
-   identity the controller sees. If the username in the error message isn't
-   what you expect — e.g. it's an email local-part or an SSO id rather than
-   your GitHub handle — your identity probably doesn't match the `user_id`
-   listed in the cluster config, and you'll land on the default tier.
+2. **Check your budget identity.** The error reports the authenticated email or
+   service account used for budget lookup. Confirm that exact value appears in
+   the cluster config. Trusted local submissions instead use the nickname at
+   the start of the job path.
 3. **Request an uplift.** If your work needs INTERACTIVE budget headroom or an
    admin-only band, ping [@Helw150](https://github.com/Helw150).
 

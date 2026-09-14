@@ -22,10 +22,10 @@ from rigging.timing import Duration, Timestamp
 
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
-from iris.cluster.controller.backend import TaskBackend
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.types import TERMINAL_JOB_STATES
+from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.types import TERMINAL_JOB_STATES, WorkerId, WorkerUsability
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +98,33 @@ def _prune_orphan_slices(db: ControllerDB, cutoff_ms: int, stop_event: threading
     return deleted
 
 
+def _find_prunable_worker(health: WorkerHealthTracker, cutoff_ms: int) -> WorkerId | None:
+    for worker_id, liveness in health.all().items():
+        if liveness.usability is WorkerUsability.DEAD and liveness.last_heartbeat_ms < cutoff_ms:
+            return worker_id
+    return None
+
+
+def _prune_dead_workers(
+    db: ControllerDB,
+    health: WorkerHealthTracker,
+    cutoff_ms: int,
+    stop_event: threading.Event | None,
+    pause: float,
+) -> int:
+    deleted = 0
+    while not _stopped(stop_event):
+        worker_id = _find_prunable_worker(health, cutoff_ms)
+        if worker_id is None:
+            break
+        with db.transaction() as cur:
+            writes.remove_worker(cur, worker_id, health=health)
+        log_event("worker_pruned", str(worker_id))
+        deleted += 1
+        time.sleep(pause)
+    return deleted
+
+
 def _sweep_expired_endpoints(db: ControllerDB, now: Timestamp) -> int:
     """Delete endpoints whose lease has expired. Reads already hide them; this
     reclaims storage so the lease — not the FK CASCADE — is the GC trigger."""
@@ -110,7 +137,7 @@ def _sweep_expired_endpoints(db: ControllerDB, now: Timestamp) -> int:
 
 def prune_old_data(
     db: ControllerDB,
-    backend: TaskBackend,
+    worker_health: WorkerHealthTracker,
     *,
     job_retention: Duration,
     worker_retention: Duration,
@@ -129,7 +156,7 @@ def prune_old_data(
             each CASCADE also drops the job's derived-count memo (reached via
             ``cur.caches``); slice/endpoint prunes use the same handle and reach
             ``EndpointsProjection`` the same way.
-        backend: The controller's backend, which garbage-collects its dead workers.
+        worker_health: Controller-owned worker liveness used to select dead rows.
         job_retention: Delete terminal jobs whose finished_at is older than this.
         worker_retention: Delete inactive/unhealthy workers whose last heartbeat is older than this.
         slice_retention: Delete orphaned slices from abandoned scale groups (no backing worker row) older than this.
@@ -140,10 +167,12 @@ def prune_old_data(
     now_ms = now.epoch_ms()
     result = PruneResult(
         jobs_deleted=_prune_terminal_jobs(db, now_ms - job_retention.to_ms(), stop_event, pause_between_s),
-        workers_deleted=backend.prune_dead_workers(
-            cutoff_ms=now_ms - worker_retention.to_ms(),
-            stop_event=stop_event,
-            pause=pause_between_s,
+        workers_deleted=_prune_dead_workers(
+            db,
+            worker_health,
+            now_ms - worker_retention.to_ms(),
+            stop_event,
+            pause_between_s,
         ),
         slices_deleted=_prune_orphan_slices(db, now_ms - slice_retention.to_ms(), stop_event, pause_between_s),
         endpoints_deleted=_sweep_expired_endpoints(db, now),

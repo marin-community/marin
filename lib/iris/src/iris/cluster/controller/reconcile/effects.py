@@ -167,7 +167,7 @@ class ControllerEffects:
     def is_empty(self) -> bool:
         """Whether this batch records no committable writes.
 
-        ``health.build_failed`` is excluded: it is folded into the liveness
-        tracker by the backend, never persisted by ``commit_effects``.
+        ``health.build_failed`` is excluded: the controller applies it to the
+        liveness tracker, and ``commit_effects`` never persists it.
         """
         return not (self.tasks or self.attempts or self.jobs or self.log_events or self.task_events)

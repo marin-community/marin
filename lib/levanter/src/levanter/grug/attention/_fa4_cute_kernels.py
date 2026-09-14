@@ -580,6 +580,11 @@ def segmented_flash_attention_forward_launcher(
                         softmax_params,
                         is_first_n_block=False,
                     )
+            else:
+                # Q and O alias shared storage. Even an all-padding tile has
+                # pending Q/K copies; drain them before the epilogue writes O.
+                cute.arch.cp_async_wait_group(0)
+                self.cta_sync_barrier.arrive_and_wait()
 
             self.normalize_softmax_and_store_lse(
                 acc_O,

@@ -5,9 +5,12 @@ pub mod proto {
 }
 
 pub mod errors;
+pub(crate) mod hex;
+pub mod indices;
 pub(crate) mod ingestion_policy;
 pub(crate) mod json;
 pub(crate) mod levanter_metrics_policy;
+pub mod maintenance;
 pub mod migrations;
 pub(crate) mod partition_policy;
 pub(crate) mod policies;
@@ -17,5 +20,5 @@ pub(crate) mod storage_policy;
 pub mod store;
 pub(crate) mod telemetry_policy;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 pub mod test_support;

@@ -516,9 +516,15 @@ class ZephyrContext:
             resources=self.coordinator_resources,
             actor_config=ActorConfig(max_concurrency=100),
         )
-        coordinator: ActorHandle | None = None
         try:
             coordinator = coordinator_group.wait_ready(count=1)[0]
+        except Exception:
+            with suppress(Exception):
+                coordinator_group.shutdown()
+            raise
+
+        pool = _OwnedPool(coordinator_group, coordinator, worker_count)
+        try:
             # The coordinator creates the workers so they land in a child job of its
             # own and Iris cascading termination retires them with it.
             coordinator.start_workers.remote(
@@ -531,15 +537,9 @@ class ZephyrContext:
             ).result()
             ready_wait = float(os.environ.get("ZEPHYR_WORKERS_READY_WAIT") or 12 * 60 * 60)
             coordinator.worker_handles.remote(1, ready_wait).result(timeout=ready_wait)
-            return _OwnedPool(coordinator_group, coordinator, worker_count)
+            return pool
         except Exception:
-            if coordinator is not None:
-                with suppress(Exception):
-                    coordinator.stop_workers.remote().result(timeout=30.0)
-                with suppress(Exception):
-                    coordinator.shutdown.remote().result(timeout=10.0)
-            with suppress(Exception):
-                coordinator_group.shutdown()
+            pool.shutdown()
             raise
 
     def start(self) -> "ZephyrContext":
@@ -675,7 +675,6 @@ class ZephyrContext:
                 time.sleep(delay)
             finally:
                 if pool is not None:
-                    assert self.client is not None
                     pool.shutdown()
                 _cleanup_execution(self.chunk_storage_prefix, execution_id)
 
@@ -695,7 +694,6 @@ class ZephyrContext:
             self._coordinator = None
             self._state = _ContextState.CLOSED
 
-        assert self.client is not None
         pool.shutdown()
 
     def __enter__(self) -> "ZephyrContext":

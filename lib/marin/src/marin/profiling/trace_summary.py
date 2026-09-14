@@ -1498,7 +1498,7 @@ def _hierarchical_parts_for_event(name: str, tf_op: str | None) -> tuple[str, ..
         if parts:
             return tuple(parts)
 
-    return (_canonical_name_part(name),)
+    return (canonical_op_name(name),)
 
 
 def _event_gap_region_path(
@@ -1543,12 +1543,6 @@ def _canonical_tf_op_part(part: str) -> str:
         if first_dot >= 0 and first_dot + 1 < len(normalized):
             normalized = normalized[first_dot + 1 :]
     return normalized
-
-
-@cache
-def _canonical_name_part(name: str) -> str:
-    stripped = name.strip().lstrip("%")
-    return re.sub(r"\.\d+$", "", stripped)
 
 
 def _filter_hierarchy_parts(parts: list[str]) -> list[str]:
@@ -1602,11 +1596,11 @@ def _preferred_region_path_by_op(events: list[TraceEvent], *, max_depth: int = 4
 
 
 def _is_fallback_parts_for_event(parts: Sequence[str], event: TraceEvent) -> bool:
-    return len(parts) == 1 and parts[0] == _canonical_name_part(event.name)
+    return len(parts) == 1 and parts[0] == canonical_op_name(event.name)
 
 
 def _format_gap_region_context_label(op_name: str, region_path: str) -> str:
-    canonical_op = _canonical_name_part(op_name).lower()
+    canonical_op = canonical_op_name(op_name).lower()
     if canonical_op.startswith("copy"):
         normalized = region_path.strip()
         if not normalized:

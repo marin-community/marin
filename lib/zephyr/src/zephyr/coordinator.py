@@ -50,6 +50,13 @@ MAX_CONCURRENT_PIPELINES = 16
 MAX_CONCURRENT_RESULT_READS = 16
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
 
+# Seconds between worker-job liveness probes. Each probe is a GetJobState RPC to
+# the Iris controller, and the coordinator loop ticks every 0.5s, so probing once
+# per tick costs 7,200 controller calls per idle hour per pool. Iris caps its own
+# long-running job-state polling at 30s, and the heartbeat timeout already bounds
+# how long a dead pool goes unnoticed, so a slower probe loses nothing.
+WORKER_GROUP_CHECK_INTERVAL = 5.0
+
 _SNAPSHOT_ATTRIBUTES = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
 
 
@@ -87,7 +94,6 @@ class _InFlightEntry:
     """Coordinator's record of one in-flight task."""
 
     task: ShardTask
-    attempt: int
     worker_id: str
 
 
@@ -349,6 +355,7 @@ class ZephyrCoordinator:
         # Throttle Iris task-status pushes; the coordinator loop ticks more
         # frequently than the UI needs to refresh.
         self._task_stats_limiter = RateLimiter(interval_seconds=10.0)
+        self._worker_group_check_limiter = RateLimiter(interval_seconds=WORKER_GROUP_CHECK_INTERVAL)
 
         # Capture the actor context while its ContextVar is still set. Methods called
         # later run on other threads, where current_actor() is unset.
@@ -469,7 +476,8 @@ class ZephyrCoordinator:
                 return
             try:
                 self.check_heartbeats(self._heartbeat_timeout)
-                self._check_worker_group()
+                if self._worker_group_check_limiter.should_run():
+                    self._check_worker_group()
 
                 now = time.monotonic()
                 if self._has_active_execution() and now - last_log_time > 5.0:
@@ -669,11 +677,7 @@ class ZephyrCoordinator:
         """
         entry = run.in_flight.pop(shard_idx, None)
 
-        # Zero counters but keep the generation watermark so late heartbeats
-        # from the old task are rejected.
-        existing = self._worker_counters.get(worker_id)
-        if existing is not None:
-            self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
+        self._clear_worker_inflight_counters(worker_id)
 
         if entry is None:
             return
@@ -805,7 +809,7 @@ class ZephyrCoordinator:
                 self._pull_offset = (self._pull_offset + i + 1) % len(dispatchable)
                 task = run.task_queue.popleft()
                 attempt = run.task_attempts[task.shard_idx]
-                run.in_flight[task.shard_idx] = _InFlightEntry(task=task, attempt=attempt, worker_id=worker_id)
+                run.in_flight[task.shard_idx] = _InFlightEntry(task=task, worker_id=worker_id)
                 return PullStatus.RUN_TASK, PullTask(
                     task=task,
                     attempt=attempt,
@@ -937,12 +941,15 @@ class ZephyrCoordinator:
             self._clear_worker_inflight_counters(worker_id, counter_snapshot.generation)
             run.stage_done.set()
 
-    def _clear_worker_inflight_counters(self, worker_id: str, generation: int) -> None:
+    def _clear_worker_inflight_counters(self, worker_id: str, generation: int = 0) -> None:
         """Zero a worker's in-flight snapshot, keeping the generation watermark.
 
         Called when a task's runner is done, so late heartbeats from that task
         (strictly-lower generation) are rejected and the finished task's live
-        counters stop being folded into cross-pipeline totals. Lock must be held.
+        counters stop being folded into cross-pipeline totals. ``generation`` is
+        the finished task's final snapshot generation; callers that have none
+        (an error report, a requeue) leave it at 0 and keep whatever watermark
+        the worker already reached. Lock must be held.
         """
         existing = self._worker_counters.get(worker_id)
         watermark = max(generation, existing.generation) if existing is not None else generation
@@ -969,11 +976,8 @@ class ZephyrCoordinator:
                     execution_id,
                     shard_idx,
                 )
-                # Drop the finished task's stale in-flight snapshot. No incoming
-                # generation here, so just re-stamp the existing watermark.
-                existing = self._worker_counters.get(worker_id)
-                if existing is not None:
-                    self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
+                # Drop the finished task's stale in-flight snapshot.
+                self._clear_worker_inflight_counters(worker_id)
                 return
 
             if not self._is_current_stage(run, stage_generation, shard_idx):

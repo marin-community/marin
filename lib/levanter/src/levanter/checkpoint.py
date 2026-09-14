@@ -1168,20 +1168,30 @@ def _discover_checkpoint_candidates_single(checkpoint_path: str) -> list[Checkpo
 
 
 def _discover_checkpoint_paths_single(checkpoint_path: str) -> list[str]:
-    """Discover valid checkpoint directories in a single root path."""
+    """Discover valid checkpoint directories in a single root path.
+
+    Uses a single delimited listing of the root. Globbing ``<root>/*`` instead would make object
+    stores enumerate every object below the root -- every tensorstore chunk of every saved step --
+    only to discard all but the first level.
+    """
     fs: AbstractFileSystem
     fs, _ = _get_fs_and_plain_path(checkpoint_path)
+    base_path_protocol = urllib.parse.urlparse(str(checkpoint_path)).scheme
 
     def is_checkpoint_dir(path: str):
         return fs.exists(os.path.join(path, "metadata.json"))
 
     def maybe_unstrip_protocol(path: str):
-        base_path_protocol = urllib.parse.urlparse(str(checkpoint_path)).scheme
         if base_path_protocol != "" and urllib.parse.urlparse(path).scheme == "":
             return f"{base_path_protocol}://{path}"
         return path
 
-    ckpt_dirs = [maybe_unstrip_protocol(d) for d in fs.glob(os.path.join(checkpoint_path, "*")) if fs.isdir(d)]
+    try:
+        entries = fs.ls(checkpoint_path, detail=True)
+    except FileNotFoundError:
+        entries = []
+
+    ckpt_dirs = [maybe_unstrip_protocol(e["name"]) for e in entries if e["type"] == "directory"]
     ckpt_dirs.append(checkpoint_path)
     return sorted(d for d in ckpt_dirs if is_checkpoint_dir(d))
 
@@ -1288,10 +1298,8 @@ def is_checkpoint_path(path: str) -> bool:
         metadata_path = os.path.join(plain_path, "metadata.json")
         if fs.exists(metadata_path):
             return True
-        # glob
-        # if we don't find a metadata file, we can check if the path has any subdirectories
-        metadata_files = fs.glob(os.path.join(plain_path, "*", "metadata.json"))
-        if len(metadata_files) > 0:
+        # if we don't find a metadata file, we can check if the path has any checkpoint subdirectories
+        if _discover_checkpoint_paths_single(path):
             return True
         else:
             logger.warning(

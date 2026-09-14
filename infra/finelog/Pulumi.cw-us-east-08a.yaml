@@ -1,3 +1,4 @@
 config:
   finelog:cluster: cw-us-east-08a
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6WQJ6dEfyJ1zRCoS6060s+JkcguaCs8o79ws/SOZCPoSSQCdtF6iWVeOQUUP4sdhN79qbqYkDztPts1mAxveAgKI792zwxn3CJGmY93V5pa/B7+RtIQnAXjoZElj7nIXF1n76Z9sK/sIDO4=

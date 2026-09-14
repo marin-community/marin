@@ -12,6 +12,7 @@ export interface NightlyCell {
   group: string;
   subgroup: string;
   state: string;
+  runStatus?: string;
   durationState: string;
   durationSeconds?: number;
   conclusion?: string;

@@ -71,7 +71,6 @@ from iris.testing.controller import (
     register_worker,
     submit_job,
     transition_task,
-    worker_backend_for_prune,
     worker_running_tasks,
 )
 from iris.testing.controller import (
@@ -801,7 +800,7 @@ def test_endpoint_survives_terminal_and_clears_on_prune(state):
         _tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(finished_at_ms=1000))
     prune_old_data(
         state._db,
-        worker_backend_for_prune(state),
+        state._health,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3211,7 +3210,7 @@ def test_prune_old_terminal_jobs(state):
     # Prune with a 1-day retention — old-job finished at ~epoch, recent-job finished just now
     result = prune_old_data(
         state._db,
-        worker_backend_for_prune(state),
+        state._health,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3245,7 +3244,7 @@ def test_prune_old_inactive_workers(state):
 
     result = prune_old_data(
         state._db,
-        worker_backend_for_prune(state),
+        state._health,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3261,7 +3260,7 @@ def test_prune_noop_when_nothing_old(state):
 
     result = prune_old_data(
         state._db,
-        worker_backend_for_prune(state),
+        state._health,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3315,7 +3314,7 @@ def test_prune_orphaned_slices(state):
 
     result = prune_old_data(
         state._db,
-        worker_backend_for_prune(state),
+        state._health,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(3600),
@@ -3343,7 +3342,7 @@ def test_prune_keeps_slice_with_live_worker_despite_empty_worker_ids(state):
 
     result = prune_old_data(
         state._db,
-        worker_backend_for_prune(state),
+        state._health,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(3600),

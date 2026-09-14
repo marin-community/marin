@@ -4,7 +4,6 @@
 import pulumi
 import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv, dockerfile_image
-from iac.gcp.cloud_run_job import ScheduledCloudRunJob, ScheduledCloudRunJobArgs
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 
@@ -77,18 +76,6 @@ def test_cloud_run_components_leave_iam_to_the_infrastructure_stack() -> pulumi.
         ),
         gcp_provider=provider,
     )
-    job = ScheduledCloudRunJob(
-        "job",
-        ScheduledCloudRunJobArgs(
-            project="example",
-            region="us-central1",
-            job_name="job",
-            build_context="/tmp/job",
-            secrets=(SecretEnv(name="TOKEN", secret="job-token"),),
-            cloudsql_instances=("example:us-central1:database",),
-        ),
-        gcp_provider=provider,
-    )
 
     def check(_: list[str]) -> None:
         iam_resource_types = {
@@ -100,7 +87,7 @@ def test_cloud_run_components_leave_iam_to_the_infrastructure_stack() -> pulumi.
         }
         assert iam_resource_types.isdisjoint(resource.typ for resource in mocks.resources)
 
-    return pulumi.Output.all(service.uri, job.job_name).apply(check)
+    return service.uri.apply(lambda uri: check([uri]))
 
 
 @pulumi.runtime.test

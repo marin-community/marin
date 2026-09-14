@@ -3,14 +3,17 @@
 
 """Integration tests for priority bands, per-user fairness, and scheduling caps."""
 
-from iris.cluster.controller import reads
+from iris.cluster.controller import reads, writes
 from iris.cluster.controller.budget import (
     compute_user_spend,
 )
 from iris.cluster.controller.scheduling.policy import (
     _sort_pending_tasks_by_resolved_band,
+    apply_scheduling_gates,
+    build_scheduling_context,
+    compute_scheduling_order,
 )
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import (
     make_controller_state,
@@ -192,3 +195,36 @@ def test_batch_childs_spend_does_not_count_against_the_budget():
 
         with state._db.read_snapshot() as snap:
             assert compute_user_spend(snap).keys() == {"bob"}
+
+
+def test_spend_and_worker_scheduler_use_authenticated_email():
+    email = "russell.power@openathena.ai"
+    with make_controller_state() as state:
+        spend_id = JobName.root("power", "spend")
+        spend_request = make_job_request(
+            name=spend_id.to_wire(), cpu=1, replicas=1, priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE
+        )
+        with state._db.transaction() as cur:
+            submit_job_in_tx(cur, job_id=spend_id, request=spend_request, submitting_user=email)
+        _activate_job(state, spend_id)
+
+        pending_id = JobName.root("power", "pending")
+        pending_request = make_job_request(
+            name=pending_id.to_wire(), cpu=1, replicas=1, priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE
+        )
+        with state._db.transaction() as cur:
+            submit_job_in_tx(cur, job_id=pending_id, request=pending_request, submitting_user=email)
+            writes.set_user_budget(cur, email, 1, job_pb2.PRIORITY_BAND_INTERACTIVE, Timestamp.now())
+
+        with state._db.read_snapshot() as snap:
+            context = build_scheduling_context(
+                snap,
+                health=None,
+                worker_attrs=state._worker_attrs,
+                defaults=UserBudgetDefaults(budget_limit=0),
+            )
+        gated = apply_scheduling_gates(context, max_tasks_per_job_per_cycle=100)
+        order = compute_scheduling_order(context, gated)
+
+        assert context.user_spend == {email: 6}
+        assert order.task_band_map[pending_id.task(0)] == job_pb2.PRIORITY_BAND_BATCH

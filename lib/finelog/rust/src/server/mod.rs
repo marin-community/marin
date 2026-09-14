@@ -20,6 +20,7 @@ pub mod interceptors;
 pub mod introspection;
 pub mod legacy_path;
 pub mod log_service;
+pub mod relay_status;
 pub mod spa;
 pub mod stats_service;
 pub mod telemetry;
@@ -33,7 +34,8 @@ pub use app::ServerConfig;
 pub use auth::AuthPolicy;
 pub use forwarding::{spawn as spawn_forwarder, Forwarder, ForwardingConfig};
 
-/// 64 MiB request/message limits (default is 4 MB — too small for WriteRows /
-/// large query IPC). The Query handler reuses it as the result-size bound ->
-/// `resource_exhausted`.
-pub(crate) const MAX_MESSAGE_BYTES: usize = 64 << 20;
+/// 256 MiB transport limit (default is 4 MB) for large WriteRows requests.
+pub(crate) const MAX_MESSAGE_BYTES: usize = 256 << 20;
+
+/// Keep query responses within the existing client and memory envelope.
+pub(crate) const MAX_QUERY_RESULT_BYTES: usize = 64 << 20;

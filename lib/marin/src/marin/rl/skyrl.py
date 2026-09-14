@@ -14,7 +14,11 @@ from collections import deque
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import cast
+from typing import Literal, cast
+
+import fsspec
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.utils import discover_hf_checkpoints
@@ -22,8 +26,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import sanitize_job_name
 from marin.external_dependencies import MARIN_SKYRL
-from marin.training.training import LevanterCheckpoint, temporary_storage_base_path
-from rigging.filesystem.storage_path import prefix_join
+from marin.training.training import LevanterCheckpoint
 
 _EXECUTION = "skyrl_execution"
 _LAUNCHER_PYTHON = "3.12"
@@ -31,6 +34,13 @@ _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
+SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
+
+
+def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
+    """Return the lifecycle-managed storage path for a SkyRL run."""
+    temporary_root = marin_temp_bucket(ttl_days=ttl_days, source_prefix=output_path)
+    return str(StoragePath(temporary_root) / _TEMPORARY_OUTPUT_PREFIX / StoragePath(output_path).key)
 
 
 class SkyRLRuntimeProfile(StrEnum):
@@ -82,7 +92,7 @@ class SkyRLRetentionPolicy:
     """
 
     resume_checkpoint_count: int = 2
-    temporary_storage_ttl_days: int = 14
+    temporary_storage_ttl_days: int = SKYRL_TEMPORARY_STORAGE_TTL_DAYS
 
     def __post_init__(self) -> None:
         if not 1 <= self.resume_checkpoint_count <= 5:
@@ -101,11 +111,60 @@ class ResolvedModelLocator:
 
 
 @dataclass(frozen=True)
-class ResolvedDataLocator:
+class ResolvedDirectoryDataSource:
     uri: str
     identity: str
     local_path: str
     relative_path: str
+    kind: Literal["directory"] = "directory"
+
+
+class TaskTroveTagMatch(StrEnum):
+    ALL = "all"
+    ANY = "any"
+
+
+def _normalized_selection_values(name: str, values: tuple[str, ...]) -> tuple[str, ...]:
+    if any(not value.strip() for value in values):
+        raise ValueError(f"TaskTrove {name} cannot contain blank values")
+    if len(set(values)) != len(values):
+        raise ValueError(f"TaskTrove {name} cannot contain duplicate values")
+    return tuple(sorted(values))
+
+
+@dataclass(frozen=True)
+class TaskTroveSelection:
+    """An exact metadata predicate over one TaskTrove Clean release."""
+
+    sources: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
+    modes: tuple[str, ...] = ()
+    tag_match: TaskTroveTagMatch = TaskTroveTagMatch.ALL
+    limit: int | None = None
+    seed: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sources", _normalized_selection_values("sources", self.sources))
+        object.__setattr__(self, "tags", _normalized_selection_values("tags", self.tags))
+        object.__setattr__(self, "modes", _normalized_selection_values("modes", self.modes))
+        if not self.sources and not self.tags and not self.modes:
+            raise ValueError("TaskTrove selection requires at least one source, tag, or mode")
+        if self.limit is not None and self.limit <= 0:
+            raise ValueError("TaskTrove selection limit must be positive")
+
+
+@dataclass(frozen=True)
+class ResolvedTaskTroveDataSource:
+    uri: str
+    identity: str
+    local_path: str
+    relative_path: str
+    verifier_ref: str
+    selection: TaskTroveSelection
+    kind: Literal["tasktrove_parquet"] = "tasktrove_parquet"
+
+
+type ResolvedDataSource = ResolvedDirectoryDataSource | ResolvedTaskTroveDataSource
 
 
 def _artifact_identity(step: ArtifactStep) -> str:
@@ -114,6 +173,12 @@ def _artifact_identity(step: ArtifactStep) -> str:
 
 def _artifact_local_path(category: str, step: ArtifactStep) -> str:
     return str(_MARINSKYRL_STAGING_ROOT / category / PurePosixPath(step.name).name)
+
+
+def _validate_relative_file_path(name: str, value: str) -> None:
+    path = PurePosixPath(value)
+    if not path.parts or path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"TaskTrove {name} must identify a file below the release root: {value!r}")
 
 
 @dataclass(frozen=True)
@@ -158,14 +223,52 @@ class ArtifactDataSource:
     def deps(self) -> tuple[ArtifactStep, ...]:
         return (self.step,)
 
-    def resolve(self, ctx: StepContext) -> ResolvedDataLocator:
+    def resolve(self, ctx: StepContext) -> ResolvedDirectoryDataSource:
         artifact_path = ctx.artifact_path(self.step)
-        return ResolvedDataLocator(
+        return ResolvedDirectoryDataSource(
             uri=artifact_path,
             identity=_artifact_identity(self.step),
             local_path=_artifact_local_path("data", self.step),
             relative_path=self.relative_path,
         )
+
+
+@dataclass(frozen=True)
+class TaskTroveDataSource:
+    """A metadata-selected cohort from one packed TaskTrove Clean release."""
+
+    step: ArtifactStep[Artifact]
+    selection: TaskTroveSelection
+    relative_path: str = "tasks/part-00000.parquet"
+    manifest_path: str = "manifest.json"
+
+    def __post_init__(self) -> None:
+        _validate_relative_file_path("relative_path", self.relative_path)
+        _validate_relative_file_path("manifest_path", self.manifest_path)
+
+    def deps(self) -> tuple[ArtifactStep, ...]:
+        return (self.step,)
+
+    def resolve(self, ctx: StepContext) -> ResolvedTaskTroveDataSource:
+        artifact_path = ctx.artifact_path(self.step)
+        verifier_ref = "<tasktrove-verifier-ref>"
+        if not ctx.is_fingerprint:
+            with fsspec.open(prefix_join(artifact_path, self.manifest_path), "r") as manifest_file:
+                manifest = json.load(manifest_file)
+            verifier_ref = manifest.get("verify_tool_ref")
+            if not isinstance(verifier_ref, str) or not verifier_ref:
+                raise ValueError("TaskTrove manifest verify_tool_ref must be a non-empty string")
+        return ResolvedTaskTroveDataSource(
+            uri=prefix_join(artifact_path, self.relative_path),
+            identity=f"{_artifact_identity(self.step)}/{self.relative_path}",
+            local_path=_artifact_local_path("data", self.step),
+            relative_path=PurePosixPath(self.relative_path).name,
+            verifier_ref=verifier_ref,
+            selection=self.selection,
+        )
+
+
+type SkyRLDataSource = ArtifactDataSource | TaskTroveDataSource
 
 
 @dataclass(frozen=True)
@@ -177,8 +280,8 @@ class SkyRLSpec:
     config_yaml: str
     runtime: SkyRLRuntime
     model: ArtifactHfModel
-    train_data: tuple[ArtifactDataSource, ...]
-    validation_data: tuple[ArtifactDataSource, ...]
+    train_data: tuple[SkyRLDataSource, ...]
+    validation_data: tuple[SkyRLDataSource, ...]
     topology: SkyRLTopology
     retention: SkyRLRetentionPolicy
     seed: int
@@ -217,8 +320,8 @@ class SkyRLLaunchRequest:
     config_yaml: str
     runtime: SkyRLRuntime
     model: ResolvedModelLocator
-    train_data: tuple[ResolvedDataLocator, ...]
-    validation_data: tuple[ResolvedDataLocator, ...]
+    train_data: tuple[ResolvedDataSource, ...]
+    validation_data: tuple[ResolvedDataSource, ...]
     topology: SkyRLTopology
     output: SkyRLOutputPaths
     seed: int
@@ -366,10 +469,9 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         if ctx.is_fingerprint:
             temporary_root = "<temporary_output_path>"
         else:
-            temporary_root = temporary_storage_base_path(
+            temporary_root = skyrl_temporary_run_path(
                 ctx.output_path,
                 ttl_days=spec.retention.temporary_storage_ttl_days,
-                category=_TEMPORARY_OUTPUT_PREFIX,
             )
         attempts_root = prefix_join(temporary_root, "attempts")
         output = SkyRLOutputPaths(

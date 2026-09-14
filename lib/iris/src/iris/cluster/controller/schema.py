@@ -250,8 +250,8 @@ jobs_table = Table(
     # The authenticated principal that submitted this job, distinct from the
     # friendly ``user_id`` owner: an IAP/JWT email, or ``local_admin`` for a
     # CIDR/loopback (null-auth) submission. Drives per-cluster federation
-    # authorization; a child inherits its root's value and a federated handoff
-    # carries it as a signed claim the receiving peer re-checks.
+    # authorization and budget accounting; a child inherits its root's value and
+    # a federated handoff carries it as a signed claim the receiving peer re-checks.
     Column("submitting_user", String, nullable=False, server_default=""),
     Column("parent_job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE")),
     Column("root_job_id", String, nullable=False),

@@ -4,6 +4,7 @@
 """Model path resolution and automatic inference sharding."""
 
 import json
+from urllib.parse import unquote, urlsplit
 
 from levanter.model_cache import resolve_cached_model_path
 from rigging.filesystem.storage_path import StoragePath
@@ -12,6 +13,17 @@ from transformers import AutoConfig
 from marin.inference.vllm_server import _is_object_store_path
 
 _MODEL_CACHE_PREFIX = "quick-serve-models"
+
+
+def _vllm_model_path(path: str) -> str:
+    """Return a local filesystem path instead of a ``file://`` storage URI."""
+
+    parsed = urlsplit(path)
+    if parsed.scheme != "file":
+        return path
+    if parsed.netloc not in ("", "localhost"):
+        raise ValueError(f"vLLM cannot serve a non-local file URI: {path!r}")
+    return unquote(parsed.path)
 
 
 def select_tensor_parallel_size(
@@ -62,7 +74,8 @@ def resolve_model_path(model: str, cache_ttl_days: int, revision: str | None = N
     """Resolve and optionally mirror an HF model to the region-local cache."""
 
     if revision is None or _is_object_store_path(model):
-        return resolve_cached_model_path(model, cache_ttl_days=cache_ttl_days, cache_prefix=_MODEL_CACHE_PREFIX)
+        resolved = resolve_cached_model_path(model, cache_ttl_days=cache_ttl_days, cache_prefix=_MODEL_CACHE_PREFIX)
+        return _vllm_model_path(resolved)
     pinned_model = f"{model}@{revision}"
     resolved = resolve_cached_model_path(
         pinned_model,
@@ -70,4 +83,4 @@ def resolve_model_path(model: str, cache_ttl_days: int, revision: str | None = N
         cache_prefix=_MODEL_CACHE_PREFIX,
     )
     # With caching disabled, vLLM receives the bare model plus its separate revision argument.
-    return model if resolved == pinned_model else resolved
+    return model if resolved == pinned_model else _vllm_model_path(resolved)

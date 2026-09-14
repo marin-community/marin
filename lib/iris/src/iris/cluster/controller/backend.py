@@ -1,19 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TaskBackend: the contract an Iris controller uses to drive its cluster.
+"""Complete controller-to-backend phase contracts.
 
-Each controller owns one backend. Per tick the controller drives that backend
-through three uniform methods — :meth:`TaskBackend.schedule`,
-:meth:`TaskBackend.reconcile`, and :meth:`TaskBackend.autoscale` — passing
-controller-owned inputs
-(:class:`ScheduleRequest` / :class:`ReconcileRequest` / :class:`AutoscaleRequest`)
-and getting back method-specific results (:class:`ScheduleResult` /
-:class:`ReconcileResult` / :class:`AutoscaleResult`). The controller supplies a
-complete scheduling workspace, so scheduling never reads controller storage.
-The worker backend's reconcile and autoscale phases use the controller database
-through a bound worker store. Kubernetes binds no worker store and delegates
-placement and capacity management to its substrate.
+Each controller owns one backend and drives it through explicit phase methods.
+Every request is assembled from controller-owned state before the call. Backend
+implementations perform pure decisions or bounded provider I/O and return plain
+results; they never open the controller database or mutate Iris resources.
 
 :attr:`TaskBackend.descriptor` declares the backend's immutable identity, kind,
 and advertised capacity. The two backend kinds have deliberately different
@@ -22,20 +15,22 @@ Kubernetes backend hands placement to Kueue and reconciles Pods directly.
 """
 
 import logging
-import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Protocol
 
-from iris.cluster.controller.autoscaler import Autoscaler
+from rigging.timing import Timestamp
+
+from iris.cluster.constraints import Constraint
 from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.autoscaler.recovery import AutoscalerCheckpoint
 from iris.cluster.controller.autoscaler.state import AutoscalerState
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import ControlSnapshot
-from iris.cluster.controller.reconcile import ControllerEffects
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
@@ -53,11 +48,16 @@ from iris.cluster.controller.scheduling.policy import (
     demanded_availability_variants,
     enrich_workers_with_availability,
 )
-from iris.cluster.controller.scheduling.scheduler import JobRequirements, Scheduler, SchedulingContext
+from iris.cluster.controller.scheduling.scheduler import (
+    JobRequirements,
+    Scheduler,
+    SchedulingContext,
+    WorkerSnapshot,
+)
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import JobName, PendingTask, WorkerId
-from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
+from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerLiveness
+from iris.cluster.types import JobName, PendingTask, WorkerId, WorkerStatusMap
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,14 @@ class BackendKind(StrEnum):
     KUBERNETES = "kubernetes"
 
 
+class BackendCapability(StrEnum):
+    """Mechanisms a backend asks the controller to feed during each phase."""
+
+    WORKER_FLEET = "worker-fleet"
+    DIRECT_DISPATCH = "direct-dispatch"
+    AUTOSCALER = "autoscaler"
+
+
 @dataclass(frozen=True, slots=True)
 class BackendDescriptor:
     """Immutable identity and advertised metadata for one controller backend."""
@@ -85,12 +93,21 @@ class BackendDescriptor:
     kind: BackendKind
     advertised_attributes: Mapping[str, frozenset[str]] = field(default_factory=dict)
     scale_groups: frozenset[str] = field(default_factory=frozenset)
+    capabilities: frozenset[BackendCapability] = field(default_factory=frozenset)
     display_name: str | None = None
 
     def __post_init__(self) -> None:
         normalized = {key: frozenset(values) for key, values in self.advertised_attributes.items()}
         object.__setattr__(self, "advertised_attributes", MappingProxyType(normalized))
         object.__setattr__(self, "scale_groups", frozenset(self.scale_groups))
+        capabilities = self.capabilities
+        if not capabilities:
+            capabilities = frozenset(
+                {BackendCapability.DIRECT_DISPATCH}
+                if self.kind is BackendKind.KUBERNETES
+                else {BackendCapability.WORKER_FLEET}
+            )
+        object.__setattr__(self, "capabilities", frozenset(capabilities))
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,12 +120,13 @@ class DashboardBackendDescriptor:
 
 def dashboard_backend_descriptor(backend: "TaskBackend") -> DashboardBackendDescriptor:
     descriptor = backend.descriptor
-    if descriptor.kind is BackendKind.KUBERNETES:
-        capabilities = ["cluster"]
-    else:
-        capabilities = ["workers"]
-        if backend.autoscaler is not None:
-            capabilities.append("autoscaler")
+    capabilities = []
+    if BackendCapability.DIRECT_DISPATCH in descriptor.capabilities:
+        capabilities.append("cluster")
+    if BackendCapability.WORKER_FLEET in descriptor.capabilities:
+        capabilities.append("workers")
+    if BackendCapability.AUTOSCALER in descriptor.capabilities:
+        capabilities.append("autoscaler")
     return DashboardBackendDescriptor(
         name=descriptor.display_name or descriptor.backend_id,
         capabilities=capabilities,
@@ -190,30 +208,28 @@ class ScheduleResult:
 
 
 @dataclass(frozen=True)
-class ReconcileResult:
-    """The committable projection :meth:`TaskBackend.reconcile` authored this tick.
+class ReconcileObservation:
+    """Backend facts from one bounded reconciliation pass.
 
-    Carries only ``effects``: a backend that tracks Iris workers folds and tears
-    down its own reaped workers, so no worker identity crosses this boundary.
+    Every backend reports exact task-attempt state through ``task_updates``.
+    Backends that communicate with Iris workers may additionally report worker
+    reachability through ``worker_health_events``. The controller applies both
+    collections without inspecting the backend implementation or kind.
     """
 
-    effects: ControllerEffects = field(default_factory=ControllerEffects)
-    """Task/attempt/job writes for the controller to commit (``commit_effects``)."""
+    task_updates: list[TaskUpdate] = field(default_factory=list)
+    worker_health_events: list[WorkerHealthEvent] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class AutoscaleResult:
     """What :meth:`TaskBackend.autoscale` did this tick.
 
-    A provisioning cycle returns the updated ``autoscaler_state`` to persist; a
-    dead-worker teardown returns the full set of ``removed_workers`` (the dead
-    workers plus their healthy slice siblings). A backend that owns its own
-    capacity (e.g. Kubernetes) returns an empty instance.
+    A provisioning cycle returns the updated ``autoscaler_state`` to persist.
+    Physical removal is a separate phase so provisioning and teardown cannot be
+    selected by an overloaded request field.
     """
 
-    removed_workers: list[WorkerId] = field(default_factory=list)
-    """Workers torn down this tick — dead workers plus their healthy slice
-    siblings. The controller serializes their removal and forgets them."""
     autoscaler_state: AutoscalerState | None = None
     """The autoscaler's tracked state for the controller to persist; None when
     the backend manages its own capacity or did not provision this tick."""
@@ -234,32 +250,98 @@ class ScheduleRequest:
 
 
 @dataclass(frozen=True)
-class ReconcileRequest:
-    """Controller-owned inputs for one backend's reconcile tick.
+class WorkerReconcileTarget:
+    """One worker address and the exact desired plan to send there."""
 
-    A worker-daemon backend sources its own worker/placement snapshot and ignores
-    this; a Kubernetes backend that owns placement receives the dispatch
-    drain (the PENDING->ASSIGNED promotion the controller commits as a DB write)
-    and applies it to its cluster.
-    """
+    plan: WorkerReconcilePlan
+    address: str
+
+
+@dataclass(frozen=True)
+class WorkerFleetReconcileRequest:
+    """Complete worker-daemon fan-out for one reconcile pass."""
+
+    targets: list[WorkerReconcileTarget] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DirectReconcileRequest:
+    """Complete desired execution view for a placement-owning backend."""
 
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
+
+
+ReconcileRequest = WorkerFleetReconcileRequest | DirectReconcileRequest
 
 
 @dataclass(frozen=True)
 class AutoscaleRequest:
     """Controller-owned inputs for one backend's autoscale tick.
 
-    ``residual_demand`` is this tick's unmet demand (from the same backend's
-    schedule). A non-empty ``dead_workers`` means "tear down these workers'
-    slices and their healthy siblings" instead of provisioning; a backend tears
-    down only the workers its own autoscaler tracks. The backend reads its own
-    worker status for the provisioning refresh.
+    ``residual_demand`` is this tick's unmet demand. ``worker_status`` is the
+    controller's complete liveness + workload snapshot for capacity refresh.
     """
 
     residual_demand: list[DemandEntry] = field(default_factory=list)
-    dead_workers: list[WorkerId] = field(default_factory=list)
+    worker_status: WorkerStatusMap = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RemoveCapacityRequest:
+    """Workers already fenced from Iris state whose capacity may be removed."""
+
+    worker_ids: list[WorkerId]
+
+
+@dataclass(frozen=True)
+class RemoveCapacityResult:
+    """External capacity-removal result folded by the controller."""
+
+    sibling_workers: list[WorkerId] = field(default_factory=list)
+    autoscaler_state: AutoscalerState | None = None
+
+
+@dataclass(frozen=True)
+class BackendRecoveryRequest:
+    """Controller checkpoint supplied before control loops start."""
+
+    autoscaler_checkpoint: AutoscalerCheckpoint | None = None
+
+
+@dataclass(frozen=True)
+class BackendRecoveryResult:
+    """Backend state worth mirroring after provider recovery."""
+
+    autoscaler_state: AutoscalerState | None = None
+
+
+@dataclass(frozen=True)
+class BackendObservationRequest:
+    """Controller facts needed to publish status and capacity without DB reads."""
+
+    workers: list[WorkerSnapshot] = field(default_factory=list)
+    liveness: Mapping[WorkerId, WorkerLiveness] = field(default_factory=dict)
+    running_tasks: Mapping[WorkerId, set[JobName]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class BackendObservation:
+    """Backend-authored provider view cached by the controller."""
+
+    status: controller_pb2.Controller.BackendStatus = field(default_factory=controller_pb2.Controller.BackendStatus)
+    resource_capacity: dict[str, DeviceCapacity] | None = None
+    pending_hints: dict[str, PendingHint] = field(default_factory=dict)
+    observed_at: Timestamp = field(default_factory=Timestamp.now)
+
+
+@dataclass(frozen=True, slots=True)
+class JobFeasibilityRequest:
+    """Submitted workload shape for backend-specific capacity validation."""
+
+    constraints: list[Constraint]
+    replicas: int | None
+    resources: job_pb2.ResourceSpecProto
 
 
 def run_scheduling_decision(
@@ -382,54 +464,19 @@ def apply_placements(
     return all_assignments, context, gated.jobs
 
 
-@dataclass(frozen=True)
-class BackendRuntime:
-    """Controller-owned values used to build a worker backend's store.
-
-    Passed to :meth:`TaskBackend.bind_runtime` at startup.
-    """
-
-    db: ControllerDB
-    """The controller database."""
-
-
 class TaskBackend(Protocol):
     """Drives task execution + capacity reporting for a single cluster backend.
 
     The controller supplies a complete scheduling workspace and threads the
     per-user budget. Implementations dispatch backend-specific I/O and return
-    plain data. Reconcile/autoscale use a controller-DB store; schedule is DB-less.
+    plain data. No method reads or writes controller storage.
     """
 
     descriptor: BackendDescriptor
     """Stable identity, backend kind, and advertised capacity."""
 
-    autoscaler: Autoscaler | None
-    """The Iris :class:`Autoscaler` driving capacity, or None for backends that
-    manage their own capacity or have no scale groups. Read-only handle the
-    controller exposes for dashboard/status RPCs; capacity is driven through
-    :meth:`autoscale`, never this attribute."""
-
-    @property
-    def health(self) -> WorkerHealthTracker | None:
-        """The backend's worker tracker, or None for Kubernetes."""
-        ...
-
-    def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
-        """Free and total consumable capacity right now, per resource token.
-
-        A federation parent advertises this to peers so a queued federated job can
-        wait for a peer that actually has room (see ``federation.availability``);
-        the dashboard renders the same numbers. v1 reports accelerator chips keyed
-        by lowercased ``device-variant`` (e.g. ``{"h100": DeviceCapacity(8, 64)}``),
-        computed from the same live-worker ``WorkerCapacity`` (``total - committed``)
-        the scheduler uses.
-
-        Returns ``None`` when this backend does not supply the metric (a placement-
-        owning Kubernetes backend that does not track per-worker capacity); the
-        controller then leaves ``BackendSummary.availability`` UNSET so a peer reading
-        it falls back to shape-only federation. An empty dict is an authoritative
-        "nothing free"."""
+    def initialize(self, request: BackendRecoveryRequest) -> BackendRecoveryResult:
+        """Reconcile a controller checkpoint with the external provider."""
         ...
 
     def runtime_image(self, requested_image: str) -> str:
@@ -441,25 +488,8 @@ class TaskBackend(Protocol):
         """
         ...
 
-    def status(self) -> controller_pb2.Controller.BackendStatus:
-        """Author this backend's expanded status for the dashboard Backends tab.
-
-        Each backend authors the variant selected by :attr:`BackendDescriptor.kind`:
-        Kubernetes fills ``kubernetes`` from its cached cluster-state snapshot;
-        a worker backend fills ``worker`` in full from the state it owns
-        — its liveness tracker (health counts + per-VM usability) and running-task
-        rows, with its :meth:`autoscaler_status` embedded. The controller reads the
-        result verbatim; it overlays nothing.
-        """
-        ...
-
-    def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
-        """This backend's autoscaler status, fully populated and self-contained.
-
-        Every group is tagged with this backend's id and every VM carries its
-        usability, running-task count, and capacity verdict. Empty for a backend
-        with no autoscaler.
-        """
+    def observe(self, request: BackendObservationRequest) -> BackendObservation:
+        """Publish provider status from a complete controller fact snapshot."""
         ...
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
@@ -471,82 +501,26 @@ class TaskBackend(Protocol):
         """
         ...
 
-    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
-        """Converge the backend toward the desired state and author the projection.
+    def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
+        """Converge external execution and return neutral observations.
 
-        Bounded I/O. Worker-daemon backends source their own worker/placement
-        snapshot, fan the reconcile RPC out, resolve the observations into task
-        ``effects``, and fold the per-worker liveness they observed — stashing the
-        workers their fold reaped for the matching :meth:`run_teardown`; cluster
-        backends apply/poll the pods in ``request`` and resolve those into
-        ``effects`` (they track no Iris workers).
-        """
-        ...
-
-    def run_teardown(self) -> None:
-        """Tear down the workers this backend's reconcile fold reaped this tick.
-
-        Bounded I/O. The controller calls this AFTER the tick's reconcile effects
-        are committed, so the just-finalized terminal attempts read as terminal and
-        are skipped. The backend drains its stash of reaped workers, fails them,
-        terminates their slices and healthy siblings, and forgets them from its
-        liveness tracker. A cluster backend tracks no Iris workers and no-ops.
-        """
-        ...
-
-    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        """Tear down a specific set of this backend's workers now.
-
-        The same fail → slice-and-sibling teardown → forget sequence
-        :meth:`run_teardown` drains its stash into, but for an explicit set the
-        controller resolved to this backend off the reconcile path — the
-        recycled-IP eviction queue. ``reason`` is recorded on the worker failure.
-        A backend that tracks no Iris workers is a no-op.
-        """
-        ...
-
-    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
-        """Garbage-collect this backend's DEAD workers whose heartbeat predates ``cutoff_ms``.
-
-        Driven by the controller's background prune loop, not the control tick. The
-        backend deletes its own dead worker rows (and their attributes) from its own
-        tracker, one per transaction, sleeping ``pause`` between deletes and stopping
-        early once ``stop_event`` is set. Returns the count removed. A backend that
-        tracks no Iris workers returns 0.
+        Bounded I/O only. Every backend normalizes its execution mechanism into
+        exact task-attempt updates and optional worker-health events. The
+        controller owns snapshot reload, state-machine policy, liveness
+        accounting, and persistence.
         """
         ...
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
-        """Provision capacity for unmet demand, OR tear down dead workers.
-
-        Bounded I/O. With ``request.dead_workers`` set, the backend terminates
-        those workers' slices AND their healthy siblings and returns the full set
-        as ``removed_workers`` (no provisioning this call). Otherwise it runs one
-        scaling cycle against ``request.residual_demand``, reading its own worker
-        status. Either way it returns its tracked ``autoscaler_state`` for the
-        controller to persist. Backends that manage their own capacity (k8s)
-        return an empty result.
-        """
+        """Provision capacity from controller-supplied demand and worker state."""
         ...
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        """Build this backend's live-worker read surface from controller-owned deps.
-
-        Called once by the controller for a worker-daemon backend. The backend joins
-        ``runtime`` with its own liveness tracker to build the
-        :class:`~iris.cluster.controller.backend_store.BackendWorkerStore` it reads
-        through; Kubernetes backends track no Iris workers and no-op.
-        """
+    def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
+        """Remove external capacity after the controller fences its workers."""
         ...
 
-    def seed_liveness(self) -> None:
-        """Seed this backend's persisted workers as live so the scheduler sees them.
-
-        Called by the controller at start and after a DB reopen (checkpoint
-        restore), only on worker-daemon backends. The backend reads its own
-        persisted workers and heartbeats them into the tracker it owns.
-        Kubernetes backends track no liveness and no-op.
-        """
+    def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
+        """Return why a submitted shape can never run, or None if feasible."""
         ...
 
     def get_process_status(

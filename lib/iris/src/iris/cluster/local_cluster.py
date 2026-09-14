@@ -40,7 +40,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
 )
-from iris.cluster.controller.backend import BackendDescriptor, BackendKind
+from iris.cluster.controller.backend import BackendCapability, BackendDescriptor, BackendKind
 from iris.cluster.controller.controller import (
     Controller,
     ControllerConfig,
@@ -242,19 +242,17 @@ class LocalCluster:
             worker_unreachable_grace=Duration.from_seconds(10.0),
         )
 
-        # The backend owns the autoscaler and constructs its own liveness tracker,
-        # sized by the controller config's worker-unreachable grace. The controller
-        # drives the autoscaler via backend.autoscale and persists the returned
-        # state each tick.
+        # The controller owns liveness and supplies it to the backend's phase
+        # requests; the backend owns only the local provider/autoscaler mechanism.
         provider = RpcTaskBackend(
             descriptor=BackendDescriptor(
                 backend_id=DEFAULT_BACKEND_ID,
                 display_name="worker",
                 kind=BackendKind.WORKER,
                 scale_groups=frozenset(self._config.scale_groups),
+                capabilities=frozenset({BackendCapability.WORKER_FLEET, BackendCapability.AUTOSCALER}),
             ),
             stub_factory=RpcWorkerStubFactory(),
-            unreachable_grace=controller_config.worker_unreachable_grace,
             autoscaler=self._autoscaler,
         )
 

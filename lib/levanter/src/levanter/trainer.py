@@ -10,7 +10,7 @@ import sys
 import typing
 import warnings
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cached_property, partial
 from pathlib import Path
 from typing import (
     Any,
@@ -779,7 +779,8 @@ class Trainer:
         Batch = _resolve_axis_in_tree((batch, batch_kwargs), self.config.batch_axis_name)
 
         # loss_fn always returns (loss, metrics), so has_aux=True
-        grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
+        # Only batch inputs should be split; raw model dimensions can match the batch size.
+        grad_fn = partial(eqx.filter_value_and_grad(loss_fn, has_aux=True), model)
 
         mbs = self.config.microbatch_size
         if mbs is not None:
@@ -792,7 +793,7 @@ class Trainer:
             )
 
         with hax.axis_mapping(self.compute_axis_mapping):
-            (loss, metrics), grads = grad_fn(model, *batch, **batch_kwargs)
+            (loss, metrics), grads = grad_fn(*batch, **batch_kwargs)
 
         return loss, grads, metrics
 
@@ -989,19 +990,19 @@ class TrainerConfig:
         # Importing cutlass.jax may initialize the XLA backend, so install its
         # cache only after jax.distributed.initialize().
         install_cutlass_kernel_cache(cutlass_kernel_cache())
+
+        if self.require_accelerator is None:
+            self.require_accelerator = not sys.platform.startswith("darwin")
+
+        if self.require_accelerator and jax.default_backend() == "cpu":
+            raise RuntimeError("No accelerator found. Please run on a TPU or GPU.")
+
         self._validate_and_set_defaults()
 
         id = self._maybe_set_id()
         levanter.utils.logging.init_logging(self.log_dir, f"{id}.log")
         _initialize_global_tracker(self.tracker, id)
         levanter.tracker.log_summary({"hardware_topology": hardware_topology_summary()})
-
-        if self.require_accelerator is None:
-            self.require_accelerator = not sys.platform.startswith("darwin")
-
-        if self.require_accelerator:
-            if jax.default_backend() == "cpu":
-                raise RuntimeError("No accelerator found. Please run on a TPU or GPU.")
 
         if self.shutdown_at_exit is not False:
             if isinstance(self.shutdown_at_exit, bool):

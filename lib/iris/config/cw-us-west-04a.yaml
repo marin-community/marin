@@ -34,6 +34,10 @@ provisioning:
       hostname: iris-cw-us-west-04a.oa.dev
       target: iris-cw-us-west-04a.208261-marin.coreweave.app
     rbac: { service_account: iris-controller }
+    loom_session_rbac:
+      usernames:
+        - cwtoken-uhBSRqWXRtyV7WWciRtYr-loom-token
+        - cwtoken-umHabiNiEWJbDFZqyTwbP-ops-loom-token
 
 # Request auth. Identity is by network location: in-cluster peers (RFC1918 pods/nodes,
 # loopback for kubectl port-forward) are trusted as admin. A non-empty trusted_cidrs makes
@@ -115,7 +119,7 @@ defaults:
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
 user_budget_defaults:
-  budget_limit: 400000
+  budget_limit: 10688
   max_band: interactive
 
 scale_groups:
@@ -160,3 +164,24 @@ scale_groups:
       coreweave:
         region: US-WEST-04A
         instance_type: gd-8xh100ib-i128
+
+user_budgets:
+  - user_ids:
+      - ben.feuer@openathena.ai
+      - benjaminfeuer
+      - david.hall@openathena.ai
+      - dlwh
+      - mark.muchane@openathena.ai
+      - muchanem
+      - matt.wittmann@openathena.ai
+      - mwittmann
+      - rafal.wojdyla@openathena.ai
+      - rav
+      - romain.yon@openathena.ai
+      - romain
+      - russell.power@openathena.ai
+      - power
+      - will.held@openathena.ai
+      - held
+    budget_limit: 0
+    max_band: PRIORITY_BAND_INTERACTIVE

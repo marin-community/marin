@@ -2,10 +2,6 @@
 
 Distributed execution abstraction layer. Start with the shared instructions in `/AGENTS.md`; only Fray-specific conventions are below.
 
-## Key Docs
-
-- Archived: `.agents/projects/20260130_fray_lite_design.md` — original API design (implemented; read code instead)
-
 ## Source Layout
 
 - `src/fray/__init__.py` — docstring only. Import from the defining submodule

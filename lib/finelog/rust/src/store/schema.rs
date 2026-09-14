@@ -15,12 +15,12 @@ use buffa::MessageField;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
+use crate::indices::group_extrema::GroupExtremaConfig;
 use crate::proto::finelog::stats::{
     Column as ProtoColumn, ColumnIndex as ProtoColumnIndex, ColumnType,
     CoveringProjection as ProtoCoveringProjection, GroupedExtrema as ProtoGroupedExtrema,
     Schema as ProtoSchema, SchemaView,
 };
-use crate::store::group_extrema::GroupExtremaConfig;
 
 /// Default implicit ordering-key column name when `Schema.key_column` is empty.
 pub const IMPLICIT_KEY_COLUMN: &str = "timestamp_ms";
@@ -38,7 +38,7 @@ pub const IMPLICIT_SEQ_COLUMN: &str = "seq";
 pub const IMPLICIT_CLUSTER_COLUMN: &str = "cluster";
 
 /// Max bytes per WriteRows request body.
-pub const MAX_WRITE_ROWS_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_WRITE_ROWS_BYTES: usize = 160 * 1024 * 1024;
 
 /// Max rows per RecordBatch. Exactly `1_000_000` (NOT `1 << 20`).
 pub const MAX_WRITE_ROWS_ROWS: usize = 1_000_000;
@@ -51,7 +51,7 @@ pub const MIN_CONFIGURED_ROW_GROUP_ROWS: u32 = 16_384;
 pub const MAX_CONFIGURED_ROW_GROUP_ROWS: u32 = 1_048_576;
 
 /// User-facing column index policy. It compiles into the closed planner-facing
-/// [`crate::store::segment_index::IndexSpec`] family.
+/// [`crate::indices::IndexSpec`] family.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ColumnIndex {
     /// Span-granular trigram substring section in each segment's `.fidx` bundle.
@@ -1264,7 +1264,9 @@ fn array_buffer_size(arr: &ArrayRef) -> i64 {
 /// Rejects: a batch column
 /// literally named `seq`, a duplicate column, an unknown column, a missing
 /// non-nullable column, a type mismatch (after dictionary decode), and any
-/// nested/union arrow type.
+/// nested/union arrow type. Conflicts with the registered columns are reported as
+/// [`StatsError::BatchSchemaConflict`]; malformed Arrow content remains
+/// [`StatsError::SchemaValidation`].
 pub fn validate_and_align_batch(
     batch: &RecordBatch,
     registered: &Schema,
@@ -1339,12 +1341,12 @@ fn validate_and_align_batch_with_policy(
                     ignored_columns.push((*name).to_string());
                 }
                 UnknownColumnPolicy::IgnoreNullable => {
-                    return Err(StatsError::SchemaValidation(format!(
+                    return Err(StatsError::BatchSchemaConflict(format!(
                         "unknown required column {name:?} not in registered schema"
                     )));
                 }
                 UnknownColumnPolicy::Reject => {
-                    return Err(StatsError::SchemaValidation(format!(
+                    return Err(StatsError::BatchSchemaConflict(format!(
                         "unknown column {name:?} not in registered schema"
                     )));
                 }
@@ -1367,7 +1369,7 @@ fn validate_and_align_batch_with_policy(
             Some((actual_dt, _, array)) => {
                 let actual_type = arrow_to_column_type(actual_dt)?;
                 if actual_type != col.r#type {
-                    return Err(StatsError::SchemaValidation(format!(
+                    return Err(StatsError::BatchSchemaConflict(format!(
                         "column {:?}: type mismatch registered={} batch={}",
                         col.name,
                         column_type_name(col.r#type),
@@ -1394,7 +1396,7 @@ fn validate_and_align_batch_with_policy(
             }
             None => {
                 if !col.nullable {
-                    return Err(StatsError::SchemaValidation(format!(
+                    return Err(StatsError::BatchSchemaConflict(format!(
                         "column {:?}: missing required (non-nullable) column",
                         col.name
                     )));
@@ -2299,7 +2301,7 @@ mod tests {
         );
         assert!(matches!(
             validate_and_align_batch(&b, &worker_stored()),
-            Err(StatsError::SchemaValidation(_))
+            Err(StatsError::BatchSchemaConflict(_))
         ));
     }
 
@@ -2321,7 +2323,7 @@ mod tests {
         );
         assert!(matches!(
             validate_and_align_batch(&b, &worker_stored()),
-            Err(StatsError::SchemaValidation(_))
+            Err(StatsError::BatchSchemaConflict(_))
         ));
     }
 
@@ -2342,7 +2344,7 @@ mod tests {
         );
         assert!(matches!(
             validate_and_align_batch(&b, &worker_stored()),
-            Err(StatsError::SchemaValidation(_))
+            Err(StatsError::BatchSchemaConflict(_))
         ));
     }
 
@@ -2375,10 +2377,9 @@ mod tests {
     #[test]
     fn align_nested_type_rejected() {
         // worker_id arrives as a List, which is unsupported.
-        let list =
-            ListArray::from_iter_primitive::<arrow::datatypes::Int64Type, _, _>(vec![Some(vec![
-                Some(1_i64),
-            ])]);
+        let list = ListArray::from_iter_primitive::<arrow::datatypes::UInt64Type, _, _>(vec![
+            Some(vec![Some(1_u64)]),
+        ]);
         let list_dt = list.data_type().clone();
         let b = batch(
             vec![Field::new("worker_id", list_dt, false)],

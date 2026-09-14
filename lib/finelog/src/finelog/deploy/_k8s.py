@@ -22,6 +22,8 @@ from finelog.deploy.config import (
     K8S_CONTAINER_NAME,
     SOURCE_REVISION_ANNOTATION,
     FinelogConfig,
+    K8sCacheStorage,
+    k8s_cache_pvc_name,
     k8s_env_secret_name,
 )
 
@@ -514,15 +516,16 @@ def k8s_verify_ingest_ready(cfg: FinelogConfig, max_attempts: int = 60) -> None:
 
 
 def k8s_status(cfg: FinelogConfig) -> None:
-    """Show deployment, service, and PVC status."""
+    """Show the deployment, service, and configured cache storage status."""
     assert cfg.deployment.k8s is not None
     k8s = cfg.deployment.k8s
+    resources = [f"deployment/{cfg.name}", f"service/{cfg.name}"]
+    if k8s.cache_storage is K8sCacheStorage.PERSISTENT_VOLUME:
+        resources.append(f"pvc/{k8s_cache_pvc_name(cfg)}")
     _kubectl(
         cfg,
         "get",
-        f"deployment/{cfg.name}",
-        f"service/{cfg.name}",
-        f"pvc/{cfg.name}-cache",
+        *resources,
         "-n",
         k8s.namespace,
     )

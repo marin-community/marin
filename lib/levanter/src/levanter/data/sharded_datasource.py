@@ -7,7 +7,9 @@ import json
 import logging
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from functools import cached_property
+from itertools import batched
 from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, Sized, Tuple, TypeVar
 
 import datasets
@@ -22,9 +24,12 @@ from ._preprocessor import (
     _MapTransform,
     _TransformedDataset,
 )
-from .utils import batched
 
 logger = logging.getLogger(__name__)
+
+# Threads used to probe shard existence. Each probe is a single object-store round trip,
+# so the useful width is set by latency, not CPU.
+SHARD_EXISTENCE_WORKERS = 32
 
 T = TypeVar("T")
 T_contra = TypeVar("T_contra", contravariant=True)
@@ -320,7 +325,7 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
         import librosa  # noqa F401
 
         def _load_audio_file(file_name, sampling_rate):
-            with open_url(audio_pointer, "rb", compression="infer") as f:
+            with open_url(file_name, "rb", compression="infer") as f:
                 array, sr = librosa.load(f, sr=sampling_rate)
             return {"array": array, "sampling_rate": sr}
 
@@ -476,6 +481,8 @@ def _mk_shard_name_mapping(urls):
         return expanded if expanded else [url]
 
     urls = [globbed for url in urls for globbed in _expand_or_placeholder(url)]
+    if not urls:
+        return {}
 
     _shard_name_to_url_mapping = {}
 
@@ -485,8 +492,14 @@ def _mk_shard_name_mapping(urls):
     else:
         common_prefix = os.path.commonprefix(urls)
 
-    for url in urls:
-        exists = StoragePath(url).exists()
+    # A component can name thousands of object-store shards, and each probe is a full
+    # round trip, so probe them concurrently instead of once per shard in series.
+    with ThreadPoolExecutor(
+        max_workers=min(SHARD_EXISTENCE_WORKERS, len(urls)), thread_name_prefix="shard_exists"
+    ) as pool:
+        url_exists = list(pool.map(lambda u: StoragePath(u).exists(), urls))
+
+    for url, exists in zip(urls, url_exists):
         # escape the url for the shard name
         shard_name = url
         if common_prefix:
@@ -550,8 +563,8 @@ class _BatchMappedShardedDataSource(ShardedDataSource[T], _TransformedDataset):
         # batch sizes are the same
         i = 0
         shard_iter = self.source.open_shard_at_row(shard_name, row)
-        for batch in batched(shard_iter, self._transform.batch_size):  # type: ignore
-            result = self._transform.fn(batch)  # type: ignore
+        for batch in batched(shard_iter, self._transform.batch_size):
+            result = self._transform.fn(list(batch))  # type: ignore
             if isinstance(result, Sized) and len(result) + i < row:
                 i += len(result)
                 continue

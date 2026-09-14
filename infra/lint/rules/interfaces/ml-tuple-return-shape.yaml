@@ -1,0 +1,20 @@
+schema_version: 1
+code: ml-tuple-return-shape
+lane: interfaces
+title: Wide tuple return where a dataclass fits
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** `tuple[dict, str, bool, int]` hides positional semantics;
+  callers have to count indices and refactors break silently. Three+ fields with
+  distinct meanings should be a dataclass / NamedTuple.
+
+  **When allowed:** Variable-length sequences (`tuple[T, ...]`), 2-tuples where
+  both elements have obvious roles (key/value pairs), or fixed coordinate-like
+  tuples.
+
+  **Bad example:**
+  ```python
+  def parse_request(raw: bytes) -> tuple[dict[str, dict], str, bool]:
+      # what is each slot? a Parsed dataclass with named fields reads itself.
+      ...
+  ```

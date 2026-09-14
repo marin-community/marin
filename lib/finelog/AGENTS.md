@@ -1,9 +1,7 @@
 # Finelog Agent Notes
 
 Standalone log store + log service. Originally lifted out of `lib/iris`
-(`iris/cluster/log_store/` and `iris/log_server/`); see the
-[worked Finelog proposal](../../.agents/projects/design-template.md#worked-example)
-or the original extraction PR for context.
+(`iris/cluster/log_store/` and `iris/log_server/`).
 
 Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 
@@ -38,10 +36,9 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
   policy schema lives in `deploy/config.py`.
 - **The admitting layer names the caller.** A `jwt` layer's matched key binds the
   request to that key's `cluster`; a `cidr` match binds to nothing (see
-  `AuthIdentity` in `rust/src/server/auth.rs`). `PushLogs` stamps each row with the
-  authenticated cluster. Cross-cluster forwarding instead writes through the generic
-  `WriteRows` path and stamps the origin into the row itself, so the `cluster` column
-  is a label, not a trust boundary — any admitted sender can write any cluster's rows.
+  `AuthIdentity` in `rust/src/server/auth.rs`). `PushLogs` and `WriteRows` overwrite
+  each row's `cluster` with the authenticated JWT cluster. Network-authenticated
+  writers stamp no cluster.
 - Keys are opaque strings. Any structure (`/system/...`, `/user/<job>/<task>:<attempt>`)
   is iris-side convention; finelog does not parse keys.
 
@@ -50,8 +47,8 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 A per-cluster finelog ships its rows to a hub finelog itself; no other process
 relays them. `forwarding:` in its deploy config names the hub, this cluster's
 name, and a `rigging.secrets` reference to its Ed25519 private key; the hub adds
-one `jwt` key entry per sender. Each server therefore owns a keypair, distinct
-from the iris controller's signing key.
+one `jwt` key entry per sender. Each sending Finelog therefore owns a keypair,
+distinct from the iris controller's signing key; the hub stores its public key.
 
 The forwarder (`rust/src/server/forwarding.rs`) forwards **every table**, not just
 logs. Each round it lists the live namespaces and gives each one a batch-sized turn,
@@ -73,17 +70,46 @@ drops that column from forwarded batches, and appends the compatible fields. Req
 unknown columns and shared-column type changes remain errors. Other namespaces retain
 ordinary additive registration.
 
-Forwarding is **best-effort by construction**: the sending store holds the record,
-the hub a convenience copy. A backlog is a durable cursor into the sender's bounded
-local retention rather than a separate queue, so the forwarder drains it without an
-age or row-count cap. Non-log chunks from one read turn may wait for hub durability
-concurrently; log chunks stay serial to preserve line order. Rows are skipped only
-after local eviction makes them unreadable. A rejected write preserves its cursor and
+Forwarding deployments are durable relays after their tables migrate to object-native
+state. A backlog is a cursor into immutable source objects rather than a separate queue.
+One settlement transaction advances the downstream cursor and removes every segment it
+fully covers. Released objects remain available through the query and rollback window.
+Relays do not compact, index, project, repartition, or rewrite their short-lived spool.
+Catalog checkpoints carry the folded release set, so collection reads the selected state,
+lists historical keys without opening them, and deletes eligible objects in provider
+batches.
+
+Non-log chunks from one read turn may wait for hub durability concurrently; log chunks
+stay serial to preserve line order. Rows are skipped after the hub returns
+`invalid_argument` for permanently invalid content. Version-0 local retention can also
+evict a sequence range; object-native relays fail closed instead of skipping it. A
+`failed_precondition` write preserves its cursor and
 invalidates the cached hub registration; the next sweep re-registers the current source
 schema and retries while other namespaces continue forwarding. Transient failures get
 three attempts before the namespace yields for the sweep, without advancing its cursor.
-A hub outage therefore cannot consume extra sender memory, but a long enough outage can
-still outlive local retention.
+
+Node-local deployments acknowledge object-backed rows only after the immutable objects,
+state document, and HEAD pointer are remotely durable. Persistent-volume deployments may
+acknowledge the same flush after its local commit while publication continues asynchronously.
+SIGTERM performs no special forwarding drain; a replacement resumes from object state and
+the durable downstream cursor. Version-0 node-local stores retain their historical eviction
+semantics until migration, so their first object-native rollout needs a cursor preflight and
+archive sync as described in `infra/finelog/README.md`.
+
+Every five minutes the sender writes delta counters to `telemetry_v1.finelog`. A later
+successful forwarding sweep can copy them to the hub. `forwarding_batches` labels accepted,
+permanently rejected, schema-conflicting, and retryable batches by namespace.
+`forwarding_seq_positions` labels accepted positions and positions skipped after a
+permanent rejection or retention eviction. Hub copies can be stale during the failure
+they diagnose, so operators check metric freshness and query the regional namespace
+when the hub or network is unavailable.
+
+Client-owned namespaces register lazily on their first write. A long-lived `Table`
+handle that receives `NOT_FOUND` from `WriteRows` retains the failed batch, registers
+its schema again, and retries. This lets producers recover when a node-local Finelog
+restart replaces the catalog. Producers running a client without this behavior need
+a restart, which creates a new `Table` handle and repeats lazy registration, or a
+manual `RegisterTable` call before their writes resume.
 
 Only the k8s backend can forward — it projects the key through a Secret. The gcp
 backend refuses, because its only channel to the server is world-readable
@@ -156,14 +182,32 @@ alongside the queries moves every number by 2-4x.
 10001 (`FINELOG_DEV_SERVER` to point elsewhere), so frontend work does not need
 a `npm run build` round trip into the `dist/` the Rust server reads from disk.
 
-Two surfaces are plain axum JSON rather than proto, because they describe this
+Three surfaces are plain axum JSON rather than proto, because they describe this
 process and its files rather than the wire contract: `GET /api/server` (build
-revision, uptime, store paths, cache diagnostics, the writer's format policy)
-and `GET /api/segments?namespace=NS` (catalog rows, plus footer and index-bundle
-detail under `physical=true`). Both sit behind the same default-deny
-auth gate as the RPCs. `build.rs` stamps the git commit, its tree hash, and a
-dirty flag into the binary; all three are empty when the build had no checkout
-to read, as in a wheel built from an sdist.
+revision, uptime, store paths, cache diagnostics, the writer's format policy),
+`GET /api/segments?namespace=NS` (catalog rows, plus footer and index-bundle
+detail under `physical=true`), and `GET /api/forwarding?namespace=NS` (the configured
+target and durable progress). All three sit behind the same default-deny auth
+gate as the RPCs. `build.rs` stamps the git commit, its tree hash, and a dirty
+flag into the binary; all three are empty when the build had no checkout to
+read, as in a wheel built from an sdist.
+
+Forwarding introspection reports the table's visible and published high-water
+marks separately. Publication lag is their nonnegative difference. The target
+reports a settled cursor and its nonnegative lag behind the published high-water
+mark. A settled cursor can include positions skipped after a permanent
+rejection, so it does not prove that the hub accepted every row. A null cursor
+means the target has not seeded the table. A null target with `configured=false`
+means forwarding is disabled.
+
+Regional forwarders also send `ReportRelayStatus` directly to the hub every 30
+seconds. The forwarding JWT determines the cluster identity, and each report is
+a complete namespace snapshot with visible, published, and settled positions.
+The hub keeps the latest report in memory, rejects stale report sequences, and
+uses its own clock to record publication and cursor progress. `ListRelayStatus`
+is the monitoring read surface. This heartbeat must remain independent of
+`WriteRows`: its purpose is to expose a stuck data path without relying on data
+that would have to traverse that path.
 
 The SQL editor completes identifiers from `ListNamespaces`, so the vocabulary is
 this store's namespaces and columns rather than a general SQL dictionary.
@@ -229,7 +273,7 @@ section. That index makes `contains(col, …)`, `col LIKE '%…%'`, and regexes 
 required literal runs prune instead of full-scan. Today it is on `log.key`,
 `log.data`, and telemetry `name` columns. `levanter.metrics` intentionally has no
 secondary indexes: its queries use exact `run_id` and `name` predicates, which
-are served by the hidden exact run partition and Parquet sort/statistics. Its
+are served by the run-first Parquet sort and row-group statistics. Its
 managed policy also disables adaptive string value counts and removes stale
 bundles written under the old telemetry-derived schema in bounded maintenance
 batches.
@@ -270,7 +314,7 @@ only when both the predicate values and every referenced query column are
 covered. Covered segments use the projection while uncovered segments retain
 source Parquet. The legacy root `telemetry_v1` table retains its training
 projections during migration. Typed training queries use `levanter.metrics`,
-whose exact hidden `run_id` partitions provide their primary pruning boundary.
+whose run-first Parquet sort and row-group statistics provide its pruning.
 
 Redefining a projection is not a conflict. `merge_schemas` supersedes the
 registered definition with the requested one, unless the registered one already

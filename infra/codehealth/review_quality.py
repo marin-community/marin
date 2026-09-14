@@ -16,8 +16,8 @@ Two subcommands:
 `aggregate`, for each PR merged in the last N days:
   1. Pull review/inline/issue comments via the `gh` CLI.
   2. Drop bot comments and agent-authored `🤖` replies.
-  3. Classify each human comment with a pluggable classifier — a sandboxed
-     Codex session (`codex exec`) by default. Comments from all PRs are pooled, batched, and the batches
+  3. Classify each human comment with a pluggable, tool-free structured model
+     request. Comments from all PRs are pooled, batched, and the batches
      classified in parallel so a many-PR run is not a long serial trickle of
      one request per comment. Two independent "could automation have caught
      this?" signals:
@@ -37,34 +37,34 @@ The tables are append-only, and a rolling window re-emits rows for PRs seen on
 an earlier run, so both reads take the most recent row per natural key by the
 server-assigned `seq`.
 
-Requires a logged-in `codex` CLI and Finelog access
+Requires an OpenAI API key and Finelog access
 (`uv run iris --cluster marin login`), plus `gh auth login` for the GitHub
 side. Designed to run as a daily GHA cron.
 """
 
 import datetime as dt
+import hashlib
 import json
 import logging
-import os
 import re
-import shlex
-import shutil
 import subprocess
-import sys
 import tempfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Literal
 
 import click
 from finelog.client import LogClient
-from pydantic import BaseModel, Field, TypeAdapter
+from openai import OpenAI, OpenAIError
+from pydantic import BaseModel, ConfigDict, Field
 
-# Sibling module: the row types for every table this tool reads and writes.
+from .github_review_corpus import is_non_human_author
 from .review_tables import (
+    DEFAULT_BOT_LOGINS,
     DEFAULT_DEPLOYMENT,
+    DEFAULT_REPOSITORY,
     FINDINGS_NAMESPACE,
     HUMAN_COMMENTS_NAMESPACE,
     INVOCATIONS_NAMESPACE,
@@ -75,23 +75,24 @@ from .review_tables import (
     append_rows,
     open_tables_client,
     parse_utc,
-    row_count,
+    query_rows,
 )
 
 logger = logging.getLogger("codehealth.review_quality")
 
-DEFAULT_REPO = "marin-community/marin"
 # Balance classification quality and cost for bounded, schema-constrained
 # comment batches.
 DEFAULT_MODEL = "gpt-5.6-terra"
 DEFAULT_REASONING_EFFORT = "medium"
-DEFAULT_AGENT_COMMAND = "codex exec"
 DEFAULT_BATCH_SIZE = 20
-# One headless Codex subprocess per batch, so concurrency caps simultaneous
-# processes and subscription rate pressure.
+# One model request per batch, so concurrency caps simultaneous API pressure.
 DEFAULT_CONCURRENCY = 4
+# Each worker fetches one PR's four endpoints sequentially. Keeping this small
+# bounds concurrent `gh` subprocesses and GitHub API pressure.
+DEFAULT_GITHUB_CONCURRENCY = 4
 MAX_COMMENT_CONTEXT = 6_000
 MAX_FILE_PATCH = 1_500
+MIN_CLASSIFICATION_CONFIDENCE = 0.7
 
 # ---------------------------------------------------------------------------
 # Comment classifier: schema + prompt
@@ -108,7 +109,7 @@ class CommentClassification(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str
 
-    model_config = {"populate_by_name": True}
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
 @dataclass
@@ -129,12 +130,18 @@ class BatchedClassification(CommentClassification):
     id: int
 
 
+class ClassificationEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[BatchedClassification]
+
+
 # A classifier turns a complete batch into classifications keyed by `id`.
 # Pluggable so the backend can change without touching batching orchestration.
 Classifier = Callable[[list[CommentToClassify]], dict[int, CommentClassification]]
 
 
-CLASSIFIER_SYSTEM = """\
+CLASSIFIER_SYSTEM = f"""\
 You triage human PR review comments to measure how much reviewer effort our
 review automation is missing. You receive a batch of comments, each delimited
 by a `=== COMMENT id=N ===` marker. Classify each comment independently and
@@ -182,7 +189,7 @@ Fields:
                        migration"; "does this still meet the ferry latency
                        budget?"; "@alice can you take a look?"; "👍"; "ship it".
 
-  confidence - your confidence in the two booleans, 0.0-1.0. Below 0.7 means
+  confidence - your confidence in the two booleans, 0.0-1.0. Below {MIN_CLASSIFICATION_CONFIDENCE} means
                you are unsure; the consumer will treat low-confidence rows
                as noise.
 
@@ -199,9 +206,6 @@ Hard rules:
 """
 
 
-_BATCH_ADAPTER = TypeAdapter(list[BatchedClassification])
-
-
 def _format_batch(items: list[CommentToClassify]) -> str:
     """Render a batch as marker-delimited blocks the classifier can split."""
     blocks = []
@@ -212,118 +216,35 @@ def _format_batch(items: list[CommentToClassify]) -> str:
     return "\n\n".join(blocks)
 
 
-# Env markers that would bind a spawned classifier to its parent agent session.
-# Each batch runs as a fresh, isolated Codex session.
-AGENT_STRIPPED_ENV = (
-    "CODEX_THREAD_ID",
-    "LOOM_SESSION_ID",
-    "LOOM_TOKEN",
-    "WEAVER_BRANCH",
-)
-
-# Per-batch wall-clock ceiling for one headless classification call.
 CLASSIFIER_TIMEOUT = 300
 
 
-def _headless_env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k not in AGENT_STRIPPED_ENV}
-
-
-def _classification_schema() -> dict:
-    """Codex structured-output schema for one batch result."""
-    item = {
-        "type": "object",
-        "properties": {
-            "id": {"type": "integer"},
-            "class": {"type": "string", "enum": list(get_args(CommentClass))},
-            "catchable_strict": {"type": "boolean"},
-            "catchable_generous": {"type": "boolean"},
-            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-            "reason": {"type": "string"},
-        },
-        "required": ["id", "class", "catchable_strict", "catchable_generous", "confidence", "reason"],
-        "additionalProperties": False,
-    }
-    return {
-        "type": "object",
-        "properties": {"results": {"type": "array", "items": item}},
-        "required": ["results"],
-        "additionalProperties": False,
-    }
-
-
-def _parse_codex_batch(output: str) -> list[BatchedClassification] | None:
-    """Parse one schema-constrained Codex final response."""
-    try:
-        envelope = json.loads(output)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(envelope, dict) or "results" not in envelope:
-        return None
-    try:
-        return _BATCH_ADAPTER.validate_python(envelope["results"])
-    except ValueError:
-        return None
-
-
-def make_codex_classifier(
+def make_model_classifier(
     model: str,
     reasoning_effort: str = DEFAULT_REASONING_EFFORT,
-    agent_command: str = DEFAULT_AGENT_COMMAND,
 ) -> Classifier:
-    """Build a sandboxed, schema-constrained Codex classifier."""
-    env = _headless_env()
-    base_command = shlex.split(agent_command)
+    """Build a tool-free, schema-constrained comment classifier."""
 
     def classify(items: list[CommentToClassify]) -> dict[int, CommentClassification]:
         if not items:
             return {}
         prompt = f"{CLASSIFIER_SYSTEM}\n\n{_format_batch(items)}"
-        with tempfile.TemporaryDirectory() as directory:
-            schema_path = Path(directory) / "schema.json"
-            output_path = Path(directory) / "result.json"
-            schema_path.write_text(json.dumps(_classification_schema()))
-            cmd = [
-                *base_command,
-                "--ephemeral",
-                "--sandbox",
-                "read-only",
-                "--ignore-rules",
-                "--model",
-                model,
-                "--config",
-                f'model_reasoning_effort="{reasoning_effort}"',
-                "--output-schema",
-                str(schema_path),
-                "--output-last-message",
-                str(output_path),
-                "-",
-            ]
-            try:
-                proc = subprocess.run(
-                    cmd,
+        try:
+            with OpenAI(timeout=float(CLASSIFIER_TIMEOUT)) as client:
+                response = client.responses.parse(
+                    model=model,
                     input=prompt,
-                    capture_output=True,
-                    text=True,
-                    env=env,
-                    timeout=CLASSIFIER_TIMEOUT,
+                    reasoning={"effort": reasoning_effort},
+                    text_format=ClassificationEnvelope,
                 )
-            except subprocess.TimeoutExpired:
-                logger.warning("Codex classification timed out for batch of %d", len(items))
-                return {}
-            output = output_path.read_text() if output_path.exists() else ""
-        parsed = _parse_codex_batch(output) if proc.returncode == 0 else None
-        if parsed is None:
-            logger.warning(
-                "Codex classification failed for batch of %d (exit=%s): %s",
-                len(items),
-                proc.returncode,
-                (proc.stderr or proc.stdout or output).strip()[:200],
-            )
-            return {}
+        except (OpenAIError, ValueError) as error:
+            raise RuntimeError(f"classification failed for a batch of {len(items)} comments: {error}") from error
+        envelope = response.output_parsed
+        if envelope is None:
+            raise RuntimeError(f"classification returned no parsed output for a batch of {len(items)} comments")
         wanted = {it.id for it in items}
         out: dict[int, CommentClassification] = {}
-        for c in parsed:
+        for c in envelope.results:
             if c.id not in wanted:
                 continue
             # Enforce the strict ⊆ generous invariant even if the model slipped.
@@ -332,7 +253,7 @@ def make_codex_classifier(
             out[c.id] = c
         missing = len(wanted) - len(out)
         if missing:
-            logger.warning("Codex omitted %d of %d comments in a batch", missing, len(items))
+            logger.warning("Model omitted %d of %d comments in a batch", missing, len(items))
         return out
 
     return classify
@@ -382,6 +303,7 @@ class Comment:
     file: str | None
     line: int | None
     body: str
+    source_url: str | None
     context: str | None
 
 
@@ -458,19 +380,6 @@ def list_merged_prs(repo: str, days: int, limit: int | None) -> list[dict]:
     return prs
 
 
-def _is_bot(author: dict | None, bot_logins: set[str]) -> bool:
-    if not author:
-        return True
-    if author.get("type") == "Bot":
-        return True
-    login = (author.get("login") or "").lower()
-    if login in bot_logins:
-        return True
-    if login.endswith("[bot]"):
-        return True
-    return False
-
-
 def _is_reviewer_comment(comment: Comment) -> bool:
     return not comment.is_bot and not comment.body.lstrip().startswith("🤖")
 
@@ -525,10 +434,11 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
                 comment_id=c["id"],
                 comment_type="inline",
                 author=u.get("login") or "unknown",
-                is_bot=_is_bot(u, bot_logins),
+                is_bot=is_non_human_author(u, bot_logins),
                 file=c.get("path"),
                 line=c.get("line") or c.get("original_line"),
                 body=c.get("body") or "",
+                source_url=c.get("html_url"),
                 context=(c.get("diff_hunk") or "")[:MAX_COMMENT_CONTEXT] or None,
             )
         )
@@ -551,10 +461,11 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
                 comment_id=r["id"],
                 comment_type="review_body",
                 author=u.get("login") or "unknown",
-                is_bot=_is_bot(u, bot_logins),
+                is_bot=is_non_human_author(u, bot_logins),
                 file=None,
                 line=None,
                 body=body,
+                source_url=r.get("html_url"),
                 context=pull_request_context,
             )
         )
@@ -574,15 +485,36 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
                 comment_id=c["id"],
                 comment_type="issue",
                 author=u.get("login") or "unknown",
-                is_bot=_is_bot(u, bot_logins),
+                is_bot=is_non_human_author(u, bot_logins),
                 file=None,
                 line=None,
                 body=c.get("body") or "",
+                source_url=c.get("html_url"),
                 context=pull_request_context,
             )
         )
 
     return out
+
+
+def fetch_pr_comment_sets(
+    repo: str,
+    prs: list[dict],
+    bot_logins: set[str],
+    concurrency: int,
+) -> dict[int, list[Comment]]:
+    """Fetch PR comments concurrently and return them in input PR order."""
+    if concurrency < 1:
+        raise ValueError("GitHub fetch concurrency must be positive")
+    if not prs:
+        return {}
+
+    unordered: dict[int, list[Comment]] = {}
+    with ThreadPoolExecutor(max_workers=min(concurrency, len(prs))) as pool:
+        futures = {pool.submit(fetch_pr_comments, repo, pr, bot_logins): pr["number"] for pr in prs}
+        for future in as_completed(futures):
+            unordered[futures[future]] = future.result()
+    return {pr["number"]: unordered[pr["number"]] for pr in prs}
 
 
 # ---------------------------------------------------------------------------
@@ -612,26 +544,6 @@ LATEST_PR_OUTCOMES_SQL = f"""
 """
 
 _SHA_PATTERN = re.compile(r"\A[0-9a-fA-F]{7,40}\Z")
-
-
-def _as_utc(value):
-    """Stamp UTC on Finelog's naive timestamps; pass everything else through."""
-    if isinstance(value, dt.datetime) and value.tzinfo is None:
-        return value.replace(tzinfo=dt.UTC)
-    return value
-
-
-def query_rows(client: LogClient, sql: str, namespace: str) -> list[dict]:
-    """Run `sql` over `namespace` and return rows with tz-aware timestamps.
-
-    An unregistered namespace is the normal state before the first write and
-    reads as empty. A query error against a registered namespace propagates, so
-    a schema mismatch is never rendered as an empty report.
-    """
-    if row_count(client, namespace) is None:
-        logger.info("namespace %s does not exist yet; treating as empty", namespace)
-        return []
-    return [{k: _as_utc(v) for k, v in row.items()} for row in client.query(sql).to_pylist()]
 
 
 def load_findings_for_shas(client: LogClient, shas: set[str]) -> dict[str, list[dict]]:
@@ -689,10 +601,13 @@ def resolve_classifications(
     batch_size: int,
     concurrency: int,
 ) -> list[CommentClassification]:
-    """Classify `comments`, returning one verdict per comment aligned with the
-    input. A comment is reused from `cache` when the same (comment_type,
-    comment_id) was seen before with identical (truncated) text; the rest are
-    sent to `classifier` in parallel batches."""
+    """Classify comments and apply the reporting confidence gate.
+
+    A comment is reused from ``cache`` when the same comment identity was seen
+    before with identical truncated text; the rest are sent to ``classifier``
+    in parallel batches. Catchability is cleared from both cached and fresh
+    classifications below the reporting confidence floor.
+    """
     resolved: dict[int, CommentClassification] = {}
     pending: list[tuple[int, Comment]] = []
     for i, c in enumerate(comments):
@@ -716,7 +631,14 @@ def resolve_classifications(
     fresh = classify_comments(classifier, items, batch_size, concurrency)
     for j, (i, _) in enumerate(pending):
         resolved[i] = fresh[j]
-    return [resolved[i] for i in range(len(comments))]
+    return [_classification_with_confidence_gate(resolved[i]) for i in range(len(comments))]
+
+
+def _classification_with_confidence_gate(classification: CommentClassification) -> CommentClassification:
+    """Clear catchability claims below the reporting confidence threshold."""
+    if classification.confidence >= MIN_CLASSIFICATION_CONFIDENCE:
+        return classification
+    return classification.model_copy(update={"catchable_strict": False, "catchable_generous": False})
 
 
 def overlap_count(bot_findings: list[dict], human_comments: list[Comment], window: int = 5) -> int:
@@ -1107,22 +1029,16 @@ def cli() -> None:
 
 
 @cli.command()
-@click.option("--repo", default=DEFAULT_REPO, show_default=True)
+@click.option("--repo", default=DEFAULT_REPOSITORY, show_default=True)
 @click.option("--days", type=int, default=1, show_default=True, help="Look back N days of merged PRs")
 @click.option("--limit", type=click.IntRange(min=1), default=None, help="Max PRs to process; omit for all PRs")
-@click.option("--model", default=DEFAULT_MODEL, show_default=True, help="Codex model id for the classifier")
+@click.option("--model", default=DEFAULT_MODEL, show_default=True, help="Model id for the classifier")
 @click.option(
     "--reasoning-effort",
     default=DEFAULT_REASONING_EFFORT,
     show_default=True,
     type=click.Choice(["none", "low", "medium", "high", "xhigh", "max"]),
-    help="Codex reasoning effort for the classifier",
-)
-@click.option(
-    "--agent-command",
-    default=DEFAULT_AGENT_COMMAND,
-    show_default=True,
-    help="Headless agent invocation for classification (reads its prompt on stdin)",
+    help="Model reasoning effort for the classifier",
 )
 @click.option(
     "--batch-size",
@@ -1139,8 +1055,15 @@ def cli() -> None:
     help="Batches classified in parallel",
 )
 @click.option(
+    "--github-concurrency",
+    type=click.IntRange(min=1),
+    default=DEFAULT_GITHUB_CONCURRENCY,
+    show_default=True,
+    help="PRs fetched from GitHub in parallel",
+)
+@click.option(
     "--bot-logins",
-    default="github-actions,dependabot,claude,claude-review,loom-oa-dev,renovate,weaverbot",
+    default=",".join(sorted(DEFAULT_BOT_LOGINS)),
     show_default=True,
     help="Comma-separated bot logins to skip (lowercase)",
 )
@@ -1157,9 +1080,9 @@ def aggregate(
     limit: int,
     model: str,
     reasoning_effort: str,
-    agent_command: str,
     batch_size: int,
     concurrency: int,
+    github_concurrency: int,
     bot_logins: str,
     refresh: bool,
     dry_run: bool,
@@ -1172,14 +1095,10 @@ def aggregate(
     window only sends genuinely-new comments to the model. Pass `--refresh` to
     re-classify everything."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     bot_login_set = {x.strip().lower() for x in bot_logins.split(",") if x.strip()}
 
-    agent_binary = agent_command.split()[0]
-    if not shutil.which(agent_binary):
-        logger.error("classifier agent %r not found on PATH (need a logged-in `codex` CLI)", agent_binary)
-        sys.exit(2)
-
-    classifier = make_codex_classifier(model, reasoning_effort, agent_command)
+    classifier = make_model_classifier(model, reasoning_effort)
 
     logger.info("Listing PRs merged in last %d day(s) in %s", days, repo)
     prs = list_merged_prs(repo, days, limit)
@@ -1190,12 +1109,9 @@ def aggregate(
     human_rows: list[HumanComment] = []
     pr_rows: list[PrReviewOutcome] = []
     all_shas: set[str] = set()
-    per_pr_comments: dict[int, list[Comment]] = {}
-
-    for pr in prs:
-        comments = fetch_pr_comments(repo, pr, bot_login_set)
-        per_pr_comments[pr["number"]] = comments
-        all_shas.add(pr["headRefOid"])
+    logger.info("Fetching PR details with at most %d concurrent GitHub requests", github_concurrency)
+    per_pr_comments = fetch_pr_comment_sets(repo, prs, bot_login_set, github_concurrency)
+    all_shas.update(pr["headRefOid"] for pr in prs)
 
     # Pull the bot's findings for these PRs plus the already-classified
     # comments, which seed the classification cache below. A dry run needs
@@ -1254,6 +1170,9 @@ def aggregate(
                     file=c.file,
                     line=c.line,
                     body=c.body[:500],
+                    source_url=c.source_url,
+                    context_hash=hashlib.sha256(c.context.encode()).hexdigest() if c.context else None,
+                    context=c.context,
                     comment_class=cls.klass,
                     catchable_strict=cls.catchable_strict,
                     catchable_generous=cls.catchable_generous,
@@ -1311,7 +1230,7 @@ def aggregate(
 
 
 @cli.command()
-@click.option("--repo", default=DEFAULT_REPO, show_default=True, help="Repo used to build PR links")
+@click.option("--repo", default=DEFAULT_REPOSITORY, show_default=True, help="Repo used to build PR links")
 @click.option("--days", type=int, default=30, show_default=True, help="Report window: PRs merged in last N days")
 @click.option("--out", type=click.Path(dir_okay=False), default=None, help="Also write the markdown report here")
 @click.option("--public", is_flag=True, help="Create a public gist (default: secret)")

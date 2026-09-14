@@ -87,12 +87,11 @@ def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[StepSpec]
     # Transform HTML to markdown
     transform_hq_data_spec = StepSpec(
         name=os.path.join(prefix, "hq-transformed"),
-        hash_attrs={"extract_method": "resiliparse"},
+        hash_attrs={"extractor": "resiliparse"},
         fn=lambda output_path: html_to_md(
             SimpleHtmlToMdConfig(
                 input_path=os.path.join(synth_data, "pos"),
                 output_path=output_path,
-                extract_method="resiliparse",
                 config=ResiliparseConfig(),
             )
         ),

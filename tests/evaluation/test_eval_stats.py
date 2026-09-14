@@ -467,6 +467,7 @@ def test_record_adapter_recovers_the_item_counts_lm_eval_records():
 
     assert measurement is not None
     assert measurement.metric == "exact_match,flexible-extract"
+    assert measurement.num_fewshot == 5
     assert measurement.coverage.n_scored == 128
     assert measurement.n_correct == 54
     assert measurement.kind is MetricKind.BINARY

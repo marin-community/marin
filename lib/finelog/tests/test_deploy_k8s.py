@@ -19,6 +19,7 @@ from finelog.deploy._k8s import (
     _build_env_secret_manifest,
     k8s_pulumi_rollout,
     k8s_rollback,
+    k8s_status,
     k8s_verify_ingest_ready,
     select_rollback_revision,
 )
@@ -27,6 +28,7 @@ from finelog.deploy.config import (
     Deployment,
     FinelogConfig,
     ForwardingConfig,
+    K8sCacheStorage,
     K8sDeployment,
 )
 from rigging.secrets import SecretResolutionError
@@ -180,6 +182,37 @@ def test_ingest_verification_rejects_registration_timeout(monkeypatch: pytest.Mo
 
     with pytest.raises(click.ClickException, match="registration pending"):
         k8s_verify_ingest_ready(_forwarding_config(), max_attempts=3)
+
+
+@pytest.mark.parametrize(
+    ("config", "expected_resources"),
+    [
+        (
+            _s3_config(cache_pvc_name="finelog-cw-cache-recovery"),
+            ["deployment/finelog-cw", "service/finelog-cw", "pvc/finelog-cw-cache-recovery"],
+        ),
+        (
+            _s3_config(cache_storage=K8sCacheStorage.NODE_LOCAL),
+            ["deployment/finelog-cw", "service/finelog-cw"],
+        ),
+    ],
+)
+def test_status_queries_configured_resources(
+    monkeypatch: pytest.MonkeyPatch,
+    config: FinelogConfig,
+    expected_resources: list[str],
+) -> None:
+    observed: list[str] = []
+
+    def run(_cfg: FinelogConfig, *args: str, **_kwargs) -> subprocess.CompletedProcess:
+        observed.extend(args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(_k8s, "_kubectl", run)
+
+    k8s_status(config)
+
+    assert observed == ["get", *expected_resources, "-n", "iris"]
 
 
 def _revision(name: str, revision: int, age: int) -> K8sRevision:

@@ -1,0 +1,18 @@
+schema_version: 1
+code: ml-undocumented-return
+lane: prose
+title: Non-obvious return value with no docstring
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A function returning `bool` or `int | None` where the
+  semantics aren't clear from the name forces callers to read the body.
+
+  **When allowed:** Names that already convey the return (`is_ready`,
+  `count`) — no docstring needed.
+
+  **Bad example:**
+  ```python
+  def flush(self) -> bool:
+      # what does True mean — flushed? already-empty? timed-out? Say so.
+      ...
+  ```

@@ -9,7 +9,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
-import equinox as eqx
 import jax
 import jmp
 import numpy as np
@@ -40,14 +39,13 @@ from levanter.analysis.perplexity_gap import (
     tokenize_text_with_byte_spans,
     write_report_files,
 )
-from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
+from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
 
 
@@ -394,23 +392,23 @@ def _load_model_runner(
         return model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
 
     if spec.checkpoint_is_hf:
-        model_config = spec.model
-        if not isinstance(model_config, HFCompatConfig):
-            raise ValueError(f"Model config {type(model_config).__name__} cannot load HF checkpoints.")
-        converter = model_config.hf_checkpoint_converter()
-        converter = converter.replaced(reference_checkpoint=spec.checkpoint_path, tokenizer=tokenizer)
-        model = converter.load_pretrained(
-            model_config.model_type,
-            ref=spec.checkpoint_path,
+        if not isinstance(spec.model, HFCompatConfig):
+            raise ValueError(f"Model config {type(spec.model).__name__} cannot load HF checkpoints.")
+        model = load_hf_checkpoint(
+            spec.model,
+            spec.checkpoint_path,
             axis_mapping=parameter_axis_mapping,
-            dtype=trainer.mp.compute_dtype,  # type: ignore[arg-type]
+            tokenizer=tokenizer,
+            compute_dtype=mp.compute_dtype,
         )
     else:
-        with use_cpu_device():
-            model = eqx.filter_eval_shape(spec.model.build, Vocab, key=key)
-            checkpoint_path = latest_checkpoint_path(spec.checkpoint_path)
-            model = load_checkpoint(model, checkpoint_path, subpath="model")
-        model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
+        model = load_levanter_checkpoint(
+            spec.model,
+            spec.checkpoint_path,
+            Vocab=Vocab,
+            axis_mapping=parameter_axis_mapping,
+            key=key,
+        )
 
     label = _model_label(spec)
     return _ModelRunner(

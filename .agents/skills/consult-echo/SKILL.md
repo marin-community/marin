@@ -13,7 +13,7 @@ Discord URLs for the evidence you use.
 Use a natural-language federated search:
 
 ```bash
-uv run infra/echo/cli.py search "how do I diagnose a stalled TPU collective" --limit 10
+uv run infra/marina/apps/echo/cli.py search "how do I diagnose a stalled TPU collective" --limit 10
 ```
 
 Search covers `wiki`, `file`, `pr`, and `issue` by default. Repeat `--domain` to
@@ -29,16 +29,19 @@ Discord is excluded by default because messages may be noisy or untrusted. Add
 `--domain discord` only when discussion history is relevant, and open the
 canonical URL when surrounding thread context matters.
 
-Fetch a result's full detail with its printed ID:
+Fetch a result's full detail with the value in the `SOURCE ID` column:
 
 ```bash
-uv run infra/echo/cli.py get <domain:id>
+uv run infra/marina/apps/echo/cli.py get <source-id>
 ```
+
+The `GRADE KEY` column is for `feedback`. `get` also accepts file grading keys
+with numeric suffixes, such as `file:20849`.
 
 Grade evaluated results with the exact query and printed keys:
 
 ```bash
-uv run infra/echo/cli.py feedback --query "stalled TPU collective" \
+uv run infra/marina/apps/echo/cli.py feedback --query "stalled TPU collective" \
   --grade wiki:730=0 --grade file:731=10 \
   <<< "The file result answered the task; wiki results were off-topic."
 ```
@@ -50,7 +53,7 @@ Use `grep` for exact strings in GitHub or Discord activity, narrowing with
 `--source` or `--kind` when needed:
 
 ```bash
-uv run infra/echo/cli.py grep "FAILED_PRECONDITION" --source github
+uv run infra/marina/apps/echo/cli.py grep "FAILED_PRECONDITION" --source github
 ```
 
 Use `rg` for exact identifiers in the current checkout. Echo's file index
@@ -58,15 +61,16 @@ follows the periodically refreshed GitHub head, so it does not contain
 branch-only or uncommitted files. Use `wiki search --tag <tag>` when tags, rather
 than federated relevance, define the desired synthesis. Authentication reuses
 the shared Marin login via `iris login`; see
-[Echo setup and access](../../../infra/echo/README.md).
+[Echo setup and access](../../../infra/marina/apps/echo/README.md).
 
 Run this search sequence before adding or editing a wiki note.
 
 ## Choose the durable home
 
-Every incident gets a standalone Echo record through `write-ops-log`, linked
-from its associated PR or issue. Also use the narrowest reusable home when the
-incident or other work changes durable guidance:
+Every live infrastructure incident, as defined by `write-ops-log`, gets a
+standalone Echo record linked from its associated PR or issue. Also use the
+narrowest reusable home when the incident or other work changes durable
+guidance:
 
 - Update `OPS.md` for a recurring operational procedure, diagnostic workflow,
   or guardrail in one subsystem.
@@ -118,15 +122,15 @@ caveat.
 Create a note:
 
 ```bash
-uv run infra/echo/cli.py wiki add --file note.md
+uv run infra/marina/apps/echo/cli.py wiki add --file note.md
 ```
 
 Revise the closest existing note:
 
 ```bash
-uv run infra/echo/cli.py wiki show <id> > note.md
+uv run infra/marina/apps/echo/cli.py wiki show <id> > note.md
 # Edit note.md.
-uv run infra/echo/cli.py wiki edit <id> --file note.md
+uv run infra/marina/apps/echo/cli.py wiki edit <id> --file note.md
 ```
 
 Both write commands print the canonical Echo URL. Return and cite that URL

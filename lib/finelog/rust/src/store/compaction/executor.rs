@@ -31,15 +31,15 @@ use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
 use parquet::arrow::ProjectionMask;
 
 use crate::errors::StatsError;
+use crate::indices::{local_sidecar_artifacts, write_segment_index, SegmentIndexConfig};
 use crate::partition_policy::{segment_path, PhysicalPartitionPolicy, SegmentPartition};
 use crate::store::compaction::config::CompactionJob;
 use crate::store::compaction::merge::{
-    kway_merge, project_to_schema, sort_batch_by, sort_col_indices,
+    merge_row_converter, merge_runs, project_to_schema, sort_batch_to_run, sort_col_indices,
+    SortedRun,
 };
-use crate::store::segment::{
-    read_segment_footer, segment_bounds, segment_writer_properties_with_partition,
-};
-use crate::store::segment_index::{write_segment_index, SegmentIndexConfig};
+use crate::store::segment::{read_segment_footer, segment_writer_properties_with_partition};
+use crate::store::table_state::LocalArtifacts;
 use crate::store::types::{seg_filename, LocalSegment, SegmentLocation, SegmentRow};
 
 fn now_ms() -> i64 {
@@ -80,12 +80,27 @@ pub struct CompactionLayout<'a> {
     pub max_row_group_rows: usize,
 }
 
+/// Whether an input may reach the output without being decoded.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum OutputPolicy {
+    /// A lone input whose partition already matches the policy is promoted by
+    /// rename, and an unreadable run head is promoted or dropped so a corrupt
+    /// file cannot wedge a level.
+    PromoteWhenUnchanged,
+    /// Every input is decoded and rewritten under the requested layout, and an
+    /// unreadable input fails the job. A definition migration uses this: an
+    /// object that reaches the target version without being rewritten would
+    /// carry the source layout under the target's name.
+    AlwaysRewrite,
+}
+
 #[derive(Clone, Copy)]
 pub struct CompactionExecution<'a> {
     pub layout: CompactionLayout<'a>,
     pub index_config: &'a SegmentIndexConfig,
     pub partition_policy: Option<&'a dyn PhysicalPartitionPolicy>,
     pub max_merge_arrow_bytes: i64,
+    pub output: OutputPolicy,
 }
 
 /// Resolve `job` into a `PlannedSwap`, performing the heavy read/merge/write for
@@ -97,9 +112,9 @@ pub struct CompactionExecution<'a> {
 /// read in order and the merge takes the longest prefix that fits, leaving the
 /// rest of the run for the next tick.
 ///
-/// `input_key_bounds` supplies typed in-memory key bounds for each input (the
-/// catalog round-trip stringifies them, losing numeric ordering). A bump carries
-/// the single input's bounds; a merge folds them via `aggregate_key_bounds`.
+/// `input_key_bounds` supplies the encoded key bounds for each input. A bump
+/// carries the single input's bounds; a rewritten merge recovers its bounds
+/// from the output footer.
 #[cfg(test)]
 fn run_job(
     job: &CompactionJob,
@@ -108,15 +123,48 @@ fn run_job(
     layout: CompactionLayout<'_>,
     index_config: &SegmentIndexConfig,
     max_merge_arrow_bytes: i64,
-    input_key_bounds: impl Fn(&str) -> (Option<i64>, Option<i64>),
+    input_key_bounds: impl Fn(&str) -> (Option<String>, Option<String>),
 ) -> Result<PlannedSwap, StatsError> {
     let execution = CompactionExecution {
         layout,
         index_config,
         partition_policy: None,
         max_merge_arrow_bytes,
+        output: OutputPolicy::PromoteWhenUnchanged,
     };
     run_job_with_partition_policy(job, dir, arrow_schema, execution, input_key_bounds)
+}
+
+/// Run one merge on a dedicated thread instead of the shared blocking pool.
+///
+/// The dedicated thread is itself the pacing: a merge is single-threaded, so
+/// whatever `nice` it runs at it can occupy at most one core. `nice` then sets
+/// how it shares that core with serving threads — 0 competes fairly (for work
+/// that must finish, like a migration), a positive value yields when queries
+/// are busy. Avoid nice(19): on a saturated box it rounds down to no CPU at
+/// all and the merge never finishes. `name` must fit the kernel's 15-character
+/// comm limit so the thread stays identifiable in `/proc/<pid>/task`.
+pub async fn run_merge_thread<T: Send + 'static>(
+    name: &'static str,
+    nice: i32,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, StatsError> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(move || {
+            #[cfg(unix)]
+            if nice > 0 {
+                unsafe {
+                    libc::nice(nice);
+                }
+            }
+            let _ = send.send(work());
+        })
+        .map_err(|error| StatsError::Internal(format!("spawn {name} thread: {error}")))?;
+    receive
+        .await
+        .map_err(|_| StatsError::Internal(format!("{name} thread died")))
 }
 
 pub fn run_job_with_partition_policy(
@@ -124,7 +172,7 @@ pub fn run_job_with_partition_policy(
     dir: &Path,
     arrow_schema: &SchemaRef,
     execution: CompactionExecution<'_>,
-    input_key_bounds: impl Fn(&str) -> (Option<i64>, Option<i64>),
+    input_key_bounds: impl Fn(&str) -> (Option<String>, Option<String>),
 ) -> Result<PlannedSwap, StatsError> {
     let job_partition = job
         .inputs
@@ -135,7 +183,10 @@ pub fn run_job_with_partition_policy(
             .as_ref()
             .is_none_or(|partition| !policy.is_current_partition(partition))
     });
-    if job.inputs.len() == 1 && !needs_repartition {
+    if job.inputs.len() == 1
+        && !needs_repartition
+        && execution.output == OutputPolicy::PromoteWhenUnchanged
+    {
         apply_level_bump(
             &job.inputs[0],
             job.output_level,
@@ -173,7 +224,7 @@ fn apply_level_bump(
     output_level: i32,
     dir: &Path,
     partition_policy: Option<&dyn PhysicalPartitionPolicy>,
-    input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
+    input_key_bounds: &impl Fn(&str) -> (Option<String>, Option<String>),
 ) -> Result<PlannedSwap, StatsError> {
     if !Path::new(&old.path).exists() {
         tracing::warn!(
@@ -203,6 +254,8 @@ fn apply_level_bump(
         max_key_value: max_key,
         partition: old.partition.clone(),
         location: SegmentLocation::Local,
+        // The commit resolves the artifacts that survive the promotion rename.
+        artifacts: LocalArtifacts::default(),
     };
     Ok(PlannedSwap {
         removed: vec![old.path.clone()],
@@ -245,13 +298,14 @@ fn apply_merge(
     arrow_schema: &SchemaRef,
     execution: CompactionExecution<'_>,
     needs_repartition: bool,
-    input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
+    input_key_bounds: &impl Fn(&str) -> (Option<String>, Option<String>),
 ) -> Result<PlannedSwap, StatsError> {
     let job_partition = job
         .inputs
         .first()
         .and_then(|segment| segment.partition.clone());
     let sort_cols = sort_col_indices(arrow_schema, execution.layout.sort_columns);
+    let must_rewrite = needs_repartition || execution.output == OutputPolicy::AlwaysRewrite;
 
     // Read each input's row-group batches, project onto the namespace schema
     // (additive null-fill), then SORT each batch and feed it to the k-way merge
@@ -274,7 +328,9 @@ fn apply_merge(
     // An input that does not fit is therefore read, measured, and dropped again —
     // one input of transient RAM over the ceiling, the price of measuring instead
     // of guessing.
-    let mut projected: Vec<RecordBatch> = Vec::new();
+    let converter = merge_row_converter(arrow_schema, &sort_cols)
+        .map_err(|e| StatsError::Internal(format!("merge row converter: {e}")))?;
+    let mut projected: Vec<SortedRun> = Vec::new();
     let mut consumed: Vec<&SegmentRow> = Vec::new();
     let mut input_arrow_bytes: i64 = 0;
     for inp in &job.inputs {
@@ -286,9 +342,12 @@ fn apply_merge(
         // corrupt file past the merge by rename and drops a missing one. Only the
         // READ is forgiven — a projection or sort failure is a schema bug and still
         // propagates.
-        let raw = match read_segment_batches(Path::new(&inp.path)) {
+        let raw = match read_segment_projected(Path::new(&inp.path), None) {
             Ok(raw) => raw,
             Err(e) => {
+                if must_rewrite {
+                    return Err(e);
+                }
                 if consumed.is_empty() {
                     tracing::warn!(
                         path = %inp.path,
@@ -311,15 +370,15 @@ fn apply_merge(
                 break;
             }
         };
-        let mut batches: Vec<RecordBatch> = Vec::new();
+        let mut batches: Vec<SortedRun> = Vec::new();
         let mut batch_bytes: i64 = 0;
         for b in raw {
             let projected_batch = project_to_schema(&b, arrow_schema)
                 .map_err(|e| StatsError::Internal(format!("project merge input: {e}")))?;
-            let sorted = sort_batch_by(&projected_batch, &sort_cols)
+            let run = sort_batch_to_run(&projected_batch, &converter, &sort_cols)
                 .map_err(|e| StatsError::Internal(format!("sort merge input: {e}")))?;
-            batch_bytes = batch_bytes.saturating_add(sorted.get_array_memory_size() as i64);
-            batches.push(sorted);
+            batch_bytes = batch_bytes.saturating_add(run.batch().get_array_memory_size() as i64);
+            batches.push(run);
         }
         if !consumed.is_empty()
             && input_arrow_bytes.saturating_add(batch_bytes) > execution.max_merge_arrow_bytes
@@ -337,7 +396,7 @@ fn apply_merge(
     // One input has nothing to merge with — whether it busted the ceiling alone
     // or merely left no room for the next input. Promote it by rename instead,
     // so it costs no merge memory and its level still advances.
-    if consumed.len() == 1 && !needs_repartition {
+    if consumed.len() == 1 && !must_rewrite {
         drop(projected);
         return apply_level_bump(
             consumed[0],
@@ -348,12 +407,12 @@ fn apply_merge(
         );
     }
 
-    let merged = kway_merge(&projected, &sort_cols)
-        .map_err(|e| StatsError::Internal(format!("k-way merge: {e}")))?;
-    // `kway_merge` copied the rows it needs into `merged`; free the sorted inputs
-    // now so the segment isn't held in RAM twice through the Parquet + index
-    // writes below (each input plus the output is a fully materialized,
-    // uncompressed copy of the segment).
+    let merged =
+        merge_runs(&projected).map_err(|e| StatsError::Internal(format!("k-way merge: {e}")))?;
+    // `merge_runs` copied the rows it needs into `merged`; free the inputs now
+    // so the segment isn't held in RAM twice through the Parquet + index writes
+    // below (each input plus the output is a fully materialized, uncompressed
+    // copy of the segment).
     drop(projected);
     let output_batches: Vec<(Option<SegmentPartition>, Vec<RecordBatch>)> = if needs_repartition {
         execution
@@ -363,6 +422,10 @@ fn apply_merge(
             .into_iter()
             .map(|output| (Some(output.partition), output.batches))
             .collect()
+    } else if must_rewrite && execution.partition_policy.is_none() {
+        // The requested layout declares no partitioning, so the rewrite drops
+        // whatever partition its source carried.
+        vec![(None, merged)]
     } else {
         vec![(job_partition, merged)]
     };
@@ -430,6 +493,7 @@ fn apply_merge(
             max_key_value: metadata.max_key_value,
             partition: metadata.partition,
             location: SegmentLocation::Local,
+            artifacts: local_sidecar_artifacts(&merged_path),
         });
     }
     Ok(PlannedSwap {
@@ -442,12 +506,6 @@ fn apply_merge(
 }
 
 /// Read all `RecordBatch`es from the parquet file at `path` (sync reader).
-/// Wrapped in `spawn_blocking` by the maintenance task; the body is sync so
-/// `run_job` can also be exercised directly in unit tests.
-pub fn read_segment_batches(path: &Path) -> Result<Vec<RecordBatch>, StatsError> {
-    read_segment_projected(path, None)
-}
-
 /// Read `path`, keeping only the columns named in `columns`; `None` reads every
 /// column.
 ///
@@ -460,10 +518,16 @@ pub fn read_segment_projected(
     path: &Path,
     columns: Option<&[&str]>,
 ) -> Result<Vec<RecordBatch>, StatsError> {
+    // Far above the 1,024-row arrow default, which shredded a 46k-row segment
+    // into ~45 batches and multiplied the k-way merge's fan-in and per-chunk
+    // interleave setup by the same factor. Bounded so one batch's decoded Utf8
+    // stays well under the 2^31 offset ceiling even for high-ratio log text.
+    const READ_BATCH_ROWS: usize = 65_536;
     let file = std::fs::File::open(path)
         .map_err(|e| StatsError::Internal(format!("open merge input {}: {e}", path.display())))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)
-        .map_err(|e| StatsError::Internal(format!("parquet reader {}: {e}", path.display())))?;
+        .map_err(|e| StatsError::Internal(format!("parquet reader {}: {e}", path.display())))?
+        .with_batch_size(READ_BATCH_ROWS);
     let builder = match columns {
         None => builder,
         Some(wanted) => {
@@ -535,12 +599,6 @@ fn batch_int64_bounds(
     Ok(minimum.zip(maximum))
 }
 
-/// Footer-only `row_count` for a written segment (verification helper for the
-/// caller / tests). Returns `None` on an unreadable footer.
-pub fn segment_row_count(path: &Path) -> Option<i64> {
-    segment_bounds(path, None).map(|(n, _, _)| n)
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -549,13 +607,14 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 
     use super::*;
-    use crate::store::exact::ExactIndexConfig;
-    use crate::store::index_bundle::{self, SectionKind};
+    use crate::indices::exact::ExactIndexConfig;
+    use crate::indices::format::{self, SectionKind};
+    use crate::indices::projection::{parse_projection_reference, projection_path};
+    use crate::indices::read_exact_section;
     use crate::store::schema::CoveringProjection;
     use crate::store::segment::{
         read_segment_footer, segment_row_group_rows, write_segment_to_dir, MAX_ROW_GROUP_ROWS,
     };
-    use crate::store::segment_index::{parse_projection_reference, read_exact_section};
     use crate::store::types::{seg_filename, SegmentRow};
 
     fn tempdir(tag: &str) -> PathBuf {
@@ -633,7 +692,7 @@ mod tests {
         assert_eq!(partial[0].num_columns(), 1);
 
         // No projection still reads everything.
-        let full = read_segment_batches(&path).unwrap();
+        let full = read_segment_projected(&path, None).unwrap();
         assert_eq!(full[0].num_columns(), 3);
     }
 
@@ -680,12 +739,11 @@ mod tests {
             output_level: 1,
             output_min_seq: 1,
         };
-        // typed key bounds per input.
-        let bounds = |path: &str| -> (Option<i64>, Option<i64>) {
+        let bounds = |path: &str| -> (Option<String>, Option<String>) {
             match path {
-                p if p == p1.to_string_lossy() => (Some(10), Some(30)),
-                p if p == p2.to_string_lossy() => (Some(20), Some(40)),
-                p if p == p3.to_string_lossy() => (Some(5), Some(25)),
+                p if p == p1.to_string_lossy() => (Some("10".into()), Some("30".into())),
+                p if p == p2.to_string_lossy() => (Some("20".into()), Some("40".into())),
+                p if p == p3.to_string_lossy() => (Some("5".into()), Some("25".into())),
                 _ => (None, None),
             }
         };
@@ -723,8 +781,8 @@ mod tests {
         assert_eq!(added_seg(&swap).min_seq, 1);
         assert_eq!(added_seg(&swap).max_seq, 6);
         // folded key bounds preserve numeric ordering.
-        assert_eq!(added_seg(&swap).min_key_value, Some(5));
-        assert_eq!(added_seg(&swap).max_key_value, Some(40));
+        assert_eq!(added_seg(&swap).min_key_value.as_deref(), Some("5"));
+        assert_eq!(added_seg(&swap).max_key_value.as_deref(), Some("40"));
 
         // the output file exists with the expected name and is (key,seq)-sorted.
         let out = PathBuf::from(&added_seg(&swap).path);
@@ -732,7 +790,7 @@ mod tests {
             out.file_name().unwrap().to_str().unwrap(),
             seg_filename(1, 1)
         );
-        let batches = read_segment_batches(&out).unwrap();
+        let batches = read_segment_projected(&out, None).unwrap();
         let mut keyed: Vec<(i64, i64)> = Vec::new();
         for b in &batches {
             let seqs = b.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
@@ -745,8 +803,8 @@ mod tests {
         let mut sorted = keyed.clone();
         sorted.sort();
         assert_eq!(keyed, sorted, "globally sorted by (key, seq)");
-        let bundle = index_bundle::bundle_path(&out);
-        let header = index_bundle::read_header(&bundle).unwrap();
+        let bundle = format::bundle_path(&out);
+        let header = format::read_header(&bundle).unwrap();
         let exact = read_exact_section(&bundle, &header, SectionKind::ValueCounts).unwrap();
         assert_eq!(
             exact.columns["worker_id"].counts.as_ref().unwrap()[&Some("c".to_string())],
@@ -756,7 +814,7 @@ mod tests {
             parse_projection_reference(&header.section("projection:worker-c").unwrap().coverage)
                 .unwrap();
         assert_eq!(reference.descriptor.row_count, 1);
-        assert!(crate::store::segment_index::projection_path(&out, &reference).exists());
+        assert!(projection_path(&out, &reference).exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -806,7 +864,7 @@ mod tests {
         .unwrap();
 
         let output = PathBuf::from(&added_seg(&swap).path);
-        let rows: Vec<(String, i64, i64)> = read_segment_batches(&output)
+        let rows: Vec<(String, i64, i64)> = read_segment_projected(&output, None)
             .unwrap()
             .iter()
             .flat_map(|batch| {
@@ -874,7 +932,7 @@ mod tests {
     }
 
     fn decoded_bytes(path: &Path) -> i64 {
-        read_segment_batches(path)
+        read_segment_projected(path, None)
             .unwrap()
             .iter()
             .map(|b| b.get_array_memory_size() as i64)
@@ -1179,9 +1237,10 @@ mod tests {
     fn merge_multi_row_group_input_no_concat() {
         let dir = tempdir("multirg");
 
-        // One large L0 segment: >2 row groups, written UNSORTED (descending key)
-        // so the per-batch sort is load-bearing. seq is unique and monotonic.
-        let n = 16_384_i64 * 2 + 500;
+        // One large L0 segment spanning multiple reader batches, written
+        // UNSORTED (descending key) so the per-batch sort is load-bearing. seq
+        // is unique and monotonic.
+        let n = 65_536_i64 * 2 + 500;
         let big: Vec<(i64, i64, &str)> = (1..=n).map(|s| (s, n - s + 1, "big")).collect();
         let (p_big, _) = write_segment_to_dir(&dir, 0, 1, &batch(&big)).unwrap();
         let (p_small, _) =
@@ -1190,7 +1249,7 @@ mod tests {
         // Reading `big` back yields many row-group-bounded batches, not one array
         // — the condition under which the old concat path overflowed.
         assert!(
-            read_segment_batches(&p_big).unwrap().len() > 1,
+            read_segment_projected(&p_big, None).unwrap().len() > 1,
             "large input must span multiple reader batches"
         );
 
@@ -1202,7 +1261,7 @@ mod tests {
             output_level: 1,
             output_min_seq: 1,
         };
-        let bounds = |_: &str| (Some(1), Some(n));
+        let bounds = |_: &str| (Some("1".to_string()), Some(n.to_string()));
         let swap = run_job(
             &job,
             &dir,
@@ -1222,7 +1281,7 @@ mod tests {
         assert_eq!(added_seg(&swap).row_count, n + 1, "no row loss");
         let out = PathBuf::from(&added_seg(&swap).path);
         let mut keyed: Vec<(i64, i64)> = Vec::new();
-        for b in &read_segment_batches(&out).unwrap() {
+        for b in &read_segment_projected(&out, None).unwrap() {
             let seqs = b.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
             let keys = b.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
             for i in 0..b.num_rows() {
@@ -1251,7 +1310,7 @@ mod tests {
             output_level: 3,
             output_min_seq: 1,
         };
-        let bounds = |_: &str| (Some(10), Some(20));
+        let bounds = |_: &str| (Some("10".to_string()), Some("20".to_string()));
         let swap = run_job(
             &job,
             &dir,
@@ -1283,8 +1342,8 @@ mod tests {
             size,
             "no rewrite -> same bytes"
         );
-        assert_eq!(added_seg(&swap).min_key_value, Some(10));
-        assert_eq!(added_seg(&swap).max_key_value, Some(20));
+        assert_eq!(added_seg(&swap).min_key_value.as_deref(), Some("10"));
+        assert_eq!(added_seg(&swap).max_key_value.as_deref(), Some("20"));
 
         // The executor itself does NOT rename (deferred to commit); the old file
         // is still present and the new one absent.
@@ -1323,7 +1382,7 @@ mod tests {
             write_segment_to_dir(&dir, 0, 1, &mk(1, &["Bootstrap completed for TPU"])).unwrap();
         let (p2, _) = write_segment_to_dir(&dir, 0, 2, &mk(2, &["unrelated heartbeat"])).unwrap();
         // These direct test fixtures have no derived bundle.
-        assert!(!index_bundle::bundle_path(&p1).exists());
+        assert!(!format::bundle_path(&p1).exists());
 
         let job = CompactionJob {
             inputs: vec![
@@ -1346,14 +1405,13 @@ mod tests {
 
         // The merged output carries a trigram section whose mask prunes correctly.
         let out = PathBuf::from(&added_seg(&swap).path);
-        let bundle = index_bundle::bundle_path(&out);
+        let bundle = format::bundle_path(&out);
         assert!(bundle.exists(), "merge output must have an index bundle");
-        let header = index_bundle::read_header(&bundle).unwrap();
+        let header = format::read_header(&bundle).unwrap();
         let section = header.section("trigram:data").unwrap();
-        let coverage =
-            crate::store::segment_index::parse_trigram_coverage(&section.coverage).unwrap();
-        let index = crate::store::trigram::parse_column(
-            &index_bundle::read_section(&bundle, &header, "trigram:data").unwrap(),
+        let coverage = crate::indices::parse_trigram_coverage(&section.coverage).unwrap();
+        let index = crate::indices::trigram::parse_column(
+            &format::read_section(&bundle, &header, "trigram:data").unwrap(),
             coverage.span_count,
         )
         .unwrap();
@@ -1376,8 +1434,8 @@ mod tests {
         // writer chose. Both sides chunk independently of how the written batches
         // are split, so lock that with input batches whose boundaries straddle a
         // span boundary (10k|10k|10005 over a 16384 stride).
+        use crate::indices::trigram::{TrigramIndex, SIDECAR_SPAN_ROWS};
         use crate::store::segment::segment_row_group_rows;
-        use crate::store::trigram::{TrigramIndex, SIDECAR_SPAN_ROWS};
 
         let dir = tempdir("tgm_align");
         let log: SchemaRef = Arc::new(ArrowSchema::new(vec![
@@ -1470,7 +1528,7 @@ mod tests {
             |_| (None, None),
         )
         .unwrap();
-        let batches = read_segment_batches(Path::new(&added_seg(&swap).path)).unwrap();
+        let batches = read_segment_projected(Path::new(&added_seg(&swap).path), None).unwrap();
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 2);
         // note column exists and the first (old) row is null.
