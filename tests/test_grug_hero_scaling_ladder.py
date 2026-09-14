@@ -141,7 +141,7 @@ def test_scaling_ladder_disables_simulated_epoching_above_flop_limit(size, num_s
     assert (data.experiment_budget is not None) is expected_simulated_epoching
 
 
-def test_scaling_ladder_searches_cluster_and_data_local_temp_roots(monkeypatch):
+def test_scaling_ladder_searches_permanent_and_cluster_temp_roots(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
     monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://hero-checkpoints")
     step = build_ladder_run(run_id="test-d6144", size="d6144", num_steps=1, version="2026.08.18")
@@ -154,8 +154,7 @@ def test_scaling_ladder_searches_cluster_and_data_local_temp_roots(monkeypatch):
     trainer = step.build_config(ctx).trainer.trainer
     assert trainer.checkpoint_search_paths("test-d6144") == [
         f"{output_path}/checkpoints",
-        "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/test-d6144/v/checkpoints",
-        "s3://marin-us-east-02a/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/test-d6144/v/checkpoints",
+        "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin/grug/test-d6144/v/checkpoints",
     ]
 
 
