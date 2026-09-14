@@ -390,6 +390,48 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
+      # The regional process reports this state directly to the hub, outside the
+      # row-forwarding path. The bridge evaluates heartbeat and progress ages so
+      # the Grafana expression remains one explicit value per cluster/table.
+      - uid: finelog-relay-stalled
+        title: FinelogRelayStalled
+        condition: C
+        for: 2m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.namespace }} relay is {{ $labels.state }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/finelog/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/relay_status
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: namespace, text: namespace, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
   # The hourly collector stores CoreWeave usage and zone quotas in Finelog.
   - orgId: 1
     name: coreweave-storage

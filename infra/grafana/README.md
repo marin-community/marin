@@ -31,7 +31,9 @@ fetch server-side, so nothing outside the container reaches it.
 ```
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
+GET /finelog/marin/relay_status                  direct regional relay heartbeats
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
+GET /finelog/marin/alerts/relay_status           stale relay/table rows + value(0|1)
 GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
 GET /finelog/marin/alerts/loss_spikes            active hero runs + loss-spike value(0|1)
 GET /finelog/marin/alerts/training_telemetry     watched hero runs + silent-telemetry value(0|1)
@@ -86,6 +88,11 @@ result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub 
 at or above 5 seconds is slow. Clusters' finelog row adds effective pod
 resources, restart history, probe presence, node placement, PVC class/capacity, and
 recent matching Kubernetes Warning events.
+
+`relay_status` comes from a complete snapshot each regional Finelog sends directly to
+the hub every 30 seconds. It does not travel through the row-forwarding path. The alert
+fires when a regional heartbeat is two minutes old, the required node-agent namespace
+is absent, or a nonzero publication/forwarding lag has made no progress for ten minutes.
 
 Iris: the bridge owns each query behind a fixed endpoint and returns flat rows, so the
 dashboard never sends raw admin SQL. `jobs` (root jobs by state — in-flight plus 24h
