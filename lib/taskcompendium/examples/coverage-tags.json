@@ -63,6 +63,22 @@
     "interaction:multi_action_workflow",
     "shape:derived_stateful_domain"
   ],
+  "nemo/workplace/1163": [
+    "competency:stateful_tool_use",
+    "context:workplace_assistant",
+    "difficulty:medium",
+    "domain:email",
+    "interaction:single_tool_call",
+    "shape:stateful_domain"
+  ],
+  "nemo/workplace/536": [
+    "competency:stateful_tool_use",
+    "context:workplace_assistant",
+    "difficulty:medium",
+    "domain:customer_relationship_management",
+    "interaction:single_tool_call",
+    "shape:stateful_domain"
+  ],
   "r2egym/269e2a176b9b2b8e00be46f5a59e840625879bf9": [
     "artifact:source_code",
     "competency:debugging",

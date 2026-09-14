@@ -1,0 +1,8 @@
+{
+  "config": "default",
+  "dataset": "nvidia/Nemotron-RL-agent-workplace_assistant",
+  "offset": 536,
+  "raw_sha256": "9b8e5b1eb9b35bf0557ff1d7e9435680fef8d48a66bd7139d732d8dd0e5040f5",
+  "revision": "c86a908379e0a361a573c395e175d3c1aa128e6c",
+  "split": "train"
+}

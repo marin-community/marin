@@ -15,14 +15,21 @@ import pytest
 
 from taskcompendium.execution import HarborExecutionConfig, HarborLaunchConfig
 from taskcompendium.harbor.runner import run_trial
-from taskcompendium.importers.nemo_workplace import FIXTURE_NAME, build_sample
+from taskcompendium.importers.nemo_workplace import (
+    FIXTURE_NAME,
+    ProviderCall,
+    build_sample,
+    import_hub_row,
+    provider_binding,
+)
 from taskcompendium.lowering import lower_to_harbor
-from taskcompendium.models import ActionInterface, Outcome, ProviderStateVerifier
+from taskcompendium.models import ActionInterface, AssistantFinal, Outcome, ProviderStateVerifier, Rejected, Rendering
 from taskcompendium.providers.nemo_workplace.provider import NemoWorkplaceEnvironment
 from taskcompendium.providers.nemo_workplace.tools import get_tools
 from taskcompendium.rendering import render_task
 
 FIXTURES = Path(__file__).parent / "fixtures/nemo"
+REIMPORT_FIXTURES = FIXTURES / "reimport"
 
 
 def _environment() -> NemoWorkplaceEnvironment:
@@ -55,6 +62,53 @@ async def test_workplace_provider_preserves_all_source_tools_and_stateful_outcom
     noop = _environment()
     await _dispatch(noop, sample.noop)
     assert (await noop.grade_provider_state("nemo_workplace_v1", parameters)).reward == 0.0
+
+
+@pytest.mark.parametrize("offset", (536, 1163))
+async def test_hub_workplace_rows_preserve_source_identity_and_authoritative_state(offset):
+    data = (REIMPORT_FIXTURES / f"workplace-{offset}.json").read_bytes()
+    provenance = json.loads((REIMPORT_FIXTURES / f"workplace-{offset}.provenance.json").read_text())
+    assert hashlib.sha256(data).hexdigest() == provenance["raw_sha256"]
+
+    specification = import_hub_row(data, split=provenance["split"], offset=offset)
+
+    assert not isinstance(specification, Rejected)
+    assert specification.metadata.source.dataset == provenance["dataset"]
+    assert specification.metadata.source.revision == provenance["revision"]
+    assert specification.metadata.source.row == str(offset)
+    verifier = specification.steps[0].verifier
+    assert isinstance(verifier, ProviderStateVerifier)
+    private = {resource.path: resource for resource in specification.resources}
+    assert json.loads(private["source-provenance.json"].content.data) == {
+        "dataset": provenance["dataset"],
+        "revision": provenance["revision"],
+        "split": provenance["split"],
+        "offset": str(offset),
+    }
+
+    environment = _environment()
+    source_tools = json.loads(data)["responses_create_params"]["tools"]
+    assert {tool["name"] for tool in source_tools} == {
+        tool["function"]["name"] for tool in await environment.native_tool_definitions()
+    }
+    calls = tuple(ProviderCall(action["name"], action["arguments"]) for action in verifier.parameters["ground_truth"])
+    assert await _dispatch(environment, calls)
+    assert (await environment.grade_provider_state(verifier.adapter, verifier.parameters)).reward == 1.0
+
+    public = msgspec.json.encode(render_task(specification, (Rendering("chat", AssistantFinal()),))).decode()
+    assert "ground_truth" not in public
+    assert "source-provenance.json" not in public
+    assert provider_binding().environment.interface == verifier.interface
+
+
+def test_hub_workplace_import_rejects_a_tool_surface_the_shared_provider_cannot_supply():
+    row = json.loads((REIMPORT_FIXTURES / "workplace-536.json").read_text())
+    row["responses_create_params"]["tools"][0]["name"] = "unavailable_tool"
+
+    result = import_hub_row(json.dumps(row).encode(), split="train", offset=536)
+
+    assert isinstance(result, Rejected)
+    assert result.reason.value == "unrecoverable_source"
 
 
 async def test_workplace_provider_returns_errors_and_recovers_with_correlated_trace():

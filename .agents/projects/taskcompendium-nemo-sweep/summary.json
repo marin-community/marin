@@ -4,8 +4,8 @@
   "training_blends_excluded": 3,
   "sampled_rows": 58,
   "disposition": {
-    "accepted": 4,
-    "rejected": 8,
+    "accepted": 6,
+    "rejected": 6,
     "deferred": 46
   },
   "accepted": [
@@ -36,6 +36,20 @@
       "split": "train",
       "offset": 1,
       "task_id": "nemo/ifeval/44654/binary"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-agent-workplace_assistant",
+      "revision": "c86a908379e0a361a573c395e175d3c1aa128e6c",
+      "split": "train",
+      "offset": 536,
+      "task_id": "nemo/workplace/536"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-agent-workplace_assistant",
+      "revision": "c86a908379e0a361a573c395e175d3c1aa128e6c",
+      "split": "train",
+      "offset": 1163,
+      "task_id": "nemo/workplace/1163"
     }
   ],
   "superseded_findings": [
@@ -50,6 +64,11 @@
     {
       "review": "reviews/viewer-fallback.json",
       "resolution": "The Dataset Viewer first-row fallback made all twelve initially unavailable rows inspectable; two instruction-following rows were accepted and the remaining ten were deferred."
+    },
+    {
+      "review": "reviews/agent-corpora.json",
+      "corpus": "nvidia/Nemotron-RL-agent-workplace_assistant",
+      "resolution": "The importer now preserves sampled source rows against the existing shared Workplace seed and authoritative-state provider; both rows are accepted."
     }
   ]
 }
