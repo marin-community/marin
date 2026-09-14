@@ -28,6 +28,7 @@ from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp,
 from starlette.types import ASGIApp
 
 from zephyr.dashboard.app import (
+    ROOT_PLAN_PREFIX,
     PipelinePlan,
     PlanNodeState,
     create_dashboard_application,
@@ -1273,7 +1274,7 @@ class ZephyrCoordinator:
                 run.plan_stages = list(plan.stages)
 
             for stage_idx, stage in enumerate(plan.stages):
-                node_id = stage_node_id("main", stage_idx)
+                node_id = stage_node_id(ROOT_PLAN_PREFIX, stage_idx)
                 if stage.stage_type == StageType.RESHARD:
                     with self._track_plan_node(run, node_id):
                         shards = _reshard_refs(shards, stage.output_shards or len(shards))
@@ -1456,7 +1457,7 @@ class ZephyrCoordinator:
                 continue
 
             right_refs = _build_source_shards(op.right_plan.source_items)
-            prefix = join_right_prefix(stage_node_id("main", parent_stage_idx), i)
+            prefix = join_right_prefix(stage_node_id(ROOT_PLAN_PREFIX, parent_stage_idx), i)
 
             for stage_idx, right_stage in enumerate(op.right_plan.stages):
                 with self._track_plan_node(run, stage_node_id(prefix, stage_idx)):

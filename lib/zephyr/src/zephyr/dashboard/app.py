@@ -29,6 +29,7 @@ MAX_WORKER_LIMIT = 200
 DEFAULT_METRIC_POINTS = 200
 MAX_METRIC_POINTS = 500
 SOURCE_STAGE_TYPE = "SOURCE"
+ROOT_PLAN_PREFIX = "main"
 
 _BASE_ELEMENT = '<base href="/"'
 
@@ -288,7 +289,7 @@ def pipeline_plan(
                     auxiliary=True,
                 )
 
-    add_plan(plan, prefix="main")
+    add_plan(plan, prefix=ROOT_PLAN_PREFIX)
     return PipelinePlan(
         pipeline_name=pipeline_name,
         execution_id=execution_id,
