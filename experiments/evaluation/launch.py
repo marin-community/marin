@@ -40,6 +40,7 @@ from marin.evaluation.runner import (
     SubmittedEvaluationBatch,
     submit_evaluation_batch,
 )
+from marin.evaluation.serving_config import resolved_serve_config
 from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import SecretSpec
@@ -202,7 +203,12 @@ def build_evaluation_batch(
         if accelerator.platform is not Platform.GPU:
             raise ValueError("--federated_cluster requires a GPU accelerator")
         accelerator = replace(accelerator, target_cluster=spec.federated_cluster)
-    definitions = _resolve_definitions(_evaluation_definitions(spec), model, spec.limit)
+    requested_definitions = _evaluation_definitions(spec)
+    if model.serve.max_model_len is not None and any(
+        isinstance(definition, HarborDefinition) for _, definition in requested_definitions
+    ):
+        model = replace(model, serve=resolved_serve_config(model))
+    definitions = _resolve_definitions(requested_definitions, model, spec.limit)
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []

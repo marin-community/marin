@@ -32,6 +32,7 @@ from marin.evaluation.runner import (
     evaluate_batch,
     submit_evaluation_batch,
 )
+from marin.evaluation.serving_config import inference_config_for_model
 from marin.external_dependencies import EVALCHEMY
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
@@ -765,11 +766,17 @@ def test_build_evaluation_batch_gives_harbor_the_served_context_limits(tmp_path,
     preflight_requests = _install_fake_harbor_preflight(monkeypatch)
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     config_path = _write_harbor_config(tmp_path / "aime-policy.yaml")
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    checkpoint_config = checkpoint / "config.json"
+    checkpoint_config.write_text(json.dumps({"max_position_embeddings": 131072}))
     spec = LaunchSpec(
         model=replace(
             models()["qwen3-8b"],
+            location=str(checkpoint),
+            resource_hint=ResourceHint(hbm_gb=21, memory="32g"),
             serve=ServeConfig(max_model_len=1048576),
-            generation=GenerationConfig(max_gen_toks=393216),
+            generation=GenerationConfig(max_gen_toks=8192),
         ),
         evals=(),
         evalchemy_definitions=(),
@@ -785,7 +792,7 @@ def test_build_evaluation_batch_gives_harbor_the_served_context_limits(tmp_path,
 
     batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
 
-    served_limits = {"max_input_tokens": 1048576, "max_output_tokens": 393216}
+    served_limits = {"max_input_tokens": 131072, "max_output_tokens": 8192}
     (evaluation,) = batch.evaluations
     assert [request["model_info"] for request in preflight_requests] == [served_limits]
     assert evaluation.executor.model_agent_kwargs["model_info"] == served_limits
@@ -794,6 +801,9 @@ def test_build_evaluation_batch_gives_harbor_the_served_context_limits(tmp_path,
         _PREFLIGHT_MAX_INPUT_TOKENS,
         _PREFLIGHT_MAX_OUTPUT_TOKENS,
     )
+    checkpoint_config.unlink()
+    inference = inference_config_for_model(batch.model, batch.accelerator, env_vars={}, priority=batch.priority_band)
+    assert inference.model.max_model_len == served_limits["max_input_tokens"]
 
 
 def test_launch_dry_run_prints_the_resolved_harbor_agent_context(tmp_path, monkeypatch):
