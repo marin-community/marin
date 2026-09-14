@@ -15,6 +15,7 @@ from jax.sharding import NamedSharding, PartitionSpec
 from levanter.testing.helpers import use_test_mesh
 
 from levanter.grad_accum import microbatched
+from levanter.metrics import Metric, ReductionType
 
 
 class Mlp(eqx.Module):
@@ -123,3 +124,30 @@ def test_accumulate_fp8_gradients_preserves_largest_amax_and_scale():
         jnp.array([32.0, 0.0, 0.0, 0.0]),
     )
     assert_trees_all_close(grads.dot_general.input_scale, linear.dot_general.input_scale)
+
+
+def test_accumulate_metrics_uses_extrema_identities():
+    microbatch_size = len(jax.devices())
+    Batch = hax.Axis("Batch", 2 * microbatch_size)
+    values = hax.named(jnp.arange(1, Batch.size + 1, dtype=jnp.float32), Batch)
+    axis_mapping = {"Batch": ResourceAxis.DATA}
+
+    def loss_fn(scale, inputs):
+        scaled = scale * inputs.array
+        return jnp.mean(scaled), {
+            "minimum": Metric.from_value(jnp.min(scaled), ReductionType.MIN),
+            "maximum": Metric.from_value(jnp.max(scaled), ReductionType.MAX),
+        }
+
+    @hax.partitioning.named_jit(axis_resources=axis_mapping)
+    def accumulated_metrics(scale, inputs):
+        grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
+        grad_fn = microbatched(grad_fn, Batch, microbatch_size, axis_mapping, axis_mapping)
+        return grad_fn(scale, inputs)[0][1]
+
+    with use_test_mesh() as mesh:
+        values = jax.device_put(values, NamedSharding(mesh, PartitionSpec(ResourceAxis.DATA)))
+        metrics = accumulated_metrics(jnp.asarray(2.0), values)
+
+    assert float(metrics["minimum"]) == 2.0
+    assert float(metrics["maximum"]) == 2.0 * Batch.size

@@ -15,7 +15,7 @@ from haliax.util import is_named_array
 from jax.lax import with_sharding_constraint
 from jax.sharding import PartitionSpec
 
-from levanter.metrics import Metric
+from levanter.metrics import Metric, ReductionType
 from levanter.metrics import fold as fold_metric
 from levanter.utils.jax_utils import zeros_like_tree
 
@@ -95,6 +95,28 @@ def microbatched(
         # first, determine the shape and make accumulator arrays
         r_shape = eqx.filter_eval_shape(fn, *args, **kwargs)
         acc = zeros_like_tree(r_shape, accum_axis_mapping, accum_dtype)
+
+        # Zero is the identity for sums and means, but not for extrema. In
+        # particular, folding positive MIN metrics into a zero-initialized
+        # accumulator permanently reports zero. Replace only the metric value
+        # leaves with their reduction's true identity before the scan.
+        def metric_identity(shape, zero):
+            if not isinstance(shape, Metric):
+                return zero
+            if shape.reduction is ReductionType.MIN:
+                value = jnp.full_like(zero._value, jnp.inf)
+            elif shape.reduction is ReductionType.MAX:
+                value = jnp.full_like(zero._value, -jnp.inf)
+            else:
+                value = zero._value
+            return Metric(_value=value, _count=zero._count, reduction=shape.reduction)
+
+        acc = jax.tree_util.tree_map(
+            metric_identity,
+            r_shape,
+            acc,
+            is_leaf=lambda x: isinstance(x, Metric),
+        )
 
         # then, reshape the inputs from (Batch, ...) to (AccumStep, Microbatch, ...)
 
