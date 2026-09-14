@@ -70,6 +70,7 @@ def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
                         infrastructure=frozenset({"InfrastructureError"}),
                         agent=frozenset({"AgentError"}),
                         passthrough=frozenset({"PassthroughError"}),
+                        undecided=frozenset({"VerifierTimeoutError"}),
                         version="1.2.3",
                     ),
                 )

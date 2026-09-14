@@ -23,7 +23,7 @@ from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
-from harbor_config.errors import ErrorCategory, errors_by_category  # pyrefly: ignore[missing-import]
+from harbor_config.errors import ErrorCategory, errors_by_category, known_error_types  # pyrefly: ignore[missing-import]
 from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
 from harbor_config.models.job.config import DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
@@ -359,6 +359,10 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
             model_agent_kwargs=dict(model_agent_kwargs),
         ),
     )
+    infrastructure_errors = errors_by_category(ErrorCategory.INFRASTRUCTURE)
+    agent_errors = errors_by_category(ErrorCategory.AGENT)
+    passthrough_errors = errors_by_category(ErrorCategory.PASSTHROUGH)
+    undecided_errors = known_error_types() - infrastructure_errors - agent_errors - passthrough_errors
     return {
         "stable_policy_json": stable_policy_json,
         "digest": f"sha256:{hashlib.sha256(stable_policy_json.encode()).hexdigest()}",
@@ -368,9 +372,10 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
         "agent": agent_name,
         "environment": environment_name,
         "error_taxonomy": {
-            "infrastructure": sorted(errors_by_category(ErrorCategory.INFRASTRUCTURE)),
-            "agent": sorted(errors_by_category(ErrorCategory.AGENT)),
-            "passthrough": sorted(errors_by_category(ErrorCategory.PASSTHROUGH)),
+            "infrastructure": sorted(infrastructure_errors),
+            "agent": sorted(agent_errors),
+            "passthrough": sorted(passthrough_errors),
+            "undecided": sorted(undecided_errors),
             "version": importlib.metadata.version(importlib.metadata.packages_distributions()["harbor_config"][0]),
         },
     }

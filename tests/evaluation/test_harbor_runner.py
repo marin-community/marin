@@ -34,6 +34,7 @@ _ERROR_TAXONOMY = HarborErrorTaxonomy(
     infrastructure=frozenset({"InfrastructureError", "InternalServerError"}),
     agent=frozenset({"AgentError", "AgentTimeoutError"}),
     passthrough=frozenset({"PassthroughError"}),
+    undecided=frozenset({"VerifierTimeoutError"}),
     version="1.2.3",
 )
 
@@ -211,6 +212,8 @@ def test_read_trials_and_archive_captures_trajectory(tmp_path):
         ("AgentError", None, True, "AgentError"),
         ("PassthroughError", {"rewards": {"reward": 0.5}}, True, "PassthroughError"),
         ("PassthroughError", None, False, "PassthroughError"),
+        ("VerifierTimeoutError", {"rewards": {"reward": 0.5}}, False, "VerifierTimeoutError"),
+        ("VerifierTimeoutError", None, False, "VerifierTimeoutError"),
         ("NewHarborError", {"rewards": {"reward": 1.0}}, False, "unknown:NewHarborError"),
     ],
 )
@@ -616,6 +619,34 @@ def test_harbor_executor_counts_agent_failure_without_verifier_as_zero_reward(tm
     assert coverage.errors == {"AgentTimeoutError": 1}
     result = json.loads((tmp_path / "harbor_result.json").read_text())
     assert result["errors"] == {"AgentTimeoutError": 1}
+
+
+def test_harbor_executor_counts_undecided_error_against_completion_gate(tmp_path, monkeypatch):
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 20)
+        for index in range(20):
+            trial_dir = job_dir / f"trial-{index}"
+            trial_dir.mkdir(parents=True, exist_ok=True)
+            result = {"task_name": f"task-{index}", "verifier_result": {"rewards": {"reward": 1.0}}}
+            if index == 0:
+                result = {
+                    "task_name": f"task-{index}",
+                    "verifier_result": None,
+                    "exception_info": {"exception_type": "VerifierTimeoutError"},
+                }
+            trial_dir.joinpath("result.json").write_text(json.dumps(result))
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"undecided-{tmp_path.name}")
+
+    outcome = executor(_inference_session(), str(tmp_path), {})
+
+    dataset = executor.config.record_dataset
+    assert outcome.metrics[dataset]["total"] == 19.0
+    coverage = outcome.coverage[dataset]
+    assert (coverage.n_attempted, coverage.n_scored) == (20, 19)
+    assert coverage.errors == {"VerifierTimeoutError": 1}
 
 
 def test_harbor_executor_rejects_unknown_error_name(tmp_path, monkeypatch):

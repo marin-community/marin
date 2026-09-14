@@ -100,6 +100,7 @@ class HarborErrorTaxonomy:
     infrastructure: frozenset[str]
     agent: frozenset[str]
     passthrough: frozenset[str]
+    undecided: frozenset[str]
     version: str
 
 
@@ -253,9 +254,15 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
         infrastructure=taxonomy_names("infrastructure"),
         agent=taxonomy_names("agent"),
         passthrough=taxonomy_names("passthrough"),
+        undecided=taxonomy_names("undecided"),
         version=taxonomy_version,
     )
-    categories = (error_taxonomy.infrastructure, error_taxonomy.agent, error_taxonomy.passthrough)
+    categories = (
+        error_taxonomy.infrastructure,
+        error_taxonomy.agent,
+        error_taxonomy.passthrough,
+        error_taxonomy.undecided,
+    )
     if any(left & right for index, left in enumerate(categories) for right in categories[index + 1 :]):
         raise ValueError(f"Harbor preflight returned overlapping error taxonomy categories for {path}")
     workspace_dataset_path = None

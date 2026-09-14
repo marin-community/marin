@@ -215,11 +215,15 @@ def test_preflight_exports_pinned_harbor_error_taxonomy(checked_policies):
         _external_python(
             "-c",
             """import importlib.metadata, json
-from harbor_config.errors import ErrorCategory, errors_by_category
+from harbor_config.errors import ErrorCategory, errors_by_category, known_error_types
+infrastructure = errors_by_category(ErrorCategory.INFRASTRUCTURE)
+agent = errors_by_category(ErrorCategory.AGENT)
+passthrough = errors_by_category(ErrorCategory.PASSTHROUGH)
 print(json.dumps({
-    \"infrastructure\": sorted(errors_by_category(ErrorCategory.INFRASTRUCTURE)),
-    \"agent\": sorted(errors_by_category(ErrorCategory.AGENT)),
-    \"passthrough\": sorted(errors_by_category(ErrorCategory.PASSTHROUGH)),
+    \"infrastructure\": sorted(infrastructure),
+    \"agent\": sorted(agent),
+    \"passthrough\": sorted(passthrough),
+    \"undecided\": sorted(known_error_types() - infrastructure - agent - passthrough),
     \"version\": importlib.metadata.version(importlib.metadata.packages_distributions()[\"harbor_config\"][0]),
 }))""",
         ).stdout

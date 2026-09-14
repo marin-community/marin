@@ -199,6 +199,8 @@ def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> Harb
         scored = verifier_result is not None
     elif exception_type in taxonomy.infrastructure:
         scored = False
+    elif exception_type in taxonomy.undecided:
+        scored = False
     else:
         error["type"] = f"{_UNKNOWN_ERROR_PREFIX}{exception_type or _UNKNOWN_ERROR}"
         scored = False
