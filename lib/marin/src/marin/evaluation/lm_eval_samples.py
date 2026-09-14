@@ -71,6 +71,7 @@ _CONTENT_TYPES = {
 # :func:`is_scratch_artifact`.
 _SCRATCH_SEGMENT = re.compile(r"(?:^|/)tmp[a-z0-9_]{6,}/")
 _INFRASTRUCTURE_ERROR_PREFIX = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}]"
+_NATIVE_EVALCHEMY_SOURCE_PREFIX = f"{SOURCES_PREFIX}/evalchemy/"
 
 
 def is_scratch_artifact(relative_path: str) -> bool:
@@ -272,6 +273,37 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> Sa
     return SampleExport(samples=count, coverage=coverage, recovered_metrics=recovered_metrics)
 
 
+def summarize_native_eval_samples(out_path: str) -> SampleExport:
+    """Summarize Evalchemy's native FineStore sources without rewriting its sample table."""
+    reader = ReadView(out_path)
+    sources = tuple(
+        name
+        for name in preserved_sample_sources(out_path)
+        if name.startswith(_NATIVE_EVALCHEMY_SOURCE_PREFIX) and "/native/" in name
+    )
+    if not sources:
+        raise FileNotFoundError(f"archive at {out_path!r} preserves no native Evalchemy sample sources")
+
+    keys = _task_keys(sources)
+    count = 0
+    coverage: dict[str, TaskCoverage] = {}
+    recovered_metrics: dict[str, dict[str, float]] = {}
+    for name in sources:
+        payload = reader.read_blob(name)
+        if payload is None:
+            raise FileNotFoundError(f"archive at {out_path!r} lists source blob {name!r} but cannot read it")
+        samples = _lm_eval_samples(name.rsplit("/", 1)[-1], payload)
+        count += len(samples)
+        if not samples:
+            continue
+        task_key = keys[name]
+        task_coverage_result, task_metrics = task_coverage_and_metrics(samples)
+        coverage[task_key] = task_coverage_result
+        if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
+            recovered_metrics[task_key] = task_metrics
+    return SampleExport(samples=count, coverage=coverage, recovered_metrics=recovered_metrics)
+
+
 def require_current_samples(out_path: str) -> None:
     """Raise if the archive's samples predate the current contract.
 
@@ -297,15 +329,20 @@ def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> 
 
     Physical LF bytes delimit records. Literal U+2028/U+2029 characters remain inside JSON strings.
     """
+    samples = _lm_eval_samples(filename, payload)
+    for sample in samples:
+        store.add_sample(sample)
+    return samples
+
+
+def _lm_eval_samples(filename: str, payload: bytes) -> list[EvalSample]:
+    """Normalize one evaluator-native JSONL payload without writing it."""
     rows = [json.loads(line) for line in payload.decode().split("\n") if line.strip()]
     if not rows:
         logger.warning("samples file %s is empty; skipping archive export", filename)
         return []
     task = _task_from_filename(filename, ".jsonl")
-    samples = [sample for raw in rows for sample in samples_from_lm_eval(task, raw)]
-    for sample in samples:
-        store.add_sample(sample)
-    return samples
+    return [sample for raw in rows for sample in samples_from_lm_eval(task, raw)]
 
 
 def preserved_sample_sources(out_path: str) -> tuple[str, ...]:

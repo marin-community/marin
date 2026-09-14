@@ -4,13 +4,11 @@
 """Run a Harbor dataset against an already-served model and normalize the trials.
 
 The group launcher serves a model once and hands this runner an OpenAI endpoint; the runner points a
-Harbor agent at it (``hosted_vllm/<served-name>``), runs the dataset's trials on the configured
-sandbox environment, and normalizes each finished trial into the shared eval
-contract: one agentic :class:`~finestore.eval.EvalSample` per task (its reward, its grading,
-and a reference to the saved trajectory) plus an aggregate this module's :class:`HarborResult` reads
-back for the record's metrics. Harbor writes each trial's ``result.json`` and trajectory straight to
-the durable output path as it finishes, so a completed trial survives a driver killed before the job
-returns and Harbor's own per-trial resume reads it back from that path on the next run.
+Harbor agent at it (``hosted_vllm/<served-name>``) and runs the dataset's trials on the configured
+sandbox environment. Harbor writes each native result and normalized evaluation sample directly to
+the run's FineStore archive. This module reads Harbor's durable trial results only to compute the
+aggregate record metrics and coverage. A completed trial survives a driver killed before the job
+returns, and Harbor's own per-trial resume reads it back from that path on the next run.
 
 The ``harbor`` dependency is optional and imported lazily, so importing this module never requires it.
 """
@@ -24,7 +22,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from finestore.eval import EvalSample, EvaluationStore, Grading, SampleKind
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
@@ -265,59 +262,6 @@ def _remove_unscored_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy)
             result_file.parent.rmtree()
 
 
-def _sample_for(trial: HarborTrial, dataset: str, *, trajectory_uri: str | None) -> EvalSample:
-    """Normalize one trial into an agentic :class:`EvalSample`, referencing its archived trajectory.
-
-    An ungraded trial is ungraded, not wrong: it carries no score and ``correct`` stays ``None``, so
-    the sample browser counts it apart from the answers the model actually got wrong.
-    """
-    solved = trial.reward >= SOLVED_REWARD if trial.scored else None
-    detail = json.dumps({"reward": trial.reward, "error": trial.error, "scored": trial.scored}, ensure_ascii=False)
-    return EvalSample(
-        task=dataset,
-        doc_id=trial.task_id,
-        kind=SampleKind.AGENTIC,
-        trajectory_uri=trajectory_uri,
-        grading=Grading(
-            method="harbor:verifier",
-            metric="reward",
-            score=trial.reward if trial.scored else None,
-            passed=solved,
-            detail=detail,
-        ),
-        metrics={"reward": trial.reward} if trial.scored else {},
-        correct=solved,
-    )
-
-
-def _write_archive(trials: list[HarborTrial], dataset: str, output_dir: str) -> str | None:
-    """Write the run's samples, flattened steps, and raw trajectories to the finestore archive.
-
-    Each trial's raw trajectory is stored once in the ``blobs`` table and referenced from the sample
-    by a ``finestore://`` URI; its steps are flattened into the ``steps`` table for column projection.
-    Returns the archive root, or ``None`` when there are no trials to write.
-    """
-    if not trials:
-        return None
-    store = EvaluationStore.open(output_dir, writer_id="harbor")
-    try:
-        for trial in trials:
-            trajectory_uri = None
-            if trial.trajectory_path is not None:
-                stored = store.add_trajectory(
-                    StoragePath(trial.trajectory_path).read_bytes(),
-                    task=dataset,
-                    doc_id=trial.task_id,
-                    trial_id=trial.trial_id,
-                )
-                trajectory_uri = stored.uri
-            store.add_sample(_sample_for(trial, dataset, trajectory_uri=trajectory_uri), trial_id=trial.trial_id)
-        store.seal()
-    finally:
-        store.close()
-    return output_dir
-
-
 def _trial_errors(trials: list[HarborTrial], attempted: int | None) -> dict[str, int]:
     """Count trial errors, including errors on scored outcomes.
 
@@ -385,7 +329,7 @@ def _run_harbor_job(
             logger.info("inference recovered; resuming Harbor job %s", job_name)
 
     trials = _read_trials(job_dir, config.error_taxonomy)
-    archive_path = _write_archive(trials, dataset, output_dir)
+    archive_path = output_dir if trials else None
     result = _aggregate(trials, dataset, archive_path, _attempted_trials(job_dir))
     StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
         json.dumps(
@@ -516,6 +460,8 @@ class HarborExecutor:
             served_model=model.endpoint.model,
             task_limit=self.task_limit,
             model_agent_kwargs=self.model_agent_kwargs,
+            archive_root=output_dir,
+            archive_dataset=dataset,
         )
         return _run_harbor_job(
             job_name=job_name,

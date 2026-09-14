@@ -26,7 +26,7 @@ from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_REQUIREMENT,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.lm_eval_samples import export_lm_eval_samples
+from marin.evaluation.lm_eval_samples import summarize_native_eval_samples
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, RunStatus, TaskCoverage
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import RemoteInferenceSession
@@ -271,7 +271,7 @@ def run_evalchemy(
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
     try:
         _verify_durable_artifacts(output_dir)
-        export = export_lm_eval_samples(output_dir)
+        export = summarize_native_eval_samples(output_dir)
     except Exception as exc:
         raise EvalPipelineError(
             str(exc),

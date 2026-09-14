@@ -134,9 +134,13 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         str(gen_budget),
         "--output_path",
         output_path,
-        # Per-question jsonl (doc, prompt, responses, per-sample scores) next to the results JSON;
-        # the parent converts each to parquet for drill-down analysis.
+        # Per-question JSONL remains beside the results JSON. Evalchemy also writes both native
+        # artifacts and normalized tables directly to the shared FineStore root.
         "--log_samples",
+        "--finestore_output_path",
+        config["out_path"],
+        "--finestore_output_prefix",
+        task["dir"],
         "--verbosity",
         "INFO",
     ]

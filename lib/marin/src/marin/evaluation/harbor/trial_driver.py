@@ -24,7 +24,7 @@ from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by ex
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config.errors import ErrorCategory, errors_by_category, known_error_types  # pyrefly: ignore[missing-import]
 from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
-from harbor_config.models.job.config import DatasetConfig  # pyrefly: ignore[missing-import]
+from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
 from upath import UPath  # pyrefly: ignore[missing-import]  # installed by external driver
@@ -59,6 +59,8 @@ class RuntimeOverlay(BaseModel):
     served_model: str
     task_limit: int | None
     model_agent_kwargs: dict[str, Any]
+    archive_root: str
+    archive_dataset: str
 
 
 class _DatasetKind(StrEnum):
@@ -283,6 +285,10 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             "jobs_dir": UPath(overlay.jobs_dir),
             "agents": [agent],
             "datasets": [dataset],
+            "archive": ArchiveConfig(
+                root=overlay.archive_root,
+                dataset=overlay.archive_dataset,
+            ),
         }
     )
     return effective
@@ -360,6 +366,8 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
             served_model=_STABLE_MODEL,
             task_limit=None,
             model_agent_kwargs=dict(model_agent_kwargs),
+            archive_root=_STABLE_JOBS_DIR,
+            archive_dataset=dataset_metadata.selector,
         ),
     )
     infrastructure_errors = errors_by_category(ErrorCategory.INFRASTRUCTURE)

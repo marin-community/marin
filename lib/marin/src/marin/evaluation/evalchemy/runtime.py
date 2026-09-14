@@ -9,7 +9,7 @@ revision identifies the CLI, graders, and benchmark data without requiring a sep
 
 from marin.external_dependencies import EVALCHEMY
 
-EVALCHEMY_REQUIREMENT = EVALCHEMY.requirement()
+EVALCHEMY_REQUIREMENT = EVALCHEMY.requirement(("serve-eval",))
 
 # Evalchemy's current dependency graph has Python 3.12 wheels. Letting uvx select Python 3.13 makes
 # pandas 2.2.2 build from source during a cold start.

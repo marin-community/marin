@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import click
 import pytest
 from click.testing import CliRunner
+from finestore.eval import EvaluationStore, samples_from_lm_eval
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
@@ -190,6 +191,21 @@ def _write_evalchemy_output(
     (model_dir / "results_20260807.json").write_text(json.dumps({"results": results}))
     for task, rows in samples.items():
         (model_dir / f"samples_{task}_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    store = EvaluationStore.open(output_dir, writer_id="evalchemy-test")
+    try:
+        for task, rows in samples.items():
+            payload = ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
+            store.add_source_artifact(
+                f"evalchemy/{task_dir}/native/samples_{task}_native.jsonl",
+                payload,
+                content_type="application/x-ndjson",
+            )
+            for row in rows:
+                for sample in samples_from_lm_eval(task, row):
+                    store.add_sample(sample)
+        store.seal()
+    finally:
+        store.close()
 
 
 def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp_path):
