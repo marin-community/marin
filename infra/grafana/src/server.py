@@ -14,7 +14,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
     GET /finelog/{cluster}/v1/vllm/overview       bounded per-job/run vLLM telemetry
     GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
-    GET /finelog/marin/alerts/query              alert SQL; no data when Finelog is unavailable
+    GET /finelog/{cluster}/alerts/query          alert SQL; no data when Finelog is unavailable
     GET /finelog/marin/relay_status              direct regional relay heartbeats
     GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
     GET /finelog/marin/alerts/relay_status       stale relay/table rows + value(0|1)

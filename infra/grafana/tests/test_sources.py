@@ -18,6 +18,7 @@ from finelog.errors import StatsError
 from finelog_health import FinelogRole
 from finelog_source import FinelogSource
 from github_source import GithubSource
+from google.api_core.exceptions import Forbidden, ServiceUnavailable
 from iris_source import IrisSource
 from k8s_source import K8sFleet
 from nightly_config import NIGHTLY_LANES
@@ -96,6 +97,16 @@ def test_finelog_query_classifies_only_retryable_rpc_failures_as_unavailable():
     with pytest.raises(StatsError) as raised:
         _finelog(invalid).query('SELECT * FROM "log" LIMIT 1', max_rows=1)
     assert raised.value is invalid
+
+
+def test_finelog_query_classifies_only_retryable_discovery_failures_as_unavailable():
+    with pytest.raises(FinelogUnavailableError):
+        _finelog(ServiceUnavailable("temporarily unavailable")).query('SELECT * FROM "log" LIMIT 1', max_rows=1)
+
+    forbidden = Forbidden("permission denied")
+    with pytest.raises(Forbidden) as raised:
+        _finelog(forbidden).query('SELECT * FROM "log" LIMIT 1', max_rows=1)
+    assert raised.value is forbidden
 
 
 def test_finelog_relay_status_calls_connect_json_without_a_new_client_release():

@@ -23,6 +23,7 @@ from finelog.errors import StatsError
 from finelog.types import is_retryable_error
 from finelog_health import FinelogHealth, FinelogRole
 from google.api_core.exceptions import GoogleAPIError
+from google.api_core.retry import if_transient_error
 from relay_health import RelaySenderStatus, relay_sender_statuses
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,11 @@ class FinelogSource:
             if isinstance(cause, Exception) and is_retryable_error(cause):
                 raise FinelogUnavailableError(str(err)) from err
             raise
-        except (GoogleAPIError, InstanceResolutionError, OSError) as err:
+        except GoogleAPIError as err:
+            if if_transient_error(err):
+                raise FinelogUnavailableError(str(err)) from err
+            raise
+        except (InstanceResolutionError, OSError) as err:
             raise FinelogUnavailableError(str(err)) from err
 
     def health(self) -> FinelogHealth:
