@@ -1,0 +1,86 @@
+{
+  "reviewer": "agent-corpora",
+  "sampler": "lib/taskcompendium/examples/nemo_gym_sampling.py",
+  "collection_revision": "nvidia/nemo-gym-68d1e0902765fbacc937bb4f",
+  "corpora": [
+    {
+      "dataset": "nvidia/Nemotron-RL-agent-workplace_assistant",
+      "revision": "c86a908379e0a361a573c395e175d3c1aa128e6c",
+      "config": "default", "split": "train", "offsets": [536, 1163],
+      "samples": [
+        {"offset": 536, "disposition": "rejected", "evidence": "responses_create_params advertises 27 workplace functions; the user asks to add Taylor Robinson as a CRM lead assigned to Raj; ground_truth names customer_relationship_manager_add_customer with a Raj email.", "blocker": "The existing workplace importer only accepts the separately pinned id-0 source row and its exact raw digest; this row is id 536. No source seed/state and no importer contract can preserve this row's CRM mutation semantics."},
+        {"offset": 1163, "disposition": "rejected", "evidence": "responses_create_params advertises the same workplace function surface; the user asks to forward Anaya's prior-week matching email to Yuki; ground_truth names email_forward_email for email 00000414.", "blocker": "The existing workplace importer only accepts the separately pinned id-0 source row and exact raw digest. This row's email state and matching message are unavailable to a supported provider contract."}
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-agent-calendar_scheduling",
+      "revision": "f4a9cb60a19a56e1cc96628e3456147bf8598ea5",
+      "config": "default", "split": "train", "offsets": [1294, 3230],
+      "samples": [
+        {"offset": 1294, "disposition": "rejected", "evidence": "The row is a long calendar conversation with seven event records in exp_cal_state and JSON calendar responses; source input declares no tools.", "blocker": "No existing calendar importer or verifier contract preserves the evolving schedule, constraints, conflict resolution, and final state; the source state is not an available TaskCompendium environment."},
+        {"offset": 3230, "disposition": "rejected", "evidence": "The row is a long calendar conversation with seven event records in exp_cal_state and JSON calendar responses; source input declares no tools.", "blocker": "No existing calendar importer or verifier contract preserves the evolving schedule, constraints, conflict resolution, and final state; the source state is not an available TaskCompendium environment."}
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-Instruction-Following-Calendar-v2",
+      "revision": "556a3b1ab3eb12bab38327bf0ec4cdbeab452338",
+      "config": "default", "split": "train", "offsets": [2513, 3230],
+      "samples": [
+        {"offset": 2513, "disposition": "rejected", "evidence": "The row contains a multi-turn calendar conversation, exp_cal_state with six populated event entries, and no tool declarations.", "blocker": "The existing answer-only instruction importer requires one user input and a supported constraint record; it cannot verify the multi-turn calendar state or scheduling transitions."},
+        {"offset": 3230, "disposition": "rejected", "evidence": "The row contains a multi-turn calendar conversation, exp_cal_state with seven populated event entries, and no tool declarations.", "blocker": "The existing answer-only instruction importer requires one user input and a supported constraint record; it cannot verify the multi-turn calendar state or scheduling transitions."}
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-Agentic-Function-Calling-Pivot-v1",
+      "revision": "cd26a12f54348e02a832d85f9da86621cd5dca4a",
+      "config": "default", "split": "train", "offsets": [4039, 8849],
+      "samples": [
+        {"offset": 4039, "disposition": "accepted", "evidence": "The row has one user request, explicit tools companybusinessscope/openbankaccount/querystock/etc., and expected_action function_call querystock with arguments {stock_code: DELL}.", "mapping": {"TaskSpecification": "one answer step containing the source conversation", "verifier": "PredictedActionVerifier", "rendering": "FinalActionSubmission using only the advertised native functions", "environment": "none; prediction records the native call and does not execute it", "capabilities": []}},
+        {"offset": 8849, "disposition": "accepted", "evidence": "The row has a multi-turn user conversation, explicit calculate_similarity tool, and expected_action message content; no environment state is needed to submit the requested native final response.", "mapping": {"TaskSpecification": "one answer step containing the source conversation", "verifier": "PredictedActionVerifier", "rendering": "FinalActionSubmission using calculate_similarity, with message output permitted by the source expected action", "environment": "none; the predicted action is submitted and no tool is dispatched", "capabilities": []}}
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1",
+      "revision": "9643c8103d7bfbc2d7fc4d15991d6739c612ff58",
+      "config": "default", "split": "train", "offsets": [43611, 92095],
+      "samples": [
+        {"offset": 43611, "disposition": "accepted", "evidence": "The row has an explicit customer-support policy, advertised native tools including get_user_profile, and expected_action get_user_profile for PlayerOne_77.", "mapping": {"TaskSpecification": "one answer step with the source conversation", "verifier": "PredictedActionVerifier", "rendering": "FinalActionSubmission from the row's advertised functions", "environment": "none; tool calls are predicted rather than executed", "capabilities": []}},
+        {"offset": 92095, "disposition": "accepted", "evidence": "The row has an explicit construction-support policy, advertised native tools including get_project_status, and expected_action get_project_status for CTR-0123.", "mapping": {"TaskSpecification": "one answer step with the source conversation", "verifier": "PredictedActionVerifier", "rendering": "FinalActionSubmission from the row's advertised functions", "environment": "none; tool calls are predicted rather than executed", "capabilities": []}}
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-Agentic-SWE-Pivot-v1",
+      "revision": "4947a3c8ea803413a65f9eca14a96ef521b2ddf5",
+      "config": "default", "split": "train", "offsets": [14364, 39518],
+      "samples": [
+        {"offset": 14364, "disposition": "deferred", "evidence": "The row asks for repository changes under /workspace/pandas-dev__pandas__2.0 and provides shell/editing functions; expected_action is a shell_command containing a patch attempt.", "blocker": "Repository contents, issue fixture, and final environment state are unavailable; accepting as an action prediction would discard the requested repository-repair semantics, while no safe native environment mapping is available."},
+        {"offset": 39518, "disposition": "deferred", "evidence": "The row asks for a Dask repository fix under /workspace/dask__dask__2021.04 and provides execute_bash/editor functions; expected_action is an execute_bash command inspecting pytest configuration.", "blocker": "Repository contents, issue fixture, and final environment state are unavailable; accepting as an action prediction would discard the requested repository-repair semantics, while no safe native environment mapping is available."}
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-ReasoningGym-v1",
+      "revision": null, "config": null, "split": null, "offsets": [null, null],
+      "samples": [
+        {"offset": null, "disposition": "deferred", "evidence": "The sampler reported that Dataset Viewer did not return a row count.", "blocker": "No deterministic rows, pinned revision, config, or split were available for safe inspection."},
+        {"offset": null, "disposition": "deferred", "evidence": "The sampler reported that Dataset Viewer did not return a row count.", "blocker": "No deterministic rows, pinned revision, config, or split were available for safe inspection."}
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-CFBench-v1",
+      "revision": "7de374a40dd15b003717c069fa69b3cf5d763f98",
+      "config": "default", "split": "train", "offsets": [533, 1093],
+      "samples": [
+        {"offset": 533, "disposition": "rejected", "evidence": "The row contains a four-request French conversation plus instruction records, llm_judge criteria, and no tools.", "blocker": "The private judge and multi-turn instruction aggregation have no supported safe importer/verifier contract; the existing one-message constraint importer cannot preserve this source semantics."},
+        {"offset": 1093, "disposition": "rejected", "evidence": "The row contains Arabic conversation text plus instruction records and llm_judge criteria, with no tools.", "blocker": "The private judge and multi-turn instruction aggregation have no supported safe importer/verifier contract; the existing one-message constraint importer cannot preserve this source semantics."}
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-SysBench-v1",
+      "revision": null, "config": null, "split": null, "offsets": [null, null],
+      "samples": [
+        {"offset": null, "disposition": "deferred", "evidence": "The sampler reported that Dataset Viewer did not return a row count.", "blocker": "No deterministic rows, pinned revision, config, or split were available for safe inspection."},
+        {"offset": null, "disposition": "deferred", "evidence": "The sampler reported that Dataset Viewer did not return a row count.", "blocker": "No deterministic rows, pinned revision, config, or split were available for safe inspection."}
+      ]
+    }
+  ]
+}

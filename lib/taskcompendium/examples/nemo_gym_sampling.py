@@ -41,6 +41,22 @@ def _sample_offsets(dataset: str, total: int, samples_per_corpus: int) -> tuple[
     return tuple(sorted(offsets))
 
 
+def _preview_samples(preview: dict[str, Any], samples_per_corpus: int) -> list[dict[str, Any]]:
+    rows = preview.get("rows", [])
+    if len(rows) < samples_per_corpus:
+        raise ValueError("Dataset Viewer preview returned too few rows")
+    samples = []
+    for index, entry in enumerate(rows[:samples_per_corpus]):
+        row = entry.get("row")
+        if not isinstance(row, dict):
+            raise ValueError("Dataset Viewer preview returned an invalid row")
+        offset = entry.get("row_idx", index)
+        if not isinstance(offset, int):
+            raise ValueError("Dataset Viewer preview did not identify a row offset")
+        samples.append({"offset": offset, "row": row})
+    return samples
+
+
 def _split(dataset: str) -> dict[str, Any]:
     choices = _read_json(_url("splits", dataset=dataset)).get("splits", [])
     if not choices:
@@ -53,26 +69,33 @@ def _dataset_samples(dataset: str, samples_per_corpus: int) -> dict[str, Any]:
     repository = _read_json(f"https://huggingface.co/api/datasets/{dataset}")
     split = _split(dataset)
     preview = _read_json(_url("first-rows", dataset=dataset, config=split["config"], split=split["split"]))
-    size = _read_json(_url("size", dataset=dataset))
-    total = next(
-        (
-            entry.get("num_rows")
-            for entry in size.get("size", {}).get("splits", [])
-            if entry.get("config") == split["config"] and entry.get("split") == split["split"]
-        ),
-        None,
-    )
-    if not isinstance(total, int):
-        raise ValueError("Dataset Viewer did not return a row count")
-    rows = []
-    for offset in _sample_offsets(dataset, total, samples_per_corpus):
-        response = _read_json(
-            _url("rows", dataset=dataset, config=split["config"], split=split["split"], offset=offset, length=1)
+    try:
+        size = _read_json(_url("size", dataset=dataset))
+        total = next(
+            (
+                entry.get("num_rows")
+                for entry in size.get("size", {}).get("splits", [])
+                if entry.get("config") == split["config"] and entry.get("split") == split["split"]
+            ),
+            None,
         )
-        row = response.get("rows", [])
-        if len(row) != 1:
-            raise ValueError(f"Dataset Viewer did not return row {offset}")
-        rows.append({"offset": offset, "row": row[0]["row"]})
+    except Exception:
+        total = None
+    if isinstance(total, int):
+        try:
+            rows = []
+            for offset in _sample_offsets(dataset, total, samples_per_corpus):
+                response = _read_json(
+                    _url("rows", dataset=dataset, config=split["config"], split=split["split"], offset=offset, length=1)
+                )
+                row = response.get("rows", [])
+                if len(row) != 1:
+                    raise ValueError(f"Dataset Viewer did not return row {offset}")
+                rows.append({"offset": offset, "row": row[0]["row"]})
+        except Exception:
+            rows = _preview_samples(preview, samples_per_corpus)
+    else:
+        rows = _preview_samples(preview, samples_per_corpus)
     return {
         "dataset": dataset,
         "revision": repository["sha"],

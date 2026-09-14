@@ -37,6 +37,7 @@ CODE_REVISION = "ae1f446f299823ea3c4c00217942b53787278b31"
 IMPORTER_REVISION = "taskcompendium-nemo-v0.2"
 _CHECKER_PATH = "check_code_answer.py"
 _SOURCE_ROW_PATH = "source-row.json"
+_SOURCE_PROVENANCE_PATH = "source-provenance.json"
 _CODE_PROMPT_PREFIX = (
     "You are a helpful and harmless assistant. You should think step-by-step before responding to the "
     "instruction below.\n\n"
@@ -165,8 +166,12 @@ def _code_prompt(prompt: str) -> str:
     return "Write a Python solution for the following problem.\n\n" + prompt.removeprefix(_CODE_PROMPT_PREFIX)
 
 
-def import_instruction_following(
-    data: bytes, *, aggregation: Literal["binary", "fraction"] | None = None
+def _import_instruction_following(
+    data: bytes,
+    *,
+    aggregation: Literal["binary", "fraction"] | None = None,
+    source_row: str | None = None,
+    source_provenance: dict[str, str] | None = None,
 ) -> TaskSpecification | Rejected:
     """Convert one NeMo Gym IFEval record, preserving source aggregation semantics."""
     try:
@@ -193,14 +198,23 @@ def import_instruction_following(
             if not isinstance(params, dict):
                 raise ValueError("IFEval kwargs must be objects or null")
             constraints.append(InstructionConstraint(name, params))
-        source = Source(IFEVAL_DATASET, IFEVAL_REVISION, str(identifier), IMPORTER_REVISION)
+        source = Source(IFEVAL_DATASET, IFEVAL_REVISION, source_row or str(identifier), IMPORTER_REVISION)
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         source = Source(IFEVAL_DATASET, IFEVAL_REVISION, "unparseable", IMPORTER_REVISION)
         return Rejected(source, RejectionReason.BROKEN_GRADER, str(error))
+    resources = [Resource(_SOURCE_ROW_PATH, (ResourceRole.VERIFIER,), Embedded(data))]
+    if source_provenance is not None:
+        resources.append(
+            Resource(
+                _SOURCE_PROVENANCE_PATH,
+                (ResourceRole.VERIFIER,),
+                Embedded(json.dumps(source_provenance, sort_keys=True, separators=(",", ":")).encode()),
+            )
+        )
     return TaskSpecification(
         id=f"nemo/ifeval/{identifier}/{effective_aggregation}",
         requirements=TaskRequirements(),
-        resources=(Resource(_SOURCE_ROW_PATH, (ResourceRole.VERIFIER,), Embedded(data)),),
+        resources=tuple(resources),
         metadata=TaskMetadata(source, competencies=("instruction-following",), task_shape="answer"),
         steps=(
             StepSpecification(
@@ -212,7 +226,37 @@ def import_instruction_following(
     )
 
 
-def import_code_answer(data: bytes, *, verifier_image: str | None = None) -> TaskSpecification | Rejected:
+def import_instruction_following(
+    data: bytes, *, aggregation: Literal["binary", "fraction"] | None = None
+) -> TaskSpecification | Rejected:
+    """Convert one NeMo Gym IFEval record, preserving source aggregation semantics."""
+    return _import_instruction_following(data, aggregation=aggregation)
+
+
+def import_hub_instruction_row(
+    data: bytes, *, split: str, offset: int, aggregation: Literal["binary", "fraction"] | None = None
+) -> TaskSpecification | Rejected:
+    """Convert a selected IFEval Hub row while retaining its split and offset privately."""
+    return _import_instruction_following(
+        data,
+        aggregation=aggregation,
+        source_row=str(offset),
+        source_provenance={
+            "dataset": IFEVAL_DATASET,
+            "revision": IFEVAL_REVISION,
+            "split": split,
+            "offset": str(offset),
+        },
+    )
+
+
+def _import_code_answer(
+    data: bytes,
+    *,
+    verifier_image: str | None,
+    source_row: str | None = None,
+    source_provenance: dict[str, str] | None = None,
+) -> TaskSpecification | Rejected:
     """Convert one NeMo Gym code response task to an isolated private checker."""
     try:
         row = _row(data)
@@ -243,7 +287,7 @@ def import_code_answer(data: bytes, *, verifier_image: str | None = None) -> Tas
         if verifier_image is None:
             raise LookupError("an immutable isolated verifier image must be supplied by the caller")
         runtime = ContainerRuntime(verifier_image)
-        source = Source(CODE_DATASET, CODE_REVISION, identifier, IMPORTER_REVISION)
+        source = Source(CODE_DATASET, CODE_REVISION, source_row or identifier, IMPORTER_REVISION)
     except LookupError as error:
         source = Source(CODE_DATASET, CODE_REVISION, "unparseable", IMPORTER_REVISION)
         return Rejected(source, RejectionReason.UNSUPPORTED_ENVIRONMENT, str(error))
@@ -253,13 +297,22 @@ def import_code_answer(data: bytes, *, verifier_image: str | None = None) -> Tas
     verifier = CodeAnswerVerifier(
         TaskTroveVerifier(Mode.SCRIPT, {"path": _CHECKER_PATH, "timeout": 60.0}, runtime=runtime), "answer.txt"
     )
+    resources = [
+        Resource(_SOURCE_ROW_PATH, (ResourceRole.VERIFIER,), Embedded(data)),
+        Resource(_CHECKER_PATH, (ResourceRole.VERIFIER,), Embedded(_CODE_CHECKER), executable=True),
+    ]
+    if source_provenance is not None:
+        resources.append(
+            Resource(
+                _SOURCE_PROVENANCE_PATH,
+                (ResourceRole.VERIFIER,),
+                Embedded(json.dumps(source_provenance, sort_keys=True, separators=(",", ":")).encode()),
+            )
+        )
     return TaskSpecification(
         id=f"nemo/code-answer/{identifier}",
         requirements=TaskRequirements(),
-        resources=(
-            Resource(_SOURCE_ROW_PATH, (ResourceRole.VERIFIER,), Embedded(data)),
-            Resource(_CHECKER_PATH, (ResourceRole.VERIFIER,), Embedded(_CODE_CHECKER), executable=True),
-        ),
+        resources=tuple(resources),
         metadata=TaskMetadata(source, competencies=("competitive-programming",), task_shape="answer"),
         steps=(
             StepSpecification(
@@ -268,6 +321,23 @@ def import_code_answer(data: bytes, *, verifier_image: str | None = None) -> Tas
                 answer_requirements=AnswerRequirements("text"),
             ),
         ),
+    )
+
+
+def import_code_answer(data: bytes, *, verifier_image: str | None = None) -> TaskSpecification | Rejected:
+    """Convert one pinned NeMo Gym code response task to an isolated private checker."""
+    return _import_code_answer(data, verifier_image=verifier_image)
+
+
+def import_hub_code_row(
+    data: bytes, *, split: str, offset: int, verifier_image: str | None = None
+) -> TaskSpecification | Rejected:
+    """Convert a selected Hub row while retaining its split and offset privately."""
+    return _import_code_answer(
+        data,
+        verifier_image=verifier_image,
+        source_row=str(offset),
+        source_provenance={"dataset": CODE_DATASET, "revision": CODE_REVISION, "split": split, "offset": str(offset)},
     )
 
 

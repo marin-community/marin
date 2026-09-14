@@ -1,0 +1,55 @@
+{
+  "collection": "nvidia/nemo-gym-68d1e0902765fbacc937bb4f",
+  "reviewed_task_corpora": 29,
+  "training_blends_excluded": 3,
+  "sampled_rows": 58,
+  "disposition": {
+    "accepted": 4,
+    "rejected": 8,
+    "deferred": 46
+  },
+  "accepted": [
+    {
+      "dataset": "nvidia/Nemotron-RL-coding-competitive_coding",
+      "revision": "ae1f446f299823ea3c4c00217942b53787278b31",
+      "split": "train",
+      "offset": 5135,
+      "task_id": "nemo/code-answer/ced8ee9e1a54129fab130febf5c4e3f5"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-coding-competitive_coding",
+      "revision": "ae1f446f299823ea3c4c00217942b53787278b31",
+      "split": "train",
+      "offset": 13176,
+      "task_id": "nemo/code-answer/c6ab22b152348b2663857766a436bfe0"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-instruction_following",
+      "revision": "3b253899665cb71334bb54c14eb5d91751beaad7",
+      "split": "train",
+      "offset": 0,
+      "task_id": "nemo/ifeval/17616/binary"
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-instruction_following",
+      "revision": "3b253899665cb71334bb54c14eb5d91751beaad7",
+      "split": "train",
+      "offset": 1,
+      "task_id": "nemo/ifeval/44654/binary"
+    }
+  ],
+  "superseded_findings": [
+    {
+      "review": "reviews/agent-corpora.json",
+      "corpora": [
+        "nvidia/Nemotron-RL-Agentic-Function-Calling-Pivot-v1",
+        "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1"
+      ],
+      "resolution": "reviews/action-wire-format.json defers all four rows because their correct next actions depend on hidden tool results or authentication state."
+    },
+    {
+      "review": "reviews/viewer-fallback.json",
+      "resolution": "The Dataset Viewer first-row fallback made all twelve initially unavailable rows inspectable; two instruction-following rows were accepted and the remaining ten were deferred."
+    }
+  ]
+}

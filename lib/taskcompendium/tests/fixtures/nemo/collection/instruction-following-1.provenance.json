@@ -1,0 +1,7 @@
+{
+  "dataset": "nvidia/Nemotron-RL-instruction_following",
+  "revision": "3b253899665cb71334bb54c14eb5d91751beaad7",
+  "config": "default",
+  "split": "train",
+  "offset": 1
+}

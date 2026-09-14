@@ -1,0 +1,33 @@
+{
+  "review": "action-wire-format",
+  "rows": [
+    {
+      "dataset": "nvidia/Nemotron-RL-Agentic-Function-Calling-Pivot-v1", "offset": 4039, "disposition": "deferred",
+      "extra_items": [{"type": "reasoning", "fields": ["id", "summary", "status"]}, {"type": "function_call", "fields": ["arguments", "call_id", "name", "id", "status"]}, {"type": "function_call_output", "fields": ["call_id", "output"]}],
+      "evidence": "The visible user request is conditional on checking Dell's business scope. The preceding hidden call is companybusinessscope and its hidden output supplies the condition; expected_action is querystock.",
+      "allowed_transformation": "Normalize the initial role/content items to message items and remove reasoning, function_call, and function_call_output items. This is syntactically safe but semantically insufficient because the conditional tool result cannot be shown.",
+      "blocker": "No safe model-visible conversation preserves the conditional state without exposing a tool result; defer rather than turn it into an unconditional stock-call prediction."
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-Agentic-Function-Calling-Pivot-v1", "offset": 8849, "disposition": "deferred",
+      "extra_items": [{"type": "reasoning", "fields": ["id", "summary", "status"]}, {"type": "function_call", "fields": ["arguments", "call_id", "name", "id", "status"]}, {"type": "function_call_output", "fields": ["call_id", "output"]}, {"type": "message", "fields": ["id", "content", "role", "status"]}],
+      "evidence": "The trajectory repeats hidden calculate_similarity calls and outputs; the final expected_action is a message containing the hidden 37.5% result and analysis.",
+      "allowed_transformation": "Retain only role/content system, user, and assistant text messages, normalizing them to message items; remove reasoning, calls, and outputs. This cannot preserve the final result because it is contained in a removed tool output.",
+      "blocker": "The expected final message depends on unavailable private tool output; exposing it would leak source execution data, so no sound answer-only or native-action mapping exists."
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1", "offset": 43611, "disposition": "deferred",
+      "extra_items": [{"type": "reasoning", "fields": ["id", "summary", "type", "status"]}, {"type": "message", "fields": ["id", "content", "role", "status", "type"]}, {"type": "function_call", "fields": ["arguments", "call_id", "name", "type", "id", "status"]}, {"type": "function_call_output", "fields": ["type", "call_id", "output"]}],
+      "evidence": "The row contains an assistant message, hidden reasoning, authenticate_user call, and auth result before expected_action get_user_profile.",
+      "allowed_transformation": "Keep system/user/assistant output text, normalize role/content records to message items, and remove reasoning, function calls, and outputs. The removed authentication result is required context for the next action.",
+      "blocker": "Removing hidden authentication state changes the conversation; exposing it violates the private execution boundary. Reactive tool-use semantics cannot be represented as a static safe prediction here."
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1", "offset": 92095, "disposition": "deferred",
+      "extra_items": [{"type": "reasoning", "fields": ["id", "summary", "type", "status"]}, {"type": "message", "fields": ["id", "content", "role", "status", "type"]}, {"type": "function_call", "fields": ["arguments", "call_id", "name", "type", "id", "status"]}, {"type": "function_call_output", "fields": ["type", "call_id", "output"]}],
+      "evidence": "The row contains prior authentication and contract-access calls/results, assistant messages, and then expected_action get_project_status.",
+      "allowed_transformation": "Keep system/user/assistant output text, normalize role/content records to message items, and remove reasoning, function calls, and outputs. The removed authentication and contract context is required for the next action.",
+      "blocker": "The expected next action depends on unavailable private state from several prior calls; a static prediction would discard source semantics and executing tools requires an unavailable domain environment."
+    }
+  ]
+}

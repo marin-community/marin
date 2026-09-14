@@ -1,0 +1,90 @@
+{
+  "id": 17616,
+  "instruction_id_list": [
+    "length_constraints:nth_paragraph_first_word",
+    "last_word:last_word_answer"
+  ],
+  "prompt": "While diying after his fight against the antimonitor, Oliver Queen finds his soul sent back to the start of his journey. Right back to Starling City hospital. First Episode of season 1. This is Oliver Queen realising he has a second chance. Oliver & his mom are in the car. Oliver asked his mom to take him to where he can find Laurel Lance. “Hello Laurel” his voice breaking at the end. Oliver knew that Laurel would be angry & demanding answer. Why had he cheated on her with her sister ? Was she dead then, with her body resting at the bottom of the ocean. He could not tell her she was dead. He would not lye again to her. Please ensure your answer follows these guidelines: There should be 4 paragraphs. Paragraphs and only paragraphs are separated with each other by two new lines as if it was '\\n\\n' in python. Paragraph 3 must start with word crash and The last word of your response should be the word contest",
+  "kwargs": [
+    {
+      "capital_frequency": null,
+      "capital_relation": null,
+      "first_word": "crash",
+      "section_spliter": null,
+      "num_sections": null,
+      "N": null,
+      "num_paragraphs": 4,
+      "letter": null,
+      "let_frequency": null,
+      "let_relation": null,
+      "num_sentences": null,
+      "relation": null,
+      "keyword": null,
+      "frequency": null,
+      "nth_paragraph": 3,
+      "language": null,
+      "keyword1": null,
+      "keyword2": null,
+      "num_bullets": null,
+      "end_phrase": null,
+      "last_word": null,
+      "n_sent": null,
+      "n_words": null,
+      "phrase": null,
+      "small_n": null,
+      "forbidden_words": null,
+      "num_highlights": null,
+      "n": null,
+      "m": null,
+      "postscript_marker": null,
+      "num_placeholders": null,
+      "num_words": null,
+      "keywords": null
+    },
+    {
+      "capital_frequency": null,
+      "capital_relation": null,
+      "first_word": null,
+      "section_spliter": null,
+      "num_sections": null,
+      "N": null,
+      "num_paragraphs": null,
+      "letter": null,
+      "let_frequency": null,
+      "let_relation": null,
+      "num_sentences": null,
+      "relation": null,
+      "keyword": null,
+      "frequency": null,
+      "nth_paragraph": null,
+      "language": null,
+      "keyword1": null,
+      "keyword2": null,
+      "num_bullets": null,
+      "end_phrase": null,
+      "last_word": "contest",
+      "n_sent": null,
+      "n_words": null,
+      "phrase": null,
+      "small_n": null,
+      "forbidden_words": null,
+      "num_highlights": null,
+      "n": null,
+      "m": null,
+      "postscript_marker": null,
+      "num_placeholders": null,
+      "num_words": null,
+      "keywords": null
+    }
+  ],
+  "responses_create_params": {
+    "input": [
+      {
+        "role": "user",
+        "content": "While diying after his fight against the antimonitor, Oliver Queen finds his soul sent back to the start of his journey. Right back to Starling City hospital. First Episode of season 1. This is Oliver Queen realising he has a second chance. Oliver & his mom are in the car. Oliver asked his mom to take him to where he can find Laurel Lance. “Hello Laurel” his voice breaking at the end. Oliver knew that Laurel would be angry & demanding answer. Why had he cheated on her with her sister ? Was she dead then, with her body resting at the bottom of the ocean. He could not tell her she was dead. He would not lye again to her. Please ensure your answer follows these guidelines: There should be 4 paragraphs. Paragraphs and only paragraphs are separated with each other by two new lines as if it was '\\n\\n' in python. Paragraph 3 must start with word crash and The last word of your response should be the word contest"
+      }
+    ],
+    "tools": [],
+    "parallel_tool_calls": false
+  }
+}

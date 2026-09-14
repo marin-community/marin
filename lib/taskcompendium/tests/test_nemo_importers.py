@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import msgspec
+import pytest
 from tasktrove_verify.modes.grade_ifeval import resolve_checks
 from tasktrove_verify.spec import Constraint, Mode
 
@@ -15,6 +16,8 @@ from taskcompendium.importers.nemo import (
     CODE_REVISION,
     IFEVAL_REVISION,
     import_code_answer,
+    import_hub_code_row,
+    import_hub_instruction_row,
     import_instruction_following,
     load_code_sample,
     load_instruction_sample,
@@ -96,6 +99,39 @@ def test_instruction_sample_preserves_binary_and_fractional_semantics():
     ]
 
 
+@pytest.mark.parametrize(
+    ("offset", "identifier", "constraints_count"),
+    ((0, 17616, 2), (1, 44654, 3)),
+)
+def test_collection_instruction_rows_preserve_hub_source_identity(offset, identifier, constraints_count):
+    data = _fixture(f"collection/instruction-following-{offset}.json")
+    provenance = json.loads(_fixture(f"collection/instruction-following-{offset}.provenance.json"))
+
+    specification = import_hub_instruction_row(data, split=provenance["split"], offset=provenance["offset"])
+
+    assert not isinstance(specification, Rejected)
+    assert specification.id == f"nemo/ifeval/{identifier}/binary"
+    assert specification.metadata.source.dataset == provenance["dataset"]
+    assert specification.metadata.source.revision == provenance["revision"]
+    assert specification.metadata.source.row == str(provenance["offset"])
+    assert isinstance(specification.steps[0].verifier, ConstraintVerifier)
+    assert len(specification.steps[0].verifier.constraints) == constraints_count
+    private = {
+        resource.path: resource for resource in specification.resources if ResourceRole.VERIFIER in resource.roles
+    }
+    assert json.loads(private["source-provenance.json"].content.data) == {
+        "dataset": provenance["dataset"],
+        "revision": provenance["revision"],
+        "split": provenance["split"],
+        "offset": str(provenance["offset"]),
+    }
+
+    task = render_task(specification, (Rendering("answer", AssistantFinal()),))
+    public = msgspec.json.encode(task).decode()
+    assert "instruction_id_list" not in public
+    assert "source-row.json" not in public
+
+
 def test_code_import_is_answer_only_and_retains_hidden_test_bundle():
     specification = load_code_sample(
         FIXTURES / "code-answer-c69268d8bdb4da0685d7b187c88296c1.json", verifier_image=IMAGE
@@ -152,3 +188,29 @@ def test_code_import_requires_an_isolated_runtime():
 
     assert isinstance(result, Rejected)
     assert result.reason.value == "unsupported_environment"
+
+
+@pytest.mark.parametrize("offset", (5135, 13176))
+def test_collection_code_rows_preserve_hub_offsets_and_private_test_data(offset):
+    data = _fixture(f"collection/coding-{offset}.json")
+    specification = import_hub_code_row(data, split="train", offset=offset, verifier_image=IMAGE)
+
+    assert not isinstance(specification, Rejected)
+    assert specification.metadata.source.row == str(offset)
+    private = {
+        resource.path: resource for resource in specification.resources if ResourceRole.VERIFIER in resource.roles
+    }
+    private_paths = set(private)
+    assert private_paths == {"check_code_answer.py", "source-provenance.json", "source-row.json"}
+    provenance = json.loads(private["source-provenance.json"].content.data)
+    assert provenance == {
+        "dataset": "nvidia/Nemotron-RL-coding-competitive_coding",
+        "revision": CODE_REVISION,
+        "split": "train",
+        "offset": str(offset),
+    }
+
+    task = render_task(specification, (Rendering("answer", AssistantFinal()),))
+    public = msgspec.json.encode(task).decode()
+    assert "unit_tests" not in public
+    assert "source-provenance.json" not in public

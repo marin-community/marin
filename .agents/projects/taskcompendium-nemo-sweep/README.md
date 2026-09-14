@@ -18,3 +18,7 @@ Do not accept a row only because it resembles another NeMo Gym dataset. Source
 tool schemas, state, verifiers, and response history determine the semantic task.
 Do not infer agent tool access from a source Docker image or an evaluator that
 executes code privately. Preserve source revision and row offset in every record.
+
+`summary.json` is the final disposition index. It supersedes any preliminary
+finding in an individual review when a follow-up source-format review establishes
+that the public projection would lose required state.

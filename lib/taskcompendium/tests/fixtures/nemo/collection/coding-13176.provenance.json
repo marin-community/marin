@@ -1,0 +1,7 @@
+{
+  "dataset": "nvidia/Nemotron-RL-coding-competitive_coding",
+  "revision": "ae1f446f299823ea3c4c00217942b53787278b31",
+  "config": "default",
+  "split": "train",
+  "offset": 13176
+}

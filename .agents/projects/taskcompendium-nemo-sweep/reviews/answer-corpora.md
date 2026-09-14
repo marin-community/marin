@@ -1,0 +1,5 @@
+# Answer corpus review
+
+The sampler was run against all ten requested collection items on 2026-09-14. It returned seven corpora at the revisions recorded in `answer-corpora.json`; Viewer size failed for instruction following and math Stack Overflow, and the OpenMathReasoning row request timed out. Those three are deferred because their two rows and offsets could not be inspected.
+
+The two competitive-coding rows are accepted by the existing `import_code_answer` contract: both are Python standard-input tasks with source unit tests, and the checker remains private in an immutable verifier runtime. Web-search rows are deferred because generic search/browse tools have no supported provider binding. Structured JSON, MCQA, open QA, advanced calculations, and Science rows are deferred because their source schema, judge, tool, or domain-verifier semantics cannot be represented by an existing deterministic contract. No source answers, verifier payloads, or judge instructions are included in model-visible task text.
