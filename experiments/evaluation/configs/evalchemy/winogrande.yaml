@@ -3,4 +3,5 @@ task_options:
   winogrande:
     num_fewshot: 5
     task_alias: winogrande_5shot
+    primary_metric: acc
 max_tokens: 256

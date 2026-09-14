@@ -3,4 +3,5 @@ task_options:
   hellaswag:
     num_fewshot: 10
     task_alias: hellaswag_10shot
+    primary_metric: acc_norm
 max_tokens: 256

@@ -4,4 +4,5 @@ task_options:
     num_fewshot: 0
     task_alias: gsm8k_0shot
     generation: true
+    primary_metric: exact_match
 max_tokens: 512

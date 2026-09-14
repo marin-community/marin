@@ -57,6 +57,13 @@ class RunStatus(StrEnum):
     INFRA_FAILED = "infra_failed"
 
 
+class MetricKind(StrEnum):
+    """How a metric's uncertainty is computed."""
+
+    BINARY = "binary"
+    CONTINUOUS = "continuous"
+
+
 class ModelResourceConfig(BaseModel):
     """Normalized placement and inference-worker resources for an evaluated model."""
 
@@ -154,6 +161,8 @@ class EvalTaskRef(BaseModel):
     generation: bool = False
     unsafe_code: bool = False
     completion_only: bool = False
+    primary_metric: str | None = None
+    metric_kind: MetricKind | None = None
 
 
 class EvalchemyRef(BaseModel):

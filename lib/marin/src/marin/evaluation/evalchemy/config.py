@@ -11,6 +11,8 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from marin.evaluation.records import MetricKind
+
 RESERVED_ENDPOINT_MODEL_ARGS = frozenset({"model", "base_url", "tokenizer", "tokenizer_backend", "tokenized_requests"})
 
 
@@ -24,6 +26,9 @@ class EvalchemyTaskOptions(BaseModel):
     generation: bool = False
     unsafe_code: bool = False
     completion_only: bool = False
+    primary_metric: str | None = None
+    metric_kind: MetricKind | None = None
+    expected_items: int | None = Field(default=None, gt=0)
 
 
 class EvalchemyConfig(BaseModel):
