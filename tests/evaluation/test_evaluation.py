@@ -90,6 +90,7 @@ def _install_fake_harbor_preflight(
                     ),
                     max_input_tokens=_PREFLIGHT_MAX_INPUT_TOKENS,
                     max_output_tokens=_PREFLIGHT_MAX_OUTPUT_TOKENS,
+                    n_benchmark=1,
                 )
             )
         return tuple(configs)
@@ -231,7 +232,16 @@ def _write_evalchemy_output(
 ) -> None:
     model_dir = StoragePath(output_dir) / task_dir / "model"
     model_dir.mkdirs()
-    (model_dir / "results_20260807.json").write_text(json.dumps({"results": results}))
+    sample_counts = {
+        task: {
+            "original": max((int(row["doc_id"]) for row in rows), default=-1) + 1,
+            "effective": max((int(row["doc_id"]) for row in rows), default=-1) + 1,
+        }
+        for task, rows in samples.items()
+    }
+    (model_dir / "results_20260807.json").write_text(
+        json.dumps({"results": results, "n-samples": sample_counts})
+    )
     for task, rows in samples.items():
         (model_dir / f"samples_{task}_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
 
@@ -285,7 +295,12 @@ def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypa
     model_dir = StoragePath(output_dir) / "gsm8k_5shot" / "model"
     model_dir.mkdirs()
     (model_dir / "results_20260807.json").write_text(
-        json.dumps({"results": {"gsm8k": {"exact_match,flexible-extract": 0.75}}})
+        json.dumps(
+            {
+                "results": {"gsm8k": {"exact_match,flexible-extract": 0.75}},
+                "n-samples": {"gsm8k": {"original": 1, "effective": 1}},
+            }
+        )
     )
     (model_dir / "samples_gsm8k_20260807.jsonl").write_text('{"unterminated": "sample\n')
     monkeypatch.setattr(
@@ -293,7 +308,12 @@ def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypa
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
     )
     session = _remote_session()
-    executor = EvalchemyExecutor(EvalchemyRunConfig(name="gsm8k", tasks=(EvalTaskConfig(name="gsm8k", num_fewshot=5),)))
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(
+            name="gsm8k",
+            tasks=(EvalTaskConfig(name="gsm8k", num_fewshot=5, primary_metric="exact_match"),),
+        )
+    )
 
     with pytest.raises(EvaluationError) as exc_info:
         executor(session, output_dir, {})
@@ -325,7 +345,12 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
     )
-    executor = EvalchemyExecutor(EvalchemyRunConfig(name="mmlu", tasks=(EvalTaskConfig(name="mmlu", num_fewshot=5),)))
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(
+            name="mmlu",
+            tasks=(EvalTaskConfig(name="mmlu", num_fewshot=5, primary_metric="acc"),),
+        )
+    )
 
     outcome = executor(_remote_session(), partial_output_dir, {})
 
@@ -335,12 +360,15 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
     }
     assert outcome.coverage == {
         "mmlu_5shot/mmlu_anatomy": TaskCoverage(
+            n_benchmark=2,
             n_attempted=2,
             n_scored=1,
             n_correct=1,
             errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
         ),
-        "mmlu_5shot/mmlu_astronomy": TaskCoverage(n_attempted=1, n_scored=1, n_correct=1),
+        "mmlu_5shot/mmlu_astronomy": TaskCoverage(
+            n_benchmark=1, n_attempted=1, n_scored=1, n_correct=1
+        ),
     }
 
     failed_output_dir = f"file://{tmp_path / 'failed'}"
@@ -364,11 +392,13 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
     assert exc_info.value.status is RunStatus.INFRA_FAILED
     assert exc_info.value.coverage == {
         "mmlu_5shot/mmlu_anatomy": TaskCoverage(
+            n_benchmark=1,
             n_attempted=1,
             n_scored=0,
             errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
         ),
         "mmlu_5shot/mmlu_astronomy": TaskCoverage(
+            n_benchmark=1,
             n_attempted=1,
             n_scored=0,
             errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
@@ -828,7 +858,16 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
     assert evaluation.identity.eval_ref.model_dump(mode="json", exclude_none=True) == {
         "name": "aime-policy",
         "mechanism": "harbor",
-        "tasks": [],
+        "tasks": [
+            {
+                "name": "aime",
+                "generation": False,
+                "unsafe_code": False,
+                "completion_only": False,
+                "primary_metric": "accuracy",
+                "metric_kind": "binary",
+            }
+        ],
         "harbor": {
             "dataset": "aime",
             "version": "1.0",

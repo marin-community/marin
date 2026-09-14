@@ -348,6 +348,13 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
 
     stable_config = _stable_config(config)
     stable_policy_json = _stable_policy_json(stable_config)
+    if dataset_metadata.kind == _DatasetKind.LOCAL:
+        dataset_path = (path.parent / dataset_metadata.selector).resolve()
+        n_benchmark = sum(entry.is_dir() for entry in dataset_path.iterdir())
+    else:
+        n_benchmark = len(asyncio.run(Job._resolve_task_configs(config)))
+    if n_benchmark <= 0:
+        raise ValueError("Harbor dataset must contain at least one task")
     placeholder_dataset_path = (
         None if dataset_metadata.kind == _DatasetKind.HARBOR_REGISTRY else _PLACEHOLDER_DATASET_PATH
     )
@@ -388,6 +395,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
         },
         "max_input_tokens": model_info[MAX_INPUT_TOKENS_KEY],
         "max_output_tokens": model_info[MAX_OUTPUT_TOKENS_KEY],
+        "n_benchmark": n_benchmark,
     }
 
 

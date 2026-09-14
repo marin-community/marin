@@ -72,6 +72,7 @@ def _validated_config(
     dataset_revision: str | None = "1.0",
     workspace_dataset_path: Path | None = None,
     agent: str = "terminus-2",
+    n_benchmark: int = 1,
 ) -> ValidatedHarborConfig:
     return ValidatedHarborConfig(
         stable_policy_json='{"opaque":"policy"}',
@@ -85,6 +86,7 @@ def _validated_config(
         error_taxonomy=_ERROR_TAXONOMY,
         max_input_tokens=32768,
         max_output_tokens=8192,
+        n_benchmark=n_benchmark,
     )
 
 
@@ -391,7 +393,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
 
 def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, monkeypatch):
     output_dir = str(tmp_path / "run")
-    executor = _harbor_executor(f"managed-{tmp_path.name}")
+    executor = _harbor_executor(f"managed-{tmp_path.name}", n_benchmark=3)
 
     class RecoveringSession:
         model = _running_model()
@@ -583,9 +585,9 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     assert outcome.metrics[f"toy-{tmp_path.name}"]["accuracy"] == 1.0
 
 
-def _harbor_executor(dataset: str) -> HarborExecutor:
+def _harbor_executor(dataset: str, *, n_benchmark: int = 1) -> HarborExecutor:
     return HarborExecutor(
-        _validated_config(dataset_selector=dataset),
+        _validated_config(dataset_selector=dataset, n_benchmark=n_benchmark),
         task_limit=None,
         model_agent_kwargs={},
     )
@@ -654,7 +656,7 @@ def test_harbor_executor_counts_agent_failure_without_verifier_as_zero_reward(tm
             )
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
-    executor = _harbor_executor(f"gated-{tmp_path.name}")
+    executor = _harbor_executor(f"gated-{tmp_path.name}", n_benchmark=20)
 
     outcome = executor(_inference_session(), str(tmp_path), {})
 
@@ -741,7 +743,7 @@ def test_harbor_executor_preserves_scored_errors(tmp_path, monkeypatch, exceptio
             trial_dir.joinpath("result.json").write_text(json.dumps(result))
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
-    executor = _harbor_executor(f"timeout-{tmp_path.name}")
+    executor = _harbor_executor(f"timeout-{tmp_path.name}", n_benchmark=10)
 
     outcome = executor(_inference_session(), str(tmp_path), {})
 
@@ -753,10 +755,7 @@ def test_harbor_executor_preserves_scored_errors(tmp_path, monkeypatch, exceptio
     assert coverage.errors == {exception_type: 4}
 
 
-def test_an_unreadable_job_record_reports_unknown_coverage_rather_than_complete(tmp_path, monkeypatch):
-    """Without Harbor's job record there is no denominator. Falling back to the number of results
-    found would certify exactly the interrupted runs as complete, so coverage stays unreported and
-    the completion gate -- which has no rate to test -- does not reject the batch either."""
+def test_preflight_benchmark_count_supplies_coverage_without_a_job_record(tmp_path, monkeypatch):
 
     def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
@@ -768,17 +767,16 @@ def test_an_unreadable_job_record_reports_unknown_coverage_rather_than_complete(
             )
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
-    executor = _harbor_executor(f"unknown-{tmp_path.name}")
+    executor = _harbor_executor(f"known-{tmp_path.name}", n_benchmark=4)
 
     outcome = executor(_inference_session(), str(tmp_path), {})
 
     dataset = executor.config.record_dataset
     coverage = outcome.coverage[dataset]
-    assert coverage.n_attempted is None
+    assert coverage.n_benchmark == 4
+    assert coverage.n_attempted == 4
     assert coverage.n_scored == 4
-    # No attempted count means no "attempted" metric to publish, rather than one equal to the scored
-    # count, which would read as complete.
-    assert "attempted" not in outcome.metrics[dataset]
+    assert outcome.metrics[dataset]["attempted"] == 4
 
 
 def test_harbor_attempted_trials_come_from_the_job_record_not_the_result_glob(tmp_path, monkeypatch):
@@ -796,7 +794,7 @@ def test_harbor_attempted_trials_come_from_the_job_record_not_the_result_glob(tm
             )
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
-    executor = _harbor_executor(f"missing-{tmp_path.name}")
+    executor = _harbor_executor(f"missing-{tmp_path.name}", n_benchmark=20)
 
     outcome = executor(_inference_session(), str(tmp_path), {})
 

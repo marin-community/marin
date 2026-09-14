@@ -271,7 +271,11 @@ def run_evalchemy(
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
     try:
         _verify_durable_artifacts(output_dir)
-        export = export_lm_eval_samples(output_dir)
+        export = export_lm_eval_samples(
+            output_dir,
+            tasks=config.tasks,
+            max_eval_instances=config.max_eval_instances,
+        )
     except Exception as exc:
         raise EvalPipelineError(
             str(exc),

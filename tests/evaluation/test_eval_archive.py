@@ -31,6 +31,7 @@ from marin.evaluation.lm_eval_samples import (
     rebuild_lm_eval_samples,
     run_artifacts,
 )
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.records import TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
 
@@ -387,6 +388,56 @@ def test_a_group_task_reports_coverage_per_subtask(tmp_path):
 
     assert sorted(coverage) == ["mmlu_5shot/mmlu_anatomy", "mmlu_5shot/mmlu_astronomy"]
     assert all(entry.n_attempted == 3 for entry in coverage.values())
+
+
+def test_export_records_full_benchmark_and_intended_cap_for_every_group_leaf(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "mmlu_5shot" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"mmlu_anatomy": {"acc,none": 1.0}, "mmlu_astronomy": {"acc,none": 0.0}},
+                "n-samples": {
+                    "mmlu_anatomy": {"original": 3, "effective": 2},
+                    "mmlu_astronomy": {"original": 4, "effective": 2},
+                },
+            }
+        )
+    )
+    rows = [_lm_eval_row(doc_id, "none", 1.0, "4") for doc_id in range(2)]
+    (directory / "samples_mmlu_anatomy_20260807.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n"
+    )
+
+    coverage = export_lm_eval_samples(
+        str(results),
+        tasks=(EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),),
+        max_eval_instances=2,
+    ).coverage
+
+    assert coverage == {
+        "mmlu_5shot/mmlu_anatomy": TaskCoverage(n_benchmark=3, n_attempted=2, n_scored=2, n_correct=2),
+        "mmlu_5shot/mmlu_astronomy": TaskCoverage(n_benchmark=4, n_attempted=2, n_scored=0),
+    }
+
+
+def test_export_uses_declared_size_for_chat_native_task(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "math500" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(json.dumps({"results": {"MATH500": {"accuracy": 1.0}}}))
+    (directory / "samples_MATH500_20260807.jsonl").write_text(json.dumps(_lm_eval_row(0, "none", 1.0, "4")) + "\n")
+
+    [coverage] = export_lm_eval_samples(
+        str(results),
+        tasks=(EvalTaskConfig("MATH500", 0, task_alias="math500", expected_items=500),),
+        max_eval_instances=10,
+    ).coverage.values()
+
+    assert coverage.n_benchmark == 500
+    assert coverage.n_attempted == 10
+    assert coverage.n_scored == 1
 
 
 def test_writing_to_a_sealed_archive_clears_its_seal(tmp_path):
