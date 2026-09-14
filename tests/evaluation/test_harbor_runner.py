@@ -197,26 +197,20 @@ def test_materialize_harbor_dataset_rebases_local_path_onto_worker_workspace(tmp
     )
 
 
-def test_read_trials_locates_trajectory(tmp_path):
+def test_read_trials_reads_every_result(tmp_path):
     job_dir = tmp_path / "harbor_jobs" / "job"
-    with_trajectory = job_dir / "trial-one"
-    (with_trajectory / "agent").mkdir(parents=True)
-    (with_trajectory / "result.json").write_text(
+    first_trial = job_dir / "trial-one"
+    first_trial.mkdir(parents=True)
+    (first_trial / "result.json").write_text(
         json.dumps({"task_name": "task-one", "verifier_result": {"rewards": {"reward": 1.0}}})
     )
-    (with_trajectory / "agent" / "trajectory.json").write_text(
-        json.dumps({"steps": [{"step_id": 1, "source": "agent", "message": "hi"}]})
-    )
-    without_trajectory = job_dir / "trial-two"
-    without_trajectory.mkdir(parents=True)
-    (without_trajectory / "result.json").write_text(json.dumps({"task_name": "task-two"}))
+    second_trial = job_dir / "trial-two"
+    second_trial.mkdir(parents=True)
+    (second_trial / "result.json").write_text(json.dumps({"task_name": "task-two"}))
 
     trials = _read_trials(StoragePath(str(job_dir)), _ERROR_TAXONOMY)
 
-    by_task = {trial.task_id: trial for trial in trials}
-    assert by_task["task-one"].trajectory_path == str(with_trajectory / "agent" / "trajectory.json")
-    assert by_task["task-one"].trial_id == "trial-one"
-    assert by_task["task-two"].trajectory_path is None
+    assert [(trial.reward, trial.scored) for trial in trials] == [(1.0, True), (0.0, False)]
 
 
 @pytest.mark.parametrize(

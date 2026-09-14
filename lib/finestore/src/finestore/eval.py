@@ -295,6 +295,7 @@ def _sample_metrics(raw: dict) -> dict[str, float]:
 
 
 def _correct(metrics: dict[str, float]) -> bool | None:
+    """Return whether the primary metric reaches 1.0, or ``None`` when none exists."""
     picked = primary_metric(metrics)
     if picked is None:
         return None

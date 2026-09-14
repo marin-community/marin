@@ -79,18 +79,14 @@ class HarborTrial:
     infrastructure or unknown failures remain ungraded.
     """
 
-    task_id: str
-    trial_id: str
     reward: float
     scored: bool
-    status: str
-    trajectory_path: str | None
     error: dict | None
 
 
 @dataclass(frozen=True)
 class HarborRunResult:
-    """The aggregate of one Harbor run, and the root of the finestore archive it wrote.
+    """The aggregate of one Harbor run.
 
     ``attempted_trials`` is the number of trials the run set out to score, taken from the dataset it
     launched rather than from the trial results it found: a trial that dies before writing a result
@@ -107,7 +103,6 @@ class HarborRunResult:
     errors: Mapping[str, int]
     mean_reward: float
     accuracy: float
-    archive_path: str | None
 
     @property
     def unscored_trials(self) -> int | None:
@@ -177,10 +172,8 @@ def _job_dir(output_dir: str, job_name: str) -> StoragePath:
 
 
 def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> HarborTrial:
-    """Normalize one Harbor result and locate its durable trajectory."""
-    trial_dir = result_file.parent
+    """Normalize one Harbor result for aggregate scoring and coverage."""
     data = json.loads(result_file.read_text())
-    task_id = data.get("task_name", trial_dir.name)
     verifier_result = data.get("verifier_result")
     rewards = (verifier_result or {}).get("rewards") or {}
     reward = rewards.get("reward", 0.0)
@@ -201,15 +194,9 @@ def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> Harb
     else:
         error["type"] = f"{_UNKNOWN_ERROR_PREFIX}{exception_type or _UNKNOWN_ERROR}"
         scored = False
-    trajectory_file = trial_dir / "agent" / "trajectory.json"
-    trajectory_path = str(trajectory_file) if trajectory_file.exists() else None
     return HarborTrial(
-        task_id=task_id,
-        trial_id=trial_dir.name,
         reward=reward,
         scored=scored,
-        status="failed" if exc else "completed",
-        trajectory_path=trajectory_path,
         error=error,
     )
 
@@ -281,9 +268,7 @@ def _trial_errors(trials: list[HarborTrial], attempted: int | None) -> dict[str,
     return errors
 
 
-def _aggregate(
-    trials: list[HarborTrial], dataset: str, archive_path: str | None, attempted: int | None
-) -> HarborRunResult:
+def _aggregate(trials: list[HarborTrial], dataset: str, attempted: int | None) -> HarborRunResult:
     """Aggregate the graded trials, keeping the ungraded ones as coverage rather than as zeros.
 
     Rates divide by the graded trials. Dividing by every attempted trial, with an ungraded trial read
@@ -301,7 +286,6 @@ def _aggregate(
         errors=_trial_errors(trials, attempted),
         mean_reward=(total_reward / len(scored)) if scored else 0.0,
         accuracy=(solved / len(scored)) if scored else 0.0,
-        archive_path=archive_path,
     )
 
 
@@ -329,8 +313,7 @@ def _run_harbor_job(
             logger.info("inference recovered; resuming Harbor job %s", job_name)
 
     trials = _read_trials(job_dir, config.error_taxonomy)
-    archive_path = output_dir if trials else None
-    result = _aggregate(trials, dataset, archive_path, _attempted_trials(job_dir))
+    result = _aggregate(trials, dataset, _attempted_trials(job_dir))
     StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
         json.dumps(
             {

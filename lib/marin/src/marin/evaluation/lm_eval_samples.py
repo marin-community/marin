@@ -71,7 +71,7 @@ _CONTENT_TYPES = {
 # :func:`is_scratch_artifact`.
 _SCRATCH_SEGMENT = re.compile(r"(?:^|/)tmp[a-z0-9_]{6,}/")
 _INFRASTRUCTURE_ERROR_PREFIX = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}]"
-_NATIVE_EVALCHEMY_SOURCE_PREFIX = f"{SOURCES_PREFIX}/evalchemy/"
+_NATIVE_EVALCHEMY_SOURCE_ROOT = PurePosixPath(prefix_join(SOURCES_PREFIX, "evalchemy"))
 
 
 def is_scratch_artifact(relative_path: str) -> bool:
@@ -227,6 +227,40 @@ class SampleExport:
     """Metrics rebuilt from successful samples for tasks with request failures."""
 
 
+@dataclass
+class _SampleExportBuilder:
+    task_keys: dict[str, str]
+    samples: int = 0
+    coverage: dict[str, TaskCoverage] = field(default_factory=dict)
+    recovered_metrics: dict[str, dict[str, float]] = field(default_factory=dict)
+
+    @classmethod
+    def for_sources(cls, sources: Sequence[str]) -> _SampleExportBuilder:
+        return cls(task_keys=_task_keys(sources))
+
+    def accepts(self, name: str) -> bool:
+        return name in self.task_keys
+
+    def add_source(self, name: str, payload: bytes) -> list[EvalSample]:
+        samples = _lm_eval_samples(name.rsplit("/", 1)[-1], payload)
+        self.samples += len(samples)
+        if not samples:
+            return samples
+        task_key = self.task_keys[name]
+        task_coverage_result, task_metrics = task_coverage_and_metrics(samples)
+        self.coverage[task_key] = task_coverage_result
+        if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
+            self.recovered_metrics[task_key] = task_metrics
+        return samples
+
+    def build(self) -> SampleExport:
+        return SampleExport(
+            samples=self.samples,
+            coverage=self.coverage,
+            recovered_metrics=self.recovered_metrics,
+        )
+
+
 def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> SampleExport:
     """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
 
@@ -246,62 +280,43 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> Sa
         # already stored, so a run evaluated by another mechanism keeps the archive it has.
         return SampleExport(samples=0)
     require_current_samples(out_path)
-    keys = _task_keys(sources)
+    summary = _SampleExportBuilder.for_sources(sources)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
-    count = 0
-    coverage: dict[str, TaskCoverage] = {}
-    recovered_metrics: dict[str, dict[str, float]] = {}
     try:
         for relative in artifacts:
             payload = StoragePath(prefix_join(str(root), relative)).read_bytes()
             store.add_source_artifact(relative, payload, content_type=_content_type(relative))
             # One shard per artifact keeps a multi-hundred-megabyte results tree from buffering whole.
             store.flush()
-            if relative not in keys:
+            if not summary.accepts(relative):
                 continue
-            samples = _add_lm_eval_rows(store, relative.rsplit("/", 1)[-1], payload)
-            count += len(samples)
-            if samples:
-                task_key = keys[relative]
-                task_coverage_result, task_metrics = task_coverage_and_metrics(samples)
-                coverage[task_key] = task_coverage_result
-                if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
-                    recovered_metrics[task_key] = task_metrics
+            for sample in summary.add_source(relative, payload):
+                store.add_sample(sample)
         store.seal()
     finally:
         store.close()
-    return SampleExport(samples=count, coverage=coverage, recovered_metrics=recovered_metrics)
+    return summary.build()
+
+
+def _is_native_evalchemy_source(name: str) -> bool:
+    path = PurePosixPath(name)
+    return path.is_relative_to(_NATIVE_EVALCHEMY_SOURCE_ROOT) and path.parent.name == "native"
 
 
 def summarize_native_eval_samples(out_path: str) -> SampleExport:
     """Summarize Evalchemy's native FineStore sources without rewriting its sample table."""
     reader = ReadView(out_path)
-    sources = tuple(
-        name
-        for name in preserved_sample_sources(out_path)
-        if name.startswith(_NATIVE_EVALCHEMY_SOURCE_PREFIX) and "/native/" in name
-    )
+    sources = tuple(name for name in preserved_sample_sources(out_path) if _is_native_evalchemy_source(name))
     if not sources:
         raise FileNotFoundError(f"archive at {out_path!r} preserves no native Evalchemy sample sources")
 
-    keys = _task_keys(sources)
-    count = 0
-    coverage: dict[str, TaskCoverage] = {}
-    recovered_metrics: dict[str, dict[str, float]] = {}
+    summary = _SampleExportBuilder.for_sources(sources)
     for name in sources:
         payload = reader.read_blob(name)
         if payload is None:
             raise FileNotFoundError(f"archive at {out_path!r} lists source blob {name!r} but cannot read it")
-        samples = _lm_eval_samples(name.rsplit("/", 1)[-1], payload)
-        count += len(samples)
-        if not samples:
-            continue
-        task_key = keys[name]
-        task_coverage_result, task_metrics = task_coverage_and_metrics(samples)
-        coverage[task_key] = task_coverage_result
-        if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
-            recovered_metrics[task_key] = task_metrics
-    return SampleExport(samples=count, coverage=coverage, recovered_metrics=recovered_metrics)
+        summary.add_source(name, payload)
+    return summary.build()
 
 
 def require_current_samples(out_path: str) -> None:
