@@ -26,7 +26,10 @@ from levanter.grug.attention import (
     RotaryConfig,
 )
 from levanter.grug.grug_moe import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
     MOE_REMAT_SAVE_NAMES,
+    MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+    MOE_VALID_ASSIGNMENTS_METRIC,
     MoeActivation,
     MoeImplementation,
     resolve_moe_implementation,
@@ -361,9 +364,9 @@ class Transformer(eqx.Module):
             summarized_metrics = _summarize_router_metrics(router_metrics)
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
-            summarized_metrics["moe/dropped_assignments"] = router_metrics["capacity_overflow_per_layer"]
-            summarized_metrics["moe/skipped_padding_assignments"] = router_metrics["skipped_assignments_per_layer"]
-            summarized_metrics["moe/valid_assignments"] = jnp.sum(
+            summarized_metrics[MOE_DROPPED_ASSIGNMENTS_METRIC] = router_metrics["capacity_overflow_per_layer"]
+            summarized_metrics[MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC] = router_metrics["skipped_assignments_per_layer"]
+            summarized_metrics[MOE_VALID_ASSIGNMENTS_METRIC] = jnp.sum(
                 router_metrics["routing_counts_per_layer"], axis=-1, dtype=jnp.int32
             )
             return loss, summarized_metrics

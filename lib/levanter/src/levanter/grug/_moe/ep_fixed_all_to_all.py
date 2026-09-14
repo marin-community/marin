@@ -16,7 +16,7 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_MOE_OUTPUT,
     _assignment_validity,
     _scaled_capacity,
-    CapacityOverflow,
+    MoeDispatchCounts,
 )
 from levanter.grug.sharding import _batch_axes
 
@@ -91,7 +91,7 @@ def _moe_mlp_ep_fixed_a2a_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
+) -> tuple[Float[Array, "Tlocal H"], MoeDispatchCounts]:
     """Run fixed-capacity all-to-all dispatch, expert MLPs, and combine.
 
     ``capacity_factor`` scales each fixed (sender shard, global expert) cell as
@@ -196,4 +196,8 @@ def _moe_mlp_ep_fixed_a2a_local(
         dropped_local = valid_assignments - jnp.sum(keep, dtype=jnp.int32)
         counts_local = jnp.stack((dropped_local, assignments_per_shard - valid_assignments))
         counts = jax.lax.psum(counts_local, _batch_axes(jax.sharding.get_abstract_mesh()))
-    return out_local, CapacityOverflow(sender=counts[0], receiver=jnp.zeros_like(counts[0]), skipped=counts[1])
+    return out_local, MoeDispatchCounts(
+        sender_dropped=counts[0],
+        receiver_dropped=jnp.zeros_like(counts[0]),
+        padding_skipped=counts[1],
+    )

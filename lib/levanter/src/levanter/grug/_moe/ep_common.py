@@ -45,7 +45,7 @@ def _ranks_within_groups(
     num_groups: int,
     valid: Bool[Array, "N"] | None = None,
 ) -> Int[Array, "N"]:
-    """Return the zero-based rank of each item in its group."""
+    """Return each valid item's zero-based group rank; invalid ranks are unspecified."""
     if valid is None:
         valid = jnp.ones(group_ids.shape, dtype=jnp.bool_)
     sortable_groups = jnp.where(valid, group_ids, num_groups)

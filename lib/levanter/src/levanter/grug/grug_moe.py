@@ -20,6 +20,7 @@ from functools import partial
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import jax.scipy as jsp
 from haliax.jax_utils import named_call
 from jax import shard_map
 from jax.sharding import PartitionSpec as P
@@ -29,8 +30,8 @@ from levanter.grug._moe.common import (
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
     _init_weight,
-    CapacityOverflow,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
+    MoeDispatchCounts,
     MoEExpertMlpPspecs,
     MoeActivation,
     MoeImplementation,
@@ -59,6 +60,79 @@ from levanter.grug.sharding import (
     _value_spec_or_default,
 )
 from levanter.utils.activation import ActivationFunctionEnum
+
+
+MOE_DROPPED_ASSIGNMENTS_METRIC = "moe/dropped_assignments"
+MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC = "moe/skipped_padding_assignments"
+MOE_VALID_ASSIGNMENTS_METRIC = "moe/valid_assignments"
+
+
+def moe_routing_stats(
+    selected_experts: Int[Array, "T K"],
+    router_probs: Float[Array, "T E"],
+    router_logits: Float[Array, "T E"],
+    token_valid: Bool[Array, "T"],
+    *,
+    num_experts: int,
+    num_experts_per_token: int,
+) -> dict[str, jax.Array]:
+    """Compute padding-aware routing distributions and auxiliary losses."""
+    router_probs_f = router_probs.astype(jnp.float32)
+    router_logits_f = router_logits.astype(jnp.float32)
+    valid_f = token_valid.astype(jnp.float32)
+    expert_counts = jnp.sum(
+        jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32) * valid_f[:, None, None],
+        axis=(0, 1),
+    )
+    total_assignments = jnp.maximum(jnp.sum(expert_counts), 1.0)
+    assignment_fraction = expert_counts / total_assignments
+    routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6))
+    token_fraction = assignment_fraction * num_experts_per_token
+    valid_tokens = jnp.maximum(jnp.sum(valid_f), 1.0)
+    mean_router_probability = jnp.sum(router_probs_f * valid_f[:, None], axis=0) / valid_tokens
+    load_balancing_loss = num_experts * jnp.sum(token_fraction * mean_router_probability)
+    log_partition = jsp.special.logsumexp(router_logits_f, axis=-1)
+    router_z_loss = jnp.sum(log_partition**2 * valid_f) / valid_tokens
+    return {
+        "routing_counts": expert_counts,
+        "routing_entropy": routing_entropy,
+        "load_balancing_loss": load_balancing_loss,
+        "router_z_loss": router_z_loss,
+    }
+
+
+def estimate_qb_beta_topk(
+    s_minus_alpha: Float[Array, "T E"],
+    token_valid: Bool[Array, "T"],
+    mesh: jax.sharding.AbstractMesh,
+    *,
+    batch_axes: tuple[str, ...],
+    num_experts_per_token: int,
+    num_experts: int,
+) -> Float[Array, "E"]:
+    """Estimate QB thresholds from valid tokens on each batch shard."""
+    num_devices = 1
+    for axis in batch_axes:
+        num_devices *= mesh.shape[axis]
+    local_tokens = s_minus_alpha.shape[0] // num_devices
+    physical_count = max(1, local_tokens * num_experts_per_token // num_experts)
+
+    def _local(s_local: jax.Array, valid_local: jax.Array) -> jax.Array:
+        valid_count = jnp.sum(valid_local, dtype=jnp.int32)
+        topk_values, _ = jax.lax.top_k(jnp.where(valid_local[None, :], s_local.T, -jnp.inf), physical_count)
+        logical_count = jnp.clip(valid_count * num_experts_per_token // num_experts, 1, physical_count)
+        beta = jnp.take(topk_values, logical_count - 1, axis=1)
+        beta = jnp.where(valid_count > 0, beta, 0)
+        weighted_beta = jax.lax.psum(beta * valid_count, axis_name=batch_axes)
+        global_valid_count = jax.lax.psum(valid_count, axis_name=batch_axes)
+        return weighted_beta / jnp.maximum(global_valid_count, 1)
+
+    return shard_map(
+        _local,
+        mesh=mesh,
+        in_specs=(P(batch_axes, None), P(batch_axes)),
+        out_specs=P(),
+    )(s_minus_alpha, token_valid)
 
 
 class MoEExpertMlp(eqx.Module):
@@ -124,7 +198,7 @@ class MoEExpertMlp(eqx.Module):
         token_valid: Bool[Array, "T"] | None = None,
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
-    ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], CapacityOverflow]:
+    ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
         w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         return moe_mlp(
             x,
@@ -161,7 +235,7 @@ def moe_mlp(
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
-) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], CapacityOverflow]:
+) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
     This helper handles dispatch/permute/unpermute (+EP collectives) from
@@ -236,7 +310,11 @@ def moe_mlp(
         )
         if report_capacity_overflow:
             skipped = jnp.sum(~token_valid, dtype=jnp.int32) * selected_experts.shape[1]
-            return out, CapacityOverflow(sender=dropped, receiver=jnp.zeros_like(dropped), skipped=skipped)
+            return out, MoeDispatchCounts(
+                sender_dropped=dropped,
+                receiver_dropped=jnp.zeros_like(dropped),
+                padding_skipped=skipped,
+            )
         return out
 
     batch_spec = _batch_spec_from_x(x, mesh)
@@ -298,7 +376,10 @@ def moe_mlp(
                 w_up_gate_spec,
                 w_down_spec,
             ),
-            out_specs=(batch_spec, CapacityOverflow(sender=P(), receiver=P(), skipped=P())),
+            out_specs=(
+                batch_spec,
+                MoeDispatchCounts(sender_dropped=P(), receiver_dropped=P(), padding_skipped=P()),
+            ),
             check_vma=False,
         )
         out, overflow = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
@@ -355,7 +436,11 @@ def moe_mlp(
         batch_axis_names = x_spec[0]
         if report_capacity_overflow and batch_axis_names is not None:
             dropped, skipped = jax.lax.psum((dropped, skipped), axis_name=batch_axis_names)
-        return out, CapacityOverflow(sender=dropped, receiver=jnp.zeros_like(dropped), skipped=skipped)
+        return out, MoeDispatchCounts(
+            sender_dropped=dropped,
+            receiver_dropped=jnp.zeros_like(dropped),
+            padding_skipped=skipped,
+        )
 
     shard_fn = shard_map(
         local_moe,
@@ -368,7 +453,7 @@ def moe_mlp(
             w_up_gate_spec,
             w_down_spec,
         ),
-        out_specs=(x_spec, CapacityOverflow(sender=P(), receiver=P(), skipped=P())),
+        out_specs=(x_spec, MoeDispatchCounts(sender_dropped=P(), receiver_dropped=P(), padding_skipped=P())),
         check_vma=False,
     )
     out, overflow = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
@@ -378,13 +463,18 @@ def moe_mlp(
 
 
 __all__ = [
-    "CapacityOverflow",
+    "MOE_DROPPED_ASSIGNMENTS_METRIC",
+    "MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC",
+    "MOE_VALID_ASSIGNMENTS_METRIC",
+    "MoeDispatchCounts",
     "MoeActivation",
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",
     "MoeImplementation",
     "PspecAxis",
     "moe_mlp",
+    "moe_routing_stats",
+    "estimate_qb_beta_topk",
     "resolve_moe_implementation",
     "split_moe_w13_output",
 ]

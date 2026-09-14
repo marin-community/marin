@@ -33,6 +33,11 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.grug.grug_moe import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+    MOE_VALID_ASSIGNMENTS_METRIC,
+)
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -397,11 +402,11 @@ def _drop_metrics(
     if valid_assignments_host + skipped_padding_assignments_host != total_positions:
         raise ValueError("valid plus skipped assignments must equal the padded batch size")
     return {
-        "moe/dropped_assignments": dropped_assignments_host,
+        MOE_DROPPED_ASSIGNMENTS_METRIC: dropped_assignments_host,
         "moe/drop_fraction": dropped_assignments_host / max(valid_assignments_host, 1),
-        "moe/skipped_padding_assignments": skipped_padding_assignments_host,
+        MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: skipped_padding_assignments_host,
         "moe/skipped_padding_fraction": skipped_padding_assignments_host / total_positions,
-        "moe/valid_assignments": valid_assignments_host,
+        MOE_VALID_ASSIGNMENTS_METRIC: valid_assignments_host,
     }
 
 
@@ -691,11 +696,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                             step=step,
                         )
-                    if "moe/dropped_assignments" in metrics:
+                    if MOE_DROPPED_ASSIGNMENTS_METRIC in metrics:
                         drop_metrics = _drop_metrics(
-                            metrics["moe/dropped_assignments"],
-                            metrics["moe/skipped_padding_assignments"],
-                            metrics["moe/valid_assignments"],
+                            metrics[MOE_DROPPED_ASSIGNMENTS_METRIC],
+                            metrics[MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC],
+                            metrics[MOE_VALID_ASSIGNMENTS_METRIC],
                             batch_size=batch.tokens.shape[0],
                             sequence_length=batch.tokens.shape[1],
                             top_k=config.model.num_experts_per_token,

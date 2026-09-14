@@ -18,7 +18,7 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_EXPERT_HIDDEN,
     _assignment_validity,
     _scaled_capacity,
-    CapacityOverflow,
+    MoeDispatchCounts,
 )
 from levanter.grug._moe.ep_common import _prefix_cap_counts
 from levanter.grug.sharding import _batch_axes
@@ -35,7 +35,7 @@ def _moe_mlp_ep_ring_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
+) -> tuple[Float[Array, "Tlocal H"], MoeDispatchCounts]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
@@ -130,4 +130,8 @@ def _moe_mlp_ep_ring_local(
             jnp.stack((dropped_local, skipped_local)),
             _batch_axes(jax.sharding.get_abstract_mesh()),
         )
-    return out_local, CapacityOverflow(sender=jnp.zeros_like(counts[0]), receiver=counts[0], skipped=counts[1])
+    return out_local, MoeDispatchCounts(
+        sender_dropped=jnp.zeros_like(counts[0]),
+        receiver_dropped=counts[0],
+        padding_skipped=counts[1],
+    )

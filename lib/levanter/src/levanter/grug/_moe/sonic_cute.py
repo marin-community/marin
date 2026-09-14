@@ -256,8 +256,8 @@ def _moe_mlp_local_sonic_cute_chunked(
         token_seg = jax.lax.dynamic_slice(token_pad, (start,), (cap,))
         w_seg = jax.lax.dynamic_slice(w_pad, (start,), (cap,))
 
-        # Real assignments for this chunk occupy segment rows [0, count); the rest are padding or
-        # rows belonging to later chunks. Mask their combine weight to zero.
+        # Only the logical accepted prefix is active. Later rows may be overflow assignments,
+        # physical padding, or assignments for later chunks.
         count = cu[hi] - start
         active_rows = jnp.minimum(count, logical_cap)
         valid = jnp.arange(cap, dtype=jnp.int32) < active_rows

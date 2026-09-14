@@ -31,7 +31,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
-from levanter.grug._moe.common import _assignment_validity, _interleave_gate_up, _scaled_capacity, CapacityOverflow
+from levanter.grug._moe.common import _assignment_validity, _interleave_gate_up, _scaled_capacity, MoeDispatchCounts
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
@@ -315,7 +315,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
+) -> tuple[Float[Array, "Tlocal H"], MoeDispatchCounts]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(
@@ -436,4 +436,8 @@ def _moe_mlp_ep_ragged_a2a_local(
             jnp.stack((dropped_local, skipped_local)),
             _batch_axes(jax.sharding.get_abstract_mesh()),
         )
-    return out_local, CapacityOverflow(sender=counts[0], receiver=jnp.zeros_like(counts[0]), skipped=counts[1])
+    return out_local, MoeDispatchCounts(
+        sender_dropped=counts[0],
+        receiver_dropped=jnp.zeros_like(counts[0]),
+        padding_skipped=counts[1],
+    )

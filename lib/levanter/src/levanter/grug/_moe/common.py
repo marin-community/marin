@@ -127,16 +127,16 @@ MOE_REMAT_SAVE_NAMES = (
 )
 
 
-class CapacityOverflow(NamedTuple):
-    """Expert assignments dropped by capacity and skipped as padding."""
+class MoeDispatchCounts(NamedTuple):
+    """Assignment counts omitted from expert dispatch."""
 
-    sender: Int[Array, ""]
-    receiver: Int[Array, ""]
-    skipped: Int[Array, ""]
+    sender_dropped: Int[Array, ""]
+    receiver_dropped: Int[Array, ""]
+    padding_skipped: Int[Array, ""]
 
     @property
-    def total(self) -> Int[Array, ""]:
-        return self.sender + self.receiver
+    def dropped(self) -> Int[Array, ""]:
+        return self.sender_dropped + self.receiver_dropped
 
 
 @dataclass(frozen=True)
@@ -249,7 +249,6 @@ def _assignment_validity(
     tokens: int,
     topk: int,
 ) -> Bool[Array, "TK"]:
-    """Broadcast per-token validity over routed assignments."""
     if token_valid is None:
         return jnp.ones((tokens * topk,), dtype=jnp.bool_)
     return jnp.broadcast_to(token_valid[:, None], (tokens, topk)).reshape(tokens * topk)

@@ -6,6 +6,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import jax.numpy as jnp
+from levanter.grug.grug_moe import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+    MOE_VALID_ASSIGNMENTS_METRIC,
+)
 
 from experiments.grug.moe_hero_fsdp import launch, train
 
@@ -35,11 +40,11 @@ def test_drop_metrics_separates_padding_from_capacity_drops():
     )
 
     assert metrics == {
-        "moe/dropped_assignments": 2,
+        MOE_DROPPED_ASSIGNMENTS_METRIC: 2,
         "moe/drop_fraction": 2 / 12,
-        "moe/skipped_padding_assignments": 4,
+        MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: 4,
         "moe/skipped_padding_fraction": 4 / 16,
-        "moe/valid_assignments": 12,
+        MOE_VALID_ASSIGNMENTS_METRIC: 12,
     }
 
 

@@ -42,7 +42,10 @@ from levanter.grug.attention import (
     token_validity_from_attention_mask,
 )
 from levanter.grug.grug_moe import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
     MOE_REMAT_SAVE_NAMES,
+    MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+    MOE_VALID_ASSIGNMENTS_METRIC,
     MoeActivation,
     MoEExpertMlp,
     MoeImplementation,
@@ -751,7 +754,7 @@ def _reduce_router_stats(
 
     ``stacked`` holds the scan's ``ys``: a leading ``[num_layers]`` axis over a shard axis that is
     still sharded over ``_BATCH_AXES``. Summing that shard axis is one all-reduce for the whole
-    stack rather than one per layer; XLA's all-reduce combiner then merges the four into a single
+    stack rather than one per layer; XLA's all-reduce combiner then merges them into a single
     tupled collective, so the layer scan emits none at all. The pointwise algebra below is
     identical to what the old per-layer ``_routing_stats`` did, just vectorized over the layer axis.
 
@@ -1117,10 +1120,10 @@ class MoEMLP(eqx.Module):
         )
         if self.cfg.report_capacity_overflow:
             routed_flat, capacity_overflow = moe_out
-            dropped_assignments = capacity_overflow.total
-            sender_dropped_assignments = capacity_overflow.sender
-            receiver_dropped_assignments = capacity_overflow.receiver
-            skipped_assignments = capacity_overflow.skipped
+            dropped_assignments = capacity_overflow.dropped
+            sender_dropped_assignments = capacity_overflow.sender_dropped
+            receiver_dropped_assignments = capacity_overflow.receiver_dropped
+            skipped_assignments = capacity_overflow.padding_skipped
         else:
             routed_flat = moe_out
             dropped_assignments = _zero_dropped_assignments()
@@ -1446,15 +1449,17 @@ class Transformer(eqx.Module):
                 # the host in int64. Summing here with jnp.sum overflows int32 at large batch (e.g. batch
                 # 4096: 4096*4096*8*48 ~ 6.4e9 assignments > 2.1e9) and breaks the total==sender+receiver
                 # accounting check, since jax_enable_x64 is off so an in-device int64 sum silently downcasts.
-                summarized_metrics["moe/dropped_assignments"] = router_metrics["capacity_overflow_per_layer"]
+                summarized_metrics[MOE_DROPPED_ASSIGNMENTS_METRIC] = router_metrics["capacity_overflow_per_layer"]
                 summarized_metrics["moe/sender_dropped_assignments"] = router_metrics[
                     "sender_capacity_overflow_per_layer"
                 ]
                 summarized_metrics["moe/receiver_dropped_assignments"] = router_metrics[
                     "receiver_capacity_overflow_per_layer"
                 ]
-                summarized_metrics["moe/skipped_padding_assignments"] = router_metrics["skipped_assignments_per_layer"]
-                summarized_metrics["moe/valid_assignments"] = jnp.sum(
+                summarized_metrics[MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC] = router_metrics[
+                    "skipped_assignments_per_layer"
+                ]
+                summarized_metrics[MOE_VALID_ASSIGNMENTS_METRIC] = jnp.sum(
                     router_metrics["routing_counts_per_layer"], axis=-1, dtype=jnp.int32
                 )
             return loss, summarized_metrics

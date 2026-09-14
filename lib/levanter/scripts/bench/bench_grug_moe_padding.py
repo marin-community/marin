@@ -30,7 +30,7 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
-from typing import Literal
+from enum import StrEnum
 
 import jax
 import jax.numpy as jnp
@@ -40,7 +40,9 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from levanter.grug.grug_moe import moe_mlp
 
 
-BenchmarkCase = Literal["padding-counted", "padding-skipped"]
+class BenchmarkCase(StrEnum):
+    PADDING_COUNTED = "padding-counted"
+    PADDING_SKIPPED = "padding-skipped"
 
 
 @dataclass(frozen=True)
@@ -99,16 +101,12 @@ def _validate(config: BenchmarkConfig) -> None:
     if config.top_k > config.experts:
         raise ValueError(f"top_k={config.top_k} must not exceed experts={config.experts}")
     if config.experts % config.expert_axis_size != 0:
-        raise ValueError(
-            f"experts={config.experts} must be divisible by expert_axis_size={config.expert_axis_size}"
-        )
+        raise ValueError(f"experts={config.experts} must be divisible by expert_axis_size={config.expert_axis_size}")
 
 
 def _run_case(config: BenchmarkConfig, case: BenchmarkCase) -> BenchmarkResult:
     if config.expert_axis_size > len(jax.devices()):
-        raise ValueError(
-            f"expert_axis_size={config.expert_axis_size} exceeds available devices={len(jax.devices())}"
-        )
+        raise ValueError(f"expert_axis_size={config.expert_axis_size} exceeds available devices={len(jax.devices())}")
     devices = np.asarray(jax.devices()[: config.expert_axis_size])
     mesh = Mesh(devices, ("expert",), axis_types=(AxisType.Explicit,))
     token_sharding = NamedSharding(mesh, P("expert"))
@@ -140,7 +138,7 @@ def _run_case(config: BenchmarkConfig, case: BenchmarkCase) -> BenchmarkResult:
     )
     valid_tokens = max(1, round(config.tokens * (1 - config.padding_fraction)))
     token_valid = jnp.arange(config.tokens) < valid_tokens
-    if case == "padding-counted":
+    if case == BenchmarkCase.PADDING_COUNTED:
         token_valid = jnp.ones_like(token_valid)
 
     x = jax.device_put(x, token_matrix_sharding)
@@ -195,13 +193,13 @@ def _run_case(config: BenchmarkConfig, case: BenchmarkCase) -> BenchmarkResult:
         implementation=config.implementation,
         device_kind=jax.devices()[0].device_kind,
         tokens=config.tokens,
-        valid_tokens=(config.tokens if case == "padding-counted" else valid_tokens),
+        valid_tokens=(config.tokens if case == BenchmarkCase.PADDING_COUNTED else valid_tokens),
         top_k=config.top_k,
         forward_only=config.forward_only,
         mean_step_ms=elapsed * 1000 / config.iterations,
         peak_bytes_in_use=None if peak_bytes is None else int(peak_bytes),
-        dropped_assignments=int(overflow.total),
-        skipped_padding_assignments=int(overflow.skipped),
+        dropped_assignments=int(overflow.dropped),
+        skipped_padding_assignments=int(overflow.padding_skipped),
     )
 
 
@@ -245,9 +243,9 @@ def _child_command(config: BenchmarkConfig, case: BenchmarkCase) -> list[str]:
 
 def _compare(config: BenchmarkConfig) -> dict[str, object]:
     environment = os.environ.copy()
-    environment.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+    environment["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     results = []
-    for case in ("padding-counted", "padding-skipped"):
+    for case in BenchmarkCase:
         completed = subprocess.run(
             _child_command(config, case),
             env=environment,
@@ -289,7 +287,7 @@ def _parse_args() -> tuple[BenchmarkConfig, BenchmarkCase | None]:
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--iterations", type=int, default=10)
     parser.add_argument("--forward-only", action="store_true")
-    parser.add_argument("--case", choices=("padding-counted", "padding-skipped"), default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--case", choices=tuple(BenchmarkCase), default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
     config = BenchmarkConfig(
         implementation=args.implementation,
@@ -307,7 +305,7 @@ def _parse_args() -> tuple[BenchmarkConfig, BenchmarkCase | None]:
         iterations=args.iterations,
         forward_only=args.forward_only,
     )
-    return config, args.case
+    return config, None if args.case is None else BenchmarkCase(args.case)
 
 
 def main() -> None:

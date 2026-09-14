@@ -28,6 +28,11 @@ from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.checkpoint import save_checkpoint
 from levanter.grug.attention import AttentionMask
+from levanter.grug.grug_moe import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+    MOE_VALID_ASSIGNMENTS_METRIC,
+)
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
@@ -1141,16 +1146,16 @@ def test_drop_metrics_reports_sender_and_receiver_fractions():
     )
 
     assert metrics == {
-        "moe/dropped_assignments": 5,
+        MOE_DROPPED_ASSIGNMENTS_METRIC: 5,
         "moe/drop_fraction": 5 / 12,
         "moe/sender_dropped_assignments": 2,
         "moe/sender_drop_fraction": 2 / 12,
         "moe/receiver_dropped_assignments": 3,
         "moe/receiver_drop_fraction": 3 / 12,
         "moe/receiver_drop_fraction_of_received": 3 / 10,
-        "moe/skipped_padding_assignments": 4,
+        MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: 4,
         "moe/skipped_padding_fraction": 4 / 16,
-        "moe/valid_assignments": 12,
+        MOE_VALID_ASSIGNMENTS_METRIC: 12,
     }
 
 
@@ -1178,7 +1183,7 @@ def test_drop_metrics_sums_per_layer_counts_in_int64_without_overflow():
         num_layers=num_layers,
     )
 
-    assert metrics["moe/dropped_assignments"] == sender_total + receiver_total  # no int32 wrap
+    assert metrics[MOE_DROPPED_ASSIGNMENTS_METRIC] == sender_total + receiver_total  # no int32 wrap
     assert metrics["moe/sender_dropped_assignments"] == sender_total
     assert metrics["moe/receiver_dropped_assignments"] == receiver_total
 

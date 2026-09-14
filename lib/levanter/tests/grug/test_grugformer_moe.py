@@ -24,7 +24,7 @@ from levanter.grug._moe.common import (
     _prepare_moe_dispatch,
     _prepare_moe_dispatch_indices_with_assignment_ids,
     _swiglu_gate_up_backward,
-    CapacityOverflow,
+    MoeDispatchCounts,
 )
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
@@ -368,8 +368,8 @@ def test_moe_mlp_padding_matches_compact_value_and_gradients():
     np.testing.assert_array_equal(actual_gradients[0][~token_valid], jnp.zeros((2, x.shape[1])))
     for actual_gradient, expected_gradient in zip(actual_gradients[1:], expected_gradients[1:], strict=True):
         np.testing.assert_allclose(actual_gradient, expected_gradient, rtol=1e-5, atol=1e-5)
-    assert int(overflow.total) == 0
-    assert int(overflow.skipped) == 4
+    assert int(overflow.dropped) == 0
+    assert int(overflow.padding_skipped) == 4
 
 
 def test_moe_mlp_all_padding_has_no_expert_output_or_gradients():
@@ -411,8 +411,8 @@ def test_moe_mlp_all_padding_has_no_expert_output_or_gradients():
     np.testing.assert_array_equal(out, jnp.zeros_like(out))
     for gradient in gradients:
         np.testing.assert_array_equal(gradient, jnp.zeros_like(gradient))
-    assert int(overflow.total) == 0
-    assert int(overflow.skipped) == x.shape[0] * selected_experts.shape[1]
+    assert int(overflow.dropped) == 0
+    assert int(overflow.padding_skipped) == x.shape[0] * selected_experts.shape[1]
 
 
 def test_deepep_local_assignment_packing_uses_local_expert_ids():
@@ -844,7 +844,7 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
         fixed_a2a,
         mesh=mesh,
         in_specs=(P(), P(), P(), P(), P()),
-        out_specs=(P(), CapacityOverflow(sender=P(), receiver=P(), skipped=P())),
+        out_specs=(P(), MoeDispatchCounts(sender_dropped=P(), receiver_dropped=P(), padding_skipped=P())),
         check_vma=False,
     )
     with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
@@ -878,9 +878,9 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
             rtol=1e-5,
             atol=1e-5,
         )
-    assert int(overflow.sender) == 4
-    assert int(overflow.receiver) == 0
-    assert int(overflow.skipped) == 0
+    assert int(overflow.sender_dropped) == 4
+    assert int(overflow.receiver_dropped) == 0
+    assert int(overflow.padding_skipped) == 0
 
 
 def test_fixed_all_to_all_padding_does_not_change_capacity_acceptance():
@@ -915,7 +915,7 @@ def test_fixed_all_to_all_padding_does_not_change_capacity_acceptance():
         fixed_a2a,
         mesh=mesh,
         in_specs=(P(), P(), P(), P(), P(), P()),
-        out_specs=(P(), CapacityOverflow(sender=P(), receiver=P(), skipped=P())),
+        out_specs=(P(), MoeDispatchCounts(sender_dropped=P(), receiver_dropped=P(), padding_skipped=P())),
         check_vma=False,
     )
 
@@ -962,9 +962,9 @@ def test_fixed_all_to_all_padding_does_not_change_capacity_acceptance():
     np.testing.assert_array_equal(actual_gradients[0][~token_valid], jnp.zeros((2, x.shape[1])))
     for actual_gradient, expected_gradient in zip(actual_gradients[1:], expected_gradients[1:], strict=True):
         np.testing.assert_allclose(actual_gradient, expected_gradient, rtol=1e-5, atol=1e-5)
-    assert padded_overflow.total == compact_overflow.total == 4
-    assert int(padded_overflow.skipped) == 4
-    assert int(compact_overflow.skipped) == 0
+    assert padded_overflow.dropped == compact_overflow.dropped == 4
+    assert int(padded_overflow.padding_skipped) == 4
+    assert int(compact_overflow.padding_skipped) == 0
 
 
 @pytest.mark.timeout(180)
@@ -1088,7 +1088,7 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
         pooled_output,
         mesh=mesh,
         in_specs=(P(), P(), P(), P()),
-        out_specs=(P(), CapacityOverflow(sender=P(), receiver=P(), skipped=P())),
+        out_specs=(P(), MoeDispatchCounts(sender_dropped=P(), receiver_dropped=P(), padding_skipped=P())),
         check_vma=False,
     )
     with jax.set_mesh(mesh):
@@ -1098,9 +1098,9 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     expected = _dense_moe_output(x, selected_experts, combine_weights * keep, w_up_gate, w_down)
 
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
-    assert int(overflow.sender) == 3
-    assert int(overflow.receiver) == 3
-    assert int(overflow.skipped) == 0
+    assert int(overflow.sender_dropped) == 3
+    assert int(overflow.receiver_dropped) == 3
+    assert int(overflow.padding_skipped) == 0
 
 
 @pytest.mark.parametrize("implementation", ["ring", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"])
@@ -1197,8 +1197,8 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(implem
                 rtol=1e-5,
                 atol=1e-5,
             )
-        assert int(overflow.total) == 0
-        assert int(overflow.skipped) == 2
+        assert int(overflow.dropped) == 0
+        assert int(overflow.padding_skipped) == 2
     """
     result = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(script.replace("__IMPLEMENTATION__", implementation))],
@@ -1442,8 +1442,8 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
     for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
         assert np.isfinite(np.asarray(actual_gradient)).all()
         assert relative_max_error(actual_gradient, expected_gradient) < relative_tolerance
-    assert int(overflow.total) == 0
-    assert int(overflow.skipped) == int(jnp.sum(~token_valid)) * topk
+    assert int(overflow.dropped) == 0
+    assert int(overflow.padding_skipped) == int(jnp.sum(~token_valid)) * topk
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
@@ -1567,7 +1567,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
         w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
         w_down = jax.sharding.reshard(w_down, expert_sharding)
 
-        out, dropped = moe_mlp(
+        out, dispatch_counts = moe_mlp(
             x,
             selected_experts,
             combine_weights,
@@ -1579,8 +1579,8 @@ def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
         )
 
     assert out.shape == (tokens, hidden_dim)
-    assert dropped.total.shape == ()
-    assert int(dropped.total) > 0
+    assert dispatch_counts.dropped.shape == ()
+    assert int(dispatch_counts.dropped) > 0
 
 
 def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
@@ -1612,7 +1612,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
         w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
         w_down = jax.sharding.reshard(w_down, expert_sharding)
 
-        out, dropped = moe_mlp(
+        out, dispatch_counts = moe_mlp(
             x,
             selected_experts,
             combine_weights,
@@ -1624,8 +1624,8 @@ def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
         )
 
     assert out.shape == (tokens, hidden_dim)
-    assert dropped.total.shape == ()
-    assert int(dropped.total) > 0
+    assert dispatch_counts.dropped.shape == ()
+    assert int(dispatch_counts.dropped) > 0
 
 
 def test_ragged_a2a_receiver_clipping_respects_capacity():
