@@ -33,7 +33,7 @@ from marin.experiment.cli import build_options
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe_hero_ep.launch_mfu_test import HERO_EP_EXPERT_AXIS_SIZE, HERO_GPUS_PER_NODE
+from experiments.grug.moe_hero_ep.hero_recipe import HERO_EP_EXPERT_AXIS_SIZE, HERO_GPUS_PER_NODE
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import SEQ_LEN
 from experiments.grug.moe_hero_ep.train import (
