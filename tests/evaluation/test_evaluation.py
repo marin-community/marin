@@ -16,6 +16,7 @@ import pytest
 from click.testing import CliRunner
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
+from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyTaskOptions
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
@@ -26,7 +27,7 @@ from marin.evaluation.harbor.driver_config import (
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
-from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus, TaskCoverage, read_record
+from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, MetricKind, RunStatus, TaskCoverage, read_record
 from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
@@ -44,7 +45,7 @@ from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.cli import cli, resolve_model_config
-from experiments.evaluation.evals import EVALS, EvalchemyDefinition, HarborDefinition, resolve_eval_keys
+from experiments.evaluation.evals import EVALS, EvalchemyDefinition, HarborDefinition, evalchemy_run_config, resolve_eval_keys
 from experiments.evaluation.launch import (
     LaunchSpec,
     build_evaluation_batch,
@@ -118,6 +119,44 @@ serve:
 """
     )
     return path
+
+
+@pytest.mark.parametrize(
+    ("task", "options", "message"),
+    [
+        ("arc_easy", EvalchemyTaskOptions(), "arc_easy.*primary_metric"),
+        ("drop", EvalchemyTaskOptions(primary_metric="f1"), "drop.*metric_kind"),
+        (
+            "arc_easy",
+            EvalchemyTaskOptions(primary_metric="acc", expected_items=100),
+            "arc_easy.*must not declare expected_items",
+        ),
+        (
+            "AIME24",
+            EvalchemyTaskOptions(primary_metric="accuracy_avg", metric_kind=MetricKind.CONTINUOUS),
+            "AIME24.*expected_items",
+        ),
+    ],
+)
+def test_evalchemy_run_config_rejects_incomplete_metric_protocol(task, options, message):
+    source = EvalchemyConfig(tasks=(task,), task_options={task: options})
+
+    with pytest.raises(ValueError, match=message):
+        evalchemy_run_config("test", source)
+
+
+def test_evalchemy_run_config_defaults_binary_kind_and_honors_override():
+    source = EvalchemyConfig(
+        tasks=("arc_easy", "drop"),
+        task_options={
+            "arc_easy": EvalchemyTaskOptions(primary_metric="acc"),
+            "drop": EvalchemyTaskOptions(primary_metric="f1", metric_kind=MetricKind.BINARY),
+        },
+    )
+
+    config = evalchemy_run_config("test", source)
+
+    assert [task.metric_kind for task in config.tasks] == [MetricKind.BINARY, MetricKind.BINARY]
 
 
 def _successful_evaluation(
@@ -662,7 +701,9 @@ def test_evalchemy_generation_budget_preserves_benchmark_protocol(
 ):
     config_path = tmp_path / "generation.yaml"
     max_tokens = "" if benchmark_limit is None else f"max_tokens: {benchmark_limit}\n"
-    config_path.write_text(f"tasks: [triviaqa]\n{max_tokens}")
+    config_path.write_text(
+        f"tasks: [triviaqa]\ntask_options:\n  triviaqa:\n    primary_metric: exact_match\n{max_tokens}"
+    )
     model = replace(models()["qwen3-8b"], generation=GenerationConfig(max_gen_toks=model_limit))
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     caplog.set_level(logging.WARNING, logger="experiments.evaluation.evals")
@@ -767,6 +808,8 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
                 "generation": True,
                 "unsafe_code": False,
                 "completion_only": False,
+                "primary_metric": "prompt_level_strict_acc",
+                "metric_kind": "binary",
             }
         ],
         "evalchemy": {
@@ -1044,7 +1087,10 @@ def test_launch_rejects_malformed_evalchemy_yaml_before_iris_submission(tmp_path
 
 def test_launch_defers_evalchemy_task_validation_to_external_cli(tmp_path, monkeypatch):
     config_path = tmp_path / "external-task.yaml"
-    config_path.write_text("tasks: [task_added_after_marin_release]\n")
+    config_path.write_text(
+        "tasks: [task_added_after_marin_release]\n"
+        "task_options:\n  task_added_after_marin_release:\n    primary_metric: acc\n"
+    )
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
 
     result = CliRunner().invoke(

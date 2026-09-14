@@ -5,6 +5,8 @@ task_options:
     num_fewshot: 0
     task_alias: ifeval_0shot
     generation: true
+    primary_metric: prompt_level_strict_acc
+    metric_kind: binary
 apply_chat_template: true
 limit: null
 batch_size: 1

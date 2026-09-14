@@ -30,7 +30,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from marin.evaluation.records import RunStatus
+from marin.evaluation.records import MetricKind, RunStatus
 
 ALPHA = 0.05
 
@@ -42,7 +42,7 @@ DEFAULT_MIN_COVERAGE = 0.9
 # Wilson interval applies. Everything else (pass@k estimators, partial-credit graders, mean rewards)
 # takes the recorded-dispersion path. ``accuracy`` is both evalchemy's chat-native key and Harbor's
 # solved-trial rate; both are per-item binary.
-BINARY_METRICS = frozenset({"acc", "acc_norm", "exact_match", "accuracy"})
+BINARY_METRICS = frozenset({"acc", "acc_norm", "exact_match", "accuracy", "pass@1"})
 
 # lm-eval records a task's graded-document count under this key, beside the metrics themselves.
 SAMPLE_COUNT_METRIC = "sample_len"
@@ -54,16 +54,6 @@ TOTAL_METRICS = ("num_total", "total")
 _Z_TWO_SIDED = 1.959963984540054
 _Z_ONE_SIDED = 1.6448536269514722
 _BISECTION_STEPS = 60
-
-
-class MetricKind(StrEnum):
-    """How a metric's uncertainty is computed."""
-
-    BINARY = "binary"
-    """A mean of per-item 0/1 outcomes: the Wilson score interval on (k, n)."""
-
-    CONTINUOUS = "continuous"
-    """A mean of per-item scores: the harness-recorded standard error."""
 
 
 class IntervalKind(StrEnum):

@@ -6,4 +6,5 @@ task_options:
     generation: true
     unsafe_code: true
     completion_only: true
+    primary_metric: pass@1
 max_tokens: 1024

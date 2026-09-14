@@ -12,6 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from marin.evaluation.evalchemy.config import EvalchemyConfig
+from marin.evaluation.eval_stats import BINARY_METRICS
 from marin.evaluation.evalchemy.runner import (
     DEFAULT_MAX_GEN_TOKS,
     DEFAULT_NUM_CONCURRENT,
@@ -23,7 +24,7 @@ from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_i
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, HarborRef
+from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, HarborRef, MetricKind
 from marin.evaluation.runner import EvalExecutor
 from marin.external_dependencies import EVALCHEMY
 from rigging.secrets import SecretSpec
@@ -31,6 +32,7 @@ from rigging.secrets import SecretSpec
 logger = logging.getLogger(__name__)
 
 _DAYTONA_ENVIRONMENT_TYPE = "daytona"
+_CHAT_NATIVE_TASKS = frozenset({"AIME24", "MATH500", "OlympiadBench", "HumanEvalPlus", "MBPPPlus"})
 _EVALCHEMY_CONFIG_DIR = Path(__file__).with_name("configs") / "evalchemy"
 _HARBOR_CONFIG_DIR = Path(__file__).with_name("configs") / "harbor"
 _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
@@ -66,6 +68,8 @@ class EvalchemyDefinition:
                     generation=task.generation,
                     unsafe_code=task.unsafe_code,
                     completion_only=task.completion_only,
+                    primary_metric=task.primary_metric,
+                    metric_kind=task.metric_kind,
                 )
                 for task in config.tasks
             ),
@@ -193,6 +197,22 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         num_fewshot = config.num_fewshot
         if options is not None and options.num_fewshot is not None:
             num_fewshot = options.num_fewshot
+        primary_metric = options.primary_metric if options is not None else None
+        if primary_metric is None:
+            raise ValueError(f"Evalchemy task {task_name!r} must declare primary_metric")
+        metric_kind = options.metric_kind if options is not None else None
+        if metric_kind is None:
+            if primary_metric not in BINARY_METRICS:
+                raise ValueError(
+                    f"Evalchemy task {task_name!r} must declare metric_kind for metric {primary_metric!r}"
+                )
+            metric_kind = MetricKind.BINARY
+        expected_items = options.expected_items if options is not None else None
+        if task_name in _CHAT_NATIVE_TASKS:
+            if expected_items is None:
+                raise ValueError(f"Evalchemy chat-native task {task_name!r} must declare expected_items")
+        elif expected_items is not None:
+            raise ValueError(f"Evalchemy lm-eval task {task_name!r} must not declare expected_items")
         tasks.append(
             EvalTaskConfig(
                 name=task_name,
@@ -201,6 +221,9 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
                 generation=options.generation if options is not None else False,
                 unsafe_code=options.unsafe_code if options is not None else False,
                 completion_only=options.completion_only if options is not None else False,
+                primary_metric=primary_metric,
+                metric_kind=metric_kind,
+                expected_items=expected_items,
             )
         )
 
