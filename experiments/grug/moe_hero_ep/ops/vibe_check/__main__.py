@@ -18,9 +18,10 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from experiments.grug.moe_hero_ep.hero_recipe import HERO_PROCESSES_PER_TASK
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleStore, reconcile
 from experiments.grug.moe_hero_ep.ops.vibe_check.config import (
+    CHECKPOINT_RUNS,
     STORE_ROOT,
+    TARGET_CLUSTER,
     discover_requests,
-    production_run,
     sampling_resources,
     sampling_spec,
 )
@@ -46,7 +47,7 @@ def main() -> None:
         logger.info("Daily report: %s", url)
         return
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    requests = discover_requests(production_run(), sampling_spec(), revision)
+    requests = discover_requests(CHECKPOINT_RUNS, sampling_spec(), revision, TARGET_CLUSTER)
     if args.action == "inventory":
         for request in sorted(requests, key=lambda value: value.checkpoint.step):
             logger.info("%s step=%d %s", request.sample_id, request.checkpoint.step, request.checkpoint.uri)

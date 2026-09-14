@@ -3,6 +3,7 @@
 
 """Daily public history reports and one updated GitHub issue comment."""
 
+import html
 import json
 import logging
 from collections.abc import Callable
@@ -13,12 +14,14 @@ from tempfile import TemporaryDirectory
 import httpx
 from marin.publish import sites
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
+from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import Phase, Queue, SampleStore
 
 REPORT_USER = "hero"
 REPORT_SLUG = "completions"
+LATEST_REPORT_KEY = f"{REPORT_USER}/{REPORT_SLUG}/latest/index.html"
 COMMENT_MARKER = "<!-- hero-checkpoint-completions-v1 -->"
 ISSUES_API = "https://api.github.com/repos/marin-community/marin/issues"
 ISSUE_API = f"{ISSUES_API}/8827"
@@ -57,6 +60,23 @@ def render_report(manifest: dict) -> str:
     # A script element ends at </script> even when it contains JSON. Escape every '<'.
     data = json.dumps(manifest, ensure_ascii=True).replace("<", "\\u003c")
     return Path(__file__).with_name("report.html").read_text().replace("__REPORT_DATA__", data)
+
+
+def publish_latest(url: str) -> str:
+    """Update the stable report redirect after its dated page is uploaded."""
+    target = json.dumps(url).replace("<", "\\u003c")
+    page = (
+        '<!doctype html><meta charset="utf-8"><title>Latest report</title>'
+        f'<a href="{html.escape(url, quote=True)}">Open the latest report</a>'
+        f"<script>location.replace({target} + location.search + location.hash)</script>"
+    )
+    fs, path = url_to_fs(prefix_join(sites.PUBLIC_ROOT, LATEST_REPORT_KEY))
+    fs.makedirs(str(Path(path).parent), exist_ok=True)
+    with fs.open(
+        path, "wb", content_type="text/html; charset=utf-8", fixed_key_metadata={"cache_control": "no-store"}
+    ) as handle:
+        handle.write(page.encode())
+    return prefix_join(sites.PUBLIC_URL_BASE, LATEST_REPORT_KEY)
 
 
 def update_issue_comment(body: str, token: str) -> None:
@@ -132,7 +152,7 @@ def publish_daily(store: SampleStore, day: date, comment: Callable[[str], None])
             title="Hero checkpoint completions",
             summary="Every permanent checkpoint, with a daily history report.",
         )
-    latest = sites.publish_site_alias(site, user=REPORT_USER, slug=REPORT_SLUG)
+    latest = publish_latest(site.url)
     counts = manifest["counts"]
     comment(
         f"🤖 Hero checkpoint completions · {report_date} UTC\n\n"

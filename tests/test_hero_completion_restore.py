@@ -21,7 +21,7 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     SamplingSpec,
     digest,
 )
-from experiments.grug.moe_hero_ep.ops.vibe_check.config import Ancestor, ProductionRun, discover_requests
+from experiments.grug.moe_hero_ep.ops.vibe_check.config import CheckpointRun, discover_requests
 from experiments.grug.moe_hero_ep.ops.vibe_check.sample import COMPUTE_POLICY, next_logits, restore_model
 
 
@@ -111,15 +111,11 @@ def test_discovery_excludes_temporary_incomplete_and_non_lineage_checkpoints(tmp
     handoff = tmp_path / "forced-handoff"
     handoff.mkdir()
     (handoff / "metadata.json").write_text(json.dumps({**metadata, "step": 7000}))
-    run = ProductionRun(
-        run_id="active",
-        version="v1",
-        target_cluster="test",
-        handoff_checkpoint=str(handoff),
-        handoff_run_id="old",
-        ancestors=(Ancestor(run_id="old", version="v1", max_step=7000),),
+    runs = (
+        CheckpointRun("old", "v1", max_step=7000, additional_checkpoints=(str(handoff),)),
+        CheckpointRun("active", "v1"),
     )
-    requests = discover_requests(run, spec, "a" * 40)
+    requests = discover_requests(runs, spec, "a" * 40, "test")
     assert {(row.checkpoint.run_id, row.checkpoint.step) for row in requests} == {
         ("old", 6000),
         ("old", 7000),

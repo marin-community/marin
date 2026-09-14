@@ -319,7 +319,7 @@ def test_sampling_streams_do_not_depend_on_prompt_order_or_early_eos(sample_requ
     assert early[1].token_ids == alone[0].token_ids
 
 
-def test_daily_publication_retry_preserves_snapshot_and_does_not_resample(tmp_path, monkeypatch, sample_request):
+def test_daily_publication_preserves_history_across_retries_and_new_days(tmp_path, monkeypatch, sample_request):
     request = sample_request
     public = tmp_path / "public"
     monkeypatch.setattr(sites, "PUBLIC_ROOT", str(public))
@@ -349,6 +349,12 @@ def test_daily_publication_retry_preserves_snapshot_and_does_not_resample(tmp_pa
     assert len(comments) == 1
     publish_daily(store, date(2026, 9, 12), comments.append)
     assert len(comments) == 1
+    latest = public / "hero/completions/latest/index.html"
+    assert f'href="{url}"' in latest.read_text()
+    next_url = publish_daily(store, date(2026, 9, 13), comments.append)
+    assert next_url != url
+    assert f'href="{next_url}"' in latest.read_text()
+    assert page.read_text() == first_page
 
 
 def test_report_data_cannot_close_its_script_element(sample_request):

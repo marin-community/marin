@@ -13,10 +13,10 @@ and shows pending and failed sample sets. The first successful publication creat
 
 - [prompts.json](prompts.json) holds 34 fixed prompts with IDs, seeds, and source links.
   Edit it through a PR. Prompt text and results are public; do not add private data.
-- [production_run.json](../../production_run.json) is shared with the hero launcher.
-  Update it at production handoff. Discovery includes permanent checkpoints from
-  the named runs, up to each ancestor's step limit. Deleted checkpoints are unavailable.
-- Each job uses 64 GB200 GPUs at batch priority. Only one sample job runs at a time;
+- `CHECKPOINT_RUNS` in [config.py](config.py) selects runs for sampling.
+  Update it when the production run changes. Discovery includes permanent checkpoints
+  up to each run's step limit. Deleted checkpoints are unavailable.
+- Each job uses 64 GB200 GPUs at batch priority. The scheduled queue runs one job at a time;
   newer steps run first. Sampling restores checkpoint weights and the saved router bias,
   without optimizer state. It uses master weights when present. Missing tensors fail the job.
 - Generation uses a 4,096-token context, temperature 0.2, at most 200 new tokens,
@@ -51,6 +51,17 @@ For a read-only inventory, run from the repository root with CoreWeave credentia
 ```bash
 uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check inventory
 ```
+
+To run the scheduled workflow on demand, use `gh workflow run hero-completions.yaml --ref main`.
+For one request, use the same sampler inside a 64-GPU job at the request's source commit:
+
+```bash
+uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check.sample \
+  --request completion-request.json --store-root s3://your-bucket/vibe-checks
+```
+
+The request JSON follows `SampleRequest` in [completions.py](completions.py).
+It pins the checkpoint, prompt bank, generation settings, and source commit.
 
 Actions runs `reconcile` hourly and `report` daily. Keep all invocations in its
 shared concurrency group. Report retries reuse the day's saved snapshot and do not start GPU jobs.

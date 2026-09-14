@@ -15,15 +15,10 @@ fi
 # the checkpoint forced on the pooled-wave run at step 81716 (its metadata is marked non-temporary
 # so the hourly save keeps it) under its own run id and tree. The 2026-09-09 trial run
 # hero-ragged_a2a-ep-step81k validated this restore over 200 steps; its tree is not a lineage source.
-# The production launcher and completion inventory share one lineage declaration.
-production_values=$(python3 -c '
-import json
-from pathlib import Path
-config = json.loads(Path("experiments/grug/moe_hero_ep/production_run.json").read_text())
-print("\t".join(config[key] for key in ("run_id", "handoff_checkpoint", "target_cluster", "version")))
-')
-IFS=$'\t' read -r RUN_ID HANDOFF_CHECKPOINT TARGET_CLUSTER HERO_VERSION <<< "$production_values"
+RUN_ID=hero-ragged_a2a-nccl2307-ep-step81k
+HANDOFF_CHECKPOINT=s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/hero-wd-gate-router-p02-step58k/2026.08.19.2/checkpoints/step-81716
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
+TARGET_CLUSTER=cw-us-east-08a
 TARGET_DESCRIPTION='11 x NVL72'
 short_uuid=$(uuidgen | tr '[:upper:]' '[:lower:]')
 short_uuid=${short_uuid:0:8}
@@ -58,5 +53,5 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
     --run-id "$RUN_ID" \
     --initialize-from-checkpoint "$HANDOFF_CHECKPOINT" \
     --size d6144 \
-    --version "$HERO_VERSION" \
+    --version 2026.08.19.2 \
     --run

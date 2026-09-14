@@ -17,7 +17,6 @@ from experiments.grug.moe_hero_ep import hero_recipe
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     Checkpoint,
     Prompt,
-    Record,
     SampleRequest,
     SamplingSpec,
     digest,
@@ -27,26 +26,31 @@ from experiments.grug.moe_hero_ep.train import DEFAULT_DROPLESS_MOE_IMPLEMENTATI
 CONFIG_DIRECTORY = Path(__file__).parent
 CHECKPOINT_ROOT = "s3://marin-us-east-02a/marin/grug"
 STORE_ROOT = "s3://marin-us-east-02a/marin/hero-completions/v1"
+TARGET_CLUSTER = "cw-us-east-08a"
 logger = logging.getLogger(__name__)
 
 
-class Ancestor(Record):
+@dataclasses.dataclass(frozen=True)
+class CheckpointRun:
     run_id: str
     version: str
-    max_step: int
+    max_step: int | None = None
+    additional_checkpoints: tuple[str, ...] = ()
 
 
-class ProductionRun(Record):
-    run_id: str
-    version: str
-    target_cluster: str
-    handoff_checkpoint: str
-    handoff_run_id: str
-    ancestors: tuple[Ancestor, ...]
-
-
-def production_run() -> ProductionRun:
-    return ProductionRun.model_validate_json(Path(hero_recipe.__file__).with_name("production_run.json").read_bytes())
+CHECKPOINT_RUNS = (
+    CheckpointRun("hero-12d8b6f0-dee637", "2026.08.19.2", max_step=58014),
+    CheckpointRun(
+        "hero-wd-gate-router-p02-step58k",
+        "2026.08.19.2",
+        max_step=81716,
+        additional_checkpoints=(
+            "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/"
+            "hero-wd-gate-router-p02-step58k/2026.08.19.2/checkpoints/step-81716",
+        ),
+    ),
+    CheckpointRun("hero-ragged_a2a-nccl2307-ep-step81k", "2026.08.19.2"),
+)
 
 
 def sampling_spec() -> SamplingSpec:
@@ -77,33 +81,33 @@ def sampling_resources() -> ResourceConfig:
     )
 
 
-def discover_requests(run: ProductionRun, spec: SamplingSpec, revision: str) -> list[SampleRequest]:
+def discover_requests(
+    runs: tuple[CheckpointRun, ...], spec: SamplingSpec, revision: str, target_cluster: str
+) -> list[SampleRequest]:
     """Read committed permanent checkpoints in the declared production lineage, without tensor reads."""
-    roots = [(ancestor.run_id, ancestor.version, ancestor.max_step) for ancestor in run.ancestors]
-    roots.append((run.run_id, run.version, None))
-    if run.handoff_run_id not in {ancestor.run_id for ancestor in run.ancestors}:
-        raise ValueError("The handoff checkpoint must name an accepted ancestor")
     checkpoints: dict[str, Checkpoint] = {}
-    for run_id, version, max_step in roots:
-        additional = (run.handoff_checkpoint,) if run_id == run.handoff_run_id else ()
+    for run in runs:
         candidates = discover_checkpoint_candidates(
-            prefix_join(CHECKPOINT_ROOT, f"{run_id}/{version}/checkpoints"), *additional, max_step=max_step
+            prefix_join(CHECKPOINT_ROOT, f"{run.run_id}/{run.version}/checkpoints"),
+            *run.additional_checkpoints,
+            max_step=run.max_step,
         )
         if not candidates:
-            logger.warning("No complete checkpoints found for declared run %s at version %s", run_id, version)
-        if additional and not any(candidate.path == run.handoff_checkpoint for candidate in candidates):
-            logger.warning("Declared handoff checkpoint is unavailable: %s", run.handoff_checkpoint)
+            logger.warning("No complete checkpoints found for run %s at version %s", run.run_id, run.version)
+        for checkpoint in run.additional_checkpoints:
+            if not any(candidate.path == checkpoint for candidate in candidates):
+                logger.warning("Configured checkpoint is unavailable: %s", checkpoint)
         for candidate in candidates:
             if candidate.metadata.get("is_temporary") is not False:
                 continue
             checkpoints[candidate.path] = Checkpoint(
                 uri=candidate.path,
-                run_id=run_id,
+                run_id=run.run_id,
                 step=candidate.step,
                 timestamp=candidate.timestamp.isoformat(),
                 metadata_digest=digest(candidate.metadata),
             )
     return [
-        SampleRequest(checkpoint=checkpoint, spec=spec, source_revision=revision, target_cluster=run.target_cluster)
+        SampleRequest(checkpoint=checkpoint, spec=spec, source_revision=revision, target_cluster=target_cluster)
         for checkpoint in checkpoints.values()
     ]
