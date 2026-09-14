@@ -52,15 +52,17 @@ from `main-next` to `main`, rerun `uv run config/update-external.py <fork>`, and
 the lock still records the validated SHA. Commit and push that follow-up to the draft
 Marin PR before marking it ready or merging it.
 
-## The two-branch vllm fork
+## The shared vLLM source branch
 
-The vllm fork carries two pins on different upstream bases, so they cannot share one
-branch. It splits them across two stable branches: the GPU wheel builds from `main`
-(the release candidate triggers on `push: main`), and the TPU source pin lives on
-`tpu`. Each promotes on its own: `main-next` to `main` for the GPU pin, `tpu-next` to
-`tpu` for the TPU pin. A partial failure leaves the other pin correct because Marin
-resolves an exact wheel or SHA either way. Single-pin forks track `main` directly, so
-for them `<branch>` is `main`.
+The vLLM fork has one maintained source branch, `main`. A `vllm-gpu` source
+refresh stages on `main-next` and promotes it to `main` after GPU qualification.
+The TPU group selects an exact commit already on that lineage and never creates
+or promotes `tpu` or `tpu-next`. Only its tpu-inference rebase needs the usual
+`main-next` to `main` hard swap.
+
+GPU and TPU artifacts still promote independently because Marin resolves an
+exact GPU wheel release and an exact TPU source pair. A successful source
+promotion does not move either consumer pin by itself.
 
 ## Partial failure
 
