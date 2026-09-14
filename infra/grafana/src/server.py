@@ -373,6 +373,21 @@ def _query(request: Request, config: BridgeConfig, sources: Mapping[str, MetricS
     return cache.get_or_compute(key, run)
 
 
+def _finelog_query_response(
+    request: Request,
+    *,
+    config: BridgeConfig,
+    sources: Mapping[str, MetricSource],
+    cache: TtlCache,
+) -> JSONResponse:
+    try:
+        return JSONResponse(_query(request, config, sources, cache))
+    except _BadRequest as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    except QueryResultTooLargeError as err:
+        return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
+
+
 def _finelog_alert_query(
     request: Request,
     *,
@@ -382,14 +397,10 @@ def _finelog_alert_query(
 ) -> JSONResponse:
     """Run alert SQL while treating only transient Finelog failures as no data."""
     try:
-        return JSONResponse(_query(request, config, sources, cache))
+        return _finelog_query_response(request, config=config, sources=sources, cache=cache)
     except FinelogUnavailableError as err:
         logger.warning("Finelog alert query unavailable: %s", err)
         return JSONResponse([])
-    except _BadRequest as err:
-        return JSONResponse({"error": str(err)}, status_code=400)
-    except QueryResultTooLargeError as err:
-        return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
 
 
 def _iris_for(name: str, sources: Mapping[str, IrisSource]) -> IrisSource:
@@ -415,20 +426,18 @@ def create_app(
     github_cache: TtlCache = TtlCache(config.github_cache_ttl)
     k8s_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     wandb_cache: TtlCache = TtlCache(config.github_cache_ttl)
+    query = partial(
+        _finelog_query_response,
+        config=config,
+        sources=finelog_sources,
+        cache=finelog_cache,
+    )
     finelog_alert_query = partial(
         _finelog_alert_query,
         config=config,
         sources=finelog_sources,
         cache=finelog_cache,
     )
-
-    def query(request: Request) -> JSONResponse:
-        try:
-            return JSONResponse(_query(request, config, finelog_sources, finelog_cache))
-        except _BadRequest as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-        except QueryResultTooLargeError as err:
-            return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
 
     def vllm_overview(request: Request) -> JSONResponse:
         try:

@@ -7,7 +7,7 @@ from finelog.errors import StatsError
 
 
 class FinelogUnavailableError(StatsError):
-    """A transient Finelog query-path failure covered by the fleet monitor."""
+    """A transient Finelog query-path failure that may succeed on retry."""
 
 
 class UpstreamError(Exception):
