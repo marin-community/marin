@@ -1,16 +1,26 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from rigging.filesystem.storage_path import StoragePath
 
 import levanter.callbacks as callbacks_module
 from levanter.callbacks import LambdaCallback
 from levanter.callbacks import profile_ctx
 from levanter.callbacks import profiler as profiler_module
-from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig, XprofUploadConfig, profile
+from levanter.callbacks.profiler import (
+    ProfileOptionsConfig,
+    ProfilerConfig,
+    XlaDumpUploadConfig,
+    XprofUploadConfig,
+    profile,
+    upload_xla_dumps,
+    xla_dump_path,
+)
 
 
 def test_profile_writes_trace_to_run_dir_and_ignores_duplicate_forced_stop(monkeypatch, tmp_path):
@@ -110,6 +120,78 @@ def test_upload_destination_uses_xprof_ttl_path(monkeypatch):
 
     assert XprofUploadConfig().destination_for_run("run-123") == "gs://marin-us-east5/tmp/ttl=30d/xprof/run-123"
     assert calls == [(30, "xprof/run-123")]
+
+
+def test_xla_dump_upload_uses_ttl_path_per_process(monkeypatch):
+    calls = []
+
+    def temp_bucket(ttl_days: int, prefix: str) -> str:
+        calls.append((ttl_days, prefix))
+        return f"gs://marin-us-east5/tmp/ttl={ttl_days}d/{prefix}"
+
+    monkeypatch.setattr(profiler_module, "marin_temp_bucket", temp_bucket)
+
+    assert XlaDumpUploadConfig().destination_for_run("run-123", 4) == (
+        "gs://marin-us-east5/tmp/ttl=30d/xla-dumps/run-123/process-4"
+    )
+    assert calls == [(30, "xla-dumps/run-123/process-4")]
+
+
+def test_xla_dump_upload_runs_only_at_final_hook(monkeypatch, tmp_path):
+    uploads = []
+    monkeypatch.setenv("XLA_FLAGS", f"--xla_dump_to={tmp_path / 'dumps'}")
+    monkeypatch.setattr(profiler_module.jax, "process_index", lambda: 2)
+    monkeypatch.setattr(
+        profiler_module,
+        "marin_temp_bucket",
+        lambda ttl_days, prefix: f"gs://marin-us-east5/tmp/ttl={ttl_days}d/{prefix}",
+    )
+    monkeypatch.setattr(profiler_module, "upload_xla_dumps", lambda *args: uploads.append(args))
+
+    callback = XlaDumpUploadConfig(enabled=True).build("run-123", started_at=42.0)
+
+    assert callback is not None
+    callback(SimpleNamespace(), force=False)
+    callback(SimpleNamespace(), force=True)
+    callback(SimpleNamespace(), force=True)
+    assert uploads == [
+        (
+            tmp_path / "dumps",
+            "gs://marin-us-east5/tmp/ttl=30d/xla-dumps/run-123/process-2",
+            42.0,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        ("--xla_dump_to=/tmp/xla", "/tmp/xla"),
+        ('--xla_dump_to "/tmp/xla dumps"', "/tmp/xla dumps"),
+        ("--xla_force_host_platform_device_count=8", None),
+    ],
+)
+def test_xla_dump_path_reads_xla_flag(flags, expected):
+    path = xla_dump_path(flags)
+
+    assert (None if path is None else str(path)) == expected
+
+
+def test_upload_xla_dumps_copies_only_current_run_files(tmp_path):
+    dump_path = tmp_path / "dumps"
+    dump_path.mkdir()
+    old_file = dump_path / "old.txt"
+    old_file.write_text("old")
+    os.utime(old_file, (0, 0))
+    current_file = dump_path / "nested" / "current.txt"
+    current_file.parent.mkdir()
+    current_file.write_text("current")
+
+    upload_uri = f"memory://xla-dumps-{tmp_path.name}"
+    upload_xla_dumps(dump_path, upload_uri, started_at=1)
+
+    assert (StoragePath(upload_uri) / "nested/current.txt").read_text() == "current"
+    assert not (StoragePath(upload_uri) / "old.txt").exists()
 
 
 def test_profiler_upload_can_be_disabled(monkeypatch, tmp_path):

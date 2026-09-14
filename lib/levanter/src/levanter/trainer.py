@@ -7,6 +7,7 @@ import functools
 import logging as pylogging
 import os
 import sys
+import time
 import typing
 import warnings
 from dataclasses import dataclass
@@ -62,7 +63,7 @@ from levanter.callbacks import (
     StepInfo,
     progress_event_scope,
 )
-from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.profiler import ProfilerConfig, XlaDumpUploadConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import Checkpointer, CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
@@ -659,6 +660,10 @@ class Trainer:
                 every=1,
             )
 
+        xla_dump_upload = self.config.xla_dump_upload.build(self.run_id, started_at=time.time())
+        if xla_dump_upload is not None:
+            self.add_hook(xla_dump_upload, every=1)
+
     def add_eval_hook(self, eval_dataset, name: Optional[str] = None):
         eval_loader = self.data_loader(eval_dataset, self.EvalBatch)
 
@@ -863,6 +868,7 @@ class TrainerConfig:
     tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
     watch: WatchConfig = WatchConfig()
     profiler: ProfilerConfig = ProfilerConfig()
+    xla_dump_upload: XlaDumpUploadConfig = XlaDumpUploadConfig()
     progress_watchdog: ProgressWatchdogConfig = ProgressWatchdogConfig()
     """Optional deadlines for training-step and whole-process progress events."""
 

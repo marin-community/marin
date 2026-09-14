@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import os
 import re
+import shlex
 import sys
 import threading
 import time
@@ -25,6 +27,7 @@ AdvancedProfileOptionValue = bool | int | str
 DEFAULT_XPROF_SERVICE_URL = "https://iris.oa.dev/proxy/xprof"
 _XPROF_RUN_PATH = "plugins/profile"
 _XPROF_TTL_SEGMENT = re.compile(r"ttl=[1-9]\d*d")
+_XLA_DUMP_TTL_PREFIX = "xla-dumps"
 
 
 def xprof_viewer_url(service_url: str, profile_uri: str) -> str:
@@ -75,6 +78,44 @@ class XprofUploadConfig:
 
 
 @dataclass(frozen=True)
+class XlaDumpUploadConfig:
+    """Upload XLA compiler dumps to lifecycle-managed temporary storage."""
+
+    enabled: bool = False
+    ttl_days: int = 30
+
+    def destination_for_run(self, run_id: str, process_index: int) -> str:
+        """Resolve this process's XLA dump upload root."""
+        return marin_temp_bucket(self.ttl_days, prefix=f"{_XLA_DUMP_TTL_PREFIX}/{run_id}/process-{process_index}")
+
+    def build(self, run_id: str, started_at: float) -> Callable[[StepInfo], None] | None:
+        """Build a final-training hook that uploads this process's new XLA dumps."""
+        if not self.enabled:
+            return None
+        dump_path = xla_dump_path()
+        if dump_path is None:
+            logger.warning("XLA dump upload is enabled but XLA_FLAGS does not contain --xla_dump_to; skipping upload.")
+            return None
+
+        process_index = jax.process_index()
+        upload_uri = self.destination_for_run(run_id, process_index)
+        if not _is_ttl_root(StoragePath(upload_uri), _XLA_DUMP_TTL_PREFIX):
+            logger.info("MARIN_PREFIX has no remote XLA dump TTL store; keeping dumps at %s", dump_path)
+            return None
+
+        uploaded = False
+
+        def upload_at_end(_step: StepInfo, *, force: bool = False) -> None:
+            nonlocal uploaded
+            if not force or uploaded:
+                return
+            upload_xla_dumps(dump_path, upload_uri, started_at)
+            uploaded = True
+
+        return upload_at_end
+
+
+@dataclass(frozen=True)
 class ProfilerConfig:
     """Configuration for scheduling the training profiler callback."""
 
@@ -110,7 +151,7 @@ class ProfilerConfig:
         if num_steps is None:
             num_steps = self.num_steps
         upload_uri = self.upload.destination_for_run(run_id) if self.upload.enabled else None
-        if upload_uri is not None and not _is_xprof_ttl_root(StoragePath(upload_uri)):
+        if upload_uri is not None and not _is_ttl_root(StoragePath(upload_uri), "xprof"):
             logger.info("MARIN_PREFIX has no remote XProf TTL store; keeping the profile at %s", path)
             upload_uri = None
         service_url = None
@@ -129,14 +170,47 @@ class ProfilerConfig:
         )
 
 
-def _is_xprof_ttl_root(path: StoragePath) -> bool:
+def _is_ttl_root(path: StoragePath, prefix: str) -> bool:
     if path.scheme not in ("gs", "s3") or not path.bucket:
         return False
-    # Leave room after the TTL segment for xprof and at least one run segment.
     return any(
-        _XPROF_TTL_SEGMENT.fullmatch(segment) and path.segments[index + 1] == "xprof"
+        _XPROF_TTL_SEGMENT.fullmatch(segment) and path.segments[index + 1] == prefix
         for index, segment in enumerate(path.segments[:-2])
     )
+
+
+def xla_dump_path(xla_flags: str | None = None) -> Path | None:
+    """Return the dump directory configured by ``--xla_dump_to``."""
+    if xla_flags is None:
+        xla_flags = os.environ.get("XLA_FLAGS", "")
+    flags = shlex.split(xla_flags)
+    for index, flag in enumerate(flags):
+        if flag.startswith("--xla_dump_to="):
+            return Path(flag.removeprefix("--xla_dump_to=")).expanduser()
+        if flag == "--xla_dump_to" and index + 1 < len(flags):
+            return Path(flags[index + 1]).expanduser()
+    return None
+
+
+def upload_xla_dumps(dump_path: Path, upload_uri: str, started_at: float) -> None:
+    """Upload XLA dump files produced after ``started_at`` without staging them in W&B."""
+    if not dump_path.is_dir():
+        logger.warning("XLA dump directory %s does not exist; skipping upload.", dump_path)
+        return
+
+    destination = StoragePath(upload_uri)
+    files = [
+        path
+        for path in sorted(dump_path.rglob("*"))
+        if path.is_file() and not path.is_symlink() and path.stat().st_mtime >= started_at
+    ]
+    if not files:
+        logger.info("No XLA dumps created after training started under %s", dump_path)
+        return
+
+    for path in files:
+        (destination / path.relative_to(dump_path).as_posix()).upload_from(str(path))
+    logger.info("Uploaded %d XLA dump files to %s", len(files), destination)
 
 
 def profile(
