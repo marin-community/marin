@@ -33,6 +33,7 @@ from finelog.errors import (
     InvalidNamespaceError,
     NamespaceNotFoundError,
     QueryResultTooLargeError,
+    RetryableStatsError,
     SchemaValidationError,
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
@@ -929,6 +930,17 @@ def test_table_query_translates_invalid_argument(tracked_clients):
         tracked_clients[0].errors.append(ConnectError(Code.INVALID_ARGUMENT, "syntax error"))
         with pytest.raises(SchemaValidationError):
             table.query("not valid sql")
+    finally:
+        client.close()
+
+
+def test_query_translates_retryable_rpc_failure(tracked_clients):
+    client = LogClient.connect("http://h:1")
+    try:
+        client.query("SELECT 1")
+        tracked_clients[0].errors.append(ConnectError(Code.UNAVAILABLE, "down"))
+        with pytest.raises(RetryableStatsError):
+            client.query("SELECT 1")
     finally:
         client.close()
 

@@ -454,11 +454,11 @@ Loom triage session on that thread). `severity=warning`
 matches the always-active `dashboard-only` mute timing: Grafana continues
 evaluating and displaying the alert, but creates no notification. Every rule
 sets explicit error and no-data behavior, and the alert endpoints return
-explicit zeros when healthy. Most rules alert on execution errors. Rules that
-query the `finelog-marin` datasource stay normal on execution errors because
-`FinelogFleetUnhealthy` reports that shared query-path failure. The fleet-health
-rule itself still alerts on execution errors. The CoreWeave storage rules also
-stay normal when no data exists, before the collector writes its first rows.
+explicit zeros when healthy. Every rule alerts on invalid query results and
+other execution errors. Finelog alert endpoints convert only retryable service
+failures into valid non-firing results because `FinelogFleetUnhealthy` reports
+that shared failure. The CoreWeave storage rules stay normal when a successful
+query returns no data.
 
 Federation peer reachability comes from `ListPeers` on the Marin controller.
 The controller heartbeat traverses production DNS, TLS, Traefik, the source-IP

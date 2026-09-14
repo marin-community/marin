@@ -136,15 +136,20 @@ def test_alert_rules_have_resolvable_datasources_and_refids():
 def test_alert_rules_define_nodata_and_error_behavior():
     # Most alert endpoints return explicit zeros when healthy. The storage rules
     # stay normal until the optional CoreWeave collector writes its first rows.
-    # FinelogFleetUnhealthy owns failures of the shared Finelog query path so
-    # dependent rules do not duplicate its notification.
     for rule in _rules():
         expected_no_data = "OK" if rule["uid"].startswith("coreweave-storage-") else "Alerting"
-        uses_finelog = any(node["datasourceUid"] == "finelog-marin" for node in rule["data"])
-        expected_exec_error = "OK" if uses_finelog and rule["uid"] != "finelog-fleet-unhealthy" else "Alerting"
         assert rule["noDataState"] == expected_no_data, rule["uid"]
-        assert rule["execErrState"] == expected_exec_error, rule["uid"]
+        assert rule["execErrState"] == "Alerting", rule["uid"]
         assert rule["labels"]["severity"] in VALID_SEVERITIES, rule["uid"]
+
+
+def test_finelog_alert_rules_use_error_aware_endpoints():
+    for rule in _rules():
+        if rule["uid"] == "finelog-fleet-unhealthy":
+            continue
+        for node in rule["data"]:
+            if node["datasourceUid"] == "finelog-marin":
+                assert node["model"]["url"].startswith("/alerts/"), rule["uid"]
 
 
 class _FakeIris:

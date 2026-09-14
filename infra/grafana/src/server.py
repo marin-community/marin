@@ -14,6 +14,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
     GET /finelog/{cluster}/v1/vllm/overview       bounded per-job/run vLLM telemetry
     GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
+    GET /finelog/marin/alerts/query              alert SQL; no data when Finelog is unavailable
     GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
     GET /finelog/marin/alerts/training_stalls    active jobs + stalled-progress value(0|1)
     GET /finelog/marin/alerts/loss_spikes        active hero runs + loss-spike value(0|1)
@@ -89,7 +90,7 @@ from config import (
     ClusterTarget,
 )
 from errors import UpstreamError
-from finelog.errors import QueryResultTooLargeError
+from finelog.errors import QueryResultTooLargeError, RetryableStatsError
 from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth
@@ -400,6 +401,18 @@ def create_app(
         except QueryResultTooLargeError as err:
             return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
 
+    def finelog_alert_query(request: Request) -> JSONResponse:
+        """Run alert SQL while treating only transient Finelog failures as no data."""
+        try:
+            return JSONResponse(_query(request, config, finelog_sources, finelog_cache))
+        except RetryableStatsError as err:
+            logger.warning("Finelog alert query unavailable: %s", err)
+            return JSONResponse([])
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except QueryResultTooLargeError as err:
+            return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
+
     def vllm_overview(request: Request) -> JSONResponse:
         try:
             target = _target_for(request.path_params["cluster"], finelog_sources)
@@ -522,13 +535,16 @@ def create_app(
             lambda: source.query(loss_window_query(now, runs, executions), max_rows=config.max_rows),
         )
 
-    def finelog_alert_endpoint(name: str, project) -> JSONResponse:
+    def finelog_alert_endpoint(name: str, project, unavailable) -> JSONResponse:
         """Serve one finelog-backed alert projection under the hub's cache and error contract."""
+        now = datetime.now(UTC)
         try:
             target = _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
-            now = datetime.now(UTC)
             key = (name, _bucket(now, config.cache_ttl))
             return JSONResponse(finelog_cache.get_or_compute(key, lambda: project(target, now)))
+        except RetryableStatsError as err:
+            logger.warning("Finelog alert endpoint %s unavailable: %s", name, err)
+            return JSONResponse(unavailable(now))
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
         except QueryResultTooLargeError as err:
@@ -544,21 +560,33 @@ def create_app(
             )
             return training_stall_alert_rows(runs, telemetry_metrics, now)
 
-        return finelog_alert_endpoint("training_stalls", project)
+        return finelog_alert_endpoint(
+            "training_stalls",
+            project,
+            lambda now: training_stall_alert_rows((), pa.table({}), now),
+        )
 
     def finelog_alerts_loss_spikes(_: Request) -> JSONResponse:
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
             runs = hero_runs(target, now)
             return loss_spike_alert_rows(runs, hero_loss_windows(target, now, runs))
 
-        return finelog_alert_endpoint("loss_spikes", project)
+        return finelog_alert_endpoint(
+            "loss_spikes",
+            project,
+            lambda _: loss_spike_alert_rows((), pa.table({})),
+        )
 
     def finelog_alerts_training_telemetry(_: Request) -> JSONResponse:
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
             runs = hero_watched_runs(target, now)
             return telemetry_alert_rows(runs, hero_signals(target, now, runs), now)
 
-        return finelog_alert_endpoint("training_telemetry", project)
+        return finelog_alert_endpoint(
+            "training_telemetry",
+            project,
+            lambda now: telemetry_alert_rows((), {}, now),
+        )
 
     def finelog_alerts_training_optimizer(_: Request) -> JSONResponse:
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
@@ -569,7 +597,11 @@ def create_app(
             loss_windows = hero_loss_windows(target, now, runs, selected_executions(signals))
             return optimizer_alert_rows(runs, signals, loss_windows, now)
 
-        return finelog_alert_endpoint("training_optimizer", project)
+        return finelog_alert_endpoint(
+            "training_optimizer",
+            project,
+            lambda now: optimizer_alert_rows((), {}, pa.table({}), now),
+        )
 
     def finelog_alerts_training_health(_: Request) -> JSONResponse:
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
@@ -579,14 +611,22 @@ def create_app(
             )
             return health_alert_rows(runs, hero_signals(target, now, runs), retry_events, now)
 
-        return finelog_alert_endpoint("training_health", project)
+        return finelog_alert_endpoint(
+            "training_health",
+            project,
+            lambda now: health_alert_rows((), {}, pa.table({}), now),
+        )
 
     def finelog_alerts_zephyr_stalls(_: Request) -> JSONResponse:
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
             progress_metrics = finelog_sources[target.name].query(zephyr_progress_query(now), max_rows=config.max_rows)
             return zephyr_stall_alert_rows(progress_metrics, now)
 
-        return finelog_alert_endpoint("zephyr_stalls", project)
+        return finelog_alert_endpoint(
+            "zephyr_stalls",
+            project,
+            lambda now: zephyr_stall_alert_rows(pa.table({}), now),
+        )
 
     def iris_endpoint(request: Request, endpoint: str, run) -> JSONResponse:
         try:
@@ -831,6 +871,7 @@ def create_app(
             Route("/wandb/activity", wandb_run_activity),
             Route("/wandb/report/{chart}", wandb_report_chart),
             Route("/finelog/{cluster}/query", query),
+            Route("/finelog/{cluster}/alerts/query", finelog_alert_query),
             Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),

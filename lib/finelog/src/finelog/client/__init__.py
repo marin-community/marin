@@ -20,6 +20,7 @@ from finelog.errors import (
     NamespaceNotFoundError,
     QueryResultTooLargeError,
     QueryTimeoutError,
+    RetryableStatsError,
     SchemaConflictError,
     SchemaValidationError,
     StatsError,

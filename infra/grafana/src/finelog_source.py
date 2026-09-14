@@ -16,7 +16,7 @@ import pyarrow as pa
 from config import FINELOG_PORT, ClusterTarget
 from discovery import InstanceResolutionError, resolve_internal_ip
 from finelog.client.log_client import LogClient
-from finelog.errors import StatsError
+from finelog.errors import RetryableStatsError, StatsError
 from finelog_health import FinelogHealth, FinelogRole
 from google.api_core.exceptions import GoogleAPIError
 
@@ -60,8 +60,11 @@ class FinelogSource:
         return f"http://{ip}:{FINELOG_PORT}"
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
-        """Run sql against this cluster's finelog. Raises QueryResultTooLargeError past max_rows."""
-        return self._client.query(sql, max_rows=max_rows)
+        """Run SQL, classifying discovery and transport failures as retryable."""
+        try:
+            return self._client.query(sql, max_rows=max_rows)
+        except (GoogleAPIError, InstanceResolutionError, OSError) as err:
+            raise RetryableStatsError(str(err)) from err
 
     def health(self) -> FinelogHealth:
         """Probe the query path and return a dashboard-safe health row."""

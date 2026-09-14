@@ -13,7 +13,7 @@ import pytest
 from cache import TtlCache
 from config import ClusterTarget
 from conftest import FINELOG_DEPLOYMENTS_PATH, bridge_config, deployment, healthy_k8s_routes, k8s_api, make_k8s_source
-from finelog.errors import QueryResultTooLargeError
+from finelog.errors import QueryResultTooLargeError, RetryableStatsError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from hero_health import (
@@ -103,6 +103,7 @@ def _client(
     k8s_fleet: K8sFleet | None = None,
     loom_alerts: LoomAlertClient | None = None,
     slack_alerts: SlackAlertClient | None = None,
+    raise_server_exceptions: bool = True,
 ) -> TestClient:
     github = GithubSource(auth=None, timeout=5.0)
     return TestClient(
@@ -115,7 +116,8 @@ def _client(
             WandbSource(timeout=5.0),
             loom_alerts,
             slack_alerts,
-        )
+        ),
+        raise_server_exceptions=raise_server_exceptions,
     )
 
 
@@ -169,6 +171,29 @@ def test_oversized_result_is_a_400_with_guidance():
     resp = _get(_client(FakeSource(raises=QueryResultTooLargeError("query returned 500000 rows"))), "SELECT 1")
     assert resp.status_code == 400
     assert "narrow the time range" in resp.json()["error"]
+
+
+def test_alert_endpoints_return_non_firing_results_when_finelog_is_unavailable():
+    source = FakeSource(raises=RetryableStatsError("unavailable"))
+    client = _client(source)
+
+    assert client.get("/finelog/marin/alerts/query", params={"sql": "SELECT 1"}).json() == []
+    assert client.get("/finelog/marin/alerts/training_stalls").json() == [
+        {"cluster": "fleet", "job": "", "run": "", "phase": "idle", "reason": "healthy", "value": 0}
+    ]
+
+
+@pytest.mark.parametrize(
+    "path, params",
+    [
+        ("/finelog/marin/alerts/query", {"sql": "SELECT 1"}),
+        ("/finelog/marin/alerts/training_stalls", {}),
+    ],
+)
+def test_alert_endpoints_surface_invalid_finelog_results(path, params):
+    client = _client(FakeSource(raises=pa.ArrowInvalid("invalid result")), raise_server_exceptions=False)
+
+    assert client.get(path, params=params).status_code == 500
 
 
 def test_repeated_identical_panels_hit_finelog_once():

@@ -6,8 +6,10 @@
 # /k8s/alerts/* endpoints, which return string label columns plus exactly one
 # numeric column. Most also always emit at least one row per cluster (explicit
 # zeros when healthy), making their NoData state unreachable by construction;
-# gpu_rack_trays is the exception. FinelogFleetUnhealthy reports Finelog query
-# failures; dependent Finelog rules stay normal when that shared query path fails.
+# gpu_rack_trays is the exception. Every rule sets execErrState to Alerting so
+# invalid results still surface. Finelog alert endpoints turn only transient
+# query failures into valid non-firing results; FinelogFleetUnhealthy reports
+# that shared query-path failure.
 #
 # Workload-tier signals (gated pods, kueue backlog, workload crashloops) are
 # dashboard-only: they have expected benign causes (capacity pressure, user
@@ -401,7 +403,7 @@ groups:
         condition: C
         for: 5m
         noDataState: OK
-        execErrState: OK
+        execErrState: Alerting
         labels:
           severity: critical
         annotations:
@@ -418,7 +420,7 @@ groups:
               source: url
               parser: backend
               format: table
-              url: /query
+              url: /alerts/query
               url_options:
                 method: GET
                 params:
@@ -470,7 +472,7 @@ groups:
         condition: C
         for: 5m
         noDataState: OK
-        execErrState: OK
+        execErrState: Alerting
         labels:
           severity: warning
           notification: slack
@@ -488,7 +490,7 @@ groups:
               source: url
               parser: backend
               format: table
-              url: /query
+              url: /alerts/query
               url_options:
                 method: GET
                 params:
@@ -528,7 +530,7 @@ groups:
         condition: C
         for: 5m
         noDataState: Alerting
-        execErrState: OK
+        execErrState: Alerting
         labels:
           severity: critical
           notification: hero-run
@@ -577,7 +579,7 @@ groups:
         condition: C
         for: 5m
         noDataState: Alerting
-        execErrState: OK
+        execErrState: Alerting
         labels:
           severity: critical
           notification: hero-run
@@ -631,7 +633,7 @@ groups:
         condition: C
         for: 5m
         noDataState: Alerting
-        execErrState: OK
+        execErrState: Alerting
         labels:
           severity: critical
           notification: hero-run
@@ -676,7 +678,7 @@ groups:
         condition: C
         for: 5m
         noDataState: Alerting
-        execErrState: OK
+        execErrState: Alerting
         labels:
           severity: critical
           notification: hero-run
@@ -722,7 +724,7 @@ groups:
         condition: C
         for: 5m
         noDataState: Alerting
-        execErrState: OK
+        execErrState: Alerting
         labels:
           severity: warning
           notification: slack
@@ -770,7 +772,7 @@ groups:
         condition: C
         for: 5m
         noDataState: Alerting
-        execErrState: OK
+        execErrState: Alerting
         labels:
           severity: warning
         annotations:
