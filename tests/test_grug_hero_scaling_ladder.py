@@ -213,14 +213,14 @@ async def test_hero_mixture_switch_preserves_prefix_and_resumes_at_new_weights()
         )
         for config in configs
     ]
-    switch_index = 108_000 * 11_264
+    switch_index = batch.global_data_offset_by_step(108_000)
     block_size = new.data.mixture_block_size
     prefix_indices = [0, 1, 10_000, *range(switch_index - block_size, switch_index)]
     assert await mixtures[0].get_batch(prefix_indices) == await mixtures[1].get_batch(prefix_indices)
 
     # Fetch directly at each phase boundary, as a restored loader does, without replaying the prefix.
     for step, expected_agent_share, expected_science_share in [(108_000, 0.060, 0.069), (312_192, 0.066, 0.113)]:
-        start = step * 11_264
+        start = batch.global_data_offset_by_step(step)
         samples = await mixtures[1].get_batch(list(range(start, start + block_size)))
         domains = Counter(name[:3] for name, _ in samples)
         # These domain shares come from the independently published mixture analysis in #9126.

@@ -13,7 +13,7 @@ fi
 
 # Continue the NCCL 2.30.7 hero under a new identity after its next permanent checkpoint.
 # step-108000 contains 108000 completed updates; the first resumed batch uses the selected mix.
-# The source checkpoint must finish writing before this trigger is used. See issue #9126.
+# The source checkpoint must finish writing before this trigger is used. See https://github.com/marin-community/marin/issues/9126.
 RUN_ID=hero-mix-996f4891-step108k
 HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-ragged_a2a-nccl2307-ep-step81k/2026.08.19.2/checkpoints/step-108000
 MIXTURE_SWITCH_STEP=108000
