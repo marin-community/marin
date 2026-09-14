@@ -17,9 +17,18 @@ from harbor.verifier.base import BaseVerifier
 from taskcompendium.grading import grade_attempt
 from taskcompendium.grading_paths import EXTERNAL_DIRECTORY, submission_relative
 from taskcompendium.harbor.container import grade_in_container
+from taskcompendium.harbor.providers import ProviderActionEnvironment
 from taskcompendium.judging import OpenAIJudgeClient
-from taskcompendium.models import ContainerRuntime, FileSubmission, FinalState, NoEnvironment, Outcome
-from taskcompendium.serialization import from_json, protocol_from_json
+from taskcompendium.models import (
+    ContainerRuntime,
+    FileSubmission,
+    FinalState,
+    Outcome,
+    ProviderStateVerifier,
+    tasktrove_verifier,
+    verifier_runtime,
+)
+from taskcompendium.serialization import from_json, renderings_from_json
 
 
 class ExtractionError(RuntimeError):
@@ -48,7 +57,26 @@ class SemanticVerifier(BaseVerifier):
     async def verify(self) -> VerifierResult:
         root = self.task.paths.task_dir
         spec = from_json((root / "specification.json").read_bytes())
-        protocol = protocol_from_json((root / "protocol.json").read_bytes())
+        renderings = renderings_from_json((root / "renderings.json").read_bytes())
+        names = json.loads((root / "manifest.json").read_text())["step_names"]
+        step_index = names.index(self.step_name) if self.step_name is not None else 0
+        protocol = renderings[step_index]
+        source_state_verifier = spec.steps[step_index].verifier
+        if isinstance(source_state_verifier, ProviderStateVerifier):
+            if not isinstance(self.environment, ProviderActionEnvironment):
+                raise GradingInfrastructureError("Provider-state verifier requires a provider action environment")
+            if self.environment.interface != source_state_verifier.interface:
+                raise GradingInfrastructureError(
+                    "Provider-state verifier interface does not match the provider environment"
+                )
+            result = await self.environment.grade_provider_state(
+                source_state_verifier.adapter, source_state_verifier.parameters
+            )
+            self.trial_paths.verifier_dir.mkdir(parents=True, exist_ok=True)
+            (self.trial_paths.verifier_dir / "taskcompendium-result.json").write_bytes(msgspec.json.encode(result))
+            if result.status != Outcome.GRADED or result.reward is None:
+                raise GradingInfrastructureError(json.dumps(result.detail))
+            return VerifierResult(rewards={"reward": result.reward}, stdout=json.dumps(result.detail))
         response_path = self.trial_paths.agent_dir / "response.txt"
         transcript_path = self.trial_paths.agent_dir / "transcript.json"
         response = response_path.read_text() if response_path.exists() else None
@@ -59,13 +87,13 @@ class SemanticVerifier(BaseVerifier):
             paths.add(protocol.submission.path)
         elif isinstance(protocol.submission, FinalState):
             paths.update(protocol.submission.paths)
-        if spec.verifier.judge is not None:
-            paths.update(spec.verifier.judge.view.files)
+        source_verifier = tasktrove_verifier(spec.steps[step_index].verifier)
+        judge = source_verifier.judge if source_verifier is not None else None
+        if judge is not None:
+            paths.update(judge.view.files)
         with tempfile.TemporaryDirectory(prefix="taskcompendium-evidence-") as temporary:
             workspace = Path(temporary)
-            directories = (
-                spec.environment.additional_directories if not isinstance(spec.environment, NoEnvironment) else ()
-            )
+            directories = spec.requirements.state.additional_directories
             locations = [(path, submission_relative(path, workdir, directories)) for path in sorted(paths)]
             for path, relative in locations:
                 if not relative.startswith(EXTERNAL_DIRECTORY + "/"):
@@ -78,11 +106,13 @@ class SemanticVerifier(BaseVerifier):
             for path, relative in locations:
                 if relative.startswith(EXTERNAL_DIRECTORY + "/"):
                     await self._download_evidence(path, workspace / relative)
-            if isinstance(spec.verifier_runtime, ContainerRuntime):
-                result = await asyncio.to_thread(grade_in_container, spec, protocol, response, workspace, transcript)
+            if isinstance(verifier_runtime(spec.steps[step_index].verifier), ContainerRuntime):
+                result = await asyncio.to_thread(
+                    grade_in_container, spec, protocol, response, workspace, transcript, step_index
+                )
             else:
                 result = await asyncio.to_thread(
-                    grade_attempt, spec, protocol, response, workspace, transcript, self.judge_client
+                    grade_attempt, spec, protocol, response, workspace, transcript, self.judge_client, step_index
                 )
 
         self.trial_paths.verifier_dir.mkdir(parents=True, exist_ok=True)

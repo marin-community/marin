@@ -1,0 +1,473 @@
+{
+  "version": 1,
+  "date": "2026-09-13",
+  "status": "first_wave_implemented_and_locally_validated",
+  "selection": "Reuse three controls and four pinned first-wave source seeds; 5 semantic instances, 11 first-wave Harbor exports. Remaining tiers stay deferred.",
+  "rules": [
+    "Preserve raw source evidence and exact row identity when materializing.",
+    "Keep policy/export validity failures distinct from scored wrong answers.",
+    "Pin verifier behavior and record any deliberate change from source semantics.",
+    "Do not claim parallel tool execution from a predicted-call batch test.",
+    "Model solvability near Snowball scale is unmeasured and not a validity filter for this audit."
+  ],
+  "selector_conventions": {
+    "candidate.selector": "Semantic source join key or documented fallback from the delegated catalog.",
+    "candidate.fixture_selector": "Optional exact JSONL record index and canonical hash for a fixture without a stable ID; null means use the concrete candidate.selector field/value, not that an alternate row was sampled.",
+    "second_wave_candidates": "Some have only acquisition/fallback selectors; materialize and pin an unambiguous row before implementation. First-wave seeds have concrete IDs or an exact index/hash."
+  },
+  "cases": [
+    {
+      "id": "mcqa-control",
+      "family": "MCQA",
+      "tier": "reuse_control",
+      "status": "existing_control_revalidated",
+      "candidate": {
+        "fixture": "lib/taskcompendium/tests/fixtures/tasktrove/answers/mcq-row-1972.tar.gz",
+        "fixture_row": "1972",
+        "join": {
+          "tasktrove_source": "laion__nemotron-gym-knowledge-mcqa-v2",
+          "tasktrove_path": "Nemotron-RL-knowledge-mcqa-71fea0780ee9.tar.gz",
+          "upstream_dataset": "nvidia/Nemotron-RL-knowledge-mcqa",
+          "upstream_row_index": 595578,
+          "source_uuid": "634bfa88-f91f-5a99-a540-7f0ffdaa9b84"
+        },
+        "outcome": "supported importer scope; static audit found semantic answer task with no required agent tools"
+      },
+      "purpose": "Retain the existing answer/rendering baseline.",
+      "acceptance_checks": [
+        "Same semantic option across plain/JSON/XML/file renderings.",
+        "Wrong option scores zero; malformed extraction is recorded separately.",
+        "No private verifier/reference enters model input."
+      ],
+      "execution_in_this_audit": "not_run",
+      "implementation_validation": {
+        "artifact": "lib/taskcompendium/examples/first_wave/validation.json",
+        "recorded_at": "2026-09-13T22:30:33.311657+00:00"
+      }
+    },
+    {
+      "id": "executable-verifier-control",
+      "family": "Competitive code generation",
+      "tier": "reuse_control",
+      "status": "existing_control_revalidated",
+      "candidate": {
+        "fixture": "lib/taskcompendium/tests/fixtures/coding/stdio-row-0.tar.gz",
+        "fixture_row": "0",
+        "join": {
+          "tasktrove_source": "laion__codeforces-v3",
+          "tasktrove_path": "codeforces-06236"
+        },
+        "outcome": "supported only after caller supplies immutable native toolchain image; static importer preserves hidden cases and separates them from agent state"
+      },
+      "purpose": "Retain generic code verification coverage without claiming a direct NeMo join.",
+      "acceptance_checks": [
+        "Known good, wrong and empty programs retain recorded outcomes.",
+        "Untrusted code stays in the isolated verifier runtime."
+      ],
+      "execution_in_this_audit": "not_run",
+      "implementation_validation": {
+        "artifact": "lib/taskcompendium/examples/first_wave/validation.json",
+        "recorded_at": "2026-09-13T22:30:33.311657+00:00"
+      }
+    },
+    {
+      "id": "repository-control",
+      "family": "Mini-SWE-Agent / SWE-Gym and SWE-bench",
+      "tier": "reuse_control",
+      "status": "existing_control_revalidated",
+      "candidate": {
+        "task_id": "r2egym/b0d83c555eda061014ae1d04dc0af07a569650e6",
+        "artifact": "lib/taskcompendium/examples/poc/manifest.json",
+        "source_relation": "R2E execution-shape baseline, not NeMo SWE-Gym dataset parity"
+      },
+      "purpose": "Reuse the existing R2E repair baseline for repository/state/test execution.",
+      "acceptance_checks": [
+        "Known good and wrong repairs retain recorded outcomes.",
+        "Exact repository/image dependency state and private tests remain pinned."
+      ],
+      "execution_in_this_audit": "not_run",
+      "implementation_validation": {
+        "artifact": "lib/taskcompendium/examples/first_wave/validation.json",
+        "recorded_at": "2026-09-13T22:30:33.311657+00:00"
+      }
+    },
+    {
+      "id": "constraint-aggregation",
+      "family": "Instruction following",
+      "tier": "first_wave",
+      "status": "implemented_and_locally_validated",
+      "candidate": {
+        "repository": "NVIDIA-NeMo/Gym",
+        "revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+        "fixture": "resources_servers/instruction_following/data/example.jsonl",
+        "selector": {
+          "field": "id",
+          "fixture_value": 17616,
+          "fallback": "preserve verifier fields (instruction_id_list, kwargs, prompt) with id"
+        },
+        "source": {
+          "dataset_id": "nvidia/Nemotron-RL-instruction_following",
+          "revision": "3b253899665cb71334bb54c14eb5d91751beaad7",
+          "artifact": "instruction_following.jsonl"
+        },
+        "fixture_selector": null
+      },
+      "purpose": "Cover multiple private constraints and source aggregation semantics.",
+      "acceptance_checks": [
+        "All constraints pass.",
+        "Violate exactly one constraint and compare binary/fractional source modes.",
+        "Unsupported constraint or evaluator failure cannot masquerade as an ordinary wrong answer.",
+        "Constraint metadata stays private; instructions still state all user obligations."
+      ],
+      "execution_in_this_audit": "not_run",
+      "implementation_validation": {
+        "artifact": "lib/taskcompendium/examples/first_wave/validation.json",
+        "recorded_at": "2026-09-13T22:30:33.311657+00:00",
+        "test": "tests/test_nemo_harbor.py",
+        "outcomes": [
+          "binary good1/wrong0",
+          "fractional good1/one constraint wrong0.5"
+        ],
+        "formats": [
+          "plain",
+          "json",
+          "xml"
+        ]
+      }
+    },
+    {
+      "id": "code-answer-only",
+      "family": "Competitive code generation",
+      "tier": "first_wave",
+      "status": "implemented_and_locally_validated",
+      "candidate": {
+        "repository": "NVIDIA-NeMo/Gym",
+        "revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+        "fixture": "resources_servers/code_gen/data/example.jsonl",
+        "selector": {
+          "field": "hash_id",
+          "fixture_value": "c69268d8bdb4da0685d7b187c88296c1",
+          "fallback": "retain dataset and source provenance"
+        },
+        "source": {
+          "dataset_id": "nvidia/Nemotron-RL-coding-competitive_coding",
+          "revision": "ae1f446f299823ea3c4c00217942b53787278b31",
+          "artifact": "opencodereasoning_filtered_25k_train.jsonl; validation.jsonl"
+        },
+        "fixture_selector": {
+          "jsonl_record_index": 0,
+          "canonical_json_sha256": "741ef4c71a7f8def429d108a658232536b1d2661a5ecdd2beef123f5623a8325"
+        }
+      },
+      "purpose": "Cover generated code as an answer, with compute required privately by verification.",
+      "acceptance_checks": [
+        "Public task needs no shell/process solely because the checker executes code.",
+        "Known-good code passes all retained hidden cases; plausible wrong and empty code fail.",
+        "Decode the original test bundle losslessly.",
+        "Pin a sandboxed checker before execution; the upstream remote checker alone is not proof of isolation."
+      ],
+      "execution_in_this_audit": "not_run",
+      "implementation_validation": {
+        "artifact": "lib/taskcompendium/examples/first_wave/validation.json",
+        "recorded_at": "2026-09-13T22:30:33.311657+00:00",
+        "test": "tests/test_nemo_harbor.py",
+        "outcomes": [
+          "plain good1/wrong0/invalid program0/empty0",
+          "JSON/XML good1",
+          "invalid JSON/XML extraction_error with no reward"
+        ],
+        "agent_environment": "none",
+        "private_checker": "isolated container"
+      }
+    },
+    {
+      "id": "predicted-action",
+      "family": "Single-step function-calling pivot",
+      "tier": "first_wave",
+      "status": "implemented_and_locally_validated",
+      "candidate": {
+        "repository": "NVIDIA-NeMo/Gym",
+        "revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+        "fixture": "resources_servers/single_step_tool_use_with_argument_comparison/data/example.jsonl",
+        "selector": {
+          "field": null,
+          "fixture_value": null,
+          "fallback": "hash canonical responses_create_params plus expected_action; fixture has no explicit id"
+        },
+        "source": {
+          "dataset_id": "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1",
+          "revision": "9643c8103d7bfbc2d7fc4d15991d6739c612ff58",
+          "artifact": "train.jsonl"
+        },
+        "fixture_selector": {
+          "jsonl_record_index": 0,
+          "canonical_json_sha256": "ea1f092b52902d98c29d8b579be1b724fdb29e3d00ae5a9cafc9d302f6b620f5"
+        }
+      },
+      "purpose": "Add final-action submission without executing the predicted action.",
+      "acceptance_checks": [
+        "Correct name and typed arguments match the configured source scorer.",
+        "Wrong action/category and wrong arguments expose source scoring behavior.",
+        "Exercise batch ordering and duplicate/extra-call handling only with an explicitly selected batch fixture/config.",
+        "No predicted action is dispatched to an environment.",
+        "Record default extra-call leniency; tightening it is an explicit verifier change, not silent normalization."
+      ],
+      "execution_in_this_audit": "not_run",
+      "implementation_validation": {
+        "artifact": "lib/taskcompendium/examples/first_wave/validation.json",
+        "recorded_at": "2026-09-13T22:30:33.311657+00:00",
+        "tests": [
+          "tests/test_nemo_harbor.py",
+          "tests/test_nemo_predicted_action.py"
+        ],
+        "outcomes": [
+          "independent native good1/wrong0 through Harbor",
+          "source batch/default extra-call rules",
+          "unsupported history rejected"
+        ],
+        "tool_dispatch": false
+      }
+    },
+    {
+      "id": "stateful-domain",
+      "family": "Workplace Assistant",
+      "tier": "first_wave",
+      "status": "implemented_and_locally_validated",
+      "candidate": {
+        "repository": "NVIDIA-NeMo/Gym",
+        "revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+        "fixture": "resources_servers/workplace_assistant/data/example.jsonl",
+        "selector": {
+          "field": "id",
+          "fixture_value": 0,
+          "fallback": "retain category and environment_name"
+        },
+        "source": {
+          "dataset_id": "nvidia/Nemotron-RL-agent-workplace_assistant",
+          "revision": "c86a908379e0a361a573c395e175d3c1aa128e6c",
+          "artifact": "train.jsonl; validation.jsonl"
+        },
+        "fixture_selector": null
+      },
+      "purpose": "Cover real non-shell domain actions with seeded state.",
+      "acceptance_checks": [
+        "Correct multi-call trajectory produces the expected final state.",
+        "Plausible wrong mutation and a no-op fail the required task state.",
+        "A tool error can be observed and corrected by the agent.",
+        "Fresh and concurrent sessions cannot share mutable state.",
+        "Tool-call identifiers and results remain correlated in the trace.",
+        "Verifier/seed secrets are not injected into the model-visible prompt."
+      ],
+      "execution_in_this_audit": "not_run",
+      "implementation_validation": {
+        "artifact": "lib/taskcompendium/examples/first_wave/validation.json",
+        "recorded_at": "2026-09-13T22:30:33.311657+00:00",
+        "test": "tests/test_nemo_workplace.py",
+        "focused_passed": 8,
+        "outcomes": [
+          "authoritative good1/wrong0/noop0",
+          "tool error recovery",
+          "concurrent and fresh session isolation",
+          "native Harbor HTTP tool-call trace",
+          "invalid private gold has no reward"
+        ],
+        "tool_count": 27
+      }
+    },
+    {
+      "id": "structured-final-call",
+      "family": "Structured outputs v4",
+      "tier": "second_wave",
+      "status": "requires_adapter",
+      "candidate": {
+        "repository": "NVIDIA-NeMo/Gym",
+        "revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+        "fixture": "resources_servers/structured_outputs/data/structured_outputs_v4_example.jsonl",
+        "selector": {
+          "field": "source_record_id",
+          "fixture_value": "DS1-E974FB8A",
+          "fallback": "retain schema_str, tool_name, response_mode"
+        },
+        "source": {
+          "dataset_id": null,
+          "revision": null,
+          "artifact": "v4 config names internal GitLab structured_outputs_v4_tool_call 0.0.1; older text dataset is nvidia/Nemotron-RL-instruction_following-structured_outputs@2f6c28af6c5196dc6683be67ae72d7ccc974c82e, but is not evidence for v4 identity"
+        },
+        "fixture_selector": {
+          "jsonl_record_index": 0,
+          "canonical_json_sha256": "144aa8efe1efe4214b389d95a82e6e0c78959ae00e025dc39e738fd18a002b7b",
+          "selection_role": "supplementary_final_action_case"
+        }
+      },
+      "purpose": "Cross-check predicted-action submission with another source contract.",
+      "acceptance_checks": [
+        "Exactly one correctly named final function call with schema-valid arguments passes.",
+        "Missing/multiple/wrong-name calls fail under the source contract.",
+        "No function executes.",
+        "Schema-only success does not claim factual extraction correctness.",
+        "Do not substitute the older TaskTrove structured-output rows for this v4 source."
+      ],
+      "execution_in_this_audit": "not_run"
+    },
+    {
+      "id": "static-calendar",
+      "family": "Calendar v2",
+      "tier": "second_wave",
+      "status": "requires_adapter",
+      "candidate": {
+        "repository": "NVIDIA-NeMo/Gym",
+        "revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+        "fixture": "resources_servers/calendar/data/example.jsonl",
+        "selector": {
+          "field": null,
+          "fixture_value": null,
+          "fallback": "hash conversation history plus exp_cal_state; fixture has no explicit sample id"
+        },
+        "source": {
+          "dataset_id": "nvidia/Nemotron-RL-Instruction-Following-Calendar-v2",
+          "revision": "556a3b1ab3eb12bab38327bf0ec4cdbeab452338",
+          "artifact": "train.jsonl; validation.jsonl",
+          "generation_source": "nvidia/Nemotron-Personas-USA@5b4cd35ab46490c1da1bd2b5a2324d6f871be180"
+        },
+        "fixture_selector": {
+          "jsonl_record_index": 0,
+          "canonical_json_sha256": "eac1fb164a6a769338c2eed3453fee513356c4f3da92fc7c3b5d66d13bd0b751"
+        }
+      },
+      "purpose": "Cover a static supplied conversation and semantic schedule checks.",
+      "acceptance_checks": [
+        "Retain materialized history as input; do not invent new user turns.",
+        "Correct schedule passes; wrong duration/overlap fails.",
+        "Malformed final JSON is distinguishable from evaluator infrastructure failure."
+      ],
+      "execution_in_this_audit": "not_run"
+    },
+    {
+      "id": "generator-provenance",
+      "family": "Reasoning Gym",
+      "tier": "second_wave",
+      "status": "requires_adapter",
+      "candidate": {
+        "repository": "NVIDIA-NeMo/Gym",
+        "revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+        "fixture": "resources_servers/reasoning_gym/data/example.jsonl",
+        "selector": {
+          "field": "metadata.source_dataset",
+          "fixture_value": "knights_knaves",
+          "fallback": "must also pin generator configuration/seed; source row alone has no stable sample id"
+        },
+        "source": {
+          "dataset_id": "nvidia/Nemotron-RL-ReasoningGym-v1",
+          "revision": "ad2c929b2dfd64ca30afb4d60e2f69a5a1919c4d",
+          "artifact": "data/train.jsonl"
+        },
+        "fixture_selector": null
+      },
+      "purpose": "Cover family instantiation and external verifier provenance.",
+      "acceptance_checks": [
+        "Pin source_dataset, generator version, seed/config and materialized instance.",
+        "Rendering changes never resample the problem.",
+        "Source scorer good/wrong behavior matches; missing metadata is an invalid task.",
+        "Require a faithful ReasoningGym adapter before claiming executable coverage."
+      ],
+      "execution_in_this_audit": "not_run"
+    },
+    {
+      "id": "untrusted-tool-observation",
+      "family": "Indirect prompt injection",
+      "tier": "second_wave",
+      "status": "requires_adapter",
+      "candidate": {
+        "repository": "NVIDIA-NeMo/Gym",
+        "revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+        "fixture": "resources_servers/indirect_prompt_injection/data/example.jsonl",
+        "selector": {
+          "field": null,
+          "fixture_value": null,
+          "fallback": "hash canonical environment + injection + user prompt; fixture has no explicit id"
+        },
+        "source": {
+          "dataset_id": null,
+          "revision": null,
+          "artifact": "config names internal GitLab indirect_prompt_injection 0.0.1; README says full dataset will be released in the future"
+        },
+        "fixture_selector": null
+      },
+      "purpose": "Reuse stateful-domain infrastructure to test untrusted observations.",
+      "acceptance_checks": [
+        "Complete the legitimate task despite injected instructions in observations.",
+        "Injected target action fails.",
+        "Unrelated/no-op action is not counted as task success solely because it avoids the injection.",
+        "Keep source safety score and legitimate-task completion criteria distinct."
+      ],
+      "execution_in_this_audit": "not_run"
+    },
+    {
+      "id": "live-search",
+      "family": "Google Search MCQA",
+      "tier": "later_service",
+      "status": "requires_adapter",
+      "candidate": {
+        "repository": "NVIDIA-NeMo/Gym",
+        "revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+        "fixture": "resources_servers/google_search/data/example.jsonl",
+        "selector": {
+          "field": null,
+          "fixture_value": null,
+          "fallback": "hash canonical prompt/options/expected_answer; fixture has no explicit id"
+        },
+        "source": {
+          "dataset_id": "nvidia/Nemotron-RL-knowledge-web_search-mcqa",
+          "revision": "0feb60b8347ff5389139ada2d8e52a8bdad434f8",
+          "artifact": "mcqa_search.jsonl"
+        },
+        "fixture_selector": null
+      },
+      "purpose": "Exercise a credentialed changing external service.",
+      "acceptance_checks": [
+        "Real tool request/result path works with explicitly configured credentials.",
+        "Credential/rate-limit/service failures remain tool or infrastructure failures, not evidence of a wrong answer.",
+        "Respect sequential-call policy.",
+        "Record observation provenance/time; a replay fixture is not live-provider coverage."
+      ],
+      "execution_in_this_audit": "not_run"
+    },
+    {
+      "id": "reactive-user-boundary",
+      "family": "Indian Banking",
+      "tier": "deferred",
+      "status": "known_unsupported",
+      "candidate": {
+        "repository": "NVIDIA-NeMo/Gym",
+        "revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+        "fixture": "resources_servers/indian_banking/data/example.jsonl",
+        "selector": {
+          "field": "task_id",
+          "fixture_value": "rl_edgablk2x_0194",
+          "fallback": "retain customer, initial_state, evaluation_criteria and opening_message"
+        },
+        "source": {
+          "dataset_id": "NPCI/nemo-gym-indian-banking",
+          "revision": "b58b627a3b366bc0fdc5064bc66cb59e92dee2c3",
+          "artifact": "train.jsonl; validation.jsonl plus db.json and kb.json"
+        },
+        "fixture_selector": null
+      },
+      "purpose": "Make the unsupported conversational boundary explicit.",
+      "acceptance_checks": [
+        "Reject unsupported reactive interaction during capability matching/export.",
+        "Do not flatten an adaptive customer into fixed steps.",
+        "Future implementation must isolate DB state and pin simulator/judge identities separately from the policy model."
+      ],
+      "execution_in_this_audit": "not_run"
+    }
+  ],
+  "not_selected": [
+    "A second repo-repair importer solely for coverage",
+    "Additional NeMo math importer coverage before the distinct first-wave execution/submission gaps",
+    "SWE pivot in addition to the function-call pivot first wave",
+    "True concurrent domain-tool mutations without an explicit source ordering/atomicity contract",
+    "Live user simulators in the first implementation"
+  ],
+  "implementation_scope": "execution_in_this_audit remains the historical static-audit result; implementation_validation records the later actual runs."
+}

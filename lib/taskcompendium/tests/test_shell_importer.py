@@ -12,7 +12,7 @@ from tasktrove_verify.spec import Mode
 
 from taskcompendium.importers.tasktrove import read_archive
 from taskcompendium.importers.tasktrove_shell import import_task
-from taskcompendium.models import ContainerRuntime, Rejected, ResourceRole, ShellSimEnvironment
+from taskcompendium.models import Capability, ContainerRuntime, Rejected, ResourceRole
 
 FIXTURES = Path(__file__).parent / "fixtures/shell"
 IMAGE = "ubuntu@sha256:" + "0" * 64
@@ -31,15 +31,15 @@ def test_shell_importer_preserves_real_source_archive_and_semantic_paths(row):
     result = import_task(archive, verifier_runtime=ContainerRuntime(IMAGE))
 
     assert not isinstance(result, Rejected)
-    assert "verifier" not in result.instructions.lower()
-    assert "Do not delete any helper files generated during execution." in result.instructions
-    assert isinstance(result.environment, ShellSimEnvironment)
-    assert result.environment.workdir == "/workspace"
-    assert result.environment.setup_commands == ("cp -a /workspace/setup_files /setup_files",)
-    assert result.verifier.mode is Mode.SCRIPT
-    assert result.verifier.parameters["path"] == "nl2bash_check.py"
-    assert result.verifier.parameters["args"] == ("/output/command_capture.txt",)
-    assert "workspace" not in result.verifier.parameters
+    assert "verifier" not in result.steps[0].instructions.lower()
+    assert "Do not delete any helper files generated during execution." in result.steps[0].instructions
+    assert Capability.SHELL in result.requirements.capabilities
+    assert result.requirements.state.workdir == "/workspace"
+    assert result.requirements.state.setup_commands == ("cp -a /workspace/setup_files /setup_files",)
+    assert result.steps[0].verifier.mode is Mode.SCRIPT
+    assert result.steps[0].verifier.parameters["path"] == "nl2bash_check.py"
+    assert result.steps[0].verifier.parameters["args"] == ("/output/command_capture.txt",)
+    assert "workspace" not in result.steps[0].verifier.parameters
     assert {r.path for r in result.resources if ResourceRole.AGENT in r.roles} >= {"setup_files/setup_seeds.sh"}
     assert {r.path for r in result.resources if ResourceRole.VERIFIER in r.roles} >= {
         "nl2bash_check.py",

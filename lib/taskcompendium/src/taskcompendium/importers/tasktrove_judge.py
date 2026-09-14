@@ -14,13 +14,13 @@ from taskcompendium.importers.tasktrove import TaskArchive
 from taskcompendium.models import (
     AnswerRequirements,
     JudgeConfig,
-    NoEnvironment,
-    PythonRuntime,
     Rejected,
     RejectionReason,
+    StepSpecification,
     TaskMetadata,
+    TaskRequirements,
     TaskSpecification,
-    VerifierSpec,
+    TaskTroveVerifier,
 )
 
 _FAMILY = "qa-short-answer"
@@ -32,6 +32,15 @@ _DELIVERY_PREFIX = (
     "as long as the substantive answer matches).\n\n---\n\n"
 )
 _DELIVERY_SUFFIX = re.compile(r"\nRemember to put your answer inside \\boxed\{\}\.\s*\Z")
+
+_BOXED_PREFIX = r"Solve the following problem step by step. Put your answer inside \boxed{}."
+
+
+def _clean_question(question: str) -> str:
+    question = _DELIVERY_SUFFIX.sub("", question).strip()
+    if question.startswith(_BOXED_PREFIX):
+        question = "Solve the following problem step by step." + question[len(_BOXED_PREFIX) :]
+    return question
 
 
 def _metadata(archive: TaskArchive) -> dict[str, Any]:
@@ -47,13 +56,13 @@ def _clean_instructions(instructions: str) -> str:
     """Remove the known response-file wrapper while retaining the source question."""
     if not instructions.startswith(_DELIVERY_PREFIX):
         raise ValueError("unsupported judge instruction template")
-    cleaned = _DELIVERY_SUFFIX.sub("", instructions[len(_DELIVERY_PREFIX) :]).strip()
+    cleaned = _clean_question(instructions[len(_DELIVERY_PREFIX) :])
     if not cleaned:
         raise ValueError("judge instruction has no semantic task text")
     return cleaned
 
 
-def _judge_verifier(archive: TaskArchive, judge: JudgeConfig) -> VerifierSpec:
+def _judge_verifier(archive: TaskArchive, judge: JudgeConfig) -> TaskTroveVerifier:
     contract = archive.verifier
     if not isinstance(contract, JudgeSpec) or mode_of(contract) is not Mode.JUDGE:
         raise ValueError("judge family does not have a judge verifier")
@@ -61,6 +70,7 @@ def _judge_verifier(archive: TaskArchive, judge: JudgeConfig) -> VerifierSpec:
     parameters = dataclasses.asdict(contract)
     parameters.pop("output", None)
     parameters.pop("workspace", None)
+    parameters["question"] = _clean_question(parameters["question"])
     if mode is not Mode.JUDGE:
         raise ValueError("judge family does not have a judge verifier")
     if parameters.get("rubric") != RUBRIC_REFERENCE:
@@ -70,7 +80,7 @@ def _judge_verifier(archive: TaskArchive, judge: JudgeConfig) -> VerifierSpec:
         raise ValueError("judge verifier must have non-empty reference answers")
     if not parameters.get("exact_gate"):
         raise ValueError("openqa judge must retain its exact gate")
-    return VerifierSpec(mode, parameters, judge)
+    return TaskTroveVerifier(mode, parameters, judge, implementation_revision=archive.release.verifier_revision)
 
 
 def import_task(archive: TaskArchive, judge: JudgeConfig) -> TaskSpecification | Rejected:
@@ -94,11 +104,14 @@ def import_task(archive: TaskArchive, judge: JudgeConfig) -> TaskSpecification |
     competencies = tuple(tag for tag in tags if isinstance(tag, str)) if isinstance(tags, list) else ()
     return TaskSpecification(
         id=f"tasktrove-{source.row}",
-        instructions=instructions,
-        environment=NoEnvironment(),
+        requirements=TaskRequirements(),
         resources=(),
-        verifier=verifier,
-        verifier_runtime=PythonRuntime(),
         metadata=TaskMetadata(source=source, competencies=competencies, task_shape="answer"),
-        answer_requirements=AnswerRequirements("value"),
+        steps=(
+            StepSpecification(
+                instructions=instructions,
+                verifier=verifier,
+                answer_requirements=AnswerRequirements("text"),
+            ),
+        ),
     )

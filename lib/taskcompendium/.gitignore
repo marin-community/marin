@@ -1,3 +1,6 @@
 /examples/poc/harbor/
 /examples/poc/specifications/
 !/examples/poc/rejections.jsonl
+/examples/first_wave/harbor/
+/examples/first_wave/specifications/
+!/src/taskcompendium/providers/nemo_workplace/vendor/csv_data/**/*.csv

@@ -1,0 +1,112 @@
+{
+  "schema_version": "0.6",
+  "specifications": 6,
+  "exports": [
+    {
+      "task": "nemo/ifeval/17616/binary",
+      "rendering": "plain",
+      "path": "harbor/nemo-ifeval-17616-binary-plain",
+      "specification_sha256": "b61a60e29c7ee356c37aaefd0bfb789d8587adabc8e59df42c8b677dd306a2db"
+    },
+    {
+      "task": "nemo/ifeval/17616/binary",
+      "rendering": "json",
+      "path": "harbor/nemo-ifeval-17616-binary-json",
+      "specification_sha256": "b61a60e29c7ee356c37aaefd0bfb789d8587adabc8e59df42c8b677dd306a2db"
+    },
+    {
+      "task": "nemo/ifeval/17616/binary",
+      "rendering": "xml",
+      "path": "harbor/nemo-ifeval-17616-binary-xml",
+      "specification_sha256": "b61a60e29c7ee356c37aaefd0bfb789d8587adabc8e59df42c8b677dd306a2db"
+    },
+    {
+      "task": "nemo/ifeval/17616/fraction",
+      "rendering": "plain",
+      "path": "harbor/nemo-ifeval-17616-fraction-plain",
+      "specification_sha256": "a0d672484681c68f0c0bcd1efc87b470ee23ee715c5953f8800ddf2fd3569374"
+    },
+    {
+      "task": "nemo/ifeval/17616/fraction",
+      "rendering": "json",
+      "path": "harbor/nemo-ifeval-17616-fraction-json",
+      "specification_sha256": "a0d672484681c68f0c0bcd1efc87b470ee23ee715c5953f8800ddf2fd3569374"
+    },
+    {
+      "task": "nemo/ifeval/17616/fraction",
+      "rendering": "xml",
+      "path": "harbor/nemo-ifeval-17616-fraction-xml",
+      "specification_sha256": "a0d672484681c68f0c0bcd1efc87b470ee23ee715c5953f8800ddf2fd3569374"
+    },
+    {
+      "task": "nemo/code-answer/c69268d8bdb4da0685d7b187c88296c1",
+      "rendering": "raw-code",
+      "path": "harbor/nemo-code-answer-c69268d8bdb4da0685d7b187c88296c1-raw-code",
+      "specification_sha256": "b2c8b466316fecb0ae4d90c2c49f0361c356462c78ce443d668fbd65001bf4ab"
+    },
+    {
+      "task": "nemo/code-answer/c69268d8bdb4da0685d7b187c88296c1",
+      "rendering": "json",
+      "path": "harbor/nemo-code-answer-c69268d8bdb4da0685d7b187c88296c1-json",
+      "specification_sha256": "b2c8b466316fecb0ae4d90c2c49f0361c356462c78ce443d668fbd65001bf4ab"
+    },
+    {
+      "task": "nemo/code-answer/c69268d8bdb4da0685d7b187c88296c1",
+      "rendering": "xml",
+      "path": "harbor/nemo-code-answer-c69268d8bdb4da0685d7b187c88296c1-xml",
+      "specification_sha256": "b2c8b466316fecb0ae4d90c2c49f0361c356462c78ce443d668fbd65001bf4ab"
+    },
+    {
+      "task": "nemo-predicted-action-100006de9c5795f992b54542d6368012170b333990b37202780ab19f60d2185f",
+      "rendering": "nemo-native-final-action",
+      "path": "harbor/nemo-predicted-action-100006de9c5795f992b54542d6368012170b333990b37202780ab19f60d2185f-nemo-native-final-action",
+      "specification_sha256": "bd192d87817c22944e097e6105a2be253942ae1180fa444226b3aba7f3d96ed7"
+    },
+    {
+      "task": "nemo/workplace/0",
+      "rendering": "nemo-workplace-chat",
+      "path": "harbor/nemo-workplace-0-nemo-workplace-chat",
+      "specification_sha256": "ab1a28e6abd832c9e30b8d2abb9940d688cad10e6c76f2f67584e94fbe808713"
+    },
+    {
+      "task": "nemo/workplace/0-derived-multistep",
+      "rendering": "nemo-workplace-chat",
+      "path": "harbor/nemo-workplace-0-derived-multistep-nemo-workplace-chat",
+      "specification_sha256": "1c51f2e3e6fed39b653b188a61e8f4bd951b7c490db02ec4316d4c4ec04bddf3"
+    }
+  ],
+  "runtime_image": "sha256:1e02be2c8950c47f6d8eef8bfd775abbd9c547c68d57ac6a887fd13b8ae7c8b7",
+  "inputs": [
+    {
+      "path": "code-answer-c69268d8bdb4da0685d7b187c88296c1.json",
+      "sha256": "cd7ece7134aa095726aa1c455ba1880ddfd2b2d450de0935515abd48656a5adf"
+    },
+    {
+      "path": "instruction-following-17616.json",
+      "sha256": "9eac27ae9be397cd51ffb2c0a854c40ee10fce3289e5b5ad1eaac22992457d86"
+    },
+    {
+      "path": "predicted-action.json",
+      "sha256": "d84245bcbe44a2a799231e5c53813056b6c7ea73f9c4f17840952e7a5e6be7d0"
+    },
+    {
+      "path": "predicted-action.provenance.json",
+      "sha256": "eefc25f85a3f7e106d83b7bc5eceb84f38cdbe9d6fa4d502e235a2d2d274ac73"
+    },
+    {
+      "path": "provenance.json",
+      "sha256": "d8e5fee6b7b018224327c2dfc229f5e6f731fbd1cff1f5767fb4be81bb6af5c5"
+    },
+    {
+      "path": "workplace-0.json",
+      "sha256": "a92e1627d61734c323071765bba22a7f25bc3ec7e096b77b0c8d4f7e2848f447"
+    },
+    {
+      "path": "workplace-0.provenance.json",
+      "sha256": "ac42d328ecb7dc6cbe0b899a746f83f233111942d1d305ccf38c63dd5bcfbee4"
+    }
+  ],
+  "validation": "Import, serialization, and export only. Execution evidence is recorded separately.",
+  "execution": "Configure a model endpoint for chat/provider_chat, or use the private scripted test attempts.",
+  "scope": "Four pinned source cases plus a derived Workplace sequence. Instruction scoring has binary/fractional variants."
+}

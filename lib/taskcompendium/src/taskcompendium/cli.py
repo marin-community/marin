@@ -11,14 +11,15 @@ from typing import BinaryIO, cast
 import fsspec
 import msgspec
 
+from taskcompendium.execution import HarborTaskBinding
 from taskcompendium.grading import source_verifier
-from taskcompendium.lowering import export_task
-from taskcompendium.models import ExecutionConfig
+from taskcompendium.lowering import lower_to_harbor
+from taskcompendium.models import tasktrove_verifier
 from taskcompendium.serialization import (
     from_json,
     json_schema,
-    protocol_from_json,
     read_parquet,
+    renderings_from_json,
     specification_hash,
     write_parquet,
 )
@@ -43,19 +44,19 @@ def main() -> None:
     listing.add_argument("input")
     export = commands.add_parser("export", help="Lower one JSON specification to a runnable Harbor package")
     export.add_argument("input")
-    export.add_argument("--protocol", required=True)
-    export.add_argument("--execution", required=True, help="TaskCompendium ExecutionConfig JSON")
+    export.add_argument("--renderings", required=True)
+    export.add_argument("--binding", required=True, help="TaskCompendium HarborTaskBinding JSON")
     export.add_argument("--output", type=Path, required=True)
-    export.add_argument("--agent-kwargs", default="{}", help="JSON agent runtime settings; do not include credentials")
-    export.add_argument("--environment-kwargs", default="{}", help="JSON environment runtime settings")
-    export.add_argument("--model-name")
     args = parser.parse_args()
     if args.command == "schema":
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(json_schema(), indent=2) + "\n")
     elif args.command == "validate":
         spec = from_json(_read(args.input))
-        source_verifier(spec.verifier)
+        for step in spec.steps:
+            verifier = tasktrove_verifier(step.verifier)
+            if verifier is not None:
+                source_verifier(verifier)
         print(json.dumps({"id": spec.id, "sha256": specification_hash(spec)}))
     elif args.command == "pack":
         count = write_parquet((from_json(_read(uri)) for uri in args.inputs), args.output)
@@ -72,14 +73,11 @@ def main() -> None:
                 )
             )
     elif args.command == "export":
-        destination = export_task(
+        destination = lower_to_harbor(
             from_json(_read(args.input)),
-            protocol_from_json(_read(args.protocol)),
-            msgspec.json.decode(_read(args.execution), type=ExecutionConfig),
+            renderings_from_json(_read(args.renderings)),
+            msgspec.json.decode(_read(args.binding), type=HarborTaskBinding),
             args.output,
-            agent_kwargs=json.loads(args.agent_kwargs),
-            environment_kwargs=json.loads(args.environment_kwargs),
-            model_name=args.model_name,
         )
         print(destination)
 

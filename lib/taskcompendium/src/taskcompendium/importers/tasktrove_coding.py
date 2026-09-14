@@ -12,19 +12,21 @@ from tasktrove_verify.spec import Mode
 from taskcompendium.importers.tasktrove import TaskArchive, semantic_verifier
 from taskcompendium.models import (
     AnswerRequirements,
+    Capability,
     ContainerRuntime,
-    DockerEnvironment,
     Embedded,
     Rejected,
     RejectionReason,
     Resource,
     ResourceRole,
+    StepSpecification,
     TaskMetadata,
+    TaskRequirements,
     TaskSpecification,
+    WorkspaceState,
     relative_path,
 )
 
-IMPORTER_REVISION = "taskcompendium-tasktrove-coding-v0.1"
 PYTEST_FAMILY = "unit-test-gen"
 STDIO_FAMILY = "competitive-programming"
 PYTEST_CONVERTER = "python_unit_tests"
@@ -186,6 +188,8 @@ def _validate_pytest(archive: TaskArchive, verifier: Any) -> None:
 def _validate_stdio(archive: TaskArchive, verifier: Any) -> None:
     if verifier.mode is not Mode.STDIO:
         raise ValueError("competitive-programming family does not have a stdio verifier")
+    if archive.instructions.lstrip().startswith("This is an interactive problem."):
+        raise LookupError("interactive stdio tasks require an interactive execution adapter")
     parameters = verifier.parameters
     if parameters.get("special_judge") is not None or parameters.get("cases") != "cases":
         raise ValueError("stdio special judges and relocated case trees are unsupported")
@@ -216,17 +220,14 @@ def import_task(
     source = archive.source
     try:
         metadata = _metadata(archive)
-        verifier = semantic_verifier(archive.verifier)
         converter = metadata.get("converter")
         if converter == PYTEST_CONVERTER and metadata.get("mode") == "pytest":
             family = PYTEST_FAMILY
             image = python_image
-            _validate_pytest(archive, verifier)
             task_shape = "environment-modification"
         elif converter == STDIO_CONVERTER and metadata.get("mode") == "stdio":
             family = STDIO_FAMILY
             image = native_image
-            _validate_stdio(archive, verifier)
             task_shape = "environment-modification"
         else:
             raise LookupError("unsupported coding converter")
@@ -234,26 +235,40 @@ def import_task(
             raise LookupError(f"unexpected coding family {archive.family!r}")
         if image is None:
             raise LookupError("an immutable toolchain image must be supplied by the caller")
-        resources = _resources(archive, verifier.mode)
         # Constructing both fields validates the caller's digest and keeps the
         # grading runtime identical to the agent's declared toolchain image.
-        environment = DockerEnvironment(image=image, workdir="/app")
+        environment = TaskRequirements(
+            (Capability.FILESYSTEM, Capability.SHELL, Capability.PROCESS), WorkspaceState(image=image, workdir="/app")
+        )
         runtime = ContainerRuntime(image=image)
+        verifier = semantic_verifier(
+            archive.verifier,
+            runtime,
+            implementation_revision=archive.release.verifier_revision,
+        )
+        if verifier.mode == Mode.PYTEST:
+            _validate_pytest(archive, verifier)
+        else:
+            _validate_stdio(archive, verifier)
+        resources = _resources(archive, verifier.mode)
     except LookupError as error:
         return Rejected(source, RejectionReason.UNSUPPORTED_ENVIRONMENT, str(error))
     except (KeyError, UnicodeDecodeError, ValueError, tomllib.TOMLDecodeError) as error:
         return Rejected(source, RejectionReason.BROKEN_GRADER, str(error))
     return TaskSpecification(
         id=f"tasktrove-{source.row}",
-        instructions=(
-            _clean_pytest_instructions(source.row, archive.instructions)
-            if verifier.mode is Mode.PYTEST
-            else archive.instructions.replace(_STDIO_EVALUATION_NOTE, "")
-        ).strip(),
-        environment=environment,
+        requirements=environment,
         resources=resources,
-        verifier=verifier,
-        verifier_runtime=runtime,
         metadata=TaskMetadata(source=source, competencies=_tags(metadata), task_shape=task_shape),
-        answer_requirements=AnswerRequirements("final_state"),
+        steps=(
+            StepSpecification(
+                instructions=(
+                    _clean_pytest_instructions(source.row, archive.instructions)
+                    if verifier.mode is Mode.PYTEST
+                    else archive.instructions.replace(_STDIO_EVALUATION_NOTE, "")
+                ).strip(),
+                verifier=verifier,
+                answer_requirements=AnswerRequirements("final_state"),
+            ),
+        ),
     )

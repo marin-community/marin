@@ -1,0 +1,30 @@
+{
+  "$ref": "#/$defs/HarborLaunchConfig",
+  "$defs": {
+    "HarborLaunchConfig": {
+      "title": "HarborLaunchConfig",
+      "description": "Harbor-owned choices made when starting a rollout.",
+      "type": "object",
+      "properties": {
+        "agent": {
+          "enum": [
+            "chat",
+            "mini-swe-agent",
+            "provider_chat",
+            "replay",
+            "terminus-2",
+            "tool_chat"
+          ]
+        },
+        "timeout": {
+          "type": "number",
+          "default": 120.0
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

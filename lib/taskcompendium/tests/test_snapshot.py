@@ -1,27 +1,33 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
 import io
 import tarfile
 
 import pytest
 from tasktrove_verify.spec import Mode
 
+from taskcompendium.execution import (
+    ChatWithTools,
+    HarborExecutionConfig,
+    HarnessToolBinding,
+    environment_for_requirements,
+)
 from taskcompendium.harbor.snapshot import MAX_SNAPSHOT_BYTES, extract_snapshot
-from taskcompendium.lowering import export_task
+from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import (
     AnswerRequirements,
-    ChatWithTools,
+    Capability,
     ContainerRuntime,
-    DockerEnvironment,
-    ExecutionConfig,
     FinalState,
     ImageOverlay,
-    Protocol,
+    Rendering,
     Source,
+    StepSpecification,
     TaskMetadata,
+    TaskRequirements,
     TaskSpecification,
-    VerifierSpec,
+    TaskTroveVerifier,
+    WorkspaceState,
 )
 from taskcompendium.serialization import from_json, read_parquet, specification_hash, to_json, write_parquet
 
@@ -31,15 +37,27 @@ IMAGE = "sha256:" + "1" * 64
 def _specification():
     return TaskSpecification(
         id="overlay",
-        instructions="Modify main.py",
-        environment=DockerEnvironment(IMAGE),
-        resources=(),
-        verifier=VerifierSpec(Mode.STDIO, {"command": ".venv/bin/python main.py"}),
-        verifier_runtime=ContainerRuntime(
-            IMAGE, timeout=300, workspace=ImageOverlay((".venv",)), supervisor_python="/opt/python/bin/python"
+        requirements=TaskRequirements(
+            (Capability.FILESYSTEM, Capability.SHELL, Capability.PROCESS), WorkspaceState(IMAGE)
         ),
+        resources=(),
         metadata=TaskMetadata(Source("test", "1", "0", "1")),
-        answer_requirements=AnswerRequirements("final_state"),
+        steps=(
+            StepSpecification(
+                instructions="Modify main.py",
+                verifier=TaskTroveVerifier(
+                    Mode.STDIO,
+                    {"command": ".venv/bin/python main.py"},
+                    runtime=ContainerRuntime(
+                        IMAGE,
+                        timeout=300,
+                        workspace=ImageOverlay((".venv",)),
+                        supervisor_python="/opt/python/bin/python",
+                    ),
+                ),
+                answer_requirements=AnswerRequirements("final_state"),
+            ),
+        ),
     )
 
 
@@ -58,10 +76,14 @@ def test_overlay_export_rejects_incomplete_dependency_exclusion(tmp_path, exclud
     spec = _specification()
     destination = tmp_path / "task"
     with pytest.raises(ValueError, match="exclusions must cover"):
-        export_task(
+        lower_to_harbor(
             spec,
-            Protocol("overlay", ChatWithTools(), FinalState((".",), excluded_paths=excluded)),
-            ExecutionConfig("replay", spec.environment),
+            (Rendering("overlay", FinalState((".",), excluded_paths=excluded)),),
+            HarborExecutionConfig(
+                "replay",
+                environment_for_requirements(spec.requirements),
+                interaction=(ChatWithTools((HarnessToolBinding("replay", "docker"),))),
+            ),
             destination,
         )
     assert not destination.exists()

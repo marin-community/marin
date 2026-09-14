@@ -12,6 +12,17 @@ from pathlib import Path
 import msgspec
 from tasktrove_verify.spec import Mode
 
+from taskcompendium.execution import (
+    Chat,
+    ChatWithTools,
+    DockerEnvironment,
+    HarborTaskBinding,
+    HarnessToolBinding,
+    NoEnvironment,
+    ShellSimEnvironment,
+    ShellToolBinding,
+    environment_for_requirements,
+)
 from taskcompendium.importers import (
     gsm8k,
     r2egym,
@@ -22,23 +33,21 @@ from taskcompendium.importers import (
     tasktrove_shell,
     tasktrove_structured,
 )
+from taskcompendium.importers.sequential import greeting_task, sentence_revision_task
 from taskcompendium.importers.tasktrove import (
+    CLEAN_09_RELEASE,
     INSPECTED_CONVERTER_REVISION,
     RELEASE_PRODUCER_REVISION,
     RELEASE_ROOT,
     read_archive,
 )
-from taskcompendium.lowering import export_task
+from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import (
     HARBOR_REVISION,
     VERIFIER_REVISION,
     AssistantFinal,
     BoxedLatex,
-    Chat,
-    ChatWithTools,
     ContainerRuntime,
-    DockerEnvironment,
-    ExecutionConfig,
     FileSubmission,
     FinalState,
     ImageOverlay,
@@ -46,17 +55,42 @@ from taskcompendium.models import (
     JudgeConfig,
     JudgeModelPolicy,
     JudgeView,
-    NoEnvironment,
     PlainText,
-    Protocol,
     Rejected,
-    ShellSimEnvironment,
-    Source,
+    Rendering,
     XmlPath,
 )
+from taskcompendium.rendering import TaskSpec
 from taskcompendium.serialization import read_parquet, specification_hash, to_json, write_parquet
 
 FIXTURES = Path(__file__).resolve().parents[1] / "tests/fixtures"
+
+CLEAN_09_ANSWER_SAMPLES = (
+    (
+        "tasktrove-clean-09/answers/mcq-1961bdb52b5a.tar.gz",
+        "Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz",
+        "qa-short-answer",
+        lambda task, judge: tasktrove_answers.import_task(task),
+    ),
+    (
+        "tasktrove-clean-09/answers/mcq-cce3426cf566.tar.gz",
+        "Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz",
+        "qa-short-answer",
+        lambda task, judge: tasktrove_answers.import_task(task),
+    ),
+    (
+        "tasktrove-clean-09/judge/openqa-80f6c461ebcf.tar.gz",
+        "openqa-80f6c461ebcf.tar.gz",
+        "qa-short-answer",
+        lambda task, judge: tasktrove_judge.import_task(task, judge),
+    ),
+    (
+        "tasktrove-clean-09/judge/openqa-c7e9374b56ea.tar.gz",
+        "openqa-c7e9374b56ea.tar.gz",
+        "qa-short-answer",
+        lambda task, judge: tasktrove_judge.import_task(task, judge),
+    ),
+)
 
 
 def build(output: Path, runtime_image: str | None, r2e_runtimes: dict[str, ContainerRuntime] | None = None) -> None:
@@ -83,6 +117,19 @@ def build(output: Path, runtime_image: str | None, r2e_runtimes: dict[str, Conta
             inputs.append({"path": str(path.relative_to(FIXTURES)), "sha256": hashlib.sha256(raw).hexdigest()})
             result = importer(read_archive(raw, row, family))
             (rejected if isinstance(result, Rejected) else specs).append(result)
+    for relative_path, row, family, importer in CLEAN_09_ANSWER_SAMPLES:
+        path = FIXTURES / relative_path
+        raw = path.read_bytes()
+        inputs.append(
+            {
+                "path": relative_path,
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "tasktrove_release": CLEAN_09_RELEASE.root,
+                "source_row": row,
+            }
+        )
+        result = importer(read_archive(raw, row, family, CLEAN_09_RELEASE), judge)
+        (rejected if isinstance(result, Rejected) else specs).append(result)
     if runtime_image is not None:
         for path in sorted((FIXTURES / "coding").glob("*.tar.gz")):
             row = path.name.split("-row-")[1].removesuffix(".tar.gz")
@@ -106,118 +153,193 @@ def build(output: Path, runtime_image: str | None, r2e_runtimes: dict[str, Conta
     raw = path.read_bytes()
     inputs.append({"path": path.name, "sha256": hashlib.sha256(raw).hexdigest()})
     data = json.loads(raw)
+    family: TaskSpec = gsm8k.Gsm8kTaskSpec(
+        {f'{data["split"]}/{row["row"]}': (row["data"]["question"], row["data"]["answer"]) for row in data["rows"]}
+    )
     for row in data["rows"]:
-        result = gsm8k.import_row(
-            row["data"]["question"],
-            row["data"]["answer"],
-            Source(gsm8k.DATASET, gsm8k.REVISION, f'{data["split"]}/{row["row"]}', gsm8k.IMPORTER_REVISION),
-        )
+        result = family.instantiate(f'{data["split"]}/{row["row"]}')
         (rejected if isinstance(result, Rejected) else specs).append(result)
     if r2e_runtimes:
-        path = FIXTURES / "r2egym/rows.json.gz"
-        raw = path.read_bytes()
-        rows = json.loads(gzip.decompress(raw))
+        rows = []
+        for filename in ("rows.json.gz", "broadened_rows.json.gz"):
+            path = FIXTURES / "r2egym" / filename
+            raw = path.read_bytes()
+            rows.extend(json.loads(gzip.decompress(raw)))
+            inputs.append({"path": str(path.relative_to(FIXTURES)), "sha256": hashlib.sha256(raw).hexdigest()})
         unknown = r2e_runtimes.keys() - {row["commit_hash"] for row in rows}
         if unknown:
             raise ValueError(f"R2E runtime keys do not identify source rows: {sorted(unknown)}")
-        inputs.append({"path": str(path.relative_to(FIXTURES)), "sha256": hashlib.sha256(raw).hexdigest()})
         for row in rows:
             runtime = r2e_runtimes.get(row["commit_hash"])
             if runtime is None:
                 continue
             result = r2egym.import_row(row, verifier_runtime=runtime)
             (rejected if isinstance(result, Rejected) else specs).append(result)
+    if runtime_image is not None:
+        specs.append(greeting_task(runtime_image))
+    specs.append(sentence_revision_task())
     (output / "specifications").mkdir()
     exports = []
     for spec in specs:
+        selected_environment = environment_for_requirements(spec.requirements)
         task_id = spec.id.replace("/", "-")
         (output / "specifications" / f"{task_id}.json").write_bytes(to_json(spec))
-        if spec.answer_requirements.kind == "final_state":
+        if len(spec.steps) > 1:
+            if isinstance(selected_environment, NoEnvironment):
+                variants = [
+                    (
+                        Rendering(name, AssistantFinal(extractor)),
+                        HarborTaskBinding(
+                            selected_environment,
+                            Chat(),
+                            context="conversation",
+                        ),
+                    )
+                    for name, extractor in (("chat-plain", PlainText()), ("chat-json", JsonPath()))
+                ]
+            else:
+                variants = [
+                    (
+                        Rendering("workspace", FinalState(("greeting.py",))),
+                        HarborTaskBinding(
+                            selected_environment,
+                            ChatWithTools((HarnessToolBinding("terminal", "docker"),)),
+                        ),
+                    )
+                ]
+            for rendering, execution in variants:
+                destination = output / "harbor" / f"{task_id}-{rendering.id}"
+                lower_to_harbor(spec, (rendering,) * len(spec.steps), execution, destination)
+                exports.append(
+                    {"task": spec.id, "rendering": rendering.id, "path": str(destination.relative_to(output))}
+                )
+            continue
+        if spec.steps[0].answer_requirements.kind == "final_state":
             excluded_paths = ()
-            if isinstance(spec.verifier_runtime, ContainerRuntime) and isinstance(
-                spec.verifier_runtime.workspace, ImageOverlay
+            if isinstance(spec.steps[0].verifier.runtime, ContainerRuntime) and isinstance(
+                spec.steps[0].verifier.runtime.workspace, ImageOverlay
             ):
-                excluded_paths = spec.verifier_runtime.workspace.preserved_directories
+                excluded_paths = spec.steps[0].verifier.runtime.workspace.preserved_directories
             if spec.metadata.source.dataset == r2egym.DATASET:
                 excluded_paths = tuple(sorted(set(excluded_paths) | set(r2egym.SNAPSHOT_EXCLUSIONS)))
             protocols = [
-                Protocol(
+                Rendering(
                     "workspace",
-                    ChatWithTools(),
                     FinalState(
                         (
                             ("/output/command_capture.txt",)
-                            if isinstance(spec.environment, ShellSimEnvironment)
+                            if isinstance(selected_environment, ShellSimEnvironment)
                             else (".",)
                         ),
                         excluded_paths=excluded_paths,
                     ),
                 )
             ]
-        elif spec.answer_requirements.kind != "value":
-            protocols = [Protocol("plain", Chat(), AssistantFinal())]
+        elif spec.steps[0].answer_requirements.kind != "text":
+            protocols = [Rendering("plain", AssistantFinal())]
         else:
             protocols = [
-                Protocol(name, Chat(), AssistantFinal(extractor))
+                Rendering(name, AssistantFinal(extractor))
                 for name, extractor in (
                     ("plain", PlainText()),
                     ("json", JsonPath()),
                     ("xml", XmlPath()),
                 )
             ]
-            if spec.verifier.mode == Mode.MATH:
+            if spec.steps[0].verifier.mode == Mode.MATH:
                 protocols += [
-                    Protocol("boxed", Chat(), AssistantFinal(BoxedLatex())),
-                    Protocol("file", ChatWithTools(), FileSubmission("/app/answer.txt")),
+                    Rendering("boxed", AssistantFinal(BoxedLatex())),
+                    Rendering("file", FileSubmission("/app/answer.txt")),
                 ]
         lowerings = []
         for protocol in protocols:
-            environment = spec.environment
-            if isinstance(protocol.interaction, ChatWithTools) and isinstance(environment, NoEnvironment):
+            environment = selected_environment
+            if isinstance(protocol.submission, FileSubmission) and isinstance(environment, NoEnvironment):
                 environment = ShellSimEnvironment()
-            lowerings.append((protocol, ExecutionConfig("replay", environment)))
-        if spec.verifier.mode == Mode.MCQ:
+            lowerings.append(
+                (
+                    protocol,
+                    HarborTaskBinding(
+                        environment,
+                        (
+                            Chat()
+                            if isinstance(environment, NoEnvironment)
+                            else ChatWithTools(
+                                (
+                                    (
+                                        ShellToolBinding("shell", "shellsim")
+                                        if isinstance(environment, ShellSimEnvironment)
+                                        else HarnessToolBinding("terminal", "docker")
+                                    ),
+                                )
+                            )
+                        ),
+                    ),
+                )
+            )
+        if spec.steps[0].verifier.mode == Mode.MCQ:
             for name, extractor, filename in (("plain", PlainText(), "answer.txt"), ("json", JsonPath(), "answer.json")):
                 lowerings.append(
                     (
-                        Protocol(
-                            f"shellsim-file-{name}", ChatWithTools(), FileSubmission(f"/app/{filename}", extractor)
+                        Rendering(f"shellsim-file-{name}", FileSubmission(f"/app/{filename}", extractor)),
+                        HarborTaskBinding(
+                            ShellSimEnvironment(),
+                            ChatWithTools((ShellToolBinding("shell", "shellsim"),)),
                         ),
-                        ExecutionConfig("replay", ShellSimEnvironment()),
+                    )
+                )
+                lowerings.append(
+                    (
+                        Rendering(f"shellsim-tool-chat-file-{name}", FileSubmission(f"/app/{filename}", extractor)),
+                        HarborTaskBinding(
+                            ShellSimEnvironment(),
+                            ChatWithTools((ShellToolBinding("shell", "shellsim"),)),
+                        ),
                     )
                 )
                 if runtime_image is not None:
                     lowerings.append(
                         (
-                            Protocol(
-                                f"docker-terminus-file-{name}",
-                                ChatWithTools(),
-                                FileSubmission(f"/app/{filename}", extractor),
+                            Rendering(f"docker-terminal-file-{name}", FileSubmission(f"/app/{filename}", extractor)),
+                            HarborTaskBinding(
+                                DockerEnvironment(runtime_image),
+                                ChatWithTools((HarnessToolBinding("terminal", "docker"),)),
                             ),
-                            ExecutionConfig("terminus-2", DockerEnvironment(runtime_image)),
                         )
                     )
-        if isinstance(spec.environment, DockerEnvironment) and spec.environment.image == runtime_image:
+        if isinstance(selected_environment, DockerEnvironment) and selected_environment.image == runtime_image:
             lowerings.append(
                 (
-                    msgspec.structs.replace(protocols[0], id="terminus-workspace"),
-                    ExecutionConfig("terminus-2", spec.environment),
+                    msgspec.structs.replace(protocols[0], id="terminal-workspace"),
+                    HarborTaskBinding(
+                        selected_environment,
+                        ChatWithTools((HarnessToolBinding("terminal", "docker"),)),
+                    ),
                 )
             )
         for protocol, execution in lowerings:
             destination = output / "harbor" / f"{task_id}-{protocol.id}"
-            export_task(spec, protocol, execution, destination)
-            exports.append({"task": spec.id, "protocol": protocol.id, "path": str(destination.relative_to(output))})
+            lower_to_harbor(spec, (protocol,), execution, destination)
+            exports.append({"task": spec.id, "rendering": protocol.id, "path": str(destination.relative_to(output))})
     write_parquet(specs, str(output / "specifications.parquet"))
     restored = list(read_parquet(str(output / "specifications.parquet")))
     if [specification_hash(s) for s in restored] != [specification_hash(s) for s in specs]:
         raise RuntimeError("Generated Parquet does not round-trip to the source specifications")
     (output / "rejections.jsonl").write_bytes(b"".join(msgspec.json.encode(r) + b"\n" for r in rejected))
     manifest = {
-        "release": RELEASE_ROOT,
+        "tasktrove_releases": {
+            "2026.09.10.8": {
+                "root": RELEASE_ROOT,
+                "verifier_revision": "b2b68d8b0a770cdc0ab3903780172c4b3eea81b1",
+            },
+            CLEAN_09_RELEASE.version: {
+                "root": CLEAN_09_RELEASE.root,
+                "verifier_revision": CLEAN_09_RELEASE.verifier_revision,
+            },
+        },
         "inspected_converter_revision": INSPECTED_CONVERTER_REVISION,
         "release_cleanup_code_revision": RELEASE_PRODUCER_REVISION,
-        "verifier_revision": VERIFIER_REVISION,
+        "default_verifier_revision": VERIFIER_REVISION,
         "harbor_revision": HARBOR_REVISION,
         "specifications": len(specs),
         "rejections": len(rejected),

@@ -11,26 +11,34 @@ import msgspec
 import pytest
 from tasktrove_verify.spec import Mode
 
+from taskcompendium.execution import (
+    ChatWithTools,
+    HarborExecutionConfig,
+    HarnessToolBinding,
+    environment_for_requirements,
+)
 from taskcompendium.harbor.container import grade_in_container
 from taskcompendium.harbor.runner import run_trial
-from taskcompendium.lowering import export_task
+from taskcompendium.importers.sequential import greeting_task
+from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import (
     AnswerRequirements,
-    ChatWithTools,
+    Capability,
     ContainerRuntime,
-    DockerEnvironment,
     Embedded,
-    ExecutionConfig,
     FinalState,
     ImageOverlay,
     Outcome,
-    Protocol,
+    Rendering,
     Resource,
     ResourceRole,
     Source,
+    StepSpecification,
     TaskMetadata,
+    TaskRequirements,
     TaskSpecification,
-    VerifierSpec,
+    TaskTroveVerifier,
+    WorkspaceState,
 )
 
 pytestmark = pytest.mark.docker
@@ -39,8 +47,9 @@ pytestmark = pytest.mark.docker
 def _spec(image, mode=Mode.STDIO, parameters=None, resources=()):
     return TaskSpecification(
         id="code/sum",
-        instructions="Write main.py to read two integers and print their sum.",
-        environment=DockerEnvironment(image),
+        requirements=TaskRequirements(
+            (Capability.FILESYSTEM, Capability.SHELL, Capability.PROCESS), WorkspaceState(image)
+        ),
         resources=resources
         or (
             Resource("cases/input_1.txt", (ResourceRole.VERIFIER,), Embedded(b"2 3\n")),
@@ -48,21 +57,31 @@ def _spec(image, mode=Mode.STDIO, parameters=None, resources=()):
             Resource("cases/input_2.txt", (ResourceRole.VERIFIER,), Embedded(b"-1 8\n")),
             Resource("cases/output_2.txt", (ResourceRole.VERIFIER,), Embedded(b"7\n")),
         ),
-        verifier=VerifierSpec(mode, parameters or {"command": "python3 main.py"}),
-        verifier_runtime=ContainerRuntime(image),
         metadata=TaskMetadata(Source("test", "1", "0", "1")),
-        answer_requirements=AnswerRequirements("final_state"),
+        steps=(
+            StepSpecification(
+                instructions="Write main.py to read two integers and print their sum.",
+                verifier=TaskTroveVerifier(
+                    mode, parameters or {"command": "python3 main.py"}, runtime=ContainerRuntime(image)
+                ),
+                answer_requirements=AnswerRequirements("final_state"),
+            ),
+        ),
     )
 
 
 @pytest.mark.parametrize("source,reward", [("print(sum(map(int,input().split())))", 1.0), ("print(99)", 0.0)])
 async def test_harbor_docker_trial_grades_code_and_ignores_agent_reward(tmp_path, runtime_image, source, reward):
     spec = _spec(runtime_image)
-    protocol = Protocol("code", ChatWithTools(), FinalState(("main.py", "reward.txt")))
-    task = export_task(
+    protocol = Rendering("code", FinalState(("main.py", "reward.txt")))
+    task = lower_to_harbor(
         spec,
-        protocol,
-        ExecutionConfig("replay", spec.environment),
+        (protocol,),
+        HarborExecutionConfig(
+            "replay",
+            environment_for_requirements(spec.requirements),
+            interaction=(ChatWithTools((HarnessToolBinding("replay", "docker"),))),
+        ),
         tmp_path / "task",
         agent_kwargs={
             "commands": [f"printf '%s' {shlex.quote(source)} > main.py", "echo 1 > reward.txt"],
@@ -92,9 +111,7 @@ else:
 print(sum(map(int,input().split())))
 """
     (tmp_path / "main.py").write_text(source)
-    result = grade_in_container(
-        _spec(runtime_image), Protocol("code", ChatWithTools(), FinalState(("main.py",))), None, tmp_path
-    )
+    result = grade_in_container(_spec(runtime_image), Rendering("code", FinalState(("main.py",))), None, tmp_path)
     assert result.status == Outcome.GRADED
     assert result.reward == 1.0
 
@@ -105,7 +122,7 @@ def test_container_compiled_program_uses_original_stdio_grader(tmp_path, runtime
         "#include <iostream>\nint main(){int a,b;std::cin>>a>>b;std::cout<<(a" + add + "b);}"
     )
     spec = _spec(runtime_image, parameters={"command": "./main", "build": "g++ -o main main.cpp"})
-    result = grade_in_container(spec, Protocol("cpp", ChatWithTools(), FinalState(("main.cpp",))), None, tmp_path)
+    result = grade_in_container(spec, Rendering("cpp", FinalState(("main.cpp",))), None, tmp_path)
     assert result.status == Outcome.GRADED
     assert result.reward == reward
 
@@ -130,7 +147,7 @@ def test_container_pytest_uses_hidden_original_tests(tmp_path, runtime_image, va
         },
         resources,
     )
-    result = grade_in_container(spec, Protocol("pytest", ChatWithTools(), FinalState(("solution.py",))), None, tmp_path)
+    result = grade_in_container(spec, Rendering("pytest", FinalState(("solution.py",))), None, tmp_path)
     assert result.status == Outcome.GRADED
     assert result.reward == reward
 
@@ -146,7 +163,7 @@ def test_container_script_preserves_original_reward_contract(tmp_path, runtime_i
         ),
     )
     spec = _spec(runtime_image, Mode.SCRIPT, {"path": "check.sh"}, resources)
-    result = grade_in_container(spec, Protocol("script", ChatWithTools(), FinalState(("answer.txt",))), None, tmp_path)
+    result = grade_in_container(spec, Rendering("script", FinalState(("answer.txt",))), None, tmp_path)
     assert result.status == Outcome.GRADED
     assert result.reward == reward
 
@@ -170,7 +187,15 @@ def overlay_image(runtime_image, tmp_path_factory):
 async def test_overlay_trial_excludes_dependencies_and_replaces_deleted_files(tmp_path, overlay_image):
     spec = msgspec.structs.replace(
         _spec(overlay_image, parameters={"command": ".venv/bin/python main.py"}),
-        verifier_runtime=ContainerRuntime(overlay_image, workspace=ImageOverlay((".venv",))),
+        steps=(
+            msgspec.structs.replace(
+                _spec(overlay_image, parameters={"command": ".venv/bin/python main.py"}).steps[0],
+                verifier=msgspec.structs.replace(
+                    _spec(overlay_image, parameters={"command": ".venv/bin/python main.py"}).steps[0].verifier,
+                    runtime=ContainerRuntime(overlay_image, workspace=ImageOverlay((".venv",))),
+                ),
+            ),
+        ),
     )
     source = """import os, pathlib
 assert os.getuid() == 65534
@@ -186,10 +211,14 @@ for path in ['/input/specification.json', '/result/result.json']:
         raise AssertionError('candidate escaped isolation')
 print(sum(map(int,input().split())))
 """
-    task = export_task(
+    task = lower_to_harbor(
         spec,
-        Protocol("overlay", ChatWithTools(), FinalState((".",), excluded_paths=(".venv",))),
-        ExecutionConfig("replay", spec.environment),
+        (Rendering("overlay", FinalState((".",), excluded_paths=(".venv",))),),
+        HarborExecutionConfig(
+            "replay",
+            environment_for_requirements(spec.requirements),
+            interaction=(ChatWithTools((HarnessToolBinding("replay", "docker"),))),
+        ),
         tmp_path / "task",
         agent_kwargs={
             "commands": [
@@ -206,10 +235,19 @@ print(sum(map(int,input().split())))
 def test_overlay_rejects_submitted_dependency_directory(tmp_path, overlay_image):
     (tmp_path / ".venv").mkdir()
     spec = msgspec.structs.replace(
-        _spec(overlay_image), verifier_runtime=ContainerRuntime(overlay_image, workspace=ImageOverlay((".venv",)))
+        _spec(overlay_image),
+        steps=(
+            msgspec.structs.replace(
+                _spec(overlay_image).steps[0],
+                verifier=msgspec.structs.replace(
+                    _spec(overlay_image).steps[0].verifier,
+                    runtime=ContainerRuntime(overlay_image, workspace=ImageOverlay((".venv",))),
+                ),
+            ),
+        ),
     )
     result = grade_in_container(
-        spec, Protocol("overlay", ChatWithTools(), FinalState((".",), excluded_paths=(".venv",))), None, tmp_path
+        spec, Rendering("overlay", FinalState((".",), excluded_paths=(".venv",))), None, tmp_path
     )
     assert result.status == Outcome.INFRA_ERROR
     assert result.reward is None
@@ -217,15 +255,66 @@ def test_overlay_rejects_submitted_dependency_directory(tmp_path, overlay_image)
 
 async def test_overlay_trial_rejects_submitted_symlink(tmp_path, overlay_image):
     spec = msgspec.structs.replace(
-        _spec(overlay_image), verifier_runtime=ContainerRuntime(overlay_image, workspace=ImageOverlay((".venv",)))
+        _spec(overlay_image),
+        steps=(
+            msgspec.structs.replace(
+                _spec(overlay_image).steps[0],
+                verifier=msgspec.structs.replace(
+                    _spec(overlay_image).steps[0].verifier,
+                    runtime=ContainerRuntime(overlay_image, workspace=ImageOverlay((".venv",))),
+                ),
+            ),
+        ),
     )
-    task = export_task(
+    task = lower_to_harbor(
         spec,
-        Protocol("overlay", ChatWithTools(), FinalState((".",), excluded_paths=(".venv",))),
-        ExecutionConfig("replay", spec.environment),
+        (Rendering("overlay", FinalState((".",), excluded_paths=(".venv",))),),
+        HarborExecutionConfig(
+            "replay",
+            environment_for_requirements(spec.requirements),
+            interaction=(ChatWithTools((HarnessToolBinding("replay", "docker"),))),
+        ),
         tmp_path / "task",
         agent_kwargs={"commands": ["ln -s .venv/dependency main.py"]},
     )
     result = await run_trial(task, json.loads((task / "execution.json").read_text()), tmp_path / "trials", "symlink")
     assert result.exception_info is not None
     assert result.verifier_result is None
+
+
+@pytest.mark.parametrize("extend,reward", [(True, 1.0), (False, 0.0)])
+async def test_sequential_feature_preserves_workspace_and_private_step_tests(tmp_path, runtime_image, extend, reward):
+    spec = greeting_task(runtime_image)
+    first = "def greet(name):\n    return f'Hello, {name}!'\n"
+    extension = (
+        "\noriginal = greet\ndef greet(name, uppercase=False):\n"
+        "    value = original(name)\n    return value.upper() if uppercase else value\n"
+    )
+    task = lower_to_harbor(
+        spec,
+        (Rendering("workspace", FinalState(("greeting.py",))),) * 2,
+        HarborExecutionConfig(
+            "replay",
+            environment_for_requirements(spec.requirements),
+            context="fresh",
+            interaction=(ChatWithTools((HarnessToolBinding("replay", "docker"),))),
+        ),
+        tmp_path / "sequential",
+        agent_kwargs={
+            "steps": [
+                {"commands": [f"printf '%s' {shlex.quote(first)} > greeting.py"], "response": ""},
+                {
+                    "commands": [
+                        f"printf '%s' {shlex.quote(extension if extend else '')} >> greeting.py",
+                        "test ! -e /tests/test_greeting.py",
+                    ],
+                    "response": "",
+                },
+            ]
+        },
+    )
+    result = await run_trial(task, json.loads((task / "execution.json").read_text()), tmp_path / "trials", "sequential")
+    assert result.exception_info is None
+    assert [s.verifier_result.rewards["reward"] for s in result.step_results] == [1.0, reward]
+    assert result.verifier_result.rewards == {"reward": reward}
+    assert not (task / "steps/step-2/workdir/test_greeting.py").exists()

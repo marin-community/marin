@@ -1,0 +1,23 @@
+{
+  "dataset": "R2E-Gym/R2E-Gym-V1",
+  "revision": "903d405799ac435061c41e72260c81ca5100f964",
+  "source_code_revision": "0d94c4eb9431cd195c55a7ea3abd54006c9a1735",
+  "rows": [
+    {
+      "row": 500,
+      "repo_name": "sympy",
+      "commit_hash": "b0d83c555eda061014ae1d04dc0af07a569650e6",
+      "docker_image": "namanjain12/sympy_final:b0d83c555eda061014ae1d04dc0af07a569650e6",
+      "docker_manifest_digest": "sha256:0c6511c00df0564ad7513261f1c643d31130fe7157b34457d9f36fed5d674d56",
+      "source_repository": "sympy/sympy"
+    },
+    {
+      "row": 550,
+      "repo_name": "sympy",
+      "commit_hash": "d635509acdf6aa448200797e2d3393068ed29dc7",
+      "docker_image": "namanjain12/sympy_final:d635509acdf6aa448200797e2d3393068ed29dc7",
+      "docker_manifest_digest": "sha256:e1dba0c4da4398c49840bea0a5f7398be5787e7150d4ddea600b531ac0d80a0f",
+      "source_repository": "sympy/sympy"
+    }
+  ]
+}

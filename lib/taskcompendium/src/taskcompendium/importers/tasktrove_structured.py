@@ -16,13 +16,13 @@ from taskcompendium.importers.tasktrove import TaskArchive, semantic_verifier
 from taskcompendium.models import (
     AnswerRequirements,
     Embedded,
-    NoEnvironment,
-    PythonRuntime,
     Rejected,
     RejectionReason,
     Resource,
     ResourceRole,
+    StepSpecification,
     TaskMetadata,
+    TaskRequirements,
     TaskSpecification,
 )
 
@@ -33,6 +33,10 @@ _XML_MODE = Mode.XML_ELEMENTS
 _SUPPORTED_TYPES = {"json": (_JSON_SCHEMA_MODE, "json"), "xml": (_XML_MODE, "xml")}
 _INSTRUCTION_PREFIX = "You will produce a structured response. Write your final answer to `/app/answer.txt`.\n"
 _SUBMISSION_HEADER = "\n## Submitting your answer (IMPORTANT)"
+_XML_SCHEMA_WORDING = (
+    "Emit a single well-formed XML document representing data that follows the JSON Schema in the task."
+)
+_XML_SCHEMA_REPLACEMENT = "Emit a single well-formed XML document representing data that follows the schema in the task."
 _EVALUATION_NOTES = (
     (
         " The verifier parses your answer (optionally unwrapping a ```json fence) and validates it "
@@ -65,6 +69,8 @@ def _clean_instructions(instructions: str) -> str:
     if _SUBMISSION_HEADER not in body:
         raise ValueError("structured-output instruction has no submission boundary")
     cleaned = body.split(_SUBMISSION_HEADER, 1)[0].strip()
+    if cleaned.startswith(_XML_SCHEMA_WORDING):
+        cleaned = _XML_SCHEMA_REPLACEMENT + cleaned[len(_XML_SCHEMA_WORDING) :]
     for source_text, task_requirement in _EVALUATION_NOTES:
         cleaned = cleaned.replace(source_text, task_requirement)
     if not cleaned:
@@ -128,7 +134,7 @@ def import_task(archive: TaskArchive) -> TaskSpecification | Rejected:
     try:
         metadata = _metadata(archive)
         instructions = _clean_instructions(archive.instructions)
-        verifier = semantic_verifier(archive.verifier)
+        verifier = semantic_verifier(archive.verifier, implementation_revision=archive.release.verifier_revision)
     except (KeyError, UnicodeDecodeError, ValueError, tomllib.TOMLDecodeError) as error:
         return Rejected(source, RejectionReason.UNRECOVERABLE_SOURCE, str(error))
     if metadata.get("converter") != _CONVERTER:
@@ -175,11 +181,14 @@ def import_task(archive: TaskArchive) -> TaskSpecification | Rejected:
     competencies = tuple(tag for tag in tags if isinstance(tag, str)) if isinstance(tags, list) else ()
     return TaskSpecification(
         id=f"tasktrove-{source.row}",
-        instructions=instructions,
-        environment=NoEnvironment(),
+        requirements=TaskRequirements(),
         resources=(resource,) if resource is not None else (),
-        verifier=verifier,
-        verifier_runtime=PythonRuntime(),
         metadata=TaskMetadata(source=source, competencies=competencies, task_shape="answer"),
-        answer_requirements=AnswerRequirements("json" if schema_type == "json" else "xml"),
+        steps=(
+            StepSpecification(
+                instructions=instructions,
+                verifier=verifier,
+                answer_requirements=AnswerRequirements("json" if schema_type == "json" else "xml"),
+            ),
+        ),
     )

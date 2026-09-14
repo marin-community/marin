@@ -9,24 +9,29 @@ from pathlib import Path
 
 import pytest
 
+from taskcompendium.execution import (
+    Chat,
+    ChatWithTools,
+    HarborExecutionConfig,
+    HarnessToolBinding,
+    NoEnvironment,
+    ShellSimEnvironment,
+    environment_for_requirements,
+)
 from taskcompendium.harbor.runner import run_trial
 from taskcompendium.importers.gsm8k import IMPORTER_REVISION, import_row
 from taskcompendium.importers.tasktrove import read_archive
 from taskcompendium.importers.tasktrove_answers import import_task as import_answer
 from taskcompendium.importers.tasktrove_math import import_task as import_math
-from taskcompendium.lowering import export_task
+from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import (
     AssistantFinal,
     BoxedLatex,
-    Chat,
-    ChatWithTools,
-    ExecutionConfig,
     FileSubmission,
     JsonPath,
     PlainText,
-    Protocol,
     Rejected,
-    ShellSimEnvironment,
+    Rendering,
     Source,
     TaskSpecification,
     XmlPath,
@@ -76,10 +81,31 @@ def _source_task(source: str) -> TaskSpecification:
 async def test_real_answer_harbor_replay(tmp_path, source, submission, good, bad, attempt, reward):
     specification = _source_task(source)
     response = {"good": good, "bad": bad, "empty": ""}[attempt]
-    task = export_task(
+    task = lower_to_harbor(
         specification,
-        Protocol("answer", Chat(), submission),
-        ExecutionConfig("replay", specification.environment),
+        (Rendering("answer", submission),),
+        HarborExecutionConfig(
+            "replay",
+            environment_for_requirements(specification.requirements),
+            interaction=(
+                Chat()
+                if isinstance(environment_for_requirements(specification.requirements), NoEnvironment)
+                else ChatWithTools(
+                    (
+                        HarnessToolBinding(
+                            "replay",
+                            (
+                                "shellsim"
+                                if isinstance(
+                                    environment_for_requirements(specification.requirements), ShellSimEnvironment
+                                )
+                                else "docker"
+                            ),
+                        ),
+                    )
+                )
+            ),
+        ),
         tmp_path / "task",
         agent_kwargs={"response": response},
     )
@@ -112,10 +138,31 @@ async def test_real_answer_harbor_replay(tmp_path, source, submission, good, bad
 )
 async def test_real_answer_harbor_malformed_wrapper_has_no_reward(tmp_path, source, submission, response):
     specification = _source_task(source)
-    task = export_task(
+    task = lower_to_harbor(
         specification,
-        Protocol("answer", Chat(), submission),
-        ExecutionConfig("replay", specification.environment),
+        (Rendering("answer", submission),),
+        HarborExecutionConfig(
+            "replay",
+            environment_for_requirements(specification.requirements),
+            interaction=(
+                Chat()
+                if isinstance(environment_for_requirements(specification.requirements), NoEnvironment)
+                else ChatWithTools(
+                    (
+                        HarnessToolBinding(
+                            "replay",
+                            (
+                                "shellsim"
+                                if isinstance(
+                                    environment_for_requirements(specification.requirements), ShellSimEnvironment
+                                )
+                                else "docker"
+                            ),
+                        ),
+                    )
+                )
+            ),
+        ),
         tmp_path / "task",
         agent_kwargs={"response": response},
     )
@@ -144,10 +191,14 @@ async def test_real_answer_harbor_shellsim_grades_file_not_final_response(
     elif attempt == "missing":
         commands = []
     response = bad if attempt == "good" else good
-    task = export_task(
+    task = lower_to_harbor(
         specification,
-        Protocol("file", ChatWithTools(), FileSubmission("/app/answer.txt", extractor)),
-        ExecutionConfig("replay", ShellSimEnvironment()),
+        (Rendering("file", FileSubmission("/app/answer.txt", extractor)),),
+        HarborExecutionConfig(
+            "replay",
+            ShellSimEnvironment(),
+            interaction=(ChatWithTools((HarnessToolBinding("replay", "shellsim"),))),
+        ),
         tmp_path / "task",
         agent_kwargs={"commands": commands, "response": response},
         environment_kwargs={"bridge_path": str(Path(bridge).resolve())},

@@ -4,17 +4,18 @@
 """Materialize only explicitly visible resources, checking immutable references."""
 
 import hashlib
+from collections.abc import Iterable
 from pathlib import Path
 from typing import BinaryIO, cast
 
 import fsspec
 
-from taskcompendium.models import Embedded, Resource, ResourceRole, TaskSpecification
+from taskcompendium.models import Embedded, PublicResource, Resource, ResourceRole, TaskSpecification
 
 MAX_RESOURCE_BYTES = 64 * 1024 * 1024
 
 
-def resource_bytes(resource: Resource, max_bytes: int = MAX_RESOURCE_BYTES) -> bytes:
+def resource_bytes(resource: Resource | PublicResource, max_bytes: int = MAX_RESOURCE_BYTES) -> bytes:
     if isinstance(resource.content, Embedded):
         data = resource.content.data
     else:
@@ -35,11 +36,20 @@ def contained_path(root: Path, relative: str) -> Path:
     return candidate
 
 
-def materialize(specification: TaskSpecification, role: ResourceRole, root: Path) -> None:
+def materialize(specification: TaskSpecification, role: ResourceRole, root: Path, step_index: int | None = None) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    for resource in specification.resources:
-        if role not in resource.roles:
-            continue
+    resources = (
+        specification.resources
+        if step_index is None
+        else (*specification.resources, *specification.steps[step_index].resources)
+    )
+    materialize_resources((resource for resource in resources if role in resource.roles), root)
+
+
+def materialize_resources(resources: Iterable[Resource | PublicResource], root: Path) -> None:
+    """Write already selected resources into an owned directory."""
+    root.mkdir(parents=True, exist_ok=True)
+    for resource in resources:
         target = contained_path(root, resource.path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(resource_bytes(resource))

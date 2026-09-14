@@ -13,7 +13,7 @@ import msgspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from taskcompendium.models import SCHEMA_VERSION, Protocol, TaskSpecification
+from taskcompendium.models import SCHEMA_VERSION, Rendering, TaskSpecification
 
 
 def to_json(specification: TaskSpecification) -> bytes:
@@ -28,8 +28,12 @@ def from_json(data: bytes | str) -> TaskSpecification:
     return msgspec.json.decode(data, type=TaskSpecification)
 
 
-def protocol_from_json(data: bytes | str) -> Protocol:
-    return msgspec.json.decode(data, type=Protocol)
+def rendering_from_json(data: bytes | str) -> Rendering:
+    return msgspec.json.decode(data, type=Rendering)
+
+
+def renderings_from_json(data: bytes | str) -> tuple[Rendering, ...]:
+    return msgspec.json.decode(data, type=tuple[Rendering, ...])
 
 
 def specification_hash(specification: TaskSpecification) -> str:
@@ -43,56 +47,36 @@ def json_schema() -> dict[str, Any]:
 _TEXT = pa.string()
 _STRINGS = pa.list_(_TEXT)
 _SOURCE = pa.struct([("dataset", _TEXT), ("revision", _TEXT), ("row", _TEXT), ("importer_revision", _TEXT)])
-_ENVIRONMENT = pa.struct(
-    [
-        ("kind", _TEXT),
-        ("image", _TEXT),
-        ("workdir", _TEXT),
-        ("max_steps", pa.int64()),
-        ("max_output_bytes", pa.int64()),
-        ("setup_commands", _STRINGS),
-        ("additional_directories", _STRINGS),
-    ]
+_STATE = pa.struct(
+    [("image", _TEXT), ("workdir", _TEXT), ("setup_commands", _STRINGS), ("additional_directories", _STRINGS)]
+)
+_ACTION_INTERFACE = pa.struct([("name", _TEXT), ("version", _TEXT), ("seed_sha256", _TEXT)])
+_REQUIREMENTS = pa.struct(
+    [("capabilities", _STRINGS), ("state", _STATE), ("action_interfaces", pa.list_(_ACTION_INTERFACE))]
 )
 _CONTENT = pa.struct([("kind", _TEXT), ("data", pa.large_string()), ("uri", _TEXT), ("sha256", _TEXT)])
 _RESOURCE = pa.struct([("path", _TEXT), ("roles", _STRINGS), ("content", _CONTENT), ("executable", pa.bool_())])
-_POLICY = pa.struct(
+# Verifiers are a discriminated union in schema 0.6. Keep their independently
+# versioned, private contracts as canonical JSON instead of padding unrelated
+# source-specific variants into one universal Arrow ontology.
+_VERIFIER = pa.large_string()
+_STEP = pa.struct(
     [
-        ("model", _TEXT),
-        ("size_class", _TEXT),
-        ("provider", _TEXT),
-        ("base_url", _TEXT),
-        ("samples", pa.int64()),
-        ("aggregation", _TEXT),
-        ("temperature", pa.float64()),
-    ]
-)
-_VIEW = pa.struct([("transcript", pa.bool_()), ("files", _STRINGS), ("reference_context", _STRINGS)])
-_JUDGE = pa.struct([("policy", _POLICY), ("view", _VIEW)])
-# Ontology parameters can include arbitrary JSON schemas and per-mode constraint
-# dictionaries. Encode individual values, preserving parameter names as Arrow map
-# keys. The task, resources, environment, judge, and provenance stay nested columns.
-_VERIFIER = pa.struct([("mode", _TEXT), ("parameters", pa.map_(_TEXT, pa.large_string())), ("judge", _JUDGE)])
-_RUNTIME = pa.struct(
-    [
-        ("kind", _TEXT),
-        ("image", _TEXT),
-        ("timeout", pa.float64()),
-        ("revision", _TEXT),
-        ("workspace", pa.struct([("kind", _TEXT), ("preserved_directories", _STRINGS)])),
-        ("supervisor_python", _TEXT),
+        ("instructions", pa.large_string()),
+        ("answer_requirements", pa.struct([("kind", _TEXT)])),
+        ("resources", pa.list_(_RESOURCE)),
+        ("verifier", _VERIFIER),
+        ("context_requirement", _TEXT),
     ]
 )
 ARROW_SCHEMA = pa.schema(
     [
         ("schema_version", _TEXT),
         ("id", _TEXT),
-        ("instructions", pa.large_string()),
-        ("answer_requirements", pa.struct([("kind", _TEXT)])),
-        ("environment", _ENVIRONMENT),
+        ("steps", pa.list_(_STEP)),
+        ("success_policy", _TEXT),
+        ("requirements", _REQUIREMENTS),
         ("resources", pa.list_(_RESOURCE)),
-        ("verifier", _VERIFIER),
-        ("verifier_runtime", _RUNTIME),
         ("metadata", pa.struct([("source", _SOURCE), ("competencies", _STRINGS), ("task_shape", _TEXT)])),
     ],
     metadata={b"taskcompendium.schema_version": SCHEMA_VERSION.encode()},
@@ -101,10 +85,8 @@ ARROW_SCHEMA = pa.schema(
 
 def _arrow_row(specification: TaskSpecification) -> dict[str, Any]:
     row = msgspec.to_builtins(specification)
-    row["verifier"]["parameters"] = [
-        (key, json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False))
-        for key, value in sorted(row["verifier"]["parameters"].items())
-    ]
+    for step in row["steps"]:
+        step["verifier"] = json.dumps(step["verifier"], sort_keys=True, separators=(",", ":"), allow_nan=False)
     return row
 
 
@@ -144,7 +126,6 @@ def read_parquet(uri: str) -> Iterator[TaskSpecification]:
         for batch in parquet.iter_batches(batch_size=256):
             for row in batch.to_pylist():
                 row = _without_padding(row)
-                # Decode after removing Arrow's inactive-variant padding: JSON null
-                # inside a verifier parameter is meaningful and must survive.
-                row["verifier"]["parameters"] = {key: json.loads(value) for key, value in row["verifier"]["parameters"]}
+                for step in row["steps"]:
+                    step["verifier"] = json.loads(step["verifier"])
                 yield msgspec.convert(row, type=TaskSpecification)

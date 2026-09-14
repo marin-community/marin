@@ -11,19 +11,21 @@ from tasktrove_verify.spec import ScriptSpec
 from taskcompendium.importers.tasktrove import TaskArchive, semantic_verifier
 from taskcompendium.models import (
     AnswerRequirements,
+    Capability,
     ContainerRuntime,
     Embedded,
     Rejected,
     RejectionReason,
     Resource,
     ResourceRole,
-    ShellSimEnvironment,
+    StepSpecification,
     TaskMetadata,
+    TaskRequirements,
     TaskSpecification,
+    WorkspaceState,
     relative_path,
 )
 
-IMPORTER_REVISION = "taskcompendium-tasktrove-shell-v0.1"
 FAMILY = "shell-cmd"
 CONVERTER = "nl2bash"
 MODE = "script"
@@ -106,15 +108,22 @@ def import_task(
             raise LookupError("unsupported shell converter")
         if metadata.get("language") != "bash":
             raise LookupError("shell converter is not bash")
-        verifier = semantic_verifier(archive.verifier)
         _validate_verifier(archive, archive.verifier)
         resources = _resources(archive)
         if verifier_runtime is None:
             raise LookupError("an immutable verifier runtime must be supplied by the caller")
-        environment = ShellSimEnvironment(
-            workdir=WORKDIR,
-            setup_commands=("cp -a /workspace/setup_files /setup_files",),
-            additional_directories=("/output",),
+        verifier = semantic_verifier(
+            archive.verifier,
+            verifier_runtime,
+            implementation_revision=archive.release.verifier_revision,
+        )
+        environment = TaskRequirements(
+            (Capability.FILESYSTEM, Capability.SHELL),
+            WorkspaceState(
+                workdir=WORKDIR,
+                setup_commands=("cp -a /workspace/setup_files /setup_files",),
+                additional_directories=("/output",),
+            ),
         )
     except LookupError as error:
         return Rejected(source, RejectionReason.UNSUPPORTED_ENVIRONMENT, str(error))
@@ -124,11 +133,14 @@ def import_task(
     competencies = tuple(tag for tag in tags if isinstance(tag, str)) if isinstance(tags, list) else ()
     return TaskSpecification(
         id=f"tasktrove-{source.row}",
-        instructions=_instructions(archive.instructions),
-        environment=environment,
+        requirements=environment,
         resources=resources,
-        verifier=verifier,
-        verifier_runtime=verifier_runtime,
         metadata=TaskMetadata(source=source, competencies=competencies, task_shape="environment-modification"),
-        answer_requirements=AnswerRequirements("final_state"),
+        steps=(
+            StepSpecification(
+                instructions=_instructions(archive.instructions),
+                verifier=verifier,
+                answer_requirements=AnswerRequirements("final_state"),
+            ),
+        ),
     )

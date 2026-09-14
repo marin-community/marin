@@ -5,6 +5,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -15,9 +16,10 @@ from source_parser import decolor_dict_keys, parse_log_pytest
 
 tests = Path(os.environ["TASKTROVE_TESTS_DIR"])
 workspace = Path(os.environ["TASKTROVE_WORKSPACE"])
+require_xvfb = sys.argv[1:] == ["--require-xvfb"]
+if require_xvfb and not shutil.which("xvfb-run"):
+    raise RuntimeError("This source family requires xvfb-run, but the source image does not provide it")
 command = [
-    "xvfb-run",
-    "--auto-servernum",
     ".venv/bin/python",
     "-W",
     "ignore",
@@ -27,6 +29,8 @@ command = [
     "-rA",
     str(tests / "r2e_tests"),
 ]
+if require_xvfb:
+    command[:0] = ["xvfb-run", "--auto-servernum"]
 completed = subprocess.run(
     command,
     cwd=workspace,

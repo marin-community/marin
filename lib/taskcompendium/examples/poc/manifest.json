@@ -1,11 +1,20 @@
 {
-  "release": "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8",
+  "tasktrove_releases": {
+    "2026.09.10.8": {
+      "root": "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8",
+      "verifier_revision": "b2b68d8b0a770cdc0ab3903780172c4b3eea81b1"
+    },
+    "2026.09.10.9": {
+      "root": "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9",
+      "verifier_revision": "b76d03131cd88bd9fc711dba206659027edba3a8"
+    }
+  },
   "inspected_converter_revision": "bef70bb8584d7e0c1391d88c9eacb1605b551a90",
   "release_cleanup_code_revision": "ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2",
-  "verifier_revision": "b2b68d8b0a770cdc0ab3903780172c4b3eea81b1",
+  "default_verifier_revision": "b76d03131cd88bd9fc711dba206659027edba3a8",
   "harbor_revision": "9551f376157d90104011107dcbf9ca3621228126",
-  "specifications": 41,
-  "rejections": 2,
+  "specifications": 47,
+  "rejections": 3,
   "inputs": [
     {
       "path": "tasktrove/answers/mcq-row-1972.tar.gz",
@@ -52,6 +61,30 @@
       "sha256": "bbb6b9857dc71106db9b828201afedc438abdefbb21e6791c003ada42645c9ed"
     },
     {
+      "path": "tasktrove-clean-09/answers/mcq-1961bdb52b5a.tar.gz",
+      "sha256": "2127bf1fdb382c6e257d93023cc64ea99374a377c73d833699ace96dab2856f8",
+      "tasktrove_release": "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9",
+      "source_row": "Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz"
+    },
+    {
+      "path": "tasktrove-clean-09/answers/mcq-cce3426cf566.tar.gz",
+      "sha256": "a5e53a9dd2cfcec842036c2915a920113fe991ca67588affe3e8563888283136",
+      "tasktrove_release": "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9",
+      "source_row": "Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz"
+    },
+    {
+      "path": "tasktrove-clean-09/judge/openqa-80f6c461ebcf.tar.gz",
+      "sha256": "39d3f88e1f99d0b4797d9bb198ecdf68945e13a611646c177f335fd1cbe061cd",
+      "tasktrove_release": "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9",
+      "source_row": "openqa-80f6c461ebcf.tar.gz"
+    },
+    {
+      "path": "tasktrove-clean-09/judge/openqa-c7e9374b56ea.tar.gz",
+      "sha256": "57e62cdbf41b0ce26283f437f6096f733b0f7b3313ca0477caff185057d2c677",
+      "tasktrove_release": "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9",
+      "source_row": "openqa-c7e9374b56ea.tar.gz"
+    },
+    {
       "path": "coding/pytest-row-1487.tar.gz",
       "sha256": "9230f14445018c7460b7eb0891d9a5d9df2c1c3a2e1a872e46f3faee546f9863"
     },
@@ -94,416 +127,560 @@
     {
       "path": "r2egym/rows.json.gz",
       "sha256": "ef47c429228bcacc48bd453fd2f210dd2125bcdd87e6f81fc4bf7d58fa845fd1"
+    },
+    {
+      "path": "r2egym/broadened_rows.json.gz",
+      "sha256": "c1bfbbb7d0114d248d5dfeffbace599d23c8f306e831f7bee1daa530876ec3a3"
     }
   ],
   "exports": [
     {
       "task": "tasktrove-1972",
-      "protocol": "plain",
+      "rendering": "plain",
       "path": "harbor/tasktrove-1972-plain"
     },
     {
       "task": "tasktrove-1972",
-      "protocol": "json",
+      "rendering": "json",
       "path": "harbor/tasktrove-1972-json"
     },
     {
       "task": "tasktrove-1972",
-      "protocol": "xml",
+      "rendering": "xml",
       "path": "harbor/tasktrove-1972-xml"
     },
     {
       "task": "tasktrove-1972",
-      "protocol": "shellsim-file-plain",
+      "rendering": "shellsim-file-plain",
       "path": "harbor/tasktrove-1972-shellsim-file-plain"
     },
     {
       "task": "tasktrove-1972",
-      "protocol": "docker-terminus-file-plain",
-      "path": "harbor/tasktrove-1972-docker-terminus-file-plain"
+      "rendering": "shellsim-tool-chat-file-plain",
+      "path": "harbor/tasktrove-1972-shellsim-tool-chat-file-plain"
     },
     {
       "task": "tasktrove-1972",
-      "protocol": "shellsim-file-json",
+      "rendering": "docker-terminal-file-plain",
+      "path": "harbor/tasktrove-1972-docker-terminal-file-plain"
+    },
+    {
+      "task": "tasktrove-1972",
+      "rendering": "shellsim-file-json",
       "path": "harbor/tasktrove-1972-shellsim-file-json"
     },
     {
       "task": "tasktrove-1972",
-      "protocol": "docker-terminus-file-json",
-      "path": "harbor/tasktrove-1972-docker-terminus-file-json"
+      "rendering": "shellsim-tool-chat-file-json",
+      "path": "harbor/tasktrove-1972-shellsim-tool-chat-file-json"
+    },
+    {
+      "task": "tasktrove-1972",
+      "rendering": "docker-terminal-file-json",
+      "path": "harbor/tasktrove-1972-docker-terminal-file-json"
     },
     {
       "task": "tasktrove-119",
-      "protocol": "plain",
+      "rendering": "plain",
       "path": "harbor/tasktrove-119-plain"
     },
     {
       "task": "tasktrove-119",
-      "protocol": "json",
+      "rendering": "json",
       "path": "harbor/tasktrove-119-json"
     },
     {
       "task": "tasktrove-119",
-      "protocol": "xml",
+      "rendering": "xml",
       "path": "harbor/tasktrove-119-xml"
     },
     {
       "task": "tasktrove-114",
-      "protocol": "plain",
+      "rendering": "plain",
       "path": "harbor/tasktrove-114-plain"
     },
     {
       "task": "tasktrove-114",
-      "protocol": "json",
+      "rendering": "json",
       "path": "harbor/tasktrove-114-json"
     },
     {
       "task": "tasktrove-114",
-      "protocol": "xml",
+      "rendering": "xml",
       "path": "harbor/tasktrove-114-xml"
     },
     {
       "task": "tasktrove-114",
-      "protocol": "boxed",
+      "rendering": "boxed",
       "path": "harbor/tasktrove-114-boxed"
     },
     {
       "task": "tasktrove-114",
-      "protocol": "file",
+      "rendering": "file",
       "path": "harbor/tasktrove-114-file"
     },
     {
       "task": "tasktrove-115",
-      "protocol": "plain",
+      "rendering": "plain",
       "path": "harbor/tasktrove-115-plain"
     },
     {
       "task": "tasktrove-115",
-      "protocol": "json",
+      "rendering": "json",
       "path": "harbor/tasktrove-115-json"
     },
     {
       "task": "tasktrove-115",
-      "protocol": "xml",
+      "rendering": "xml",
       "path": "harbor/tasktrove-115-xml"
     },
     {
       "task": "tasktrove-115",
-      "protocol": "boxed",
+      "rendering": "boxed",
       "path": "harbor/tasktrove-115-boxed"
     },
     {
       "task": "tasktrove-115",
-      "protocol": "file",
+      "rendering": "file",
       "path": "harbor/tasktrove-115-file"
     },
     {
       "task": "tasktrove-11676",
-      "protocol": "plain",
+      "rendering": "plain",
       "path": "harbor/tasktrove-11676-plain"
     },
     {
       "task": "tasktrove-11676",
-      "protocol": "json",
+      "rendering": "json",
       "path": "harbor/tasktrove-11676-json"
     },
     {
       "task": "tasktrove-11676",
-      "protocol": "xml",
+      "rendering": "xml",
       "path": "harbor/tasktrove-11676-xml"
     },
     {
       "task": "tasktrove-11677",
-      "protocol": "plain",
+      "rendering": "plain",
       "path": "harbor/tasktrove-11677-plain"
     },
     {
       "task": "tasktrove-11677",
-      "protocol": "json",
+      "rendering": "json",
       "path": "harbor/tasktrove-11677-json"
     },
     {
       "task": "tasktrove-11677",
-      "protocol": "xml",
+      "rendering": "xml",
       "path": "harbor/tasktrove-11677-xml"
     },
     {
       "task": "tasktrove-11678",
-      "protocol": "plain",
+      "rendering": "plain",
       "path": "harbor/tasktrove-11678-plain"
     },
     {
       "task": "tasktrove-11678",
-      "protocol": "json",
+      "rendering": "json",
       "path": "harbor/tasktrove-11678-json"
     },
     {
       "task": "tasktrove-11678",
-      "protocol": "xml",
+      "rendering": "xml",
       "path": "harbor/tasktrove-11678-xml"
     },
     {
       "task": "tasktrove-16636",
-      "protocol": "plain",
+      "rendering": "plain",
       "path": "harbor/tasktrove-16636-plain"
     },
     {
       "task": "tasktrove-16634",
-      "protocol": "plain",
+      "rendering": "plain",
       "path": "harbor/tasktrove-16634-plain"
     },
     {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz",
+      "rendering": "plain",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz-plain"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz",
+      "rendering": "json",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz-json"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz",
+      "rendering": "xml",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz-xml"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz",
+      "rendering": "shellsim-file-plain",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz-shellsim-file-plain"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz",
+      "rendering": "shellsim-tool-chat-file-plain",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz-shellsim-tool-chat-file-plain"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz",
+      "rendering": "docker-terminal-file-plain",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz-docker-terminal-file-plain"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz",
+      "rendering": "shellsim-file-json",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz-shellsim-file-json"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz",
+      "rendering": "shellsim-tool-chat-file-json",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz-shellsim-tool-chat-file-json"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz",
+      "rendering": "docker-terminal-file-json",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz-docker-terminal-file-json"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz",
+      "rendering": "plain",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz-plain"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz",
+      "rendering": "json",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz-json"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz",
+      "rendering": "xml",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz-xml"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz",
+      "rendering": "shellsim-file-plain",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz-shellsim-file-plain"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz",
+      "rendering": "shellsim-tool-chat-file-plain",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz-shellsim-tool-chat-file-plain"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz",
+      "rendering": "docker-terminal-file-plain",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz-docker-terminal-file-plain"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz",
+      "rendering": "shellsim-file-json",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz-shellsim-file-json"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz",
+      "rendering": "shellsim-tool-chat-file-json",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz-shellsim-tool-chat-file-json"
+    },
+    {
+      "task": "tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz",
+      "rendering": "docker-terminal-file-json",
+      "path": "harbor/tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz-docker-terminal-file-json"
+    },
+    {
+      "task": "tasktrove-openqa-80f6c461ebcf.tar.gz",
+      "rendering": "plain",
+      "path": "harbor/tasktrove-openqa-80f6c461ebcf.tar.gz-plain"
+    },
+    {
+      "task": "tasktrove-openqa-80f6c461ebcf.tar.gz",
+      "rendering": "json",
+      "path": "harbor/tasktrove-openqa-80f6c461ebcf.tar.gz-json"
+    },
+    {
+      "task": "tasktrove-openqa-80f6c461ebcf.tar.gz",
+      "rendering": "xml",
+      "path": "harbor/tasktrove-openqa-80f6c461ebcf.tar.gz-xml"
+    },
+    {
+      "task": "tasktrove-openqa-c7e9374b56ea.tar.gz",
+      "rendering": "plain",
+      "path": "harbor/tasktrove-openqa-c7e9374b56ea.tar.gz-plain"
+    },
+    {
+      "task": "tasktrove-openqa-c7e9374b56ea.tar.gz",
+      "rendering": "json",
+      "path": "harbor/tasktrove-openqa-c7e9374b56ea.tar.gz-json"
+    },
+    {
+      "task": "tasktrove-openqa-c7e9374b56ea.tar.gz",
+      "rendering": "xml",
+      "path": "harbor/tasktrove-openqa-c7e9374b56ea.tar.gz-xml"
+    },
+    {
       "task": "tasktrove-1487",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/tasktrove-1487-workspace"
     },
     {
       "task": "tasktrove-1487",
-      "protocol": "terminus-workspace",
-      "path": "harbor/tasktrove-1487-terminus-workspace"
+      "rendering": "terminal-workspace",
+      "path": "harbor/tasktrove-1487-terminal-workspace"
     },
     {
       "task": "tasktrove-1488",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/tasktrove-1488-workspace"
     },
     {
       "task": "tasktrove-1488",
-      "protocol": "terminus-workspace",
-      "path": "harbor/tasktrove-1488-terminus-workspace"
+      "rendering": "terminal-workspace",
+      "path": "harbor/tasktrove-1488-terminal-workspace"
     },
     {
       "task": "tasktrove-1489",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/tasktrove-1489-workspace"
     },
     {
       "task": "tasktrove-1489",
-      "protocol": "terminus-workspace",
-      "path": "harbor/tasktrove-1489-terminus-workspace"
+      "rendering": "terminal-workspace",
+      "path": "harbor/tasktrove-1489-terminal-workspace"
     },
     {
       "task": "tasktrove-0",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/tasktrove-0-workspace"
     },
     {
       "task": "tasktrove-0",
-      "protocol": "terminus-workspace",
-      "path": "harbor/tasktrove-0-terminus-workspace"
+      "rendering": "terminal-workspace",
+      "path": "harbor/tasktrove-0-terminal-workspace"
     },
     {
       "task": "tasktrove-1",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/tasktrove-1-workspace"
     },
     {
       "task": "tasktrove-1",
-      "protocol": "terminus-workspace",
-      "path": "harbor/tasktrove-1-terminus-workspace"
-    },
-    {
-      "task": "tasktrove-2",
-      "protocol": "workspace",
-      "path": "harbor/tasktrove-2-workspace"
-    },
-    {
-      "task": "tasktrove-2",
-      "protocol": "terminus-workspace",
-      "path": "harbor/tasktrove-2-terminus-workspace"
+      "rendering": "terminal-workspace",
+      "path": "harbor/tasktrove-1-terminal-workspace"
     },
     {
       "task": "tasktrove-16158",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/tasktrove-16158-workspace"
     },
     {
       "task": "tasktrove-16159",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/tasktrove-16159-workspace"
     },
     {
       "task": "tasktrove-16160",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/tasktrove-16160-workspace"
     },
     {
       "task": "gsm8k-train/0",
-      "protocol": "plain",
+      "rendering": "plain",
       "path": "harbor/gsm8k-train-0-plain"
     },
     {
       "task": "gsm8k-train/0",
-      "protocol": "json",
+      "rendering": "json",
       "path": "harbor/gsm8k-train-0-json"
     },
     {
       "task": "gsm8k-train/0",
-      "protocol": "xml",
+      "rendering": "xml",
       "path": "harbor/gsm8k-train-0-xml"
     },
     {
       "task": "gsm8k-train/0",
-      "protocol": "boxed",
+      "rendering": "boxed",
       "path": "harbor/gsm8k-train-0-boxed"
     },
     {
       "task": "gsm8k-train/0",
-      "protocol": "file",
+      "rendering": "file",
       "path": "harbor/gsm8k-train-0-file"
     },
     {
       "task": "gsm8k-train/1",
-      "protocol": "plain",
+      "rendering": "plain",
       "path": "harbor/gsm8k-train-1-plain"
     },
     {
       "task": "gsm8k-train/1",
-      "protocol": "json",
+      "rendering": "json",
       "path": "harbor/gsm8k-train-1-json"
     },
     {
       "task": "gsm8k-train/1",
-      "protocol": "xml",
+      "rendering": "xml",
       "path": "harbor/gsm8k-train-1-xml"
     },
     {
       "task": "gsm8k-train/1",
-      "protocol": "boxed",
+      "rendering": "boxed",
       "path": "harbor/gsm8k-train-1-boxed"
     },
     {
       "task": "gsm8k-train/1",
-      "protocol": "file",
+      "rendering": "file",
       "path": "harbor/gsm8k-train-1-file"
     },
     {
       "task": "gsm8k-train/2",
-      "protocol": "plain",
+      "rendering": "plain",
       "path": "harbor/gsm8k-train-2-plain"
     },
     {
       "task": "gsm8k-train/2",
-      "protocol": "json",
+      "rendering": "json",
       "path": "harbor/gsm8k-train-2-json"
     },
     {
       "task": "gsm8k-train/2",
-      "protocol": "xml",
+      "rendering": "xml",
       "path": "harbor/gsm8k-train-2-xml"
     },
     {
       "task": "gsm8k-train/2",
-      "protocol": "boxed",
+      "rendering": "boxed",
       "path": "harbor/gsm8k-train-2-boxed"
     },
     {
       "task": "gsm8k-train/2",
-      "protocol": "file",
+      "rendering": "file",
       "path": "harbor/gsm8k-train-2-file"
     },
     {
       "task": "r2egym/2d9617bd0cb1f0ba61771258410ab8fae8e7e24d",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-2d9617bd0cb1f0ba61771258410ab8fae8e7e24d-workspace"
     },
     {
       "task": "r2egym/a95245e37f35446f9870feb68f5ebb97d1c279ce",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-a95245e37f35446f9870feb68f5ebb97d1c279ce-workspace"
     },
     {
       "task": "r2egym/9764be4fa30b1ae85db3b875039f0a2983531a9d",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-9764be4fa30b1ae85db3b875039f0a2983531a9d-workspace"
     },
     {
       "task": "r2egym/ef8363b650134f6415704b064573707a6d304ca3",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-ef8363b650134f6415704b064573707a6d304ca3-workspace"
     },
     {
       "task": "r2egym/e48a32f29bd3736e53efb7290cae64d5688357d6",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-e48a32f29bd3736e53efb7290cae64d5688357d6-workspace"
     },
     {
       "task": "r2egym/74ffccc1d4a1dbb877490c9d6b59e6f501d5e438",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-74ffccc1d4a1dbb877490c9d6b59e6f501d5e438-workspace"
     },
     {
       "task": "r2egym/269e2a176b9b2b8e00be46f5a59e840625879bf9",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-269e2a176b9b2b8e00be46f5a59e840625879bf9-workspace"
     },
     {
       "task": "r2egym/9b5494e26f407b75e79699c9d40be6df1d80a040",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-9b5494e26f407b75e79699c9d40be6df1d80a040-workspace"
     },
     {
       "task": "r2egym/70a4df334835bcb9ea7c6b0eb11b4f5f7e117f36",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-70a4df334835bcb9ea7c6b0eb11b4f5f7e117f36-workspace"
     },
     {
       "task": "r2egym/d61803f7181e7ad525d4bb1dd71ca500bb41617e",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-d61803f7181e7ad525d4bb1dd71ca500bb41617e-workspace"
     },
     {
       "task": "r2egym/df34d9081e1fbe25466980b17a082ce210e821b5",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-df34d9081e1fbe25466980b17a082ce210e821b5-workspace"
     },
     {
       "task": "r2egym/f5b986b11e518191441420df8f8b84154c92e81c",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-f5b986b11e518191441420df8f8b84154c92e81c-workspace"
     },
     {
       "task": "r2egym/3758d8594d8738e51b3a738e06858ae7fc3cbdf1",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-3758d8594d8738e51b3a738e06858ae7fc3cbdf1-workspace"
     },
     {
       "task": "r2egym/4651e73c8ea9a502d4fd6ee25f33ece07b693b37",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-4651e73c8ea9a502d4fd6ee25f33ece07b693b37-workspace"
     },
     {
       "task": "r2egym/7f5c9dace89a846e6fb7aed86e4ff7eb05e01dc0",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-7f5c9dace89a846e6fb7aed86e4ff7eb05e01dc0-workspace"
     },
     {
       "task": "r2egym/aae8c47f823197a04010a74570793464eb7352fe",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-aae8c47f823197a04010a74570793464eb7352fe-workspace"
     },
     {
       "task": "r2egym/b983e25212aa3c006c37089ef970688e3c01c369",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-b983e25212aa3c006c37089ef970688e3c01c369-workspace"
     },
     {
       "task": "r2egym/7c9de553a279791535aa8ec927bef47801b819f1",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-7c9de553a279791535aa8ec927bef47801b819f1-workspace"
     },
     {
       "task": "r2egym/ea8c3b0ce9ff87f849b1462aab0b34bd3e35d4ed",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-ea8c3b0ce9ff87f849b1462aab0b34bd3e35d4ed-workspace"
     },
     {
       "task": "r2egym/ad202ae0d526f208bfde4ed9ef47190f078be7de",
-      "protocol": "workspace",
+      "rendering": "workspace",
       "path": "harbor/r2egym-ad202ae0d526f208bfde4ed9ef47190f078be7de-workspace"
+    },
+    {
+      "task": "r2egym/b0d83c555eda061014ae1d04dc0af07a569650e6",
+      "rendering": "workspace",
+      "path": "harbor/r2egym-b0d83c555eda061014ae1d04dc0af07a569650e6-workspace"
+    },
+    {
+      "task": "synthetic/sequential-greeting",
+      "rendering": "workspace",
+      "path": "harbor/synthetic-sequential-greeting-workspace"
+    },
+    {
+      "task": "synthetic/conversational-revision",
+      "rendering": "chat-plain",
+      "path": "harbor/synthetic-conversational-revision-chat-plain"
+    },
+    {
+      "task": "synthetic/conversational-revision",
+      "rendering": "chat-json",
+      "path": "harbor/synthetic-conversational-revision-chat-json"
     }
   ],
-  "runtime_image": "sha256:7a5e734b713a7a9e7760808de2defea77643e91508f16807affd33cb87972610",
+  "runtime_image": "sha256:1e02be2c8950c47f6d8eef8bfd775abbd9c547c68d57ac6a887fd13b8ae7c8b7",
   "r2e_runtimes": {
     "2d9617bd0cb1f0ba61771258410ab8fae8e7e24d": {
       "kind": "container",
@@ -755,6 +932,19 @@
     "ad202ae0d526f208bfde4ed9ef47190f078be7de": {
       "kind": "container",
       "image": "sha256:68402232fc6f54f9fde088161b72cccb822dbeaf6c4522f834544c03a1d2e255",
+      "timeout": 300.0,
+      "revision": "b2b68d8b0a770cdc0ab3903780172c4b3eea81b1",
+      "workspace": {
+        "kind": "image_overlay",
+        "preserved_directories": [
+          ".venv"
+        ]
+      },
+      "supervisor_python": "/usr/local/bin/python3"
+    },
+    "b0d83c555eda061014ae1d04dc0af07a569650e6": {
+      "kind": "container",
+      "image": "sha256:3e44e72e4819e92d0c6dee21a536f382247b962379171c9d29fdc1a529ec60a6",
       "timeout": 300.0,
       "revision": "b2b68d8b0a770cdc0ab3903780172c4b3eea81b1",
       "workspace": {

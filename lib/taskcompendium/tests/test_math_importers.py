@@ -15,13 +15,11 @@ from taskcompendium.importers.tasktrove_math import import_task
 from taskcompendium.models import (
     AssistantFinal,
     BoxedLatex,
-    Chat,
     FileSubmission,
     JsonPath,
-    NoEnvironment,
     Outcome,
-    Protocol,
     Rejected,
+    Rendering,
     ResourceRole,
     Source,
 )
@@ -39,10 +37,10 @@ def test_tasktrove_math_preserves_problem_and_provenance():
     result = _math("114")
 
     assert not isinstance(result, Rejected)
-    assert isinstance(result.environment, NoEnvironment)
-    assert "orthocenter" in result.instructions
+    assert result.requirements.capabilities == ()
+    assert "orthocenter" in result.steps[0].instructions
     assert result.metadata.source.row == "114"
-    assert result.verifier.parameters["expected"] == "(-5.167, 4.693)"
+    assert result.steps[0].verifier.parameters["expected"] == "(-5.167, 4.693)"
 
 
 @pytest.mark.parametrize("answer", ["", "working only", "#### 1\n#### 2", "#### "])
@@ -61,18 +59,18 @@ def test_gsm8k_keeps_reasoning_private_and_uses_delimited_gold():
     result = import_row(row["question"], row["answer"], source)
 
     assert not isinstance(result, Rejected)
-    assert "####" not in result.instructions
-    assert result.verifier.parameters["expected"] == "72"
+    assert "####" not in result.steps[0].instructions
+    assert result.steps[0].verifier.parameters["expected"] == "72"
     assert result.resources[0].roles == (ResourceRole.ORACLE,)
 
 
 @pytest.mark.parametrize(
     ("protocol", "response"),
     [
-        (Protocol("plain", Chat(), AssistantFinal()), "246"),
-        (Protocol("boxed", Chat(), AssistantFinal(BoxedLatex())), r"\\boxed{246}"),
-        (Protocol("json", Chat(), AssistantFinal(JsonPath())), '{"answer":"246"}'),
-        (Protocol("file", Chat(), FileSubmission("/app/answer.txt")), None),
+        (Rendering("plain", AssistantFinal()), "246"),
+        (Rendering("boxed", AssistantFinal(BoxedLatex())), r"\\boxed{246}"),
+        (Rendering("json", AssistantFinal(JsonPath())), '{"answer":"246"}'),
+        (Rendering("file", FileSubmission("/app/answer.txt")), None),
     ],
 )
 def test_math_grading_accepts_explicit_submission_wrappers(protocol, response, tmp_path):
@@ -90,7 +88,7 @@ def test_math_grading_accepts_explicit_submission_wrappers(protocol, response, t
 def test_real_math_tasks_reject_wrong_and_empty_submissions(row, bad, tmp_path):
     specification = _math(row)
     assert not isinstance(specification, Rejected)
-    protocol = Protocol("plain", Chat(), AssistantFinal())
+    protocol = Rendering("plain", AssistantFinal())
     assert grade_attempt(specification, protocol, bad, tmp_path).reward == 0.0
     empty = grade_attempt(specification, protocol, "", tmp_path)
     assert empty.status == Outcome.EXTRACTION_ERROR and empty.reward is None
@@ -110,7 +108,7 @@ def test_math_does_not_treat_numeric_overlap_as_gold_leak():
     archive.files["instruction.md"] = instruction.encode()
     result = import_task(archive)
     assert not isinstance(result, Rejected)
-    assert "A value given in this problem is 246." in result.instructions
+    assert "A value given in this problem is 246." in result.steps[0].instructions
 
 
 def test_math_import_rejects_a_choice_task_with_a_math_verifier():

@@ -11,11 +11,11 @@ from tasktrove_verify.spec import MathType, Mode, mode_of
 from taskcompendium.importers.tasktrove import TaskArchive, puzzle_instructions, semantic_verifier
 from taskcompendium.models import (
     AnswerRequirements,
-    NoEnvironment,
-    PythonRuntime,
     Rejected,
     RejectionReason,
+    StepSpecification,
     TaskMetadata,
+    TaskRequirements,
     TaskSpecification,
 )
 
@@ -58,7 +58,7 @@ def import_task(archive: TaskArchive) -> TaskSpecification | Rejected:
         )
     if mode_of(verifier) is not Mode.MATH:
         return Rejected(source, RejectionReason.UNSUPPORTED_VERIFIER, "math family does not have a math verifier")
-    semantic = semantic_verifier(verifier)
+    semantic = semantic_verifier(verifier, implementation_revision=archive.release.verifier_revision)
     expected = semantic.parameters.get("expected")
     math_type = semantic.parameters.get("math_type")
     if not isinstance(expected, str) or not expected.strip():
@@ -76,11 +76,14 @@ def import_task(archive: TaskArchive) -> TaskSpecification | Rejected:
     competencies = tuple(tag for tag in tags if isinstance(tag, str)) if isinstance(tags, list) else ()
     return TaskSpecification(
         id=f"tasktrove-{source.row}",
-        instructions=cleaned,
-        environment=NoEnvironment(),
+        requirements=TaskRequirements(),
         resources=(),
-        verifier=semantic,
-        verifier_runtime=PythonRuntime(),
         metadata=TaskMetadata(source=source, competencies=competencies, task_shape="answer"),
-        answer_requirements=AnswerRequirements("value"),
+        steps=(
+            StepSpecification(
+                instructions=cleaned,
+                verifier=semantic,
+                answer_requirements=AnswerRequirements("text"),
+            ),
+        ),
     )

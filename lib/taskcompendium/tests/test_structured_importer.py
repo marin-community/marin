@@ -10,7 +10,7 @@ from pathlib import Path
 
 from taskcompendium.importers.tasktrove import read_archive
 from taskcompendium.importers.tasktrove_structured import import_task
-from taskcompendium.models import Embedded, NoEnvironment, Rejected, ResourceRole
+from taskcompendium.models import Embedded, Rejected, ResourceRole
 
 FIXTURES = Path(__file__).parent / "fixtures/structured"
 
@@ -46,19 +46,19 @@ def test_json_schema_import_keeps_schema_verifier_only():
     result = import_task(_archive("json", 'mode = "json-schema"\nschema = "schema.json"\nformat = "json"\n'))
 
     assert not isinstance(result, Rejected)
-    assert isinstance(result.environment, NoEnvironment)
-    assert result.answer_requirements.kind == "json"
+    assert result.requirements.capabilities == ()
+    assert result.steps[0].answer_requirements.kind == "json"
     assert result.resources[0].roles == (ResourceRole.VERIFIER,)
     assert isinstance(result.resources[0].content, Embedded)
-    assert "/app/answer.txt" not in result.instructions
+    assert "/app/answer.txt" not in result.steps[0].instructions
 
 
 def test_xml_elements_import_preserves_structural_verifier():
     result = import_task(_archive("xml", 'mode = "xml-elements"\nrequired = ["answer"]\n'))
 
     assert not isinstance(result, Rejected)
-    assert result.answer_requirements.kind == "xml"
-    assert result.verifier.mode.value == "xml-elements"
+    assert result.steps[0].answer_requirements.kind == "xml"
+    assert result.steps[0].verifier.mode.value == "xml-elements"
     assert not result.resources
 
 
@@ -76,10 +76,10 @@ def test_real_json_archive_preserves_schema_and_source_contract():
 
     assert not isinstance(result, Rejected)
     assert result.metadata.source.row == "16636"
-    assert result.verifier.parameters["schema"] == "schema.json"
-    assert result.verifier.parameters["format"].value == "json"
-    assert "verifier" not in result.instructions.lower()
-    assert result.instructions.startswith("Emit a JSON document that validates against the JSON Schema")
+    assert result.steps[0].verifier.parameters["schema"] == "schema.json"
+    assert result.steps[0].verifier.parameters["format"].value == "json"
+    assert "verifier" not in result.steps[0].instructions.lower()
+    assert result.steps[0].instructions.startswith("Emit a JSON document that validates against the JSON Schema")
     assert json.loads(result.resources[0].content.data) == json.loads(_archive_schema("json-row-16636.tar.gz"))
 
 
@@ -106,11 +106,11 @@ def test_real_xml_archive_preserves_required_element_verifier():
     result = import_task(archive)
 
     assert not isinstance(result, Rejected)
-    assert "verifier" not in result.instructions.lower()
-    assert "Include every top-level required field" in result.instructions
+    assert "verifier" not in result.steps[0].instructions.lower()
+    assert "Include every top-level required field" in result.steps[0].instructions
     assert result.metadata.source.row == "16634"
-    assert result.answer_requirements.kind == "xml"
-    assert result.verifier.parameters["required"] == (
+    assert result.steps[0].answer_requirements.kind == "xml"
+    assert result.steps[0].verifier.parameters["required"] == (
         "aircraft_name",
         "role",
         "manufacturer",
@@ -118,7 +118,9 @@ def test_real_xml_archive_preserves_required_element_verifier():
         "first_flight_year",
         "number_built",
     )
-    assert "## Submitting your answer" not in result.instructions
+    assert "JSON Schema" not in result.steps[0].instructions
+    assert "follows the schema in the task" in result.steps[0].instructions
+    assert "## Submitting your answer" not in result.steps[0].instructions
 
 
 def test_malformed_json_schema_is_rejected_instead_of_exported():

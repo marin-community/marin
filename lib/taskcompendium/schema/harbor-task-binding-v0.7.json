@@ -1,0 +1,339 @@
+{
+  "$ref": "#/$defs/HarborTaskBinding",
+  "$defs": {
+    "HarborTaskBinding": {
+      "title": "HarborTaskBinding",
+      "description": "Task-owned Harbor requirements, independent of the selected harness.",
+      "type": "object",
+      "properties": {
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NoEnvironment"
+            },
+            {
+              "$ref": "#/$defs/ShellSimEnvironment"
+            },
+            {
+              "$ref": "#/$defs/DockerEnvironment"
+            },
+            {
+              "$ref": "#/$defs/ProviderEnvironment"
+            }
+          ],
+          "discriminator": {
+            "propertyName": "kind",
+            "mapping": {
+              "none": "#/$defs/NoEnvironment",
+              "shellsim": "#/$defs/ShellSimEnvironment",
+              "docker": "#/$defs/DockerEnvironment",
+              "provider": "#/$defs/ProviderEnvironment"
+            }
+          }
+        },
+        "interaction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Chat"
+            },
+            {
+              "$ref": "#/$defs/ChatWithTools"
+            }
+          ],
+          "discriminator": {
+            "propertyName": "kind",
+            "mapping": {
+              "chat": "#/$defs/Chat",
+              "chat_with_tools": "#/$defs/ChatWithTools"
+            }
+          }
+        },
+        "context": {
+          "enum": [
+            "conversation",
+            "fresh"
+          ],
+          "default": "fresh"
+        }
+      },
+      "required": [
+        "environment",
+        "interaction"
+      ],
+      "additionalProperties": false
+    },
+    "NoEnvironment": {
+      "title": "NoEnvironment",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "none"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "ShellSimEnvironment": {
+      "title": "ShellSimEnvironment",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "shellsim"
+          ]
+        },
+        "workdir": {
+          "type": "string",
+          "default": "/app"
+        },
+        "max_steps": {
+          "type": "integer",
+          "default": 100000
+        },
+        "max_output_bytes": {
+          "type": "integer",
+          "default": 1048576
+        },
+        "setup_commands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "additional_directories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "DockerEnvironment": {
+      "title": "DockerEnvironment",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "docker"
+          ]
+        },
+        "image": {
+          "type": "string"
+        },
+        "workdir": {
+          "type": "string",
+          "default": "/app"
+        },
+        "setup_commands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "additional_directories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "kind",
+        "image"
+      ],
+      "additionalProperties": false
+    },
+    "ProviderEnvironment": {
+      "title": "ProviderEnvironment",
+      "description": "A provider adapter with private configuration, including any mutable-state seed.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "provider"
+          ]
+        },
+        "interface": {
+          "$ref": "#/$defs/ActionInterface"
+        },
+        "adapter": {
+          "type": "string"
+        },
+        "configuration": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "interface",
+        "adapter",
+        "configuration"
+      ],
+      "additionalProperties": false
+    },
+    "ActionInterface": {
+      "title": "ActionInterface",
+      "description": "A semantic, provider-independent stateful action surface and pinned seed digest.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "seed_sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "seed_sha256"
+      ],
+      "additionalProperties": false
+    },
+    "Chat": {
+      "title": "Chat",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "chat"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "ChatWithTools": {
+      "title": "ChatWithTools",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "chat_with_tools"
+          ]
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ShellToolBinding"
+              },
+              {
+                "$ref": "#/$defs/HarnessToolBinding"
+              },
+              {
+                "$ref": "#/$defs/ProviderToolBinding"
+              }
+            ],
+            "discriminator": {
+              "propertyName": "kind",
+              "mapping": {
+                "shell": "#/$defs/ShellToolBinding",
+                "harness": "#/$defs/HarnessToolBinding",
+                "provider": "#/$defs/ProviderToolBinding"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "tools"
+      ],
+      "additionalProperties": false
+    },
+    "ShellToolBinding": {
+      "title": "ShellToolBinding",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "shell"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "backend": {
+          "enum": [
+            "docker",
+            "shellsim"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "backend"
+      ],
+      "additionalProperties": false
+    },
+    "HarnessToolBinding": {
+      "title": "HarnessToolBinding",
+      "description": "A terminal-oriented interface supplied by a compatible Harbor agent.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "harness"
+          ]
+        },
+        "interface": {
+          "enum": [
+            "terminal"
+          ]
+        },
+        "backend": {
+          "enum": [
+            "docker",
+            "shellsim"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "interface",
+        "backend"
+      ],
+      "additionalProperties": false
+    },
+    "ProviderToolBinding": {
+      "title": "ProviderToolBinding",
+      "description": "Bind one declared semantic action interface to its provider adapter.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "provider"
+          ]
+        },
+        "interface": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "interface"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

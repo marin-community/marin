@@ -10,12 +10,12 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import openai
-from tasktrove_verify.modes.ifeval import resolve_checks
-from tasktrove_verify.modes.judge import CHECKLIST_PROMPT, REFERENCE_PROMPT, normalize
+from tasktrove_verify.modes.grade_ifeval import resolve_checks
+from tasktrove_verify.modes.grade_judge import CHECKLIST_PROMPT, REFERENCE_PROMPT, normalize
 from tasktrove_verify.spec import RUBRIC_CHECKLIST, RUBRIC_REFERENCE, JudgeSpec, Spec
 
 from taskcompendium.grading_paths import submission_relative
-from taskcompendium.models import GradingResult, JudgeModelPolicy, Outcome, TaskSpecification
+from taskcompendium.models import GradingResult, JudgeModelPolicy, Outcome, TaskSpecification, TaskTroveVerifier
 from taskcompendium.resources import contained_path
 
 _SCORE = re.compile(r"(?:^|\n)SCORE: (0|0\.5|1)\s*\Z")
@@ -57,8 +57,12 @@ def grade_judge_attempt(
     tests: Path,
     transcript: tuple[dict[str, Any], ...],
     client: JudgeClient | None,
+    step_index: int = 0,
 ) -> GradingResult:
-    config = specification.verifier.judge
+    verifier = specification.steps[step_index].verifier
+    if not isinstance(verifier, TaskTroveVerifier):
+        raise ValueError("Model judging requires a TaskTrove judge verifier")
+    config = verifier.judge
     assert config is not None and isinstance(contract, JudgeSpec)
     references = tuple(reference for reference in contract.references if reference.strip())
     criteria = tuple(criterion for criterion in contract.criteria if criterion.strip())

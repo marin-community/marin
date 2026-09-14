@@ -5,23 +5,28 @@
 
 from pathlib import Path
 
+import pytest
+
 from taskcompendium.grading import grade_attempt
-from taskcompendium.importers.tasktrove import read_archive
+from taskcompendium.importers.tasktrove import CLEAN_09_RELEASE, read_archive
 from taskcompendium.importers.tasktrove_judge import import_task
 from taskcompendium.judging import JudgeReply
 from taskcompendium.models import (
+    VERIFIER_REVISION,
     AssistantFinal,
-    Chat,
+    BoxedLatex,
+    JsonPath,
     JudgeConfig,
     JudgeModelPolicy,
     JudgeView,
-    NoEnvironment,
     Outcome,
-    Protocol,
     Rejected,
+    Rendering,
 )
+from taskcompendium.rendering import render_instruction
 
 FIXTURES = Path(__file__).parent / "fixtures/tasktrove/judge"
+CLEAN_09_FIXTURES = Path(__file__).parent / "fixtures/tasktrove-clean-09/judge"
 
 
 class FakeJudge:
@@ -42,23 +47,23 @@ def test_reference_judge_import_preserves_contract_and_strips_delivery_wrapper()
     archive, result = _spec("11676")
 
     assert not isinstance(result, Rejected)
-    assert isinstance(result.environment, NoEnvironment)
-    assert result.verifier.parameters["references"] == (
+    assert result.requirements.capabilities == ()
+    assert result.steps[0].verifier.parameters["references"] == (
         "No, because the buyer lacks legal title to encumber the property.",
     )
-    assert result.verifier.parameters["exact_gate"] is True
-    assert result.verifier.parameters["rubric"] == "reference"
-    assert result.verifier.judge is not None
-    assert "/app/response.txt" not in result.instructions
-    assert not result.instructions.endswith("Remember to put your answer inside \\boxed{}.")
-    assert "contract for deed transaction" in result.instructions
+    assert result.steps[0].verifier.parameters["exact_gate"] is True
+    assert result.steps[0].verifier.parameters["rubric"] == "reference"
+    assert result.steps[0].verifier.judge is not None
+    assert "/app/response.txt" not in result.steps[0].instructions
+    assert not result.steps[0].instructions.endswith("Remember to put your answer inside \\boxed{}.")
+    assert "contract for deed transaction" in result.steps[0].instructions
     assert archive.source.row == "11676"
 
 
 def test_reference_judge_grades_exact_gate_before_fixture_model(tmp_path):
     _, result = _spec("11678")
     assert not isinstance(result, Rejected)
-    protocol = Protocol("judge", Chat(), AssistantFinal())
+    protocol = Rendering("judge", AssistantFinal())
 
     exact = grade_attempt(result, protocol, r"$ \frac{4\pi a \sin(\theta_0)}{\lambda} $", tmp_path)
     judged = grade_attempt(
@@ -79,3 +84,44 @@ def test_reference_judge_grades_exact_gate_before_fixture_model(tmp_path):
     assert exact.status is Outcome.GRADED and exact.reward == 1.0
     assert judged.status is Outcome.GRADED and judged.reward == 1.0
     assert bad.status is Outcome.GRADED and bad.reward == 0.0
+
+
+@pytest.mark.parametrize(
+    ("filename", "reference"),
+    [
+        (
+            "openqa-80f6c461ebcf.tar.gz",
+            "Because the bounds for x and y are independent, allowing for simpler limits of integration when "
+            "integrating with respect to x and y before z.",
+        ),
+        ("openqa-c7e9374b56ea.tar.gz", "Continuous exposure (control)"),
+    ],
+)
+def test_clean09_openqa_is_release_pinned_and_uses_a_private_reference_gate(tmp_path, filename, reference):
+    archive = read_archive((CLEAN_09_FIXTURES / filename).read_bytes(), filename, "qa-short-answer", CLEAN_09_RELEASE)
+    config = JudgeConfig(JudgeModelPolicy("fixture", "small", "fixture", "https://fixture.invalid/v1"), JudgeView())
+    specification = import_task(archive, config)
+
+    assert not isinstance(specification, Rejected)
+    assert specification.metadata.source.dataset == CLEAN_09_RELEASE.root
+    assert specification.steps[0].verifier.implementation_revision == VERIFIER_REVISION
+    assert "judge" not in specification.steps[0].instructions.lower()
+    assert grade_attempt(specification, Rendering("plain", AssistantFinal()), reference, tmp_path).reward == 1.0
+
+
+@pytest.mark.parametrize("row", ["11676", "11677", "11678"])
+def test_judge_task_answer_wrapper_belongs_only_to_rendering(row, tmp_path):
+    archive, spec = _spec(row)
+    assert not isinstance(spec, Rejected)
+    assert r"\boxed" in archive.instructions
+    assert r"\boxed" not in spec.steps[0].instructions
+    assert r"\boxed" not in spec.steps[0].verifier.parameters["question"]
+    plain = Rendering("plain", AssistantFinal())
+    structured = Rendering("json", AssistantFinal(JsonPath()))
+    boxed = Rendering("boxed", AssistantFinal(BoxedLatex()))
+    assert r"\boxed" not in render_instruction(spec, plain)
+    assert r"\boxed" not in render_instruction(spec, structured)
+    assert r"\boxed" in render_instruction(spec, boxed)
+    reference = spec.steps[0].verifier.parameters["references"][0]
+    assert grade_attempt(spec, plain, reference, tmp_path).reward == 1.0
+    assert grade_attempt(spec, boxed, r"\boxed{" + reference + "}", tmp_path).reward == 1.0

@@ -13,7 +13,7 @@ from harbor.models.trial.config import TrialConfig
 from harbor.trial.trial import Trial
 
 from taskcompendium.models import HARBOR_REVISION
-from taskcompendium.serialization import from_json, protocol_from_json, specification_hash
+from taskcompendium.serialization import from_json, renderings_from_json, specification_hash
 
 
 async def run_trial(
@@ -33,9 +33,9 @@ async def run_trial(
     specification = from_json((task_dir / "specification.json").read_bytes())
     if manifest["specification_sha256"] != specification_hash(specification):
         raise ValueError("Export specification does not match its manifest hash")
-    protocol = protocol_from_json((task_dir / "protocol.json").read_bytes())
-    if protocol_from_json(json.dumps(manifest["protocol"])) != protocol:
-        raise ValueError("Export protocol does not match its manifest")
+    renderings = renderings_from_json((task_dir / "renderings.json").read_bytes())
+    if renderings_from_json(json.dumps(manifest["renderings"])) != renderings:
+        raise ValueError("Export rendering does not match its manifest")
     config = TrialConfig.model_validate(
         {
             **execution,
@@ -45,18 +45,27 @@ async def run_trial(
         }
     )
     trial = await Trial.create(config)
-    return await trial.run()
+    result = await trial.run()
+    if len(specification.steps) > 1:
+        steps = result.step_results or []
+        if len(steps) != len(specification.steps) or any(
+            step.exception_info is not None or step.verifier_result is None for step in steps
+        ):
+            result.verifier_result = None
+            # Harbor has already written its result; persist the corrected absence
+            # of an aggregate alongside the retained per-step diagnostics.
+            trial.paths.result_path.write_text(result.model_dump_json(indent=2))
+    return result
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("task", type=Path)
-    parser.add_argument("--execution", type=Path)
+    parser.add_argument("--execution", type=Path, required=True, help="Harbor-resolved launch configuration")
     parser.add_argument("--trials-dir", type=Path, required=True)
     parser.add_argument("--trial-name", required=True)
     args = parser.parse_args()
-    execution_path = args.execution or args.task / "execution.json"
-    execution = json.loads(execution_path.read_text())
+    execution = json.loads(args.execution.read_text())
     result = asyncio.run(run_trial(args.task, execution, args.trials_dir, args.trial_name))
     print(result.model_dump_json(indent=2))
     if result.verifier_result is None or result.exception_info is not None:

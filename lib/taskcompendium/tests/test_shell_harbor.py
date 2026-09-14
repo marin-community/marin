@@ -8,18 +8,26 @@ from pathlib import Path
 
 import pytest
 
+from taskcompendium.execution import (
+    ChatWithTools,
+    DockerEnvironment,
+    HarborExecutionConfig,
+    HarnessToolBinding,
+    environment_for_requirements,
+)
 from taskcompendium.harbor.runner import run_trial
 from taskcompendium.importers.tasktrove import read_archive
 from taskcompendium.importers.tasktrove_shell import import_task
-from taskcompendium.lowering import export_task
-from taskcompendium.models import ChatWithTools, ContainerRuntime, ExecutionConfig, FinalState, Protocol, Rejected
+from taskcompendium.lowering import lower_to_harbor
+from taskcompendium.models import ContainerRuntime, FinalState, Rejected, Rendering
 
 pytestmark = pytest.mark.docker
 FIXTURE = Path(__file__).parent / "fixtures/shell/script-row-16158.tar.gz"
 
 
+@pytest.mark.parametrize("provider", ["shellsim", "docker"])
 @pytest.mark.parametrize("attempt,reward", [("good", 1.0), ("bad", 0.0), ("empty", 0.0), ("shadow", 0.0)])
-async def test_real_nl2bash_shellsim_with_original_checker(tmp_path, runtime_image, bridge, attempt, reward):
+async def test_real_nl2bash_shellsim_with_original_checker(tmp_path, runtime_image, bridge, attempt, reward, provider):
     archive = read_archive(FIXTURE.read_bytes(), "16158", "shell-cmd")
     spec = import_task(archive, verifier_runtime=ContainerRuntime(runtime_image))
     assert not isinstance(spec, Rejected)
@@ -40,13 +48,23 @@ async def test_real_nl2bash_shellsim_with_original_checker(tmp_path, runtime_ima
         commands.append("echo wrong > /output/command_capture.txt")
     else:
         commands.append(": > /output/command_capture.txt")
-    task = export_task(
+    state = spec.requirements.state
+    environment = (
+        environment_for_requirements(spec.requirements)
+        if provider == "shellsim"
+        else DockerEnvironment(runtime_image, state.workdir, state.setup_commands, state.additional_directories)
+    )
+    task = lower_to_harbor(
         spec,
-        Protocol("shell", ChatWithTools(), FinalState((".", "/output/command_capture.txt"))),
-        ExecutionConfig("replay", spec.environment),
+        (Rendering("shell", FinalState((".", "/output/command_capture.txt"))),),
+        HarborExecutionConfig(
+            "replay",
+            environment,
+            interaction=(ChatWithTools((HarnessToolBinding("replay", provider),))),
+        ),
         tmp_path / "task",
         agent_kwargs={"commands": commands},
-        environment_kwargs={"bridge_path": bridge},
+        environment_kwargs={"bridge_path": bridge} if provider == "shellsim" else None,
     )
     execution = json.loads((task / "execution.json").read_text())
     result = await run_trial(task, execution, tmp_path / "trials", "shell")

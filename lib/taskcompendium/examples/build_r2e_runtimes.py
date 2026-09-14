@@ -20,9 +20,13 @@ PACKAGE = Path(__file__).resolve().parents[1]
 def build(indices: list[int], output: Path) -> None:
     if output.exists():
         raise FileExistsError(output)
-    rows = json.loads(gzip.decompress((PACKAGE / "tests/fixtures/r2egym/rows.json.gz").read_bytes()))
-    if len(set(indices)) != len(indices) or any(index < 0 or index >= len(rows) for index in indices):
-        raise ValueError("Select unique row indices from the pinned sample")
+    fixtures = PACKAGE / "tests/fixtures/r2egym"
+    rows = dict(enumerate(json.loads(gzip.decompress((fixtures / "rows.json.gz").read_bytes()))))
+    broadened = json.loads(gzip.decompress((fixtures / "broadened_rows.json.gz").read_bytes()))
+    source_indices = json.loads((fixtures / "broadened_rows_provenance.json").read_text())["rows"]
+    rows.update(zip(source_indices, broadened, strict=True))
+    if len(set(indices)) != len(indices) or any(index not in rows for index in indices):
+        raise ValueError(f"Select unique source rows from {sorted(rows)}")
     runtimes = {}
     directory = PACKAGE / "src/taskcompendium/harbor"
     for index in indices:
@@ -63,7 +67,7 @@ def build(indices: list[int], output: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--rows", type=int, nargs="+", required=True, help="Zero-based rows to build; downloads their images"
+        "--rows", type=int, nargs="+", required=True, help="Pinned source row indices: 0 through 19, 500, or 550"
     )
     parser.add_argument("--output", type=Path, required=True, help="New runtime mapping JSON for build_poc.py")
     arguments = parser.parse_args()

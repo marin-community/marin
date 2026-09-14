@@ -12,29 +12,37 @@ from pathlib import Path
 import pytest
 from tasktrove_verify.spec import Mode
 
+from taskcompendium.execution import (
+    ChatWithTools,
+    DockerEnvironment,
+    HarborExecutionConfig,
+    HarnessToolBinding,
+    environment_for_requirements,
+)
 from taskcompendium.harbor.runner import run_trial
 from taskcompendium.importers.tasktrove import read_archive
 from taskcompendium.importers.tasktrove_answers import import_task
-from taskcompendium.lowering import export_task
+from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import (
     AnswerRequirements,
-    ChatWithTools,
+    Capability,
     ContainerRuntime,
-    DockerEnvironment,
     Embedded,
-    ExecutionConfig,
     FileSubmission,
     FinalState,
     JsonPath,
     PlainText,
-    Protocol,
     Rejected,
+    Rendering,
     Resource,
     ResourceRole,
     Source,
+    StepSpecification,
     TaskMetadata,
+    TaskRequirements,
     TaskSpecification,
-    VerifierSpec,
+    TaskTroveVerifier,
+    WorkspaceState,
 )
 
 pytestmark = pytest.mark.docker
@@ -80,18 +88,24 @@ HTTPServer(('127.0.0.1', 8765), Endpoint).serve_forever()
 def _spec(image, setup_commands=()):
     return TaskSpecification(
         id="native-agent/sum",
-        instructions="Write /app/main.py to read two integers from stdin and print their sum.",
-        environment=DockerEnvironment(image, setup_commands=setup_commands),
+        requirements=TaskRequirements(
+            (Capability.FILESYSTEM, Capability.SHELL, Capability.PROCESS),
+            WorkspaceState(image, setup_commands=setup_commands),
+        ),
         resources=(
             Resource("cases/input_1.txt", (ResourceRole.VERIFIER,), Embedded(b"2 3\n")),
             Resource("cases/output_1.txt", (ResourceRole.VERIFIER,), Embedded(b"5\n")),
             Resource("cases/input_2.txt", (ResourceRole.VERIFIER,), Embedded(b"-1 8\n")),
             Resource("cases/output_2.txt", (ResourceRole.VERIFIER,), Embedded(b"7\n")),
         ),
-        verifier=VerifierSpec(Mode.STDIO, {"command": "python3 main.py"}),
-        verifier_runtime=ContainerRuntime(image),
         metadata=TaskMetadata(Source("native-agent-fixture", "1", "0", "1")),
-        answer_requirements=AnswerRequirements("final_state"),
+        steps=(
+            StepSpecification(
+                instructions="Write /app/main.py to read two integers from stdin and print their sum.",
+                verifier=TaskTroveVerifier(Mode.STDIO, {"command": "python3 main.py"}, runtime=ContainerRuntime(image)),
+                answer_requirements=AnswerRequirements("final_state"),
+            ),
+        ),
     )
 
 
@@ -153,16 +167,21 @@ async def test_native_terminus_executes_terminal_commands(
     thread.start()
     try:
         spec = _spec(runtime_image)
-        protocol = Protocol("code", ChatWithTools(), FinalState(("main.py",)))
+        protocol = Rendering("code", FinalState(("main.py",)))
         if extractor is not None:
             archive = Path(__file__).parent / "fixtures/tasktrove/answers/mcq-row-1972.tar.gz"
             spec = import_task(read_archive(archive.read_bytes(), "1972", "qa-short-answer"))
             assert not isinstance(spec, Rejected)
-            protocol = Protocol("mcq", ChatWithTools(), FileSubmission(output_path, extractor))
-        task = export_task(
+            protocol = Rendering("mcq", FileSubmission(output_path, extractor))
+        task = lower_to_harbor(
             spec,
-            protocol,
-            ExecutionConfig("terminus-2", DockerEnvironment(runtime_image), timeout=45),
+            (protocol,),
+            HarborExecutionConfig(
+                "terminus-2",
+                DockerEnvironment(runtime_image),
+                timeout=45,
+                interaction=ChatWithTools((HarnessToolBinding("terminus-2", "docker"),)),
+            ),
             tmp_path / "task",
             model_name="openai/gpt-4o",
             agent_kwargs={
@@ -196,10 +215,15 @@ async def test_preinstalled_native_mini_swe_agent_executes_bash(tmp_path, runtim
         " except OSError: time.sleep(.05)\nelse: raise RuntimeError('fixture endpoint failed to start')"
     )
     spec = _spec(runtime_image, (start + "\npython3 -c " + shlex.quote(ready),))
-    task = export_task(
+    task = lower_to_harbor(
         spec,
-        Protocol("code", ChatWithTools(), FinalState(("main.py",))),
-        ExecutionConfig("mini-swe-agent", spec.environment, timeout=45),
+        (Rendering("code", FinalState(("main.py",))),),
+        HarborExecutionConfig(
+            "mini-swe-agent",
+            environment_for_requirements(spec.requirements),
+            timeout=45,
+            interaction=ChatWithTools((HarnessToolBinding("mini-swe-agent", "docker"),)),
+        ),
         tmp_path / "task",
         model_name="openai/gpt-4o",
         agent_env={"OPENAI_API_BASE": "http://127.0.0.1:8765/v1", "LITELLM_LOCAL_MODEL_COST_MAP": "True"},

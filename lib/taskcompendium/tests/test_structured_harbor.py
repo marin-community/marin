@@ -8,11 +8,12 @@ from pathlib import Path
 
 import pytest
 
+from taskcompendium.execution import Chat, HarborExecutionConfig, environment_for_requirements
 from taskcompendium.harbor.runner import run_trial
 from taskcompendium.importers.tasktrove import read_archive
 from taskcompendium.importers.tasktrove_structured import import_task
-from taskcompendium.lowering import export_task
-from taskcompendium.models import AssistantFinal, Chat, ExecutionConfig, Protocol, Rejected
+from taskcompendium.lowering import lower_to_harbor
+from taskcompendium.models import AssistantFinal, Rejected, Rendering
 
 FIXTURES = Path(__file__).parent / "fixtures/structured"
 
@@ -42,10 +43,14 @@ def _task(tmp_path: Path):
     archive = read_archive((FIXTURES / "json-row-16636.tar.gz").read_bytes(), "16636", "other")
     specification = import_task(archive)
     assert not isinstance(specification, Rejected)
-    return export_task(
+    return lower_to_harbor(
         specification,
-        Protocol("structured", Chat(), AssistantFinal()),
-        ExecutionConfig("replay", specification.environment),
+        (Rendering("structured", AssistantFinal()),),
+        HarborExecutionConfig(
+            "replay",
+            environment_for_requirements(specification.requirements),
+            interaction=(Chat()),
+        ),
         tmp_path / "structured",
     )
 
@@ -54,10 +59,14 @@ def _xml_task(tmp_path: Path):
     archive = read_archive((FIXTURES / "xml-row-16634.tar.gz").read_bytes(), "16634", "other")
     specification = import_task(archive)
     assert not isinstance(specification, Rejected)
-    return export_task(
+    return lower_to_harbor(
         specification,
-        Protocol("structured-xml", Chat(), AssistantFinal()),
-        ExecutionConfig("replay", specification.environment),
+        (Rendering("structured-xml", AssistantFinal()),),
+        HarborExecutionConfig(
+            "replay",
+            environment_for_requirements(specification.requirements),
+            interaction=(Chat()),
+        ),
         tmp_path / "structured-xml",
     )
 

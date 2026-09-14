@@ -12,8 +12,8 @@ from tasktrove_verify.spec import Mode
 
 from taskcompendium.models import (
     AnswerRequirements,
+    Capability,
     ContainerRuntime,
-    DockerEnvironment,
     Embedded,
     ImageOverlay,
     Rejected,
@@ -21,16 +21,19 @@ from taskcompendium.models import (
     Resource,
     ResourceRole,
     Source,
+    StepSpecification,
     TaskMetadata,
+    TaskRequirements,
     TaskSpecification,
-    VerifierSpec,
+    TaskTroveVerifier,
+    WorkspaceState,
     relative_path,
 )
 
 DATASET = "R2E-Gym/R2E-Gym-V1"
 REVISION = "903d405799ac435061c41e72260c81ca5100f964"
 SOURCE_REVISION = "0d94c4eb9431cd195c55a7ea3abd54006c9a1735"
-IMPORTER_REVISION = "taskcompendium-r2egym-v1"
+IMPORTER_REVISION = "taskcompendium-r2egym-v4"
 # Source images contain a dangling datasets alias; it is not a candidate repair.
 SNAPSHOT_EXCLUSIONS = (".venv", "datasets")
 
@@ -57,7 +60,26 @@ _IMAGE_DIGESTS = {
     "7c9de553a279791535aa8ec927bef47801b819f1": "f719c808a015c883cabe3152ea8159346569028105c008273dbf6154c4dd4ec8",
     "ea8c3b0ce9ff87f849b1462aab0b34bd3e35d4ed": "928fec0305886115f1c7ccd22275da5d4aab9dd8df3c03497cb06bd5e6e7cf3e",
     "ad202ae0d526f208bfde4ed9ef47190f078be7de": "1f51967789c2f9172ad05d2c7ca7ab1112266feb804d13f96961bc96a1281eb6",
+    # These two SymPy rows are pinned source-family broadening examples.  The
+    # manifest digests were resolved from Docker Hub; image layers are not
+    # downloaded by the importer.
+    "b0d83c555eda061014ae1d04dc0af07a569650e6": "0c6511c00df0564ad7513261f1c643d31130fe7157b34457d9f36fed5d674d56",
+    "d635509acdf6aa448200797e2d3393068ed29dc7": "e1dba0c4da4398c49840bea0a5f7398be5787e7150d4ddea600b531ac0d80a0f",
 }
+_IMAGE_REPOSITORIES = {
+    **{
+        tag: "namanjain12/orange3_final"
+        for tag in _IMAGE_DIGESTS
+        if tag
+        not in {
+            "b0d83c555eda061014ae1d04dc0af07a569650e6",
+            "d635509acdf6aa448200797e2d3393068ed29dc7",
+        }
+    },
+    "b0d83c555eda061014ae1d04dc0af07a569650e6": "namanjain12/sympy_final",
+    "d635509acdf6aa448200797e2d3393068ed29dc7": "namanjain12/sympy_final",
+}
+_REQUIRES_XVFB = {"orange3": True, "sympy": False}
 
 
 def _source(row: Mapping[str, Any], row_id: str) -> Source:
@@ -70,7 +92,7 @@ def source_image(row: Mapping[str, Any]) -> str | None:
     if not isinstance(value, str) or ":" not in value:
         return None
     repository, tag = value.rsplit(":", 1)
-    if repository != "namanjain12/orange3_final":
+    if _IMAGE_REPOSITORIES.get(tag) != repository:
         return None
     digest = _IMAGE_DIGESTS.get(tag)
     return f"docker.io/{repository}@sha256:{digest}" if digest else None
@@ -103,7 +125,12 @@ def import_row(
     )
     if any(key not in row for key in required):
         return Rejected(source, RejectionReason.UNRECOVERABLE_SOURCE, "R2E-Gym row is truncated")
-    if row["repo_name"] != "orange3" or not str(row["docker_image"]).endswith(":" + row_id):
+    expected_repository = f"namanjain12/{row['repo_name']}_final"
+    if (
+        not isinstance(row["repo_name"], str)
+        or not str(row["docker_image"]).startswith(expected_repository + ":")
+        or not str(row["docker_image"]).endswith(":" + row_id)
+    ):
         return Rejected(
             source, RejectionReason.UNRECOVERABLE_SOURCE, "image repository or commit does not match the row"
         )
@@ -203,18 +230,28 @@ def import_row(
         "rm -rf /r2e_tests /expected_test_output.json /testbed/r2e_tests "
         "/testbed/expected_test_output.json /testbed/.git",
     )
-    parameters = {"path": "r2e_assets/verify.py", "args": []}
+    parameters = {
+        "path": "r2e_assets/verify.py",
+        "args": ["--require-xvfb"] if _REQUIRES_XVFB[row["repo_name"]] else [],
+    }
+    verifier = TaskTroveVerifier(Mode.SCRIPT, parameters, runtime=verifier_runtime)
     return TaskSpecification(
         id=f"r2egym/{row_id}",
-        instructions=instruction.strip(),
-        environment=DockerEnvironment(image=image, workdir="/testbed", setup_commands=setup),
+        steps=(
+            StepSpecification(
+                instructions=instruction.strip(),
+                verifier=verifier,
+                answer_requirements=AnswerRequirements("final_state"),
+            ),
+        ),
+        requirements=TaskRequirements(
+            (Capability.FILESYSTEM, Capability.SHELL, Capability.PROCESS),
+            WorkspaceState(image=image, workdir="/testbed", setup_commands=setup),
+        ),
         resources=tuple(resources),
-        verifier=VerifierSpec(Mode.SCRIPT, parameters),
-        verifier_runtime=verifier_runtime,
         metadata=TaskMetadata(
             source=source, competencies=("software-engineering", "debugging"), task_shape="environment-modification"
         ),
-        answer_requirements=AnswerRequirements("final_state"),
     )
 
 

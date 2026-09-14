@@ -4,27 +4,29 @@
 """Import pinned GSM8K rows without recovering answers heuristically."""
 
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 from tasktrove_verify.spec import MathType, Mode
 
 from taskcompendium.models import (
     AnswerRequirements,
     Embedded,
-    NoEnvironment,
-    PythonRuntime,
     Rejected,
     RejectionReason,
     Resource,
     ResourceRole,
     Source,
+    StepSpecification,
     TaskMetadata,
+    TaskRequirements,
     TaskSpecification,
-    VerifierSpec,
+    TaskTroveVerifier,
 )
 
 DATASET = "openai/gsm8k"
 REVISION = "e53f048856ff4f594e959d75785d2c2d37b678ee"
-IMPORTER_REVISION = "taskcompendium-gsm8k-v1"
+IMPORTER_REVISION = "taskcompendium-gsm8k-v4"
 _DELIMITER = re.compile(r"(?m)^####[ \t]+([^\n]+)[ \t]*$")
 
 
@@ -48,11 +50,25 @@ def import_row(question: str, answer: str, source: Source) -> TaskSpecification 
         )
     return TaskSpecification(
         id=f"gsm8k-{source.row}",
-        instructions=question.strip(),
-        environment=NoEnvironment(),
+        requirements=TaskRequirements(),
         resources=(Resource("oracle/reasoning.txt", (ResourceRole.ORACLE,), Embedded(answer.encode())),),
-        verifier=VerifierSpec(Mode.MATH, {"expected": expected, "math_type": MathType.SCALAR}),
-        verifier_runtime=PythonRuntime(),
         metadata=TaskMetadata(source=source, competencies=("math",), task_shape="answer"),
-        answer_requirements=AnswerRequirements("value"),
+        steps=(
+            StepSpecification(
+                instructions=question.strip(),
+                verifier=TaskTroveVerifier(Mode.MATH, {"expected": expected, "math_type": MathType.SCALAR}),
+                answer_requirements=AnswerRequirements("text"),
+            ),
+        ),
     )
+
+
+@dataclass(frozen=True)
+class Gsm8kTaskSpec:
+    """Pinned source family; keyed rows are resolved once before any rendering."""
+
+    rows: Mapping[str, tuple[str, str]]
+
+    def instantiate(self, key: str) -> TaskSpecification | Rejected:
+        question, answer = self.rows[key]
+        return import_row(question, answer, Source(DATASET, REVISION, key, IMPORTER_REVISION))

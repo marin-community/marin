@@ -4,7 +4,6 @@
 """Harbor environments for direct chat and persistent ShellSim sessions."""
 
 import asyncio
-import json
 import shlex
 from pathlib import Path, PurePosixPath
 
@@ -13,11 +12,12 @@ from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 from harbor.environments.docker.docker import DockerEnvironment
 
+from taskcompendium.execution import DockerEnvironment as DockerRequirement
+from taskcompendium.execution import HarborTaskBinding
+from taskcompendium.execution import ShellSimEnvironment as ShellSimRequirement
 from taskcompendium.harbor.snapshot import download_snapshot
-from taskcompendium.models import DockerEnvironment as DockerRequirement
-from taskcompendium.models import ExecutionConfig, FinalState, image_digest
-from taskcompendium.models import ShellSimEnvironment as ShellSimRequirement
-from taskcompendium.serialization import from_json, protocol_from_json
+from taskcompendium.models import FinalState, image_digest
+from taskcompendium.serialization import renderings_from_json
 from taskcompendium.shellsim import ShellSimLimits, ShellSimSession
 
 
@@ -43,7 +43,13 @@ class NoToolEnvironment(BaseEnvironment):
         pass
 
     async def exec(self, command, cwd=None, env=None, timeout_sec=None, user=None) -> ExecResult:
+        if command == "pwd":
+            return ExecResult(stdout="/app\n", stderr="", return_code=0)
         raise ValueError("Chat does not provide shell execution")
+
+    async def empty_dirs(self, dirs, *, chmod: bool = True) -> None:
+        if not set(map(str, dirs)).issubset({"/logs/agent", "/logs/verifier", "/logs/artifacts", "/tests"}):
+            raise ValueError("Chat does not provide filesystem operations")
 
     async def upload_file(self, source_path, target_path) -> None:
         raise ValueError("Chat does not provide filesystem uploads")
@@ -97,8 +103,10 @@ class ShellSimEnvironment(BaseEnvironment):
         inputs = self.environment_dir / "inputs"
         if inputs.exists():
             await self.upload_dir(inputs, workdir)
-        specification = from_json((self.environment_dir.parent / "specification.json").read_bytes())
-        requirement = specification.environment
+        binding = msgspec.json.decode(
+            (self.environment_dir.parent / "binding.json").read_bytes(), type=HarborTaskBinding
+        )
+        requirement = binding.environment
         if isinstance(requirement, ShellSimRequirement):
             for directory in requirement.additional_directories:
                 await asyncio.to_thread(self.session.mkdir, directory)
@@ -163,9 +171,10 @@ class TaskDockerEnvironment(DockerEnvironment):
         image_digest(self.task_env_config.docker_image)
 
     async def _upload_environment_dir_after_start(self) -> None:
-        manifest = json.loads((self.environment_dir.parent / "manifest.json").read_text())
-        execution = msgspec.convert(manifest["execution"], type=ExecutionConfig)
-        environment = execution.environment
+        binding = msgspec.json.decode(
+            (self.environment_dir.parent / "binding.json").read_bytes(), type=HarborTaskBinding
+        )
+        environment = binding.environment
         if not isinstance(environment, DockerRequirement):
             raise ValueError("Docker bootstrap requires a Docker execution environment")
         workdir = self.task_env_config.workdir
@@ -190,8 +199,8 @@ class TaskDockerEnvironment(DockerEnvironment):
         if PurePosixPath(source_dir) != PurePosixPath(self.task_env_config.workdir or "/app"):
             await super().download_dir(source_dir, target_dir)
             return
-        protocol = protocol_from_json((self.environment_dir.parent / "protocol.json").read_bytes())
-        exclusions = protocol.submission.excluded_paths if isinstance(protocol.submission, FinalState) else ()
+        renderings = renderings_from_json((self.environment_dir.parent / "renderings.json").read_bytes())
+        exclusions = next((r.submission.excluded_paths for r in renderings if isinstance(r.submission, FinalState)), ())
         result = await self._run_docker_compose_command(["ps", "-q", "main"])
         container_id = (result.stdout or "").strip()
         if not container_id or len(container_id.splitlines()) != 1:

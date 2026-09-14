@@ -18,12 +18,12 @@ from taskcompendium.models import (
     Embedded,
     GradingResult,
     ImageOverlay,
-    NoEnvironment,
     Outcome,
-    Protocol,
+    Rendering,
     ResourceRef,
     ResourceRole,
     TaskSpecification,
+    verifier_runtime,
 )
 from taskcompendium.resources import resource_bytes
 from taskcompendium.serialization import to_json
@@ -31,18 +31,37 @@ from taskcompendium.serialization import to_json
 
 def grade_in_container(
     specification: TaskSpecification,
-    protocol: Protocol,
+    protocol: Rendering,
     response: str | None,
     workspace: Path,
     transcript: tuple[dict, ...] = (),
+    step_index: int = 0,
 ) -> GradingResult:
     """Grade a workspace snapshot without executing candidate code on the host."""
-    validate_workspace_submission(specification, protocol)
-    runtime = specification.verifier_runtime
+    validate_workspace_submission(specification, protocol, step_index)
+    runtime = verifier_runtime(specification.steps[step_index].verifier)
     if not isinstance(runtime, ContainerRuntime):
         raise ValueError("Container grading requires ContainerRuntime")
     specification = msgspec.structs.replace(
         specification,
+        steps=tuple(
+            (
+                msgspec.structs.replace(
+                    step,
+                    resources=tuple(
+                        (
+                            msgspec.structs.replace(resource, content=Embedded(resource_bytes(resource)))
+                            if ResourceRole.VERIFIER in resource.roles and isinstance(resource.content, ResourceRef)
+                            else resource
+                        )
+                        for resource in step.resources
+                    ),
+                )
+                if index == step_index
+                else step
+            )
+            for index, step in enumerate(specification.steps)
+        ),
         resources=tuple(
             (
                 msgspec.structs.replace(resource, content=Embedded(resource_bytes(resource)))
@@ -52,7 +71,7 @@ def grade_in_container(
             for resource in specification.resources
         ),
     )
-    workdir = "/app" if isinstance(specification.environment, NoEnvironment) else specification.environment.workdir
+    workdir = specification.requirements.state.workdir
     package = Path(__file__).resolve().parents[1]
     source_verifier = Path(tasktrove_verify.__file__).resolve().parent
     name = f"taskcompendium-verifier-{uuid.uuid4().hex}"
@@ -60,6 +79,7 @@ def grade_in_container(
         {
             "specification": json.loads(to_json(specification)),
             "protocol": msgspec.to_builtins(protocol),
+            "step_index": step_index,
             "attempt": {"response": response, "transcript": transcript},
         }
     )
@@ -68,8 +88,8 @@ def grade_in_container(
         (package, "/opt/runtime/taskcompendium"),
         (source_verifier, "/opt/runtime/tasktrove_verify"),
     ]
-    if not isinstance(specification.environment, NoEnvironment):
-        for directory in specification.environment.additional_directories:
+    if specification.requirements.state.additional_directories:
+        for directory in specification.requirements.state.additional_directories:
             source = workspace / EXTERNAL_DIRECTORY / directory.lstrip("/")
             source.mkdir(parents=True, exist_ok=True)
             mounts.append((source.resolve(), directory))

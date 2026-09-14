@@ -1,0 +1,1488 @@
+{
+  "hf_mirror": "open-athena/task-trove",
+  "hf_revision": "b115a18c3d51b83a890984c63c44ac0e417e38e8",
+  "manifest_sha256": "61b16f38fdcf8afee87ed979c354bd3933f2269bb24e2b79405acb20c494f259",
+  "release": "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9",
+  "rows": [
+    {
+      "converter": "nl2bash",
+      "dockerfile_id": "fd46f9c11b2f",
+      "family": "shell-cmd",
+      "has_solution": true,
+      "language": "bash",
+      "mode": "script",
+      "path": "task_1139",
+      "source": "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+      "tags": [
+        "shell",
+        "bash",
+        "nl2bash",
+        "terminal",
+        "dcagent2"
+      ],
+      "template_id": "b794a612e017"
+    },
+    {
+      "converter": "nl2bash",
+      "dockerfile_id": "fd46f9c11b2f",
+      "family": "shell-cmd",
+      "has_solution": true,
+      "language": "bash",
+      "mode": "script",
+      "path": "task_6529",
+      "source": "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+      "tags": [
+        "shell",
+        "bash",
+        "nl2bash",
+        "terminal",
+        "dcagent2"
+      ],
+      "template_id": "b794a612e017"
+    },
+    {
+      "converter": "code_contests",
+      "dockerfile_id": "fceb5c7f23dc",
+      "family": "competitive-programming",
+      "has_solution": false,
+      "language": "python",
+      "mode": "stdio",
+      "path": "code_contests-8689",
+      "source": "DCAgent__code-contests-noblock",
+      "tags": [
+        "code",
+        "competitive-programming",
+        "stdio",
+        "code-contests"
+      ],
+      "template_id": "c81840b2923b"
+    },
+    {
+      "converter": "code_contests",
+      "dockerfile_id": "fceb5c7f23dc",
+      "family": "competitive-programming",
+      "has_solution": false,
+      "language": "python",
+      "mode": "stdio",
+      "path": "code_contests-10155",
+      "source": "DCAgent__code-contests-noblock",
+      "tags": [
+        "code",
+        "competitive-programming",
+        "stdio",
+        "code-contests"
+      ],
+      "template_id": "c81840b2923b"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "6c4268eaf683",
+      "family": "unit-test-gen",
+      "has_solution": false,
+      "language": "python",
+      "mode": "pytest",
+      "path": "curriculum-easy-0005",
+      "source": "DCAgent__exp_rpt_curriculum-easy",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "c7220d602d42"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "6c4268eaf683",
+      "family": "unit-test-gen",
+      "has_solution": false,
+      "language": "python",
+      "mode": "pytest",
+      "path": "curriculum-easy-0103",
+      "source": "DCAgent__exp_rpt_curriculum-easy",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "c7220d602d42"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "5458c53ac683",
+      "family": "unit-test-gen",
+      "has_solution": false,
+      "language": "python",
+      "mode": "pytest",
+      "path": "curriculum-medium-0289",
+      "source": "DCAgent__exp_rpt_curriculum-medium-v2",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "c7220d602d42"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "5458c53ac683",
+      "family": "unit-test-gen",
+      "has_solution": false,
+      "language": "python",
+      "mode": "pytest",
+      "path": "curriculum-medium-0098",
+      "source": "DCAgent__exp_rpt_curriculum-medium-v2",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "c7220d602d42"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "ae9228630cae",
+      "family": "unit-test-gen",
+      "has_solution": false,
+      "language": "python",
+      "mode": "pytest",
+      "path": "e2egit-3191",
+      "source": "DCAgent__exp_rpt_e2egit-large",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "c70496ef0bc4"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "ae9228630cae",
+      "family": "unit-test-gen",
+      "has_solution": false,
+      "language": "python",
+      "mode": "pytest",
+      "path": "e2egit-1722",
+      "source": "DCAgent__exp_rpt_e2egit-large",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "c70496ef0bc4"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "ae9228630cae",
+      "family": "unit-test-gen",
+      "has_solution": false,
+      "language": "python",
+      "mode": "pytest",
+      "path": "e2egit-0014",
+      "source": "DCAgent__exp_rpt_e2egit-v2",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "e66117d97a3e"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "ae9228630cae",
+      "family": "unit-test-gen",
+      "has_solution": false,
+      "language": "python",
+      "mode": "pytest",
+      "path": "e2egit-0137",
+      "source": "DCAgent__exp_rpt_e2egit-v2",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "e66117d97a3e"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "5458c53ac683",
+      "family": "unit-test-gen",
+      "has_solution": false,
+      "language": "python",
+      "mode": "pytest",
+      "path": "multifile-3520",
+      "source": "DCAgent__exp_rpt_multifile-v3",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "c7220d602d42"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "5458c53ac683",
+      "family": "unit-test-gen",
+      "has_solution": false,
+      "language": "python",
+      "mode": "pytest",
+      "path": "multifile-2374",
+      "source": "DCAgent__exp_rpt_multifile-v3",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "c7220d602d42"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "6c4268eaf683",
+      "family": "unit-test-gen",
+      "has_solution": true,
+      "language": "python",
+      "mode": "pytest",
+      "path": "pymethods2test-2173",
+      "source": "DCAgent__exp_rpt_pymethods2test-large-v2",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "181781bda27c"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "6c4268eaf683",
+      "family": "unit-test-gen",
+      "has_solution": true,
+      "language": "python",
+      "mode": "pytest",
+      "path": "pymethods2test-0362",
+      "source": "DCAgent__exp_rpt_pymethods2test-large-v2",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "181781bda27c"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "6c4268eaf683",
+      "family": "unit-test-gen",
+      "has_solution": true,
+      "language": "python",
+      "mode": "pytest",
+      "path": "pymethods2test-0325",
+      "source": "DCAgent__exp_rpt_pymethods2test-v3",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "ee76e3c80bc7"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "6c4268eaf683",
+      "family": "unit-test-gen",
+      "has_solution": true,
+      "language": "python",
+      "mode": "pytest",
+      "path": "pymethods2test-0011",
+      "source": "DCAgent__exp_rpt_pymethods2test-v3",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "ee76e3c80bc7"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "35cb29377a88",
+      "family": "unit-test-gen",
+      "has_solution": false,
+      "language": "python",
+      "mode": "pytest",
+      "path": "stack-pytest-0454",
+      "source": "DCAgent__exp_rpt_stack-pytest-v2",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "979e08f690f8"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "35cb29377a88",
+      "family": "unit-test-gen",
+      "has_solution": false,
+      "language": "python",
+      "mode": "pytest",
+      "path": "stack-pytest-0496",
+      "source": "DCAgent__exp_rpt_stack-pytest-v2",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "979e08f690f8"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "6c4268eaf683",
+      "family": "unit-test-gen",
+      "has_solution": true,
+      "language": "python",
+      "mode": "pytest",
+      "path": "unitsyn-python-2001",
+      "source": "DCAgent__exp_rpt_unitsyn-python-large-v2",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "181781bda27c"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "6c4268eaf683",
+      "family": "unit-test-gen",
+      "has_solution": true,
+      "language": "python",
+      "mode": "pytest",
+      "path": "unitsyn-python-1010",
+      "source": "DCAgent__exp_rpt_unitsyn-python-large-v2",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "181781bda27c"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "6c4268eaf683",
+      "family": "unit-test-gen",
+      "has_solution": true,
+      "language": "python",
+      "mode": "pytest",
+      "path": "unitsyn-python-0358",
+      "source": "DCAgent__exp_rpt_unitsyn-python-v4",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "ee76e3c80bc7"
+    },
+    {
+      "converter": "python_unit_tests",
+      "dockerfile_id": "6c4268eaf683",
+      "family": "unit-test-gen",
+      "has_solution": true,
+      "language": "python",
+      "mode": "pytest",
+      "path": "unitsyn-python-0401",
+      "source": "DCAgent__exp_rpt_unitsyn-python-v4",
+      "tags": [
+        "code",
+        "python",
+        "unit-test",
+        "kata"
+      ],
+      "template_id": "ee76e3c80bc7"
+    },
+    {
+      "converter": "swe_patched",
+      "dockerfile_id": "72298b522224",
+      "family": "swe-repo",
+      "has_solution": true,
+      "language": "python",
+      "mode": "pytest",
+      "path": "agnostiqhq__covalent-1599",
+      "source": "DCAgent__swe_rebench_v2_patched_oracle-v2",
+      "tags": [
+        "code",
+        "swe",
+        "swe-repo",
+        "python",
+        "patched"
+      ],
+      "template_id": "5fe0ce4fdbe2"
+    },
+    {
+      "converter": "swe_patched",
+      "dockerfile_id": "72298b522224",
+      "family": "swe-repo",
+      "has_solution": true,
+      "language": "python",
+      "mode": "pytest",
+      "path": "kinto__kinto-http.py-384",
+      "source": "DCAgent__swe_rebench_v2_patched_oracle-v2",
+      "tags": [
+        "code",
+        "swe",
+        "swe-repo",
+        "python",
+        "patched"
+      ],
+      "template_id": "5fe0ce4fdbe2"
+    },
+    {
+      "converter": "nemotron_math",
+      "dockerfile_id": "7ebf98ecd2fd",
+      "family": "math-answer",
+      "has_solution": true,
+      "language": "",
+      "mode": "math",
+      "path": "nemotron-121758",
+      "source": "SankalpKJ__nemotron-math-oracle-filtered-v2",
+      "tags": [
+        "math",
+        "nemotron"
+      ],
+      "template_id": "5ee94cf985a9"
+    },
+    {
+      "converter": "nemotron_math",
+      "dockerfile_id": "7ebf98ecd2fd",
+      "family": "math-answer",
+      "has_solution": true,
+      "language": "",
+      "mode": "math",
+      "path": "nemotron-025508",
+      "source": "SankalpKJ__nemotron-math-oracle-filtered-v2",
+      "tags": [
+        "math",
+        "nemotron"
+      ],
+      "template_id": "5ee94cf985a9"
+    },
+    {
+      "converter": "all_puzzles",
+      "dockerfile_id": "59f4a4193b71",
+      "family": "math-answer",
+      "has_solution": true,
+      "language": "",
+      "mode": "exact",
+      "path": "all_puzzles-0880",
+      "source": "laion__all-puzzles-v2",
+      "tags": [
+        "puzzle",
+        "laion",
+        "alphabetical-sorting"
+      ],
+      "template_id": "ba81283a695b"
+    },
+    {
+      "converter": "all_puzzles",
+      "dockerfile_id": "59f4a4193b71",
+      "family": "math-answer",
+      "has_solution": true,
+      "language": "",
+      "mode": "exact",
+      "path": "all_puzzles-35346",
+      "source": "laion__all-puzzles-v2",
+      "tags": [
+        "puzzle",
+        "laion",
+        "acre"
+      ],
+      "template_id": "ba81283a695b"
+    },
+    {
+      "converter": "codeforces",
+      "dockerfile_id": "43963417e109",
+      "family": "competitive-programming",
+      "has_solution": false,
+      "language": "python",
+      "mode": "stdio",
+      "path": "codeforces-08311",
+      "source": "laion__codeforces-v3",
+      "tags": [
+        "code",
+        "competitive-programming",
+        "stdio",
+        "codeforces"
+      ],
+      "template_id": "9a29baf583bf"
+    },
+    {
+      "converter": "codeforces",
+      "dockerfile_id": "43963417e109",
+      "family": "competitive-programming",
+      "has_solution": false,
+      "language": "python",
+      "mode": "stdio",
+      "path": "codeforces-07764",
+      "source": "laion__codeforces-v3",
+      "tags": [
+        "code",
+        "competitive-programming",
+        "stdio",
+        "codeforces",
+        "special-judge"
+      ],
+      "template_id": "9a29baf583bf"
+    },
+    {
+      "converter": "taco",
+      "dockerfile_id": "3f4ad4c6f411",
+      "family": "stdin-stdout",
+      "has_solution": true,
+      "language": "python",
+      "mode": "stdio",
+      "path": "taco-9046",
+      "source": "laion__exp_rpt_taco-v2",
+      "tags": [
+        "code",
+        "competitive-programming",
+        "stdio",
+        "taco"
+      ],
+      "template_id": "bd3aa8e11182"
+    },
+    {
+      "converter": "taco",
+      "dockerfile_id": "3f4ad4c6f411",
+      "family": "stdin-stdout",
+      "has_solution": true,
+      "language": "python",
+      "mode": "stdio",
+      "path": "taco-3045",
+      "source": "laion__exp_rpt_taco-v2",
+      "tags": [
+        "code",
+        "competitive-programming",
+        "stdio",
+        "taco"
+      ],
+      "template_id": "bd3aa8e11182"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "a586757c3643",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "glaive-code-assistant-1622",
+      "source": "laion__glaive-code-assistant-sandboxes-verified-v2",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "code-assistant",
+        "code"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "a586757c3643",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "glaive-code-assistant-3166",
+      "source": "laion__glaive-code-assistant-sandboxes-verified-v2",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "code-assistant",
+        "code"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "nemotron_math",
+      "dockerfile_id": "7ebf98ecd2fd",
+      "family": "math-answer",
+      "has_solution": true,
+      "language": "",
+      "mode": "math",
+      "path": "nemo-math-v2-14721",
+      "source": "laion__nemo-prism-math-v3",
+      "tags": [
+        "math",
+        "nemotron"
+      ],
+      "template_id": "5ee94cf985a9"
+    },
+    {
+      "converter": "nemotron_math",
+      "dockerfile_id": "7ebf98ecd2fd",
+      "family": "math-answer",
+      "has_solution": true,
+      "language": "",
+      "mode": "math",
+      "path": "nemo-math-v2-12431",
+      "source": "laion__nemo-prism-math-v3",
+      "tags": [
+        "math",
+        "nemotron"
+      ],
+      "template_id": "5ee94cf985a9"
+    },
+    {
+      "converter": "agent_calendar",
+      "dockerfile_id": "7aee1955b736",
+      "family": "tool-use",
+      "has_solution": true,
+      "language": "",
+      "mode": "script",
+      "path": "agent-calendar-7e7daa6b642b.tar.gz",
+      "source": "laion__nemotron-gym-agent-calendar-v2",
+      "tags": [
+        "tool-use",
+        "calendar",
+        "scheduling",
+        "state-tracking",
+        "nemotron"
+      ],
+      "template_id": "79fcfa29fd1b"
+    },
+    {
+      "converter": "agent_calendar",
+      "dockerfile_id": "7aee1955b736",
+      "family": "tool-use",
+      "has_solution": true,
+      "language": "",
+      "mode": "script",
+      "path": "agent-calendar-ef447f15b98b.tar.gz",
+      "source": "laion__nemotron-gym-agent-calendar-v2",
+      "tags": [
+        "tool-use",
+        "calendar",
+        "scheduling",
+        "state-tracking",
+        "nemotron"
+      ],
+      "template_id": "79fcfa29fd1b"
+    },
+    {
+      "converter": "nemotron_reasoning",
+      "dockerfile_id": "511528c45654",
+      "family": "other",
+      "has_solution": false,
+      "language": "python",
+      "mode": "script",
+      "path": "arc-induct-a02d14f53427.tar.gz",
+      "source": "laion__nemotron-gym-arc-agi-python-inductive-v2",
+      "tags": [
+        "reasoning",
+        "arc-agi",
+        "grid-transform",
+        "code",
+        "nemotron"
+      ],
+      "template_id": "7d2db0a8ac84"
+    },
+    {
+      "converter": "nemotron_reasoning",
+      "dockerfile_id": "511528c45654",
+      "family": "other",
+      "has_solution": false,
+      "language": "python",
+      "mode": "script",
+      "path": "arc-induct-9f0822b88753.tar.gz",
+      "source": "laion__nemotron-gym-arc-agi-python-inductive-v2",
+      "tags": [
+        "reasoning",
+        "arc-agi",
+        "grid-transform",
+        "code",
+        "nemotron"
+      ],
+      "template_id": "7d2db0a8ac84"
+    },
+    {
+      "converter": "nemotron_reasoning",
+      "dockerfile_id": "7aee1955b736",
+      "family": "other",
+      "has_solution": false,
+      "language": "",
+      "mode": "exact",
+      "path": "arc-trans-62e4d5061bf3.tar.gz",
+      "source": "laion__nemotron-gym-arc-agi-transductive-v3",
+      "tags": [
+        "reasoning",
+        "arc-agi",
+        "grid-match",
+        "nemotron"
+      ],
+      "template_id": "601f795b0fa1"
+    },
+    {
+      "converter": "nemotron_reasoning",
+      "dockerfile_id": "7aee1955b736",
+      "family": "other",
+      "has_solution": false,
+      "language": "",
+      "mode": "exact",
+      "path": "arc-trans-f53c1ec0e12c.tar.gz",
+      "source": "laion__nemotron-gym-arc-agi-transductive-v3",
+      "tags": [
+        "reasoning",
+        "arc-agi",
+        "grid-match",
+        "nemotron"
+      ],
+      "template_id": "601f795b0fa1"
+    },
+    {
+      "converter": "nemotron_competitive",
+      "dockerfile_id": "7aee1955b736",
+      "family": "competitive-programming",
+      "has_solution": false,
+      "language": "python",
+      "mode": "stdio",
+      "path": "comp-coding-28b11b2c1e7b.tar.gz",
+      "source": "laion__nemotron-gym-competitive-coding-v2",
+      "tags": [
+        "code",
+        "competitive-programming",
+        "stdio",
+        "nemotron"
+      ],
+      "template_id": "be8e427c15f6"
+    },
+    {
+      "converter": "nemotron_competitive",
+      "dockerfile_id": "7aee1955b736",
+      "family": "competitive-programming",
+      "has_solution": false,
+      "language": "python",
+      "mode": "stdio",
+      "path": "comp-coding-585551561f1a.tar.gz",
+      "source": "laion__nemotron-gym-competitive-coding-v2",
+      "tags": [
+        "code",
+        "competitive-programming",
+        "stdio",
+        "nemotron"
+      ],
+      "template_id": "be8e427c15f6"
+    },
+    {
+      "converter": "nemotron_if_structured",
+      "dockerfile_id": "7aee1955b736",
+      "family": "instruction-following",
+      "has_solution": true,
+      "language": "",
+      "mode": "script",
+      "path": "agent-calendar-2f6d4ea91d7e.tar.gz",
+      "source": "laion__nemotron-gym-instruction-following-calendar-v3",
+      "tags": [
+        "tool-use",
+        "calendar",
+        "scheduling",
+        "state-tracking",
+        "nemotron"
+      ],
+      "template_id": "be439d81cebe"
+    },
+    {
+      "converter": "nemotron_if_structured",
+      "dockerfile_id": "7aee1955b736",
+      "family": "instruction-following",
+      "has_solution": true,
+      "language": "",
+      "mode": "script",
+      "path": "agent-calendar-3a1e8a946d71.tar.gz",
+      "source": "laion__nemotron-gym-instruction-following-calendar-v3",
+      "tags": [
+        "tool-use",
+        "calendar",
+        "scheduling",
+        "state-tracking",
+        "nemotron"
+      ],
+      "template_id": "be439d81cebe"
+    },
+    {
+      "converter": "nemotron_if_structured",
+      "dockerfile_id": "58af8699e4d0",
+      "family": "instruction-following",
+      "has_solution": false,
+      "language": "",
+      "mode": "json-schema",
+      "path": "if-structured-700bbfb7ae3d.tar.gz",
+      "source": "laion__nemotron-gym-instruction-following-structured-v3",
+      "tags": [
+        "instruction-following",
+        "structured-output",
+        "json-schema",
+        "nemotron"
+      ],
+      "template_id": "bc12f6dea916"
+    },
+    {
+      "converter": "nemotron_if_structured",
+      "dockerfile_id": "58af8699e4d0",
+      "family": "instruction-following",
+      "has_solution": false,
+      "language": "",
+      "mode": "json-schema",
+      "path": "if-structured-a252a3bbe924.tar.gz",
+      "source": "laion__nemotron-gym-instruction-following-structured-v3",
+      "tags": [
+        "instruction-following",
+        "structured-output",
+        "json-schema",
+        "nemotron"
+      ],
+      "template_id": "bc12f6dea916"
+    },
+    {
+      "converter": "nemotron_ifeval",
+      "dockerfile_id": "7aee1955b736",
+      "family": "instruction-following",
+      "has_solution": false,
+      "language": "",
+      "mode": "ifeval",
+      "path": "Nemotron-RL-instruction_following-57d39940cdab.tar.gz",
+      "source": "laion__nemotron-gym-instruction-following-v3",
+      "tags": [
+        "instruction-following",
+        "ifeval",
+        "nemotron"
+      ],
+      "template_id": "f43208a5823e"
+    },
+    {
+      "converter": "nemotron_ifeval",
+      "dockerfile_id": "7aee1955b736",
+      "family": "instruction-following",
+      "has_solution": false,
+      "language": "",
+      "mode": "ifeval",
+      "path": "Nemotron-RL-instruction_following-cb2b2e78637d.tar.gz",
+      "source": "laion__nemotron-gym-instruction-following-v3",
+      "tags": [
+        "instruction-following",
+        "ifeval",
+        "nemotron"
+      ],
+      "template_id": "f43208a5823e"
+    },
+    {
+      "converter": "nemotron_mcqa",
+      "dockerfile_id": "7aee1955b736",
+      "family": "qa-short-answer",
+      "has_solution": true,
+      "language": "",
+      "mode": "mcq",
+      "path": "Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz",
+      "source": "laion__nemotron-gym-knowledge-mcqa-v2",
+      "tags": [
+        "qa",
+        "mcq",
+        "nemotron"
+      ],
+      "template_id": "c814af4f124d"
+    },
+    {
+      "converter": "nemotron_mcqa",
+      "dockerfile_id": "7aee1955b736",
+      "family": "qa-short-answer",
+      "has_solution": true,
+      "language": "",
+      "mode": "mcq",
+      "path": "Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz",
+      "source": "laion__nemotron-gym-knowledge-mcqa-v2",
+      "tags": [
+        "qa",
+        "mcq",
+        "nemotron"
+      ],
+      "template_id": "c814af4f124d"
+    },
+    {
+      "converter": "nemotron_openqa",
+      "dockerfile_id": "e9270f2c1573",
+      "family": "qa-short-answer",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "openqa-80f6c461ebcf.tar.gz",
+      "source": "laion__nemotron-gym-knowledge-openqa-v4",
+      "tags": [
+        "qa",
+        "openqa",
+        "judge",
+        "reference",
+        "nemotron",
+        "knowledge"
+      ],
+      "template_id": "7b7e304b4fe8"
+    },
+    {
+      "converter": "nemotron_openqa",
+      "dockerfile_id": "e9270f2c1573",
+      "family": "qa-short-answer",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "openqa-c7e9374b56ea.tar.gz",
+      "source": "laion__nemotron-gym-knowledge-openqa-v4",
+      "tags": [
+        "qa",
+        "openqa",
+        "judge",
+        "reference",
+        "nemotron",
+        "knowledge"
+      ],
+      "template_id": "7b7e304b4fe8"
+    },
+    {
+      "converter": "nemotron_math",
+      "dockerfile_id": "7ebf98ecd2fd",
+      "family": "math-answer",
+      "has_solution": true,
+      "language": "",
+      "mode": "math",
+      "path": "Nemotron-RL-math-OpenMathReasoning-e8223ea14ef5.tar.gz",
+      "source": "laion__nemotron-gym-math-openmathreasoning-v2",
+      "tags": [
+        "math",
+        "nemotron"
+      ],
+      "template_id": "5ee94cf985a9"
+    },
+    {
+      "converter": "nemotron_math",
+      "dockerfile_id": "7ebf98ecd2fd",
+      "family": "math-answer",
+      "has_solution": true,
+      "language": "",
+      "mode": "math",
+      "path": "Nemotron-RL-math-OpenMathReasoning-b59f94dd5bab.tar.gz",
+      "source": "laion__nemotron-gym-math-openmathreasoning-v2",
+      "tags": [
+        "math",
+        "nemotron"
+      ],
+      "template_id": "5ee94cf985a9"
+    },
+    {
+      "converter": "nemotron_math",
+      "dockerfile_id": "7ebf98ecd2fd",
+      "family": "math-answer",
+      "has_solution": true,
+      "language": "",
+      "mode": "math",
+      "path": "Nemotron-RL-math-stack_overflow-b4f0cd74a84a.tar.gz",
+      "source": "laion__nemotron-gym-math-stack-overflow-v3",
+      "tags": [
+        "math",
+        "nemotron"
+      ],
+      "template_id": "5ee94cf985a9"
+    },
+    {
+      "converter": "nemotron_math",
+      "dockerfile_id": "7ebf98ecd2fd",
+      "family": "math-answer",
+      "has_solution": true,
+      "language": "",
+      "mode": "math",
+      "path": "Nemotron-RL-math-stack_overflow-735dcfb50cf9.tar.gz",
+      "source": "laion__nemotron-gym-math-stack-overflow-v3",
+      "tags": [
+        "math",
+        "nemotron"
+      ],
+      "template_id": "5ee94cf985a9"
+    },
+    {
+      "converter": "nemotron_math",
+      "dockerfile_id": "30aacebaf171",
+      "family": "math-answer",
+      "has_solution": true,
+      "language": "",
+      "mode": "math",
+      "path": "Nemotron-RL-Math-v2-d893974eeac7.tar.gz",
+      "source": "laion__nemotron-gym-math-v5",
+      "tags": [
+        "math",
+        "nemotron"
+      ],
+      "template_id": "334fa3ab07c7"
+    },
+    {
+      "converter": "nemotron_math",
+      "dockerfile_id": "30aacebaf171",
+      "family": "math-answer",
+      "has_solution": true,
+      "language": "",
+      "mode": "math",
+      "path": "Nemotron-RL-Math-v2-3b9806b4543d.tar.gz",
+      "source": "laion__nemotron-gym-math-v5",
+      "tags": [
+        "math",
+        "nemotron"
+      ],
+      "template_id": "334fa3ab07c7"
+    },
+    {
+      "converter": "nemotron_multichallenge",
+      "dockerfile_id": "e9270f2c1573",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "multichallenge-bd743fdd3788.tar.gz",
+      "source": "laion__nemotron-gym-multichallenge-advanced-v4",
+      "tags": [
+        "instruction-following",
+        "multi-turn",
+        "judge",
+        "checklist",
+        "nemotron"
+      ],
+      "template_id": "e2c236dbe5e2"
+    },
+    {
+      "converter": "nemotron_multichallenge",
+      "dockerfile_id": "e9270f2c1573",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "multichallenge-d5285d7544da.tar.gz",
+      "source": "laion__nemotron-gym-multichallenge-advanced-v4",
+      "tags": [
+        "instruction-following",
+        "multi-turn",
+        "judge",
+        "checklist",
+        "nemotron"
+      ],
+      "template_id": "e2c236dbe5e2"
+    },
+    {
+      "converter": "nemotron_reasoning",
+      "dockerfile_id": "6d77b5c24d4c",
+      "family": "other",
+      "has_solution": false,
+      "language": "",
+      "mode": "reasoning-gym",
+      "path": "reasoning-gym-66a9f5b4098f.tar.gz",
+      "source": "laion__nemotron-gym-reasoning-gym-v2",
+      "tags": [
+        "reasoning",
+        "reasoning-gym",
+        "letter-counting",
+        "nemotron"
+      ],
+      "template_id": "f4e0d8fd979d"
+    },
+    {
+      "converter": "nemotron_reasoning",
+      "dockerfile_id": "6d77b5c24d4c",
+      "family": "other",
+      "has_solution": false,
+      "language": "",
+      "mode": "reasoning-gym",
+      "path": "reasoning-gym-54ac10b07937.tar.gz",
+      "source": "laion__nemotron-gym-reasoning-gym-v2",
+      "tags": [
+        "reasoning",
+        "reasoning-gym",
+        "simple-equations",
+        "nemotron"
+      ],
+      "template_id": "f4e0d8fd979d"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "e9270f2c1573",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "safety-81126840c306.tar.gz",
+      "source": "laion__nemotron-gym-safety-v3",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "safety"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "e9270f2c1573",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "safety-8e0de17b8424.tar.gz",
+      "source": "laion__nemotron-gym-safety-v3",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "safety"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "nemotron_openqa",
+      "dockerfile_id": "e9270f2c1573",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "science-38fd8e5eabe0.tar.gz",
+      "source": "laion__nemotron-gym-science-so-openq-v3",
+      "tags": [
+        "qa",
+        "openqa",
+        "judge",
+        "reference",
+        "nemotron",
+        "science"
+      ],
+      "template_id": "7b7e304b4fe8"
+    },
+    {
+      "converter": "nemotron_openqa",
+      "dockerfile_id": "e9270f2c1573",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "science-624d2b4da1fe.tar.gz",
+      "source": "laion__nemotron-gym-science-so-openq-v3",
+      "tags": [
+        "qa",
+        "openqa",
+        "judge",
+        "reference",
+        "nemotron",
+        "science"
+      ],
+      "template_id": "7b7e304b4fe8"
+    },
+    {
+      "converter": "nemotron_structured_outputs",
+      "dockerfile_id": "49879a65e274",
+      "family": "other",
+      "has_solution": false,
+      "language": "",
+      "mode": "json-schema",
+      "path": "if-structured-v2-478906f3fa67.tar.gz",
+      "source": "laion__nemotron-gym-structured-outputs-v4",
+      "tags": [
+        "structured-outputs",
+        "json-schema",
+        "nemotron",
+        "yaml"
+      ],
+      "template_id": "8d5891f68ed0"
+    },
+    {
+      "converter": "nemotron_structured_outputs",
+      "dockerfile_id": "5f4521cd7ffa",
+      "family": "other",
+      "has_solution": false,
+      "language": "",
+      "mode": "xml-elements",
+      "path": "if-structured-v2-529e76d630c5.tar.gz",
+      "source": "laion__nemotron-gym-structured-outputs-v4",
+      "tags": [
+        "structured-outputs",
+        "xml-elements",
+        "nemotron",
+        "xml"
+      ],
+      "template_id": "8d5891f68ed0"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "049de4a4051e",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "codereview-73823",
+      "source": "laion__stackexchange-codereview-sandboxes-verified-v2",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "stackexchange",
+        "codereview",
+        "code"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "049de4a4051e",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "codereview-68706",
+      "source": "laion__stackexchange-codereview-sandboxes-verified-v2",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "stackexchange",
+        "codereview",
+        "code"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "049de4a4051e",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "overflow-9815",
+      "source": "laion__stackexchange-overflow-sandboxes-verified-v2",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "stackexchange",
+        "stackoverflow",
+        "code"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "049de4a4051e",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "overflow-9766",
+      "source": "laion__stackexchange-overflow-sandboxes-verified-v2",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "stackexchange",
+        "stackoverflow",
+        "code"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "049de4a4051e",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "superuser-99834",
+      "source": "laion__stackexchange-superuser-sandboxes-verified-v2",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "stackexchange",
+        "superuser"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "049de4a4051e",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "superuser-59539",
+      "source": "laion__stackexchange-superuser-sandboxes-verified-v2",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "stackexchange",
+        "superuser"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "049de4a4051e",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "tezos-0323",
+      "source": "laion__stackexchange-tezos-sandboxes-verified-v2",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "stackexchange",
+        "tezos"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "049de4a4051e",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "tezos-0100",
+      "source": "laion__stackexchange-tezos-sandboxes-verified-v2",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "stackexchange",
+        "tezos"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "049de4a4051e",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "unix-60316",
+      "source": "laion__stackexchange-unix-sandboxes-verified-v2",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "stackexchange",
+        "unix",
+        "shell"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "049de4a4051e",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "unix-51635",
+      "source": "laion__stackexchange-unix-sandboxes-verified-v2",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "stackexchange",
+        "unix",
+        "shell"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "swe_trusted_paths",
+      "dockerfile_id": "6bbc92a19d6e",
+      "family": "swe-repo",
+      "has_solution": true,
+      "language": "python",
+      "mode": "pytest",
+      "path": "swesmith-06888",
+      "source": "laion__swesmith-oracle-filtered-v2",
+      "tags": [
+        "code",
+        "swe",
+        "swe-repo",
+        "trusted-test-paths"
+      ],
+      "template_id": "28e273e8db11"
+    },
+    {
+      "converter": "swe_trusted_paths",
+      "dockerfile_id": "6bbc92a19d6e",
+      "family": "swe-repo",
+      "has_solution": true,
+      "language": "python",
+      "mode": "pytest",
+      "path": "swesmith-13308",
+      "source": "laion__swesmith-oracle-filtered-v2",
+      "tags": [
+        "code",
+        "swe",
+        "swe-repo",
+        "trusted-test-paths"
+      ],
+      "template_id": "28e273e8db11"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "161f75c9e8c0",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "wizardlm_orca-8407",
+      "source": "laion__wizardlm-orca-v4",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "general-assistant"
+      ],
+      "template_id": "d760b1c4174a"
+    },
+    {
+      "converter": "judge_rubric",
+      "dockerfile_id": "161f75c9e8c0",
+      "family": "llm-judge-freeform",
+      "has_solution": false,
+      "language": "",
+      "mode": "judge",
+      "path": "wizardlm_orca-1725",
+      "source": "laion__wizardlm-orca-v4",
+      "tags": [
+        "judge",
+        "rubric",
+        "no-reference",
+        "general-assistant"
+      ],
+      "template_id": "d760b1c4174a"
+    }
+  ],
+  "selection": {
+    "algorithm": "sha256(source + \":\" + path), row_number partitioned by source, first two paths",
+    "rows_per_source": 2,
+    "source_count": 43
+  }
+}

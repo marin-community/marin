@@ -12,11 +12,11 @@ from tasktrove_verify.spec import Mode, mode_of
 from taskcompendium.importers.tasktrove import TaskArchive, puzzle_instructions, semantic_verifier
 from taskcompendium.models import (
     AnswerRequirements,
-    NoEnvironment,
-    PythonRuntime,
     Rejected,
     RejectionReason,
+    StepSpecification,
     TaskMetadata,
+    TaskRequirements,
     TaskSpecification,
 )
 
@@ -33,8 +33,7 @@ _MCQ_PREFIX = (
 )
 _MCQ_FORMAT_LINE = re.compile(
     r"^Answer the following multiple choice question\. The last line of your response should be in "
-    r"the following format: 'Answer: \\boxed\{A/B/C/D/E/F/G/H/I/J\}' "
-    r"\(e\.g\. 'Answer: \\boxed\{E\}'\)\.\n*",
+    r"the following format: .*\n*",
     re.MULTILINE,
 )
 _MCQ_GOLD_ERROR = "MCQ verifier must have one expected option letter"
@@ -63,7 +62,7 @@ def _clean_mcq(instructions: str) -> str:
 
 def _defective_descending_gold(instructions: str, expected: tuple[str, ...]) -> bool:
     """Reject the known all-puzzles rows with an ascending gold for descending text."""
-    if "descending order" not in instructions.lower():
+    if re.search(r"(?im)^\s*Now, sort these words in descending order\b", instructions) is None:
         return False
     match = _WORD_LIST.search(instructions)
     if match is None:
@@ -92,7 +91,7 @@ def import_task(archive: TaskArchive) -> TaskSpecification | Rejected:
         return Rejected(
             source, RejectionReason.UNSUPPORTED_VERIFIER, f"unsupported verifier mode {verifier_mode.value!r}"
         )
-    semantic = semantic_verifier(verifier)
+    semantic = semantic_verifier(verifier, implementation_revision=archive.release.verifier_revision)
     parameters = semantic.parameters
     expected = parameters.get("expected")
     if archive.family == _MCQ_FAMILY:
@@ -107,7 +106,7 @@ def import_task(archive: TaskArchive) -> TaskSpecification | Rejected:
         ):
             return Rejected(source, RejectionReason.BROKEN_GRADER, _MCQ_GOLD_ERROR)
         cleaned = _clean_mcq(instructions)
-        requirements = AnswerRequirements("value")
+        requirements = AnswerRequirements("text")
     else:
         if (
             verifier_mode != Mode.EXACT
@@ -126,7 +125,7 @@ def import_task(archive: TaskArchive) -> TaskSpecification | Rejected:
             cleaned = puzzle_instructions(instructions)
         except ValueError as error:
             return Rejected(source, RejectionReason.UNDERSPECIFIED, str(error))
-        requirements = AnswerRequirements("value")
+        requirements = AnswerRequirements("text")
     if not cleaned:
         return Rejected(source, RejectionReason.UNDERSPECIFIED, "source instruction has no semantic task text")
     try:
@@ -137,11 +136,14 @@ def import_task(archive: TaskArchive) -> TaskSpecification | Rejected:
     competencies = tuple(tag for tag in tags if isinstance(tag, str)) if isinstance(tags, list) else ()
     return TaskSpecification(
         id=f"tasktrove-{source.row}",
-        instructions=cleaned,
-        environment=NoEnvironment(),
+        requirements=TaskRequirements(),
         resources=(),
-        verifier=semantic,
-        verifier_runtime=PythonRuntime(),
         metadata=TaskMetadata(source=source, competencies=competencies, task_shape="answer"),
-        answer_requirements=requirements,
+        steps=(
+            StepSpecification(
+                instructions=cleaned,
+                verifier=semantic,
+                answer_requirements=requirements,
+            ),
+        ),
     )

@@ -9,11 +9,17 @@ from pathlib import Path
 
 import pytest
 
+from taskcompendium.execution import (
+    ChatWithTools,
+    HarborExecutionConfig,
+    HarnessToolBinding,
+    environment_for_requirements,
+)
 from taskcompendium.harbor.runner import run_trial
 from taskcompendium.importers.tasktrove import read_archive
 from taskcompendium.importers.tasktrove_coding import import_task
-from taskcompendium.lowering import export_task
-from taskcompendium.models import ChatWithTools, ExecutionConfig, FinalState, Protocol, Rejected
+from taskcompendium.lowering import lower_to_harbor
+from taskcompendium.models import FinalState, Rejected, Rendering
 
 pytestmark = pytest.mark.docker
 FIXTURES = Path(__file__).parent / "fixtures/coding"
@@ -98,10 +104,14 @@ async def test_real_coding_source_grader(tmp_path, runtime_image, family, row, p
                 CPP_SOLUTION if attempt == "good" else CPP_SOLUTION.replace("bool inside =", "bool inside = false &&")
             )
             commands = [f"printf '%s' {shlex.quote(source)} > solution.cpp"]
-    task = export_task(
+    task = lower_to_harbor(
         spec,
-        Protocol("code", ChatWithTools(), FinalState(paths)),
-        ExecutionConfig("replay", spec.environment),
+        (Rendering("code", FinalState(paths)),),
+        HarborExecutionConfig(
+            "replay",
+            environment_for_requirements(spec.requirements),
+            interaction=(ChatWithTools((HarnessToolBinding("replay", "docker"),))),
+        ),
         tmp_path / "task",
         agent_kwargs={"commands": commands},
     )

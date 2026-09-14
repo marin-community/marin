@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fsspec>=2025.3.0",
     "msgspec>=0.18",
+    "pandas>=2.2",
     "pyarrow>=23",
     "tasktrove-verify[answer,schema,judge]",
     "tomlkit>=0.13",
@@ -28,7 +29,7 @@ test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
 [tool.uv.workspace]
 
 [tool.uv.sources]
-tasktrove-verify = { git = "https://github.com/marin-community/marin.git", rev = "b2b68d8b0a770cdc0ab3903780172c4b3eea81b1", subdirectory = "lib/tasktrove-verify" }
+tasktrove-verify = { git = "https://github.com/marin-community/marin.git", rev = "b76d03131cd88bd9fc711dba206659027edba3a8", subdirectory = "lib/tasktrove-verify" }
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "9551f376157d90104011107dcbf9ca3621228126" }
 
 [tool.hatch.build.targets.wheel]
@@ -42,6 +43,7 @@ markers = ["integration: live external service", "docker: requires a Docker daem
 
 [tool.ruff]
 extend = "../../pyproject.toml"
+extend-exclude = ["src/taskcompendium/providers/nemo_workplace/vendor/workplace_assistant_tools"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["taskcompendium"]
@@ -49,5 +51,6 @@ known-local-folder = []
 
 [tool.pyrefly]
 project-includes = ["src"]
+project-excludes = ["src/taskcompendium/providers/nemo_workplace/vendor/workplace_assistant_tools/**"]
 search-path = ["src", "src/taskcompendium/importers/r2e_assets"]
 python-interpreter = ".venv/bin/python"

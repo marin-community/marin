@@ -10,34 +10,48 @@ import pyarrow.parquet as pq
 import pytest
 from tasktrove_verify.spec import Mode
 
+from taskcompendium.execution import (
+    Chat,
+    ChatWithTools,
+    DockerEnvironment,
+    HarborExecutionConfig,
+    HarborLaunchConfig,
+    HarborTaskBinding,
+    HarnessToolBinding,
+    NoEnvironment,
+    ShellSimEnvironment,
+    ShellToolBinding,
+    validate_requirements,
+)
 from taskcompendium.extraction import ExtractionError, extract
 from taskcompendium.grading import grade_attempt
-from taskcompendium.lowering import export_task, validate_lowering
+from taskcompendium.lowering import lower_to_harbor, resolve_harbor_execution, validate_lowering
 from taskcompendium.models import (
     AnswerRequirements,
     AssistantFinal,
     BoxedLatex,
-    Chat,
-    ChatWithTools,
+    Capability,
     Embedded,
-    ExecutionConfig,
     FileSubmission,
     JsonPath,
-    NoEnvironment,
     Outcome,
     PlainText,
-    Protocol,
-    PythonRuntime,
+    Rendering,
     Resource,
     ResourceRef,
     ResourceRole,
-    ShellSimEnvironment,
     Source,
+    StepSpecification,
+    Task,
     TaskMetadata,
+    TaskRequirements,
     TaskSpecification,
-    VerifierSpec,
+    TaskSuccessPolicy,
+    TaskTroveVerifier,
+    WorkspaceState,
     XmlPath,
 )
+from taskcompendium.rendering import render_task
 from taskcompendium.resources import materialize
 from taskcompendium.serialization import from_json, read_parquet, specification_hash, to_json, write_parquet
 
@@ -46,12 +60,15 @@ from taskcompendium.serialization import from_json, read_parquet, specification_
 def math_task():
     return TaskSpecification(
         id="unit/math",
-        instructions="Compute 1/2 + 1/4.",
-        environment=NoEnvironment(),
+        requirements=TaskRequirements(),
         resources=(),
-        verifier=VerifierSpec(Mode.MATH, {"expected": "3/4"}),
-        verifier_runtime=PythonRuntime(),
         metadata=TaskMetadata(Source("unit", "v1", "0", "v1")),
+        steps=(
+            StepSpecification(
+                instructions="Compute 1/2 + 1/4.",
+                verifier=TaskTroveVerifier(Mode.MATH, {"expected": "3/4"}),
+            ),
+        ),
     )
 
 
@@ -65,7 +82,7 @@ def math_task():
     ],
 )
 def test_equivalent_submissions_keep_same_semantic_grading(math_task, tmp_path, extractor, good, bad):
-    protocol = Protocol("answer", Chat(), AssistantFinal(extractor))
+    protocol = Rendering("answer", AssistantFinal(extractor))
     success = grade_attempt(math_task, protocol, good, tmp_path)
     failure = grade_attempt(math_task, protocol, bad, tmp_path)
     empty = grade_attempt(math_task, protocol, "", tmp_path)
@@ -75,7 +92,7 @@ def test_equivalent_submissions_keep_same_semantic_grading(math_task, tmp_path, 
 
 
 def test_file_submission_reuses_math_verifier(math_task, tmp_path):
-    protocol = Protocol("file", ChatWithTools(), FileSubmission("/app/answer.txt", JsonPath()))
+    protocol = Rendering("file", FileSubmission("/app/answer.txt", JsonPath()))
     (tmp_path / "answer.txt").write_text('{"answer":"3/4"}')
     assert grade_attempt(math_task, protocol, None, tmp_path).reward == 1.0
     (tmp_path / "answer.txt").write_text('{"answer":"4/3"}')
@@ -105,13 +122,18 @@ def test_mixed_task_records_roundtrip_across_parquet_batches(math_task, tmp_path
     other = msgspec.structs.replace(
         math_task,
         id="unit/structured",
-        environment=ShellSimEnvironment(),
+        requirements=TaskRequirements((Capability.FILESYSTEM, Capability.SHELL), WorkspaceState()),
         resources=(
             Resource("input.txt", (ResourceRole.AGENT,), Embedded(b"public input")),
             Resource("schema.json", (ResourceRole.VERIFIER,), Embedded(b'{"type":"object"}')),
         ),
-        verifier=VerifierSpec(Mode.JSON_SCHEMA, {"schema": "schema.json"}),
-        answer_requirements=AnswerRequirements("json"),
+        steps=(
+            msgspec.structs.replace(
+                math_task.steps[0],
+                verifier=TaskTroveVerifier(Mode.JSON_SCHEMA, {"schema": "schema.json"}),
+                answer_requirements=AnswerRequirements("json"),
+            ),
+        ),
     )
     uri = str(tmp_path / "dataset.parquet")
     assert write_parquet([math_task, other], uri, batch_size=1) == 2
@@ -119,19 +141,25 @@ def test_mixed_task_records_roundtrip_across_parquet_batches(math_task, tmp_path
     assert restored == [math_task, other]
     assert [specification_hash(s) for s in restored] == [specification_hash(s) for s in (math_task, other)]
     assert from_json(to_json(other)) == other
-    table = pq.read_table(uri, columns=["id", "environment"])
-    assert [r["environment"]["kind"] for r in table.to_pylist()] == ["none", "shellsim"]
+    table = pq.read_table(uri, columns=["id", "requirements"])
+    assert [r["requirements"]["capabilities"] for r in table.to_pylist()] == [[], ["filesystem", "shell"]]
 
 
 def test_format_is_semantic_and_cannot_be_replaced_by_wrapper(math_task):
-    spec = msgspec.structs.replace(math_task, answer_requirements=AnswerRequirements("json"))
+    spec = msgspec.structs.replace(
+        math_task, steps=(msgspec.structs.replace(math_task.steps[0], answer_requirements=AnswerRequirements("json")),)
+    )
     with pytest.raises(ValueError, match="Intrinsic"):
         validate_lowering(
-            spec, Protocol("xml", Chat(), AssistantFinal(XmlPath())), ExecutionConfig("chat", NoEnvironment())
+            spec,
+            Rendering("xml", AssistantFinal(XmlPath())),
+            HarborTaskBinding(NoEnvironment(), Chat()),
         )
-    with pytest.raises(ValueError, match="Chat supports"):
+    with pytest.raises(ValueError, match="Chat requires"):
         validate_lowering(
-            math_task, Protocol("file", Chat(), FileSubmission("/app/a")), ExecutionConfig("chat", NoEnvironment())
+            math_task,
+            Rendering("file", FileSubmission("/app/a")),
+            HarborTaskBinding(NoEnvironment(), Chat()),
         )
 
 
@@ -144,10 +172,13 @@ def test_export_materializes_only_agent_projection(math_task, tmp_path):
             Resource("solve.sh", (ResourceRole.ORACLE,), Embedded(b"secret oracle")),
         ),
     )
-    task = export_task(
+    task = lower_to_harbor(
         spec,
-        Protocol("file", ChatWithTools(), FileSubmission("/app/answer.txt")),
-        ExecutionConfig("replay", ShellSimEnvironment()),
+        (Rendering("file", FileSubmission("/app/answer.txt")),),
+        HarborTaskBinding(
+            ShellSimEnvironment(),
+            ChatWithTools((ShellToolBinding("shell", "shellsim"),)),
+        ),
         tmp_path / "export",
     )
     assert (task / "environment/inputs/visible.txt").read_bytes() == b"public"
@@ -181,6 +212,188 @@ def test_materialization_rejects_symlink_escape_and_modified_reference(math_task
 
 @pytest.mark.parametrize("candidate", [r"wrong } \boxed{3/4}", r"\boxed{4/3} then \boxed{3/4}"])
 def test_plain_math_does_not_reextract_an_embedded_answer(math_task, tmp_path, candidate):
-    result = grade_attempt(math_task, Protocol("plain", Chat(), AssistantFinal()), candidate, tmp_path)
+    result = grade_attempt(math_task, Rendering("plain", AssistantFinal()), candidate, tmp_path)
     assert result.status == Outcome.EXTRACTION_ERROR
     assert result.reward is None
+
+
+def test_multistep_parquet_keeps_order_and_distinct_private_resources(math_task, tmp_path):
+    first = msgspec.structs.replace(
+        math_task.steps[0], resources=(Resource("reference.txt", (ResourceRole.VERIFIER,), Embedded(b"first")),)
+    )
+    second = msgspec.structs.replace(
+        first,
+        instructions="Compute two plus two.",
+        verifier=TaskTroveVerifier(Mode.EXACT, {"expected": ["4"]}),
+        resources=(Resource("reference.txt", (ResourceRole.VERIFIER,), Embedded(b"second")),),
+    )
+    spec = msgspec.structs.replace(math_task, steps=(first, second), success_policy=TaskSuccessPolicy.FINAL)
+    uri = str(tmp_path / "multi.parquet")
+    write_parquet([spec], uri)
+    restored = next(read_parquet(uri))
+    assert restored == spec
+    assert specification_hash(restored) == specification_hash(spec)
+    assert grade_attempt(restored, Rendering("plain", AssistantFinal()), "4", tmp_path, step_index=1).reward == 1.0
+    materialize(restored, ResourceRole.VERIFIER, tmp_path / "second", step_index=1)
+    assert (tmp_path / "second/reference.txt").read_bytes() == b"second"
+
+
+def test_exact_verifier_without_runtime_survives_storage_and_grades(math_task, tmp_path):
+    spec = msgspec.structs.replace(
+        math_task,
+        steps=(
+            StepSpecification(instructions="Return A.", verifier=TaskTroveVerifier(Mode.EXACT, {"expected": ["A"]})),
+        ),
+    )
+    document = json.loads(to_json(spec))
+    assert "verifier_runtime" not in document["steps"][0]
+    assert "runtime" not in document["steps"][0]["verifier"]
+    path = str(tmp_path / "tasks.parquet")
+    write_parquet([from_json(json.dumps(document))], path)
+    restored = next(iter(read_parquet(path)))
+    rendering = Rendering("json", AssistantFinal(JsonPath()))
+    assert grade_attempt(restored, rendering, '{"answer":"A"}', tmp_path).reward == 1.0
+    assert grade_attempt(restored, rendering, '{"answer":"B"}', tmp_path).reward == 0.0
+
+
+@pytest.mark.parametrize("mode", ["stdio", "pytest", "script", "junit", "gotest"])
+def test_serialized_executable_verifier_requires_isolation(math_task, mode):
+    document = json.loads(to_json(math_task))
+    document["steps"][0]["verifier"] = {"kind": "tasktrove", "mode": mode, "parameters": {}}
+    with pytest.raises(msgspec.ValidationError, match="isolated container runtime"):
+        from_json(json.dumps(document))
+
+
+def test_serialized_exact_verifier_rejects_execution_runtime(math_task):
+    document = json.loads(to_json(math_task))
+    document["steps"][0]["verifier"] = {
+        "kind": "tasktrove",
+        "mode": "exact",
+        "parameters": {"expected": ["A"]},
+        "runtime": {"kind": "container", "image": "sha256:" + "1" * 64},
+    }
+    with pytest.raises(msgspec.ValidationError, match="Only executable verifiers"):
+        from_json(json.dumps(document))
+
+
+@pytest.mark.parametrize(
+    "agent,environment,interaction",
+    [
+        ("tool_chat", {"kind": "shellsim"}, {"kind": "chat_with_tools", "tools": []}),
+        (
+            "tool_chat",
+            {"kind": "shellsim"},
+            {"kind": "chat_with_tools", "tools": [{"kind": "shell", "name": "shell", "backend": "docker"}]},
+        ),
+        (
+            "terminus-2",
+            {"kind": "docker", "image": "sha256:" + "1" * 64},
+            {
+                "kind": "chat_with_tools",
+                "tools": [{"kind": "harness", "interface": "mini-swe-agent", "backend": "docker"}],
+            },
+        ),
+        (
+            "tool_chat",
+            {"kind": "none"},
+            {"kind": "chat_with_tools", "tools": [{"kind": "shell", "name": "shell", "backend": "shellsim"}]},
+        ),
+    ],
+)
+def test_binding_json_rejects_unimplementable_tool_bindings(agent, environment, interaction):
+    with pytest.raises((msgspec.ValidationError, ValueError)):
+        msgspec.json.decode(json.dumps({"environment": environment, "interaction": interaction}), type=HarborTaskBinding)
+
+
+def test_binding_json_requires_explicit_interaction():
+    with pytest.raises(msgspec.ValidationError, match="interaction"):
+        msgspec.json.decode('{"environment":{"kind":"none"}}', type=HarborTaskBinding)
+
+
+def test_terminal_binding_accepts_multiple_harbor_agents_without_selecting_one():
+    environment = DockerEnvironment("sha256:" + "1" * 64)
+    binding = HarborTaskBinding(
+        environment,
+        ChatWithTools((HarnessToolBinding("terminal", "docker"),)),
+    )
+    for agent in ("replay", "terminus-2", "mini-swe-agent"):
+        resolved = resolve_harbor_execution(
+            (Rendering("workspace", FileSubmission("/app/answer.txt")),),
+            HarborExecutionConfig(binding, HarborLaunchConfig(agent)),
+            {"import_path": "taskcompendium.harbor.environments:TaskDockerEnvironment"},
+        )
+        assert resolved["environment"]["import_path"] == "taskcompendium.harbor.environments:TaskDockerEnvironment"
+    with pytest.raises(ValueError, match="compatible terminal agent"):
+        HarborExecutionConfig(binding, HarborLaunchConfig("tool_chat"))
+
+
+def test_export_rejects_tool_binding_override_before_writing(math_task, tmp_path):
+    destination = tmp_path / "invalid"
+    with pytest.raises(ValueError, match="Harbor task binding"):
+        lower_to_harbor(
+            math_task,
+            (Rendering("plain", AssistantFinal()),),
+            HarborTaskBinding(NoEnvironment(), Chat()),
+            destination,
+            agent_kwargs={"tool_binding": {"kind": "harness", "interface": "terminal", "backend": "docker"}},
+        )
+    assert not destination.exists()
+
+
+def test_public_task_preserves_instance_across_harnesses_and_hides_private_data(math_task, tmp_path):
+    spec = msgspec.structs.replace(
+        math_task,
+        resources=(Resource("oracle.txt", (ResourceRole.ORACLE,), Embedded(b"secret rationale")),),
+    )
+    renderings = (Rendering("plain", AssistantFinal()),)
+    public = render_task(spec, renderings)
+    binding = HarborTaskBinding(NoEnvironment(), Chat())
+    for agent in ("chat", "replay"):
+        path = lower_to_harbor(
+            spec,
+            renderings,
+            binding,
+            tmp_path / agent,
+            reference_execution=HarborExecutionConfig(binding, HarborLaunchConfig(agent)),
+        )
+        assert msgspec.json.decode((path / "task.json").read_bytes(), type=Task) == public
+        assert (path / "instruction.md").read_text() == public.steps[0].instructions
+        assert (path / "binding.json").is_file()
+        assert not (path / "execution.json").exists()
+    payload = msgspec.to_builtins(public)
+    assert public.specification_sha256 == specification_hash(spec)
+    assert public.resources == ()
+    assert "verifier" not in payload["steps"][0]
+    assert "secret rationale" not in msgspec.json.encode(public).decode()
+    file_task = render_task(spec, (Rendering("file-json", FileSubmission("/app/answer.json", JsonPath())),))
+    assert file_task.id == public.id
+    assert file_task.specification_sha256 == public.specification_sha256
+    assert file_task.requirements.capabilities == (Capability.FILESYSTEM,)
+    assert grade_attempt(spec, renderings[0], "3/4", tmp_path).reward == 1.0
+
+
+def test_public_rendering_rejects_changes_to_intrinsic_submission(math_task):
+    state = msgspec.structs.replace(
+        math_task,
+        steps=(msgspec.structs.replace(math_task.steps[0], answer_requirements=AnswerRequirements("final_state")),),
+    )
+    with pytest.raises(ValueError, match="final-state"):
+        render_task(state, (Rendering("plain", AssistantFinal()),))
+    literal = msgspec.structs.replace(
+        math_task,
+        steps=(msgspec.structs.replace(math_task.steps[0], answer_requirements=AnswerRequirements("literal")),),
+    )
+    with pytest.raises(ValueError, match="Intrinsic"):
+        render_task(literal, (Rendering("json", AssistantFinal(JsonPath())),))
+
+
+def test_provider_matching_preserves_capabilities_and_pinned_state():
+    image = "sha256:" + "a" * 64
+    state = WorkspaceState(image=image, workdir="/repo", setup_commands=("touch /repo/ready",))
+    required = TaskRequirements((Capability.FILESYSTEM, Capability.SHELL, Capability.PROCESS), state)
+    with pytest.raises(ValueError, match="capabilities"):
+        validate_requirements(required, ShellSimEnvironment(workdir="/repo"))
+    with pytest.raises(ValueError, match="initial state"):
+        validate_requirements(required, DockerEnvironment("sha256:" + "b" * 64, workdir="/repo"))
+    with pytest.raises(ValueError, match="workspace state"):
+        validate_requirements(required, DockerEnvironment(image, workdir="/repo"))
