@@ -13,10 +13,16 @@ from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
-from ops.vibe_check import config
-from ops.vibe_check.completions import Checkpoint, Prompt, SampleRequest, SamplingSpec, digest
-from ops.vibe_check.config import Ancestor, ProductionRun, discover_requests
-from ops.vibe_check.sample import COMPUTE_POLICY, next_logits, restore_model
+from experiments.grug.moe_hero_ep.ops.vibe_check import config
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
+    Checkpoint,
+    Prompt,
+    SampleRequest,
+    SamplingSpec,
+    digest,
+)
+from experiments.grug.moe_hero_ep.ops.vibe_check.config import Ancestor, ProductionRun, discover_requests
+from experiments.grug.moe_hero_ep.ops.vibe_check.sample import COMPUTE_POLICY, next_logits, restore_model
 
 
 @pytest.fixture

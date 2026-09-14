@@ -13,8 +13,15 @@ from fray.types import GpuConfig, ResourceConfig
 from levanter.checkpoint import discover_checkpoint_candidates
 
 from experiments.grug.moe_hero_ep import hero_recipe
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
+    Checkpoint,
+    Prompt,
+    Record,
+    SampleRequest,
+    SamplingSpec,
+    digest,
+)
 from experiments.grug.moe_hero_ep.train import DEFAULT_DROPLESS_MOE_IMPLEMENTATION
-from ops.vibe_check.completions import Checkpoint, Prompt, Record, SampleRequest, SamplingSpec, digest
 
 CONFIG_DIRECTORY = Path(__file__).parent
 CHECKPOINT_ROOT = "s3://marin-us-east-02a/marin/grug"

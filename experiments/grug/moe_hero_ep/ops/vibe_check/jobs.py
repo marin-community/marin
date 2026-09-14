@@ -20,7 +20,7 @@ from iris.rpc import job_pb2
 from marin.training.training import resolve_training_env
 from rigging.timing import Duration
 
-from ops.vibe_check.completions import Entry, JobStatus
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import Entry, JobStatus
 
 JOB_USER = "hero-completions"
 

@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 
 import numpy as np
 
-from ops.vibe_check.completions import Completion, SamplingSpec, StopReason
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import Completion, SamplingSpec, StopReason
 
 
 def generate(

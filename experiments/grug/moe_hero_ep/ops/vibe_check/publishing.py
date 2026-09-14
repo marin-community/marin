@@ -15,7 +15,7 @@ from marin.publish import sites
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.storage_path import prefix_join
 
-from ops.vibe_check.completions import Phase, Queue, SampleStore
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import Phase, Queue, SampleStore
 
 REPORT_USER = "hero"
 REPORT_SLUG = "completions"

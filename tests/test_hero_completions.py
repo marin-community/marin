@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from marin.publish import sites
 
-from ops.vibe_check.completions import (
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     Checkpoint,
     Completion,
     Entry,
@@ -24,8 +24,8 @@ from ops.vibe_check.completions import (
     StopReason,
     reconcile,
 )
-from ops.vibe_check.generation import generate
-from ops.vibe_check.publishing import (
+from experiments.grug.moe_hero_ep.ops.vibe_check.generation import generate
+from experiments.grug.moe_hero_ep.ops.vibe_check.publishing import (
     COMMENT_MARKER,
     publish_daily,
     render_report,

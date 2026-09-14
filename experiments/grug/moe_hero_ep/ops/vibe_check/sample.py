@@ -29,8 +29,8 @@ from transformers import AutoTokenizer
 
 from experiments.grug.checkpointing import LEGACY_STATE_KEY, MASTER_PARAMS_KEY
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
-from ops.vibe_check.completions import SampleRequest, SampleResult, SampleStore, digest
-from ops.vibe_check.generation import generate
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleRequest, SampleResult, SampleStore, digest
+from experiments.grug.moe_hero_ep.ops.vibe_check.generation import generate
 
 COMPUTE_POLICY = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
 

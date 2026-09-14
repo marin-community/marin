@@ -62,7 +62,6 @@ SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     SourceRoot("infra/deploy/src/marin_deploy", "infra/deploy/src"),
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
     SourceRoot("experiments", "."),
-    SourceRoot("ops", "."),
     SourceRoot("infra/ci", "."),
     SourceRoot("infra/marina/src/marina", "infra/marina/src"),
     SourceRoot("infra/marina/apps", "infra/marina/apps"),
