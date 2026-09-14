@@ -319,9 +319,7 @@ def _write_archive(trials: list[HarborTrial], dataset: str, output_dir: str) -> 
 def _trial_errors(trials: list[HarborTrial], attempted: int) -> dict[str, int]:
     """Count trial errors, including errors on scored outcomes.
 
-    Trials the job never wrote a result for are counted under :data:`_MISSING_RESULT_ERROR`: they are
-    the attrition Harbor's own bookkeeping knows about but its result files cannot show. With no
-    readable job record there is no such count, so only the errors the trials themselves report appear.
+    Trials the job never wrote a result for are counted under :data:`_MISSING_RESULT_ERROR`.
     """
     errors: dict[str, int] = {}
     for trial in trials:

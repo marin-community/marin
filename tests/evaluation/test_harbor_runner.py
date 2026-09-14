@@ -393,7 +393,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
 
 def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, monkeypatch):
     output_dir = str(tmp_path / "run")
-    executor = _harbor_executor(f"managed-{tmp_path.name}", n_benchmark=3)
+    executor = _harbor_executor(f"managed-{tmp_path.name}", n_benchmark=4)
 
     class RecoveringSession:
         model = _running_model()
@@ -689,7 +689,7 @@ def test_harbor_executor_counts_undecided_error_against_completion_gate(tmp_path
             trial_dir.joinpath("result.json").write_text(json.dumps(result))
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
-    executor = _harbor_executor(f"undecided-{tmp_path.name}")
+    executor = _harbor_executor(f"undecided-{tmp_path.name}", n_benchmark=20)
 
     outcome = executor(_inference_session(), str(tmp_path), {})
 
@@ -753,6 +753,8 @@ def test_harbor_executor_preserves_scored_errors(tmp_path, monkeypatch, exceptio
     coverage = outcome.coverage[dataset]
     assert (coverage.n_attempted, coverage.n_scored) == (10, 10)
     assert coverage.errors == {exception_type: 4}
+    result = json.loads((tmp_path / "harbor_result.json").read_text())
+    assert result["unscored_trials"] == 0
 
 
 def test_preflight_benchmark_count_supplies_coverage_without_a_job_record(tmp_path, monkeypatch):
@@ -779,10 +781,7 @@ def test_preflight_benchmark_count_supplies_coverage_without_a_job_record(tmp_pa
     assert outcome.metrics[dataset]["attempted"] == 4
 
 
-def test_harbor_attempted_trials_come_from_the_job_record_not_the_result_glob(tmp_path, monkeypatch):
-    """A trial that dies before writing a result leaves no file. Counting result files would report
-    perfect coverage for exactly the runs that lost the most trials."""
-
+def test_harbor_missing_results_reduce_scored_not_intended_count(tmp_path, monkeypatch):
     def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
         _write_job_record(job_dir, 20)
