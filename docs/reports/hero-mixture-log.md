@@ -15,7 +15,7 @@ Software infrastructure, low-level code, and natural-science research lead the
 mixture, with substantial general software development, history, and math.
 
 Weights: `phase0_weights` in
-[`harrier_mix_2026_08_18.json`](../../experiments/grug/moe_hero_ep/harrier_mix_2026_08_18.json).
+[`harrier_mix_2026_08_18.json`](https://github.com/marin-community/marin/blob/d27dffe9c125e34b6f5a56a3a4006d196efb6575/experiments/grug/moe_hero_ep/harrier_mix_2026_08_18.json).
 
 ## Phase 2 — Main mixture · planned step 108,000 (~27.7%)
 
@@ -24,7 +24,7 @@ software development, finance, history, and math. Within software, the emphasis
 shifts toward agent transcripts and performance logs/low-level code.
 
 Weights: `phase0_weights` in
-[`best_mixture_996f489106c7b922.json`](../../experiments/grug/moe_hero_ep/best_mixture_996f489106c7b922.json).
+[`best_mixture_996f489106c7b922.json`](https://github.com/marin-community/marin/blob/d27dffe9c125e34b6f5a56a3a4006d196efb6575/experiments/grug/moe_hero_ep/best_mixture_996f489106c7b922.json).
 The relaunch is configured to restore permanent checkpoint `step-108000`.
 
 ## Phase 3 — Cooldown mixture · planned step 312,192 (~80%)
