@@ -57,7 +57,10 @@ _JOB_DIGEST_LENGTH = 12
 # margin tolerates float noise).
 SOLVED_REWARD = 0.99
 
-# Minimum fraction of attempted trials scoreable under the Harbor taxonomy.
+# Fraction of attempted trials that must be scoreable under the Harbor taxonomy. Agent failures
+# remain scoreable, while infrastructure failures and passthrough failures without verifier results
+# reduce completion. Below this rate, the ungraded trials make the result too uncertain to compare.
+# The rate is coarse for small batches: one unscored trial in eight yields 0.875 and fails.
 DEFAULT_MIN_COMPLETION_RATE = 0.9
 
 # Error labels for ungraded trials that carry no exception of their own.
