@@ -6,8 +6,9 @@ Distributed job orchestration for Marin. Start with the shared instructions in `
 
 - `README.md` — overview + quick start
 - `OPS.md` — operating / troubleshooting a live cluster (also used by skills: `debug`, `use-iris`)
-- Echo — durable incident and debugging records; use `write-ops-log` after an
-  infrastructure investigation and link the canonical Echo URL
+- Echo — live infrastructure incident records; use `write-ops-log` when an
+  investigation diagnoses a service, production run, or shared operational
+  system failure or degradation
 - `TESTING.md` — testing policy, markers, and commands
 - `docs/task-states.md` — task state machine + retry semantics
 - `docs/coreweave.md` — CoreWeave platform + `runtime=kubernetes` behavior
