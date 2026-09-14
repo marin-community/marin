@@ -17,8 +17,10 @@ import httpx
 import pyarrow as pa
 from config import FINELOG_PORT, ClusterTarget
 from discovery import InstanceResolutionError, resolve_internal_ip
+from errors import FinelogUnavailableError
 from finelog.client.log_client import LogClient
-from finelog.errors import FinelogUnavailableError, StatsError
+from finelog.errors import StatsError
+from finelog.types import is_retryable_error
 from finelog_health import FinelogHealth, FinelogRole
 from google.api_core.exceptions import GoogleAPIError
 from relay_health import RelaySenderStatus, relay_sender_statuses
@@ -74,6 +76,11 @@ class FinelogSource:
         """Run SQL, classifying discovery and transport failures as retryable."""
         try:
             return self._client.query(sql, max_rows=max_rows)
+        except StatsError as err:
+            cause = err.__cause__
+            if isinstance(cause, Exception) and is_retryable_error(cause):
+                raise FinelogUnavailableError(str(err)) from err
+            raise
         except (GoogleAPIError, InstanceResolutionError, OSError) as err:
             raise FinelogUnavailableError(str(err)) from err
 
@@ -83,7 +90,9 @@ class FinelogSource:
         try:
             self.query('SELECT * FROM "log" LIMIT 1', max_rows=1)
         except StatsError as err:
-            logger.warning("finelog health query failed for %s: %s", self._target.name, err)
+            reported_error = err.__cause__ if isinstance(err, FinelogUnavailableError) else err
+            assert isinstance(reported_error, Exception)
+            logger.warning("finelog health query failed for %s: %s", self._target.name, reported_error)
             return FinelogHealth(
                 cluster=self._target.name,
                 server=f"finelog-{self._target.name}",
@@ -92,8 +101,8 @@ class FinelogSource:
                 ready=0,
                 desired=1,
                 latency_ms=None,
-                error_class=type(err).__name__,
-                error=str(err),
+                error_class=type(reported_error).__name__,
+                error=str(reported_error),
             )
         return FinelogHealth(
             cluster=self._target.name,

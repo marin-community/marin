@@ -92,8 +92,8 @@ from config import (
     BridgeConfig,
     ClusterTarget,
 )
-from errors import UpstreamError
-from finelog.errors import FinelogUnavailableError, QueryResultTooLargeError
+from errors import FinelogUnavailableError, UpstreamError
+from finelog.errors import QueryResultTooLargeError
 from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth

@@ -12,10 +12,6 @@ class StatsError(Exception):
     """Base error for stats-service operations."""
 
 
-class FinelogUnavailableError(StatsError):
-    """A transient Finelog service failure that may succeed on retry."""
-
-
 class SchemaConflictError(StatsError):
     """Requested schema disagrees with the registered one about the data's shape.
 

@@ -13,7 +13,8 @@ import pytest
 from cache import TtlCache
 from config import ClusterTarget
 from conftest import FINELOG_DEPLOYMENTS_PATH, bridge_config, deployment, healthy_k8s_routes, k8s_api, make_k8s_source
-from finelog.errors import FinelogUnavailableError, QueryResultTooLargeError
+from errors import FinelogUnavailableError
+from finelog.errors import QueryResultTooLargeError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from hero_health import (

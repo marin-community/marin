@@ -11,7 +11,10 @@ import pyarrow as pa
 import pytest
 from config import ClusterTarget
 from conftest import bridge_config
-from errors import UpstreamError
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from errors import FinelogUnavailableError, UpstreamError
+from finelog.errors import StatsError
 from finelog_health import FinelogRole
 from finelog_source import FinelogSource
 from github_source import GithubSource
@@ -80,6 +83,19 @@ def test_finelog_health_reports_query_failures_without_raising():
 def test_finelog_health_does_not_mask_programming_errors():
     with pytest.raises(ValueError, match="bug"):
         _finelog(ValueError("bug")).health()
+
+
+def test_finelog_query_classifies_only_retryable_rpc_failures_as_unavailable():
+    unavailable = StatsError("query failed")
+    unavailable.__cause__ = ConnectError(Code.UNAVAILABLE, "down")
+    with pytest.raises(FinelogUnavailableError):
+        _finelog(unavailable).query('SELECT * FROM "log" LIMIT 1', max_rows=1)
+
+    invalid = StatsError("invalid query")
+    invalid.__cause__ = ConnectError(Code.INVALID_ARGUMENT, "syntax error")
+    with pytest.raises(StatsError) as raised:
+        _finelog(invalid).query('SELECT * FROM "log" LIMIT 1', max_rows=1)
+    assert raised.value is invalid
 
 
 def test_finelog_relay_status_calls_connect_json_without_a_new_client_release():
