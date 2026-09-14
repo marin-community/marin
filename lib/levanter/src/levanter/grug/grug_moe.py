@@ -54,7 +54,8 @@ from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
-    _batch_spec_from_x,
+    _axis_names,
+    _token_spec_from_x,
     _current_mesh,
     _drop_absent_mesh_axes,
     _mesh_axis_size,
@@ -526,9 +527,17 @@ def moe_mlp(
             )
         return out
 
-    batch_spec = _batch_spec_from_x(x, mesh)
+    token_spec = _token_spec_from_x(x, mesh)
+    # Mesh axes partitioning batch or sequence positions. Reduce token counts over these
+    # axes only; other mesh axes carry replicas.
+    token_sharding_axes = _axis_names(token_spec[0])
 
     if has_expert_axis and expert_axis_size > 1:
+        if "expert" not in token_sharding_axes:
+            # EP dispatch requires disjoint token shards across expert ranks to avoid duplicate dispatch.
+            raise ValueError(
+                f"expert-parallel moe_mlp needs the token dim sharded over 'expert'; got token spec {token_spec}"
+            )
         if expert_chunks != 1:
             raise ValueError("expert_chunks must be 1 when expert parallelism is active")
         if resolved_implementation not in _EP_MOE_IMPLEMENTATIONS:
@@ -562,10 +571,10 @@ def moe_mlp(
         w_up_gate_spec = P("expert", None, None)
         w_down_spec = P("expert", None, None)
 
-        x = _reshard_for_shard_map(x, mesh, batch_spec)
-        selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
-        combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
-        token_valid = _reshard_for_shard_map(token_valid, mesh, batch_spec)
+        x = _reshard_for_shard_map(x, mesh, token_spec)
+        selected_experts = _reshard_for_shard_map(selected_experts, mesh, token_spec)
+        combine_weights = _reshard_for_shard_map(combine_weights, mesh, token_spec)
+        token_valid = _reshard_for_shard_map(token_valid, mesh, token_spec)
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
@@ -575,17 +584,18 @@ def moe_mlp(
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
+                token_sharding_axes=token_sharding_axes,
             ),
             mesh=mesh,
             in_specs=(
-                batch_spec,
-                batch_spec,
-                batch_spec,
-                batch_spec,
+                token_spec,
+                token_spec,
+                token_spec,
+                token_spec,
                 w_up_gate_spec,
                 w_down_spec,
             ),
-            out_specs=(batch_spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
+            out_specs=(token_spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
             check_vma=False,
         )
         out, drops = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
@@ -597,10 +607,10 @@ def moe_mlp(
     # semantics without EP collectives. JAX 0.9 requires shard_map in_specs to
     # match the actual input sharding, so reshard ordinary inputs to the mesh
     # specs that preserve data-axis parallelism.
-    x_spec = _value_spec_or_default(x, batch_spec, replace_replicated=True)
-    selected_experts_spec = _value_spec_or_default(selected_experts, batch_spec, replace_replicated=True)
-    combine_weights_spec = _value_spec_or_default(combine_weights, batch_spec, replace_replicated=True)
-    token_valid_spec = _value_spec_or_default(token_valid, batch_spec, replace_replicated=True)
+    x_spec = _value_spec_or_default(x, token_spec, replace_replicated=True)
+    selected_experts_spec = _value_spec_or_default(selected_experts, token_spec, replace_replicated=True)
+    combine_weights_spec = _value_spec_or_default(combine_weights, token_spec, replace_replicated=True)
+    token_valid_spec = _value_spec_or_default(token_valid, token_spec, replace_replicated=True)
     if expert_chunks > 1 and resolved_implementation == "sonic_cute":
         # The chunked sonic_cute path all-gathers the hidden dim per expert-chunk over ``data``, so it
         # needs a real data axis; without one the local kernel hits an unbound-axis error.
@@ -615,8 +625,9 @@ def moe_mlp(
         w_up_gate_spec = _drop_absent_mesh_axes(mesh, P("expert", "data", "model"))
         w_down_spec = _drop_absent_mesh_axes(mesh, P("expert", "model", "data"))
     else:
-        w_up_gate_spec = _value_spec_or_default(w_up_gate, P(*(None for _ in range(w_up_gate.ndim))))
-        w_down_spec = _value_spec_or_default(w_down, P(*(None for _ in range(w_down.ndim))))
+        # The local kernel contracts full hidden dimensions against the complete expert bank.
+        w_up_gate_spec = P(*(None for _ in range(w_up_gate.ndim)))
+        w_down_spec = P(*(None for _ in range(w_down.ndim)))
 
     x = _reshard_for_shard_map(x, mesh, x_spec)
     selected_experts = _reshard_for_shard_map(selected_experts, mesh, selected_experts_spec)
@@ -638,9 +649,9 @@ def moe_mlp(
             implementation=resolved_implementation,
             expert_chunks=expert_chunks,
         )
-        batch_axis_names = x_spec[0]
-        if report_capacity_overflow and batch_axis_names is not None:
-            dropped = jax.lax.psum(dropped, axis_name=batch_axis_names)
+        local_token_sharding_axes = _axis_names(x_spec[0])
+        if report_capacity_overflow and local_token_sharding_axes:
+            dropped = jax.lax.psum(dropped, axis_name=local_token_sharding_axes)
         return out, dropped
 
     shard_fn = shard_map(
