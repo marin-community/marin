@@ -116,8 +116,7 @@ For a quota warning, check the zone values in the Storage dashboard and in the
 [CoreWeave quota page].
 
 Both rules read the `storage.usage` namespace, which exists only after the
-collector writes its first rows. Until then the query fails, and because both
-rules set `execErrState: Alerting`, each one pages with `[no value]` labels. Run
-the collector once when you add a rule that reads a new namespace.
+collector writes its first rows. Until then the query fails and both rules stay
+normal. Run the collector once when you add a rule that reads a new namespace.
 
 [CoreWeave quota page]: https://docs.coreweave.com/products/storage/object-storage/manage-quotas
