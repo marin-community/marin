@@ -323,6 +323,7 @@ class TaskCoverage(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    n_benchmark: int | None = None
     n_attempted: int | None = None
     n_scored: int
     n_correct: int | None = None

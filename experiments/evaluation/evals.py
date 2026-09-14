@@ -136,6 +136,14 @@ class HarborDefinition:
             name=self.name,
             mechanism="harbor",
             family=self.family,
+            tasks=(
+                EvalTaskRef(
+                    name=config.record_dataset,
+                    num_fewshot=None,
+                    primary_metric="accuracy",
+                    metric_kind=MetricKind.BINARY,
+                ),
+            ),
             harbor=HarborRef(
                 dataset=config.record_dataset,
                 version=config.record_revision,

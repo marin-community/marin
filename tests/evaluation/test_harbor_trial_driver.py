@@ -435,9 +435,15 @@ datasets:
   - path: tasks
 """
         )
-        (launch_dir / "tasks").mkdir()
+        task_dir = launch_dir / "tasks" / "task-one"
+        task_dir.mkdir(parents=True)
+        (task_dir / "task.toml").write_text(
+            'version = "1.0"\n[task]\nname = "task-one"\n[environment]\n'
+        )
+        (task_dir / "instruction.md").write_text("Solve the task.")
 
         (config,) = preflight_harbor_configs([(policy_path, {})])
+        assert config.n_benchmark == 1
 
         worker_workspace = tmp_path / "worker"
         worker_dataset = worker_workspace / launch_dir.relative_to(_ROOT) / "tasks"

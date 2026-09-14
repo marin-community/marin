@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
@@ -41,6 +41,7 @@ from finestore.migrations.m0001_manifest import LEGACY_SEAL_FILE
 from finestore.reader import ReadView
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC
 from marin.evaluation.metric_selection import base_metric, primary_filter, primary_metric
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, TaskCoverage
@@ -316,7 +317,9 @@ def _is_infrastructure_error(sample: EvalSample) -> bool:
     )
 
 
-def task_coverage_and_metrics(samples: Sequence[EvalSample]) -> tuple[TaskCoverage, dict[str, float]]:
+def task_coverage_and_metrics(
+    samples: Sequence[EvalSample], *, n_benchmark: int | None = None, n_attempted: int | None = None
+) -> tuple[TaskCoverage, dict[str, float]]:
     """Compute one task's coverage and metrics recovered after request failures.
 
     Ungraded documents and failed requests are unscored. Empty model completions remain scored and
@@ -352,8 +355,12 @@ def task_coverage_and_metrics(samples: Sequence[EvalSample]) -> tuple[TaskCovera
     errors = {"ungraded": ungraded} if ungraded else {}
     if infrastructure_errors:
         errors[EVALCHEMY_INFRASTRUCTURE_ERROR] = len(infrastructure_errors)
+    extent = _document_extent(seen)
+    if n_attempted is not None and extent is not None and extent > n_attempted:
+        raise ValueError(f"sample document extent {extent} exceeds intended count {n_attempted}")
     coverage = TaskCoverage(
-        n_attempted=_document_extent(seen),
+        n_benchmark=n_benchmark,
+        n_attempted=n_attempted if n_attempted is not None else extent,
         n_scored=len(scored),
         n_correct=sum(1 for sample in scored if sample.correct) if binary and scored else None,
         n_unanswered=sum(1 for sample in scored if sample.kind is SampleKind.GENERATION and not sample.extracted),
@@ -367,7 +374,7 @@ def task_coverage_and_metrics(samples: Sequence[EvalSample]) -> tuple[TaskCovera
     return coverage, recovered_metrics
 
 
-def _task_keys(sources: Sequence[str]) -> dict[str, str]:
+def _task_keys(sources: Sequence[str], benchmark_sizes: Mapping[str, Mapping[str, int]] | None = None) -> dict[str, str]:
     """The ``metrics`` key each sample file's coverage belongs to.
 
     A run's records key metrics by the task-config directory (``<task_dir>/<model>/<file>``), and
@@ -382,8 +389,53 @@ def _task_keys(sources: Sequence[str]) -> dict[str, str]:
     for directory, files in by_directory.items():
         for relative in files:
             task = _task_from_filename(PurePosixPath(relative).name, ".jsonl")
-            keys[relative] = f"{directory.name}/{task}" if len(files) > 1 else directory.name
+            grouped = len(files) > 1 or len((benchmark_sizes or {}).get(directory.name, {})) > 1
+            keys[relative] = f"{directory.name}/{task}" if grouped else directory.name
     return keys
+
+
+def _benchmark_sizes(
+    root: StoragePath,
+    artifacts: Sequence[str],
+    tasks: Sequence[EvalTaskConfig],
+) -> dict[str, dict[str, int]]:
+    """Read each task's full benchmark size from its harness result."""
+    configs = {_task_dir_name(task): task for task in tasks}
+    sizes: dict[str, dict[str, int]] = {}
+    for relative in artifacts:
+        name = PurePosixPath(relative).name
+        if not (name.startswith("results_") and name.endswith(".json")) or is_scratch_artifact(relative):
+            continue
+        directory = PurePosixPath(relative).parent.parent.name
+        task = configs.get(directory)
+        if task is None:
+            continue
+        result = json.loads(StoragePath(prefix_join(str(root), relative)).read_text())
+        reported = result.get("n-samples") or {}
+        if reported:
+            for leaf, count in reported.items():
+                original = count.get("original") if isinstance(count, Mapping) else None
+                if not isinstance(original, int) or original <= 0:
+                    raise ValueError(f"Evalchemy task {leaf!r} reported invalid benchmark size {original!r}")
+                sizes.setdefault(directory, {})[leaf] = original
+            continue
+        if task.expected_items is None:
+            raise ValueError(f"Evalchemy task {task.name!r} did not report n-samples")
+        result_tasks = result.get("results") or {}
+        if len(result_tasks) != 1:
+            raise ValueError(f"Evalchemy task {task.name!r} with expected_items must produce one result row")
+        [leaf] = result_tasks
+        sizes.setdefault(directory, {})[leaf] = task.expected_items
+    for task in tasks:
+        directory = _task_dir_name(task)
+        if directory not in sizes:
+            raise ValueError(f"Evalchemy task {task.name!r} has no readable benchmark size")
+    return sizes
+
+
+def _task_dir_name(task: EvalTaskConfig) -> str:
+    shots = "default" if task.num_fewshot is None else str(task.num_fewshot)
+    return task.task_alias or f"{task.name}_{shots}shot"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -432,7 +484,13 @@ class SampleExport:
     """Metrics rebuilt from successful samples for tasks with request failures."""
 
 
-def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> SampleExport:
+def export_lm_eval_samples(
+    out_path: str,
+    *,
+    tasks: Sequence[EvalTaskConfig] = (),
+    max_eval_instances: int | None = None,
+    writer_id: str = "evalchemy",
+) -> SampleExport:
     """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
 
     Returns the rows written, coverage, and metrics recovered from successful requests. The archive
@@ -451,7 +509,8 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> Sa
         # already stored, so a run evaluated by another mechanism keeps the archive it has.
         return SampleExport(samples=0)
     require_current_samples(out_path)
-    keys = _task_keys(sources)
+    benchmark_sizes = _benchmark_sizes(root, artifacts, tasks) if tasks else {}
+    keys = _task_keys(sources, benchmark_sizes)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
     coverage: dict[str, TaskCoverage] = {}
@@ -468,10 +527,26 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> Sa
             count += len(samples)
             if samples:
                 task_key = keys[relative]
-                task_coverage_result, task_metrics = task_coverage_and_metrics(samples)
+                directory, _, leaf = task_key.partition("/")
+                by_leaf = benchmark_sizes.get(directory, {})
+                n_benchmark = by_leaf.get(leaf) if leaf else next(iter(by_leaf.values()), None)
+                n_attempted = min(max_eval_instances, n_benchmark) if max_eval_instances is not None and n_benchmark else n_benchmark
+                task_coverage_result, task_metrics = task_coverage_and_metrics(
+                    samples,
+                    n_benchmark=n_benchmark,
+                    n_attempted=n_attempted,
+                )
                 coverage[task_key] = task_coverage_result
                 if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
                     recovered_metrics[task_key] = task_metrics
+        for directory, leaf_sizes in benchmark_sizes.items():
+            grouped = len(leaf_sizes) > 1
+            for leaf, n_benchmark in leaf_sizes.items():
+                task_key = f"{directory}/{leaf}" if grouped else directory
+                if task_key in coverage:
+                    continue
+                n_attempted = min(max_eval_instances, n_benchmark) if max_eval_instances is not None else n_benchmark
+                coverage[task_key] = TaskCoverage(n_benchmark=n_benchmark, n_attempted=n_attempted, n_scored=0)
         store.seal()
     finally:
         store.close()

@@ -96,16 +96,15 @@ class HarborTrial:
 class HarborRunResult:
     """The aggregate of one Harbor run, and the root of the finestore archive it wrote.
 
-    ``attempted_trials`` is the number of trials the run set out to score, taken from the dataset it
-    launched rather than from the trial results it found: a trial that dies before writing a result
-    leaves no file behind, so counting results would make the worst-affected runs look complete. It is
-    ``None`` when Harbor's job bookkeeping is unreadable, which is unknown rather than complete.
+    ``attempted_trials`` is the number of trials the run set out to score after the runtime cap,
+    derived from the dataset size captured during preflight rather than from result files.
     ``scored_trials`` counts outcomes accepted by the Harbor taxonomy, including agent failures
     without verifier results. Accuracy and mean reward divide by this count.
     """
 
     dataset: str
-    attempted_trials: int | None
+    benchmark_trials: int
+    attempted_trials: int
     scored_trials: int
     solved_trials: int
     errors: Mapping[str, int]
@@ -114,17 +113,13 @@ class HarborRunResult:
     archive_path: str | None
 
     @property
-    def unscored_trials(self) -> int | None:
-        """Unscored trials, or None when the attempted count is unknown."""
-        if self.attempted_trials is None:
-            return None
+    def unscored_trials(self) -> int:
+        """Attempted trials that did not produce a score-bearing outcome."""
         return max(0, self.attempted_trials - self.scored_trials)
 
     @property
-    def completion_rate(self) -> float | None:
-        """Scoreable fraction of attempted trials, or None when that count is unknown."""
-        if self.attempted_trials is None:
-            return None
+    def completion_rate(self) -> float:
+        """The fraction of attempted trials with score-bearing outcomes."""
         if self.attempted_trials <= 0:
             return 0.0
         return min(1.0, self.scored_trials / self.attempted_trials)
@@ -137,14 +132,14 @@ class HarborRunResult:
             "solved": float(self.solved_trials),
             "total": float(self.scored_trials),
         }
-        if self.attempted_trials is not None:
-            metrics["attempted"] = float(self.attempted_trials)
+        metrics["attempted"] = float(self.attempted_trials)
         return {self.dataset: metrics}
 
     def task_coverage(self) -> dict[str, TaskCoverage]:
         """Coverage keyed like :meth:`task_metrics`, carrying the per-trial error distribution."""
         return {
             self.dataset: TaskCoverage(
+                n_benchmark=self.benchmark_trials,
                 n_attempted=self.attempted_trials,
                 n_scored=self.scored_trials,
                 errors=dict(self.errors),
@@ -320,7 +315,7 @@ def _write_archive(trials: list[HarborTrial], dataset: str, output_dir: str) -> 
     return output_dir
 
 
-def _trial_errors(trials: list[HarborTrial], attempted: int | None) -> dict[str, int]:
+def _trial_errors(trials: list[HarborTrial], attempted: int) -> dict[str, int]:
     """Count trial errors, including errors on scored outcomes.
 
     Trials the job never wrote a result for are counted under :data:`_MISSING_RESULT_ERROR`: they are
@@ -333,14 +328,14 @@ def _trial_errors(trials: list[HarborTrial], attempted: int | None) -> dict[str,
             continue
         name = (trial.error or {}).get("type") or _UNKNOWN_ERROR
         errors[name] = errors.get(name, 0) + 1
-    missing = 0 if attempted is None else max(0, attempted - len(trials))
+    missing = max(0, attempted - len(trials))
     if missing:
         errors[_MISSING_RESULT_ERROR] = errors.get(_MISSING_RESULT_ERROR, 0) + missing
     return errors
 
 
 def _aggregate(
-    trials: list[HarborTrial], dataset: str, archive_path: str | None, attempted: int | None
+    trials: list[HarborTrial], dataset: str, archive_path: str | None, n_benchmark: int, attempted: int
 ) -> HarborRunResult:
     """Aggregate the graded trials, keeping the ungraded ones as coverage rather than as zeros.
 
@@ -349,11 +344,14 @@ def _aggregate(
     that lower bound from the coverage this records.
     """
     scored = [trial for trial in trials if trial.scored]
+    if len(scored) > attempted:
+        raise ValueError(f"Harbor scored {len(scored)} trials but intended only {attempted}")
     solved = sum(1 for trial in scored if trial.reward >= SOLVED_REWARD)
     total_reward = sum(trial.reward for trial in scored)
     return HarborRunResult(
         dataset=dataset,
-        attempted_trials=None if attempted is None else max(attempted, len(trials)),
+        benchmark_trials=n_benchmark,
+        attempted_trials=attempted,
         scored_trials=len(scored),
         solved_trials=solved,
         errors=_trial_errors(trials, attempted),
@@ -373,6 +371,8 @@ def _run_harbor_job(
     output_dir: str,
     driver_env: Mapping[str, str],
     inference_session: RemoteInferenceSession,
+    n_benchmark: int,
+    n_attempted: int,
 ) -> HarborRunResult:
     job_dir = _job_dir(output_dir, job_name)
     logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
@@ -388,11 +388,15 @@ def _run_harbor_job(
 
     trials = _read_trials(job_dir, config.error_taxonomy)
     archive_path = _write_archive(trials, dataset, output_dir)
-    result = _aggregate(trials, dataset, archive_path, _attempted_trials(job_dir))
+    recorded_attempted = _attempted_trials(job_dir)
+    if recorded_attempted is not None and recorded_attempted > n_attempted:
+        raise ValueError(f"Harbor recorded {recorded_attempted} trials but intended only {n_attempted}")
+    result = _aggregate(trials, dataset, archive_path, n_benchmark, n_attempted)
     StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
         json.dumps(
             {
                 "dataset": result.dataset,
+                "benchmark_trials": result.benchmark_trials,
                 "attempted_trials": result.attempted_trials,
                 "scored_trials": result.scored_trials,
                 "solved_trials": result.solved_trials,
@@ -413,7 +417,7 @@ def _run_harbor_job(
         "an unknown number of" if result.attempted_trials is None else result.attempted_trials,
         result.accuracy,
         result.mean_reward,
-        "unknown" if completion is None else f"{completion:.3f}",
+        f"{completion:.3f}",
     )
     return result
 
@@ -428,9 +432,6 @@ def _evaluation_outcome(
     gate fails as an infrastructure failure and still records its coverage so the rejection is legible
     as counts rather than as prose. Unknown exception names reject the run as taxonomy drift.
 
-    A run whose attempted-trial count is unknown has no rate to gate on. It is admitted with its
-    coverage left unreported, which downstream widens to "completeness unknown" rather than treating
-    it as complete.
     """
     try:
         result = run()
@@ -450,14 +451,7 @@ def _evaluation_outcome(
             status=RunStatus.FAILED,
         )
     completion = result.completion_rate
-    if completion is None:
-        logger.warning(
-            "Harbor %s graded %d trials but recorded no attempted count; admitting without a "
-            "completion gate and reporting coverage as unknown",
-            result.dataset,
-            result.scored_trials,
-        )
-    elif completion < min_completion_rate:
+    if completion < min_completion_rate:
         raise EvaluationError(
             f"Harbor eval graded {result.scored_trials} of {result.attempted_trials} trials "
             f"({completion:.1%}), below the {min_completion_rate:.0%} gate, under "
@@ -519,6 +513,7 @@ class HarborExecutor:
             task_limit=self.task_limit,
             model_agent_kwargs=self.model_agent_kwargs,
         )
+        n_attempted = min(self.task_limit, self.config.n_benchmark) if self.task_limit is not None else self.config.n_benchmark
         return _run_harbor_job(
             job_name=job_name,
             config=self.config,
@@ -528,6 +523,8 @@ class HarborExecutor:
             output_dir=output_dir,
             driver_env=driver_env,
             inference_session=inference_session,
+            n_benchmark=self.config.n_benchmark,
+            n_attempted=n_attempted,
         )
 
     def __call__(
