@@ -21,6 +21,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
+from typing import Protocol
 
 import rigging.filesystem.factory as factory
 from finestore.eval import (
@@ -41,12 +42,26 @@ from finestore.migrations.m0001_manifest import LEGACY_SEAL_FILE
 from finestore.reader import ReadView
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
+from marin.evaluation.evaluation_config import eval_task_directory
 from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC
-from marin.evaluation.metric_selection import base_metric, declared_metric, primary_filter, primary_metric
-from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalTaskRef, TaskCoverage
+from marin.evaluation.metric_selection import (
+    AGGREGATE_AVERAGE_SUFFIX,
+    base_metric,
+    declared_metric,
+    primary_filter,
+)
+from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, TaskCoverage
 
-TaskDeclaration = EvalTaskConfig | EvalTaskRef
+
+class TaskDeclaration(Protocol):
+    """Fields shared by launch-time and recorded task declarations."""
+
+    name: str
+    num_fewshot: int | None
+    task_alias: str | None
+    primary_metric: str | None
+    expected_items: int | None
+
 
 logger = logging.getLogger(__name__)
 
@@ -185,13 +200,11 @@ def _sample_metrics(raw: dict) -> dict[str, float]:
 
 
 def _picked_metric(metrics: dict[str, float], primary_metric_name: str | None) -> tuple[str, float] | None:
-    if primary_metric_name is None:
-        return primary_metric(metrics)
     picked = declared_metric(metrics, primary_metric_name)
     if picked is not None:
         return picked
-    if primary_metric_name.endswith("_avg"):
-        return declared_metric(metrics, primary_metric_name.removesuffix("_avg"))
+    if primary_metric_name is not None and primary_metric_name.endswith(AGGREGATE_AVERAGE_SUFFIX):
+        return declared_metric(metrics, primary_metric_name.removesuffix(AGGREGATE_AVERAGE_SUFFIX))
     return None
 
 
@@ -407,7 +420,7 @@ def _task_keys(sources: Sequence[str], benchmark_sizes: Mapping[str, Mapping[str
     A run's records key metrics by the task-config directory (``<task_dir>/<model>/<file>``), and
     namespace them ``<task_dir>/<task>`` when one config evaluated several tasks -- see
     :meth:`~marin.evaluation.evalchemy.result.EvalchemyResult.task_metrics`. Coverage uses the same
-    keys. The full source set determines whether a task-config directory needs subtask names.
+    keys. Multiple sample files or multiple leaves in ``n-samples`` trigger subtask names.
     """
     by_directory: dict[PurePosixPath, list[str]] = {}
     for relative in sources:
@@ -442,7 +455,7 @@ def _benchmark_sizes(
                     raise ValueError(f"Evalchemy task {leaf!r} reported invalid benchmark size {original!r}")
                 sizes.setdefault(directory, {})[leaf] = original
             continue
-        expected_items = task.expected_items if isinstance(task, EvalTaskConfig) else None
+        expected_items = task.expected_items
         if expected_items is None:
             raise ValueError(f"Evalchemy task {task.name!r} did not report n-samples")
         result_tasks = result.get("results") or {}

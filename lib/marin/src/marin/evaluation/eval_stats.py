@@ -22,9 +22,8 @@ set out to grade and gates admission; ``n_scored / n_attempted`` says how much o
 widens the interval. A one-item run of a 1319-item benchmark passes the second and fails the first.
 
 Nothing here knows what a harness writes: :mod:`marin.evaluation.eval_measurements` turns records into
-measurements, and this module takes them from there. It is import-light on purpose -- the record
-status enum and nothing else, with no marin/levanter/iris imports -- so the dashboard image can vendor
-it beside ``records.py``.
+measurements, and this module takes them from there. It depends only on the evaluation record and
+archive contracts, with no training, Levanter, or Iris imports.
 """
 
 from __future__ import annotations
@@ -333,8 +332,8 @@ def difference_interval(a: Measurement, b: Measurement, alpha: float = ALPHA) ->
     are equal -- at a 90% coverage gate the unidentified width alone is 0.2, so ordering claims need a
     much stricter coverage threshold than display does.
     """
-    metric_a = a.protocol_metric if a.declared and a.protocol_metric is not None else base_metric(a.metric)
-    metric_b = b.protocol_metric if b.declared and b.protocol_metric is not None else base_metric(b.metric)
+    metric_a = effective_protocol(a).metric
+    metric_b = effective_protocol(b).metric
     if metric_a != metric_b:
         raise ValueError(f"measurements use different metrics: {metric_a} and {metric_b}")
     rate_a = a.coverage.rate if a.coverage.rate is not None else 1.0
@@ -528,6 +527,22 @@ class MetricProtocol:
     kind: MetricKind
 
 
+@dataclass(frozen=True)
+class LegacyMetric:
+    """The newest inferred metric for a benchmark without a declaration."""
+
+    created_at: str
+    run_id: str
+    metric: str
+
+
+def effective_protocol(measurement: Measurement) -> MetricProtocol:
+    """Resolve a measurement's declared protocol or its legacy inferred protocol."""
+    if measurement.declared and measurement.protocol_metric is not None and measurement.protocol_kind is not None:
+        return MetricProtocol(metric=measurement.protocol_metric, kind=measurement.protocol_kind)
+    return MetricProtocol(metric=base_metric(measurement.metric), kind=measurement.kind)
+
+
 def declared_protocols(measurements: Iterable[Measurement]) -> Mapping[str, MetricProtocol]:
     """Return each benchmark's protocol from its newest declared measurement."""
     newest: dict[str, Measurement] = {}
@@ -544,15 +559,7 @@ def declared_protocols(measurements: Iterable[Measurement]) -> Mapping[str, Metr
 
 def matches_protocol(measurement: Measurement, protocol: MetricProtocol) -> bool:
     """Whether a measurement uses a benchmark column's declared protocol."""
-    metric = (
-        measurement.protocol_metric
-        if measurement.declared and measurement.protocol_metric is not None
-        else base_metric(measurement.metric)
-    )
-    kind = (
-        measurement.protocol_kind if measurement.declared and measurement.protocol_kind is not None else measurement.kind
-    )
-    return (metric, kind) == (protocol.metric, protocol.kind)
+    return effective_protocol(measurement) == protocol
 
 
 def _admission_reason(measurement: Measurement, request: SelectionRequest) -> str | None:
@@ -603,14 +610,14 @@ def select(
     measurements = list(measurements)
     metadata = metadata or {}
     protocols = declared_protocols(measurements) if protocols is None else protocols
-    legacy_metrics: dict[str, tuple[str, str, str]] = {}
+    legacy_metrics: dict[str, LegacyMetric] = {}
     for measurement in measurements:
         if measurement.benchmark in protocols:
             continue
         current = legacy_metrics.get(measurement.benchmark)
-        recency = (measurement.created_at, measurement.run_id)
-        if current is None or recency > current[:2]:
-            legacy_metrics[measurement.benchmark] = (*recency, base_metric(measurement.metric))
+        candidate = LegacyMetric(measurement.created_at, measurement.run_id, base_metric(measurement.metric))
+        if current is None or (candidate.created_at, candidate.run_id) > (current.created_at, current.run_id):
+            legacy_metrics[measurement.benchmark] = candidate
     chosen: dict[str, dict[str, Measurement]] = {}
     rejections: list[Rejection] = []
     for measurement in measurements:
@@ -619,16 +626,9 @@ def select(
         if request.panel is not None and measurement.benchmark not in request.panel:
             continue
         protocol = protocols.get(measurement.benchmark)
-        metric = (
-            measurement.protocol_metric
-            if measurement.declared and measurement.protocol_metric is not None
-            else base_metric(measurement.metric)
-        )
-        kind = (
-            measurement.protocol_kind
-            if measurement.declared and measurement.protocol_kind is not None
-            else measurement.kind
-        )
+        effective = effective_protocol(measurement)
+        metric = effective.metric
+        kind = effective.kind
         if protocol is not None and not matches_protocol(measurement, protocol):
             reason = (
                 f"metric {metric} differs from declared {protocol.metric}"
@@ -645,13 +645,13 @@ def select(
             )
             continue
         legacy_metric = legacy_metrics.get(measurement.benchmark)
-        if protocol is None and legacy_metric is not None and metric != legacy_metric[2]:
+        if protocol is None and legacy_metric is not None and metric != legacy_metric.metric:
             rejections.append(
                 Rejection(
                     model=measurement.model,
                     benchmark=measurement.benchmark,
                     run_id=measurement.run_id,
-                    reason=f"metric {metric} differs from current {legacy_metric[2]}",
+                    reason=f"metric {metric} differs from current {legacy_metric.metric}",
                 )
             )
             continue

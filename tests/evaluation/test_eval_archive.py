@@ -32,7 +32,7 @@ from marin.evaluation.lm_eval_samples import (
     rebuild_lm_eval_samples,
     run_artifacts,
 )
-from marin.evaluation.records import TaskCoverage
+from marin.evaluation.records import EvalTaskRef, MetricKind, TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.migrations.cli import ArchiveSweep, SweepOutcome, _sweep_archives, selected_archives
@@ -429,7 +429,7 @@ def test_export_uses_declared_size_for_chat_native_task(tmp_path):
 
     [coverage] = export_lm_eval_samples(
         str(results),
-        tasks=(EvalTaskConfig("MATH500", 0, task_alias="math500", expected_items=500),),
+        tasks=(EvalTaskRef(name="MATH500", num_fewshot=0, task_alias="math500", expected_items=500),),
         max_eval_instances=10,
     ).coverage.values()
 
@@ -474,6 +474,33 @@ def test_rebuild_keeps_the_recorded_primary_metric(tmp_path):
     sample = sample_from_archive_row(stored)
     assert sample.grading.metric == "f1"
     assert sample.correct
+
+
+def test_rebuild_chat_native_samples_from_recorded_task_declaration(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "aime24" / "model"
+    directory.mkdir(parents=True)
+    result_path = directory / "results_20260807.json"
+    result_path.write_text(json.dumps({"results": {"AIME24": {"accuracy_avg": 1.0}}}))
+    row = _lm_eval_row(0, "none", 1.0, "4")
+    row.pop("exact_match")
+    row["accuracy"] = 1.0
+    source = directory / "samples_AIME24_20260807.jsonl"
+    source.write_text(json.dumps(row) + "\n")
+    task = EvalTaskRef(
+        name="AIME24",
+        num_fewshot=0,
+        task_alias="aime24",
+        primary_metric="accuracy_avg",
+        metric_kind=MetricKind.CONTINUOUS,
+        expected_items=30,
+    )
+    export_lm_eval_samples(str(results), tasks=(task,))
+    source.unlink()
+
+    assert rebuild_lm_eval_samples(str(results), tasks=(task,)) == 1
+    [stored] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert sample_from_archive_row(stored).grading.metric == "accuracy"
 
 
 def test_two_sample_files_for_one_leaf_use_one_grouped_coverage_key(tmp_path):

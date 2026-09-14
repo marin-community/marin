@@ -22,7 +22,7 @@ from marin.evaluation.evalchemy.runner import (
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, ValidatedHarborConfig
-from marin.evaluation.harbor.runner import HarborExecutor
+from marin.evaluation.harbor.runner import HARBOR_ACCURACY_METRIC, HarborExecutor
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, HarborRef, MetricKind
 from marin.evaluation.runner import EvalExecutor
@@ -70,6 +70,7 @@ class EvalchemyDefinition:
                     completion_only=task.completion_only,
                     primary_metric=task.primary_metric,
                     metric_kind=task.metric_kind,
+                    expected_items=task.expected_items,
                 )
                 for task in config.tasks
             ),
@@ -140,7 +141,7 @@ class HarborDefinition:
                 EvalTaskRef(
                     name=config.record_dataset,
                     num_fewshot=None,
-                    primary_metric="accuracy",
+                    primary_metric=HARBOR_ACCURACY_METRIC,
                     metric_kind=MetricKind.BINARY,
                 ),
             ),

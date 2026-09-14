@@ -338,7 +338,7 @@ def declared_primary_metric(record: EvalRunRecord, sample_task: str) -> str | No
 
 def _sample_primary_metric(metric_columns: tuple[str, ...], declared: str | None) -> str | None:
     metrics = dict.fromkeys(metric_columns, 0.0)
-    picked = primary_metric(metrics) if declared is None else declared_metric(metrics, declared)
+    picked = declared_metric(metrics, declared)
     return picked[0] if picked is not None else None
 
 

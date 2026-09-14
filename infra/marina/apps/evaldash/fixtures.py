@@ -33,6 +33,8 @@ from finestore.eval import (
     write_sample_parquet,
 )
 from fsspec.core import url_to_fs
+from marin.evaluation.harbor.runner import HARBOR_ACCURACY_METRIC
+from marin.evaluation.metric_selection import base_metric
 from marin.evaluation.records import (
     RECORD_FILE,
     EvalRef,
@@ -80,7 +82,7 @@ _EVAL_FAMILIES = {"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"}
 
 
 def _lm_eval_ref(eval_name: str, num_fewshot: int) -> EvalRef:
-    primary_metric = _HEADLINE[eval_name][0].split(",", 1)[0]
+    primary_metric = base_metric(_HEADLINE[eval_name][0])
     return EvalRef(
         name=eval_name,
         mechanism="evalchemy",
@@ -104,7 +106,7 @@ def _harbor_ref(dataset: str) -> EvalRef:
             EvalTaskRef(
                 name=dataset,
                 num_fewshot=None,
-                primary_metric="accuracy",
+                primary_metric=HARBOR_ACCURACY_METRIC,
                 metric_kind=MetricKind.BINARY,
             ),
         ),
