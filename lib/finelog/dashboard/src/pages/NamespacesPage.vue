@@ -90,6 +90,11 @@ function setSort(key: string) {
 
 <template>
   <div class="space-y-3">
+    <div>
+      <h2 class="text-lg">Tables</h2>
+      <p class="text-xs text-text-muted mt-0.5">Registered tables and their current storage footprint.</p>
+    </div>
+
     <div
       v-if="error"
       class="px-4 py-3 text-sm text-status-danger bg-status-danger-bg rounded-lg border border-status-danger-border"
@@ -97,14 +102,14 @@ function setSort(key: string) {
       {{ error }}
     </div>
 
-    <InfoCard title="Registered namespaces">
+    <InfoCard title="Registered tables">
       <DataTable
         :columns="columns"
         :rows="sorted"
         :loading="loading"
         :sort-key="sortKey"
         :sort-dir="sortDir"
-        empty-message="No namespaces registered."
+        empty-message="No tables registered."
         @sort="(k) => setSort(k)"
       >
         <template #cell-namespace="{ value }">

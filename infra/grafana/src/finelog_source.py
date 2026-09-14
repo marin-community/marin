@@ -15,6 +15,7 @@ from typing import Protocol
 import pyarrow as pa
 from config import FINELOG_PORT, ClusterTarget
 from discovery import InstanceResolutionError, resolve_internal_ip
+from finelog.client import RelaySenderStatus
 from finelog.client.log_client import LogClient
 from finelog.errors import StatsError
 from finelog_health import FinelogHealth, FinelogRole
@@ -32,6 +33,8 @@ class MetricSource(Protocol):
     def query(self, sql: str, *, max_rows: int) -> pa.Table: ...
 
     def health(self) -> FinelogHealth: ...
+
+    def relay_status(self) -> tuple[RelaySenderStatus, ...]: ...
 
 
 class FinelogSource:
@@ -92,3 +95,7 @@ class FinelogSource:
             error_class="",
             error="",
         )
+
+    def relay_status(self) -> tuple[RelaySenderStatus, ...]:
+        """Return direct regional relay heartbeats held by this hub."""
+        return self._client.list_relay_status()

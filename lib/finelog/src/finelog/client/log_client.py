@@ -120,6 +120,30 @@ class NamespaceInfo:
     storage_policy: StoragePolicy
 
 
+@dataclass(frozen=True)
+class RelayNamespaceStatus:
+    """Hub-clocked progress for one namespace on one regional relay."""
+
+    namespace: str
+    visible_high_water: int
+    published_high_water: int
+    settled_cursor: int | None
+    publication_progress_at_ms: int
+    cursor_progress_at_ms: int
+
+
+@dataclass(frozen=True)
+class RelaySenderStatus:
+    """The latest complete relay heartbeat accepted from one cluster."""
+
+    cluster: str
+    boot_id: str
+    report_sequence: int
+    target: str
+    received_at_ms: int
+    namespaces: tuple[RelayNamespaceStatus, ...]
+
+
 def _format_exc_summary(exc: BaseException) -> str:
     if isinstance(exc, ConnectError):
         # The server detail (e.g. "column \"ts\": nullable mismatch
@@ -711,6 +735,31 @@ class LogClient:
             lambda client: client.get_table_schema(stats_pb2.GetTableSchemaRequest(namespace=namespace))
         )
         return schema_from_proto(response.schema)
+
+    def list_relay_status(self) -> tuple[RelaySenderStatus, ...]:
+        """Return the latest direct heartbeat from every regional relay."""
+        response = self._stats_rpc(lambda client: client.list_relay_status(stats_pb2.ListRelayStatusRequest()))
+        return tuple(
+            RelaySenderStatus(
+                cluster=sender.cluster,
+                boot_id=sender.boot_id,
+                report_sequence=sender.report_sequence,
+                target=sender.target,
+                received_at_ms=sender.received_at_ms,
+                namespaces=tuple(
+                    RelayNamespaceStatus(
+                        namespace=namespace.namespace,
+                        visible_high_water=namespace.visible_high_water,
+                        published_high_water=namespace.published_high_water,
+                        settled_cursor=(namespace.settled_cursor if namespace.HasField("settled_cursor") else None),
+                        publication_progress_at_ms=namespace.publication_progress_at_ms,
+                        cursor_progress_at_ms=namespace.cursor_progress_at_ms,
+                    )
+                    for namespace in sender.namespaces
+                ),
+            )
+            for sender in response.senders
+        )
 
     def get_table_status(self, namespace: str) -> TableStatus:
         """Return the active and desired table-spec versions."""

@@ -1446,6 +1446,31 @@ impl Store {
         Ok(self.tables.require(name)?.persisted_seq())
     }
 
+    /// `name`'s highest query-visible sequence, including locally durable rows
+    /// whose object state has not reached HEAD yet.
+    pub fn namespace_visible_seq(&self, name: &str) -> Result<i64, StatsError> {
+        match self.tables.get(name) {
+            Some(table) => Ok(table.stats().max_seq),
+            None => {
+                self.catalog.require_live(name)?;
+                Ok(self.catalog.aggregate_namespace_stats(name)?.max_seq)
+            }
+        }
+    }
+
+    /// `name`'s highest sequence recoverable from its published object-state
+    /// HEAD. This can trail [`Self::namespace_visible_seq`] while publication
+    /// is deferred.
+    pub fn namespace_published_seq(&self, name: &str) -> Result<i64, StatsError> {
+        match self.tables.get(name) {
+            Some(table) => Ok(table.published_seq()),
+            None => {
+                self.catalog.require_live(name)?;
+                Ok(self.catalog.aggregate_namespace_stats(name)?.max_seq)
+            }
+        }
+    }
+
     /// The seq in `namespace` below which this store will never send to `target` again.
     pub fn forward_cursor(&self, target: &str, namespace: &str) -> Result<Option<i64>, StatsError> {
         self.catalog.forward_cursor(target, namespace)

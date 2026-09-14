@@ -47,6 +47,8 @@ export interface ProtoSchema {
   keyColumn?: string
   projections?: ProtoCoveringProjection[]
   groupedExtrema?: ProtoGroupedExtrema[]
+  sortColumns?: string[]
+  maxRowGroupRows?: number
 }
 
 export function shortColumnType(t: ColumnType | undefined): string {

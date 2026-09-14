@@ -121,6 +121,7 @@ class _FakeStatsServiceClient:
         self.errors: list[Exception] = []
         self.query_handler = None
         self.namespaces: list[stats_pb2.NamespaceInfo] = []
+        self.relay_statuses: list[stats_pb2.RelaySenderStatus] = []
 
     def register_table(self, request):
         self.registration_requests.append(request)
@@ -171,6 +172,10 @@ class _FakeStatsServiceClient:
         if spec is None:
             raise ConnectError(Code.NOT_FOUND, f"namespace {request.namespace!r} has no table spec")
         return stats_pb2.GetTableStatusResponse(active_table_spec=spec, catalog_generation=7)
+
+    def list_relay_status(self, request):
+        del request
+        return stats_pb2.ListRelayStatusResponse(senders=self.relay_statuses)
 
     def abort_table_migration(self, request):
         self.aborts.append(request.namespace)
@@ -917,6 +922,36 @@ def test_client_gets_registered_schema_without_table_handle(tracked_clients):
         )
         with pytest.raises(NamespaceNotFoundError):
             client.get_table_schema("missing")
+    finally:
+        client.close()
+
+
+def test_client_preserves_an_unseeded_relay_cursor(tracked_clients):
+    client = LogClient.connect("http://h:1")
+    try:
+        client.query("SELECT 1")
+        tracked_clients[0].relay_statuses = [
+            stats_pb2.RelaySenderStatus(
+                cluster="cw-a",
+                boot_id="boot",
+                report_sequence=3,
+                target="https://hub",
+                received_at_ms=100,
+                namespaces=[
+                    stats_pb2.RelayNamespaceStatus(
+                        namespace="telemetry_v1.node_agent",
+                        visible_high_water=12,
+                        published_high_water=10,
+                        publication_progress_at_ms=90,
+                        cursor_progress_at_ms=80,
+                    )
+                ],
+            )
+        ]
+
+        (sender,) = client.list_relay_status()
+        assert sender.cluster == "cw-a"
+        assert sender.namespaces[0].settled_cursor is None
     finally:
         client.close()
 
