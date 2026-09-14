@@ -31,6 +31,7 @@ from marin.evaluation.eval_stats import (
     Completeness,
     Interval,
     Measurement,
+    MetricProtocol,
     MissingPolicy,
     Rejection,
     SelectionRequest,
@@ -38,6 +39,7 @@ from marin.evaluation.eval_stats import (
     declared_protocols,
     difference_interval,
     matches_filters,
+    matches_protocol,
     measurement_interval,
     panel_aggregate,
     select,
@@ -411,10 +413,10 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
     }
 
 
-def record_headline(record: EvalRunRecord) -> dict | None:
+def record_headline(record: EvalRunRecord, protocol: MetricProtocol | None = None) -> dict | None:
     """One run's headline score with its interval, or None when the run produced no primary metric."""
     measurement = measurement_from_record(record)
-    if measurement is None:
+    if measurement is None or (protocol is not None and not matches_protocol(measurement, protocol)):
         return None
     return cell_payload(measurement)
 
@@ -440,11 +442,11 @@ def _model_cohorts(records: list[EvalRunRecord]) -> list[dict]:
     return cohorts
 
 
-def _model_history(records: list[EvalRunRecord]) -> dict[str, list[dict]]:
+def _model_history(records: list[EvalRunRecord], protocols: Mapping[str, MetricProtocol]) -> dict[str, list[dict]]:
     """Per-eval score-over-time: every scored run for the model on each eval, oldest first."""
     history: dict[str, list[dict]] = {}
     for record in records:
-        headline = record_headline(record)
+        headline = record_headline(record, protocols.get(record.evaluation.name))
         if headline is None:
             continue
         history.setdefault(record.evaluation.name, []).append({**headline, "status": record.status.value})
@@ -453,11 +455,16 @@ def _model_history(records: list[EvalRunRecord]) -> dict[str, list[dict]]:
     return history
 
 
-def _model_runs(records: list[EvalRunRecord]) -> list[dict]:
+def _model_runs(records: list[EvalRunRecord], protocols: Mapping[str, MetricProtocol]) -> list[dict]:
     """Every run for the model, newest first, each with its headline score when it scored."""
     runs = []
     for record in records:
-        headline = record_headline(record)
+        protocol = protocols.get(record.evaluation.name)
+        measurement = measurement_from_record(record)
+        headline = record_headline(record, protocol)
+        protocol_mismatch = (
+            measurement is not None and protocol is not None and not matches_protocol(measurement, protocol)
+        )
         runs.append(
             {
                 "run_id": record.run_id,
@@ -466,7 +473,11 @@ def _model_runs(records: list[EvalRunRecord]) -> list[dict]:
                 "created_at": record.created_at,
                 "version": record.version,
                 "headline": headline,
-                "gap_reason": None if headline else _gap_reason(record),
+                "gap_reason": (
+                    None
+                    if headline
+                    else "metric differs from current protocol" if protocol_mismatch else _gap_reason(record)
+                ),
             }
         )
     runs.sort(key=lambda run: run["created_at"] or "", reverse=True)
@@ -481,6 +492,7 @@ def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
     as the headline panel does. ``history`` is the per-eval score-over-time across every scored run,
     and ``runs`` spans every run for the model (smoke included), newest first.
     """
+    protocols = declared_protocols(measurements_from_records(_panel_records(records)))
     model_records = [record for record in records if record.model.name == model]
     if not model_records:
         return None
@@ -493,8 +505,8 @@ def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
         "user": newest.user,
         "current_version": max(eligible, key=lambda r: r.created_at or "").version if eligible else None,
         "cohorts": _model_cohorts(eligible),
-        "history": _model_history(eligible),
-        "runs": _model_runs(model_records),
+        "history": _model_history(eligible, protocols),
+        "runs": _model_runs(model_records, protocols),
     }
 
 

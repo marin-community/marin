@@ -397,6 +397,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
         "max_input_tokens": model_info[MAX_INPUT_TOKENS_KEY],
         "max_output_tokens": model_info[MAX_OUTPUT_TOKENS_KEY],
         "n_benchmark": n_benchmark,
+        "trials_per_task": config.n_attempts * len(config.agents),
     }
 
 

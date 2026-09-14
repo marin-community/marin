@@ -503,11 +503,11 @@ class HarborExecutor:
             workdir,
             hf_token=hf_token,
         )
-        n_benchmark = self.config.n_benchmark
-        if n_benchmark is None:
+        benchmark_tasks = self.config.n_benchmark
+        if benchmark_tasks is None:
             if dataset_path is None:
                 raise ValueError("Harbor preflight did not report the dataset size")
-            n_benchmark = dataset_task_count(dataset_path)
+            benchmark_tasks = dataset_task_count(dataset_path)
         overlay = HarborRuntimeOverlay(
             job_name=job_name,
             jobs_dir=str(_jobs_dir(output_dir)),
@@ -517,7 +517,9 @@ class HarborExecutor:
             task_limit=self.task_limit,
             model_agent_kwargs=self.model_agent_kwargs,
         )
-        n_attempted = min(self.task_limit, n_benchmark) if self.task_limit is not None else n_benchmark
+        attempted_tasks = min(self.task_limit, benchmark_tasks) if self.task_limit is not None else benchmark_tasks
+        n_benchmark = benchmark_tasks * self.config.trials_per_task
+        n_attempted = attempted_tasks * self.config.trials_per_task
         return _run_harbor_job(
             job_name=job_name,
             config=self.config,

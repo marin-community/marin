@@ -208,6 +208,7 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     expected = checked_policies[path.name]
     assert all(result["stable_policy_json"] == expected["stable_policy_json"] for result in seeded)
     assert all(result["digest"] == expected["digest"] for result in seeded)
+    assert expected["trials_per_task"] == 3
 
 
 def test_preflight_reports_only_verifier_host_environment_dependencies(tmp_path):

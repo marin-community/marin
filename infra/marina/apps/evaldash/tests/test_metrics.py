@@ -5,7 +5,7 @@
 aggregates, and head-to-head difference intervals."""
 
 import pytest
-from evaldash.metrics import build_comparison, build_meta, build_panel, eval_suites, panel_request
+from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
 from marin.evaluation.eval_stats import Completeness, MissingPolicy
 from marin.evaluation.records import (
     EvalchemyRef,
@@ -38,9 +38,14 @@ def _record(
     primary_metric: str | None = None,
     metric_kind: MetricKind | None = None,
     limit: int | None = None,
+    metric: str = "acc,none",
 ) -> EvalRunRecord:
     succeeded = value is not None
-    metrics = {eval_name: {"acc,none": value, "acc_stderr,none": 0.01, "sample_len": float(ITEMS)}} if succeeded else {}
+    metrics = (
+        {eval_name: {metric: value, f"{metric.split(',', 1)[0]}_stderr,none": 0.01, "sample_len": float(ITEMS)}}
+        if succeeded
+        else {}
+    )
     return EvalRunRecord(
         run_id=f"{model}-{eval_name}-{created_at}",
         group_id=f"{model}-{created_at}",
@@ -237,6 +242,57 @@ def test_capped_canary_does_not_replace_a_full_run_and_reports_the_column_protoc
     assert rows["canary-only"]["missing"]["gsm8k"]["reason"] == "benchmark coverage 0.001 below 0.90"
     assert panel["protocols"] == {"gsm8k": {"metric": "acc", "kind": "binary"}}
     assert panel["request"]["min_benchmark_coverage"] == 0.9
+
+
+def test_declared_binary_protocol_survives_continuous_interval_demotion():
+    record = _record(
+        "m",
+        "gsm8k",
+        None,
+        "2026-02-01T00:00:00+00:00",
+        0.6,
+        coverage={"gsm8k": TaskCoverage(n_benchmark=ITEMS, n_attempted=ITEMS, n_scored=ITEMS, n_correct=0)},
+        primary_metric="acc",
+        metric_kind=MetricKind.BINARY,
+    )
+
+    panel = build_panel([record], panel_request())
+
+    assert panel["protocols"] == {"gsm8k": {"metric": "acc", "kind": "binary"}}
+    assert panel["rows"][0]["cells"]["gsm8k"]["metric_kind"] == "continuous"
+
+
+def test_model_history_uses_the_newest_declared_protocol():
+    legacy = _record("m", "drop", None, "2026-01-01T00:00:00+00:00", 0.8, metric="exact_match,none")
+    declared = _record(
+        "m",
+        "drop",
+        None,
+        "2026-02-01T00:00:00+00:00",
+        0.6,
+        primary_metric="acc",
+        metric_kind=MetricKind.BINARY,
+    )
+
+    detail = build_model_detail([legacy, declared], "m")
+
+    assert detail is not None
+    assert [point["run_id"] for point in detail["history"]["drop"]] == [declared.run_id]
+    runs = {run["run_id"]: run for run in detail["runs"]}
+    assert runs[legacy.run_id]["headline"] is None
+    assert runs[legacy.run_id]["gap_reason"] == "metric differs from current protocol"
+
+
+def test_comparison_accepts_legacy_filter_variants_of_one_metric():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.6, metric="acc,none"),
+        _record("b", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.5, metric="acc,strict-match"),
+    ]
+
+    comparison = build_comparison(records, panel_request(), ("a", "b"))
+
+    assert comparison["shared"] == ["gsm8k"]
+    assert comparison["rows"][0]["differences"]["b"]["low"] < comparison["rows"][0]["differences"]["b"]["high"]
 
 
 def test_complete_panel_filtering_keeps_only_models_with_every_selected_benchmark():

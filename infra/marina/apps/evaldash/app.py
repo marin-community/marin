@@ -43,7 +43,14 @@ from typing import Protocol
 import google.auth
 from fastapi import APIRouter, FastAPI
 from google.auth.transport.requests import AuthorizedSession
-from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE, Completeness, MissingPolicy, SelectionRequest
+from marin.evaluation.eval_measurements import measurements_from_records
+from marin.evaluation.eval_stats import (
+    DEFAULT_MIN_COVERAGE,
+    Completeness,
+    MissingPolicy,
+    SelectionRequest,
+    declared_protocols,
+)
 from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
@@ -510,11 +517,12 @@ class RecordStore:
         primary metric, each carrying its interval, coverage, and provenance for the tooltip.
         """
         records, _by_id = self._snapshot()
+        task_records = [record for record in records if record.model.name == model and record.evaluation.name == task]
+        protocol_records = [record for record in records if record.evaluation.name == task]
+        protocols = declared_protocols(measurements_from_records(protocol_records))
         points = []
-        for record in records:
-            if record.model.name != model or record.evaluation.name != task:
-                continue
-            headline = record_headline(record)
+        for record in task_records:
+            headline = record_headline(record, protocols.get(task))
             if headline is None:
                 continue
             points.append({**headline, "status": record.status.value})

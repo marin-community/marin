@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter, defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from enum import StrEnum
@@ -33,6 +33,8 @@ from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_SCAN_PREFIXES,
     LEGACY_CW_RECORDS_PREFIX,
+    EvalRunRecord,
+    EvalTaskRef,
     list_records,
 )
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -125,7 +127,7 @@ def upgrade_format(results_paths: tuple[str, ...], prefixes: tuple[str, ...], wo
     _sweep_archives(targets, workers, _upgrade_one)
 
 
-def _upgrade_one(results_path: str) -> SweepOutcome:
+def _upgrade_one(results_path: str, _records: list[EvalRunRecord]) -> SweepOutcome:
     result = migrate(results_path)
     if not result.applied:
         return SweepOutcome("already_current", "current")
@@ -307,42 +309,52 @@ def _resolve_prefixes(prefixes: tuple[str, ...], results_paths: tuple[str, ...])
     return tuple(DEFAULT_SCAN_PREFIXES)
 
 
-def _backfill_one(results_path: str) -> SweepOutcome:
+def _backfill_one(results_path: str, records: list[EvalRunRecord]) -> SweepOutcome:
     """Export one archive unless a completed export already brought it to the current contract."""
     reader = ReadView(results_path)
     # The version alone is stamped as soon as the new table is created, so an export that died
     # partway would read as current and never be retried. The seal is what says it finished.
     if reader.schema_version(ARCHIVE_SAMPLES_TABLE) == SCHEMA_VERSION and reader.is_sealed():
         return SweepOutcome("already_current", "current")
-    written = export_lm_eval_samples(results_path).samples
+    tasks, max_eval_instances = _archive_eval_config(records)
+    written = export_lm_eval_samples(results_path, tasks=tasks, max_eval_instances=max_eval_instances).samples
     return SweepOutcome("exported", f"{written} sample(s)")
 
 
-def selected_archives(prefixes: tuple[str, ...], results_paths: tuple[str, ...]) -> dict[str, list[str]]:
-    """Group run ids by archive path, over explicit paths and every record under each prefix.
+def selected_archives(prefixes: tuple[str, ...], results_paths: tuple[str, ...]) -> dict[str, list[EvalRunRecord]]:
+    """Group records by archive path, over explicit paths and every record under each prefix.
 
     Grouping is what keeps a sweep correct: several runs can be recorded against one results tree,
     and letting two workers write the same archive concurrently makes one of them compact shards the
     other is still reading.
     """
-    runs_by_path: dict[str, list[str]] = defaultdict(list)
+    runs_by_path: dict[str, list[EvalRunRecord]] = defaultdict(list)
     for path in results_paths:
         runs_by_path[path.rstrip("/")] = []
     for prefix in prefixes:
         for record in list_records(prefix):
-            runs_by_path[record.results_path.rstrip("/")].append(record.run_id)
+            runs_by_path[record.results_path.rstrip("/")].append(record)
     return runs_by_path
 
 
-def _sweep_archives(runs_by_path: dict[str, list[str]], workers: int, work: Callable[[str], SweepOutcome], /) -> None:
+def _sweep_archives(
+    runs_by_path: Mapping[str, Sequence[str | EvalRunRecord]],
+    workers: int,
+    work: Callable[[str, list[EvalRunRecord]], SweepOutcome],
+    /,
+) -> None:
     """Apply ``work`` once per archive, reporting each outcome and a final tally."""
     tally: Counter[str] = Counter()
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(work, path): path for path in runs_by_path}
+        futures = {
+            pool.submit(work, path, [run for run in runs if isinstance(run, EvalRunRecord)]): path
+            for path, runs in runs_by_path.items()
+        }
         for future in as_completed(futures):
             path = futures[future]
             # A path named directly has no record to take a run id from; the tree names it well enough.
-            runs = " ".join(sorted(runs_by_path[path])) or path.rstrip("/").rsplit("/", 2)[-2]
+            run_names = sorted(run.run_id if isinstance(run, EvalRunRecord) else str(run) for run in runs_by_path[path])
+            runs = " ".join(run_names) or path.rstrip("/").rsplit("/", 2)[-2]
             try:
                 outcome = future.result()
             except Exception as exc:
@@ -384,11 +396,24 @@ def rebuild_samples(results_paths: tuple[str, ...], prefixes: tuple[str, ...], w
     _sweep_archives(selected_archives(_resolve_prefixes(prefixes, results_paths), results_paths), workers, _rebuild_one)
 
 
-def _rebuild_one(results_path: str) -> SweepOutcome:
+def _archive_eval_config(records: list[EvalRunRecord]) -> tuple[tuple[EvalTaskRef, ...], int | None]:
+    """Task declarations and cap from the newest Evalchemy record for an archive."""
+    evalchemy_records = [record for record in records if record.evaluation.evalchemy is not None]
+    if not evalchemy_records:
+        return (), None
+    record = max(evalchemy_records, key=lambda candidate: candidate.created_at or "")
+    evalchemy = record.evaluation.evalchemy
+    if evalchemy is None:
+        raise ValueError(f"record {record.run_id} has no Evalchemy configuration")
+    return record.evaluation.tasks, evalchemy.max_eval_instances
+
+
+def _rebuild_one(results_path: str, records: list[EvalRunRecord]) -> SweepOutcome:
     """Rebuild one archive from its preserved sources, or report that it has none."""
     if not preserved_sample_sources(results_path):
         return SweepOutcome("no_sources", "no preserved sources")
-    written = rebuild_lm_eval_samples(results_path)
+    tasks, _max_eval_instances = _archive_eval_config(records)
+    written = rebuild_lm_eval_samples(results_path, tasks=tasks)
     return SweepOutcome("rebuilt", f"{written} sample(s)")
 
 

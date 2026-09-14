@@ -438,6 +438,82 @@ def test_export_uses_declared_size_for_chat_native_task(tmp_path):
     assert coverage.n_scored == 1
 
 
+def test_declared_aggregate_metric_uses_its_per_sample_base_metric(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "aime24" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps({"results": {"aime24": {"accuracy_avg": 1.0}}, "n-samples": {"aime24": {"original": 1}}})
+    )
+    row = _lm_eval_row(0, "none", 1.0, "4")
+    row.pop("exact_match")
+    row["accuracy"] = 1.0
+    (directory / "samples_aime24_20260807.jsonl").write_text(json.dumps(row) + "\n")
+    task = EvalTaskConfig("aime24", 0, task_alias="aime24", primary_metric="accuracy_avg")
+
+    export_lm_eval_samples(str(results), tasks=(task,))
+
+    [stored] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert sample_from_archive_row(stored).grading.metric == "accuracy"
+
+
+def test_rebuild_keeps_the_recorded_primary_metric(tmp_path):
+    results = tmp_path / "run" / "results"
+    row = _lm_eval_row(0, "none", 0.0, "4")
+    row["f1"] = 1.0
+    source = _write_jsonl(results, [row])
+    (source.parent / "results_20260807.json").write_text(
+        json.dumps({"results": {"gsm8k": {"f1": 1.0}}, "n-samples": {"gsm8k": {"original": 1}}})
+    )
+    task = EvalTaskConfig("gsm8k", 5, primary_metric="f1")
+    export_lm_eval_samples(str(results), tasks=(task,))
+    source.unlink()
+
+    assert rebuild_lm_eval_samples(str(results), tasks=(task,)) == 1
+    [stored] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    sample = sample_from_archive_row(stored)
+    assert sample.grading.metric == "f1"
+    assert sample.correct
+
+
+def test_two_sample_files_for_one_leaf_use_one_grouped_coverage_key(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "gsm8k_5shot" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps({"results": {"gsm8k": {"exact_match": 1.0}}, "n-samples": {"gsm8k": {"original": 2}}})
+    )
+    for timestamp in ("20260807", "20260808"):
+        (directory / f"samples_gsm8k_{timestamp}.jsonl").write_text(json.dumps(_lm_eval_row(0, "none", 1.0, "4")) + "\n")
+
+    coverage = export_lm_eval_samples(str(results), tasks=(EvalTaskConfig("gsm8k", 5),)).coverage
+
+    assert set(coverage) == {"gsm8k_5shot/gsm8k"}
+
+
+def test_export_reads_each_result_payload_once(tmp_path, monkeypatch):
+    results = tmp_path / "run" / "results"
+    source = _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4")])
+    result_path = source.parent / "results_20260807.json"
+    result_path.write_text(
+        json.dumps({"results": {"gsm8k": {"exact_match": 1.0}}, "n-samples": {"gsm8k": {"original": 1}}})
+    )
+    original = StoragePath.read_bytes
+    reads = 0
+
+    def counted_read(path: StoragePath) -> bytes:
+        nonlocal reads
+        if str(path).endswith("results_20260807.json"):
+            reads += 1
+        return original(path)
+
+    monkeypatch.setattr(StoragePath, "read_bytes", counted_read)
+
+    export_lm_eval_samples(str(results), tasks=(EvalTaskConfig("gsm8k", 5),))
+
+    assert reads == 1
+
+
 def test_export_rejects_samples_beyond_the_intended_cap(tmp_path):
     results = tmp_path / "run" / "results"
     directory = results / "gsm8k_5shot" / "model"
@@ -485,7 +561,7 @@ def test_sweep_visits_an_archive_shared_by_several_runs_once(tmp_path):
     own = str(tmp_path / "own" / "results")
     visited: list[str] = []
 
-    def work(path: str) -> SweepOutcome:
+    def work(path: str, _records) -> SweepOutcome:
         visited.append(path)
         return SweepOutcome("exported", "0 sample(s)")
 

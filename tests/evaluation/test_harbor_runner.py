@@ -14,6 +14,7 @@ from marin.evaluation.harbor.agent_context import (
     served_model_info,
 )
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
+from marin.evaluation.harbor.dataset_layout import dataset_task_count
 from marin.evaluation.harbor.driver_config import (
     HarborBackendsUnavailable,
     HarborDatasetKind,
@@ -73,6 +74,7 @@ def _validated_config(
     workspace_dataset_path: Path | None = None,
     agent: str = "terminus-2",
     n_benchmark: int = 1,
+    trials_per_task: int = 1,
 ) -> ValidatedHarborConfig:
     return ValidatedHarborConfig(
         stable_policy_json='{"opaque":"policy"}',
@@ -87,6 +89,7 @@ def _validated_config(
         max_input_tokens=32768,
         max_output_tokens=8192,
         n_benchmark=n_benchmark,
+        trials_per_task=trials_per_task,
     )
 
 
@@ -144,7 +147,10 @@ def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_pat
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
     (snapshot / ".gitattributes").write_text("*.gz filter=lfs")
-    (snapshot / "task-one").mkdir()
+    task = snapshot / "task-one"
+    task.mkdir()
+    (task / "task.toml").write_text('[task]\nname = "task-one"\n')
+    (snapshot / ".cache" / "huggingface").mkdir(parents=True)
     calls: list[dict] = []
 
     def download(**kwargs):
@@ -175,6 +181,7 @@ def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_pat
         }
     ]
     assert not (snapshot / ".gitattributes").exists()
+    assert dataset_task_count(path) == 1
 
 
 def test_materialize_harbor_dataset_rebases_local_path_onto_worker_workspace(tmp_path, monkeypatch):
@@ -585,9 +592,9 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     assert outcome.metrics[f"toy-{tmp_path.name}"]["accuracy"] == 1.0
 
 
-def _harbor_executor(dataset: str, *, n_benchmark: int = 1) -> HarborExecutor:
+def _harbor_executor(dataset: str, *, n_benchmark: int = 1, trials_per_task: int = 1) -> HarborExecutor:
     return HarborExecutor(
-        _validated_config(dataset_selector=dataset, n_benchmark=n_benchmark),
+        _validated_config(dataset_selector=dataset, n_benchmark=n_benchmark, trials_per_task=trials_per_task),
         task_limit=None,
         model_agent_kwargs={},
     )
@@ -779,6 +786,26 @@ def test_preflight_benchmark_count_supplies_coverage_without_a_job_record(tmp_pa
     assert coverage.n_attempted == 4
     assert coverage.n_scored == 4
     assert outcome.metrics[dataset]["attempted"] == 4
+
+
+def test_harbor_attempt_count_includes_repeated_trials_per_task(tmp_path, monkeypatch):
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 6)
+        for index in range(6):
+            trial_dir = job_dir / f"trial-{index}"
+            trial_dir.mkdir(parents=True, exist_ok=True)
+            trial_dir.joinpath("result.json").write_text(
+                json.dumps({"task_name": f"task-{index // 3}", "verifier_result": {"rewards": {"reward": 1.0}}})
+            )
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"repeated-{tmp_path.name}", n_benchmark=2, trials_per_task=3)
+
+    outcome = executor(_inference_session(), str(tmp_path), {})
+
+    coverage = outcome.coverage[executor.config.record_dataset]
+    assert (coverage.n_benchmark, coverage.n_attempted, coverage.n_scored) == (6, 6, 6)
 
 
 def test_harbor_missing_results_reduce_scored_not_intended_count(tmp_path, monkeypatch):

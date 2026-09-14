@@ -104,6 +104,7 @@ def _install_fake_harbor_preflight(
                     max_input_tokens=_PREFLIGHT_MAX_INPUT_TOKENS,
                     max_output_tokens=_PREFLIGHT_MAX_OUTPUT_TOKENS,
                     n_benchmark=1,
+                    trials_per_task=1,
                 )
             )
         return tuple(configs)

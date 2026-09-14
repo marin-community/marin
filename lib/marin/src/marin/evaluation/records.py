@@ -162,7 +162,10 @@ class EvalTaskRef(BaseModel):
     unsafe_code: bool = False
     completion_only: bool = False
     primary_metric: str | None = None
+    """Headline metric declared by this task."""
+
     metric_kind: MetricKind | None = None
+    """Uncertainty model declared for the headline metric."""
 
 
 class EvalchemyRef(BaseModel):
@@ -324,6 +327,8 @@ class TaskCoverage(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     n_benchmark: int | None = None
+    """Items in the full benchmark before any run cap."""
+
     n_attempted: int | None = None
     n_scored: int
     n_correct: int | None = None
