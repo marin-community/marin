@@ -159,9 +159,9 @@ uv run --no-project infra/ci/run_tests.py
   production run, or shared operational system failed or degraded and required
   diagnosis or mitigation. Do not use Echo as a work log for ordinary code
   debugging or implementation.
-- Keep user-facing and reusable product documentation in `docs/`; keep research
-  progress in the relevant task logbook or project artifact. These are distinct
-  from incident records.
+- Keep user-facing and reusable product documentation in `docs/`. Record
+  research progress in the task's existing issue, PR, report, or durable session
+  channel. These are distinct from incident records.
 
 ## Deprecation
 

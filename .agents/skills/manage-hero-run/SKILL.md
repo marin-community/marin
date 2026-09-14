@@ -119,7 +119,7 @@ For instance, it's ok to fix a logging bug or misconfiguration of evaluation cal
 - **Resume loss mismatch:** Levanter is generally bitwise identical on TPU. Resumes and GPU runs can sometimes differ slightly, but should stay very close. During catch-up, alert if loss differs from the pre-resume lineage by more than `0.002`; after post-resume warmup, alert if loss differs by more than `1%`.
 - **Sustained loss spike:** alert if loss is more than `50%` above the expected trend for roughly 10 or more consecutive steps.
 - **Final-step misunderstanding:** progress bars may round or display a nominal max while config has extra steps. Compute final step from config/code and use that for ETA and completion.
-- **Benign-looking success with missing artifacts:** orchestrator says success but final checkpoint, W&B summary, logbook update, or seal tag is missing. Do not seal until final artifacts are verified.
+- **Benign-looking success with missing artifacts:** orchestrator says success but final checkpoint, W&B summary, durable record update, or seal tag is missing. Do not seal until final artifacts are verified.
 
 ## Resume And Recovery
 
@@ -129,7 +129,7 @@ Many failures can be recoverable just by relaunching using the same id. These in
 
 ### Launching with a new run id
 
-- Use a new run id and W&B id only when the old lineage is unsafe or semantically different, such as W&B corruption or a nontrivial code change. Nontrivial code changes should have a new W&B id. Document the reason, old and new identities, source checkpoint, output root, and code SHA in the issue and logbook.
+- Use a new run id and W&B id only when the old lineage is unsafe or semantically different, such as W&B corruption or a nontrivial code change. Nontrivial code changes should have a new W&B id. Document the reason, old and new identities, source checkpoint, output root, and code SHA in the durable run record.
 - Use `initialize_from` to have training pick up from a specific prior checkpoint.
 - If the user does not specify a checkpoint to use for a resume, select the newest "complete" one. Complete checkpoints have `metadata.json`. If no complete checkpoints are available, escalate to the DRI instead of guessing. If the user specifies a checkpoint that does not have `metadata.json`, block the launch and escalate instead of guessing. Do not use incomplete checkpoints for resume or relaunch.
 - Sort by parsed numeric step, not lexicographic path order.
