@@ -21,7 +21,6 @@ DEFAULT_MODEL_INFO: Mapping[str, Any] = MappingProxyType(
     }
 )
 
-# Model-catalog fields named in policy-limit errors.
 _MODEL_CONFIG_FIELD: Mapping[str, str] = MappingProxyType(
     {
         MAX_INPUT_TOKENS_KEY: "serve.max_model_len",
