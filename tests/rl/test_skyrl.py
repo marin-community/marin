@@ -41,6 +41,7 @@ from marin.rl.skyrl import (
     TaskTroveTagMatch,
     run_skyrl,
     skyrl_step,
+    skyrl_temporary_run_path,
 )
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
@@ -192,8 +193,8 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "marin.rl.skyrl.temporary_storage_base_path",
-        lambda _output_path, *, ttl_days, category: f"s3://temp/ttl={ttl_days}d/{category}/users/alice/run",
+        "marin.rl.skyrl.skyrl_temporary_run_path",
+        lambda _output_path, *, ttl_days: f"s3://temp/ttl={ttl_days}d/skyrl/users/alice/run",
     )
     spec = dataclasses.replace(_spec(), name="users/alice/tests/iceball-rl", version="dev")
     step = skyrl_step(spec, _execution())
@@ -222,6 +223,18 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
         "++terminal_bench_config.trials_dir=" "'s3://temp/ttl=14d/skyrl/users/alice/run/attempts/trace_jobs'",
         "++generator.trajectory_retention.output_path="
         "'s3://temp/ttl=14d/skyrl/users/alice/run/attempts/trajectories'",
+    )
+
+
+def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+
+    assert (
+        skyrl_temporary_run_path(
+            "s3://marin-us-east-02a/marin/users/alice/run",
+            ttl_days=14,
+        )
+        == "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/alice/run"
     )
 
 
