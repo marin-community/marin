@@ -64,9 +64,10 @@ Routes, grouped by source (cluster is a path segment where it applies):
 
 A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
 cached. The k8s routes aggregate every CW cluster into one response, so a dead
-cluster becomes labeled error rows while the rest render; the alert routes always
-return at least one row per cluster (explicit zeros when healthy) so Grafana
-rules never hit NoData. Handlers are sync defs; Starlette runs them in a
+cluster becomes labeled error rows while the rest render. Fixed-shape alert routes
+return at least one row per cluster (explicit zeros when healthy), while generic
+alert SQL uses each rule's explicit no-data behavior. Handlers are sync defs;
+Starlette runs them in a
 threadpool. The two alert webhooks are async because they post to Slack, and the
 Loom one also exchanges tokens and creates a run over HTTP.
 """
@@ -74,9 +75,8 @@ Loom one also exchanges tokens and creates a run over HTTP.
 import json
 import logging
 from collections.abc import Hashable, Mapping, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from functools import partial
 
 import pyarrow as pa
 import uvicorn
@@ -348,59 +348,51 @@ def _target_for(name: str, sources: Mapping[str, MetricSource]) -> ClusterTarget
     return sources[name].target
 
 
-def _query(request: Request, config: BridgeConfig, sources: Mapping[str, MetricSource], cache: TtlCache):
-    target = _target_for(request.path_params["cluster"], sources)
-    params = request.query_params
+@dataclass(frozen=True)
+class _FinelogQueries:
+    config: BridgeConfig
+    sources: Mapping[str, MetricSource]
+    cache: TtlCache
 
-    sql = _require(params, "sql")
-    start = _optional_time(params, "from")
-    end = _optional_time(params, "to")
+    def _rows(self, request: Request):
+        target = _target_for(request.path_params["cluster"], self.sources)
+        params = request.query_params
 
-    # Key on the SQL as written, before substitution, with each window edge snapped
-    # to a TTL bucket, so a relative range stays one key as its edges drift.
-    key = (target.name, sql, _bucket(start, config.cache_ttl), _bucket(end, config.cache_ttl))
+        sql = _require(params, "sql")
+        start = _optional_time(params, "from")
+        end = _optional_time(params, "to")
 
-    try:
-        effective_sql = substitute_time_macros(sql, start, end)
-    except ValueError as err:
-        raise _BadRequest(str(err)) from err
+        # Key on the SQL as written, before substitution, with each window edge snapped
+        # to a TTL bucket, so a relative range stays one key as its edges drift.
+        key = (target.name, sql, _bucket(start, self.config.cache_ttl), _bucket(end, self.config.cache_ttl))
 
-    def run():
-        logger.info("query %s: %s", target.name, effective_sql)
-        table = sources[target.name].query(effective_sql, max_rows=config.max_rows)
-        return rows_to_json(table)
+        try:
+            effective_sql = substitute_time_macros(sql, start, end)
+        except ValueError as err:
+            raise _BadRequest(str(err)) from err
 
-    return cache.get_or_compute(key, run)
+        def run():
+            logger.info("query %s: %s", target.name, effective_sql)
+            table = self.sources[target.name].query(effective_sql, max_rows=self.config.max_rows)
+            return rows_to_json(table)
 
+        return self.cache.get_or_compute(key, run)
 
-def _finelog_query_response(
-    request: Request,
-    *,
-    config: BridgeConfig,
-    sources: Mapping[str, MetricSource],
-    cache: TtlCache,
-) -> JSONResponse:
-    try:
-        return JSONResponse(_query(request, config, sources, cache))
-    except _BadRequest as err:
-        return JSONResponse({"error": str(err)}, status_code=400)
-    except QueryResultTooLargeError as err:
-        return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
+    def query(self, request: Request) -> JSONResponse:
+        try:
+            return JSONResponse(self._rows(request))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except QueryResultTooLargeError as err:
+            return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
 
-
-def _finelog_alert_query(
-    request: Request,
-    *,
-    config: BridgeConfig,
-    sources: Mapping[str, MetricSource],
-    cache: TtlCache,
-) -> JSONResponse:
-    """Run alert SQL while treating only transient Finelog failures as no data."""
-    try:
-        return _finelog_query_response(request, config=config, sources=sources, cache=cache)
-    except FinelogUnavailableError as err:
-        logger.warning("Finelog alert query unavailable: %s", err)
-        return JSONResponse([])
+    def alert_query(self, request: Request) -> JSONResponse:
+        """Run alert SQL while treating only transient Finelog failures as no data."""
+        try:
+            return self.query(request)
+        except FinelogUnavailableError as err:
+            logger.warning("Finelog alert query unavailable: %s", err)
+            return JSONResponse([])
 
 
 def _iris_for(name: str, sources: Mapping[str, IrisSource]) -> IrisSource:
@@ -426,18 +418,7 @@ def create_app(
     github_cache: TtlCache = TtlCache(config.github_cache_ttl)
     k8s_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     wandb_cache: TtlCache = TtlCache(config.github_cache_ttl)
-    query = partial(
-        _finelog_query_response,
-        config=config,
-        sources=finelog_sources,
-        cache=finelog_cache,
-    )
-    finelog_alert_query = partial(
-        _finelog_alert_query,
-        config=config,
-        sources=finelog_sources,
-        cache=finelog_cache,
-    )
+    finelog_queries = _FinelogQueries(config, finelog_sources, finelog_cache)
 
     def vllm_overview(request: Request) -> JSONResponse:
         try:
@@ -916,8 +897,8 @@ def create_app(
             Route("/wandb/history", wandb_run_history),
             Route("/wandb/activity", wandb_run_activity),
             Route("/wandb/report/{chart}", wandb_report_chart),
-            Route("/finelog/{cluster}/query", query),
-            Route("/finelog/{cluster}/alerts/query", finelog_alert_query),
+            Route("/finelog/{cluster}/query", finelog_queries.query),
+            Route("/finelog/{cluster}/alerts/query", finelog_queries.alert_query),
             Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/relay_status", finelog_relay_status),

@@ -27,6 +27,7 @@ from starlette.testclient import TestClient
 from wandb_source import WandbSource
 
 TARGET = ClusterTarget(name="marin", project="p", zone="z", instance_filter="f", controller_filter="c")
+HEALTH_QUERY = 'SELECT * FROM "log" LIMIT 1'
 
 
 def _iris(handler) -> IrisSource:
@@ -53,7 +54,7 @@ class _FakeLogClient:
         self._raises = raises
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
-        assert sql == 'SELECT * FROM "log" LIMIT 1'
+        assert sql == HEALTH_QUERY
         assert max_rows == 1
         if self._raises is not None:
             raise self._raises
@@ -90,22 +91,22 @@ def test_finelog_query_classifies_only_retryable_rpc_failures_as_unavailable():
     unavailable = StatsError("query failed")
     unavailable.__cause__ = ConnectError(Code.UNAVAILABLE, "down")
     with pytest.raises(FinelogUnavailableError):
-        _finelog(unavailable).query('SELECT * FROM "log" LIMIT 1', max_rows=1)
+        _finelog(unavailable).query(HEALTH_QUERY, max_rows=1)
 
     invalid = StatsError("invalid query")
     invalid.__cause__ = ConnectError(Code.INVALID_ARGUMENT, "syntax error")
     with pytest.raises(StatsError) as raised:
-        _finelog(invalid).query('SELECT * FROM "log" LIMIT 1', max_rows=1)
+        _finelog(invalid).query(HEALTH_QUERY, max_rows=1)
     assert raised.value is invalid
 
 
 def test_finelog_query_classifies_only_retryable_discovery_failures_as_unavailable():
     with pytest.raises(FinelogUnavailableError):
-        _finelog(ServiceUnavailable("temporarily unavailable")).query('SELECT * FROM "log" LIMIT 1', max_rows=1)
+        _finelog(ServiceUnavailable("temporarily unavailable")).query(HEALTH_QUERY, max_rows=1)
 
     forbidden = Forbidden("permission denied")
     with pytest.raises(Forbidden) as raised:
-        _finelog(forbidden).query('SELECT * FROM "log" LIMIT 1', max_rows=1)
+        _finelog(forbidden).query(HEALTH_QUERY, max_rows=1)
     assert raised.value is forbidden
 
 
