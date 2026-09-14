@@ -303,7 +303,7 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
     checkpoint_contract = {
         "model": asdict(model_config),
         "mp_policy": config.mp_policy_string,
-        "optimizer": {"type": optax.adamw.__name__, **optimizer_config},
+        "optimizer": {"type": "adamw", **optimizer_config},
     }
     start_step = 0
     if config.checkpoint_root:

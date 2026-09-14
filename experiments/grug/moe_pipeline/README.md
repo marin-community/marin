@@ -27,7 +27,7 @@ benchmark exposes these settings as `PIPELINE_CHECKPOINT_ROOT` and
 updates, including updates completed before restore.
 
 Checkpoints use ordinary Levanter TensorStore Zarr3/OCDBT storage and discovery.
-Each save creates `step-<12-digit-completed-step>-<unique-id>/`. Completion
+Each save writes `step-<completed-step>/`. Completion
 metadata is published atomically after all processes commit their shards;
 directories without that marker are ignored. Discovery selects the highest
 completed step. Use one writer gang per root and shared storage accessible to
