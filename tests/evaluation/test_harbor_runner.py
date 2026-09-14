@@ -35,7 +35,7 @@ _ERROR_TAXONOMY = HarborErrorTaxonomy(
     agent=frozenset({"AgentError", "AgentTimeoutError"}),
     passthrough=frozenset({"PassthroughError"}),
     undecided=frozenset({"VerifierTimeoutError"}),
-    version="1.2.3",
+    commit="1" * 40,
 )
 
 

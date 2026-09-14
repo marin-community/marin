@@ -329,6 +329,15 @@ def _stable_policy_json(config: JobConfig) -> str:
     return _stable_json(_normalized(config.model_dump(mode="python")))
 
 
+def _harbor_config_commit() -> str:
+    distribution_name = importlib.metadata.packages_distributions()["harbor_config"][0]
+    direct_url = json.loads(importlib.metadata.distribution(distribution_name).read_text("direct_url.json") or "{}")
+    commit = direct_url.get("vcs_info", {}).get("commit_id")
+    if not isinstance(commit, str) or len(commit) != 40:
+        raise ValueError("Harbor distribution does not identify its pinned commit")
+    return commit
+
+
 def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict[str, object]:
     document = _document(path)
     config = JobConfig.model_validate(document, extra="forbid")
@@ -376,7 +385,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
             "agent": sorted(agent_errors),
             "passthrough": sorted(passthrough_errors),
             "undecided": sorted(undecided_errors),
-            "version": importlib.metadata.version(importlib.metadata.packages_distributions()["harbor_config"][0]),
+            "commit": _harbor_config_commit(),
         },
     }
 

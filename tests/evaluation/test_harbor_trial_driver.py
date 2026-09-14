@@ -219,12 +219,14 @@ from harbor_config.errors import ErrorCategory, errors_by_category, known_error_
 infrastructure = errors_by_category(ErrorCategory.INFRASTRUCTURE)
 agent = errors_by_category(ErrorCategory.AGENT)
 passthrough = errors_by_category(ErrorCategory.PASSTHROUGH)
+distribution = importlib.metadata.packages_distributions()[\"harbor_config\"][0]
+direct_url = json.loads(importlib.metadata.distribution(distribution).read_text(\"direct_url.json\"))
 print(json.dumps({
     \"infrastructure\": sorted(infrastructure),
     \"agent\": sorted(agent),
     \"passthrough\": sorted(passthrough),
     \"undecided\": sorted(known_error_types() - infrastructure - agent - passthrough),
-    \"version\": importlib.metadata.version(importlib.metadata.packages_distributions()[\"harbor_config\"][0]),
+    \"commit\": direct_url[\"vcs_info\"][\"commit_id\"],
 }))""",
         ).stdout
     )

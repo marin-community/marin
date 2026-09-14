@@ -101,7 +101,7 @@ class HarborErrorTaxonomy:
     agent: frozenset[str]
     passthrough: frozenset[str]
     undecided: frozenset[str]
-    version: str
+    commit: str
 
 
 @dataclass(frozen=True)
@@ -247,15 +247,19 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
             raise ValueError(f"Harbor preflight returned invalid {category!r} error taxonomy for {path}")
         return frozenset(values)
 
-    taxonomy_version = taxonomy_payload.get("version")
-    if not isinstance(taxonomy_version, str) or not taxonomy_version:
-        raise ValueError(f"Harbor preflight returned invalid error taxonomy version for {path}")
+    taxonomy_commit = taxonomy_payload.get("commit")
+    if (
+        not isinstance(taxonomy_commit, str)
+        or len(taxonomy_commit) != 40
+        or any(character not in "0123456789abcdef" for character in taxonomy_commit)
+    ):
+        raise ValueError(f"Harbor preflight returned invalid error taxonomy commit for {path}")
     error_taxonomy = HarborErrorTaxonomy(
         infrastructure=taxonomy_names("infrastructure"),
         agent=taxonomy_names("agent"),
         passthrough=taxonomy_names("passthrough"),
         undecided=taxonomy_names("undecided"),
-        version=taxonomy_version,
+        commit=taxonomy_commit,
     )
     categories = (
         error_taxonomy.infrastructure,

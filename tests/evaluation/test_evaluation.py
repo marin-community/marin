@@ -71,7 +71,7 @@ def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
                         agent=frozenset({"AgentError"}),
                         passthrough=frozenset({"PassthroughError"}),
                         undecided=frozenset({"VerifierTimeoutError"}),
-                        version="1.2.3",
+                        commit="1" * 40,
                     ),
                 )
             )
@@ -712,7 +712,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
             "env": "daytona",
             "task_limit": 2,
             "config_digest": evaluation.identity.eval_ref.harbor.config_digest,
-            "harbor_config_version": "1.2.3",
+            "harbor_config_commit": "1" * 40,
         },
     }
     assert batch.secret_env == {
