@@ -8,6 +8,7 @@ import dataclasses
 import functools
 import hashlib
 import http.server
+import importlib.metadata
 import json
 import os
 import subprocess
@@ -22,7 +23,7 @@ import marin.inference.vllm_server as vllm_server
 import pytest
 from marin.external_dependencies import VLLM_GPU_RELEASE, VllmGpuWheel
 from marin.inference.vllm_release import vllm_gpu_wheel_for_architecture, vllm_gpu_wheel_provenance
-from marin.inference.vllm_wheel_entrypoint import installed_wheel_url_matches
+from marin.inference.vllm_wheel_entrypoint import configure_nvrtc_linker_path, installed_wheel_url_matches
 
 # Non-core extensions a real vLLM wheel ships next to the core _C, so every fake install carries them
 # and the discovery path is exercised against real distractors: _moe_C is a compiled extension whose
@@ -171,6 +172,30 @@ def _build_wheel(directory: Path) -> Path:
         )
         archive.writestr(f"{dist_info}/RECORD", "")
     return wheel_path
+
+
+def test_nvrtc_linker_path_exposes_versioned_runtime_without_mutating_install(tmp_path, monkeypatch):
+    install_root = tmp_path / "install"
+    library = install_root / "nvidia" / "cu13" / "lib" / "libnvrtc.so.13"
+    library.parent.mkdir(parents=True)
+    library.write_bytes(b"nvrtc")
+    metadata = install_root / "nvidia_cuda_nvrtc-13.0.88.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text("Metadata-Version: 2.4\nName: nvidia-cuda-nvrtc\nVersion: 13.0.88\n")
+    (metadata / "RECORD").write_text("nvidia/cu13/lib/libnvrtc.so.13,,\n")
+    distribution = importlib.metadata.PathDistribution(metadata)
+    monkeypatch.delenv("LIBRARY_PATH", raising=False)
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/existing/runtime")
+
+    shim_directory = configure_nvrtc_linker_path(distribution)
+
+    assert shim_directory is not None
+    assert (shim_directory / "libnvrtc.so").resolve() == library
+    assert not (library.parent / "libnvrtc.so").exists()
+    assert os.environ["LIBRARY_PATH"] == str(shim_directory)
+    assert os.environ["LD_LIBRARY_PATH"] == os.pathsep.join(
+        (str(shim_directory), str(library.parent), "/existing/runtime")
+    )
 
 
 @contextlib.contextmanager
