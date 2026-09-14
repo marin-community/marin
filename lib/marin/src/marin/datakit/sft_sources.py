@@ -11,6 +11,8 @@ from marin.datakit.chat_render import render_chat_step
 from marin.datakit.download.agenttrove import agenttrove_chat_normalize_steps
 from marin.datakit.download.coderforge import coderforge_chat_normalize_steps
 from marin.datakit.download.davinci_dev import davinci_dev_env_native_chat_normalize_steps
+from marin.datakit.download.glm53_compaction import glm53_compaction_chat_normalize_steps
+from marin.datakit.download.glm53_format_following import glm53_format_following_chat_normalize_steps
 from marin.datakit.download.glm_kernelgym_rollouts import glm_kernelgym_rollouts_chat_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_chat_normalize_steps
 from marin.datakit.download.massive import massive_chat_normalize_steps
@@ -18,10 +20,6 @@ from marin.datakit.download.nemotron_terminal import nemotron_terminal_chat_norm
 from marin.datakit.download.nemotron_v2 import nemotron_sft_chat_normalize_steps
 from marin.datakit.download.numinamath_tir import numinamath_tir_chat_normalize_steps
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_chat_normalize_steps
-from marin.datakit.download.open_athena_glm53 import (
-    agenttrove_glm53_chat_normalize_steps,
-    wildchat_glm53_chat_normalize_steps,
-)
 from marin.datakit.download.openthoughts4_code import openthoughts4_code_chat_normalize_steps
 from marin.datakit.download.penfever_rollouts import penfever_rollouts_chat_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_chat_normalize_steps
@@ -76,8 +74,8 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     nemotron_steps = cache(nemotron_sft_chat_normalize_steps)
     rows: list[_ChatSourceRow] = [
         ("agenttrove", agenttrove_chat_normalize_steps),
-        ("agenttrove-glm53-compactions", agenttrove_glm53_chat_normalize_steps),
-        ("wildchat-glm53-format-completions", wildchat_glm53_chat_normalize_steps),
+        ("agenttrove-glm53-compactions", glm53_compaction_chat_normalize_steps),
+        ("wildchat-glm53-format-completions", glm53_format_following_chat_normalize_steps),
         ("coderforge", coderforge_chat_normalize_steps),
         ("davinci-dev/env-native", davinci_dev_env_native_chat_normalize_steps),
         ("glm-5.2-kernelgym-rollouts", glm_kernelgym_rollouts_chat_normalize_steps),
