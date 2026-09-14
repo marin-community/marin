@@ -28,7 +28,7 @@ from marin.execution.step_spec import StepSpec
 
 WILDCHAT_NAME = "wildchat-glm53-format-completions"
 WILDCHAT_REPO = "open-athena/" + WILDCHAT_NAME
-WILDCHAT_REVISION = "c20a530940c3b23c832ac89e7b3dc6f6d38b76a9"
+WILDCHAT_REVISION = "411bc9d89d8b2d983c51c9d9acd7b511c8dbe2c9"
 SOURCE_REPO = "allenai/WildChat-4.8M"
 SOURCE_REVISION = "c827c6df8fcf008219ffaffa4d1dd77491099367"
 
@@ -92,10 +92,10 @@ def resolve_reference_file(filename: str, rows: Iterator[dict], *, source_root: 
                 yield wildchat_document(row, sources[row["source_row_in_group"]])
 
 
-def transform_chat(input_path: str, output_path: str, split: str) -> None:
+def transform_chat(input_path: str, output_path: str) -> None:
     source_root = f"hf://datasets/{SOURCE_REPO}@{SOURCE_REVISION}"
     pipeline = (
-        Dataset.from_files(f"{input_path}/data/{split}-*.parquet")
+        Dataset.from_files(f"{input_path}/data/train-*.parquet")
         .flat_map(load_parquet_batched)
         .group_by(
             key=lambda row: row["source_file"],
@@ -109,32 +109,22 @@ def transform_chat(input_path: str, output_path: str, split: str) -> None:
     ZephyrContext(name=WILDCHAT_NAME, resources=ResourceConfig(cpu=1, ram="8g"), max_workers=32).execute(pipeline)
 
 
-def chat_normalize_steps(split: str) -> tuple[StepSpec, ...]:
-    if split not in ("train", "validation"):
-        raise ValueError(f"Unsupported split {split} for {WILDCHAT_NAME}")
-    name = WILDCHAT_NAME if split == "train" else f"{WILDCHAT_NAME}/{split}"
+def glm53_format_following_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    name = WILDCHAT_NAME
     download = download_hf_step(
         f"raw/{name}",
         hf_dataset_id=WILDCHAT_REPO,
         revision=WILDCHAT_REVISION,
-        hf_urls_glob=[f"data/{split}-*.parquet"],
+        hf_urls_glob=["data/train-*.parquet"],
     )
     processed = StepSpec(
         name=f"processed-chat/{name}",
         deps=[download],
-        fn=lambda output_path: transform_chat(download.output_path, output_path, split),
+        fn=lambda output_path: transform_chat(download.output_path, output_path),
         hash_attrs={
             "version": "2026.09.13",
             "source_revision": SOURCE_REVISION,
-            "split": split,
+            "split": "train",
         },
     )
     return processed, normalize_chat_step(name=f"normalized-chat/{name}", download=processed)
-
-
-def glm53_format_following_chat_normalize_steps() -> tuple[StepSpec, ...]:
-    return chat_normalize_steps("train")
-
-
-def glm53_format_following_validation_chat_normalize_steps() -> tuple[StepSpec, ...]:
-    return chat_normalize_steps("validation")
