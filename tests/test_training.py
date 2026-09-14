@@ -29,6 +29,7 @@ from marin.training.training import (
     doublecheck_paths,
     resolve_training_env,
     temporary_checkpoint_base_path,
+    temporary_storage_base_path,
 )
 
 
@@ -94,6 +95,18 @@ def test_temporary_checkpoint_base_path_uses_cluster_local_scratch():
         assert data_local_temporary_checkpoint_base_path("s3://marin-us-east-02a/experiments/grug/base-trial") == (
             "s3://marin-us-east-02a/tmp/ttl=14d/checkpoints-temp/"
             "marin-us-east-02a/experiments/grug/base-trial/checkpoints"
+        )
+
+
+def test_temporary_storage_base_path_does_not_repeat_bucket_name():
+    with patch.dict(os.environ, {"MARIN_PREFIX": "s3://marin-us-east-02a/marin"}):
+        assert (
+            temporary_storage_base_path(
+                "s3://marin-us-east-02a/marin/users/alice/run",
+                ttl_days=14,
+                category="skyrl",
+            )
+            == "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/alice/run"
         )
 
 

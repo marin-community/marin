@@ -144,6 +144,13 @@ def _cli_helpers_module():
 
 def _output_path_temp_component(output_path: str) -> str:
     parsed = urllib.parse.urlparse(output_path)
+    if parsed.scheme:
+        return parsed.path.strip("/")
+    return output_path.strip("/")
+
+
+def _checkpoint_temp_component(output_path: str) -> str:
+    parsed = urllib.parse.urlparse(output_path)
     if parsed.scheme and parsed.netloc:
         return f"{parsed.netloc}{parsed.path}".strip("/")
     if parsed.scheme:
@@ -156,27 +163,28 @@ def temporary_storage_base_path(output_path: str, *, ttl_days: int, category: st
     output_component = _output_path_temp_component(output_path)
     return marin_temp_bucket(
         ttl_days=ttl_days,
-        prefix=os.path.join(category, output_component),
+        prefix=prefix_join(category, output_component),
         source_prefix=output_path,
     )
 
 
 def temporary_checkpoint_base_path(output_path: str) -> str:
     """Return the region-local temporary checkpoint base for an executor output path."""
-    temporary_root = temporary_storage_base_path(
-        output_path,
+    output_component = _checkpoint_temp_component(output_path)
+    temporary_root = marin_temp_bucket(
         ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        category=TEMPORARY_CHECKPOINTS_PATH,
+        prefix=prefix_join(TEMPORARY_CHECKPOINTS_PATH, output_component),
+        source_prefix=output_path,
     )
     return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
 
 
 def data_local_temporary_checkpoint_base_path(output_path: str) -> str:
     """Return the legacy data-local checkpoint path, bypassing the cluster temp override."""
-    output_component = _output_path_temp_component(output_path)
+    output_component = _checkpoint_temp_component(output_path)
     temporary_root = marin_temp_bucket(
         ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        prefix=os.path.join(TEMPORARY_CHECKPOINTS_PATH, output_component),
+        prefix=prefix_join(TEMPORARY_CHECKPOINTS_PATH, output_component),
         source_prefix=output_path,
         use_env_override=False,
     )
