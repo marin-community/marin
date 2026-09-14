@@ -18,6 +18,10 @@ from marin.datakit.download.nemotron_terminal import nemotron_terminal_chat_norm
 from marin.datakit.download.nemotron_v2 import nemotron_sft_chat_normalize_steps
 from marin.datakit.download.numinamath_tir import numinamath_tir_chat_normalize_steps
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_chat_normalize_steps
+from marin.datakit.download.open_athena_glm53 import (
+    agenttrove_glm53_chat_normalize_steps,
+    wildchat_glm53_chat_normalize_steps,
+)
 from marin.datakit.download.openthoughts4_code import openthoughts4_code_chat_normalize_steps
 from marin.datakit.download.penfever_rollouts import penfever_rollouts_chat_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_chat_normalize_steps
@@ -72,6 +76,8 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     nemotron_steps = cache(nemotron_sft_chat_normalize_steps)
     rows: list[_ChatSourceRow] = [
         ("agenttrove", agenttrove_chat_normalize_steps),
+        ("agenttrove-glm53-compactions", agenttrove_glm53_chat_normalize_steps),
+        ("wildchat-glm53-format-completions", wildchat_glm53_chat_normalize_steps),
         ("coderforge", coderforge_chat_normalize_steps),
         ("davinci-dev/env-native", davinci_dev_env_native_chat_normalize_steps),
         ("glm-5.2-kernelgym-rollouts", glm_kernelgym_rollouts_chat_normalize_steps),
@@ -101,6 +107,9 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     # This chat-only source has 3,341,347,579 completion tokens in its pinned
     # manifest. The rough weight excludes repeated prompts.
     token_counts["openthoughts4-code-glm-5.2-n4"] = 3.341347579
+    # Initial sharding estimates; token-store preparation measures the actual mixture sizes.
+    token_counts["agenttrove-glm53-compactions"] = 0.25
+    token_counts["wildchat-glm53-format-completions"] = 0.01
     return {
         name: DatakitChatSource(
             name=name,
