@@ -13,19 +13,19 @@ from pathlib import Path
 
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
-from marin.evaluation.completion_jobs import IrisSamplingJobs
-from marin.evaluation.completion_publishing import publish_daily, update_issue_comment
-from marin.evaluation.completions import SampleStore, reconcile
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from experiments.grug.moe_hero_ep.completion_config import (
+from experiments.grug.moe_hero_ep.hero_recipe import HERO_PROCESSES_PER_TASK
+from ops.vibe_check.completions import SampleStore, reconcile
+from ops.vibe_check.config import (
     STORE_ROOT,
     discover_requests,
     production_run,
     sampling_resources,
     sampling_spec,
 )
-from experiments.grug.moe_hero_ep.hero_recipe import HERO_PROCESSES_PER_TASK
+from ops.vibe_check.jobs import IrisSamplingJobs
+from ops.vibe_check.publishing import publish_daily, update_issue_comment
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ def main() -> None:
                 args.store_root,
                 sampling_resources(),
                 HERO_PROCESSES_PER_TASK,
-                sampler_module="experiments.grug.moe_hero_ep.sample_completions",
+                sampler_module="ops.vibe_check.sample",
             )
             queue = reconcile(store, jobs, requests, now)
     logger.info("Checkpoint history contains %d sample sets", len(queue.entries))

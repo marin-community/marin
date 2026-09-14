@@ -17,10 +17,10 @@ from iris.client.client import IrisClient, JobAlreadyExists
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName
 from iris.resources.state import TERMINAL_JOB_STATES, JobState
 from iris.rpc import job_pb2
+from marin.training.training import resolve_training_env
 from rigging.timing import Duration
 
-from marin.evaluation.completions import Entry, JobStatus
-from marin.training.training import resolve_training_env
+from ops.vibe_check.completions import Entry, JobStatus
 
 JOB_USER = "hero-completions"
 

@@ -47,7 +47,7 @@ jobs:
         with:
           credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
       - name: Reconcile every permanent checkpoint
-        run: uv run --no-sync python -m scripts.ops.hero_completions reconcile
+        run: uv run --no-sync python -m ops.vibe_check reconcile
       - name: Publish the daily history report
         if: always() && steps.auth.outcome == 'success'
-        run: uv run --no-sync python -m scripts.ops.hero_completions report
+        run: uv run --no-sync python -m ops.vibe_check report

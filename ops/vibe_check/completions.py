@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Persistent checkpoint sampling requests and a restart-safe, single-job queue."""
+"""Persistent hero checkpoint requests and a restart-safe, single-job queue."""
 
 import hashlib
 import json

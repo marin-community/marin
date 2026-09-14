@@ -309,7 +309,7 @@ ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 "experiments/datakit/decontam/viewer/report.py" = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["experiments"]
+known-first-party = ["experiments", "ops"]
 # "config" is the local module in infra/tpu-ci/{setup,vm_manager}.py. The repo-root
 # config/ directory (cluster YAMLs) would otherwise make isort treat ``import config``
 # as first-party and reorder it, so pin it to the third-party group it already sits in.
@@ -339,6 +339,7 @@ project-includes = [
     "infra/marina/src/**/*.py",
     "infra/marina/apps/**/*.py",
     "infra/deploy/src/**/*.py",
+    "ops/vibe_check/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
 ]
@@ -360,6 +361,7 @@ search-path = [
     "infra/deploy/src",
     "infra/marina/src",
     "infra/marina/apps",
+    ".",
 ]
 disable-search-path-heuristics = true
 

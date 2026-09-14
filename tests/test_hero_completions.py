@@ -7,15 +7,9 @@ from datetime import UTC, date, datetime, timedelta
 import httpx
 import numpy as np
 import pytest
-from marin.evaluation.completion_generation import generate
-from marin.evaluation.completion_publishing import (
-    COMMENT_MARKER,
-    publish_daily,
-    render_report,
-    report_manifest,
-    update_issue_comment,
-)
-from marin.evaluation.completions import (
+from marin.publish import sites
+
+from ops.vibe_check.completions import (
     Checkpoint,
     Completion,
     Entry,
@@ -30,7 +24,14 @@ from marin.evaluation.completions import (
     StopReason,
     reconcile,
 )
-from marin.publish import sites
+from ops.vibe_check.generation import generate
+from ops.vibe_check.publishing import (
+    COMMENT_MARKER,
+    publish_daily,
+    render_report,
+    report_manifest,
+    update_issue_comment,
+)
 
 NOW = datetime(2026, 9, 12, 10, tzinfo=UTC)
 

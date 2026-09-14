@@ -11,11 +11,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import httpx
+from marin.publish import sites
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.storage_path import prefix_join
 
-from marin.evaluation.completions import Phase, Queue, SampleStore
-from marin.publish import sites
+from ops.vibe_check.completions import Phase, Queue, SampleStore
 
 REPORT_USER = "hero"
 REPORT_SLUG = "completions"
@@ -54,7 +54,7 @@ def report_manifest(queue: Queue, report_date: str) -> dict:
 def render_report(manifest: dict) -> str:
     # A script element ends at </script> even when it contains JSON. Escape every '<'.
     data = json.dumps(manifest, ensure_ascii=True).replace("<", "\\u003c")
-    return Path(__file__).with_name("completion_report.html").read_text().replace("__REPORT_DATA__", data)
+    return Path(__file__).with_name("report.html").read_text().replace("__REPORT_DATA__", data)
 
 
 def update_issue_comment(body: str, token: str) -> None:

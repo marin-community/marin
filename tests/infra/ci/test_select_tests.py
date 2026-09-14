@@ -111,13 +111,14 @@ def test_submodule_import_does_not_select_unrelated_siblings(tmp_path: Path) -> 
     assert leg_paths(matrix, "iris") == ["lib/iris/tests/test_scheduler.py"]
 
 
-def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> None:
-    write(tmp_path, "experiments/__init__.py")
-    write(tmp_path, "experiments/tokenizer_sweep.py", "def sweep():\n    pass\n")
-    write(tmp_path, "tests/test_tokenizer_sweep.py", "from experiments.tokenizer_sweep import sweep\n")
+@pytest.mark.parametrize("package", ["experiments", "ops"])
+def test_repository_tool_changes_select_dependent_marin_tests(tmp_path: Path, package: str) -> None:
+    write(tmp_path, f"{package}/__init__.py")
+    write(tmp_path, f"{package}/tokenizer_sweep.py", "def sweep():\n    pass\n")
+    write(tmp_path, "tests/test_tokenizer_sweep.py", f"from {package}.tokenizer_sweep import sweep\n")
     write(tmp_path, "tests/test_unrelated.py", "def test_x():\n    pass\n")
 
-    matrix = select_matrix(["experiments/tokenizer_sweep.py"], tmp_path)
+    matrix = select_matrix([f"{package}/tokenizer_sweep.py"], tmp_path)
 
     assert leg_paths(matrix, "marin") == ["tests/test_tokenizer_sweep.py"]
 

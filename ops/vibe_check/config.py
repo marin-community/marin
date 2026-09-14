@@ -11,18 +11,10 @@ from pathlib import Path
 import draccus
 from fray.types import GpuConfig, ResourceConfig
 from levanter.checkpoint import discover_checkpoint_candidates
-from marin.evaluation.completions import Checkpoint, Prompt, Record, SampleRequest, SamplingSpec, digest
 
-from experiments.grug.moe_hero_ep.hero_recipe import (
-    HERO_EP_EXPERT_AXIS_SIZE,
-    HERO_EP_NODES,
-    HERO_GPUS_PER_NODE,
-    HERO_MODEL_CONFIG,
-    HERO_NODE_CPU,
-    HERO_NODE_DISK,
-    HERO_NODE_RAM,
-)
+from experiments.grug.moe_hero_ep import hero_recipe
 from experiments.grug.moe_hero_ep.train import DEFAULT_DROPLESS_MOE_IMPLEMENTATION
+from ops.vibe_check.completions import Checkpoint, Prompt, Record, SampleRequest, SamplingSpec, digest
 
 CONFIG_DIRECTORY = Path(__file__).parent
 CHECKPOINT_ROOT = "s3://marin-us-east-02a/marin/grug"
@@ -46,20 +38,18 @@ class ProductionRun(Record):
 
 
 def production_run() -> ProductionRun:
-    return ProductionRun.model_validate_json((CONFIG_DIRECTORY / "production_run.json").read_bytes())
+    return ProductionRun.model_validate_json(Path(hero_recipe.__file__).with_name("production_run.json").read_bytes())
 
 
 def sampling_spec() -> SamplingSpec:
     # The local dropless backend matches held-out evaluation and cannot drop another prompt's tokens.
     model = dataclasses.replace(
-        HERO_MODEL_CONFIG, moe_implementation=DEFAULT_DROPLESS_MOE_IMPLEMENTATION, expert_chunks=1
+        hero_recipe.HERO_MODEL_CONFIG, moe_implementation=DEFAULT_DROPLESS_MOE_IMPLEMENTATION, expert_chunks=1
     )
     return SamplingSpec(
         release="hero-native-v1",
-        batch_size=HERO_EP_EXPERT_AXIS_SIZE,
-        prompts=tuple(
-            Prompt.model_validate(row) for row in json.loads((CONFIG_DIRECTORY / "completion_prompts.json").read_text())
-        ),
+        batch_size=hero_recipe.HERO_EP_EXPERT_AXIS_SIZE,
+        prompts=tuple(Prompt.model_validate(row) for row in json.loads((CONFIG_DIRECTORY / "prompts.json").read_text())),
         tokenizer="marin-community/marin-tokenizer",
         tokenizer_revision="a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2",
         model=draccus.encode(model),
@@ -71,11 +61,11 @@ def sampling_spec() -> SamplingSpec:
 
 def sampling_resources() -> ResourceConfig:
     return ResourceConfig(
-        cpu=HERO_NODE_CPU,
-        ram=HERO_NODE_RAM,
-        disk=HERO_NODE_DISK,
-        device=GpuConfig(variant="GB200", count=HERO_GPUS_PER_NODE),
-        replicas=HERO_EP_NODES,
+        cpu=hero_recipe.HERO_NODE_CPU,
+        ram=hero_recipe.HERO_NODE_RAM,
+        disk=hero_recipe.HERO_NODE_DISK,
+        device=GpuConfig(variant="GB200", count=hero_recipe.HERO_GPUS_PER_NODE),
+        replicas=hero_recipe.HERO_EP_NODES,
     )
 
 

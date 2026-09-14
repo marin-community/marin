@@ -24,13 +24,13 @@ from levanter.cutlass_kernel_cache import cutlass_kernel_cache, install
 from levanter.distributed import DistributedConfig
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.tensorstore_serialization import build_kvstore_spec
-from marin.evaluation.completion_generation import generate
-from marin.evaluation.completions import SampleRequest, SampleResult, SampleStore, digest
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoTokenizer
 
 from experiments.grug.checkpointing import LEGACY_STATE_KEY, MASTER_PARAMS_KEY
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
+from ops.vibe_check.completions import SampleRequest, SampleResult, SampleStore, digest
+from ops.vibe_check.generation import generate
 
 COMPUTE_POLICY = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
 

@@ -13,7 +13,7 @@ pending and failed sample sets. Each completed set links to its raw JSON and gen
 
 ## Inputs and lineage
 
-`experiments/grug/moe_hero_ep/completion_prompts.json` holds the prompt bank. Each entry has a
+`ops/vibe_check/prompts.json` holds the prompt bank. Each entry has a
 stable ID, exact prompt text, seed, and source link. Changes go through a normal pull request.
 Issue text is a source reference, not an executable or automatically changing input.
 
@@ -113,12 +113,12 @@ GitHub stops invoking the schedule.
 For a read-only inventory with configured CoreWeave credentials:
 
 ```bash
-uv run --no-sync python -m scripts.ops.hero_completions inventory
+uv run --no-sync python -m ops.vibe_check inventory
 ```
 
 Failed requests remain visible after their failure budget is exhausted. Correct the cause
 before another attempt. To retry after a sampler, access, or service correction, change `release="hero-native-v1"`
-in `experiments/grug/moe_hero_ep/completion_config.py` to a new release. This creates new
+in `ops/vibe_check/config.py` to a new release. This creates new
 requests for every retained checkpoint, including checkpoints that succeeded before.
 Change the release when restore or decoding behavior changes. Requests keep the source
 commit that first created them. An unrelated change to `main` does not repeat sampling.

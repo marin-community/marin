@@ -11,12 +11,12 @@ import numpy as np
 import pytest
 from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
-from marin.evaluation.completions import Checkpoint, Prompt, SampleRequest, SamplingSpec, digest
 
-from experiments.grug.moe_hero_ep import completion_config
-from experiments.grug.moe_hero_ep.completion_config import Ancestor, ProductionRun, discover_requests
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
-from experiments.grug.moe_hero_ep.sample_completions import COMPUTE_POLICY, next_logits, restore_model
+from ops.vibe_check import config
+from ops.vibe_check.completions import Checkpoint, Prompt, SampleRequest, SamplingSpec, digest
+from ops.vibe_check.config import Ancestor, ProductionRun, discover_requests
+from ops.vibe_check.sample import COMPUTE_POLICY, next_logits, restore_model
 
 
 @pytest.fixture
@@ -87,7 +87,7 @@ def test_native_restore_preserves_weights_and_applies_pending_router_bias(
 
 
 def test_discovery_excludes_temporary_incomplete_and_non_lineage_checkpoints(tmp_path, monkeypatch, spec):
-    monkeypatch.setattr(completion_config, "CHECKPOINT_ROOT", str(tmp_path))
+    monkeypatch.setattr(config, "CHECKPOINT_ROOT", str(tmp_path))
     metadata = {"timestamp": "2026-09-12T10:00:00", "is_temporary": False}
     for run_id, step, temporary in [
         ("old", 6000, False),
