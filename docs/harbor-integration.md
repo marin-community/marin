@@ -139,8 +139,9 @@ Temporary policy and overlay files are owner-readable and removed after each iso
 
 Preflight snapshots Harbor's infrastructure, agent, and passthrough error categories from the pinned
 `harbor-config` environment. Marin uses that snapshot to classify trial results and records the
-package version in `record.json`. Unknown exception names fail the run as an infrastructure failure,
-so taxonomy changes cannot silently alter scoring or completion coverage.
+package version in `record.json`. The error histogram includes scored agent and passthrough errors;
+completion is calculated from scored and attempted trial counts. Unknown exception names fail the
+run as an infrastructure failure, so taxonomy changes cannot silently alter scoring or completion coverage.
 
 ## Results
 

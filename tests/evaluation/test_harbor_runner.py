@@ -613,7 +613,9 @@ def test_harbor_executor_counts_agent_failure_without_verifier_as_zero_reward(tm
     assert metrics["accuracy"] == pytest.approx(10 / 20)
     coverage = outcome.coverage[dataset]
     assert (coverage.n_attempted, coverage.n_scored) == (20, 20)
-    assert coverage.errors == {}
+    assert coverage.errors == {"AgentTimeoutError": 1}
+    result = json.loads((tmp_path / "harbor_result.json").read_text())
+    assert result["errors"] == {"AgentTimeoutError": 1}
 
 
 def test_harbor_executor_rejects_unknown_error_name(tmp_path, monkeypatch):
@@ -642,7 +644,8 @@ def test_harbor_executor_rejects_unknown_error_name(tmp_path, monkeypatch):
     assert exc_info.value.coverage[executor.config.record_dataset].errors == {"unknown:NewHarborError": 1}
 
 
-def test_harbor_executor_counts_verified_agent_timeouts_as_scored(tmp_path, monkeypatch):
+@pytest.mark.parametrize("exception_type", ["AgentTimeoutError", "PassthroughError"])
+def test_harbor_executor_preserves_scored_errors(tmp_path, monkeypatch, exception_type):
     def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
         _write_job_record(job_dir, 10)
@@ -654,7 +657,7 @@ def test_harbor_executor_counts_verified_agent_timeouts_as_scored(tmp_path, monk
                 "verifier_result": {"rewards": {"reward": 1.0 if index >= 7 else 0.0}},
             }
             if index < 4:
-                result["exception_info"] = {"exception_type": "AgentTimeoutError"}
+                result["exception_info"] = {"exception_type": exception_type}
             trial_dir.joinpath("result.json").write_text(json.dumps(result))
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
@@ -667,7 +670,7 @@ def test_harbor_executor_counts_verified_agent_timeouts_as_scored(tmp_path, monk
     assert outcome.metrics[dataset]["accuracy"] == pytest.approx(0.3)
     coverage = outcome.coverage[dataset]
     assert (coverage.n_attempted, coverage.n_scored) == (10, 10)
-    assert coverage.errors == {}
+    assert coverage.errors == {exception_type: 4}
 
 
 def test_an_unreadable_job_record_reports_unknown_coverage_rather_than_complete(tmp_path, monkeypatch):

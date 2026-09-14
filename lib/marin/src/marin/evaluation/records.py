@@ -275,9 +275,8 @@ class TaskCoverage(BaseModel):
     """How much of one task's intended item set a run actually graded, and how those grades came out.
 
     ``n_attempted`` is the number of items the run set out to grade after any declared cap, and
-    ``n_scored`` how many produced a grade; ``errors`` counts the attempted-but-ungraded items by
-    error type, so a reader can tell a model's score apart from the quality of the infrastructure
-    that produced it.
+    ``n_scored`` how many have a usable score. ``errors`` counts errors by type, including errors
+    on scored outcomes when the harness permits them. Completion uses the item counts.
 
     ``n_attempted`` is ``None`` when the run graded items but could not establish how many it set out
     to grade. That is unknown coverage, and readers widen for it; it is never read as complete. A

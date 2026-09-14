@@ -57,11 +57,7 @@ _JOB_DIGEST_LENGTH = 12
 # margin tolerates float noise).
 SOLVED_REWARD = 0.99
 
-# The fraction of attempted trials a verifier must grade for a run to be accepted. An agentic run
-# loses occasional trials to agent and verifier timeouts, and discarding an otherwise usable batch
-# over one of them throws away the other 239; below this rate the run is not a usable measurement,
-# since the ungraded trials could take any value and the resulting interval is too wide to compare.
-# The gate is a rate, so it is coarse at small trial counts: one failure in eight is 0.875 and fails.
+# Minimum fraction of attempted trials scoreable under the Harbor taxonomy.
 DEFAULT_MIN_COMPLETION_RATE = 0.9
 
 # Error labels for ungraded trials that carry no exception of their own.
@@ -99,8 +95,8 @@ class HarborRunResult:
     launched rather than from the trial results it found: a trial that dies before writing a result
     leaves no file behind, so counting results would make the worst-affected runs look complete. It is
     ``None`` when Harbor's job bookkeeping is unreadable, which is unknown rather than complete.
-    ``scored_trials`` counts the trials a verifier actually graded, and the rates divide by it -- a
-    trial that errored is an ungraded item, not a wrong answer.
+    ``scored_trials`` counts outcomes accepted by the Harbor taxonomy, including agent failures
+    without verifier results. Accuracy and mean reward divide by this count.
     """
 
     dataset: str
@@ -114,14 +110,14 @@ class HarborRunResult:
 
     @property
     def failed_trials(self) -> int | None:
-        """Attempted trials that produced no verifier grade, or None when the denominator is unknown."""
+        """Unscored trials, or None when the attempted count is unknown."""
         if self.attempted_trials is None:
             return None
         return max(0, self.attempted_trials - self.scored_trials)
 
     @property
     def completion_rate(self) -> float | None:
-        """The fraction of attempted trials a verifier graded, or None when that count is unknown."""
+        """Scoreable fraction of attempted trials, or None when that count is unknown."""
         if self.attempted_trials is None:
             return None
         if self.attempted_trials <= 0:
@@ -318,7 +314,7 @@ def _write_archive(trials: list[HarborTrial], dataset: str, output_dir: str) -> 
 
 
 def _trial_errors(trials: list[HarborTrial], attempted: int | None) -> dict[str, int]:
-    """The error-type histogram over attempted trials that produced no grade.
+    """Count trial errors, including errors on scored outcomes.
 
     Trials the job never wrote a result for are counted under :data:`_MISSING_RESULT_ERROR`: they are
     the attrition Harbor's own bookkeeping knows about but its result files cannot show. With no
@@ -326,7 +322,7 @@ def _trial_errors(trials: list[HarborTrial], attempted: int | None) -> dict[str,
     """
     errors: dict[str, int] = {}
     for trial in trials:
-        if trial.scored:
+        if trial.scored and trial.error is None:
             continue
         name = (trial.error or {}).get("type") or _UNKNOWN_ERROR
         errors[name] = errors.get(name, 0) + 1
@@ -486,7 +482,7 @@ class HarborExecutor:
     model_agent_kwargs: Mapping[str, object]
     secret_env_keys: tuple[str, ...] = ()
     min_completion_rate: float = DEFAULT_MIN_COMPLETION_RATE
-    """The fraction of attempted trials a verifier must grade for the run to be accepted."""
+    """Minimum scoreable fraction of attempted trials for accepting the run."""
 
     def _run(
         self,
