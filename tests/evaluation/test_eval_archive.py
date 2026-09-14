@@ -35,7 +35,7 @@ from marin.evaluation.lm_eval_samples import (
 from marin.evaluation.records import TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.evaluation.migrations.cli import SweepOutcome, _sweep_archives, selected_archives
+from experiments.evaluation.migrations.cli import ArchiveSweep, SweepOutcome, _sweep_archives, selected_archives
 from experiments.evaluation.migrations.cli import cli as migrations_cli
 from experiments.evaluation.migrations.format_smoke import smoke_upgrade, smoke_upgrade_fleet
 from experiments.evaluation.migrations.migrate_archive import (
@@ -565,7 +565,11 @@ def test_sweep_visits_an_archive_shared_by_several_runs_once(tmp_path):
         visited.append(path)
         return SweepOutcome("exported", "0 sample(s)")
 
-    _sweep_archives({shared: ["run-a", "run-b"], own: ["run-c"]}, 4, work)
+    _sweep_archives(
+        {shared: ArchiveSweep(run_ids=("run-a", "run-b")), own: ArchiveSweep(run_ids=("run-c",))},
+        4,
+        work,
+    )
 
     assert sorted(visited) == sorted([shared, own])
 
@@ -573,7 +577,7 @@ def test_sweep_visits_an_archive_shared_by_several_runs_once(tmp_path):
 def test_naming_an_archive_directly_does_not_pull_in_the_fleet(tmp_path):
     # Targeting a handful of damaged archives must not re-sweep every recorded run beside them.
     named = str(tmp_path / "one" / "results")
-    assert selected_archives((), (named + "/",)) == {named: []}
+    assert selected_archives((), (named + "/",)) == {named: ArchiveSweep()}
 
 
 def test_upgrade_format_prefix_migrates_only_sealed_archives(tmp_path, monkeypatch):
