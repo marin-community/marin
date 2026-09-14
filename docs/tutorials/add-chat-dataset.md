@@ -66,14 +66,6 @@ Do not reconstruct tool definitions from observed arguments.
 For a source that constructs Harmony `Message` objects directly, use
 `chat_document` to serialize them instead.
 
-For releases that store only answers, use each row's source revision and row
-coordinates to recover its original prompt or history. Check it against the hash
-recorded in that row before pairing it with the answer. See
-[open_athena_glm53.py](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/datakit/download/open_athena_glm53.py)
-for examples. A compaction's full referenced conversation belongs inside the user
-prompt; only the new summary is the assistant answer. Keep the release's validation
-split out of training.
-
 ## 3. Meet the chat contract
 
 The schema and validators live in `marin.datakit.chat_normalize`:
