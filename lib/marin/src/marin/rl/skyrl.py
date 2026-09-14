@@ -17,7 +17,8 @@ from pathlib import PurePosixPath
 from typing import Literal, cast
 
 import fsspec
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.utils import discover_hf_checkpoints
@@ -25,7 +26,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import sanitize_job_name
 from marin.external_dependencies import MARIN_SKYRL
-from marin.training.training import LevanterCheckpoint, temporary_storage_base_path
+from marin.training.training import LevanterCheckpoint
 
 _EXECUTION = "skyrl_execution"
 _LAUNCHER_PYTHON = "3.12"
@@ -33,6 +34,12 @@ _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
+
+
+def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
+    """Return the lifecycle-managed storage path for a SkyRL run."""
+    temporary_root = marin_temp_bucket(ttl_days=ttl_days, source_prefix=output_path)
+    return str(StoragePath(temporary_root) / _TEMPORARY_OUTPUT_PREFIX / StoragePath(output_path).key)
 
 
 class SkyRLRuntimeProfile(StrEnum):
@@ -461,10 +468,9 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         if ctx.is_fingerprint:
             temporary_root = "<temporary_output_path>"
         else:
-            temporary_root = temporary_storage_base_path(
+            temporary_root = skyrl_temporary_run_path(
                 ctx.output_path,
                 ttl_days=spec.retention.temporary_storage_ttl_days,
-                category=_TEMPORARY_OUTPUT_PREFIX,
             )
         attempts_root = prefix_join(temporary_root, "attempts")
         output = SkyRLOutputPaths(

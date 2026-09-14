@@ -141,15 +141,6 @@ def _cli_helpers_module():
     return importlib.import_module("levanter.infra.cli_helpers")
 
 
-def temporary_storage_base_path(output_path: str, *, ttl_days: int, category: str) -> str:
-    """Return region-local temporary storage keyed by an executor output path."""
-    temporary_root = marin_temp_bucket(
-        ttl_days=ttl_days,
-        source_prefix=output_path,
-    )
-    return str(StoragePath(temporary_root) / category / StoragePath(output_path).key)
-
-
 def _temporary_checkpoint_key(output_path: str) -> str:
     path = StoragePath(output_path)
     return str(StoragePath(path.bucket) / path.key) if path.bucket else path.key
