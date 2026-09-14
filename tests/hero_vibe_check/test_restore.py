@@ -113,17 +113,13 @@ def test_discovery_excludes_temporary_incomplete_and_non_lineage_checkpoints(tmp
     incomplete = tmp_path / "active/v1/checkpoints/step-24000"
     incomplete.mkdir()
     (incomplete / "manifest.json").write_text("{}")
-    handoff = tmp_path / "forced-handoff"
-    handoff.mkdir()
-    (handoff / "metadata.json").write_text(json.dumps({**metadata, "step": 7000}))
     runs = (
-        CheckpointRun("old", "v1", max_step=7000, additional_checkpoints=(str(handoff),)),
+        CheckpointRun("old", "v1", max_step=7000),
         CheckpointRun("active", "v1"),
     )
     requests = discover_requests(runs, spec, "a" * 40, target_cluster="test")
     assert {(row.checkpoint.run_id, row.checkpoint.step) for row in requests} == {
         ("old", 6000),
-        ("old", 7000),
         ("active", 18000),
     }
 

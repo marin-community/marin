@@ -23,11 +23,12 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
 )
 from experiments.grug.moe_hero_ep.train import DEFAULT_DROPLESS_MOE_IMPLEMENTATION
 
+logger = logging.getLogger(__name__)
+
 CONFIG_DIRECTORY = Path(__file__).parent
 CHECKPOINT_ROOT = "s3://marin-us-east-02a/marin/grug"
 STORE_ROOT = "s3://marin-us-east-02a/marin/users/rav/hero-completions/"
 TARGET_CLUSTER = "cw-us-east-08a"
-logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -35,20 +36,11 @@ class CheckpointRun:
     run_id: str
     version: str
     max_step: int | None = None
-    additional_checkpoints: tuple[str, ...] = ()
 
 
 CHECKPOINT_RUNS = (
     CheckpointRun("hero-12d8b6f0-dee637", "2026.08.19.2", max_step=58014),
-    CheckpointRun(
-        "hero-wd-gate-router-p02-step58k",
-        "2026.08.19.2",
-        max_step=81716,
-        additional_checkpoints=(
-            "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/"
-            "hero-wd-gate-router-p02-step58k/2026.08.19.2/checkpoints/step-81716",
-        ),
-    ),
+    CheckpointRun("hero-wd-gate-router-p02-step58k", "2026.08.19.2", max_step=81716),
     CheckpointRun("hero-ragged_a2a-nccl2307-ep-step81k", "2026.08.19.2"),
 )
 
@@ -89,14 +81,10 @@ def discover_requests(
     for run in runs:
         candidates = discover_checkpoint_candidates(
             prefix_join(CHECKPOINT_ROOT, f"{run.run_id}/{run.version}/checkpoints"),
-            *run.additional_checkpoints,
             max_step=run.max_step,
         )
         if not candidates:
             logger.warning("No complete checkpoints found for run %s at version %s", run.run_id, run.version)
-        for checkpoint in run.additional_checkpoints:
-            if not any(candidate.path == checkpoint for candidate in candidates):
-                logger.warning("Configured checkpoint was not selected: %s", checkpoint)
         for candidate in candidates:
             if candidate.metadata.get("is_temporary") is not False:
                 continue
