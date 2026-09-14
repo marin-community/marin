@@ -3,7 +3,6 @@
 
 """Reconcile permanent hero checkpoints or publish their daily completion history."""
 
-import argparse
 import logging
 import os
 import subprocess
@@ -11,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 
+import click
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -31,16 +31,15 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.publishing import publish_daily
 logger = logging.getLogger(__name__)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["reconcile", "report", "inventory"])
-    parser.add_argument("--store-root", default=STORE_ROOT)
-    args = parser.parse_args()
+@click.command(help=__doc__, context_settings={"help_option_names": ["-h", "--help"]})
+@click.argument("action", type=click.Choice(["reconcile", "report", "inventory"]))
+@click.option("--store-root", default=STORE_ROOT, show_default=True)
+def main(action: str, store_root: str) -> None:
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
-    store = SampleStore(args.store_root)
+    store = SampleStore(store_root)
     now = datetime.now(UTC)
-    if args.action == "report":
+    if action == "report":
         # The report day starts at 08:00 UTC.
         report_day = (now - timedelta(hours=8)).date()
         url = publish_daily(store, report_day, partial(update_issue_comment, token=os.environ["GH_TOKEN"]))
@@ -48,7 +47,7 @@ def main() -> None:
         return
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     requests = discover_requests(CHECKPOINT_RUNS, sampling_spec(), revision, target_cluster=TARGET_CLUSTER)
-    if args.action == "inventory":
+    if action == "inventory":
         for request in sorted(requests, key=lambda value: value.checkpoint.step):
             logger.info("%s step=%d %s", request.sample_id, request.checkpoint.step, request.checkpoint.uri)
         logger.info("%d permanent checkpoints", len(requests))
@@ -60,7 +59,7 @@ def main() -> None:
                 client,
                 endpoint,
                 Path.cwd(),
-                args.store_root,
+                store_root,
                 sampling_resources(),
                 HERO_PROCESSES_PER_TASK,
                 sampler_module="experiments.grug.moe_hero_ep.ops.vibe_check.sample",
