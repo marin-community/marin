@@ -33,6 +33,7 @@ WandbRun: typing.TypeAlias = wandb.sdk.wandb_run.Run
 
 
 _WANDB_ARTIFACT_NAME_MAX_LENGTH = 128
+MAX_WANDB_ARTIFACT_BYTES = 20 * 1_000_000
 _WANDB_INIT_ERROR_KEY = "error"
 _WANDB_INIT_METADATA_KEY = "metadata"
 _WANDB_INIT_PROCESS_INDEX_KEY = "process_index"
@@ -42,6 +43,33 @@ class _WandbInitStatus(TypedDict):
     process_index: int
     error: str | None
     metadata: dict[str, Any] | None
+
+
+def _artifact_size_bytes(artifact_path: str | os.PathLike[str]) -> int:
+    """Return the number of regular-file bytes that W&B would upload for a path."""
+    path = os.fspath(artifact_path)
+    if os.path.isfile(path):
+        return os.path.getsize(path)
+    if not os.path.isdir(path):
+        raise FileNotFoundError(path)
+
+    total = 0
+    for directory, _, filenames in os.walk(path):
+        for filename in filenames:
+            file_path = os.path.join(directory, filename)
+            if not os.path.islink(file_path):
+                total += os.path.getsize(file_path)
+    return total
+
+
+def _validate_wandb_artifact_size(artifact_path: str | os.PathLike[str], *, artifact_name: str | None = None) -> None:
+    size = _artifact_size_bytes(artifact_path)
+    if size > MAX_WANDB_ARTIFACT_BYTES:
+        display_name = artifact_name or os.path.basename(os.fspath(artifact_path)) or "artifact"
+        raise ValueError(
+            f"Refusing W&B artifact {display_name!r} at {artifact_path}: {size:,} bytes exceeds the "
+            f"{MAX_WANDB_ARTIFACT_BYTES:,}-byte limit."
+        )
 
 
 def _teardown_wandb_service_bounded(timeout: float) -> None:
@@ -164,9 +192,16 @@ class WandbTracker(Tracker):
             return
         self.run.summary.update(self._prepare_summary(metrics))
 
+    def validate_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None) -> None:
+        """Reject an artifact that would exceed Marin's W&B storage limit."""
+        del type
+        artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
+        _validate_wandb_artifact_size(artifact_path, artifact_name=artifact_name)
+
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         if self._suppress_logging:
             return
+        self.validate_artifact(artifact_path, name=name, type=type)
         artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
         self.run.log_artifact(
             artifact_path,
@@ -524,6 +559,15 @@ class WandbConfig(TrackerConfig):
         else:
             code_dir = None
         if code_dir is not None:
+            try:
+                _validate_wandb_artifact_size(code_dir, artifact_name="source code")
+            except ValueError as exc:
+                logger.error(
+                    "Automatic W&B source capture is disabled: %s. Set save_code=False or choose a smaller "
+                    "source directory.",
+                    exc,
+                )
+                return other_settings
             logger.info(f"Setting wandb code_dir to {code_dir}")
             other_settings["code_dir"] = code_dir
             other_settings["git_root"] = code_dir
