@@ -142,7 +142,7 @@ def assert_checkpoint_inference_matches_golden(
         assert actual_cases[expected.id] == expected.top_logprobs, expected.id
 
 
-def test_snowball_checkpoint_matches_levanter_inference_goldens(marin_gpu_client: IrisClient, run_test_job) -> None:
+def test_snowball_checkpoint_matches_checkpoint_goldens(marin_gpu_client: IrisClient, run_test_job) -> None:
     expected_cases = read_checkpoint_goldens()
     run_test_job(
         marin_gpu_client,
