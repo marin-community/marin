@@ -210,6 +210,21 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     assert all(result["digest"] == expected["digest"] for result in seeded)
 
 
+def test_preflight_exports_pinned_harbor_error_taxonomy(checked_policies):
+    taxonomies = [payload["error_taxonomy"] for payload in checked_policies.values()]
+
+    assert all(taxonomy == taxonomies[0] for taxonomy in taxonomies)
+    assert "LLMRequestTimeoutError" in taxonomies[0]["infrastructure"]
+    assert {"AgentTimeoutError", "ContextLengthExceededError"} <= set(taxonomies[0]["agent"])
+    assert "OutputLengthExceededError" in taxonomies[0]["passthrough"]
+    assert set(taxonomies[0]["undecided"]) == {
+        "TrialNotScoredError",
+        "VerificationNotCompletedError",
+        "VerifierTimeoutError",
+    }
+    assert taxonomies[0]["commit"] == "06139137912c5764a889e7613c1d5a5eb0704448"
+
+
 def test_preflight_reports_agent_context_resolved_from_the_served_model(tmp_path):
     served = {"model_info": {"max_input_tokens": 1048576, "max_output_tokens": 393216}}
 

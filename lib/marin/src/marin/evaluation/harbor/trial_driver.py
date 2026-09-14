@@ -6,6 +6,7 @@
 import asyncio
 import hashlib
 import importlib
+import importlib.metadata
 import inspect
 import json
 import os
@@ -21,6 +22,7 @@ from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
+from harbor_config.errors import ErrorCategory, errors_by_category, known_error_types  # pyrefly: ignore[missing-import]
 from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
 from harbor_config.models.job.config import DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
@@ -33,6 +35,7 @@ from marin.evaluation.harbor.agent_context import (
     MODEL_INFO_KEY,
     reconciled_model_info,
 )
+from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_LENGTH
 
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
@@ -320,6 +323,15 @@ def _stable_policy_json(config: JobConfig) -> str:
     return _stable_json(_normalized(config.model_dump(mode="python")))
 
 
+def _harbor_config_commit() -> str:
+    distribution_name = importlib.metadata.packages_distributions()["harbor_config"][0]
+    direct_url = json.loads(importlib.metadata.distribution(distribution_name).read_text("direct_url.json") or "{}")
+    commit = direct_url.get("vcs_info", {}).get("commit_id")
+    if not isinstance(commit, str) or len(commit) != FULL_GIT_COMMIT_LENGTH:
+        raise ValueError("Harbor distribution does not identify its pinned commit")
+    return commit
+
+
 def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict[str, object]:
     document = _document(path)
     config = JobConfig.model_validate(document, extra="forbid")
@@ -350,6 +362,10 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
             model_agent_kwargs=dict(model_agent_kwargs),
         ),
     )
+    infrastructure_errors = errors_by_category(ErrorCategory.INFRASTRUCTURE)
+    agent_errors = errors_by_category(ErrorCategory.AGENT)
+    passthrough_errors = errors_by_category(ErrorCategory.PASSTHROUGH)
+    undecided_errors = known_error_types() - infrastructure_errors - agent_errors - passthrough_errors
     model_info = effective.agents[0].kwargs[MODEL_INFO_KEY]
     return {
         "stable_policy_json": stable_policy_json,
@@ -359,6 +375,13 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
         "dataset_revision": dataset_metadata.revision,
         "agent": agent_name,
         "environment": environment_name,
+        "error_taxonomy": {
+            "infrastructure": sorted(infrastructure_errors),
+            "agent": sorted(agent_errors),
+            "passthrough": sorted(passthrough_errors),
+            "undecided": sorted(undecided_errors),
+            "commit": _harbor_config_commit(),
+        },
         "max_input_tokens": model_info[MAX_INPUT_TOKENS_KEY],
         "max_output_tokens": model_info[MAX_OUTPUT_TOKENS_KEY],
     }

@@ -138,6 +138,7 @@ class HarborDefinition:
                 env=config.environment,
                 task_limit=runtime_task_limit,
                 config_digest=config.digest,
+                harbor_config_commit=config.error_taxonomy.commit,
                 max_input_tokens=config.max_input_tokens,
                 max_output_tokens=config.max_output_tokens,
             ),

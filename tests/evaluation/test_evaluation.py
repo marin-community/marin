@@ -18,7 +18,12 @@ from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, Constra
 from iris.rpc import job_pb2
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
+from marin.evaluation.harbor.driver_config import (
+    HARBOR_RUNTIME,
+    HarborDatasetKind,
+    HarborErrorTaxonomy,
+    ValidatedHarborConfig,
+)
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus, TaskCoverage, read_record
@@ -70,6 +75,13 @@ def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> list[Mapp
                     workspace_dataset_path=None,
                     agent="opencode",
                     environment="daytona",
+                    error_taxonomy=HarborErrorTaxonomy(
+                        infrastructure=frozenset({"InfrastructureError"}),
+                        agent=frozenset({"AgentError"}),
+                        passthrough=frozenset({"PassthroughError"}),
+                        undecided=frozenset({"VerifierTimeoutError"}),
+                        commit="1" * 40,
+                    ),
                     max_input_tokens=_PREFLIGHT_MAX_INPUT_TOKENS,
                     max_output_tokens=_PREFLIGHT_MAX_OUTPUT_TOKENS,
                 )
@@ -746,6 +758,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
             "env": "daytona",
             "task_limit": 2,
             "config_digest": evaluation.identity.eval_ref.harbor.config_digest,
+            "harbor_config_commit": "1" * 40,
             "max_input_tokens": _PREFLIGHT_MAX_INPUT_TOKENS,
             "max_output_tokens": _PREFLIGHT_MAX_OUTPUT_TOKENS,
         },

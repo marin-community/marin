@@ -22,6 +22,8 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 
+from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_PATTERN
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_RECORDS_PREFIX = "gs://marin-eval-metadata/evals"
@@ -193,6 +195,11 @@ class HarborRef(BaseModel):
         pattern=r"^sha256:[0-9a-f]{64}$",
         exclude_if=lambda value: value is None,
     )
+    harbor_config_commit: str | None = Field(
+        default=None,
+        pattern=FULL_GIT_COMMIT_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     max_input_tokens: int | None = Field(
         default=None,
         description="Agent context budget resolved from the served model, the policy, and Harbor's defaults",
@@ -289,9 +296,8 @@ class TaskCoverage(BaseModel):
     """How much of one task's intended item set a run actually graded, and how those grades came out.
 
     ``n_attempted`` is the number of items the run set out to grade after any declared cap, and
-    ``n_scored`` how many produced a grade; ``errors`` counts the attempted-but-ungraded items by
-    error type, so a reader can tell a model's score apart from the quality of the infrastructure
-    that produced it.
+    ``n_scored`` how many have a usable score. ``errors`` counts errors by type, including errors
+    on scored outcomes when the harness permits them. Completion uses the item counts.
 
     ``n_attempted`` is ``None`` when the run graded items but could not establish how many it set out
     to grade. That is unknown coverage, and readers widen for it; it is never read as complete. A
