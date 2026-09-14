@@ -15,7 +15,9 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/{cluster}/v1/vllm/overview       bounded per-job/run vLLM telemetry
     GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
     GET /finelog/marin/alerts/query              alert SQL; no data when Finelog is unavailable
+    GET /finelog/marin/relay_status              direct regional relay heartbeats
     GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
+    GET /finelog/marin/alerts/relay_status       stale relay/table rows + value(0|1)
     GET /finelog/marin/alerts/training_stalls    active jobs + stalled-progress value(0|1)
     GET /finelog/marin/alerts/loss_spikes        active hero runs + loss-spike value(0|1)
     GET /finelog/marin/alerts/training_telemetry watched hero runs + silent-telemetry value(0|1)
@@ -120,6 +122,7 @@ from loom_alerts import (
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from nightly_config import NIGHTLY_LANES
+from relay_health import relay_alert_rows
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -493,6 +496,26 @@ def create_app(
             return JSONResponse(finelog_alert_rows(fleet_health_rows()))
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
+
+    def relay_status_rows():
+        _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
+        return finelog_health_cache.get_or_compute(
+            "relay_status",
+            lambda: finelog_sources[_FINELOG_HUB_CLUSTER].relay_status(),
+        )
+
+    def finelog_relay_status(_: Request) -> JSONResponse:
+        return JSONResponse([asdict(sender) for sender in relay_status_rows()])
+
+    def finelog_alerts_relay_status(_: Request) -> JSONResponse:
+        expected_clusters = (cluster.name for cluster in K8S_CLUSTERS)
+        return JSONResponse(
+            relay_alert_rows(
+                relay_status_rows(),
+                expected_clusters,
+                round(datetime.now(UTC).timestamp() * 1000),
+            )
+        )
 
     def hero_query(name: str, now: datetime, target: ClusterTarget, sql) -> pa.Table:
         """Run one hero alert query per cache interval, however many rules read it."""
@@ -874,7 +897,9 @@ def create_app(
             Route("/finelog/{cluster}/alerts/query", finelog_alert_query),
             Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/relay_status", finelog_relay_status),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/relay_status", finelog_alerts_relay_status),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_stalls", finelog_alerts_training_stalls),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/loss_spikes", finelog_alerts_loss_spikes),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_telemetry", finelog_alerts_training_telemetry),
