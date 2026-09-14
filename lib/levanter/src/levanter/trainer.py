@@ -7,7 +7,6 @@ import functools
 import logging as pylogging
 import os
 import sys
-import time
 import typing
 import warnings
 from dataclasses import dataclass
@@ -298,6 +297,7 @@ class Trainer:
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
         self._checkpointer: Optional[Checkpointer] = None
+        self._xla_dump_upload: Callable[[StepInfo], None] | None = None
 
         # Use existing global tracker if available (e.g., from levanter.initialize()),
         # otherwise create a new one. This avoids calling wandb.init() twice.
@@ -359,6 +359,8 @@ class Trainer:
 
     def run_hooks(self, info: StepInfo, force: bool = False):
         self.hooks.run_hooks(info, force=force)
+        if self._xla_dump_upload is not None:
+            self._xla_dump_upload(info)
 
     def request_checkpoint(self) -> None:
         """Request a checkpoint after the current step, subject to the save policy."""
@@ -613,7 +615,6 @@ class Trainer:
                 "No training steps were executed. The dataset may be empty or there are no steps left to run."
             )
 
-        # force hooks to run at the end
         self.run_hooks(info, force=True)
 
         return info
@@ -660,9 +661,7 @@ class Trainer:
                 every=1,
             )
 
-        xla_dump_upload = self.config.xla_dump_upload.build(self.run_id, started_at=time.time())
-        if xla_dump_upload is not None:
-            self.add_hook(xla_dump_upload, every=1)
+        self._xla_dump_upload = self.config.xla_dump_upload.build(self.run_id)
 
     def add_eval_hook(self, eval_dataset, name: Optional[str] = None):
         eval_loader = self.data_loader(eval_dataset, self.EvalBatch)

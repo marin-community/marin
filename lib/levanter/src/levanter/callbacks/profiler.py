@@ -89,8 +89,8 @@ class XlaDumpUploadConfig:
         """Resolve this process's XLA dump upload root."""
         return marin_temp_bucket(self.ttl_days, prefix=f"{_XLA_DUMP_TTL_PREFIX}/{run_id}/process-{process_index}")
 
-    def build(self, run_id: str, started_at: float) -> Callable[[StepInfo], None] | None:
-        """Build a final-training hook that uploads this process's new XLA dumps."""
+    def build(self, run_id: str) -> Callable[[StepInfo], None] | None:
+        """Upload the initial dump tree and return a callback for later changes."""
         if not self.enabled:
             return None
         dump_path = xla_dump_path()
@@ -104,16 +104,13 @@ class XlaDumpUploadConfig:
             logger.info("MARIN_PREFIX has no remote XLA dump TTL store; keeping dumps at %s", dump_path)
             return None
 
-        uploaded = False
+        uploaded_files: dict[Path, tuple[int, int]] = {}
+        upload_xla_dumps(dump_path, upload_uri, uploaded_files)
 
-        def upload_at_end(_step: StepInfo, *, force: bool = False) -> None:
-            nonlocal uploaded
-            if not force or uploaded:
-                return
-            upload_xla_dumps(dump_path, upload_uri, started_at)
-            uploaded = True
+        def upload_changes(_step: StepInfo) -> None:
+            upload_xla_dumps(dump_path, upload_uri, uploaded_files)
 
-        return upload_at_end
+        return upload_changes
 
 
 @dataclass(frozen=True)
@@ -193,24 +190,31 @@ def xla_dump_path(xla_flags: str | None = None) -> Path | None:
     return None
 
 
-def upload_xla_dumps(dump_path: Path, upload_uri: str, started_at: float) -> None:
-    """Upload XLA dump files produced after ``started_at``."""
+def upload_xla_dumps(
+    dump_path: Path,
+    upload_uri: str,
+    uploaded_files: dict[Path, tuple[int, int]],
+) -> None:
+    """Upload dump files that are new or modified since the previous call."""
     if not dump_path.is_dir():
         logger.warning("XLA dump directory %s does not exist; skipping upload.", dump_path)
         return
 
     destination = StoragePath(upload_uri)
-    files = [
-        path
-        for path in sorted(dump_path.rglob("*"))
-        if path.is_file() and not path.is_symlink() and path.stat().st_mtime >= started_at
-    ]
+    files = []
+    for path in sorted(dump_path.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        stat = path.stat()
+        signature = (stat.st_mtime_ns, stat.st_size)
+        if uploaded_files.get(path) != signature:
+            files.append((path, signature))
     if not files:
-        logger.info("No XLA dumps created after training started under %s", dump_path)
         return
 
-    for path in files:
+    for path, signature in files:
         (destination / path.relative_to(dump_path).as_posix()).upload_from(str(path))
+        uploaded_files[path] = signature
     logger.info("Uploaded %d XLA dump files to %s", len(files), destination)
 
 
