@@ -16,17 +16,18 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from marin.evaluation.archive import FILTER_PRIORITY, base_metric, primary_metric
+from marin.evaluation.archive import base_metric, declared_metric, primary_metric
 from marin.evaluation.eval_stats import (
     BINARY_METRICS,
     SAMPLE_COUNT_METRIC,
     TOTAL_METRICS,
     Coverage,
     Measurement,
-    MetricKind,
     ResultFlag,
 )
-from marin.evaluation.records import EvalRunRecord, EvalTaskRef, TaskCoverage as RecordTaskCoverage
+from marin.evaluation.evaluation_config import eval_task_directory
+from marin.evaluation.records import EvalRunRecord, EvalTaskRef, MetricKind
+from marin.evaluation.records import TaskCoverage as RecordTaskCoverage
 
 # A value derived from n items is integral in k to within this tolerance when it really is k/n.
 _INTEGRALITY_TOLERANCE = 1e-6
@@ -74,23 +75,9 @@ def _task_ref(record: EvalRunRecord, task_key: str) -> EvalTaskRef | None:
         return record.evaluation.tasks[0]
     directory = task_key.split("/", 1)[0]
     for task in record.evaluation.tasks:
-        shots = "default" if task.num_fewshot is None else str(task.num_fewshot)
-        if directory == (task.task_alias or f"{task.name}_{shots}shot"):
+        if directory == eval_task_directory(task.name, task.num_fewshot, task.task_alias):
             return task
     return None
-
-
-def _declared_metric(metrics: Mapping[str, float], declared: str) -> tuple[str, float] | None:
-    candidates = {name: value for name, value in metrics.items() if base_metric(name) == declared}
-    for metric_filter in FILTER_PRIORITY:
-        filtered = sorted(name for name in candidates if name.endswith(f",{metric_filter}"))
-        if filtered:
-            name = filtered[0]
-            return name, candidates[name]
-    if not candidates:
-        return None
-    name = min(candidates)
-    return name, candidates[name]
 
 
 def _task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], bool]:
@@ -107,9 +94,7 @@ def _task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], bool]:
         task = _task_ref(record, task_key)
         declared = task is not None and task.primary_metric is not None and task.metric_kind is not None
         picked = (
-            _declared_metric(metrics, task.primary_metric)
-            if declared and task is not None
-            else primary_metric(metrics)
+            declared_metric(metrics, task.primary_metric) if declared and task is not None else primary_metric(metrics)
         )
         if picked is None:
             missing_declared_metric |= declared and bool(metrics)
@@ -241,6 +226,17 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
 def measurements_from_records(records: Iterable[EvalRunRecord]) -> list[Measurement]:
     """Every record's benchmark measurement, skipping records that produced no primary metric."""
     return [measurement for record in records if (measurement := measurement_from_record(record)) is not None]
+
+
+def declared_metric_gap(record: EvalRunRecord) -> str | None:
+    """Explain a result row that lacks its declared headline metric."""
+    for task_key, metrics in (record.metrics or {}).items():
+        task = _task_ref(record, task_key)
+        if task is None or task.primary_metric is None or not metrics:
+            continue
+        if declared_metric(metrics, task.primary_metric) is None:
+            return f"declared metric {task.primary_metric} not in results"
+    return None
 
 
 def _successes(value: float, coverage: Coverage) -> int | None:

@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from levanter.eval_harness_config import TaskConfig
+
 from marin.evaluation.records import MetricKind
 
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
@@ -30,6 +31,12 @@ class EvalTaskConfig:
     primary_metric: str | None = None
     metric_kind: MetricKind | None = None
     expected_items: int | None = None
+
+
+def eval_task_directory(name: str, num_fewshot: int | None, task_alias: str | None) -> str:
+    """Return the durable results-directory identity for an eval task."""
+    shots = "default" if num_fewshot is None else str(num_fewshot)
+    return task_alias or f"{name}_{shots}shot"
 
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:

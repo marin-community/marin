@@ -34,10 +34,12 @@ from marin.evaluation.archive import (
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
     EvalSample,
+    declared_metric,
     primary_filter,
     primary_metric,
     sample_from_archive_row,
 )
+from marin.evaluation.records import EvalRunRecord
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 
@@ -325,6 +327,23 @@ def _task_table(results_path: str, task: str) -> pa.Table | None:
     return _legacy_load_table(_fs, paths) if paths else None
 
 
+def declared_primary_metric(record: EvalRunRecord, sample_task: str) -> str | None:
+    """Return the metric declaration that applies to a sample task."""
+    tasks = record.evaluation.tasks
+    if len(tasks) == 1:
+        return tasks[0].primary_metric
+    for task in tasks:
+        if sample_task == task.name or sample_task.startswith(f"{task.name}_"):
+            return task.primary_metric
+    return None
+
+
+def _sample_primary_metric(metric_columns: tuple[str, ...], declared: str | None) -> str | None:
+    metrics = dict.fromkeys(metric_columns, 0.0)
+    picked = primary_metric(metrics) if declared is None else declared_metric(metrics, declared)
+    return picked[0] if picked is not None else None
+
+
 def fetch_samples(
     results_path: str | None,
     task: str,
@@ -333,6 +352,7 @@ def fetch_samples(
     limit: int,
     correct: str,
     extraction_filter: str | None = None,
+    primary_metric_name: str | None = None,
 ) -> SamplesResponse:
     """Return one typed, correctness-filtered page of samples for a task under one extraction filter."""
     if not results_path:
@@ -364,8 +384,7 @@ def fetch_samples(
         table.column("metrics").to_pylist(maps_as_pydicts="strict") if "metrics" in columns else [None] * table.num_rows
     )
     metric_columns = tuple(sorted({name for row in metric_maps if row for name in row}))
-    picked = primary_metric(dict.fromkeys(metric_columns, 0.0))
-    primary = picked[0] if picked is not None else None
+    primary = _sample_primary_metric(metric_columns, primary_metric_name)
     n_correct = sum(1 for value in correct_values if value is True)
     n_ungraded = sum(1 for value in correct_values if value is None)
     counts = SampleCounts(

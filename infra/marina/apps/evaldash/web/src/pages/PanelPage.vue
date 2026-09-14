@@ -375,6 +375,10 @@ function cellFor(row: PanelRow, task: string): PanelCell | undefined {
 function gapFor(row: PanelRow, task: string): MissingCell | undefined {
   return row.missing[task]
 }
+function protocolLabel(task: string): string {
+  const protocol = data.value?.protocols[task]
+  return protocol ? `${protocol.metric} · ${protocol.kind}` : 'legacy metric'
+}
 // A cell names the run behind it, the cohort it came from, and the harness that defined the
 // benchmark. Cells in one column can come from different cohorts -- that is the point of merging the
 // newest valid result per benchmark -- so the row heading cannot carry this and the cell must.
@@ -386,6 +390,9 @@ function cellTitle(cell: PanelCell): string {
   const shotSetting = cell.num_fewshot === null ? 'default shots' : `${cell.num_fewshot}-shot`
   return [
     `${cell.metric} · ${shotSetting} · ${cell.n_scored} items graded`,
+    cell.n_benchmark === null
+      ? 'benchmark size unreported'
+      : `${cell.n_attempted ?? 'unknown'} of ${cell.n_benchmark} benchmark items attempted`,
     `95% ${formatInterval(cell.low, cell.high)} · ${scope}`,
     ...cell.flags.filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
     `run ${cell.run_id} · ${formatTimestamp(cell.created_at)}`,
@@ -398,7 +405,7 @@ function isSuspect(cell: PanelCell): boolean {
   return cell.flags.includes(RESULT_FLAG.NO_ANSWERS)
 }
 function gapLabel(gap: MissingCell): string {
-  if (gap.reason.startsWith('coverage')) return 'under-covered'
+  if (gap.reason.includes('coverage')) return 'under-covered'
   if (gap.reason.startsWith('flagged')) return 'flagged'
   return 'no result'
 }
@@ -735,6 +742,9 @@ function goToModel(model: string) {
                   >
                     <option v-for="variant in column.variants" :key="variant" :value="variant">{{ variant }}</option>
                   </select>
+                  <span class="block font-normal normal-case font-mono text-[10px] text-text-muted">
+                    {{ protocolLabel(column.task) }}
+                  </span>
                   <span
                     v-if="best[column.task]"
                     class="block font-normal normal-case font-mono text-[10px]"

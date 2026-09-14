@@ -11,8 +11,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
-from marin.evaluation.evalchemy.config import EvalchemyConfig
 from marin.evaluation.eval_stats import BINARY_METRICS
+from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyTaskOptions
 from marin.evaluation.evalchemy.runner import (
     DEFAULT_MAX_GEN_TOKS,
     DEFAULT_NUM_CONCURRENT,
@@ -197,6 +197,23 @@ def harbor_definition(
     )
 
 
+def _task_protocol(task_name: str, options: EvalchemyTaskOptions | None) -> tuple[str, MetricKind, int | None]:
+    primary_metric = options.primary_metric if options is not None else None
+    if primary_metric is None:
+        raise ValueError(f"Evalchemy task {task_name!r} must declare primary_metric")
+    metric_kind = options.metric_kind if options is not None else None
+    if metric_kind is None:
+        if primary_metric not in BINARY_METRICS:
+            raise ValueError(f"Evalchemy task {task_name!r} must declare metric_kind for metric {primary_metric!r}")
+        metric_kind = MetricKind.BINARY
+    expected_items = options.expected_items if options is not None else None
+    if task_name in _CHAT_NATIVE_TASKS and expected_items is None:
+        raise ValueError(f"Evalchemy chat-native task {task_name!r} must declare expected_items")
+    if task_name not in _CHAT_NATIVE_TASKS and expected_items is not None:
+        raise ValueError(f"Evalchemy lm-eval task {task_name!r} must not declare expected_items")
+    return primary_metric, metric_kind, expected_items
+
+
 def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConfig:
     """Lower one launch file into Marin's served Evalchemy runner."""
     tasks: list[EvalTaskConfig] = []
@@ -205,22 +222,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         num_fewshot = config.num_fewshot
         if options is not None and options.num_fewshot is not None:
             num_fewshot = options.num_fewshot
-        primary_metric = options.primary_metric if options is not None else None
-        if primary_metric is None:
-            raise ValueError(f"Evalchemy task {task_name!r} must declare primary_metric")
-        metric_kind = options.metric_kind if options is not None else None
-        if metric_kind is None:
-            if primary_metric not in BINARY_METRICS:
-                raise ValueError(
-                    f"Evalchemy task {task_name!r} must declare metric_kind for metric {primary_metric!r}"
-                )
-            metric_kind = MetricKind.BINARY
-        expected_items = options.expected_items if options is not None else None
-        if task_name in _CHAT_NATIVE_TASKS:
-            if expected_items is None:
-                raise ValueError(f"Evalchemy chat-native task {task_name!r} must declare expected_items")
-        elif expected_items is not None:
-            raise ValueError(f"Evalchemy lm-eval task {task_name!r} must not declare expected_items")
+        primary_metric, metric_kind, expected_items = _task_protocol(task_name, options)
         tasks.append(
             EvalTaskConfig(
                 name=task_name,

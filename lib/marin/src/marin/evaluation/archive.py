@@ -31,7 +31,7 @@ import dataclasses
 import hashlib
 import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from enum import StrEnum
 
 import pyarrow as pa
@@ -161,6 +161,20 @@ def primary_filter(filters: Iterable[str]) -> str | None:
 def base_metric(name: str) -> str:
     """A metric key without lm-eval's ``,<filter>`` suffix (``exact_match,none`` -> ``exact_match``)."""
     return name.split(",", 1)[0]
+
+
+def declared_metric(metrics: Mapping[str, float], declared: str) -> tuple[str, float] | None:
+    """Pick a declared base metric, applying the standard extraction-filter priority."""
+    candidates = {name: value for name, value in metrics.items() if base_metric(name) == declared}
+    for metric_filter in FILTER_PRIORITY:
+        filtered = sorted(name for name in candidates if name.endswith(f",{metric_filter}"))
+        if filtered:
+            name = filtered[0]
+            return name, candidates[name]
+    if not candidates:
+        return None
+    name = min(candidates)
+    return name, candidates[name]
 
 
 def primary_metric(metrics: dict[str, float]) -> tuple[str, float] | None:

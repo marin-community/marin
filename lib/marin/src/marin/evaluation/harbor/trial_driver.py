@@ -36,6 +36,7 @@ from marin.evaluation.harbor.agent_context import (
     MODEL_INFO_KEY,
     reconciled_model_info,
 )
+from marin.evaluation.harbor.dataset_layout import dataset_task_count
 from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_LENGTH
 
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
@@ -350,11 +351,11 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
     stable_policy_json = _stable_policy_json(stable_config)
     if dataset_metadata.kind == _DatasetKind.LOCAL:
         dataset_path = (path.parent / dataset_metadata.selector).resolve()
-        n_benchmark = sum(entry.is_dir() for entry in dataset_path.iterdir())
-    else:
+        n_benchmark = dataset_task_count(dataset_path)
+    elif dataset_metadata.kind == _DatasetKind.HARBOR_REGISTRY:
         n_benchmark = len(asyncio.run(Job._resolve_task_configs(config)))
-    if n_benchmark <= 0:
-        raise ValueError("Harbor dataset must contain at least one task")
+    else:
+        n_benchmark = None
     placeholder_dataset_path = (
         None if dataset_metadata.kind == _DatasetKind.HARBOR_REGISTRY else _PLACEHOLDER_DATASET_PATH
     )

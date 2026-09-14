@@ -120,7 +120,7 @@ class ValidatedHarborConfig:
     error_taxonomy: HarborErrorTaxonomy
     max_input_tokens: int
     max_output_tokens: int
-    n_benchmark: int
+    n_benchmark: int | None
     verifier_env_keys: tuple[str, ...] = ()
 
     @property
@@ -315,7 +315,7 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
         error_taxonomy=error_taxonomy,
         max_input_tokens=required_int("max_input_tokens"),
         max_output_tokens=required_int("max_output_tokens"),
-        n_benchmark=required_positive_int("n_benchmark"),
+        n_benchmark=required_positive_int("n_benchmark") if payload.get("n_benchmark") is not None else None,
     )
 
 

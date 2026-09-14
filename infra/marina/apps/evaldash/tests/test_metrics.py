@@ -8,10 +8,12 @@ import pytest
 from evaldash.metrics import build_comparison, build_meta, build_panel, eval_suites, panel_request
 from marin.evaluation.eval_stats import Completeness, MissingPolicy
 from marin.evaluation.records import (
+    EvalchemyRef,
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
     HardwareRef,
+    MetricKind,
     ModelRef,
     Provenance,
     RunStatus,
@@ -33,6 +35,9 @@ def _record(
     family: str | None = None,
     eval_runtime: str = "i",
     num_fewshot: int | None = 0,
+    primary_metric: str | None = None,
+    metric_kind: MetricKind | None = None,
+    limit: int | None = None,
 ) -> EvalRunRecord:
     succeeded = value is not None
     metrics = {eval_name: {"acc,none": value, "acc_stderr,none": 0.01, "sample_len": float(ITEMS)}} if succeeded else {}
@@ -47,7 +52,26 @@ def _record(
             name=eval_name,
             mechanism="evalchemy",
             family=family,
-            tasks=(EvalTaskRef(name=eval_name, num_fewshot=num_fewshot),),
+            tasks=(
+                EvalTaskRef(
+                    name=eval_name,
+                    num_fewshot=num_fewshot,
+                    primary_metric=primary_metric,
+                    metric_kind=metric_kind,
+                ),
+            ),
+            evalchemy=(
+                EvalchemyRef(
+                    apply_chat_template=False,
+                    max_gen_toks=128,
+                    max_eval_instances=limit,
+                    num_concurrent=8,
+                    batch_size=None,
+                    seed=0,
+                )
+                if limit is not None
+                else None
+            ),
         ),
         hardware=HardwareRef(platform="tpu", accelerator=accelerator, region_or_cluster="us-central2"),
         status=RunStatus.SUCCEEDED if succeeded else RunStatus.INFRA_FAILED,
@@ -113,6 +137,22 @@ def test_a_failed_run_leaves_an_explained_gap_rather_than_a_blank_cell():
     assert row["missing"]["drop"]["reason"] == "status infra_failed"
 
 
+def test_a_missing_declared_metric_explains_the_gap():
+    record = _record(
+        "m",
+        "drop",
+        None,
+        "2026-01-01T00:00:00+00:00",
+        0.5,
+        primary_metric="f1",
+        metric_kind=MetricKind.CONTINUOUS,
+    )
+
+    (row,) = build_panel([record], panel_request())["rows"]
+
+    assert row["missing"]["drop"]["reason"] == "declared metric f1 not in results"
+
+
 def test_cells_carry_the_interval_and_what_it_covers():
     """A run whose mechanism reports no attempted count cannot claim it graded everything, so its
     interval is labelled as covering sampling error alone."""
@@ -163,6 +203,40 @@ def test_a_run_below_the_coverage_gate_is_rejected_with_its_rate():
 
     assert row["cells"] == {}
     assert row["missing"]["aime"]["reason"] == "coverage 0.500 below 0.90"
+
+
+def test_capped_canary_does_not_replace_a_full_run_and_reports_the_column_protocol():
+    full = _record("m", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.6)
+    canary = _record(
+        "m",
+        "gsm8k",
+        None,
+        "2026-02-01T00:00:00+00:00",
+        1.0,
+        coverage={"gsm8k": TaskCoverage(n_benchmark=1319, n_attempted=1, n_scored=1, n_correct=1)},
+        primary_metric="acc",
+        metric_kind=MetricKind.BINARY,
+        limit=1,
+    )
+    canary_only = _record(
+        "canary-only",
+        "gsm8k",
+        None,
+        "2026-02-01T00:00:00+00:00",
+        1.0,
+        coverage={"gsm8k": TaskCoverage(n_benchmark=1319, n_attempted=1, n_scored=1, n_correct=1)},
+        primary_metric="acc",
+        metric_kind=MetricKind.BINARY,
+        limit=1,
+    )
+
+    panel = build_panel([full, canary, canary_only], panel_request())
+
+    rows = {row["model"]: row for row in panel["rows"]}
+    assert rows["m"]["cells"]["gsm8k"]["run_id"] == full.run_id
+    assert rows["canary-only"]["missing"]["gsm8k"]["reason"] == "benchmark coverage 0.001 below 0.90"
+    assert panel["protocols"] == {"gsm8k": {"metric": "acc", "kind": "binary"}}
+    assert panel["request"]["min_benchmark_coverage"] == 0.9
 
 
 def test_complete_panel_filtering_keeps_only_models_with_every_selected_benchmark():

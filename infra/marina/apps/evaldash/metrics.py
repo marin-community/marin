@@ -21,7 +21,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from marin.evaluation.eval_measurements import measurement_from_record, measurements_from_records
+from marin.evaluation.eval_measurements import declared_metric_gap, measurement_from_record, measurements_from_records
 from marin.evaluation.eval_stats import (
     DEFAULT_EXCLUDE_FLAGS,
     DEFAULT_MIN_COVERAGE,
@@ -35,6 +35,7 @@ from marin.evaluation.eval_stats import (
     Rejection,
     SelectionRequest,
     covers_panel,
+    declared_protocols,
     difference_interval,
     matches_filters,
     measurement_interval,
@@ -168,7 +169,7 @@ def _panel_records(records: list[EvalRunRecord]) -> list[EvalRunRecord]:
 def _gap_reason(record: EvalRunRecord) -> str:
     """Why a record contributes no cell, when the request did not reject it outright."""
     if record.status == RunStatus.SUCCEEDED:
-        return "no metrics recorded"
+        return declared_metric_gap(record) or "no metrics recorded"
     return f"status {record.status.value}"
 
 
@@ -183,9 +184,12 @@ def cell_payload(measurement: Measurement) -> dict:
         "interval_kind": interval.kind.value,
         "metric": measurement.metric,
         "metric_kind": measurement.kind.value,
+        "declared": measurement.declared,
         "n_scored": coverage.n_scored,
+        "n_benchmark": coverage.n_benchmark,
         "n_attempted": coverage.n_attempted,
         "coverage": coverage.rate,
+        "benchmark_rate": coverage.benchmark_rate,
         "errors": dict(coverage.errors),
         "item_cap": measurement.item_cap,
         "flags": sorted(flag.value for flag in measurement.flags),
@@ -264,8 +268,15 @@ def build_panel(
     """
     eligible = _panel_records(records)
     metadata = run_metadata(eligible)
+    measurements = measurements_from_records(eligible)
+    protocols = declared_protocols(measurements)
     # Family columns are resolved after selection, so apply completeness to the effective panel below.
-    selection = select(measurements_from_records(eligible), replace(request, completeness=Completeness.ANY), metadata)
+    selection = select(
+        measurements,
+        replace(request, completeness=Completeness.ANY),
+        metadata,
+        protocols,
+    )
     requested = list(request.panel) if request.panel is not None else list(selection.benchmarks)
     families = _family_columns(requested, declared_families(eligible), selection.cells)
     panel = [column.default for column in families]
@@ -301,6 +312,10 @@ def build_panel(
         )
     return {
         "benchmarks": list(selection.benchmarks),
+        "protocols": {
+            benchmark: {"metric": protocol.metric, "kind": protocol.kind.value}
+            for benchmark, protocol in protocols.items()
+        },
         "panel": panel,
         "families": [
             {"family": column.family, "variants": list(column.variants), "default": column.default}
@@ -309,6 +324,7 @@ def build_panel(
         "rows": rows,
         "request": {
             "min_coverage": request.min_coverage,
+            "min_benchmark_coverage": request.min_benchmark_coverage,
             "cohort": request.cohort.value,
             "cohort_version": request.cohort_version,
             "completeness": request.completeness.value,
@@ -340,7 +356,8 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
     """
     eligible = _panel_records(records)
     metadata = run_metadata(eligible)
-    selection = select(measurements_from_records(eligible), request, metadata)
+    measurements = measurements_from_records(eligible)
+    selection = select(measurements, request, metadata, declared_protocols(measurements))
     chosen = {model: dict(selection.cells.get(model, {})) for model in models}
 
     union = [name for name in selection.benchmarks if any(name in cells for cells in chosen.values())]
@@ -487,6 +504,7 @@ def panel_request(
     cohort_version: str | None = None,
     completeness: Completeness = Completeness.ANY,
     min_coverage: float = DEFAULT_MIN_COVERAGE,
+    min_benchmark_coverage: float = DEFAULT_MIN_COVERAGE,
     filters: dict[str, str] | None = None,
     model_query: str | None = None,
     include_flagged: bool = False,
@@ -499,6 +517,7 @@ def panel_request(
     """
     return SelectionRequest(
         min_coverage=min_coverage,
+        min_benchmark_coverage=min_benchmark_coverage,
         exclude_flags=frozenset() if include_flagged else DEFAULT_EXCLUDE_FLAGS,
         cohort=CohortMode.SINGLE_COHORT if cohort_version else CohortMode.LATEST_VALID,
         cohort_version=cohort_version,

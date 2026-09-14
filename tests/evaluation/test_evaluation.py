@@ -27,7 +27,14 @@ from marin.evaluation.harbor.driver_config import (
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
-from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, MetricKind, RunStatus, TaskCoverage, read_record
+from marin.evaluation.records import (
+    EVALCHEMY_INFRASTRUCTURE_ERROR,
+    EvalRef,
+    MetricKind,
+    RunStatus,
+    TaskCoverage,
+    read_record,
+)
 from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
@@ -45,7 +52,13 @@ from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.cli import cli, resolve_model_config
-from experiments.evaluation.evals import EVALS, EvalchemyDefinition, HarborDefinition, evalchemy_run_config, resolve_eval_keys
+from experiments.evaluation.evals import (
+    EVALS,
+    EvalchemyDefinition,
+    HarborDefinition,
+    evalchemy_run_config,
+    resolve_eval_keys,
+)
 from experiments.evaluation.launch import (
     LaunchSpec,
     build_evaluation_batch,
@@ -239,9 +252,7 @@ def _write_evalchemy_output(
         }
         for task, rows in samples.items()
     }
-    (model_dir / "results_20260807.json").write_text(
-        json.dumps({"results": results, "n-samples": sample_counts})
-    )
+    (model_dir / "results_20260807.json").write_text(json.dumps({"results": results, "n-samples": sample_counts}))
     for task, rows in samples.items():
         (model_dir / f"samples_{task}_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
 
@@ -366,9 +377,7 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
             n_correct=1,
             errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
         ),
-        "mmlu_5shot/mmlu_astronomy": TaskCoverage(
-            n_benchmark=1, n_attempted=1, n_scored=1, n_correct=1
-        ),
+        "mmlu_5shot/mmlu_astronomy": TaskCoverage(n_benchmark=1, n_attempted=1, n_scored=1, n_correct=1),
     }
 
     failed_output_dir = f"file://{tmp_path / 'failed'}"

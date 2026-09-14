@@ -42,11 +42,12 @@ from marin.evaluation.archive import (
     Message,
     SampleKind,
     base_metric,
+    declared_metric,
     primary_filter,
     primary_metric,
 )
-from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC
+from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, TaskCoverage
 
 logger = logging.getLogger(__name__)
@@ -192,20 +193,28 @@ def _sample_metrics(raw: dict) -> dict[str, float]:
     return metrics
 
 
-def _correct(metrics: dict[str, float]) -> bool | None:
-    picked = primary_metric(metrics)
+def _picked_metric(metrics: dict[str, float], primary_metric_name: str | None) -> tuple[str, float] | None:
+    if primary_metric_name is None:
+        return primary_metric(metrics)
+    return declared_metric(metrics, primary_metric_name)
+
+
+def _correct(metrics: dict[str, float], primary_metric_name: str | None) -> bool | None:
+    picked = _picked_metric(metrics, primary_metric_name)
     if picked is None:
         return None
     return picked[1] >= 1.0
 
 
-def _lm_eval_grading(metrics: dict[str, float], extraction_filter: str | None) -> Grading | None:
+def _lm_eval_grading(
+    metrics: dict[str, float], extraction_filter: str | None, primary_metric_name: str | None
+) -> Grading | None:
     """The explicit grading for an lm-eval sample: its headline metric, filter, score, and pass flag.
 
     Per-sample rows name the extraction filter in ``filter``. Aggregate metric keys use a
     ``,<filter>`` suffix. This accepts both encodings.
     """
-    picked = primary_metric(metrics)
+    picked = _picked_metric(metrics, primary_metric_name)
     if picked is None:
         return None
     name, value = picked
@@ -219,7 +228,7 @@ def _lm_eval_grading(metrics: dict[str, float], extraction_filter: str | None) -
     )
 
 
-def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
+def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = None) -> EvalSample:
     """Normalize one lm-eval ``--log_samples`` row into an :class:`EvalSample`.
 
     Multiple-choice rows carry one ``arguments`` entry per choice (``[context, continuation]``,
@@ -242,8 +251,12 @@ def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
         "task": task,
         "doc_id": str(raw.get("doc_id")),
         "metrics": metrics,
-        "correct": _correct(metrics),
-        "grading": _lm_eval_grading(metrics, extraction_filter if isinstance(extraction_filter, str) else None),
+        "correct": _correct(metrics, primary_metric_name),
+        "grading": _lm_eval_grading(
+            metrics,
+            extraction_filter if isinstance(extraction_filter, str) else None,
+            primary_metric_name,
+        ),
         "target_text": target if isinstance(target, str) else json.dumps(target, ensure_ascii=False),
         "doc": doc if isinstance(doc, str) else json.dumps(doc, ensure_ascii=False),
     }
@@ -320,6 +333,24 @@ def _is_infrastructure_error(sample: EvalSample) -> bool:
     )
 
 
+def _validated_coverage(coverage: TaskCoverage) -> TaskCoverage:
+    if coverage.n_attempted is not None and coverage.n_scored > coverage.n_attempted:
+        raise ValueError(f"scored count {coverage.n_scored} exceeds intended count {coverage.n_attempted}")
+    if coverage.n_benchmark is None:
+        return coverage
+    if coverage.n_benchmark <= 0:
+        raise ValueError(f"benchmark size must be positive, got {coverage.n_benchmark}")
+    if coverage.n_attempted is None:
+        raise ValueError("benchmark size requires an intended attempted count")
+    if coverage.n_attempted > coverage.n_benchmark:
+        raise ValueError(f"intended count {coverage.n_attempted} exceeds benchmark size {coverage.n_benchmark}")
+    return coverage
+
+
+def _intended_count(item_cap: int | None, n_benchmark: int) -> int:
+    return min(item_cap, n_benchmark) if item_cap is not None else n_benchmark
+
+
 def task_coverage_and_metrics(
     samples: Sequence[EvalSample], *, n_benchmark: int | None = None, n_attempted: int | None = None
 ) -> tuple[TaskCoverage, dict[str, float]]:
@@ -361,13 +392,15 @@ def task_coverage_and_metrics(
     extent = _document_extent(seen)
     if n_attempted is not None and extent is not None and extent > n_attempted:
         raise ValueError(f"sample document extent {extent} exceeds intended count {n_attempted}")
-    coverage = TaskCoverage(
-        n_benchmark=n_benchmark,
-        n_attempted=n_attempted if n_attempted is not None else extent,
-        n_scored=len(scored),
-        n_correct=sum(1 for sample in scored if sample.correct) if binary and scored else None,
-        n_unanswered=sum(1 for sample in scored if sample.kind is SampleKind.GENERATION and not sample.extracted),
-        errors=errors,
+    coverage = _validated_coverage(
+        TaskCoverage(
+            n_benchmark=n_benchmark,
+            n_attempted=n_attempted if n_attempted is not None else extent,
+            n_scored=len(scored),
+            n_correct=sum(1 for sample in scored if sample.correct) if binary and scored else None,
+            n_unanswered=sum(1 for sample in scored if sample.kind is SampleKind.GENERATION and not sample.extracted),
+            errors=errors,
+        )
     )
     recovered_metrics: dict[str, float] = {}
     if infrastructure_errors:
@@ -402,8 +435,8 @@ def _benchmark_sizes(
     artifacts: Sequence[str],
     tasks: Sequence[EvalTaskConfig],
 ) -> dict[str, dict[str, int]]:
-    """Read each task's full benchmark size from its harness result."""
-    configs = {_task_dir_name(task): task for task in tasks}
+    """Read each task's full benchmark size from its harness result or task declaration."""
+    configs = {eval_task_directory(task.name, task.num_fewshot, task.task_alias): task for task in tasks}
     sizes: dict[str, dict[str, int]] = {}
     for relative in artifacts:
         name = PurePosixPath(relative).name
@@ -430,15 +463,10 @@ def _benchmark_sizes(
         [leaf] = result_tasks
         sizes.setdefault(directory, {})[leaf] = task.expected_items
     for task in tasks:
-        directory = _task_dir_name(task)
+        directory = eval_task_directory(task.name, task.num_fewshot, task.task_alias)
         if directory not in sizes:
             raise ValueError(f"Evalchemy task {task.name!r} has no readable benchmark size")
     return sizes
-
-
-def _task_dir_name(task: EvalTaskConfig) -> str:
-    shots = "default" if task.num_fewshot is None else str(task.num_fewshot)
-    return task.task_alias or f"{task.name}_{shots}shot"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -513,6 +541,7 @@ def export_lm_eval_samples(
         return SampleExport(samples=0)
     require_current_samples(out_path)
     benchmark_sizes = _benchmark_sizes(root, artifacts, tasks) if tasks else {}
+    task_configs = {eval_task_directory(task.name, task.num_fewshot, task.task_alias): task for task in tasks}
     keys = _task_keys(sources, benchmark_sizes)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
@@ -526,14 +555,21 @@ def export_lm_eval_samples(
             store.flush()
             if relative not in keys:
                 continue
-            samples = _add_lm_eval_rows(store, relative.rsplit("/", 1)[-1], payload)
+            directory = PurePosixPath(relative).parent.parent.name
+            task_config = task_configs.get(directory)
+            samples = _add_lm_eval_rows(
+                store,
+                relative.rsplit("/", 1)[-1],
+                payload,
+                primary_metric_name=task_config.primary_metric if task_config is not None else None,
+            )
             count += len(samples)
             if samples:
                 task_key = keys[relative]
                 directory, _, leaf = task_key.partition("/")
                 by_leaf = benchmark_sizes.get(directory, {})
                 n_benchmark = by_leaf.get(leaf) if leaf else next(iter(by_leaf.values()), None)
-                n_attempted = min(max_eval_instances, n_benchmark) if max_eval_instances is not None and n_benchmark else n_benchmark
+                n_attempted = _intended_count(max_eval_instances, n_benchmark) if n_benchmark is not None else None
                 task_coverage_result, task_metrics = task_coverage_and_metrics(
                     samples,
                     n_benchmark=n_benchmark,
@@ -548,7 +584,7 @@ def export_lm_eval_samples(
                 task_key = f"{directory}/{leaf}" if grouped else directory
                 if task_key in coverage:
                     continue
-                n_attempted = min(max_eval_instances, n_benchmark) if max_eval_instances is not None else n_benchmark
+                n_attempted = _intended_count(max_eval_instances, n_benchmark)
                 coverage[task_key] = TaskCoverage(n_benchmark=n_benchmark, n_attempted=n_attempted, n_scored=0)
         store.seal()
     finally:
@@ -576,7 +612,9 @@ def _task_from_filename(name: str, suffix: str) -> str:
     return name[len(SAMPLES_PREFIX) : -len(suffix)].rsplit("_", 1)[0]
 
 
-def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> list[EvalSample]:
+def _add_lm_eval_rows(
+    store: EvaluationStore, filename: str, payload: bytes, *, primary_metric_name: str | None = None
+) -> list[EvalSample]:
     """Normalize one ``samples_*.jsonl`` payload into ``store``; return the samples added.
 
     Physical LF bytes delimit records. Literal U+2028/U+2029 characters remain inside JSON strings.
@@ -586,7 +624,7 @@ def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> 
         logger.warning("samples file %s is empty; skipping archive export", filename)
         return []
     task = _task_from_filename(filename, ".jsonl")
-    samples = [sample_from_lm_eval(task, raw) for raw in rows]
+    samples = [sample_from_lm_eval(task, raw, primary_metric_name) for raw in rows]
     for sample in samples:
         store.add_sample(sample)
     return samples

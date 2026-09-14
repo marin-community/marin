@@ -28,6 +28,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.archive import EvalSample, EvaluationStore, Grading, SampleKind
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
+from marin.evaluation.harbor.dataset_layout import dataset_task_count
 from marin.evaluation.harbor.driver_config import (
     HarborBackendsUnavailable,
     HarborErrorTaxonomy,
@@ -412,7 +413,7 @@ def _run_harbor_job(
         dataset,
         result.solved_trials,
         result.scored_trials,
-        "an unknown number of" if result.attempted_trials is None else result.attempted_trials,
+        result.attempted_trials,
         result.accuracy,
         result.mean_reward,
         f"{completion:.3f}",
@@ -502,6 +503,11 @@ class HarborExecutor:
             workdir,
             hf_token=hf_token,
         )
+        n_benchmark = self.config.n_benchmark
+        if n_benchmark is None:
+            if dataset_path is None:
+                raise ValueError("Harbor preflight did not report the dataset size")
+            n_benchmark = dataset_task_count(dataset_path)
         overlay = HarborRuntimeOverlay(
             job_name=job_name,
             jobs_dir=str(_jobs_dir(output_dir)),
@@ -511,7 +517,7 @@ class HarborExecutor:
             task_limit=self.task_limit,
             model_agent_kwargs=self.model_agent_kwargs,
         )
-        n_attempted = min(self.task_limit, self.config.n_benchmark) if self.task_limit is not None else self.config.n_benchmark
+        n_attempted = min(self.task_limit, n_benchmark) if self.task_limit is not None else n_benchmark
         return _run_harbor_job(
             job_name=job_name,
             config=self.config,
@@ -521,7 +527,7 @@ class HarborExecutor:
             output_dir=output_dir,
             driver_env=driver_env,
             inference_session=inference_session,
-            n_benchmark=self.config.n_benchmark,
+            n_benchmark=n_benchmark,
             n_attempted=n_attempted,
         )
 

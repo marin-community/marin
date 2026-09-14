@@ -25,7 +25,7 @@ from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_PYTHON_VERSION,
     EVALCHEMY_REQUIREMENT,
 )
-from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
 from marin.evaluation.lm_eval_samples import export_lm_eval_samples
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, RunStatus, TaskCoverage
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
@@ -138,12 +138,6 @@ def _apply_recovered_metrics(
             metrics.pop(aggregate, None)
 
 
-def _task_dir(task: EvalTaskConfig) -> str:
-    """Return the durable subdirectory identity for one task configuration."""
-    shots = "default" if task.num_fewshot is None else str(task.num_fewshot)
-    return task.task_alias or f"{task.name}_{shots}shot"
-
-
 def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir: str) -> str:
     tokenizer = model.tokenizer
     if tokenizer is None:
@@ -160,7 +154,7 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
                 {
                     "name": task.name,
                     "num_fewshot": task.num_fewshot,
-                    "dir": _task_dir(task),
+                    "dir": eval_task_directory(task.name, task.num_fewshot, task.task_alias),
                     "generation": task.generation,
                     "unsafe_code": task.unsafe_code,
                     "completion_only": task.completion_only,

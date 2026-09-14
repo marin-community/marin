@@ -208,6 +208,8 @@ def test_api_panel_rejects_an_unusable_query_rather_than_answering_a_different_o
 
     assert client.get("/panel", params={"min_coverage": "ninety"}).status_code == 400
     assert client.get("/panel", params={"min_coverage": "90"}).status_code == 400
+    assert client.get("/panel", params={"min_benchmark_coverage": "ninety"}).status_code == 400
+    assert client.get("/panel", params={"min_benchmark_coverage": "90"}).status_code == 400
 
 
 def test_api_agentic_artifact_is_run_local(client):
