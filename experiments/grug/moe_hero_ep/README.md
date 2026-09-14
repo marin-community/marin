@@ -193,9 +193,10 @@ group `moe-hero-ep-small-abl` and carry Paloma and uncheatable evaluation at `--
 
 ### Scaling ladder
 
-`launch_scaling_ladder.py` trains one uniform hero recipe at five widths so a narrow rung predicts
-the `d6144` hero (which is the hero itself). Every rung shares the hero data (the Harrier
-2026.08.18 two-phase mixture on the Marin tokenizer, simulated against the 18.75T target budget),
+`launch_scaling_ladder.py` defaults to one hero recipe at five widths so a narrow rung predicts
+the `d6144` hero (which is the hero itself). Default launches share the Harrier 2026.08.18
+two-phase mixture on the Marin tokenizer. Simulated epoching against the 18.75T target budget
+applies only at or below 1e23 training FLOPs; the full hero uses the raw mixture. Rungs share
 the offloaded MuonH optimizer, the hero mixed precision, 384 experts / top-8, the ragged
 all-to-all transport, the QB histogram estimator at 10k bins, and a dropless held-out eval. Only
 the width and the rack count vary; the rack count, batch, step budget, eval cadence, and
@@ -218,7 +219,21 @@ storage with the shared 14-day lifecycle TTL. One temporary checkpoint is kept. 
 host out-of-memory, or a preemption thus costs at most one hour of training. The training job
 retries 1000 times on failure and 100 times on preemption.
 
-Launch or resume the production d6144 hero with `trigger_hero.sh`. The trigger first comments on
+`trigger_hero.sh` prepares the mixture continuation tracked in [#9126](https://github.com/marin-community/marin/issues/9126).
+It restores the NCCL 2.30.7 hero's permanent `step-108000` checkpoint under the new run ID
+`hero-mix-996f4891-step108k`. Wait for that checkpoint's `metadata.json` to be written and stop the
+previous training job before running the trigger. Missing checkpoints cause restore to fail.
+The first batch after 108,000 completed updates uses `best-mixture-996f489106c7b922` phase 0;
+phase 1 starts at the existing cooldown boundary, step 312,192. The data store, tokenizer,
+optimizer, and 390,251-step schedule stay unchanged; simulated epoching remains disabled.
+The selected weights and swarm revision are pinned in `best_mixture_996f489106c7b922.json`.
+
+The launcher exposes `--mixture-switch-step` for this continuation. It requires a mixture-block
+boundary before cooldown (multiples of 48 steps at the hero batch). Without the flag, ladder runs
+keep the original Harrier mixture. The pre-switch schedule is retained so resumed loaders keep
+component offsets consistent with the old prefix.
+
+Launch or resume this continuation with `trigger_hero.sh`. The trigger first comments on
 [issue #8506](https://github.com/marin-community/marin/issues/8506) with the full `HEAD` commit,
 whether the tree has staged, unstaged, or untracked changes, and the coordinator job name. A
 missing GitHub CLI login or failed comment aborts the trigger before Iris submission. Iris also

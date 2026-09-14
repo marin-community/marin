@@ -11,12 +11,12 @@ fi
 
 : "${WANDB_API_KEY:?Set WANDB_API_KEY before you start the hero.}"
 
-# Ragged all-to-all continuation on the NCCL 2.30.7 PJRT wheel: forks the hero's full state from
-# the checkpoint forced on the pooled-wave run at step 81716 (its metadata is marked non-temporary
-# so the hourly save keeps it) under its own run id and tree. The 2026-09-09 trial run
-# hero-ragged_a2a-ep-step81k validated this restore over 200 steps; its tree is not a lineage source.
-RUN_ID=hero-ragged_a2a-nccl2307-ep-step81k
-HANDOFF_CHECKPOINT=s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/hero-wd-gate-router-p02-step58k/2026.08.19.2/checkpoints/step-81716
+# Continue the NCCL 2.30.7 hero under a new identity after its next permanent checkpoint.
+# step-108000 contains 108000 completed updates; the first resumed batch uses the selected mix.
+# The source checkpoint must finish writing before this trigger is used. See issue #9126.
+RUN_ID=hero-mix-996f4891-step108k
+HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-ragged_a2a-nccl2307-ep-step81k/2026.08.19.2/checkpoints/step-108000
+MIXTURE_SWITCH_STEP=108000
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
 TARGET_CLUSTER=cw-us-east-08a
 TARGET_DESCRIPTION='11 x NVL72'
@@ -53,5 +53,6 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
     --run-id "$RUN_ID" \
     --initialize-from-checkpoint "$HANDOFF_CHECKPOINT" \
     --size d6144 \
+    --mixture-switch-step "$MIXTURE_SWITCH_STEP" \
     --version 2026.08.19.2 \
     --run
