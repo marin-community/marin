@@ -325,19 +325,19 @@ def test_daily_publication_preserves_history_across_retries_and_new_days(tmp_pat
 
     with pytest.raises(ConnectionError):
         publish_daily(store, date(2026, 9, 12), fail_comment)
-    page = public / "hero/completions/2026.09.12/index.html"
+    page = public / "rav/hero-completions/2026.09.12/index.html"
     first_page = page.read_text()
     queue, version = store.read_queue()
     store.save_queue(queue.model_copy(update={"inventory_at": NOW + timedelta(hours=3)}), version)
     url = publish_daily(store, date(2026, 9, 12), comments.append)
     assert page.read_text() == first_page
     assert SampleResult.model_validate_json(
-        (public / f"hero/completions/results/{request.sample_id}.json").read_bytes()
+        (public / f"rav/hero-completions/results/{request.sample_id}.json").read_bytes()
     ) == completed(request)
     assert url in comments[0]
     publish_daily(store, date(2026, 9, 12), comments.append)
     assert len(comments) == 1
-    latest = public / "hero/completions/latest/index.html"
+    latest = public / "rav/hero-completions/latest/index.html"
     assert f'href="{url}"' in latest.read_text()
     next_url = publish_daily(store, date(2026, 9, 13), comments.append)
     assert next_url != url

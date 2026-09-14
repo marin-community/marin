@@ -25,7 +25,7 @@ from experiments.grug.moe_hero_ep.train import DEFAULT_DROPLESS_MOE_IMPLEMENTATI
 
 CONFIG_DIRECTORY = Path(__file__).parent
 CHECKPOINT_ROOT = "s3://marin-us-east-02a/marin/grug"
-STORE_ROOT = "s3://marin-us-east-02a/marin/hero-completions/v1"
+STORE_ROOT = "s3://marin-us-east-02a/marin/users/rav/hero-completions/"
 TARGET_CLUSTER = "cw-us-east-08a"
 logger = logging.getLogger(__name__)
 

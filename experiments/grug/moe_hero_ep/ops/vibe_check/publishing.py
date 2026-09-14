@@ -19,8 +19,8 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import Phase, Queue, SampleStore
 
-REPORT_USER = "hero"
-REPORT_SLUG = "completions"
+REPORT_USER = "rav"
+REPORT_SLUG = "hero-completions"
 LATEST_REPORT_KEY = f"{REPORT_USER}/{REPORT_SLUG}/latest/index.html"
 COMMENT_MARKER = "<!-- hero-checkpoint-completions-v1 -->"
 ISSUES_API = "https://api.github.com/repos/marin-community/marin/issues"

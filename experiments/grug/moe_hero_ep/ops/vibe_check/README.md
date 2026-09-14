@@ -5,7 +5,7 @@ lineage. It checks the queue hourly and publishes a daily comparison report afte
 08:00 UTC. It updates one comment on [issue 8827](https://github.com/marin-community/marin/issues/8827)
 with the report link.
 
-The [latest report](https://storage.googleapis.com/marin-public/hero/completions/latest/index.html)
+The [latest report](https://storage.googleapis.com/marin-public/rav/hero-completions/latest/index.html)
 lets readers select two checkpoints and a prompt. It links to raw result JSON
 and shows pending and failed sample sets. The first successful publication creates this URL.
 
@@ -30,10 +30,10 @@ and shows pending and failed sample sets. The first successful publication creat
 
 | Data | Location |
 | --- | --- |
-| Queue and results | `s3://marin-us-east-02a/marin/hero-completions/v1/` |
-| Public result JSON | `gs://marin-public/hero/completions/results/` |
-| Daily HTML reports | `gs://marin-public/hero/completions/YYYY.MM.DD/` |
-| Latest report redirect | `gs://marin-public/hero/completions/latest/index.html` |
+| Queue state and saved completions | `s3://marin-us-east-02a/marin/users/rav/hero-completions/` |
+| Public result JSON | `gs://marin-public/rav/hero-completions/results/` |
+| Daily HTML reports | `gs://marin-public/rav/hero-completions/YYYY.MM.DD/` |
+| Latest report redirect | `gs://marin-public/rav/hero-completions/latest/index.html` |
 
 The HTML page loads result JSON from public GCS. Checkpoint tensors stay in CoreWeave storage.
 
