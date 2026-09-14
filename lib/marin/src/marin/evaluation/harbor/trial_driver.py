@@ -14,7 +14,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum, StrEnum
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any
 
 import yaml
@@ -28,6 +27,13 @@ from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[mis
 from pydantic import BaseModel, ConfigDict, ValidationError
 from upath import UPath  # pyrefly: ignore[missing-import]  # installed by external driver
 
+from marin.evaluation.harbor.agent_context import (
+    MAX_INPUT_TOKENS_KEY,
+    MAX_OUTPUT_TOKENS_KEY,
+    MODEL_INFO_KEY,
+    reconciled_model_info,
+)
+
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
@@ -38,14 +44,6 @@ _STABLE_MODEL = "__marin_model__"
 _STABLE_ENDPOINT = "http://marin.invalid/v1"
 _PLACEHOLDER_DATASET_PATH = "/__marin_dataset__"
 _HF_DATASET_PREFIX = "hf://"
-_DEFAULT_MODEL_INFO = MappingProxyType(
-    {
-        "max_input_tokens": 32768,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-    }
-)
 
 
 class RuntimeOverlay(BaseModel):
@@ -182,13 +180,6 @@ def _dataset_metadata(
     return _DatasetMetadata(_DatasetKind.HARBOR_REGISTRY, dataset.name, revision)
 
 
-def _model_info(value: object) -> dict[str, Any]:
-    configured = {} if value is None else value
-    if not isinstance(configured, Mapping):
-        raise ValueError("Harbor agent model_info must be a mapping")
-    return {**_DEFAULT_MODEL_INFO, **configured}
-
-
 def _opencode_config(config: object, endpoint_url: str) -> dict[str, Any]:
     if not isinstance(config, Mapping):
         raise ValueError("Harbor agent opencode_config must be a mapping")
@@ -237,7 +228,10 @@ def _agent_config(
 
 def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig:
     kwargs = {**overlay.model_agent_kwargs, **agent.kwargs}
-    kwargs["model_info"] = _model_info(kwargs.get("model_info"))
+    kwargs[MODEL_INFO_KEY] = reconciled_model_info(
+        overlay.model_agent_kwargs.get(MODEL_INFO_KEY),
+        agent.kwargs.get(MODEL_INFO_KEY),
+    )
     return _agent_config(
         agent,
         endpoint_url=overlay.endpoint_url,
@@ -247,8 +241,7 @@ def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig
 
 
 def _stable_agent(agent: AgentConfig) -> AgentConfig:
-    if "model_info" in agent.kwargs:
-        _model_info(agent.kwargs["model_info"])
+    reconciled_model_info(None, agent.kwargs.get(MODEL_INFO_KEY))
     return _agent_config(
         agent,
         endpoint_url=_STABLE_ENDPOINT,
@@ -345,7 +338,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
     placeholder_dataset_path = (
         None if dataset_metadata.kind == _DatasetKind.HARBOR_REGISTRY else _PLACEHOLDER_DATASET_PATH
     )
-    _effective_config(
+    effective = _effective_config(
         stable_config,
         RuntimeOverlay(
             job_name=_STABLE_JOB_NAME,
@@ -357,6 +350,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
             model_agent_kwargs=dict(model_agent_kwargs),
         ),
     )
+    model_info = effective.agents[0].kwargs[MODEL_INFO_KEY]
     return {
         "stable_policy_json": stable_policy_json,
         "digest": f"sha256:{hashlib.sha256(stable_policy_json.encode()).hexdigest()}",
@@ -365,6 +359,8 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
         "dataset_revision": dataset_metadata.revision,
         "agent": agent_name,
         "environment": environment_name,
+        "max_input_tokens": model_info[MAX_INPUT_TOKENS_KEY],
+        "max_output_tokens": model_info[MAX_OUTPUT_TOKENS_KEY],
     }
 
 
