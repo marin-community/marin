@@ -580,15 +580,11 @@ impl Store {
     ) -> Result<bool, StatsError> {
         let remote_revision = state.catalog_generation.unwrap_or(0);
         let local_revision = self.catalog.spec_lifecycle(namespace)?.catalog_generation;
+        // Revision order is the recovery authority. A locally committed
+        // compaction or retention pass can legitimately replace objects still
+        // named by the older remote HEAD, so object-set inclusion is not a
+        // valid ancestry test here.
         if local_revision > remote_revision {
-            let table_dir = self.namespace_dir(namespace)?.ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "local catalog for {namespace:?} is ahead of HEAD but has no table directory"
-                ))
-            })?;
-            let mut local = namespace_catalog(&self.catalog, namespace, &table_dir)?;
-            floor_persisted_high_water(&mut local, state.persisted_high_water.unwrap_or(0));
-            validate_local_catalog_extension(namespace, &state, &local)?;
             self.tables.controller(namespace).mark_publication_owed();
             tracing::info!(
                 namespace,
@@ -1458,9 +1454,11 @@ impl Store {
         }
     }
 
-    /// `name`'s highest sequence recoverable from its published object-state
-    /// HEAD. This can trail [`Self::namespace_visible_seq`] while publication
-    /// is deferred.
+    /// `name`'s highest sequence selected by its published object-state HEAD.
+    ///
+    /// Before recovery installs a table runtime, this falls back to the local
+    /// catalog projection. A running table can trail
+    /// [`Self::namespace_visible_seq`] while publication is deferred.
     pub fn namespace_published_seq(&self, name: &str) -> Result<i64, StatsError> {
         match self.tables.get(name) {
             Some(table) => Ok(table.published_seq()),
@@ -1732,61 +1730,6 @@ impl Store {
     }
 }
 
-fn validate_local_catalog_extension(
-    namespace: &str,
-    remote: &NamespaceCatalog,
-    local: &NamespaceCatalog,
-) -> Result<(), StatsError> {
-    let remote_high_water = remote.persisted_high_water.unwrap_or(0);
-    let local_high_water = local.persisted_high_water.unwrap_or(0);
-    let local_objects = catalog_live_object_ids(local);
-    let missing: Vec<_> = catalog_live_object_ids(remote)
-        .difference(&local_objects)
-        .cloned()
-        .collect();
-    let settlement_removal =
-        !missing.is_empty() && missing_remote_objects_are_settled(remote, local);
-    if !settlement_removal && (remote_high_water > local_high_water || !missing.is_empty()) {
-        return Err(StatsError::SchemaConflict(format!(
-            "local catalog tail for {namespace:?} diverges from remote HEAD: remote high-water {remote_high_water}, local high-water {local_high_water}, {} remote objects absent locally; retaining local state for operator salvage",
-            missing.len()
-        )));
-    }
-    Ok(())
-}
-
-/// A relay settlement is the one valid local-tail transition that removes
-/// selected objects without replacing them. Every configured target cursor in
-/// the resulting catalog must cover every missing remote segment.
-fn missing_remote_objects_are_settled(remote: &NamespaceCatalog, local: &NamespaceCatalog) -> bool {
-    if local.forward_cursors.is_empty() {
-        return false;
-    }
-    let Some(retirement_cursor) = local
-        .forward_cursors
-        .iter()
-        .try_fold(i64::MAX, |minimum, cursor| {
-            cursor.cursor.map(|value| minimum.min(value))
-        })
-    else {
-        return false;
-    };
-    let local_objects = catalog_live_object_ids(local);
-    remote
-        .version_segments
-        .iter()
-        .flat_map(|version| &version.live_segments)
-        .chain(&remote.direct_query_segments)
-        .filter(|segment| {
-            segment
-                .source
-                .as_option()
-                .and_then(|source| source.object_id.as_ref())
-                .is_some_and(|object| !local_objects.contains(object))
-        })
-        .all(|segment| segment.max_seq.unwrap_or(i64::MAX) <= retirement_cursor)
-}
-
 fn validate_v1_upgrade_preflight(
     namespace: &str,
     catalog: &NamespaceCatalog,
@@ -1808,20 +1751,6 @@ fn validate_v1_upgrade_preflight(
     Ok(())
 }
 
-fn catalog_live_object_ids(catalog: &NamespaceCatalog) -> BTreeSet<String> {
-    catalog
-        .version_segments
-        .iter()
-        .flat_map(|version| &version.live_segments)
-        .filter_map(|segment| {
-            segment
-                .source
-                .as_option()
-                .and_then(|source| source.object_id.clone())
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -1832,9 +1761,8 @@ mod tests {
     use super::*;
     use crate::levanter_metrics_policy::levanter_metrics_schema;
     use crate::proto::finelog::stats::{
-        partition_field, CatalogSegment, ObjectRef, OperatingPolicy, PartitionField, PartitionSpec,
-        RemoteRetentionPolicy, SourceLayout, TableMigrationStatus, TableSpec, TableSpecView,
-        TableVersionSegments,
+        partition_field, OperatingPolicy, PartitionField, PartitionSpec, RemoteRetentionPolicy,
+        SourceLayout, TableMigrationStatus, TableSpec, TableSpecView,
     };
     use crate::store::schema::{
         schema_to_arrow, schema_to_proto_owned, with_implicit_cluster, with_implicit_seq,
@@ -1846,41 +1774,6 @@ mod tests {
     use crate::test_support::{
         FaultAction, FaultInjectingObjectStore, ObjectFault, ObjectOp, ObjectPattern,
     };
-
-    fn catalog_with_live_object(
-        generation: u64,
-        high_water: i64,
-        object_id: &str,
-    ) -> NamespaceCatalog {
-        NamespaceCatalog {
-            catalog_generation: Some(generation),
-            persisted_high_water: Some(high_water),
-            version_segments: vec![TableVersionSegments {
-                table_spec_version: Some(1),
-                live_segments: vec![CatalogSegment {
-                    segment_id: Some("segment.parquet".to_string()),
-                    source: MessageField::some(ObjectRef {
-                        object_id: Some(object_id.to_string()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn local_tail_bridge_refuses_a_catalog_that_is_not_a_remote_extension() {
-        let remote = catalog_with_live_object(7, 20, "_finelog/tables/t/objects/remote.parquet");
-        let behind = catalog_with_live_object(8, 19, "_finelog/tables/t/objects/remote.parquet");
-        assert!(validate_local_catalog_extension("t", &remote, &behind).is_err());
-
-        let divergent = catalog_with_live_object(8, 21, "_finelog/tables/t/objects/local.parquet");
-        let error = validate_local_catalog_extension("t", &remote, &divergent).unwrap_err();
-        assert!(matches!(error, StatsError::SchemaConflict(_)));
-    }
 
     #[test]
     fn segment_free_projection_preserves_the_selected_high_water() {
@@ -1896,7 +1789,6 @@ mod tests {
         floor_persisted_high_water(&mut local, remote.persisted_high_water.unwrap_or(0));
 
         assert_eq!(local.persisted_high_water, Some(42));
-        validate_local_catalog_extension("t", &remote, &local).unwrap();
     }
 
     #[test]
@@ -4534,7 +4426,31 @@ mod tests {
         let bundle_name = bundle.file_name().and_then(|name| name.to_str()).unwrap();
         let bundle_id = bundle_name.strip_suffix(".fidx").unwrap();
         uuid::Uuid::parse_str(bundle_id).unwrap();
-        let after = store.publish_object_catalog("iris.worker").await.unwrap();
+
+        // Restart before the compacted revision reaches remote HEAD. The newer
+        // local revision replaces the two objects still named by HEAD, so
+        // recovery must use revision order rather than object-set inclusion.
+        store.shutdown(Duration::from_secs(1)).await;
+        drop(store);
+        let reopened = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        reopened.bootstrap_maintenance();
+        assert_eq!(reopened.recover_tables().await.unwrap(), 0);
+        assert_eq!(
+            reopened.query_snapshot("iris.worker").unwrap().paths.len(),
+            1
+        );
+        assert_eq!(scan_table(&reopened, "iris.worker").await, 2);
+
+        let after = reopened
+            .publish_object_catalog("iris.worker")
+            .await
+            .unwrap();
         assert_eq!(
             after.state().catalog().catalog_generation,
             before
@@ -4556,7 +4472,7 @@ mod tests {
         assert_eq!(after.state().catalog().direct_query_segments.len(), 1);
         assert_eq!(after.state().catalog().direct_query_high_water, Some(2));
 
-        store.shutdown(Duration::from_secs(1)).await;
+        reopened.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();
     }

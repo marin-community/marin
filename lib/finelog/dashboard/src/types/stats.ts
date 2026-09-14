@@ -51,6 +51,27 @@ export interface ProtoSchema {
   maxRowGroupRows?: number
 }
 
+export interface StoragePolicy {
+  maxSegments?: number
+  maxBytes?: string | number
+  maxAgeSeconds?: string | number
+}
+
+export interface NamespaceInfo {
+  namespace: string
+  schema?: ProtoSchema
+  rowCount?: string | number
+  byteSize?: string | number
+  minSeq?: string | number
+  maxSeq?: string | number
+  segmentCount?: number
+  storagePolicy?: StoragePolicy
+}
+
+export interface ListNamespacesResponse {
+  namespaces?: NamespaceInfo[]
+}
+
 export function shortColumnType(t: ColumnType | undefined): string {
   if (!t) return ''
   return t.replace('COLUMN_TYPE_', '').toLowerCase()

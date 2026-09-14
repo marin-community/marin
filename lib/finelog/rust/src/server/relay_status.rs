@@ -22,6 +22,10 @@ struct SenderState {
 }
 
 impl RelayStatusRegistry {
+    /// Record a complete sender snapshot and return its stored receipt time.
+    ///
+    /// A stale sequence or a report from a retired boot keeps the prior receipt
+    /// time so rejected reports cannot refresh the sender heartbeat.
     pub fn report(
         &self,
         cluster: String,

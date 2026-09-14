@@ -3,7 +3,12 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiGet, statsRpcCall } from '@/composables/useRpc'
 import { timeZoneMode } from '@/composables/useDisplayPrefs'
-import { shortColumnType, type ProtoSchema } from '@/types/stats'
+import {
+  shortColumnType,
+  type ListNamespacesResponse,
+  type NamespaceInfo,
+  type ProtoSchema,
+} from '@/types/stats'
 import type {
   ForwardingResponse,
   ForwardingTargetInfo,
@@ -17,27 +22,6 @@ import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 
 const props = defineProps<{ name: string }>()
 const router = useRouter()
-
-interface StoragePolicy {
-  maxSegments?: number
-  maxBytes?: string | number
-  maxAgeSeconds?: string | number
-}
-
-interface NamespaceInfo {
-  namespace: string
-  schema?: ProtoSchema
-  rowCount?: string | number
-  byteSize?: string | number
-  minSeq?: string | number
-  maxSeq?: string | number
-  segmentCount?: number
-  storagePolicy?: StoragePolicy
-}
-
-interface ListNamespacesResponse {
-  namespaces?: NamespaceInfo[]
-}
 
 interface TableSpec {
   version?: string | number

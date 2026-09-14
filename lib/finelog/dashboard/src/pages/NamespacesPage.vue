@@ -4,21 +4,9 @@ import { RouterLink } from 'vue-router'
 import { statsRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { formatBytes, formatNumber } from '@/utils/formatting'
-import type { ProtoSchema } from '@/types/stats'
+import type { ListNamespacesResponse } from '@/types/stats'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
-
-interface NamespaceInfo {
-  namespace: string
-  schema?: ProtoSchema
-  rowCount?: string | number
-  byteSize?: string | number
-  segmentCount?: number
-}
-
-interface ListNamespacesResponse {
-  namespaces?: NamespaceInfo[]
-}
 
 interface NamespaceRow {
   namespace: string
