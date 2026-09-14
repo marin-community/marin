@@ -198,6 +198,16 @@ class HarborRef(BaseModel):
         pattern=r"^[0-9a-f]{40}$",
         exclude_if=lambda value: value is None,
     )
+    max_input_tokens: int | None = Field(
+        default=None,
+        description="Agent context budget resolved from the served model, the policy, and Harbor's defaults",
+        exclude_if=lambda value: value is None,
+    )
+    max_output_tokens: int | None = Field(
+        default=None,
+        description="Agent generation budget resolved from the served model, the policy, and Harbor's defaults",
+        exclude_if=lambda value: value is None,
+    )
 
 
 class EvalRef(BaseModel):
@@ -211,6 +221,11 @@ class EvalRef(BaseModel):
 
     name: str
     mechanism: str
+    family: str | None = Field(
+        default=None,
+        description="Benchmark this eval is a setting of, for the leaderboard column it shares",
+        exclude_if=lambda value: value is None,
+    )
     tasks: tuple[EvalTaskRef, ...] = ()
     evalchemy: EvalchemyRef | None = None
     harbor: HarborRef | None = None

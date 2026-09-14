@@ -36,6 +36,13 @@ export function fleetBest(rows: PanelRow[], benchmarks: string[]): Record<string
   return out
 }
 
+export function withVariant(selected: Iterable<string>, variants: string[], chosen: string): Set<string> {
+  const next = new Set(selected)
+  for (const name of variants) next.delete(name)
+  next.add(chosen)
+  return next
+}
+
 // The two fields any coverage question needs. A panel cell, a history point, and a run headline all
 // carry them, so the one predicate below serves every view instead of each hand-rolling it.
 export interface Covered {

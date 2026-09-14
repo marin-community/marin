@@ -330,6 +330,40 @@ def test_trainer_train_step(loss_fn, per_device_parallelism, expected_metrics):
                 assert jnp.allclose(logged_metrics[key], expected_val)
 
 
+def test_trainer_microbatching_preserves_parameter_axes_that_match_batch_size():
+    """Parameters whose leading size matches a batch must not be microbatched."""
+    Batch = hax.Axis("batch", size=4 * max(1, jax.device_count()))
+    Feature = hax.Axis("feature", size=Batch.size)
+
+    class PerExampleWeights(eqx.Module):
+        value: jax.Array
+
+    def loss_fn(model, batch, *, key):
+        del key
+        return jnp.mean(batch.array @ model.value)
+
+    config = TrainerConfig(
+        tracker=NoopConfig(),
+        seed=42,
+        num_train_steps=1,
+        train_batch_size=Batch.size,
+        per_device_parallelism=2,
+        id="parameter-axis-regression",
+    )
+    trainer = Trainer(config, optax.sgd(1.0), loss_fn, add_default_hooks=False)
+    model = PerExampleWeights(jnp.ones((Feature.size, Feature.size)))
+    batch = hax.named(
+        jnp.arange(Batch.size * Feature.size, dtype=jnp.float32).reshape(Batch.size, Feature.size), (Batch, Feature)
+    )
+
+    with trainer:
+        state = trainer.initial_state(jax.random.PRNGKey(0), model=model)
+        result = trainer.train_step(state, batch)
+
+    expected_gradient = batch.array.sum(axis=0)[:, None] / (Batch.size * Feature.size)
+    assert jnp.allclose(result.state.model.value, 1 - expected_gradient)
+
+
 def test_microbatching_metric_aggregation():
     """Microbatching correctly aggregates different metric types."""
     model = SimpleModel.init(jax.random.PRNGKey(0))

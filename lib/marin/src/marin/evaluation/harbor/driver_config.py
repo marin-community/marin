@@ -117,6 +117,8 @@ class ValidatedHarborConfig:
     agent: str
     environment: str
     error_taxonomy: HarborErrorTaxonomy
+    max_input_tokens: int
+    max_output_tokens: int
 
     @property
     def record_dataset(self) -> str:
@@ -229,6 +231,12 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
             raise ValueError(f"Harbor preflight returned invalid {name!r} metadata for {path}")
         return value
 
+    def required_int(name: str) -> int:
+        value = payload.get(name)
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"Harbor preflight returned invalid {name!r} metadata for {path}")
+        return value
+
     revision = payload.get("dataset_revision")
     if revision is not None and not isinstance(revision, str):
         raise ValueError(f"Harbor preflight returned invalid dataset revision metadata for {path}")
@@ -292,6 +300,8 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
         agent=required_string("agent"),
         environment=required_string("environment"),
         error_taxonomy=error_taxonomy,
+        max_input_tokens=required_int("max_input_tokens"),
+        max_output_tokens=required_int("max_output_tokens"),
     )
 
 

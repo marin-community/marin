@@ -122,6 +122,14 @@ def _try_convert_int(val, default):
             return default
 
 
+def _title_part(title: str | None) -> str:
+    """The optional title suffix of a link or image destination, empty when there is no title."""
+    if not title:
+        return ""
+    escaped = title.replace('"', r"\"")
+    return f' "{escaped}"'
+
+
 class MyMarkdownConverter(MarkdownConverter):
     def __init__(self, config: HtmlToMarkdownConfig, **kwargs):
         self.include_links = config.include_links
@@ -169,7 +177,7 @@ class MyMarkdownConverter(MarkdownConverter):
             return f"<{href}>"
         if self.options["default_title"] and not title:
             title = href
-        title_part = ' "{title}"'.format(title=title.replace('"', r"\"") if title else "")
+        title_part = _title_part(title)
         return f"{prefix}[{text}]({href}{title_part}){suffix}" if href else text
 
     # markdownify doesn't allow difference pre- and post- text for converting sub and sup
@@ -204,7 +212,7 @@ class MyMarkdownConverter(MarkdownConverter):
         alt = self.escape(alt, parent_tags)
         src = el.attrs.get("src", None) or el.attrs.get("data-src", None) or ""
         title = el.attrs.get("title", None) or ""
-        title_part = ' "{title}"'.format(title=title.replace('"', r"\"") if title else "")
+        title_part = _title_part(title)
         if "_inline" in parent_tags and el.parent.name not in self.options["keep_inline_images_in"]:
             return alt
 

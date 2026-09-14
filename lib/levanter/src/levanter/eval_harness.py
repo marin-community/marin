@@ -30,6 +30,7 @@ import time
 import typing
 from dataclasses import dataclass
 from functools import cached_property
+from itertools import batched
 from typing import Callable, Iterator, List, Optional, Tuple, TypeVar, Union
 
 import haliax
@@ -82,7 +83,6 @@ from tqdm_loggable.auto import tqdm
 
 import levanter.config
 from levanter.callbacks import StepInfo
-from levanter.data.utils import batched
 from levanter.data.loader import stack_batches
 from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations

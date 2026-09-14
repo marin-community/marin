@@ -5,9 +5,9 @@
 
 One FastAPI application. Each app is mounted under ``/<name>/``: files in its ``dist``
 are served verbatim and every other path under the prefix answers ``index.html`` so a
-client-side route survives a reload. ``/<name>/data/*`` reads from the app's directory
-under the data root (a GCS bucket in production, a local directory in development), so
-large or changing files stay out of the image and the repository. A Python app's API is
+client-side route survives a reload. ``/<name>/data/*`` reads from the app's declared
+data URL or its directory under the deployment data root, so large or changing files
+stay out of the image and the repository. A Python app's API is
 mounted at ``/<name>/api/`` behind the same authentication, with the caller's identity
 bound for its handlers. ``/api/marina/*`` is the surface shared by every
 app (the app directory and the caller's identity); ``/`` lists the apps. A per-app
@@ -19,6 +19,7 @@ import html
 import mimetypes
 import os
 import posixpath
+import re
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -29,7 +30,7 @@ import httpx
 import sqlalchemy
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
-from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 from rigging.server_auth import (
     RequestAuthPolicy,
@@ -92,6 +93,7 @@ MCP_READ_PATH = "/api/marina/mcp/read"
 # routes are installed before any app's.
 KERNEL_PREFIXES = frozenset({"a", "api", "healthz"})
 DATA_CACHE_CONTROL = "private, max-age=300"
+BYTE_RANGE = re.compile(r"bytes=(\d*)-(\d*)$")
 
 
 @dataclass(frozen=True)
@@ -327,17 +329,52 @@ def clean_relative_path(path: str) -> str | None:
     return normalized
 
 
+def requested_byte_range(header: str, size: int) -> tuple[int, int] | None:
+    """Return the requested half-open byte range, or None for an invalid range."""
+    match = BYTE_RANGE.fullmatch(header)
+    if match is None or not any(match.groups()):
+        return None
+    first, last = match.groups()
+    if first:
+        start = int(first)
+        end = min(int(last) + 1, size) if last else size
+    else:
+        length = min(int(last), size)
+        start, end = size - length, size
+    return (start, end) if start < size and start < end else None
+
+
+async def storage_file_response(fs, target: str, request: Request, media_type: str, headers: dict[str, str]) -> Response:
+    """Serve one existing object, honoring HTTP byte ranges and HEAD requests."""
+    size = await run_in_threadpool(fs.size, target)
+    headers["Accept-Ranges"] = "bytes"
+    range_header = request.headers.get("range")
+    if range_header is None:
+        headers["Content-Length"] = str(size)
+        body = b"" if request.method == "HEAD" else await run_in_threadpool(fs.cat_file, target)
+        return Response(body, media_type=media_type, headers=headers)
+
+    byte_range = requested_byte_range(range_header, size)
+    if byte_range is None:
+        return Response(status_code=416, headers={**headers, "Content-Range": f"bytes */{size}"})
+    start, end = byte_range
+    headers.update({"Content-Length": str(end - start), "Content-Range": f"bytes {start}-{end - 1}/{size}"})
+    body = b"" if request.method == "HEAD" else await run_in_threadpool(fs.cat_file, target, start=start, end=end)
+    return Response(body, status_code=206, media_type=media_type, headers=headers)
+
+
 async def serve_data_file(
     app: AppManifest,
     data_root: str,
     path: str,
+    request: Request,
     connect_src: tuple[str, ...] | None = None,
 ) -> Response:
-    """A file from the app's data directory, gzip-encoded when only ``x.gz`` exists."""
+    """A file from the app's data directory, including byte ranges for large files."""
     relative = clean_relative_path(path)
     if relative is None:
         return JSONResponse({"error": "not found"}, status_code=404)
-    fs, root = url_to_fs(data_url_for(data_root, app.name))
+    fs, root = filesystem_for(data_url_for(app, data_root))
     target = prefix_join(root, relative)
     headers = {
         "Content-Security-Policy": content_security_policy(connect_src or app.connect_src),
@@ -345,8 +382,7 @@ async def serve_data_file(
     }
     media_type = mimetypes.guess_type(relative)[0] or "application/octet-stream"
     if await run_in_threadpool(fs.isfile, target):
-        body = await run_in_threadpool(fs.cat_file, target)
-        return Response(body, media_type=media_type, headers=headers)
+        return await storage_file_response(fs, target, request, media_type, headers)
     if await run_in_threadpool(fs.isfile, target + PRECOMPRESSED_SUFFIX):
         body = await run_in_threadpool(fs.cat_file, target + PRECOMPRESSED_SUFFIX)
         return Response(body, media_type=media_type, headers={**headers, "Content-Encoding": "gzip"})
@@ -395,8 +431,8 @@ def install_app_routes(
 
     @api.api_route(prefix + "/" + DATA_PREFIX + "{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     @requires_auth
-    async def app_data(path: str) -> Response:
-        return await serve_data_file(app, data_root, path, connect_src)
+    async def app_data(path: str, request: Request) -> Response:
+        return await serve_data_file(app, data_root, path, request, connect_src)
 
     @api.api_route(prefix + "/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     @requires_auth
