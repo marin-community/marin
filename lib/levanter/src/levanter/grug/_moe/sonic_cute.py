@@ -76,23 +76,26 @@ def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     over — that leaks under shard_map; not nondiff_argnums — that rejects tracers).
     """
     _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
-    return quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    return _zero_inactive_grouped_rows(y, cu)
 
 
 def _expert_mlp_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
-    return y, (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
+    return _zero_inactive_grouped_rows(y, cu), (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
 
 
 def _expert_mlp_bwd(res, dy):
     x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu = res
+    dy = _zero_inactive_grouped_rows(dy, cu)
     # down backward: dh via QuACK (transposed contraction), dw2 via XLA weight-grad
     dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k")
     (dw2,) = jax.vjp(lambda w: ragged_dot(h, w, group_sizes), moe_w2)[1](dy)
     d_gu = _swiglu_gate_up_backward(gu, dh)
     # gate/up backward: dx via QuACK, dw13 via XLA weight-grad
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k")
+    dx = _zero_inactive_grouped_rows(dx, cu)
     (dw13_il,) = jax.vjp(lambda w: ragged_dot(x_dispatch, w, group_sizes), w13_il)[1](d_gu)
     # int-typed routing args get float0 zero cotangents
     gs_ct = np.zeros(group_sizes.shape, dtype=jax.dtypes.float0)

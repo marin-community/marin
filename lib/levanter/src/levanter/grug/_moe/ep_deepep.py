@@ -19,6 +19,7 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
+    _zero_inactive_grouped_rows,
     MoeDispatchCounts,
     split_moe_w13_output,
 )
@@ -164,15 +165,22 @@ def _moe_mlp_ep_deepep_local(
             num_recv_tokens=num_recv_tokens_scalar,
         )
         x_dispatch = tree_checkpoint_name(local_assignments.x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+        cumulative_group_sizes = jnp.cumsum(local_assignments.local_group_sizes).astype(jnp.int32)
 
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(
-            ragged_dot(x_dispatch, moe_w13_local, local_assignments.local_group_sizes), _CHECKPOINT_EXPERT_HIDDEN
+        w13_out = _zero_inactive_grouped_rows(
+            ragged_dot(x_dispatch, moe_w13_local, local_assignments.local_group_sizes),
+            cumulative_group_sizes,
         )
+        w13_out = tree_checkpoint_name(w13_out, _CHECKPOINT_EXPERT_HIDDEN)
         moe_dim = moe_w2_local.shape[1]
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
-        out_dispatch = tree_checkpoint_name(
+        out_dispatch = _zero_inactive_grouped_rows(
             ragged_dot(activation_fn(gate) * up, moe_w2_local, local_assignments.local_group_sizes),
+            cumulative_group_sizes,
+        )
+        out_dispatch = tree_checkpoint_name(
+            out_dispatch,
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
