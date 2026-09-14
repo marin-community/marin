@@ -63,6 +63,7 @@ DEFAULT_MIN_COMPLETION_RATE = 0.9
 # Error labels for ungraded trials that carry no exception of their own.
 _UNKNOWN_ERROR = "unknown"
 _MISSING_RESULT_ERROR = "no_result_written"
+_TRIAL_RESULT_GLOB = "*/result.json"
 
 _UNKNOWN_ERROR_PREFIX = "unknown:"
 
@@ -213,7 +214,7 @@ def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> Harb
 
 def _read_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy) -> list[HarborTrial]:
     """Read all finished trials under ``job_dir`` concurrently."""
-    result_files = sorted((job_dir / "*/result.json").glob(), key=lambda path: path.parent.name)
+    result_files = sorted((job_dir / _TRIAL_RESULT_GLOB).glob(), key=lambda path: path.parent.name)
     if not result_files:
         return []
     with ThreadPoolExecutor(max_workers=min(_TRIAL_READ_WORKERS, len(result_files))) as pool:
@@ -246,7 +247,7 @@ def _attempted_trials(job_dir: StoragePath) -> int | None:
 
 def _remove_unscored_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy) -> None:
     """Remove results Harbor should retry after a confirmed inference interruption."""
-    for result_file in (job_dir / "*/result.json").glob():
+    for result_file in (job_dir / _TRIAL_RESULT_GLOB).glob():
         try:
             trial = _read_trial(result_file, taxonomy)
         except json.JSONDecodeError as exc:

@@ -333,7 +333,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
     assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
     assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 1.0
     assert ReadView(output_dir).is_sealed()
-    assert StoragePath(f"{output_dir}/harbor_result.json").exists()
+    assert (StoragePath.parse(output_dir) / "harbor_result.json").exists()
 
 
 def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, monkeypatch):
