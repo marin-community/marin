@@ -16,6 +16,7 @@ from rigging.config_discovery import find_project_root
 from rigging.tunnel import terminate_process_group
 
 from marin.evaluation.eval_env import env_vars_from_keys
+from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_LENGTH
 from marin.external_dependencies import HARBOR
 from marin.inference.iris import InferenceBackendState
 
@@ -258,7 +259,7 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
     taxonomy_commit = taxonomy_payload.get("commit")
     if (
         not isinstance(taxonomy_commit, str)
-        or len(taxonomy_commit) != 40
+        or len(taxonomy_commit) != FULL_GIT_COMMIT_LENGTH
         or any(character not in "0123456789abcdef" for character in taxonomy_commit)
     ):
         raise ValueError(f"Harbor preflight returned invalid error taxonomy commit for {path}")

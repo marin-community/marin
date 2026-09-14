@@ -22,6 +22,8 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 
+from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_PATTERN
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_RECORDS_PREFIX = "gs://marin-eval-metadata/evals"
@@ -195,7 +197,7 @@ class HarborRef(BaseModel):
     )
     harbor_config_commit: str | None = Field(
         default=None,
-        pattern=r"^[0-9a-f]{40}$",
+        pattern=FULL_GIT_COMMIT_PATTERN,
         exclude_if=lambda value: value is None,
     )
     max_input_tokens: int | None = Field(

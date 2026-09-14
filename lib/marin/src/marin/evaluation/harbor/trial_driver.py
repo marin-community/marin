@@ -35,6 +35,7 @@ from marin.evaluation.harbor.agent_context import (
     MODEL_INFO_KEY,
     reconciled_model_info,
 )
+from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_LENGTH
 
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
@@ -326,7 +327,7 @@ def _harbor_config_commit() -> str:
     distribution_name = importlib.metadata.packages_distributions()["harbor_config"][0]
     direct_url = json.loads(importlib.metadata.distribution(distribution_name).read_text("direct_url.json") or "{}")
     commit = direct_url.get("vcs_info", {}).get("commit_id")
-    if not isinstance(commit, str) or len(commit) != 40:
+    if not isinstance(commit, str) or len(commit) != FULL_GIT_COMMIT_LENGTH:
         raise ValueError("Harbor distribution does not identify its pinned commit")
     return commit
 

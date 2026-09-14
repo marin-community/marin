@@ -621,7 +621,7 @@ def test_harbor_executor_fails_when_too_few_trials_were_graded(tmp_path, monkeyp
     assert exc_info.value.status is RunStatus.INFRA_FAILED
     assert exc_info.value.coverage["failed-" + tmp_path.name].errors == {"InfrastructureError": 1}
     result = json.loads((tmp_path / "harbor_result.json").read_text())
-    assert result["failed_trials"] == 1
+    assert result["unscored_trials"] == 1
     assert result["errors"] == {"InfrastructureError": 1}
 
 
@@ -828,4 +828,4 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
 
     assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 0.0
     result = json.loads((tmp_path / "harbor_result.json").read_text())
-    assert result["failed_trials"] == 0
+    assert result["unscored_trials"] == 0

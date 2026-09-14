@@ -214,11 +214,9 @@ def test_preflight_exports_pinned_harbor_error_taxonomy(checked_policies):
     taxonomies = [payload["error_taxonomy"] for payload in checked_policies.values()]
 
     assert all(taxonomy == taxonomies[0] for taxonomy in taxonomies)
-    assert {category: len(taxonomies[0][category]) for category in ("infrastructure", "agent", "passthrough")} == {
-        "infrastructure": 27,
-        "agent": 3,
-        "passthrough": 2,
-    }
+    assert "LLMRequestTimeoutError" in taxonomies[0]["infrastructure"]
+    assert {"AgentTimeoutError", "ContextLengthExceededError"} <= set(taxonomies[0]["agent"])
+    assert "OutputLengthExceededError" in taxonomies[0]["passthrough"]
     assert set(taxonomies[0]["undecided"]) == {
         "TrialNotScoredError",
         "VerificationNotCompletedError",

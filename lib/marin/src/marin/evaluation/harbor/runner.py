@@ -218,7 +218,6 @@ def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> Harb
 
 
 def _read_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy) -> list[HarborTrial]:
-    """Read all finished trials under ``job_dir``."""
     result_files = sorted((job_dir / _TRIAL_RESULT_GLOB).glob(), key=lambda path: path.parent.name)
     if not result_files:
         return []
@@ -395,7 +394,7 @@ def _run_harbor_job(
                 "attempted_trials": result.attempted_trials,
                 "scored_trials": result.scored_trials,
                 "solved_trials": result.solved_trials,
-                "failed_trials": result.unscored_trials,
+                "unscored_trials": result.unscored_trials,
                 "errors": dict(result.errors),
                 "mean_reward": result.mean_reward,
                 "accuracy": result.accuracy,
