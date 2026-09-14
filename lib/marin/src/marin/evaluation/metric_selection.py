@@ -29,6 +29,22 @@ def base_metric(name: str) -> str:
     return name.split(",", 1)[0]
 
 
+def declared_metric(metrics: Mapping[str, float], declared: str | None) -> tuple[str, float] | None:
+    """Pick a declared base metric, applying the standard extraction-filter priority."""
+    if declared is None:
+        return primary_metric(metrics)
+    candidates = {name: value for name, value in metrics.items() if base_metric(name) == declared}
+    for metric_filter in FILTER_PRIORITY:
+        filtered = sorted(name for name in candidates if name.endswith(f",{metric_filter}"))
+        if filtered:
+            name = filtered[0]
+            return name, candidates[name]
+    if not candidates:
+        return None
+    name = min(candidates)
+    return name, candidates[name]
+
+
 def primary_metric(metrics: Mapping[str, float]) -> tuple[str, float] | None:
     """Pick Marin's headline ``(key, value)`` from an evaluator metric mapping."""
     candidates = {name: value for name, value in metrics.items() if not base_metric(name).endswith("_stderr")}

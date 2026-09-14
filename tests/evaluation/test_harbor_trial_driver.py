@@ -437,9 +437,7 @@ datasets:
         )
         task_dir = launch_dir / "tasks" / "task-one"
         task_dir.mkdir(parents=True)
-        (task_dir / "task.toml").write_text(
-            'version = "1.0"\n[task]\nname = "task-one"\n[environment]\n'
-        )
+        (task_dir / "task.toml").write_text('version = "1.0"\n[task]\nname = "task-one"\n[environment]\n')
         (task_dir / "instruction.md").write_text("Solve the task.")
 
         (config,) = preflight_harbor_configs([(policy_path, {})])

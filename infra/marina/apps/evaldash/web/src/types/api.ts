@@ -70,9 +70,12 @@ export interface PanelCell {
   interval_kind: IntervalKind
   metric: string
   metric_kind: string
+  declared: boolean
   n_scored: number
+  n_benchmark: number | null
   n_attempted: number | null
   coverage: number | null
+  benchmark_rate: number | null
   errors: Record<string, number>
   item_cap: number | null
   flags: string[]
@@ -122,6 +125,7 @@ export interface PanelRow {
 
 export interface PanelRequest {
   min_coverage: number
+  min_benchmark_coverage: number
   cohort: string
   cohort_version: string | null
   completeness: string
@@ -139,6 +143,7 @@ export interface PanelFamily {
 
 export interface Panel {
   benchmarks: string[]
+  protocols: Record<string, { metric: string; kind: string }>
   panel: string[]
   families: PanelFamily[]
   rows: PanelRow[]

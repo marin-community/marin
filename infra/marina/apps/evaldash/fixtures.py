@@ -40,6 +40,7 @@ from marin.evaluation.records import (
     EvalTaskRef,
     HarborRef,
     HardwareRef,
+    MetricKind,
     ModelRef,
     Provenance,
     RunStatus,
@@ -79,11 +80,19 @@ _EVAL_FAMILIES = {"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"}
 
 
 def _lm_eval_ref(eval_name: str, num_fewshot: int) -> EvalRef:
+    primary_metric = _HEADLINE[eval_name][0].split(",", 1)[0]
     return EvalRef(
         name=eval_name,
         mechanism="evalchemy",
         family=_EVAL_FAMILIES.get(eval_name),
-        tasks=(EvalTaskRef(name=eval_name, num_fewshot=num_fewshot),),
+        tasks=(
+            EvalTaskRef(
+                name=eval_name,
+                num_fewshot=num_fewshot,
+                primary_metric=primary_metric,
+                metric_kind=MetricKind.BINARY,
+            ),
+        ),
     )
 
 
@@ -91,6 +100,14 @@ def _harbor_ref(dataset: str) -> EvalRef:
     return EvalRef(
         name=dataset,
         mechanism="harbor",
+        tasks=(
+            EvalTaskRef(
+                name=dataset,
+                num_fewshot=None,
+                primary_metric="accuracy",
+                metric_kind=MetricKind.BINARY,
+            ),
+        ),
         harbor=HarborRef(dataset=dataset, version="1.0", agent=dataset, env="daytona"),
     )
 
@@ -190,6 +207,7 @@ def _mcq_sample(task: str, doc_id: str, *, model_choice: int, target_choice: int
 def _generation_sample(task: str, doc_id: str, *, extracted: str, target: str) -> EvalSample:
     correct = extracted.strip() == target.strip()
     score = 1.0 if correct else 0.0
+    metric = _HEADLINE[task][0]
     return EvalSample(
         task=task,
         doc_id=doc_id,
@@ -201,13 +219,13 @@ def _generation_sample(task: str, doc_id: str, *, extracted: str, target: str) -
         extracted=extracted,
         target_text=target,
         grading=Grading(
-            method="lm-eval:exact_match",
-            metric="exact_match,flexible-extract",
-            filter="flexible-extract",
+            method=f"lm-eval:{metric.split(',', 1)[0]}",
+            metric=metric,
+            filter=metric.split(",", 1)[1] if "," in metric else None,
             score=score,
             passed=correct,
         ),
-        metrics={"exact_match,flexible-extract": score},
+        metrics={metric: score},
         correct=correct,
         doc=json.dumps({"problem": f"problem {doc_id}", "answer": target}),
     )
@@ -321,7 +339,7 @@ _HEADLINE = {
     "arc-challenge": ("acc_norm,none", "acc_norm_stderr,none"),
     "gsm8k": ("exact_match,flexible-extract", "exact_match_stderr,flexible-extract"),
     "gsm8k-0shot": ("exact_match,flexible-extract", "exact_match_stderr,flexible-extract"),
-    "humaneval": ("exact_match,none", "exact_match_stderr,none"),
+    "humaneval": ("pass@1", "pass@1_stderr"),
     "math500": ("accuracy", None),
 }
 
@@ -466,7 +484,11 @@ def build_fixtures(dest: str) -> list[str]:
             metrics=_lm_metrics("humaneval", 0.318, 0.015),
             coverage={
                 "humaneval": TaskCoverage(
-                    n_attempted=_FIXTURE_ITEMS, n_scored=_FIXTURE_ITEMS, n_correct=318, n_unanswered=12
+                    n_benchmark=_FIXTURE_ITEMS,
+                    n_attempted=_FIXTURE_ITEMS,
+                    n_scored=_FIXTURE_ITEMS,
+                    n_correct=318,
+                    n_unanswered=12,
                 )
             },
             description=desc,
@@ -495,7 +517,7 @@ def build_fixtures(dest: str) -> list[str]:
             # An agentic run that lost one of its ten trials to a timeout: the aggregate is over the
             # nine trials a verifier graded, and the coverage carries what happened to the tenth.
             metrics={"aime": {"accuracy": 3 / 9, "mean_reward": 3 / 9, "solved": 3.0, "total": 9.0}},
-            coverage={"aime": TaskCoverage(n_attempted=10, n_scored=9, errors={"AgentTimeoutError": 1})},
+            coverage={"aime": TaskCoverage(n_benchmark=10, n_attempted=10, n_scored=9, errors={"AgentTimeoutError": 1})},
             description=desc,
             runtime_minutes=42.0,  # agentic sandbox rollouts run far longer than the lm-eval tasks
             serving=ServingParams(
@@ -602,6 +624,7 @@ def build_fixtures(dest: str) -> list[str]:
             metrics=_lm_metrics("humaneval", 0.0, 0.0),
             coverage={
                 "humaneval": TaskCoverage(
+                    n_benchmark=_FIXTURE_ITEMS,
                     n_attempted=_FIXTURE_ITEMS,
                     n_scored=_FIXTURE_ITEMS,
                     n_correct=0,

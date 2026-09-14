@@ -30,6 +30,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from marin.evaluation.archive import base_metric
 from marin.evaluation.records import MetricKind, RunStatus
 
 ALPHA = 0.05
@@ -39,7 +40,7 @@ ALPHA = 0.05
 DEFAULT_MIN_COVERAGE = 0.9
 
 # Metrics whose run-level value is a mean of per-item 0/1 outcomes, so (k, n) is recoverable and the
-# Wilson interval applies. Everything else (pass@k estimators, partial-credit graders, mean rewards)
+# Wilson interval applies. Everything else (pass@k estimators above k=1, partial-credit graders, mean rewards)
 # takes the recorded-dispersion path. ``accuracy`` is both evalchemy's chat-native key and Harbor's
 # solved-trial rate; both are per-item binary.
 BINARY_METRICS = frozenset({"acc", "acc_norm", "exact_match", "accuracy", "pass@1"})
@@ -526,7 +527,7 @@ def declared_protocols(measurements: Iterable[Measurement]) -> Mapping[str, Metr
         if measurement.declared and (current is None or measurement.created_at > current.created_at):
             newest[measurement.benchmark] = measurement
     return {
-        benchmark: MetricProtocol(metric=measurement.metric.split(",", 1)[0], kind=measurement.kind)
+        benchmark: MetricProtocol(metric=base_metric(measurement.metric), kind=measurement.kind)
         for benchmark, measurement in newest.items()
     }
 
@@ -587,7 +588,7 @@ def select(
         if request.panel is not None and measurement.benchmark not in request.panel:
             continue
         protocol = protocols.get(measurement.benchmark)
-        metric = measurement.metric.split(",", 1)[0]
+        metric = base_metric(measurement.metric)
         if protocol is not None and (metric, measurement.kind) != (protocol.metric, protocol.kind):
             reason = (
                 f"metric {metric} differs from declared {protocol.metric}"

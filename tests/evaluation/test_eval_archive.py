@@ -25,13 +25,13 @@ from finestore.eval import (
 )
 from finestore.reader import ReadView
 from fsspec.core import url_to_fs
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.lm_eval_samples import (
     export_lm_eval_samples,
     preserved_sample_sources,
     rebuild_lm_eval_samples,
     run_artifacts,
 )
-from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.records import TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
 
@@ -406,9 +406,7 @@ def test_export_records_full_benchmark_and_intended_cap_for_every_group_leaf(tmp
         )
     )
     rows = [_lm_eval_row(doc_id, "none", 1.0, "4") for doc_id in range(2)]
-    (directory / "samples_mmlu_anatomy_20260807.jsonl").write_text(
-        "\n".join(json.dumps(row) for row in rows) + "\n"
-    )
+    (directory / "samples_mmlu_anatomy_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
 
     coverage = export_lm_eval_samples(
         str(results),
@@ -438,6 +436,29 @@ def test_export_uses_declared_size_for_chat_native_task(tmp_path):
     assert coverage.n_benchmark == 500
     assert coverage.n_attempted == 10
     assert coverage.n_scored == 1
+
+
+def test_export_rejects_samples_beyond_the_intended_cap(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "gsm8k_5shot" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"gsm8k": {"exact_match,none": 1.0}},
+                "n-samples": {"gsm8k": {"original": 10, "effective": 2}},
+            }
+        )
+    )
+    rows = [_lm_eval_row(doc_id, "none", 1.0, "4") for doc_id in (0, 2)]
+    (directory / "samples_gsm8k_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    with pytest.raises(ValueError, match="sample document extent 3 exceeds intended count 2"):
+        export_lm_eval_samples(
+            str(results),
+            tasks=(EvalTaskConfig("gsm8k", 5),),
+            max_eval_instances=2,
+        )
 
 
 def test_writing_to_a_sealed_archive_clears_its_seal(tmp_path):
