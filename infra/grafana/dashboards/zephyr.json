@@ -1,7 +1,7 @@
 {
   "uid": "marin-zephyr",
   "title": "Zephyr",
-  "description": "Zephyr pipeline diagnostics. Null sizes are unreported; numeric zero means measured empty.",
+  "description": "Zephyr pipeline diagnostics.",
   "tags": [
     "marin",
     "zephyr"
