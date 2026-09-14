@@ -1,12 +1,12 @@
-# Prepare and promote `<branch>-next`
+# Prepare and promote `main-next`
 
 An unattended refresh prepares promotion after the fork's e2e passes against
-`<branch>-next`, then opens the draft Marin PR. It creates immutable refs for the old
+`main-next`, then opens the draft Marin PR. It creates immutable refs for the old
 and new tips and leaves the protected stable branch unchanged. An admin hard-swaps
 the stable branch after reviewing the draft PR and before that PR merges.
 
-A refresh rebases our patches onto a new upstream base, so `<branch>-next` does not
-descend from the current `<branch>` — their upstream bases differ. The promotion is
+A refresh rebases our patches onto a new upstream base, so `main-next` does not
+descend from the current `main` — their upstream bases differ. The promotion is
 therefore a **hard swap** (a backed-up force-update), not a merge or fast-forward. A
 PR/merge would splice two upstream bases into a merge commit and break the linear
 history the fork depends on.
@@ -18,14 +18,14 @@ move without changing what Marin resolves. That is what makes the swap safe.
 
 For each pin in the refresh after its e2e passes:
 
-- Confirm `<branch>-next` is exactly the tip the e2e ran against. For a `release:` pin
+- Confirm `main-next` is exactly the tip the e2e ran against. For a `release:` pin
   also confirm it is the `source_commit` the candidate wheel was built from.
-- Record the current remote `<branch>` SHA. Tag it as
-  `<branch>-backup/YYYYMMDD/pre-<old-shortsha>` and tag the validated staged tip as
-  `<branch>-YYYYMMDD`. Reuse a tag that already points at the expected SHA; stop and
+- Record the current remote `main` SHA. Tag it as
+  `main-backup/YYYYMMDD/pre-<old-shortsha>` and tag the validated staged tip as
+  `main-YYYYMMDD`. Reuse a tag that already points at the expected SHA; stop and
   inspect if either name points elsewhere.
 - Push both tags and verify the remote tags resolve to the recorded SHAs.
-- Leave `<branch>` unchanged and keep `<branch>-next` available for admin review.
+- Leave `main` unchanged and keep `main-next` available for admin review.
 
 Pin Marin at the exact staged SHA or candidate wheel and regenerate
 `external_dependencies.py`. The draft PR must list the staged and stable SHAs, both
@@ -39,11 +39,11 @@ merge it in this state.
 After reviewing the fork overlay and the draft Marin PR, an admin with ruleset bypass
 promotes each pin:
 
-- Confirm `<branch>-next` still resolves to the validated and date-tagged tip.
-- Confirm `<branch>` still resolves to the SHA recorded by the rollback tag.
+- Confirm `main-next` still resolves to the validated and date-tagged tip.
+- Confirm `main` still resolves to the SHA recorded by the rollback tag.
 - Hard-swap with a lease so a concurrent move is caught:
-  `git push --force-with-lease=<branch>:<old-sha> origin <branch>-next:<branch>`.
-- Verify remote `<branch>` resolves to the validated tip. Delete `<branch>-next` or
+  `git push --force-with-lease=main:<old-sha> origin main-next:main`.
+- Verify remote `main` resolves to the validated tip. Delete `main-next` or
   leave it for the next cycle; the next refresh force-updates it.
 
 Descriptor and release pins need no edit after this swap because they already record

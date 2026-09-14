@@ -43,7 +43,7 @@ in the weekly rotation. A human runs the skill for a single fork the same way.
 The session runs the `refresh-fork` skill
 (`.agents/skills/refresh-fork/SKILL.md`), which owns the migration procedure:
 select a new upstream base or existing main-line source, replay Marin's overlays
-for overlay forks, stage rebases on a `<branch>-next` branch, re-pin Marin, run the fork's declared
+for overlay forks, stage rebases on `main-next`, re-pin Marin, run the fork's declared
 end-to-end test, and on green open one draft Marin PR requesting the descriptor's
 reviewer. On an unresolved external blocker it files a "can't migrate" issue
 instead of a PR.
@@ -56,11 +56,11 @@ bump into a migration).
 
 ## Validation
 
-Each descriptor names one Marin e2e that runs before the PR opens:
+Each descriptor names one required e2e that runs before the PR opens:
 
 | Fork | End-to-end |
 |------|------------|
-| `vllm` TPU source, `tpu-inference` | Exact-pair Qwen3-0.6B TP8 gate on `v6e-8` |
+| `vllm` TPU source, `tpu-inference` | `marin-community/vllm:.github/workflows/marin-gpu-release.yaml#tpu` (Qwen3-0.6B TP8 on `v6e-8`) |
 | `vllm` (GPU) | `tests/cluster/vllm/test_snowball_backend_parity.py` |
 | `evalchemy` | `experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml` |
 | `harbor` | `experiments/evaluation/configs/harbor/aime-smoke.yaml` |
@@ -74,9 +74,9 @@ recorded as a baseline failure and left for its own fix.
 ## The vLLM GPU release pipeline
 
 The GPU pin resolves to a prebuilt wheel. The `marin-community/vllm`
-fork builds an immutable CUDA 13.2 x86_64 wheel for H100 through its own
-candidate and release workflows, validates the exact wheel bytes on real GPUs,
-and publishes a GitHub release carrying
+fork builds immutable CUDA 13 wheels for x86_64 H100 and aarch64 Blackwell
+targets through its own candidate and release workflows, validates the exact
+wheel bytes on real GPUs, and publishes a GitHub release carrying
 `marin-vllm-gpu-manifest.json`. The GPU overlay lives on the fork's `main`, which
 the candidate build triggers on.
 
@@ -94,9 +94,9 @@ loader validates.
 
 ## Promotion
 
-The refresh never force-moves a fork's stable branch. A rebase stages on `<branch>-next`
+The refresh never force-moves a fork's stable branch. A rebase stages on `main-next`
 and leaves the protected stable branch at the old tip; the draft Marin PR names
-the `<branch>-next` to `<branch>` hard swap an admin performs after review. Because
+the `main-next` to `main` hard swap an admin performs after review. Because
 the staged tip and the eventual stable tip are the same commit, the pins need no
 change after promotion.
 

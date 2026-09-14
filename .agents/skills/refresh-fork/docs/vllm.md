@@ -26,19 +26,17 @@ launcher installs both exact pins together.
 2. Resolve the vLLM source from protected `marin-community/vllm/main`. A
    package source named by an immutable Marin release tag is also valid when a
    bounded diff proves that later `main` changes do not alter wheel contents.
-   Record its full SHA, tag, upstream base, and package-equivalence command.
-3. Audit the retired `vllm/tpu` overlay against that source. Classify every
-   still-needed behavior as present, ported, or obsolete. Do not replay it onto
-   another vLLM branch.
-4. Try the exact pair. Run dependency resolution, both wheel builds, a clean
+   Record its full SHA and upstream base in the descriptor. Cite the tag and
+   package-equivalence command in the PR.
+3. Try the exact pair. Run dependency resolution, both wheel builds, a clean
    install, the native/import boundary, and focused compatibility tests before
    using a TPU. Repair ordinary vLLM API drift in tpu-inference, preferably by
    rebasing onto a newer compatible upstream release or porting its fix.
-5. If a correct repair requires changing vLLM source, stop the TPU-only path.
+4. If a correct repair requires changing vLLM source, stop the TPU-only path.
    Route the patch through the `vllm-gpu` source refresh below and require its
    GPU qualification as well as the TPU gate. Do not move vLLM back to an older
    TPU LKG.
-6. Push the reviewed tpu-inference tip and dispatch the vLLM fork's candidate
+5. Push the reviewed tpu-inference tip and dispatch the vLLM fork's candidate
    workflow from its reviewed workflow ref:
 
 ```sh
@@ -55,7 +53,7 @@ The candidate tag binds both source SHAs, the workflow SHA, dependency cutoff,
 and wheel hashes. Download the manifest and run `verify-candidate` before the
 physical gate.
 
-7. Qualify those exact public bytes without finalizing the release:
+6. Qualify those exact public bytes without finalizing the release:
 
 ```sh
 gh workflow run marin-gpu-release.yaml \
@@ -70,11 +68,11 @@ This runs the Qwen3-0.6B TP8 serve-and-probe on one production-priority
 `v6e-8` in `us-east5`. Monitor the exact workflow and Iris job. The workflow
 owns cleanup for its job.
 
-8. Set `config/external/vllm/tpu.toml` to the tested source SHAs. For vLLM,
-   record the immutable source tag when one exists. Regenerate
-   `external_dependencies.py`; no workspace lock changes are expected because
-   TPU serving uses an isolated `uvx` environment.
-9. Create rollback and date tags only for the rebased tpu-inference branch.
+7. Set `config/external/vllm/tpu.toml` to the tested source SHAs and upstream
+   bases. Cite an immutable vLLM source tag or `main` ancestry proof in the PR.
+   Regenerate `external_dependencies.py`; no workspace lock changes are expected
+   because TPU serving uses an isolated `uvx` environment.
+8. Create rollback and date tags only for the rebased tpu-inference branch.
    The selected vLLM source is already reachable from `main` or its immutable
    release tag and needs no TPU-specific staging or promotion.
 
@@ -121,9 +119,9 @@ validation.
 
 ## Marin end-to-end gates
 
-- The TPU release workflow above is the required exact-pair gate. Its manifest
-  and qualification record must name the same vLLM SHA, tpu-inference SHA,
-  workflow SHA, and wheel hashes.
+- The TPU release workflow above is the required exact-pair gate. Its candidate
+  manifest must name both source SHAs, the workflow SHA, and both wheel hashes;
+  its qualification record must name that exact candidate tag.
 - `tests/cluster/vllm/test_snowball_backend_parity.py` is the GPU model parity
   gate. Run it with `-m cluster -o addopts= --import-mode=importlib`; pair it
   with the fork release workflow's H100 serve smoke.

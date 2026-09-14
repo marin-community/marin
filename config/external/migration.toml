@@ -6,10 +6,10 @@
 # SHA/version lives in the source named by `pin` (an isolated project's uv.lock, or a vllm/*.toml
 # descriptor).
 #
-# Migrating a pin rebases our commits onto a newer upstream base on a `<branch>-next` staging branch,
+# Migrating a pin rebases our commits onto a newer upstream base on a `main-next` staging branch,
 # validates with the fork's e2e against that branch, re-pins Marin at the exact staged tip, and opens
 # a draft PR. The refresh creates rollback and date tags; an admin promotes the protected stable
-# `branch` before merging the Marin PR. Some forks have drifted too far for a mechanical rebase (see
+# `main` branch before merging the Marin PR. Some forks have drifted too far for a mechanical rebase (see
 # their nuances); a refresh files a blocker for those until a one-time manual catch-up brings them
 # close to upstream again.
 #
@@ -37,10 +37,8 @@
 #   base_select      Which upstream base to rebase onto: "upstream_main" (upstream default branch),
 #                    "latest_release" (newest stable GitHub release), or "fork_main" (select an exact
 #                    source already present on the fork's maintained main lineage without rebasing it).
-#   depends_on       Forks resolved before this one (base/derivation order; the coordinator's DAG
-#                    edges). Within a group this orders the refresh, not a separate landing.
-#   e2e              Marin end-to-end that validates the refreshed fork (file path, optional ::symbol);
-#                    the skill's Validate section holds the concrete invocation.
+#   e2e              End-to-end identifier that validates the refreshed fork; the skill's Validate
+#                    section holds the concrete invocation.
 #   blocker_assignee GitHub user assigned the "can't migrate" issue on failure.
 #   nuances          Migration constraints a human must respect (torch pins, known-good ceilings, etc.).
 
@@ -50,7 +48,7 @@ group = "tpu-vllm"
 pin = "descriptor:vllm/tpu.toml#tpu-inference"
 branch = "main"
 base_select = "latest_release"
-e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
+e2e = "marin-community/vllm:.github/workflows/marin-gpu-release.yaml#tpu"
 blocker_assignee = "yonromai"
 nuances = [
     "The fork's torchvision<0.27 constraint holds torch at 2.11 inside the uvx env.",
@@ -62,7 +60,7 @@ group = "tpu-vllm"
 pin = "descriptor:vllm/tpu.toml#vllm"
 branch = "main"
 base_select = "fork_main"
-e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
+e2e = "marin-community/vllm:.github/workflows/marin-gpu-release.yaml#tpu"
 blocker_assignee = "yonromai"
 nuances = [
     "Select a full SHA already reachable from protected main, or an immutable release tag whose package source is proven equivalent to it.",
