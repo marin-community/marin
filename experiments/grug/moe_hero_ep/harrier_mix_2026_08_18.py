@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig
@@ -26,9 +26,9 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.moe.launch_datakit_moe_mix import (
+    _MIXTURE_BLOCK_SIZE,
     _phase_1_start_step,
     _simulated_epoching_budgets,
-    _two_phase_data_config,
     _val_component,
 )
 from experiments.marin_tokenizer import marin_tokenizer
@@ -53,9 +53,8 @@ HARRIER_MIX_2026_08_18_STORE = ArtifactStep.adopt(
 class _HarrierMixSpec:
     tokenizer: str
     candidate_store_uri: str
-    phase_budgets: tuple[int, int]
     available_tokens: tuple[tuple[str, int], ...]
-    phase_weights: tuple[tuple[tuple[str, float], ...], tuple[tuple[str, float], ...]]
+    phase_weights: tuple[tuple[tuple[str, float], ...], ...]
 
 
 def _load_spec() -> _HarrierMixSpec:
@@ -63,14 +62,12 @@ def _load_spec() -> _HarrierMixSpec:
     return _HarrierMixSpec(
         tokenizer=raw["tokenizer"],
         candidate_store_uri=raw["candidate_store_uri"],
-        phase_budgets=tuple(raw["phase_budgets"]),
         available_tokens=tuple(raw["available_tokens"].items()),
-        phase_weights=(tuple(raw["phase0_weights"].items()), tuple(raw["phase1_weights"].items())),
+        phase_weights=tuple(tuple(phase["weights"].items()) for phase in raw["phases"]),
     )
 
 
 _SPEC = _load_spec()
-_SELECTED_MIX = json.loads(Path(__file__).with_name("best_mixture_996f489106c7b922.json").read_text())
 # Same relative switch for every rung; the 390251-step hero switches after checkpoint 108000.
 _MIXTURE_SWITCH_FRACTION = 108_000 / 390_251
 
@@ -79,8 +76,10 @@ def _validate_spec(spec: _HarrierMixSpec) -> None:
     available_tokens = dict(spec.available_tokens)
     phase_weights = tuple(dict(weights) for weights in spec.phase_weights)
     cells = set(available_tokens)
-    if spec.phase_budgets != (PRETRAIN_TOKENS, COOLDOWN_TOKENS):
-        raise ValueError("Harrier 2026.08.18 must use the 15T/3.75T phase budgets")
+    if len(phase_weights) != 3:
+        raise ValueError("Harrier must have initial, main, and cooldown phases")
+    initial_tokens = TOTAL_TOKENS * _MIXTURE_SWITCH_FRACTION
+    phase_budgets = (initial_tokens, PRETRAIN_TOKENS - initial_tokens, COOLDOWN_TOKENS)
     if spec.tokenizer != marin_tokenizer:
         raise ValueError("Harrier 2026.08.18 must use the Marin tokenizer")
     if spec.candidate_store_uri != HARRIER_MIX_2026_08_18_STORE.adopt_source:
@@ -90,7 +89,7 @@ def _validate_spec(spec: _HarrierMixSpec) -> None:
             raise ValueError(f"Harrier 2026.08.18 phase {phase} is not a dense simplex")
     cumulative_epochs = {
         cell: (
-            sum(tokens * weights[cell] for tokens, weights in zip(spec.phase_budgets, phase_weights, strict=True))
+            sum(tokens * weights[cell] for tokens, weights in zip(phase_budgets, phase_weights, strict=True))
             / available_tokens[cell]
         )
         for cell in cells
@@ -149,25 +148,22 @@ def harrier_mix_2026_08_18_data_config(
         enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
     )
 
-    data = _two_phase_data_config(
-        tokenizer=marin_tokenizer,
-        components=components,
-        phase_weights=phase_weights,
-        phase_1_start=_phase_1_start_step(total_steps, batch_size),
-        val_components=val_components,
-        target_budget=target_budget,
-        experiment_budget=experiment_budget,
-    )
-
-    step_multiple = data.mixture_block_size // math.gcd(data.mixture_block_size, batch_size)
+    step_multiple = _MIXTURE_BLOCK_SIZE // math.gcd(_MIXTURE_BLOCK_SIZE, batch_size)
     switch_step = math.ceil(total_steps * _MIXTURE_SWITCH_FRACTION / step_multiple) * step_multiple
     cooldown_step = _phase_1_start_step(total_steps, batch_size)
     val_zero_weights = {name: 0.0 for name in val_components}
-    assert isinstance(data.train_weights, list)
     # A short diagnostic can round both transitions to the same block; cooldown wins there.
     stages = {
-        0: data.train_weights[0][1],
-        switch_step: {**_SELECTED_MIX["phase0_weights"], **val_zero_weights},
-        cooldown_step: {**_SELECTED_MIX["phase1_weights"], **val_zero_weights},
+        step: {**weights, **val_zero_weights}
+        for step, weights in zip((0, switch_step, cooldown_step), phase_weights, strict=True)
     }
-    return replace(data, train_weights=sorted(stages.items()))
+    return LmDataConfig(
+        tokenizer=marin_tokenizer,
+        cache_dir=None,
+        components={**components, **val_components},
+        train_weights=sorted(stages.items()),
+        auto_build_caches=False,
+        mixture_block_size=_MIXTURE_BLOCK_SIZE,
+        target_budget=target_budget,
+        experiment_budget=experiment_budget,
+    )
