@@ -73,10 +73,9 @@ recorded as a baseline failure and left for its own fix.
 
 ## The vLLM GPU release pipeline
 
-The GPU pin resolves to a prebuilt wheel. The `marin-community/vllm`
-fork builds immutable CUDA 13 wheels for x86_64 H100 and aarch64 Blackwell
-targets through its own candidate and release workflows, validates the exact
-wheel bytes on real GPUs, and publishes a GitHub release carrying
+The GPU pin resolves to a prebuilt wheel. The current `marin-community/vllm`
+pipeline builds an immutable CUDA 13.2 x86_64 wheel for H100, validates the
+exact wheel bytes on real GPUs, and publishes a GitHub release carrying
 `marin-vllm-gpu-manifest.json`. The GPU overlay lives on the fork's `main`, which
 the candidate build triggers on.
 

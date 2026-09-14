@@ -77,8 +77,20 @@ owns cleanup for its job.
    release tag and needs no TPU-specific staging or promotion.
 
 Keep the candidate as a prerelease until the reviewed source and Marin pin
-changes land. The final `promote=true` dispatch must use the same workflow ref
-and candidate tag so it reuses the qualified bytes.
+changes land. Then dispatch the merged release workflow with the same candidate
+tag, the accepted qualification run ID, and `promote=true`. The promotion path
+verifies that successful run and its artifact against the candidate before
+publishing the same bytes; it does not allocate another TPU.
+
+```sh
+gh workflow run marin-gpu-release.yaml \
+  --repo marin-community/vllm \
+  --ref main \
+  -f lane=tpu \
+  -f candidate_tag=<same-exact-candidate-tag> \
+  -f qualification_run_id=<successful-qualification-run-id> \
+  -f promote=true
+```
 
 ## Refresh the GPU source and artifact
 
