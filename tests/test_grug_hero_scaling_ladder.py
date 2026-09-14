@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
 from collections import Counter
 from collections.abc import Sequence
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -126,10 +128,10 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
     )
     assert diagnostic_config.data.target_budget is ladder_config.data.target_budget is None
     assert diagnostic_config.data.experiment_budget is ladder_config.data.experiment_budget is None
-    assert diagnostic_config.data.train_weights == [
-        (step, {name: weight for name, weight in weights.items() if weight > 0})
-        for step, weights in ladder_config.data.train_weights
-    ]
+    assert diagnostic_config.data.train_weights[0] == (
+        0,
+        {name: weight for name, weight in ladder_config.data.train_weights[0][1].items() if weight > 0},
+    )
 
 
 @pytest.mark.parametrize(
@@ -194,13 +196,16 @@ class IndexedCorpus(AsyncDataset[tuple[str, int]]):
 
 @pytest.mark.asyncio
 async def test_hero_mixture_switch_preserves_prefix_and_resumes_at_new_weights():
-    baseline = build_ladder_run(run_id="test-old-mix", size="d6144", version="dev")
-    continuation = build_ladder_run(run_id="test-new-mix", size="d6144", mixture_switch_step=108_000, version="dev")
-    configs = [
-        step.build_config(StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps))
-        for step in [baseline, continuation]
-    ]
-    old, new = configs
+    continuation = build_ladder_run(run_id="test-new-mix", size="d6144", version="dev")
+    new = continuation.build_config(
+        StepContext.for_fingerprint(runtime_arg_keys=continuation.runtime_args, deps=continuation.deps)
+    )
+    # Read the historical weights independently of the new schedule.
+    old_spec = json.loads(
+        (Path(__file__).resolve().parents[1] / "experiments/grug/moe_hero_ep/harrier_mix_2026_08_18.json").read_text()
+    )
+    old = dataclasses.replace(new, data=dataclasses.replace(new.data, train_weights=[(0, old_spec["phase0_weights"])]))
+    configs = [old, new]
     batch = BatchSchedule(old.trainer.trainer.train_batch_size)
     # Unique sample identities let this exercise component offsets as well as corpus selection.
     datasets = {name: IndexedCorpus(name) for name in old.data.components}
@@ -239,10 +244,3 @@ async def test_hero_mixture_switch_preserves_prefix_and_resumes_at_new_weights()
     ]
     for name in first_indices[0].keys() & first_indices[1].keys():
         assert first_indices[0][name] == first_indices[1][name]
-
-
-@pytest.mark.parametrize("switch_step", [107_999, 312_192, 390_251])
-def test_hero_mixture_switch_rejects_unaligned_or_post_cooldown_steps(switch_step):
-    step = build_ladder_run(run_id="test-invalid-switch", size="d6144", mixture_switch_step=switch_step, version="dev")
-    with pytest.raises(ValueError, match="mixture_switch_step"):
-        step.build_config(StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps))

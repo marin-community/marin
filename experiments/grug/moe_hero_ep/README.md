@@ -193,14 +193,13 @@ group `moe-hero-ep-small-abl` and carry Paloma and uncheatable evaluation at `--
 
 ### Scaling ladder
 
-`launch_scaling_ladder.py` defaults to one hero recipe at five widths so a narrow rung predicts
-the `d6144` hero (which is the hero itself). Default launches share the Harrier 2026.08.18
-two-phase mixture on the Marin tokenizer. Simulated epoching against the 18.75T target budget
-applies only at or below 1e23 training FLOPs; the full hero uses the raw mixture. Rungs share
+`launch_scaling_ladder.py` trains the hero model and optimizer recipe at five widths. Narrow
+rungs use the Harrier 2026.08.18 two-phase mixture; d6144 uses the continuation schedule below.
+All use the Marin tokenizer. Simulated epoching against the 18.75T target budget applies only
+at or below 1e23 training FLOPs; the full hero uses the raw mixture. Rungs share
 the offloaded MuonH optimizer, the hero mixed precision, 384 experts / top-8, the ragged
-all-to-all transport, the QB histogram estimator at 10k bins, and a dropless held-out eval. Only
-the width and the rack count vary; the rack count, batch, step budget, eval cadence, and
-checkpoint policy all follow `--size`:
+all-to-all transport, the QB histogram estimator at 10k bins, and a dropless held-out eval.
+The rack count, batch, step budget, eval cadence, and checkpoint policy follow `--size`:
 
 | size | racks | batch | steps | eval | checkpoints |
 |---|---|---|---|---|---|
@@ -228,10 +227,9 @@ phase 1 starts at the existing cooldown boundary, step 312,192. The data store, 
 optimizer, and 390,251-step schedule stay unchanged; simulated epoching remains disabled.
 The selected weights and swarm revision are pinned in `best_mixture_996f489106c7b922.json`.
 
-The launcher exposes `--mixture-switch-step` for this continuation. It requires a mixture-block
-boundary before cooldown (multiples of 48 steps at the hero batch). Without the flag, ladder runs
-keep the original Harrier mixture. The pre-switch schedule is retained so resumed loaders keep
-component offsets consistent with the old prefix.
+The hero uses the existing `train_weights` schedule with boundaries at 0, 108,000, and 312,192.
+These are fixed full-run steps, including when `--num-steps` shortens a diagnostic run. The
+pre-switch schedule is retained so resumed loaders keep component offsets consistent with the old prefix.
 
 Launch or resume this continuation with `trigger_hero.sh`. The trigger first comments on
 [issue #8506](https://github.com/marin-community/marin/issues/8506) with the full `HEAD` commit,

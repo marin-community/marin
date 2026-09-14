@@ -16,7 +16,6 @@ fi
 # The source checkpoint must finish writing before this trigger is used. See https://github.com/marin-community/marin/issues/9126.
 RUN_ID=hero-mix-996f4891-step108k
 HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-ragged_a2a-nccl2307-ep-step81k/2026.08.19.2/checkpoints/step-108000
-MIXTURE_SWITCH_STEP=108000
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
 TARGET_CLUSTER=cw-us-east-08a
 TARGET_DESCRIPTION='11 x NVL72'
@@ -53,6 +52,5 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
     --run-id "$RUN_ID" \
     --initialize-from-checkpoint "$HANDOFF_CHECKPOINT" \
     --size d6144 \
-    --mixture-switch-step "$MIXTURE_SWITCH_STEP" \
     --version 2026.08.19.2 \
     --run

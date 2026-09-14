@@ -3,11 +3,11 @@
 
 """Hero-shape scaling ladder: one recipe, five widths.
 
-By default, every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
-hidden/2 latent, ragged all-to-all transport, the Harrier 2026.08.18 two-phase mixture on the
-Marin tokenizer, offloaded MuonH state, the QB histogram estimator, and a dropless held-out eval --
-and differs only in width and the rack count it spans. Behaviour is uniform across the ladder so a
-rung predicts the d6144 hero. ``d6144`` is the hero itself.
+Every rung trains the same EP hero model and optimizer recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
+hidden/2 latent, ragged all-to-all transport, the Marin tokenizer, offloaded MuonH state, the QB
+histogram estimator, and a dropless held-out eval. Narrow rungs use Harrier 2026.08.18; d6144 switches
+to the selected September mixture after 108000 updates, with its cooldown at step 312192.
+``d6144`` is the hero itself.
 
     size   racks  batch    steps  eval        checkpoints  tokens  active  total   FLOPs
     d768     1     1024    11420  every 5%    final only     48B     61M    1.6B    5.5e19
@@ -34,7 +34,6 @@ Changelog:
 
 import dataclasses
 import json
-import math
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -157,7 +156,6 @@ def build_ladder_run(
     gate_router_weight_decay: float = 0.02,
     version: str | None = None,
     initialize_from_checkpoint: str | None = None,
-    mixture_switch_step: int | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
 
@@ -171,9 +169,8 @@ def build_ladder_run(
     checkpoint directory, added as the resume fallback so a relaunch under a new run id continues
     that lineage's full state from exactly that step while writing only to its own tree.
 
-    ``mixture_switch_step`` preserves Harrier before that completed-update count, then uses the
-    selected September mixture's phase 0 and replaces the existing cooldown with its phase 1.
-    The switch must align with a mixture block and precede cooldown. Omitting it keeps Harrier.
+    The d6144 data schedule keeps Harrier through 108000 completed updates, then uses the selected
+    September mixture, with its second phase starting at step 312192. Narrow rungs keep Harrier.
 
     ``gate_router_weight_decay`` is on by default (see ``GrugMoeMuonHConfig``): the recipe decays the
     attn_gate and router weights, and because the decay reads the Adam step count it also applies at
@@ -279,11 +276,7 @@ def build_ladder_run(
                     f"racks-{dp_racks}",
                     "gb200",
                     HARRIER_MIX_2026_08_18_TAG,
-                    *(
-                        [BEST_MIXTURE_TAG, f"mixture-switch-step-{mixture_switch_step}"]
-                        if mixture_switch_step is not None
-                        else []
-                    ),
+                    *([BEST_MIXTURE_TAG] if size == "d6144" else []),
                 ],
                 group="moe-hero-ep-scaling-ladder",
                 name=run_id,
@@ -320,29 +313,15 @@ def build_ladder_run(
             experiment_flops=run_flops,
             validation=validation,
         )
-        if mixture_switch_step is not None:
+        if size == "d6144":
             assert isinstance(data.train_weights, list)
-            initial_stage, (cooldown_step, _) = data.train_weights
-            if not 0 < mixture_switch_step < cooldown_step:
-                raise ValueError("mixture_switch_step must be positive and precede cooldown")
-            if mixture_switch_step * batch_size % data.mixture_block_size:
-                raise ValueError("mixture_switch_step must align with a mixture block")
             val_zero_weights = {item.name: 0.0 for item in validation}
-            train_cells = initial_stage[1].keys() - val_zero_weights.keys()
-            phases = [BEST_MIXTURE["phase0_weights"], BEST_MIXTURE["phase1_weights"]]
-            for weights in phases:
-                if (
-                    set(weights) != train_cells
-                    or min(weights.values()) < 0
-                    or not math.isclose(sum(weights.values()), 1.0, abs_tol=1e-9)
-                ):
-                    raise ValueError("Selected mixture must be a simplex over the Harrier training cells")
             data = dataclasses.replace(
                 data,
                 train_weights=[
-                    initial_stage,
-                    (mixture_switch_step, {**phases[0], **val_zero_weights}),
-                    (cooldown_step, {**phases[1], **val_zero_weights}),
+                    data.train_weights[0],
+                    (108_000, {**BEST_MIXTURE["phase0_weights"], **val_zero_weights}),
+                    (312_192, {**BEST_MIXTURE["phase1_weights"], **val_zero_weights}),
                 ],
             )
         return GrugRunConfig(
@@ -413,13 +392,6 @@ def build_ladder_run(
     help="Checkpoint directory of another run to resume from under a new --run-id; this run writes only "
     "to its own tree and later restarts prefer its own, newer checkpoints.",
 )
-@click.option(
-    "--mixture-switch-step",
-    type=click.IntRange(min=1),
-    default=None,
-    help="Completed updates before switching to best-mixture-996f489106c7b922. Must align with a "
-    "mixture block and precede the existing cooldown. Default keeps the original Harrier mixture.",
-)
 @build_options
 def main(
     run_id: str,
@@ -428,7 +400,6 @@ def main(
     checkpoint_every: int | None,
     gate_router_weight_decay: float,
     initialize_from_checkpoint: str | None,
-    mixture_switch_step: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_ladder_run(
         run_id=run_id,
@@ -437,7 +408,6 @@ def main(
         checkpoint_every=checkpoint_every,
         gate_router_weight_decay=gate_router_weight_decay,
         initialize_from_checkpoint=initialize_from_checkpoint,
-        mixture_switch_step=mixture_switch_step,
     )
 
 
