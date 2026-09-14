@@ -1,11 +1,15 @@
 ---
 name: write-ops-log
-description: Publish a tagged Echo record after every incident, then link its canonical URL from the associated pull request or issue.
+description: Publish a tagged Echo record after a live infrastructure incident, then link its canonical URL from the associated pull request or issue.
 ---
 
 # Skill: Write an Ops Log
 
 Publish the incident record to Echo. Do not add a repository debug-log file.
+An incident is a service, production run, or shared operational system failure
+or degradation that required diagnosis or mitigation. Ordinary code debugging,
+implementation notes, experiment progress, and local failures are not incident
+records.
 The audience is a future engineer who must quickly decide what to check or do
 next. Record the smallest set of facts that supports that action. Link raw
 evidence and detailed chronology rather than reproducing them; Echo entries

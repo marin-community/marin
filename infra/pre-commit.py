@@ -686,9 +686,6 @@ def check_skill_metadata(files: list[pathlib.Path], fix: bool) -> int:
             errors.append((file_path, f"could not read file: {e}"))
             continue
 
-        if re.search(r"\.agents/project(?!s)", text):
-            errors.append((file_path, "use .agents/projects/, not .agents/project/"))
-
         if "lib/finelog/src/finelog/proto/stats.proto" in text:
             errors.append(
                 (

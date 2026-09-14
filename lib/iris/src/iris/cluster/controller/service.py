@@ -651,9 +651,14 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 
 
 def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskWithAttempts | None:
-    """Return a TaskWithAttempts for ``task_id``, or None if absent."""
+    """Return a TaskWithAttempts for ``task_id``, or None if absent.
+
+    Reads the detail row directly rather than through ``reads.get_task_detail``:
+    that helper also runs an attempt-count aggregate, and ``TaskWithAttempts``
+    carries the attempt rows instead, so clients derive the counts themselves.
+    """
     with db.read_snapshot() as tx:
-        task_row = reads.get_task_detail(tx, task_id)
+        task_row = tx.execute(reads.task_detail_query().where(tasks_table.c.task_id == task_id)).first()
         if task_row is None:
             return None
         attempt_rows = tx.execute(

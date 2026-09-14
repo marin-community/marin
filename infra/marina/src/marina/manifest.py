@@ -18,7 +18,7 @@ from pathlib import Path
 MANIFEST_FILE = "app.toml"
 DIST_DIR = "dist"
 APP_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
-KNOWN_KEYS = frozenset({"title", "description", "connect_src", "build_command", "jobs", "agent"})
+KNOWN_KEYS = frozenset({"title", "description", "connect_src", "build_command", "data_url", "jobs", "agent"})
 JOB_KEYS = frozenset({"name", "runner", "schedule", "command", "timeout", "cpu", "memory_gib", "secrets"})
 AGENT_KEYS = frozenset({"profile", "repository", "starters"})
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -56,6 +56,7 @@ class AppManifest:
     root: Path
     connect_src: tuple[str, ...] = ()
     build_command: str | None = None
+    data_url: str | None = None
     jobs: tuple[AppJob, ...] = ()
     agent: AgentPanelManifest | None = None
 
@@ -212,6 +213,7 @@ def load_manifest(app_dir: Path) -> AppManifest:
         root=app_dir,
         connect_src=tuple(raw.get("connect_src", [])),
         build_command=raw.get("build_command"),
+        data_url=_string(raw["data_url"], "data_url", manifest_path) if "data_url" in raw else None,
         jobs=jobs,
         agent=_agent(raw["agent"], manifest_path) if "agent" in raw else None,
     )

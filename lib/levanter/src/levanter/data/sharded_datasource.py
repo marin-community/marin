@@ -9,6 +9,7 @@ import os
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from functools import cached_property
+from itertools import batched
 from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, Sized, Tuple, TypeVar
 
 import datasets
@@ -23,7 +24,6 @@ from ._preprocessor import (
     _MapTransform,
     _TransformedDataset,
 )
-from .utils import batched
 
 logger = logging.getLogger(__name__)
 
@@ -563,8 +563,8 @@ class _BatchMappedShardedDataSource(ShardedDataSource[T], _TransformedDataset):
         # batch sizes are the same
         i = 0
         shard_iter = self.source.open_shard_at_row(shard_name, row)
-        for batch in batched(shard_iter, self._transform.batch_size):  # type: ignore
-            result = self._transform.fn(batch)  # type: ignore
+        for batch in batched(shard_iter, self._transform.batch_size):
+            result = self._transform.fn(list(batch))  # type: ignore
             if isinstance(result, Sized) and len(result) + i < row:
                 i += len(result)
                 continue

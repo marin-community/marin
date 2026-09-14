@@ -23,7 +23,8 @@ architecture. Dataset changes can usually reuse an existing heuristic.
 - **Validated scaling rules** confirmed at ~1e19 FLOPs and across the full isoflop range.
 - A **scaling ladder** training optimal models at larger budgets.
 - **Canary promotion** in `experiments/ferries/canary_ferry.py`.
-- A **running report** in `.agents/logbooks/<topic>.md`.
+- A **running experiment record** in the coordinating issue, W&B report, or
+  durable session channel.
 
 ## Key reference files
 

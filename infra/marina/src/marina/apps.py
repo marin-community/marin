@@ -90,10 +90,10 @@ def migration(manifest: AppManifest) -> Callable[[Engine], None] | None:
     return getattr(_module(manifest), MIGRATE, None)
 
 
-def data_url_for(data_root: str, app: str) -> str:
-    """The app's directory under the data root, whether that root is local or ``gs://``."""
-    return prefix_join(data_root, app)
+def data_url_for(manifest: AppManifest, data_root: str) -> str:
+    """The app's explicit data URL, or its directory under the deployment data root."""
+    return manifest.data_url or prefix_join(data_root, manifest.name)
 
 
 def services_for(manifest: AppManifest, data_root: str, database: DatabaseSpec | None) -> Services:
-    return Services(name=manifest.name, data_url=data_url_for(data_root, manifest.name), database=database)
+    return Services(name=manifest.name, data_url=data_url_for(manifest, data_root), database=database)
