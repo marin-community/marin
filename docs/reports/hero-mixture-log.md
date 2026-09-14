@@ -14,8 +14,8 @@ and weight source.
 Software infrastructure, low-level code, and natural-science research lead the
 mixture, with substantial general software development, history, and math.
 
-Weights: `phase0_weights` in
-[`harrier_mix_2026_08_18.json`](https://github.com/marin-community/marin/blob/d27dffe9c125e34b6f5a56a3a4006d196efb6575/experiments/grug/moe_hero_ep/harrier_mix_2026_08_18.json).
+Weights: `phases[0].weights` (`initial`) in
+[`harrier_mix_2026_08_18.json`](https://github.com/marin-community/marin/blob/7c996f66bfa7baf7bf81cb5c6d62cc8b8dc720fb/experiments/grug/moe_hero_ep/harrier_mix_2026_08_18.json).
 
 ## Phase 2 — Main mixture · planned step 108,000 (~27.7%)
 
@@ -23,8 +23,8 @@ Increase command-line agent transcripts, law, and world news. Reduce general
 software development, finance, history, and math. Within software, the emphasis
 shifts toward agent transcripts and performance logs/low-level code.
 
-Weights: `phase0_weights` in
-[`best_mixture_996f489106c7b922.json`](https://github.com/marin-community/marin/blob/d27dffe9c125e34b6f5a56a3a4006d196efb6575/experiments/grug/moe_hero_ep/best_mixture_996f489106c7b922.json).
+Weights: `phases[1].weights` (`main`) in
+[`harrier_mix_2026_08_18.json`](https://github.com/marin-community/marin/blob/7c996f66bfa7baf7bf81cb5c6d62cc8b8dc720fb/experiments/grug/moe_hero_ep/harrier_mix_2026_08_18.json).
 The relaunch is configured to restore permanent checkpoint `step-108000`.
 
 ## Phase 3 — Cooldown mixture · planned step 312,192 (~80%)
@@ -34,7 +34,7 @@ transcripts retain large shares; general software development and math fall
 further. The highest classifier-rated quality bucket, Q4, rises from 22.9% in
 phase 2 to 28.0% in phase 3.
 
-Weights: `phase1_weights` in the same selected-mixture JSON. This phase runs to
+Weights: `phases[2].weights` (`cooldown`) in the same JSON. This phase runs to
 the configured end at step 390,251.
 
 <details>
