@@ -12,11 +12,13 @@ from collections import defaultdict
 from collections.abc import Callable, Hashable
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from fray.actor import ActorFuture, ActorHandle, current_actor
 from iris.cluster.client.job_info import get_job_info
 from rigging.timing import ExponentialBackoff, RateLimiter
 
+from zephyr import counters as stage_counters
 from zephyr.coordinator import CoordinatorUnreachable, PullStatus, PullTask
 from zephyr.memory_store import (
     MemoryStoreActorStats,
@@ -29,7 +31,9 @@ from zephyr.stage_io import ShardTask, StageRunner, TaskResult, ZephyrTaskResour
 from zephyr.stats import (
     WORKER_STATS_INTERVAL,
     ZEPHYR_WORKER_MEM_CURRENT_KEY,
+    StatsConfig,
     StatsWriter,
+    ZephyrShuffleStat,
     ZephyrWorkerStatStatus,
     _push_iris_task_status,
 )
@@ -51,6 +55,7 @@ class _ActiveShard:
     task: ShardTask
     execution_id: str
     start_time: float
+    attempt: int
     attempt_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     last_counters: dict[str, CounterEntry] = field(default_factory=dict)
 
@@ -83,6 +88,7 @@ class ZephyrWorker:
         coordinator_handle: ActorHandle,
         stage_runner_factory: Callable[[], StageRunner],
         total_resources: ZephyrTaskResources,
+        stats_config: StatsConfig | None = None,
     ):
         self._coordinator = coordinator_handle
         self._stage_runner_factory = stage_runner_factory
@@ -110,8 +116,9 @@ class ZephyrWorker:
         self._worker_id = f"{self._actor_ctx.group_name}-{self._actor_ctx.index}"
         self._actor_handle = self._actor_ctx.handle
         self._memory_store = MemoryStoreService(self._actor_ctx.index)
-        self._stats_writer = StatsWriter.connect()
+        self._stats_writer = StatsWriter.connect(stats_config)
         job_info = get_job_info()
+        self._job_id = str(job_info.job_id) if job_info is not None else ""
         self._task_id = job_info.task_id.to_wire() if job_info is not None else ""
 
         self._heartbeat_thread = threading.Thread(
@@ -255,6 +262,7 @@ class ZephyrWorker:
                 task=work.task,
                 execution_id=work.execution_id,
                 start_time=time.monotonic(),
+                attempt=work.attempt,
             )
             with self._resources_lock:
                 self._available = self._available - work.task.cost
@@ -372,6 +380,7 @@ class ZephyrWorker:
         with self._resources_lock:
             if not counters:
                 counters = active_shard.last_counters
+            self._report_shuffle_sizes(active_shard, counters)
             self._stats_writer.emit_worker_stat(
                 active_shard.task.stage_name,
                 active_shard.task.shard_idx,
@@ -393,6 +402,40 @@ class ZephyrWorker:
             active = list(self._active_shards)
         stage = active[-1].task.stage_name if active else ""
         return _format_worker_status_md(len(active), stage)
+
+    def _report_shuffle_sizes(self, active: _ActiveShard, counters: dict[str, CounterEntry]) -> None:
+        keys = (
+            stage_counters.SHUFFLE_INPUT_ROWS,
+            stage_counters.SHUFFLE_PAYLOAD_BYTES,
+            stage_counters.SHUFFLE_NUM_SOURCES,
+        )
+        if not all(key in counters for key in keys):
+            return
+        input_rows, payload_bytes, num_sources = (int(counters[key].value) for key in keys)
+        record = ZephyrShuffleStat(
+            execution_id=active.execution_id,
+            stage_name=active.task.stage_name,
+            target_shard=active.task.shard_idx,
+            num_targets=active.task.total_shards,
+            attempt=active.attempt,
+            input_rows=input_rows,
+            payload_bytes=payload_bytes,
+            num_sources=num_sources,
+            ts=datetime.now(UTC).replace(tzinfo=None),
+            job_id=self._job_id,
+        )
+        logger.info(
+            "[%s] Shuffle %s target=%d/%d attempt=%d: input_rows=%d payload_bytes=%d num_sources=%d",
+            record.execution_id,
+            record.stage_name,
+            record.target_shard,
+            record.num_targets,
+            record.attempt,
+            record.input_rows,
+            record.payload_bytes,
+            record.num_sources,
+        )
+        self._stats_writer.emit_shuffle_stats([record])
 
     def _next_counter_generation_locked(self) -> int:
         self._counter_generation += 1
