@@ -4,6 +4,7 @@
 """Coordinator actor and pull protocol for Zephyr pipelines."""
 
 import enum
+import json
 import logging
 import re
 import sys
@@ -13,9 +14,10 @@ from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 import cloudpickle
 from fray.actor import ActorGroup, ActorHandle, current_actor
@@ -38,7 +40,19 @@ from zephyr.dashboard.app import (
 )
 from zephyr.dashboard.coordinator import CoordinatorDashboard
 from zephyr.memory_store import MemoryTableRegistration
-from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Reduce, Scatter, SourceItem, StageType
+from zephyr.plan import (
+    Join,
+    PhysicalOp,
+    PhysicalPlan,
+    PhysicalStage,
+    Reduce,
+    Scatter,
+    SourceItem,
+    StageType,
+    execution_stage_name,
+    execution_stages,
+    join_stage_name,
+)
 from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_io import (
     ShardTask,
@@ -49,7 +63,14 @@ from zephyr.stage_io import (
     _ensure_picklable_exception,
     _stage_throughput,
 )
-from zephyr.stats import StatsConfig, StatsWriter, ZephyrShuffleStat, ZephyrWorkerStatStatus, _push_iris_task_status
+from zephyr.stats import (
+    StatsConfig,
+    StatsWriter,
+    ZephyrExecutionStat,
+    ZephyrShuffleStat,
+    ZephyrWorkerStatStatus,
+    _push_iris_task_status,
+)
 from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, merge_counter_entries
 from zephyr.writers import ensure_parent_dir
 
@@ -61,6 +82,7 @@ MAX_STATUS_TEXT_LENGTH = 1000
 MAX_CONCURRENT_PIPELINES = 16
 MAX_CONCURRENT_RESULT_READS = 16
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
+ZEPHYR_EXECUTIONS_APPLET_URL = "https://applets.marina.oa.dev/a/6c2b0dc9-9a31-4777-82d4-e759c0292aa3/"
 
 # Seconds between worker-job liveness probes. Each probe is a GetJobState RPC to
 # the Iris controller, and the coordinator loop ticks every 0.5s, so probing once
@@ -391,6 +413,7 @@ class ZephyrCoordinator:
         self._stats_writer = StatsWriter.connect(stats_config)
         job_info = get_job_info()
         self._job_id = str(job_info.job_id) if job_info is not None else ""
+        self._root_job_id = str(job_info.job_id.root_job) if job_info is not None else ""
         self._result_executor = ThreadPoolExecutor(
             max_workers=MAX_CONCURRENT_RESULT_READS, thread_name_prefix="zephyr-result"
         )
@@ -607,7 +630,8 @@ class ZephyrCoordinator:
         detail_lines: list[str] = []
         summary_lines: list[str] = []
         for execution_id, plan_stages, stage_index, completed, total, in_flight, queued in snapshot:
-            detail_lines.append(f"**{execution_id}**")
+            execution_url = f"{ZEPHYR_EXECUTIONS_APPLET_URL}#/execution/{quote(execution_id, safe='')}"
+            detail_lines.append(f"**[{execution_id}]({execution_url})**")
             for idx, stage in enumerate(plan_stages):
                 stage_desc = _get_stage_description(stage)
                 detail_lines.append(f"- **{stage_desc}**" if idx == stage_index else f"- {stage_desc}")
@@ -1268,6 +1292,16 @@ class ZephyrCoordinator:
         result_path = _execution_result_path(self._chunk_prefix, execution_id)
         try:
             shards = _build_source_shards(plan.source_items)
+            self._stats_writer.emit_execution_stat(
+                ZephyrExecutionStat(
+                    execution_id=execution_id,
+                    root_job_id=self._root_job_id,
+                    coordinator_job_id=self._job_id,
+                    ts=datetime.now(UTC).replace(tzinfo=None),
+                    input_shards=len(shards),
+                    stages_json=json.dumps([asdict(stage) for stage in execution_stages(plan)]),
+                )
+            )
             if not shards:
                 self._persist_result(
                     result_path, ZephyrExecutionResult(results=[], counters={}, execution_id=execution_id)
@@ -1295,7 +1329,7 @@ class ZephyrCoordinator:
                         run,
                         stage,
                         shards,
-                        stage_label=f"stage{stage_idx}-{stage.stage_name(max_length=40)}",
+                        stage_label=execution_stage_name(stage, stage_idx),
                         stage_index_for_state=stage_idx,
                         aux_per_shard=aux_per_shard,
                         is_last_stage=(stage_idx == last_worker_stage_idx),
@@ -1499,7 +1533,7 @@ class ZephyrCoordinator:
                         run,
                         right_stage,
                         right_refs,
-                        stage_label=f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}",
+                        stage_label=join_stage_name(parent_stage_idx, i, stage_idx),
                         stage_index_for_state=parent_stage_idx,
                     )
 
