@@ -20,24 +20,18 @@ import equinox as eqx
 import jax.random as jr
 import numpy as np
 from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID, UNK_ID, encode_texts
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict
 from experiments.datakit.cluster.quality.fast_transformer.model import FastTransformer, FastTransformerConfig
+from experiments.datakit.cluster.quality.fast_transformer.quality_model import artifact_names, model_stem
 
 # bme scores begin/middle/end ~512-token (~2000-char) windows of the whole doc and
 # mean-pools them, so a shared boilerplate prefix no longer dominates the score.
 CHUNK_CHARS = 2_000
 
-MODEL_STEM = "pooled_junkgate2"  # the deployed model artifact stem
-
-
-def artifact_names(stem: str) -> tuple[str, str, str]:
-    """The (.eqx, remap.json, meta.json) artifact filenames for a model stem."""
-    return f"{stem}.eqx", f"{stem}_remap.json", f"{stem}_meta.json"
-
-
-MODEL_EQX, MODEL_REMAP, MODEL_META = artifact_names(MODEL_STEM)
+MODEL_STEM = "pooled_junkgate2"  # default name for a newly trained model
 
 
 @dataclass(frozen=True)
@@ -69,8 +63,13 @@ class PooledScorer:
         model = eqx.tree_deserialise_leaves(model_path, template)
         return cls(model=model, remap=remap, tokenizer_name=meta["tokenizer"], max_tokens=meta["max_tokens"])
 
-    def score(self, texts: list[str], batch_size: int = 256) -> np.ndarray:
-        """Quality score in ``[0, 1]`` per document."""
+    def score(self, texts: list[str], batch_size: int = 256, doc_embed: np.ndarray | None = None) -> np.ndarray:
+        """Quality score in ``[0, 1]`` per document.
+
+        ``doc_embed`` carries one document-embedding row per text and is required by
+        a fusion scorer (one whose config declares ``doc_embed_dim``); the forward
+        pass fails without it rather than scoring text-only by accident.
+        """
         out = np.empty(len(texts), dtype=np.float32)
         for start in range(0, len(texts), batch_size):
             chunk = texts[start : start + batch_size]
@@ -79,23 +78,29 @@ class PooledScorer:
             for i, row in enumerate(encoded):
                 mapped = [self.remap.get(t, UNK_ID) for t in row[: self.max_tokens]]
                 ids[i, : len(mapped)] = mapped
-            out[start : start + len(chunk)] = predict(self.model, ids)
+            rows = None if doc_embed is None else doc_embed[start : start + len(chunk)]
+            out[start : start + len(chunk)] = predict(self.model, ids, doc_embed=rows)
         return out
 
 
 def load_pooled_scorer(model_dir: str) -> PooledScorer:
     """Load a `PooledScorer` from a model dir (streams the .eqx to a local path,
     which eqx deserialisation requires)."""
-    model_dir = model_dir.rstrip("/")
+    root = StoragePath(model_dir)
+    eqx_name, remap_name, meta_name = artifact_names(model_stem(model_dir))
     fd, local_eqx = tempfile.mkstemp(suffix=".eqx")
-    with os.fdopen(fd, "wb") as out, open_url(f"{model_dir}/{MODEL_EQX}", "rb") as fh:
+    with os.fdopen(fd, "wb") as out, (root / eqx_name).open("rb") as fh:
         out.write(fh.read())
-    return PooledScorer.load(local_eqx, f"{model_dir}/{MODEL_REMAP}", f"{model_dir}/{MODEL_META}")
+    return PooledScorer.load(local_eqx, str(root / remap_name), str(root / meta_name))
 
 
-def score_bme(scorer: PooledScorer, texts: list[str]) -> np.ndarray:
-    """Mean-pool the FT score over begin/middle/end ~512-token windows of each doc.
-    Short docs (<= one chunk) reduce to a single scored window."""
+def bme_chunks(texts: list[str]) -> tuple[list[str], list[tuple[int, int]]]:
+    """The begin/middle/end windows of every document, flattened.
+
+    Returns the flat window list and, per input document, the ``[start, end)``
+    span of its windows in that list. Short docs (<= one chunk) contribute a
+    single window.
+    """
     flat: list[str] = []
     spans: list[tuple[int, int]] = []
     for t in texts:
@@ -106,5 +111,11 @@ def score_bme(scorer: PooledScorer, texts: list[str]) -> np.ndarray:
             cs = [t[:CHUNK_CHARS], t[max(0, m - CHUNK_CHARS // 2) : m + CHUNK_CHARS // 2], t[-CHUNK_CHARS:]]
         spans.append((len(flat), len(flat) + len(cs)))
         flat.extend(cs)
+    return flat, spans
+
+
+def score_bme(scorer: PooledScorer, texts: list[str]) -> np.ndarray:
+    """Mean-pool the FT score over begin/middle/end ~512-token windows of each doc."""
+    flat, spans = bme_chunks(texts)
     s = scorer.score(flat)
     return np.array([s[a:b].mean() for a, b in spans])
