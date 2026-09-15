@@ -23,7 +23,7 @@ import pyarrow as pa
 from marin.datakit.chat_normalize import message_text
 from marin.datakit.chat_render import CHAT_RENDER_VERSION, render_chat_record
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
-from marin.datakit.decon import DeconAttributes
+from marin.datakit.decon import DeconAttributes, build_eval_bloom_step, decon_step
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sft_sources import all_sft_sources
 from marin.datakit.source_key import datakit_source_key
@@ -32,7 +32,15 @@ from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
-from marin.processing.classification.deduplication.verify_fuzzy_dups import VerifiedFuzzyDupsAttrData
+from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+    FuzzyVerificationStoreConfig,
+    VerifiedFuzzyDupsAttrData,
+    verify_fuzzy_dups,
+)
 from openai_harmony import Message, Role
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
@@ -43,11 +51,19 @@ from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.global_exact_dedup import GlobalExactDedupData
 from experiments.datakit.reference_pipeline import (
+    AA_BENCHMARK_NAMES,
+    AA_MANIFEST_PATH,
+    DECON_EXCLUDED_EVAL_TASKS,
     DEFAULT_SCALE,
+    ESTIMATED_DOC_COUNT,
+    EVAL_CORPUS_VERSION,
+    EVAL_ROOT,
+    FALSE_POSITIVE_RATE,
+    FLAGGED_SAMPLE_SIZE,
+    LMH_MANIFEST_PATH,
+    NGRAM_LENGTH,
+    OVERLAP_THRESHOLD,
     PipelineScale,
-    decontam_source_step,
-    eval_bloom_step,
-    verified_dedup_step,
     zephyr_datakit_steps,
 )
 from experiments.datakit.reports.decontam import decontam_report
@@ -193,13 +209,65 @@ def sft_datakit_steps(
         for name, chat in sorted(sources.items())
     }
     dedup = zephyr_datakit_steps(sources, scale, zephyr_context)
-    bloom = eval_bloom_step()
+    bloom = build_eval_bloom_step(
+        name="datakit/bloom/_combined_fixed",
+        eval_data_sources=[EVAL_ROOT],
+        ngram_length=NGRAM_LENGTH,
+        overlap_threshold=OVERLAP_THRESHOLD,
+        estimated_doc_count=ESTIMATED_DOC_COUNT,
+        false_positive_rate=FALSE_POSITIVE_RATE,
+        exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
+        required_eval_manifest_path=AA_MANIFEST_PATH,
+        required_eval_corpus_version=EVAL_CORPUS_VERSION,
+        required_eval_names=AA_BENCHMARK_NAMES,
+        best_effort_eval_manifest_path=LMH_MANIFEST_PATH,
+        best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
+    )
     # Repeated eval prompts remain contamination even when many SFT rollouts
     # share them. Template boilerplate is removed by the comparison projection.
     decontam = {
-        name: decontam_source_step(name, source, bloom, scale, zephyr_context) for name, source in sources.items()
+        name: decon_step(
+            name=f"datakit/decontam/{name}",
+            normalized=source,
+            prebuilt_bloom=bloom,
+            ngram_length=NGRAM_LENGTH,
+            overlap_threshold=OVERLAP_THRESHOLD,
+            estimated_doc_count=ESTIMATED_DOC_COUNT,
+            false_positive_rate=FALSE_POSITIVE_RATE,
+            flagged_sample_size=FLAGGED_SAMPLE_SIZE,
+            worker_resources=scale.pool.worker,
+            zephyr_context=zephyr_context,
+        )
+        for name, source in sources.items()
     }
-    verified = verified_dedup_step(sources, dedup.minhash, dedup.fuzzy_dedup, scale)
+    verification_params = FuzzyVerificationParams()
+    verification_store_config = FuzzyVerificationStoreConfig(
+        recovery_timeout=1_800,
+        ready_timeout=1_800,
+        lookup_batch_size=128,
+    )
+    verified = StepSpec(
+        name="datakit/verify_fuzzy_dups",
+        deps=[*sources.values(), *dedup.minhash.values(), dedup.fuzzy_dedup],
+        hash_attrs={
+            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+            "verification": verification_params.model_dump(mode="json"),
+            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
+        },
+        fn=lambda op: verify_fuzzy_dups(
+            normalized_sources={name: read_artifact(step.output_path, NormalizedData) for name, step in sources.items()},
+            minhash_sources={
+                name: read_artifact(step.output_path, MinHashAttrData) for name, step in dedup.minhash.items()
+            },
+            candidates=read_artifact(dedup.fuzzy_dedup.output_path, FuzzyDupsAttrData),
+            output_path=op,
+            verification_params=verification_params,
+            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+            store_config=verification_store_config,
+            max_workers=scale.pool.n_workers,
+            worker_resources=scale.pool.worker,
+        ),
+    )
     filtered = {
         name: StepSpec(
             name=f"datakit/sft/filtered/{name}",
