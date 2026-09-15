@@ -486,6 +486,25 @@ uv run finelog query marin --format table \
 
 ### Distinguishing missing regional logs from delayed hub forwarding
 
+`FinelogRelayStalled` is the primary fleet alert for this distinction. Each
+regional process sends a complete status snapshot directly to the hub every 30
+seconds; the report does not pass through `WriteRows` or a telemetry table. Its
+states mean:
+
+- `heartbeat_missing` or `heartbeat_stale`: the hub has no current direct report
+  from the cluster.
+- `namespace_missing`: the required `telemetry_v1.node_agent` table is absent
+  from an otherwise current complete snapshot.
+- `publication_stalled`: locally visible sequence positions have not reached
+  the published R2 catalog for ten minutes.
+- `forwarding_stalled`: published positions have not advanced the hub-settled
+  cursor for ten minutes.
+
+The Grafana rule holds a classified failure for two more minutes before paging.
+NoData and bridge/RPC errors alert rather than appearing healthy. On the
+regional Finelog UI, the table's Forwarding card shows the same visible,
+published, and settled boundaries for local diagnosis.
+
 The regional Finelog is the record; the `marin` hub is an asynchronous copy. If
 logs for a federated Iris task are absent from the hub, query the exact task key
 on both stores before diagnosing the pod-side shipper. Iris task keys include the

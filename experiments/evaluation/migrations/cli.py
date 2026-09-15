@@ -21,9 +21,9 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 
 import click
+from finestore.eval import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION
 from finestore.migrations import migrate
 from finestore.reader import ReadView
-from marin.evaluation.archive import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION
 from marin.evaluation.lm_eval_samples import (
     export_lm_eval_samples,
     preserved_sample_sources,

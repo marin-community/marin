@@ -197,6 +197,8 @@ requires the owner to quiesce and seal its writers first.
 
 ## Package boundary
 
-`marin-finestore` contains storage, transactions, read views, compaction, and generic
-cache adapters. Evaluation record types and `EvaluationStore` live in
-`marin.evaluation.archive`. FineStore has no evaluation or Marin pipeline dependency.
+`marin-finestore` contains storage, transactions, read views, compaction, generic cache adapters,
+and the versioned `finestore.eval` schema and table API. Harbor and Evalchemy map their own native
+formats into that contract and use the table API to write dashboard-ready `samples` and `steps`
+without depending on `marin-core`; Evaldash reads the same schema. FineStore contains no evaluator
+conversion policy or Marin pipeline dependency.

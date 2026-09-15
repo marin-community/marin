@@ -46,6 +46,8 @@ dependencies = [
     "tqdm-loggable",
     "wandb>0.24.0",
     "marin-zephyr",
+    "openai-harmony>=0.0.8",
+    "tokenizers",
 ]
 
 [project.license]
@@ -60,8 +62,10 @@ test = [
     "cloud-sql-python-connector[pg8000]>=1.9",
     "pytest>=8.3.2",
     "pytest-asyncio",
+    "pytest-json-report>=1.5",
     "pytest-xdist",
     "pytest-timeout",
+    "tasktrove-verify[answer,reasoning-gym,schema]",
     # for scaling law plotting tests
     "plotly",
 ]
@@ -183,7 +187,7 @@ url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
 [tool.uv.sources]
 # Marin's patched ragged all-to-all PJRT plugin, promoted from marin-community/xla
 # (docs/dev-guide/forking-policy.md). Non-aarch64 resolution falls back to PyPI.
-jax-cuda13-pjrt = { url = "https://github.com/marin-community/xla/releases/download/marin-xla-pjrt-20260909-b040736f2c4a/jax_cuda13_pjrt-0.11.1%2Bmarin.b040736f2c4a-py3-none-manylinux_2_27_aarch64.whl", extra = "gpu", marker = "platform_machine == 'aarch64'" }
+jax-cuda13-pjrt = { url = "https://github.com/marin-community/xla/releases/download/marin-xla-pjrt-20260915-708c3a4ec79c/jax_cuda13_pjrt-0.11.1%2Bmarin.708c3a4ec79c-py3-none-manylinux_2_27_aarch64.whl", extra = "gpu", marker = "platform_machine == 'aarch64'" }
 torchvision = [
     # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra = "cpu" },

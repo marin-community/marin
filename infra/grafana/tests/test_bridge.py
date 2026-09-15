@@ -37,6 +37,7 @@ from loom_alerts import (
     SlackThread,
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
+from relay_health import RelayNamespaceStatus, RelaySenderStatus
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
@@ -67,6 +68,7 @@ class FakeSource:
         table: pa.Table | None = None,
         raises: Exception | None = None,
         health: FinelogHealth | None = None,
+        relay_status: tuple[RelaySenderStatus, ...] = (),
     ) -> None:
         self._table = table if table is not None else pa.table({})
         self._raises = raises
@@ -81,6 +83,7 @@ class FakeSource:
             error_class="",
             error="",
         )
+        self._relay_status = relay_status
         self.queries: list[str] = []
 
     @property
@@ -95,6 +98,9 @@ class FakeSource:
 
     def health(self) -> FinelogHealth:
         return self._health
+
+    def relay_status(self) -> tuple[RelaySenderStatus, ...]:
+        return self._relay_status
 
 
 def _client(
@@ -1285,6 +1291,37 @@ def test_finelog_fleet_alert_marks_slow_and_unresponsive_servers():
             "value": 1,
         },
     ]
+
+
+def test_relay_status_routes_expose_the_snapshot_and_an_explicit_healthy_value():
+    now_ms = round(datetime.now(UTC).timestamp() * 1000)
+    relay = RelaySenderStatus(
+        cluster="cw-a",
+        boot_id="boot",
+        report_sequence=2,
+        target="https://hub",
+        received_at_ms=now_ms,
+        namespaces=(
+            RelayNamespaceStatus(
+                namespace="telemetry_v1.node_agent",
+                visible_high_water=12,
+                published_high_water=11,
+                settled_cursor=10,
+                publication_progress_at_ms=now_ms,
+                cursor_progress_at_ms=now_ms,
+            ),
+        ),
+    )
+    client = _client(FakeSource(relay_status=(relay,)))
+
+    assert client.get("/finelog/marin/relay_status").json()[0]["cluster"] == "cw-a"
+    row = next(row for row in client.get("/finelog/marin/alerts/relay_status").json() if row["cluster"] == "cw-a")
+    assert row == {
+        "cluster": "cw-a",
+        "namespace": "telemetry_v1.node_agent",
+        "state": "healthy",
+        "value": 0,
+    }
 
 
 def test_workload_overview_counts_issue_rows_and_keeps_explicit_zeros():

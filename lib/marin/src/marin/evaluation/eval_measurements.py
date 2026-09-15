@@ -16,7 +16,6 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from marin.evaluation.archive import base_metric, primary_metric
 from marin.evaluation.eval_stats import (
     BINARY_METRICS,
     SAMPLE_COUNT_METRIC,
@@ -26,6 +25,7 @@ from marin.evaluation.eval_stats import (
     MetricKind,
     ResultFlag,
 )
+from marin.evaluation.metric_selection import base_metric, primary_metric
 from marin.evaluation.records import EvalRunRecord
 
 # A value derived from n items is integral in k to within this tolerance when it really is k/n.
@@ -164,6 +164,7 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
         kind = MetricKind.CONTINUOUS
 
     item_cap = _item_cap(record)
+    fewshot_values = {task.num_fewshot for task in record.evaluation.tasks}
     return Measurement(
         benchmark=record.evaluation.name,
         metric=metric,
@@ -174,6 +175,7 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
         recorded_stderr=stderr,
         item_cap=item_cap,
         flags=_flags(coverage, kind, stderr, item_cap),
+        num_fewshot=next(iter(fewshot_values)) if len(fewshot_values) == 1 else None,
         run_id=record.run_id,
         created_at=record.created_at,
         version=record.version,

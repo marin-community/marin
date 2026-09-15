@@ -82,6 +82,33 @@ def test_finelog_health_does_not_mask_programming_errors():
         _finelog(ValueError("bug")).health()
 
 
+def test_finelog_relay_status_calls_connect_json_without_a_new_client_release():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "http://finelog:10001/finelog.stats.StatsService/ListRelayStatus"
+        assert request.headers["connect-protocol-version"] == "1"
+        assert request.read() == b"{}"
+        return httpx.Response(
+            200,
+            json={
+                "senders": [
+                    {
+                        "cluster": "cw-a",
+                        "bootId": "boot",
+                        "reportSequence": "1",
+                        "target": "https://hub",
+                        "receivedAtMs": "1000",
+                        "namespaces": [],
+                    }
+                ]
+            },
+        )
+
+    source = FinelogSource(TARGET, timeout_ms=5_000)
+    source._relay_address = "http://finelog:10001"
+    source._relay_http = httpx.Client(transport=httpx.MockTransport(handler))
+    assert source.relay_status()[0].cluster == "cw-a"
+
+
 # --- IrisSource ------------------------------------------------------------
 
 
