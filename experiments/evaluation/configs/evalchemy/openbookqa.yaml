@@ -3,5 +3,4 @@ task_options:
   openbookqa:
     num_fewshot: 0
     task_alias: openbookqa_0shot
-    primary_metric: acc_norm
 max_tokens: 256

@@ -240,6 +240,24 @@ export interface Status {
 export interface EvalTask {
   name: string
   num_fewshot: number | null
+  benchmark: BenchmarkMetadata | null
+}
+
+export interface BenchmarkMetric {
+  name: string
+  source_name: string
+  kind: 'binary' | 'continuous'
+  higher_is_better: boolean
+}
+
+export interface BenchmarkMetadata {
+  schema_version: 1
+  task: string
+  primary_metric: string
+  metric_kind: 'binary' | 'continuous'
+  metrics: BenchmarkMetric[]
+  n_benchmark: number | null
+  n_attempted: number | null
 }
 
 // The canonical record.json shape (records.EvalRunRecord). `headline` is not stored on the record --
@@ -258,6 +276,7 @@ export interface EvalRecord {
   error: string | null
   results_path: string
   metrics: Record<string, Record<string, number>>
+  canonical_metrics: Record<string, Record<string, number>>
   jobs: Record<string, string>
   log_tails: Record<string, string[]>
   provenance: { git_sha: string; eval_runtime: string; launch_host: string }

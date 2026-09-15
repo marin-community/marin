@@ -18,7 +18,9 @@ The ``harbor`` dependency is optional and imported lazily, so importing this mod
 import hashlib
 import json
 import logging
+import math
 import re
+import statistics
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -28,7 +30,6 @@ from finestore.eval import EvalSample, EvaluationStore, Grading, SampleKind
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
-from marin.evaluation.harbor.dataset_layout import dataset_task_count
 from marin.evaluation.harbor.driver_config import (
     HarborBackendsUnavailable,
     HarborErrorTaxonomy,
@@ -37,7 +38,7 @@ from marin.evaluation.harbor.driver_config import (
     run_harbor_driver,
 )
 from marin.evaluation.harbor.trajectory import archive_trajectory
-from marin.evaluation.records import RunStatus, TaskCoverage
+from marin.evaluation.records import BenchmarkMetadataRef, EvalTaskRef, RunStatus, TaskCoverage
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
@@ -58,7 +59,6 @@ _JOB_DIGEST_LENGTH = 12
 # The reward at or above which a Harbor trial counts as solved (rewards are typically 0.0 / 1.0; the
 # margin tolerates float noise).
 SOLVED_REWARD = 0.99
-HARBOR_ACCURACY_METRIC = "accuracy"
 
 # Fraction of attempted trials that must be scoreable under the Harbor taxonomy. Agent failures
 # remain scoreable, while infrastructure failures and passthrough failures without verifier results
@@ -101,7 +101,7 @@ class HarborRunResult:
     ``attempted_trials`` is the number of trials the run set out to score after the runtime cap,
     derived from the dataset size captured during preflight rather than from result files.
     ``scored_trials`` counts outcomes accepted by the Harbor taxonomy, including agent failures
-    without verifier results. Accuracy and mean reward divide by this count.
+    without verifier results. Mean reward divides by this count.
     """
 
     dataset: str
@@ -111,7 +111,8 @@ class HarborRunResult:
     solved_trials: int
     errors: Mapping[str, int]
     mean_reward: float
-    accuracy: float
+    reward_stderr: float
+    benchmark: BenchmarkMetadataRef
     archive_path: str | None
 
     @property
@@ -129,13 +130,16 @@ class HarborRunResult:
     def task_metrics(self) -> dict[str, dict[str, float]]:
         """Metrics keyed like the evalchemy reader: ``{dataset: {metric: value}}``."""
         metrics = {
-            HARBOR_ACCURACY_METRIC: self.accuracy,
             "mean_reward": self.mean_reward,
             "solved": float(self.solved_trials),
             "total": float(self.scored_trials),
         }
         metrics["attempted"] = float(self.attempted_trials)
         return {self.dataset: metrics}
+
+    def canonical_task_metrics(self) -> dict[str, dict[str, float]]:
+        """Canonical reward and its standard error, keyed by dataset."""
+        return {self.dataset: {"reward": self.mean_reward, "reward_stderr": self.reward_stderr}}
 
     def task_coverage(self) -> dict[str, TaskCoverage]:
         """Coverage keyed like :meth:`task_metrics`, carrying the per-trial error distribution."""
@@ -247,6 +251,15 @@ def _attempted_trials(job_dir: StoragePath) -> int | None:
     return None
 
 
+def _job_benchmark(job_dir: StoragePath) -> BenchmarkMetadataRef:
+    """Read the evaluator-owned benchmark descriptor from Harbor's job result."""
+    data = json.loads((job_dir / "result.json").read_text())
+    descriptions = data.get("benchmark_metadata") or []
+    if not isinstance(descriptions, list) or len(descriptions) != 1:
+        raise ValueError(f"Harbor job {job_dir} did not record exactly one benchmark descriptor")
+    return BenchmarkMetadataRef.model_validate(descriptions[0])
+
+
 def _remove_unscored_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy) -> None:
     """Remove results Harbor should retry after a confirmed inference interruption."""
     for result_file in (job_dir / _TRIAL_RESULT_GLOB).glob():
@@ -335,7 +348,11 @@ def _trial_errors(trials: list[HarborTrial], attempted: int) -> dict[str, int]:
 
 
 def _aggregate(
-    trials: list[HarborTrial], dataset: str, archive_path: str | None, n_benchmark: int, attempted: int
+    trials: list[HarborTrial],
+    dataset: str,
+    archive_path: str | None,
+    benchmark: BenchmarkMetadataRef,
+    trials_per_task: int,
 ) -> HarborRunResult:
     """Aggregate the graded trials, keeping the ungraded ones as coverage rather than as zeros.
 
@@ -343,11 +360,18 @@ def _aggregate(
     back as reward 0.0, would publish the worst case as if it were the estimate; the engine recovers
     that lower bound from the coverage this records.
     """
+    if benchmark.n_benchmark is None or benchmark.n_attempted is None:
+        raise ValueError("Harbor benchmark metadata must report task counts")
+    n_benchmark = benchmark.n_benchmark * trials_per_task
+    attempted = benchmark.n_attempted * trials_per_task
     scored = [trial for trial in trials if trial.scored]
     if len(scored) > attempted:
         raise ValueError(f"Harbor scored {len(scored)} trials but intended only {attempted}")
     solved = sum(1 for trial in scored if trial.reward >= SOLVED_REWARD)
     total_reward = sum(trial.reward for trial in scored)
+    reward_stderr = (
+        statistics.stdev(trial.reward for trial in scored) / math.sqrt(len(scored)) if len(scored) > 1 else 0.0
+    )
     return HarborRunResult(
         dataset=dataset,
         benchmark_trials=n_benchmark,
@@ -356,7 +380,8 @@ def _aggregate(
         solved_trials=solved,
         errors=_trial_errors(trials, attempted),
         mean_reward=(total_reward / len(scored)) if scored else 0.0,
-        accuracy=(solved / len(scored)) if scored else 0.0,
+        reward_stderr=reward_stderr,
+        benchmark=benchmark,
         archive_path=archive_path,
     )
 
@@ -371,8 +396,8 @@ def _run_harbor_job(
     output_dir: str,
     driver_env: Mapping[str, str],
     inference_session: RemoteInferenceSession,
-    n_benchmark: int,
-    n_attempted: int,
+    benchmark: BenchmarkMetadataRef,
+    trials_per_task: int,
 ) -> HarborRunResult:
     job_dir = _job_dir(output_dir, job_name)
     logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
@@ -389,9 +414,15 @@ def _run_harbor_job(
     trials = _read_trials(job_dir, config.error_taxonomy)
     archive_path = _write_archive(trials, dataset, output_dir)
     recorded_attempted = _attempted_trials(job_dir)
+    recorded_benchmark = _job_benchmark(job_dir)
+    if recorded_benchmark != benchmark:
+        raise ValueError("Harbor job benchmark metadata differs from preflight")
+    if benchmark.n_attempted is None:
+        raise ValueError("Harbor benchmark metadata did not report an attempted task count")
+    n_attempted = benchmark.n_attempted * trials_per_task
     if recorded_attempted is not None and recorded_attempted > n_attempted:
         raise ValueError(f"Harbor recorded {recorded_attempted} trials but intended only {n_attempted}")
-    result = _aggregate(trials, dataset, archive_path, n_benchmark, n_attempted)
+    result = _aggregate(trials, dataset, archive_path, recorded_benchmark, trials_per_task)
     StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
         json.dumps(
             {
@@ -403,19 +434,19 @@ def _run_harbor_job(
                 "unscored_trials": result.unscored_trials,
                 "errors": dict(result.errors),
                 "mean_reward": result.mean_reward,
-                HARBOR_ACCURACY_METRIC: result.accuracy,
+                "reward_stderr": result.reward_stderr,
+                "benchmark_metadata": result.benchmark.model_dump(mode="json"),
             },
             indent=2,
         )
     )
     completion = result.completion_rate
     logger.info(
-        "Harbor %s: %d/%d solved of %s attempted (accuracy=%.3f mean_reward=%.3f coverage=%s)",
+        "Harbor %s: %d/%d solved of %s attempted (mean_reward=%.3f coverage=%s)",
         dataset,
         result.solved_trials,
         result.scored_trials,
         result.attempted_trials,
-        result.accuracy,
         result.mean_reward,
         f"{completion:.3f}",
     )
@@ -466,7 +497,12 @@ def _evaluation_outcome(
             completion * 100,
             _error_summary(result.errors),
         )
-    return EvaluationOutcome(metrics=result.task_metrics(), coverage=result.task_coverage())
+    return EvaluationOutcome(
+        metrics=result.task_metrics(),
+        canonical_metrics=result.canonical_task_metrics(),
+        tasks=(EvalTaskRef(name=result.dataset, num_fewshot=None, benchmark=result.benchmark),),
+        coverage=result.task_coverage(),
+    )
 
 
 def _error_summary(errors: Mapping[str, int]) -> str:
@@ -504,11 +540,6 @@ class HarborExecutor:
             workdir,
             hf_token=hf_token,
         )
-        benchmark_tasks = self.config.n_benchmark
-        if benchmark_tasks is None:
-            if dataset_path is None:
-                raise ValueError("Harbor preflight did not report the dataset size")
-            benchmark_tasks = dataset_task_count(dataset_path)
         overlay = HarborRuntimeOverlay(
             job_name=job_name,
             jobs_dir=str(_jobs_dir(output_dir)),
@@ -518,9 +549,10 @@ class HarborExecutor:
             task_limit=self.task_limit,
             model_agent_kwargs=self.model_agent_kwargs,
         )
-        attempted_tasks = min(self.task_limit, benchmark_tasks) if self.task_limit is not None else benchmark_tasks
-        n_benchmark = benchmark_tasks * self.config.trials_per_task
-        n_attempted = attempted_tasks * self.config.trials_per_task
+        benchmark = self.config.benchmark_for(
+            self.task_limit,
+            Path(dataset_path).name if dataset_path is not None else None,
+        )
         return _run_harbor_job(
             job_name=job_name,
             config=self.config,
@@ -530,8 +562,8 @@ class HarborExecutor:
             output_dir=output_dir,
             driver_env=driver_env,
             inference_session=inference_session,
-            n_benchmark=n_benchmark,
-            n_attempted=n_attempted,
+            benchmark=benchmark,
+            trials_per_task=self.config.trials_per_task,
         )
 
     def __call__(

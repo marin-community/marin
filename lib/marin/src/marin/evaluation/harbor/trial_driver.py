@@ -11,6 +11,7 @@ import inspect
 import json
 import os
 import sys
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum, StrEnum
@@ -36,7 +37,6 @@ from marin.evaluation.harbor.agent_context import (
     MODEL_INFO_KEY,
     reconciled_model_info,
 )
-from marin.evaluation.harbor.dataset_layout import dataset_task_count
 from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_LENGTH
 
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
@@ -47,7 +47,6 @@ _STABLE_JOB_NAME = "__marin_job__"
 _STABLE_JOBS_DIR = "/__marin_jobs__"
 _STABLE_MODEL = "__marin_model__"
 _STABLE_ENDPOINT = "http://marin.invalid/v1"
-_PLACEHOLDER_DATASET_PATH = "/__marin_dataset__"
 _HF_DATASET_PREFIX = "hf://"
 
 
@@ -349,28 +348,25 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
 
     stable_config = _stable_config(config)
     stable_policy_json = _stable_policy_json(stable_config)
-    if dataset_metadata.kind == _DatasetKind.LOCAL:
-        dataset_path = (path.parent / dataset_metadata.selector).resolve()
-        n_benchmark = dataset_task_count(dataset_path)
-    elif dataset_metadata.kind == _DatasetKind.HARBOR_REGISTRY:
-        n_benchmark = len(asyncio.run(Job._resolve_task_configs(config)))
-    else:
-        n_benchmark = None
-    placeholder_dataset_path = (
-        None if dataset_metadata.kind == _DatasetKind.HARBOR_REGISTRY else _PLACEHOLDER_DATASET_PATH
+    dataset_path = (
+        str((path.parent / dataset_metadata.selector).resolve()) if dataset_metadata.kind == _DatasetKind.LOCAL else None
     )
-    effective = _effective_config(
-        stable_config,
-        RuntimeOverlay(
-            job_name=_STABLE_JOB_NAME,
-            jobs_dir=_STABLE_JOBS_DIR,
-            dataset_path=placeholder_dataset_path,
-            endpoint_url=_STABLE_ENDPOINT,
-            served_model=_STABLE_MODEL,
-            task_limit=None,
-            model_agent_kwargs=dict(model_agent_kwargs),
-        ),
-    )
+    with tempfile.TemporaryDirectory(prefix="marin-harbor-preflight-job-") as jobs_dir:
+        effective = _effective_config(
+            stable_config,
+            RuntimeOverlay(
+                job_name=_STABLE_JOB_NAME,
+                jobs_dir=jobs_dir,
+                dataset_path=dataset_path,
+                endpoint_url=_STABLE_ENDPOINT,
+                served_model=_STABLE_MODEL,
+                task_limit=None,
+                model_agent_kwargs=dict(model_agent_kwargs),
+            ),
+        )
+        job = asyncio.run(Job.create(effective))
+    if len(job.benchmark_metadata) != 1:
+        raise ValueError("Harbor shared launcher requires exactly one benchmark descriptor")
     infrastructure_errors = errors_by_category(ErrorCategory.INFRASTRUCTURE)
     agent_errors = errors_by_category(ErrorCategory.AGENT)
     passthrough_errors = errors_by_category(ErrorCategory.PASSTHROUGH)
@@ -396,7 +392,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
         },
         "max_input_tokens": model_info[MAX_INPUT_TOKENS_KEY],
         "max_output_tokens": model_info[MAX_OUTPUT_TOKENS_KEY],
-        "n_benchmark": n_benchmark,
+        "benchmark_metadata": job.benchmark_metadata[0].model_dump(mode="json"),
         "trials_per_task": config.n_attempts * len(config.agents),
     }
 

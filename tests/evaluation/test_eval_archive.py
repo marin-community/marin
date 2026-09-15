@@ -32,7 +32,7 @@ from marin.evaluation.lm_eval_samples import (
     rebuild_lm_eval_samples,
     run_artifacts,
 )
-from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, MetricKind, TaskCoverage
+from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.migrations.cli import (
@@ -130,6 +130,39 @@ def _lm_eval_row(doc_id: int, extraction_filter: str, score: float, response: st
         "exact_match": score,
         "schema_version": 1,
         "task_name": "gsm8k",
+    }
+
+
+def _result_contract(
+    task: str,
+    source_metric: str,
+    canonical_metric: str,
+    value: float,
+    *,
+    n_benchmark: int,
+    n_attempted: int,
+    kind: str = "binary",
+) -> dict:
+    return {
+        "benchmark_metadata": {
+            task: {
+                "schema_version": 1,
+                "task": task,
+                "primary_metric": canonical_metric,
+                "metric_kind": kind,
+                "metrics": [
+                    {
+                        "name": canonical_metric,
+                        "source_name": source_metric,
+                        "kind": kind,
+                        "higher_is_better": True,
+                    }
+                ],
+                "n_benchmark": n_benchmark,
+                "n_attempted": n_attempted,
+            }
+        },
+        "canonical_results": {task: {canonical_metric: value}},
     }
 
 
@@ -404,20 +437,27 @@ def test_export_records_full_benchmark_and_intended_cap_for_every_group_leaf(tmp
         json.dumps(
             {
                 "results": {"mmlu_anatomy": {"acc,none": 1.0}, "mmlu_astronomy": {"acc,none": 0.0}},
-                "n-samples": {
-                    "mmlu_anatomy": {"original": 3, "effective": 2},
-                    "mmlu_astronomy": {"original": 4, "effective": 2},
+                "benchmark_metadata": {
+                    task: _result_contract(task, "acc", "accuracy", value, n_benchmark=size, n_attempted=2)[
+                        "benchmark_metadata"
+                    ][task]
+                    for task, value, size in (("mmlu_anatomy", 1.0, 3), ("mmlu_astronomy", 0.0, 4))
+                },
+                "canonical_results": {
+                    "mmlu_anatomy": {"accuracy": 1.0},
+                    "mmlu_astronomy": {"accuracy": 0.0},
                 },
             }
         )
     )
     rows = [_lm_eval_row(doc_id, "none", 1.0, "4") for doc_id in range(2)]
+    for row in rows:
+        row["acc"] = row.pop("exact_match")
     (directory / "samples_mmlu_anatomy_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
 
     coverage = export_lm_eval_samples(
         str(results),
         tasks=(EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),),
-        max_eval_instances=2,
     ).coverage
 
     assert coverage == {
@@ -426,17 +466,25 @@ def test_export_records_full_benchmark_and_intended_cap_for_every_group_leaf(tmp
     }
 
 
-def test_export_uses_declared_size_for_chat_native_task(tmp_path):
+def test_export_uses_evaluator_metadata_for_chat_native_task(tmp_path):
     results = tmp_path / "run" / "results"
     directory = results / "math500" / "model"
     directory.mkdir(parents=True)
-    (directory / "results_20260807.json").write_text(json.dumps({"results": {"MATH500": {"accuracy": 1.0}}}))
-    (directory / "samples_MATH500_20260807.jsonl").write_text(json.dumps(_lm_eval_row(0, "none", 1.0, "4")) + "\n")
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"MATH500": {"accuracy": 1.0}},
+                **_result_contract("MATH500", "accuracy", "accuracy", 1.0, n_benchmark=500, n_attempted=10),
+            }
+        )
+    )
+    row = _lm_eval_row(0, "none", 1.0, "4")
+    row["accuracy"] = row.pop("exact_match")
+    (directory / "samples_MATH500_20260807.jsonl").write_text(json.dumps(row) + "\n")
 
     [coverage] = export_lm_eval_samples(
         str(results),
-        tasks=(EvalTaskRef(name="MATH500", num_fewshot=0, task_alias="math500", expected_items=500),),
-        max_eval_instances=10,
+        tasks=(EvalTaskRef(name="MATH500", num_fewshot=0, task_alias="math500"),),
     ).coverage.values()
 
     assert coverage.n_benchmark == 500
@@ -444,18 +492,55 @@ def test_export_uses_declared_size_for_chat_native_task(tmp_path):
     assert coverage.n_scored == 1
 
 
+def test_export_records_aggregate_only_benchmark_metadata(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "aime24" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"AIME24": {"accuracy_avg": 0.4}},
+                **_result_contract(
+                    "AIME24",
+                    "accuracy_avg",
+                    "accuracy",
+                    0.4,
+                    n_benchmark=30,
+                    n_attempted=30,
+                    kind="continuous",
+                ),
+            }
+        )
+    )
+
+    exported = export_lm_eval_samples(
+        str(results),
+        tasks=(EvalTaskConfig("AIME24", 0, task_alias="aime24"),),
+    )
+
+    assert exported.canonical_metrics == {"aime24": {"accuracy": 0.4}}
+    assert exported.coverage == {"aime24": TaskCoverage(n_benchmark=30, n_attempted=30, n_scored=0)}
+    assert exported.tasks[0].benchmark is not None
+    assert exported.tasks[0].benchmark.primary_metric == "accuracy"
+
+
 def test_declared_aggregate_metric_uses_its_per_sample_base_metric(tmp_path):
     results = tmp_path / "run" / "results"
     directory = results / "aime24" / "model"
     directory.mkdir(parents=True)
     (directory / "results_20260807.json").write_text(
-        json.dumps({"results": {"aime24": {"accuracy_avg": 1.0}}, "n-samples": {"aime24": {"original": 1}}})
+        json.dumps(
+            {
+                "results": {"aime24": {"accuracy_avg": 1.0}},
+                **_result_contract("aime24", "accuracy", "accuracy", 1.0, n_benchmark=1, n_attempted=1),
+            }
+        )
     )
     row = _lm_eval_row(0, "none", 1.0, "4")
     row.pop("exact_match")
     row["accuracy"] = 1.0
     (directory / "samples_aime24_20260807.jsonl").write_text(json.dumps(row) + "\n")
-    task = EvalTaskConfig("aime24", 0, task_alias="aime24", primary_metric="accuracy_avg")
+    task = EvalTaskConfig("aime24", 0, task_alias="aime24")
 
     export_lm_eval_samples(str(results), tasks=(task,))
 
@@ -469,13 +554,18 @@ def test_rebuild_keeps_the_recorded_primary_metric(tmp_path):
     row["f1"] = 1.0
     source = _write_jsonl(results, [row])
     (source.parent / "results_20260807.json").write_text(
-        json.dumps({"results": {"gsm8k": {"f1": 1.0}}, "n-samples": {"gsm8k": {"original": 1}}})
+        json.dumps(
+            {
+                "results": {"gsm8k": {"f1": 1.0}},
+                **_result_contract("gsm8k", "f1", "f1", 1.0, n_benchmark=1, n_attempted=1, kind="continuous"),
+            }
+        )
     )
-    task = EvalTaskConfig("gsm8k", 5, primary_metric="f1")
-    export_lm_eval_samples(str(results), tasks=(task,))
+    task = EvalTaskConfig("gsm8k", 5)
+    exported = export_lm_eval_samples(str(results), tasks=(task,))
     source.unlink()
 
-    assert rebuild_lm_eval_samples(str(results), tasks=(task,)) == 1
+    assert rebuild_lm_eval_samples(str(results), tasks=exported.tasks) == 1
     [stored] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     sample = sample_from_archive_row(stored)
     assert sample.grading.metric == "f1"
@@ -487,7 +577,14 @@ def test_rebuild_chat_native_samples_from_recorded_task_declaration(tmp_path):
     directory = results / "aime24" / "model"
     directory.mkdir(parents=True)
     result_path = directory / "results_20260807.json"
-    result_path.write_text(json.dumps({"results": {"AIME24": {"accuracy_avg": 1.0}}}))
+    result_path.write_text(
+        json.dumps(
+            {
+                "results": {"AIME24": {"accuracy_avg": 1.0}},
+                **_result_contract("AIME24", "accuracy", "accuracy", 1.0, n_benchmark=30, n_attempted=30),
+            }
+        )
+    )
     row = _lm_eval_row(0, "none", 1.0, "4")
     row.pop("exact_match")
     row["accuracy"] = 1.0
@@ -497,14 +594,11 @@ def test_rebuild_chat_native_samples_from_recorded_task_declaration(tmp_path):
         name="AIME24",
         num_fewshot=0,
         task_alias="aime24",
-        primary_metric="accuracy_avg",
-        metric_kind=MetricKind.CONTINUOUS,
-        expected_items=30,
     )
-    export_lm_eval_samples(str(results), tasks=(task,))
+    exported = export_lm_eval_samples(str(results), tasks=(task,))
     source.unlink()
 
-    assert rebuild_lm_eval_samples(str(results), tasks=(task,)) == 1
+    assert rebuild_lm_eval_samples(str(results), tasks=exported.tasks) == 1
     [stored] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     assert sample_from_archive_row(stored).grading.metric == "accuracy"
 
@@ -555,7 +649,7 @@ def test_export_rejects_samples_beyond_the_intended_cap(tmp_path):
         json.dumps(
             {
                 "results": {"gsm8k": {"exact_match,none": 1.0}},
-                "n-samples": {"gsm8k": {"original": 10, "effective": 2}},
+                **_result_contract("gsm8k", "exact_match", "accuracy", 1.0, n_benchmark=10, n_attempted=2),
             }
         )
     )
@@ -566,7 +660,6 @@ def test_export_rejects_samples_beyond_the_intended_cap(tmp_path):
         export_lm_eval_samples(
             str(results),
             tasks=(EvalTaskConfig("gsm8k", 5),),
-            max_eval_instances=2,
         )
 
 

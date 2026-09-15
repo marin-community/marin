@@ -33,10 +33,11 @@ from finestore.eval import (
     write_sample_parquet,
 )
 from fsspec.core import url_to_fs
-from marin.evaluation.harbor.runner import HARBOR_ACCURACY_METRIC
-from marin.evaluation.metric_selection import base_metric
+from marin.evaluation.metric_selection import base_metric, declared_metric
 from marin.evaluation.records import (
     RECORD_FILE,
+    BenchmarkMetadataRef,
+    BenchmarkMetricRef,
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
@@ -82,7 +83,29 @@ _EVAL_FAMILIES = {"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"}
 
 
 def _lm_eval_ref(eval_name: str, num_fewshot: int) -> EvalRef:
-    primary_metric = base_metric(_HEADLINE[eval_name][0])
+    source_metric = base_metric(_HEADLINE[eval_name][0])
+    primary_metric = {
+        "acc": "accuracy",
+        "acc_norm": "normalized_accuracy",
+        "exact_match": "accuracy",
+        "pass@1": "pass_at_1",
+    }.get(source_metric, source_metric)
+    benchmark = BenchmarkMetadataRef(
+        schema_version=1,
+        task=eval_name,
+        primary_metric=primary_metric,
+        metric_kind=MetricKind.BINARY,
+        metrics=(
+            BenchmarkMetricRef(
+                name=primary_metric,
+                source_name=source_metric,
+                kind=MetricKind.BINARY,
+                higher_is_better=True,
+            ),
+        ),
+        n_benchmark=_FIXTURE_ITEMS,
+        n_attempted=_FIXTURE_ITEMS,
+    )
     return EvalRef(
         name=eval_name,
         mechanism="evalchemy",
@@ -91,14 +114,29 @@ def _lm_eval_ref(eval_name: str, num_fewshot: int) -> EvalRef:
             EvalTaskRef(
                 name=eval_name,
                 num_fewshot=num_fewshot,
-                primary_metric=primary_metric,
-                metric_kind=MetricKind.BINARY,
+                benchmark=benchmark,
             ),
         ),
     )
 
 
 def _harbor_ref(dataset: str) -> EvalRef:
+    benchmark = BenchmarkMetadataRef(
+        schema_version=1,
+        task=dataset,
+        primary_metric="reward",
+        metric_kind=MetricKind.CONTINUOUS,
+        metrics=(
+            BenchmarkMetricRef(
+                name="reward",
+                source_name="reward",
+                kind=MetricKind.CONTINUOUS,
+                higher_is_better=True,
+            ),
+        ),
+        n_benchmark=None,
+        n_attempted=None,
+    )
     return EvalRef(
         name=dataset,
         mechanism="harbor",
@@ -106,8 +144,7 @@ def _harbor_ref(dataset: str) -> EvalRef:
             EvalTaskRef(
                 name=dataset,
                 num_fewshot=None,
-                primary_metric=HARBOR_ACCURACY_METRIC,
-                metric_kind=MetricKind.BINARY,
+                benchmark=benchmark,
             ),
         ),
         harbor=HarborRef(dataset=dataset, version="1.0", agent=dataset, env="daytona"),
@@ -127,6 +164,7 @@ def _record(
     metrics: dict[str, dict[str, float]],
     description: str | None,
     coverage: dict[str, TaskCoverage] | None = None,
+    canonical_metrics: dict[str, dict[str, float]] | None = None,
     error: str | None = None,
     log_tails: dict[str, tuple[str, ...]] | None = None,
     runtime_minutes: float = 8.0,
@@ -136,6 +174,32 @@ def _record(
     # earlier -- enough to give the dashboard a real duration to show.
     finished = datetime.fromisoformat(created_at)
     started = finished - timedelta(minutes=runtime_minutes)
+    benchmark = evaluation.tasks[0].benchmark if len(evaluation.tasks) == 1 else None
+    if canonical_metrics is None and benchmark is not None:
+        canonical_metrics = {}
+        for task_key, task_metrics in metrics.items():
+            primary = next(metric for metric in benchmark.metrics if metric.name == benchmark.primary_metric)
+            picked = declared_metric(task_metrics, primary.source_name)
+            value = picked[1] if picked is not None else task_metrics.get("mean_reward")
+            if value is not None:
+                canonical_metrics[task_key] = {benchmark.primary_metric: value}
+                stderr = declared_metric(task_metrics, f"{primary.source_name}_stderr")
+                if stderr is not None:
+                    canonical_metrics[task_key][f"{benchmark.primary_metric}_stderr"] = stderr[1]
+    if coverage is None and benchmark is not None and canonical_metrics:
+        coverage = {
+            task_key: TaskCoverage(
+                n_benchmark=benchmark.n_benchmark,
+                n_attempted=benchmark.n_attempted,
+                n_scored=_FIXTURE_ITEMS,
+                n_correct=(
+                    round(task_metrics[benchmark.primary_metric] * _FIXTURE_ITEMS)
+                    if benchmark.metric_kind is MetricKind.BINARY
+                    else None
+                ),
+            )
+            for task_key, task_metrics in canonical_metrics.items()
+        }
     return EvalRunRecord(
         run_id=run_id,
         group_id=group_id,
@@ -150,6 +214,7 @@ def _record(
         error=error,
         results_path=results_path,
         metrics=metrics,
+        canonical_metrics=canonical_metrics or {},
         coverage=coverage or {},
         jobs={"serve": f"jobs/{group_id}/serve", "eval": f"jobs/{run_id}/eval"},
         log_tails=log_tails or {},
@@ -518,7 +583,8 @@ def build_fixtures(dest: str) -> list[str]:
             results_path=results_of(r),
             # An agentic run that lost one of its ten trials to a timeout: the aggregate is over the
             # nine trials a verifier graded, and the coverage carries what happened to the tenth.
-            metrics={"aime": {"accuracy": 3 / 9, "mean_reward": 3 / 9, "solved": 3.0, "total": 9.0}},
+            metrics={"aime": {"mean_reward": 3 / 9, "solved": 3.0, "total": 9.0}},
+            canonical_metrics={"aime": {"reward": 3 / 9, "reward_stderr": 1 / 6}},
             coverage={"aime": TaskCoverage(n_benchmark=10, n_attempted=10, n_scored=9, errors={"AgentTimeoutError": 1})},
             description=desc,
             runtime_minutes=42.0,  # agentic sandbox rollouts run far longer than the lm-eval tasks

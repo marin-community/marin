@@ -105,11 +105,11 @@ Imbens-Manski critical value rather than imputing them; when it reports none, th
 `sampling_only`, because completeness is then unknown. Rankings sort on the interval's lower bound, so
 losing items cannot buy rank. Each row's `last_updated` is the maximum `created_at` among its cells.
 
-Both runners establish the benchmark's item count and the count the run set out to grade. lm-eval
-publishes the pre-cap size per leaf task as `n-samples.original`; chat-native Evalchemy tasks declare
-`expected_items` in their eval YAML; Harbor counts the dataset's tasks. The attempted count is that
-size after any declared cap. The per-sample rows still carry the pass tally and the count of items
-whose grader extracted no answer. A cell every one of whose graded items yielded no
+Both evaluators emit benchmark metadata with the full item count, the count selected after a run cap,
+and the canonical metric protocol. Marin preserves that block in `record.json`. Harbor reports task
+counts there; Marin multiplies them by the configured trials per task when it records coverage. The
+per-sample rows still carry the pass tally and the count of items whose grader extracted no answer. A
+cell every one of whose graded items yielded no
 extractable answer is flagged `no_answers`. Such a result is held out of the panel by default rather
 than standing as a model's newest score -- the zero is real but is equally consistent with a broken
 grader, and reporting a collapse on that basis would be the same error as hiding it. The empty cell
@@ -125,11 +125,11 @@ and aggregation. `benchmarks` and `cells` retain every admitted variant under it
 The SPA stores its panel selection locally. The Compare route carries the selected variants in its
 URL, and `/meta` lists siblings omitted from a narrowed panel so the picker can restore them.
 
-Each eval YAML declares the task's `primary_metric` and whether it is binary or continuous, and the
-record carries both. A column's protocol is the declaration on its newest declared record; a cell
-whose metric or kind differs is rejected rather than ranked against unlike numbers. Records written
-before the declaration existed fall back to the first present of `exact_match`, `accuracy`,
-`acc_norm`, `acc`, `pass@1`.
+The evaluator names each task's primary metric, its canonical spelling, and whether its observations
+are binary or continuous. A column's protocol comes from the newest record with evaluator metadata;
+a cell whose metric or kind differs is rejected rather than ranked against unlike numbers. Records
+written before this metadata existed use their prior metric-selection rules and canonical aliases so
+their columns remain populated while benchmarks are rerun.
 
 By default each benchmark is taken from the newest run that clears the request's admission rules
 (`min_coverage`, default 0.9, and a succeeded status). `min_benchmark_coverage`, also 0.9, is the share

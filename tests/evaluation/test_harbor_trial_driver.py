@@ -442,7 +442,7 @@ datasets:
         (task_dir / "instruction.md").write_text("Solve the task.")
 
         (config,) = preflight_harbor_configs([(policy_path, {})])
-        assert config.n_benchmark == 1
+        assert config.benchmark.n_benchmark == 1
 
         worker_workspace = tmp_path / "worker"
         worker_dataset = worker_workspace / launch_dir.relative_to(_ROOT) / "tasks"

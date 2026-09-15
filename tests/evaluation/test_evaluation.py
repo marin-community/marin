@@ -16,7 +16,6 @@ import pytest
 from click.testing import CliRunner
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
-from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyTaskOptions
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
@@ -29,6 +28,8 @@ from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
+    BenchmarkMetadataRef,
+    BenchmarkMetricRef,
     EvalRef,
     MetricKind,
     RunStatus,
@@ -56,7 +57,6 @@ from experiments.evaluation.evals import (
     EVALS,
     EvalchemyDefinition,
     HarborDefinition,
-    evalchemy_run_config,
     resolve_eval_keys,
 )
 from experiments.evaluation.launch import (
@@ -103,7 +103,22 @@ def _install_fake_harbor_preflight(
                     ),
                     max_input_tokens=_PREFLIGHT_MAX_INPUT_TOKENS,
                     max_output_tokens=_PREFLIGHT_MAX_OUTPUT_TOKENS,
-                    n_benchmark=1,
+                    benchmark=BenchmarkMetadataRef(
+                        schema_version=1,
+                        task="aime",
+                        primary_metric="reward",
+                        metric_kind=MetricKind.CONTINUOUS,
+                        metrics=(
+                            BenchmarkMetricRef(
+                                name="reward",
+                                source_name="reward",
+                                kind=MetricKind.CONTINUOUS,
+                                higher_is_better=True,
+                            ),
+                        ),
+                        n_benchmark=1,
+                        n_attempted=1,
+                    ),
                     trials_per_task=1,
                 )
             )
@@ -134,74 +149,6 @@ serve:
 """
     )
     return path
-
-
-@pytest.mark.parametrize(
-    ("task", "options", "message"),
-    [
-        ("arc_easy", EvalchemyTaskOptions(), "arc_easy.*primary_metric"),
-        ("drop", EvalchemyTaskOptions(primary_metric="f1"), "drop.*metric_kind"),
-        (
-            "AIME24",
-            EvalchemyTaskOptions(primary_metric="accuracy_avg", metric_kind=MetricKind.CONTINUOUS),
-            "AIME24.*expected_items",
-        ),
-    ],
-)
-def test_evalchemy_run_config_rejects_incomplete_metric_protocol(task, options, message):
-    source = EvalchemyConfig(tasks=(task,), task_options={task: options})
-
-    with pytest.raises(ValueError, match=message):
-        evalchemy_run_config("test", source)
-
-
-def test_evalchemy_run_config_defaults_binary_kind_and_honors_override():
-    source = EvalchemyConfig(
-        tasks=("arc_easy", "drop"),
-        task_options={
-            "arc_easy": EvalchemyTaskOptions(primary_metric="acc"),
-            "drop": EvalchemyTaskOptions(primary_metric="f1", metric_kind=MetricKind.BINARY),
-        },
-    )
-
-    config = evalchemy_run_config("test", source)
-
-    assert [task.metric_kind for task in config.tasks] == [MetricKind.BINARY, MetricKind.BINARY]
-
-
-def test_evalchemy_record_keeps_chat_native_benchmark_size():
-    source = EvalchemyConfig(
-        tasks=("AIME24",),
-        task_options={
-            "AIME24": EvalchemyTaskOptions(
-                primary_metric="accuracy_avg",
-                metric_kind=MetricKind.CONTINUOUS,
-                expected_items=30,
-            )
-        },
-    )
-    config = evalchemy_run_config("aime24", source)
-
-    record_ref = EvalchemyDefinition("aime24", Path("unused.yaml")).record_ref_for(config)
-
-    assert record_ref.tasks[0].expected_items == 30
-
-
-def test_evalchemy_run_config_accepts_size_for_file_backed_task():
-    source = EvalchemyConfig(
-        tasks=("ExternalChatTask",),
-        task_options={
-            "ExternalChatTask": EvalchemyTaskOptions(
-                primary_metric="accuracy_avg",
-                metric_kind=MetricKind.CONTINUOUS,
-                expected_items=100,
-            )
-        },
-    )
-
-    config = evalchemy_run_config("external-chat", source)
-
-    assert config.tasks[0].expected_items == 100
 
 
 def _successful_evaluation(
@@ -283,7 +230,38 @@ def _write_evalchemy_output(
         }
         for task, rows in samples.items()
     }
-    (model_dir / "results_20260807.json").write_text(json.dumps({"results": results, "n-samples": sample_counts}))
+    benchmark_metadata = {}
+    canonical_results = {}
+    for task, count in sample_counts.items():
+        source_name = next(name.split(",", 1)[0] for name in results[task] if "stderr" not in name)
+        canonical_name = "accuracy" if source_name in {"acc", "exact_match"} else source_name
+        n_benchmark = count["original"]
+        benchmark_metadata[task] = {
+            "schema_version": 1,
+            "task": task,
+            "primary_metric": canonical_name,
+            "metric_kind": "binary",
+            "metrics": [
+                {
+                    "name": canonical_name,
+                    "source_name": source_name,
+                    "kind": "binary",
+                    "higher_is_better": True,
+                }
+            ],
+            "n_benchmark": n_benchmark,
+            "n_attempted": n_benchmark,
+        }
+        canonical_results[task] = {canonical_name: next(iter(results[task].values()))}
+    (model_dir / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": results,
+                "benchmark_metadata": benchmark_metadata,
+                "canonical_results": canonical_results,
+            }
+        )
+    )
     for task, rows in samples.items():
         (model_dir / f"samples_{task}_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
 
@@ -353,7 +331,7 @@ def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypa
     executor = EvalchemyExecutor(
         EvalchemyRunConfig(
             name="gsm8k",
-            tasks=(EvalTaskConfig(name="gsm8k", num_fewshot=5, primary_metric="exact_match"),),
+            tasks=(EvalTaskConfig(name="gsm8k", num_fewshot=5),),
         )
     )
 
@@ -390,7 +368,7 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
     executor = EvalchemyExecutor(
         EvalchemyRunConfig(
             name="mmlu",
-            tasks=(EvalTaskConfig(name="mmlu", num_fewshot=5, primary_metric="acc"),),
+            tasks=(EvalTaskConfig(name="mmlu", num_fewshot=5),),
         )
     )
 
@@ -771,9 +749,7 @@ def test_evalchemy_generation_budget_preserves_benchmark_protocol(
 ):
     config_path = tmp_path / "generation.yaml"
     max_tokens = "" if benchmark_limit is None else f"max_tokens: {benchmark_limit}\n"
-    config_path.write_text(
-        f"tasks: [triviaqa]\ntask_options:\n  triviaqa:\n    primary_metric: exact_match\n{max_tokens}"
-    )
+    config_path.write_text(f"tasks: [triviaqa]\n{max_tokens}")
     model = replace(models()["qwen3-8b"], generation=GenerationConfig(max_gen_toks=model_limit))
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     caplog.set_level(logging.WARNING, logger="experiments.evaluation.evals")
@@ -878,8 +854,6 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
                 "generation": True,
                 "unsafe_code": False,
                 "completion_only": False,
-                "primary_metric": "prompt_level_strict_acc",
-                "metric_kind": "binary",
             }
         ],
         "evalchemy": {
@@ -904,8 +878,22 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
                 "generation": False,
                 "unsafe_code": False,
                 "completion_only": False,
-                "primary_metric": "accuracy",
-                "metric_kind": "binary",
+                "benchmark": {
+                    "schema_version": 1,
+                    "task": "aime",
+                    "primary_metric": "reward",
+                    "metric_kind": "continuous",
+                    "metrics": [
+                        {
+                            "name": "reward",
+                            "source_name": "reward",
+                            "kind": "continuous",
+                            "higher_is_better": True,
+                        }
+                    ],
+                    "n_benchmark": 1,
+                    "n_attempted": 1,
+                },
             }
         ],
         "harbor": {
@@ -933,6 +921,16 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         assert driver_env["DAYTONA_API_KEY"] == "daytona-key"
         captured["config"] = config
         captured["overlay"] = overlay
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "result.json").write_text(
+            json.dumps(
+                {
+                    "n_total_trials": 1,
+                    "benchmark_metadata": [config.benchmark.model_dump(mode="json")],
+                }
+            )
+        )
         trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text('{"task_name":"trial-one","verifier_result":{"rewards":{"reward":1}}}')
@@ -959,7 +957,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         {"DAYTONA_API_KEY": "daytona-key"},
     )
 
-    assert outcome.metrics["aime"]["accuracy"] == 1.0
+    assert outcome.canonical_metrics["aime"]["reward"] == 1.0
     assert captured["overlay"].task_limit == 2
     assert captured["overlay"].served_model == "served-qwen3-8b"
     assert captured["overlay"].endpoint_url == "https://iris.example/capability/v1"
@@ -1166,10 +1164,7 @@ def test_launch_rejects_malformed_evalchemy_yaml_before_iris_submission(tmp_path
 
 def test_launch_defers_evalchemy_task_validation_to_external_cli(tmp_path, monkeypatch):
     config_path = tmp_path / "external-task.yaml"
-    config_path.write_text(
-        "tasks: [task_added_after_marin_release]\n"
-        "task_options:\n  task_added_after_marin_release:\n    primary_metric: acc\n"
-    )
+    config_path.write_text("tasks: [task_added_after_marin_release]\n")
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
 
     result = CliRunner().invoke(

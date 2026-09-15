@@ -5,8 +5,5 @@ task_options:
     task_alias: humanevalplus
     generation: true
     unsafe_code: true
-    primary_metric: python_pass@1
-    metric_kind: binary
-    expected_items: 164
 max_tokens: 1024
 runtime_extras: [humanevalplus]

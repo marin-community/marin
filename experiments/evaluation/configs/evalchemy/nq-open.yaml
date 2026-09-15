@@ -4,5 +4,4 @@ task_options:
     num_fewshot: 5
     task_alias: nq_open_5shot
     generation: true
-    primary_metric: exact_match
 max_tokens: 128

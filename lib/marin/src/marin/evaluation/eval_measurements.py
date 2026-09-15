@@ -25,14 +25,7 @@ from marin.evaluation.eval_stats import (
     ResultFlag,
 )
 from marin.evaluation.evaluation_config import eval_task_directory
-from marin.evaluation.metric_selection import (
-    AGGREGATE_AVERAGE_SUFFIX,
-    AGGREGATE_STDERR_SUFFIX,
-    FILTER_PRIORITY,
-    base_metric,
-    declared_metric,
-    primary_metric,
-)
+from marin.evaluation.metric_selection import base_metric, declared_metric
 from marin.evaluation.records import EvalRunRecord, EvalTaskRef, MetricKind
 from marin.evaluation.records import TaskCoverage as RecordTaskCoverage
 
@@ -58,13 +51,11 @@ def stderr_for(metrics: Mapping[str, float], metric_key: str) -> float | None:
     """The standard error paired with ``metric_key``: its ``<base>_stderr,<filter>`` value, or None.
 
     lm-eval names the stderr for ``acc,none`` as ``acc_stderr,none``; a filterless ``acc`` pairs with
-    ``acc_stderr``. Chat-native ``<metric>_avg`` keys fall back to ``<metric>_std_err``.
+    ``acc_stderr``.
     """
     base, _, metric_filter = metric_key.partition(",")
     key = f"{base}_stderr,{metric_filter}" if metric_filter else f"{base}_stderr"
     value = metrics.get(key)
-    if value is None and not metric_filter and base.endswith(AGGREGATE_AVERAGE_SUFFIX):
-        value = metrics.get(f"{base.removesuffix(AGGREGATE_AVERAGE_SUFFIX)}{AGGREGATE_STDERR_SUFFIX}")
     return float(value) if value is not None else None
 
 
@@ -81,6 +72,10 @@ def _task_ref(record: EvalRunRecord, task_key: str) -> EvalTaskRef | None:
     """Match a metrics row to its recorded task declaration."""
     if len(record.evaluation.tasks) == 1:
         return record.evaluation.tasks[0]
+    leaf = task_key.rsplit("/", 1)[-1]
+    for task in record.evaluation.tasks:
+        if task.benchmark is not None and task.benchmark.task == leaf:
+            return task
     directory = task_key.split("/", 1)[0]
     for task in record.evaluation.tasks:
         if directory == eval_task_directory(task.name, task.num_fewshot, task.task_alias):
@@ -88,23 +83,72 @@ def _task_ref(record: EvalRunRecord, task_key: str) -> EvalTaskRef | None:
     return None
 
 
-def _task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], bool]:
+def _canonical_task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], bool]:
+    """Read evaluator-canonical scores under their recorded benchmark protocols."""
+    scores: dict[str, _TaskScore] = {}
+    missing_primary = False
+    task_keys = dict.fromkeys((*record.metrics, *record.canonical_metrics))
+    for task_key in task_keys:
+        task = _task_ref(record, task_key)
+        benchmark = task.benchmark if task is not None else None
+        if benchmark is None:
+            continue
+        metrics = record.canonical_metrics.get(task_key, {})
+        value = metrics.get(benchmark.primary_metric)
+        if value is None:
+            missing_primary |= bool(metrics) or bool(record.metrics.get(task_key))
+            continue
+        leaf = task_key.rsplit("/", 1)[-1]
+        scores.setdefault(
+            leaf,
+            _TaskScore(
+                leaf=leaf,
+                value=value,
+                metric=benchmark.primary_metric,
+                stderr=metrics.get(f"{benchmark.primary_metric}_stderr"),
+                n_scored=None,
+                kind=benchmark.metric_kind,
+                declared=True,
+                protocol_metric=benchmark.primary_metric,
+            ),
+        )
+    return list(scores.values()), missing_primary
+
+
+_LEGACY_METRIC_ALIASES = {
+    "acc": "accuracy",
+    "accuracy": "accuracy",
+    "accuracy_avg": "accuracy",
+    "em": "accuracy",
+    "exact_match": "accuracy",
+    "exact-match": "accuracy",
+    "acc_norm": "normalized_accuracy",
+    "acc_norm_nospace": "normalized_accuracy",
+    "pass@1": "pass_at_1",
+    "mean_reward": "reward",
+}
+
+
+def _legacy_canonical_metric_name(name: str) -> str:
+    """Canonicalize old record metric names so they remain comparable with evaluator metadata."""
+    return _LEGACY_METRIC_ALIASES.get(name, name)
+
+
+def _legacy_task_scores(record: EvalRunRecord, *, undeclared_only: bool = False) -> tuple[list[_TaskScore], bool]:
     """Each task entry's primary metric, deduplicated by leaf task name.
 
     A record can carry the same task twice under different evalchemy task directories (a real record
     holds the whole 62-entry mmlu panel under both ``mmlu_5shot`` and a ``tmp...`` directory, scoring
     0.63502 and 0.63488). Those entries measure the same items, so keeping both would double the item
-    count and average a benchmark against itself; the first wins and the rest are dropped. The
-    boolean reports whether a non-empty task row omitted its declared metric.
+    count and average a benchmark against itself; the first wins and the rest are dropped.
     """
     scores: dict[str, _TaskScore] = {}
-    missing_declared_metric = False
     for task_key, metrics in (record.metrics or {}).items():
         task = _task_ref(record, task_key)
-        declared = task is not None and task.primary_metric is not None and task.metric_kind is not None
-        picked = declared_metric(metrics, task.primary_metric if declared and task is not None else None)
+        if undeclared_only and task is not None and task.benchmark is not None:
+            continue
+        picked = declared_metric(metrics, None)
         if picked is None:
-            missing_declared_metric |= declared and bool(metrics)
             continue
         name, value = picked
         leaf = task_key.rsplit("/", 1)[-1]
@@ -113,14 +157,19 @@ def _task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], bool]:
         scores[leaf] = _TaskScore(
             leaf=leaf,
             value=value,
-            metric=name,
+            metric=_legacy_canonical_metric_name(base_metric(name)),
             stderr=stderr_for(metrics, name),
             n_scored=_task_item_count(metrics),
-            kind=task.metric_kind if declared and task is not None else None,
-            declared=declared,
-            protocol_metric=task.primary_metric if declared and task is not None else None,
         )
-    return list(scores.values()), missing_declared_metric
+    return list(scores.values()), False
+
+
+def _task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], bool]:
+    if any(task.benchmark is not None for task in record.evaluation.tasks):
+        canonical, missing_primary = _canonical_task_scores(record)
+        legacy, _ = _legacy_task_scores(record, undeclared_only=True)
+        return canonical + legacy, missing_primary
+    return _legacy_task_scores(record)
 
 
 def _rollup_scores(scores: list[_TaskScore]) -> list[_TaskScore]:
@@ -241,12 +290,14 @@ def measurements_from_records(records: Iterable[EvalRunRecord]) -> list[Measurem
 
 def declared_metric_gap(record: EvalRunRecord) -> str | None:
     """Explain a result row that lacks its declared headline metric."""
-    for task_key, metrics in (record.metrics or {}).items():
+    for task_key, source_metrics in record.metrics.items():
         task = _task_ref(record, task_key)
-        if task is None or task.primary_metric is None or not metrics:
+        benchmark = task.benchmark if task is not None else None
+        if benchmark is None or not source_metrics:
             continue
-        if declared_metric(metrics, task.primary_metric) is None:
-            return f"declared metric {task.primary_metric} not in results"
+        metrics = record.canonical_metrics.get(task_key, {})
+        if benchmark.primary_metric not in metrics:
+            return f"declared metric {benchmark.primary_metric} not in canonical results"
     return None
 
 

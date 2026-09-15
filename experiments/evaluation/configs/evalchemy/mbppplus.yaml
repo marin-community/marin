@@ -5,7 +5,5 @@ task_options:
     task_alias: mbppplus
     generation: true
     unsafe_code: true
-    primary_metric: pass@1
-    expected_items: 378
 max_tokens: 1024
 runtime_extras: [mbppplus]

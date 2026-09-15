@@ -5,9 +5,6 @@
 
 from collections.abc import Iterable, Mapping
 
-AGGREGATE_AVERAGE_SUFFIX = "_avg"
-AGGREGATE_STDERR_SUFFIX = "_std_err"
-
 # Headline metric for a task, matched after stripping lm-eval's ``,<filter>`` suffix.
 # ``acc_norm`` outranks ``acc`` where both exist; ``accuracy`` covers Evalchemy's chat-native tasks.
 PRIMARY_METRIC_PRIORITY = ("exact_match", "accuracy", "acc_norm", "acc", "pass@1")

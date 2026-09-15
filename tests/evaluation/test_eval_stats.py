@@ -26,6 +26,8 @@ from marin.evaluation.eval_stats import (
     wilson_interval,
 )
 from marin.evaluation.records import (
+    BenchmarkMetadataRef,
+    BenchmarkMetricRef,
     EvalchemyRef,
     EvalRef,
     EvalRunRecord,
@@ -492,7 +494,27 @@ def _record(
     evalchemy: EvalchemyRef | None = None,
     primary_metric: str | None = None,
     metric_kind: MetricKind | None = None,
+    source_metric: str | None = None,
+    canonical_metrics: dict[str, dict[str, float]] | None = None,
 ) -> EvalRunRecord:
+    benchmark = None
+    if primary_metric is not None and metric_kind is not None:
+        benchmark = BenchmarkMetadataRef(
+            schema_version=1,
+            task=eval_name,
+            primary_metric=primary_metric,
+            metric_kind=metric_kind,
+            metrics=(
+                BenchmarkMetricRef(
+                    name=primary_metric,
+                    source_name=source_metric or primary_metric,
+                    kind=metric_kind,
+                    higher_is_better=True,
+                ),
+            ),
+            n_benchmark=next(iter((coverage or {}).values())).n_benchmark if coverage else None,
+            n_attempted=next(iter((coverage or {}).values())).n_attempted if coverage else None,
+        )
     return EvalRunRecord(
         run_id="run-1",
         group_id="group-1",
@@ -506,8 +528,7 @@ def _record(
                 EvalTaskRef(
                     name=eval_name,
                     num_fewshot=5,
-                    primary_metric=primary_metric,
-                    metric_kind=metric_kind,
+                    benchmark=benchmark,
                 ),
             ),
             harbor=harbor,
@@ -518,6 +539,7 @@ def _record(
         error=None,
         results_path="gs://bucket/run-1/results",
         metrics=metrics,
+        canonical_metrics=canonical_metrics or {},
         coverage=coverage or {},
         jobs={},
         log_tails={},
@@ -542,7 +564,7 @@ def test_record_adapter_recovers_the_item_counts_lm_eval_records():
     measurement = measurement_from_record(record)
 
     assert measurement is not None
-    assert measurement.metric == "exact_match,flexible-extract"
+    assert measurement.metric == "accuracy"
     assert measurement.num_fewshot == 5
     assert measurement.coverage.n_scored == 128
     assert measurement.n_correct == 54
@@ -563,12 +585,13 @@ def test_record_adapter_uses_the_declared_metric_and_filter_priority():
         },
         primary_metric="f1",
         metric_kind=MetricKind.CONTINUOUS,
+        canonical_metrics={"drop_3shot": {"f1": 0.6, "f1_stderr": 0.03}},
     )
 
     measurement = measurement_from_record(record)
 
     assert measurement is not None
-    assert measurement.metric == "f1,flexible-extract"
+    assert measurement.metric == "f1"
     assert measurement.value == 0.6
     assert measurement.kind is MetricKind.CONTINUOUS
     assert measurement.declared
@@ -577,8 +600,10 @@ def test_record_adapter_uses_the_declared_metric_and_filter_priority():
 def test_record_adapter_pairs_chat_average_with_its_recorded_standard_error():
     record = _record(
         metrics={"aime24": {"accuracy_avg": 0.5, "accuracy_std_err": 0.04, "num_total": 30}},
-        primary_metric="accuracy_avg",
+        primary_metric="accuracy",
         metric_kind=MetricKind.CONTINUOUS,
+        source_metric="accuracy_avg",
+        canonical_metrics={"aime24": {"accuracy": 0.5, "accuracy_stderr": 0.04}},
     )
 
     measurement = measurement_from_record(record)
@@ -592,9 +617,41 @@ def test_record_adapter_rejects_results_missing_the_declared_metric():
         metrics={"drop_3shot": {"exact_match,none": 0.2, "sample_len": 100}},
         primary_metric="f1",
         metric_kind=MetricKind.CONTINUOUS,
+        canonical_metrics={"drop_3shot": {"accuracy": 0.2}},
     )
 
     assert measurement_from_record(record) is None
+
+
+def test_record_adapter_keeps_an_undeclared_custom_task_beside_metadata_tasks():
+    record = _record(
+        metrics={
+            "gsm8k": {"exact_match,none": 0.6, "sample_len": 10},
+            "custom": {"exact_match,none": 0.8, "sample_len": 10},
+        },
+        primary_metric="accuracy",
+        metric_kind=MetricKind.BINARY,
+        source_metric="exact_match",
+        canonical_metrics={"gsm8k": {"accuracy": 0.6}},
+    )
+    record = record.model_copy(
+        update={
+            "evaluation": record.evaluation.model_copy(
+                update={
+                    "tasks": (
+                        record.evaluation.tasks[0],
+                        EvalTaskRef(name="custom", num_fewshot=0, task_alias="custom"),
+                    )
+                }
+            )
+        }
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.value == pytest.approx(0.7)
+    assert measurement.metric == "accuracy"
 
 
 def test_record_adapter_reads_benchmark_coverage_and_flags_inconsistent_counts():

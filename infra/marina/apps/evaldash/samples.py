@@ -36,7 +36,7 @@ from finestore.layout import FormatVersionError
 from finestore.migrations import LEGACY_READ_FORMAT_VERSION, LegacyReadView
 from finestore.reader import ReadView
 from fsspec.core import url_to_fs
-from marin.evaluation.metric_selection import declared_metric, primary_filter, primary_metric
+from marin.evaluation.metric_selection import declared_metric, primary_filter
 from marin.evaluation.records import EvalRunRecord
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
@@ -329,10 +329,14 @@ def declared_primary_metric(record: EvalRunRecord, sample_task: str) -> str | No
     """Return the metric declaration that applies to a sample task."""
     tasks = record.evaluation.tasks
     if len(tasks) == 1:
-        return tasks[0].primary_metric
+        benchmark = tasks[0].benchmark
+        if benchmark is None:
+            return None
+        return next(metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric)
     for task in tasks:
-        if sample_task == task.name or sample_task.startswith(f"{task.name}_"):
-            return task.primary_metric
+        benchmark = task.benchmark
+        if benchmark is not None and (sample_task == benchmark.task or sample_task.startswith(f"{benchmark.task}_")):
+            return next(metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric)
     return None
 
 
