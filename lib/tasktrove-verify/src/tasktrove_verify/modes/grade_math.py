@@ -16,12 +16,11 @@ does not write around it and keeps a reordered answer wrong. Everything else is 
 Expected text that math-verify cannot parse raises ``InvalidTask``.
 """
 
-import math
 import re
 import threading
 from pathlib import Path
 
-from tasktrove_verify.grade import InvalidTask, Reward, read_output, scored
+from tasktrove_verify.grade import InvalidTask, Reward, numeric_tolerance, read_output, scored
 from tasktrove_verify.modes.extract import BOXED, extract_boxed, last_line, strip_math_delimiters
 from tasktrove_verify.spec import MathSpec, MathType, NumericSpec
 
@@ -130,14 +129,7 @@ def _last_number(text: str) -> float | None:
 
 
 def _grade_numeric(spec: NumericSpec, workspace: Path) -> Reward:
-    if not math.isfinite(spec.expected):
-        raise InvalidTask(f"numeric expected must be a finite number, got {spec.expected}")
-    for name, value in (("tolerance_abs", spec.tolerance_abs), ("tolerance_rel", spec.tolerance_rel)):
-        if not math.isfinite(value) or value < 0:
-            raise InvalidTask(f"numeric {name} must be a finite nonnegative number, got {value}")
-    tolerance = max(spec.tolerance_abs, spec.tolerance_rel * abs(spec.expected))
-    if not math.isfinite(tolerance):
-        raise InvalidTask(f"numeric effective tolerance must be finite, got {tolerance}")
+    tolerance = numeric_tolerance(spec)
     text = read_output(spec, workspace)
     if text is None:
         return scored(0.0, reason="no_output")
