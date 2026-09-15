@@ -12,12 +12,12 @@ from finestore.eval import (
     EvalSample,
     EvaluationStore,
     SampleKind,
-    sample_from_lm_eval,
     sample_to_archive_row,
     write_sample_parquet,
 )
 from fsspec.core import url_to_fs
-from marin.evaluation.lm_eval_samples import export_lm_eval_samples
+from marin.evaluation.harbor.trajectory import archive_trajectory
+from marin.evaluation.lm_eval_samples import export_lm_eval_samples, sample_from_lm_eval
 
 
 def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:
@@ -327,7 +327,13 @@ def test_fetch_artifact_keys_cache_by_run(tmp_path):
     run_b = str(tmp_path / "b" / "results")
     for root, tag in ((run_a, "a"), (run_b, "b")):
         store = EvaluationStore.open(root, writer_id="w")
-        stored = store.add_trajectory(json.dumps({"run": tag}).encode(), task="t", doc_id="d", trial_id="trial-1")
+        stored = archive_trajectory(
+            store,
+            json.dumps({"run": tag}).encode(),
+            task="t",
+            doc_id="d",
+            trial_id="trial-1",
+        )
         assert stored.uri == uri
         store.seal()
         store.close()

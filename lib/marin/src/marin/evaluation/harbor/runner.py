@@ -35,6 +35,7 @@ from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
     run_harbor_driver,
 )
+from marin.evaluation.harbor.trajectory import archive_trajectory
 from marin.evaluation.records import RunStatus, TaskCoverage
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import RemoteInferenceSession
@@ -304,7 +305,8 @@ def _write_archive(trials: list[HarborTrial], dataset: str, output_dir: str) -> 
         for trial in trials:
             trajectory_uri = None
             if trial.trajectory_path is not None:
-                stored = store.add_trajectory(
+                stored = archive_trajectory(
+                    store,
                     StoragePath(trial.trajectory_path).read_bytes(),
                     task=dataset,
                     doc_id=trial.task_id,

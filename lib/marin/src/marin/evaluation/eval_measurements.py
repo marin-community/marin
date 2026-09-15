@@ -16,8 +16,6 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from finestore.eval import base_metric, primary_metric
-
 from marin.evaluation.eval_stats import (
     BINARY_METRICS,
     SAMPLE_COUNT_METRIC,
@@ -27,6 +25,7 @@ from marin.evaluation.eval_stats import (
     MetricKind,
     ResultFlag,
 )
+from marin.evaluation.metric_selection import base_metric, primary_metric
 from marin.evaluation.records import EvalRunRecord
 
 # A value derived from n items is integral in k to within this tolerance when it really is k/n.

@@ -198,6 +198,7 @@ requires the owner to quiesce and seal its writers first.
 ## Package boundary
 
 `marin-finestore` contains storage, transactions, read views, compaction, generic cache adapters,
-and the `finestore.eval` producer/consumer contract. Harbor and Evalchemy use that module to write
-dashboard-ready `samples` and `steps` tables without depending on `marin-core`; Evaldash reads the
-same versioned schema. FineStore itself has no Marin pipeline dependency.
+and the versioned `finestore.eval` schema and table API. Harbor and Evalchemy map their own native
+formats into that contract and use the table API to write dashboard-ready `samples` and `steps`
+without depending on `marin-core`; Evaldash reads the same schema. FineStore contains no evaluator
+conversion policy or Marin pipeline dependency.
