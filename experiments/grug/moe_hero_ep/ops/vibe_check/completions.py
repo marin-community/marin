@@ -13,6 +13,7 @@ from rigging.filesystem.conditional_object import ConditionalWriteError, conditi
 from rigging.filesystem.storage_path import StoragePath
 
 PRIORITIES_KEY = "priorities.json"
+TOP_TOKEN_COUNT = 5
 
 
 class Record(BaseModel):
@@ -24,9 +25,7 @@ class Prompt(Record):
     text: str = Field(min_length=1)
     seed: int = Field(ge=0)
     source_url: str
-    # The continuation a factual prompt is checking for. Most prompts are open-ended
-    # and leave this unset. Sampling ignores it; the report shows it beside the
-    # completion so a reader can mark the answer without already knowing it.
+    # A reference continuation. Open-ended prompts can have other valid answers.
     expected: str | None = None
 
 
@@ -78,12 +77,28 @@ class StopReason(StrEnum):
     CONTEXT_LIMIT = "context_limit"
 
 
+class TokenProbability(Record):
+    token_id: int = Field(ge=0)
+    text: str
+    logprob: float = Field(le=0, allow_inf_nan=False)
+
+
+class TokenScore(Record):
+    token_id: int = Field(ge=0)
+    # Context-aware text fragments preserve Unicode across byte-token boundaries.
+    text: str
+    logprob: float = Field(le=0, allow_inf_nan=False)
+    top_tokens: tuple[TokenProbability, ...] = Field(min_length=1, max_length=TOP_TOKEN_COUNT)
+
+
 class Completion(Record):
     prompt_id: str
     prompt_token_ids: tuple[int, ...] = Field(min_length=1)
     token_ids: tuple[int, ...]
     text: str
     stop_reason: StopReason
+    token_scores: tuple[TokenScore, ...] | None = None
+    expected_scores: tuple[TokenScore, ...] | None = None
 
 
 class SampleResult(Record):
@@ -97,7 +112,7 @@ class SampleResult(Record):
         spec = self.request.spec
         if [row.prompt_id for row in self.completions] != [prompt.id for prompt in spec.prompts]:
             raise ValueError("Results must contain each requested prompt exactly once, in order")
-        for row in self.completions:
+        for prompt, row in zip(spec.prompts, self.completions, strict=True):
             total = len(row.prompt_token_ids) + len(row.token_ids)
             if any(token < 0 for token in (*row.prompt_token_ids, *row.token_ids)):
                 raise ValueError("Token IDs must be non-negative")
@@ -110,6 +125,18 @@ class SampleResult(Record):
                 raise ValueError("Context-limit result does not fill the context")
             if row.stop_reason == StopReason.MAX_NEW_TOKENS and len(row.token_ids) != spec.max_new_tokens:
                 raise ValueError("Token-limit result does not reach the limit")
+            if row.token_scores is not None:
+                if tuple(token.token_id for token in row.token_scores) != row.token_ids:
+                    raise ValueError("Token scores do not match the generated token IDs")
+                if "".join(token.text for token in row.token_scores) != row.text:
+                    raise ValueError("Token text does not match the completion")
+            if row.expected_scores is not None:
+                if prompt.expected is None:
+                    raise ValueError("Expected token scores have no reference completion")
+                if "".join(token.text for token in row.expected_scores) != prompt.expected:
+                    raise ValueError("Expected token text does not match the reference completion")
+                if len(row.prompt_token_ids) + len(row.expected_scores) > spec.context_length:
+                    raise ValueError("Expected completion exceeds the context limit")
         return self
 
 
