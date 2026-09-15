@@ -15,6 +15,7 @@
     article { min-width: 0; border: 1px solid #8886; border-radius: 8px; padding: 18px; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.6 ui-monospace, monospace; }
     .prompt { border-bottom: 1px solid #8886; padding-bottom: 12px; }
+    .svg-preview { display: block; width: 100%; height: 360px; object-fit: contain; background: white; border-radius: 8px; }
     table { width: 100%; border-collapse: collapse; margin: 24px 0; }
     td, th { text-align: left; padding: 8px; border-bottom: 1px solid #8886; overflow-wrap: anywhere; }
     #prompt-control { margin: 20px 0; max-width: 700px; }
@@ -40,7 +41,7 @@
   <details><summary>All completed sample sets</summary>
     <table><thead><tr><th>Checkpoint</th><th>Sample set</th></tr></thead><tbody id="inventory"></tbody></table>
   </details>
-  <p class="muted">Generated text can be incorrect or harmful. It is shown as plain text. These are fixed-seed samples, not quality scores.</p>
+  <p class="muted">Generated text can be incorrect or harmful. SVG output has an image preview and source text. These samples use fixed seeds.</p>
   <script id="report-data" type="application/json">__REPORT_DATA__</script>
   <script>
     const report = JSON.parse(document.getElementById('report-data').textContent);
@@ -71,6 +72,17 @@
       }
       return cache.get(id);
     }
+    function svgPreview(text) {
+      const svg = text.match(/<svg\b[\s\S]*<\/svg\s*>/);
+      if (!svg) return element('p', 'No completed SVG image in this output.');
+      const preview = document.createElement('img');
+      preview.className = 'svg-preview';
+      preview.alt = 'Generated SVG image of a cat on a unicycle';
+      preview.addEventListener('error', () => preview.replaceWith(element('p', 'Cannot display this SVG image.')));
+      // The image context disables scripts and external resources in generated SVG.
+      preview.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg[0]);
+      return preview;
+    }
     function panel(target, id, data, promptId) {
       target.replaceChildren();
       if (!id) { target.append(element('p', 'No completed sample sets.')); return; }
@@ -79,7 +91,14 @@
       const completion = data.completions.find(item => item.prompt_id === promptId);
       if (!source || !completion) { target.append(element('p', 'This prompt is not in this sample set.')); return; }
       const input = element('pre', source.text); input.className = 'prompt'; target.append(input);
-      target.append(element('pre', completion.text));
+      if (promptId === 'svg-cat-unicycle') {
+        target.append(svgPreview(completion.text));
+        const sourceCode = document.createElement('details');
+        sourceCode.append(element('summary', 'SVG source'), element('pre', completion.text));
+        target.append(sourceCode);
+      } else {
+        target.append(element('pre', completion.text));
+      }
       target.append(element('p', `${completion.token_ids.length} new tokens · stop: ${completion.stop_reason} · seed: ${source.seed} · temperature: ${data.request.spec.temperature}`));
       const raw = element('a', 'Download result and full provenance'); raw.href = entry.url; target.append(raw);
       const details = document.createElement('details'); details.append(element('summary', 'Generation settings'));

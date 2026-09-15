@@ -58,7 +58,7 @@ def sampling_spec() -> SamplingSpec:
         tokenizer_revision="a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2",
         model=draccus.encode(model),
         temperature=0.2,
-        max_new_tokens=200,
+        max_new_tokens=1024,
         context_length=4096,
     )
 
