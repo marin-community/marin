@@ -17,7 +17,8 @@ The MCP, browser, and interactive-environment sections describe planned extensio
 ```mermaid
 flowchart TD
     S[TaskSpec]
-    S -->|choose rendering and target binding| L[Lowering]
+    TB[Target binding] --> L[Lowering]
+    S -->|choose rendering| L
     B[Rendering Bank] --> L
     L --> H[Harbor package]
     H --> X[Harness execution]
@@ -30,7 +31,7 @@ flowchart TD
 
 Importers implement this interface for datasets such as TaskTrove, GSM8K, R2E-Gym, and NeMo Gym. Where possible, these importers are deterministic. However, they are often heavily LLM-assisted and thus non-deterministic. They may reject a source row if it cannot be faithfully represented in TaskCompendium, or if the task is broken, underspecified, or otherwise unsuitable.
 
-`Lowering` is the only public projection. It is a target-specific package derived from a specification, its renderings, and an environment binding. It contains the model-visible instructions, declared tools, and agent resources for that target. A launch then selects a compatible harness, model endpoint, and runtime policy.
+`Lowering` is the only public projection. It is a target-specific package derived from a specification, its renderings, and a target binding. It contains the model-visible instructions, declared tools, and agent resources for that target. A launch then selects a compatible harness, model endpoint, and runtime policy.
 
 For instance, a GSM8K row may be imported as a `TaskSpec` with one step, a text answer requirement, and a verifier that checks the answer against the gold. A rendering may choose to extract the answer from `/app/answer.json`, meaning that the environment would need filesystem access. A Harbor lowering may select a Docker image. The launch may then choose a Harbor agent, model endpoint, and retry policy.
 
@@ -146,6 +147,21 @@ A rendering may add a short output instruction, such as “Write your submission
 
 A lowering maps a semantic `TaskSpec` instance and its selected renderings to a runtime package. It selects a compatible environment implementation and tool exposure, then validates that both meet the semantic requirements. It does not select the model or a particular agent strategy.
 
+### Target bindings
+
+A target binding is the target-owned compatibility contract attached to one lowering. It says how a target satisfies the `TaskSpec` requirements and how the target exposes the resulting action surface. It is separate from the semantic record because several bindings may satisfy the same requirements.
+
+A target binding includes:
+
+| Field | Meaning |
+| --- | --- |
+| Target | The lowering implementation and pinned revision that interpret the binding. |
+| Environment | The concrete environment implementation, its immutable image or provider identity, workspace roots, and target-specific limits. |
+| Tools | The model-visible actions and their target adapter. An empty set means direct assistant response. |
+| Target setup | Target-specific materialization and startup data required to realize the declared state. |
+
+A target binding does not define instructions, answer requirements, verifier behavior, source provenance, or semantic capabilities. It also does not select a model, agent, retry policy, or other rollout strategy. Those belong to `TaskSpec` or to a launch.
+
 The current Harbor lowering is `lower_to_harbor(specification, renderings, binding, destination)`. It validates:
 
 - the environment provides every declared capability and preserves the required initial state;
@@ -166,9 +182,9 @@ A successful lowering writes these important artifacts.
 | `manifest.json` | Specification hash, source provenance, rendering identity, Harbor revision, lowering version, and verifier-runtime identity. |
 | `environment/inputs` and step workdirs | Materialized agent-visible resources. |
 
-### Harbor bindings and launches
+### Harbor target bindings and launches
 
-`HarborTaskBinding` is the current Harbor-side representation of an environment and tool requirement. Its environment variant is currently `NoEnvironment`, `ShellSimEnvironment`, `DockerEnvironment`, or `ProviderEnvironment`; the provider variant carries an adapter import path and private configuration. Its `tools` tuple is empty for chat and otherwise declares the explicit model-facing tool binding. The current adapters accept one tool binding.
+`HarborTaskBinding` is the current target-binding implementation. The binding type and the pinned Harbor revision identify its target. Its environment variant is currently `NoEnvironment`, `ShellSimEnvironment`, `DockerEnvironment`, or `ProviderEnvironment`; the provider variant carries an adapter import path and private configuration. Its `tools` tuple is empty for chat and otherwise declares the explicit model-facing tool binding. The current adapters accept one tool binding. Harbor writes it to `binding.json` alongside the lowering manifest.
 
 A future non-Harbor lowering should use the same semantic specification and rendering. It must define its own binding and launch types instead of embedding Harbor fields in task data.
 
