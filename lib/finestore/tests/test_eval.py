@@ -5,6 +5,7 @@
 
 from finestore.eval import (
     ARCHIVE_SAMPLES_TABLE,
+    ARCHIVE_STEPS_TABLE,
     EvalSample,
     EvaluationStore,
     SampleKind,
@@ -64,7 +65,7 @@ def test_evaluation_store_round_trips_normalized_steps_and_artifacts(tmp_path):
         store.seal()
 
     reader = ReadView(root)
-    table = reader.scan("steps")
+    table = reader.scan(ARCHIVE_STEPS_TABLE)
     assert uri.endswith("/trial-1/trajectory.json")
     assert reader.read_blob("trial-1/trajectory.json") == b'{"steps": []}'
     assert table is not None

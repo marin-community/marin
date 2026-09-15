@@ -4,9 +4,9 @@
 """Convert historical lm-eval output into the normalized FineStore evaluation contract.
 
 lm-eval (and evalchemy, which drives it) writes one ``samples_<task>_<timestamp>.jsonl`` row per
-evaluated question in its own native shape. Current Evalchemy versions perform this conversion while
-they run. This module retains Marin's legacy export and rebuild path for archives produced before
-native writes, preserving each source file it reads so an archive can be rebuilt from itself.
+evaluated question in its own native shape. This module owns Marin's compatibility export and rebuild
+path for outputs produced without native FineStore writing. It preserves each source file it reads
+so an archive can be rebuilt from itself.
 
 The same pass measures each task's coverage from the document indices in its per-sample rows.
 lm-eval's aggregate results omit attempted-item counts. The sample indices establish the intended
