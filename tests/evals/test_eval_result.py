@@ -90,6 +90,12 @@ def test_finestore_evalchemy_result_reads_native_aggregate_artifacts(tmp_path):
         "mmlu_5shot/mmlu_stem": {"acc,none": 0.38},
     }
 
+    report = compile_eval_report(
+        [ReportEntry(root, result_type_name(FineStoreEvalchemyResult), "evalchemy")],
+        str(tmp_path / "report"),
+    )
+    assert report.task_metrics == result.task_metrics()
+
 
 def test_evalchemy_result_keys_by_task_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))

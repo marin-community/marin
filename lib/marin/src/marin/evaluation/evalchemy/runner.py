@@ -112,7 +112,7 @@ class EvalchemyRunConfig:
 
 @dataclass(frozen=True)
 class EvalchemyOutcome:
-    """A completed result tree, child job identity, coverage, and recovered partial-task metrics."""
+    """A completed FineStore archive, child job identity, coverage, and recovered partial-task metrics."""
 
     jobs: dict[str, str]
     result: FineStoreEvalchemyResult

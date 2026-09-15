@@ -74,8 +74,8 @@ _CONTENT_TYPES = {
 # :func:`is_scratch_artifact`.
 _SCRATCH_SEGMENT = re.compile(r"(?:^|/)tmp[a-z0-9_]{6,}/")
 _INFRASTRUCTURE_ERROR_PREFIX = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}]"
-_NATIVE_EVALCHEMY_SOURCE_ROOT = PurePosixPath(prefix_join(SOURCES_PREFIX, "evalchemy"))
-_NATIVE_SOURCE_DIR = "native"
+EVALCHEMY_SOURCE_ROOT = PurePosixPath(prefix_join(SOURCES_PREFIX, "evalchemy"))
+EVALCHEMY_NATIVE_SOURCE_DIR = "native"
 
 
 def is_scratch_artifact(relative_path: str) -> bool:
@@ -89,8 +89,9 @@ def is_scratch_artifact(relative_path: str) -> bool:
     return _SCRATCH_SEGMENT.search(relative_path) is not None
 
 
-# This adapter exists only for historical Marin archives. Native Evalchemy owns the corresponding
-# conversion for new runs; FineStore owns only the normalized schema and storage API.
+# Live runs are normalized by Evalchemy. These conversion helpers remain for historical exports and
+# for rebuilding an archive's table from preserved sources after damage or an interrupted migration.
+# FineStore itself owns only the normalized schema and storage API.
 _LM_EVAL_STRUCTURAL_KEYS = frozenset(
     {
         "doc",
@@ -513,7 +514,7 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> Sa
 
 def _is_native_evalchemy_source(name: str) -> bool:
     path = PurePosixPath(name)
-    return path.is_relative_to(_NATIVE_EVALCHEMY_SOURCE_ROOT) and path.parent.name == _NATIVE_SOURCE_DIR
+    return path.is_relative_to(EVALCHEMY_SOURCE_ROOT) and path.parent.name == EVALCHEMY_NATIVE_SOURCE_DIR
 
 
 def summarize_native_eval_samples(out_path: str) -> SampleExport:

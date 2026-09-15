@@ -278,8 +278,8 @@ class EvaluationStore:
     def add_source_artifact(self, name: str, raw: bytes, *, content_type: str) -> str:
         """Preserve one evaluator-native source file inside the archive; return its blob URI.
 
-        ``name`` is the file's path relative to the run's results root, so a rebuild can re-derive
-        the tables from the archive alone, without the surrounding results tree still being intact.
+        ``name`` is the evaluator-owned path below ``sources/``. A rebuild can re-derive the tables
+        from the archive alone, without an external results tree still being intact.
         """
         return self.add_artifact(
             prefix_join(SOURCES_PREFIX, name),

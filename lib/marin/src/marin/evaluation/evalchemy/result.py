@@ -4,8 +4,9 @@
 """Typed readers for evaluation output artifacts and aggregate reports.
 
 Eval steps write backend-native output. :class:`EvalResult` subclasses parse each backend's layout.
-:class:`EvalchemyResult` reads lm-eval's ``<task_dir>/<model>/results_<ts>.json`` trees and keys the
-metrics by task-config directory. :func:`compile_eval_report` merges several typed results.
+:class:`FineStoreEvalchemyResult` reads current Evalchemy aggregate artifacts;
+:class:`EvalchemyResult` retains the historical result-tree reader. :func:`compile_eval_report`
+merges several typed results.
 """
 
 import functools
@@ -14,20 +15,21 @@ import logging
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from finestore.eval import SOURCES_PREFIX
 from finestore.layout import BlobTables
 from finestore.reader import ReadView
 from pydantic import Field
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.evaluation.lm_eval_samples import is_scratch_artifact
+from marin.evaluation.lm_eval_samples import (
+    EVALCHEMY_NATIVE_SOURCE_DIR,
+    EVALCHEMY_SOURCE_ROOT,
+    is_scratch_artifact,
+)
 from marin.execution.artifact import Artifact, result_type_name
 
 logger = logging.getLogger(__name__)
 
 _REPORT_FILE = "report.json"
-_EVALCHEMY_SOURCE_ROOT = PurePosixPath(SOURCES_PREFIX, "evalchemy")
-_NATIVE_SOURCE_DIR = "native"
 
 
 def _numeric(values: dict) -> dict[str, float]:
@@ -40,6 +42,14 @@ def _result_task_dir(result_file: StoragePath) -> str:
     if not task_dir:
         raise ValueError(f"unexpected evalchemy results layout (want <task_dir>/<model>/file): {result_file}")
     return task_dir
+
+
+def _metrics_for_task_dir(results: dict, task_dir: str) -> dict[str, dict[str, float]]:
+    """Key one aggregate result payload by its task-config directory."""
+    return {
+        task_dir if len(results) == 1 else f"{task_dir}/{task}": _numeric(task_metrics)
+        for task, task_metrics in results.items()
+    }
 
 
 class EvalResult(Artifact):
@@ -81,10 +91,7 @@ class EvalchemyResult(EvalResult):
         for result_file in result_files:
             task_dir = _result_task_dir(result_file)
             results = json.loads(result_file.read_text()).get("results", {})
-            for task, task_metrics in results.items():
-                # One entry -> the dir is the whole identity; several (a group task) -> namespace them.
-                key = task_dir if len(results) == 1 else f"{task_dir}/{task}"
-                metrics[key] = _numeric(task_metrics)
+            metrics.update(_metrics_for_task_dir(results, task_dir))
         return metrics
 
     def task_metrics(self) -> dict[str, dict[str, float]]:
@@ -106,12 +113,12 @@ class FineStoreEvalchemyResult(EvalResult):
             if not isinstance(name, str):
                 continue
             path = PurePosixPath(name)
-            if not path.is_relative_to(_EVALCHEMY_SOURCE_ROOT):
+            if not path.is_relative_to(EVALCHEMY_SOURCE_ROOT):
                 continue
-            relative = path.relative_to(_EVALCHEMY_SOURCE_ROOT)
+            relative = path.relative_to(EVALCHEMY_SOURCE_ROOT)
             if (
                 len(relative.parts) != 3
-                or relative.parts[1] != _NATIVE_SOURCE_DIR
+                or relative.parts[1] != EVALCHEMY_NATIVE_SOURCE_DIR
                 or not relative.name.startswith("results_")
                 or relative.suffix != ".json"
             ):
@@ -126,9 +133,7 @@ class FineStoreEvalchemyResult(EvalResult):
             if payload is None:
                 raise FileNotFoundError(f"FineStore archive {self.path} lists {name!r} but cannot read it")
             results = json.loads(payload).get("results", {})
-            for task, task_metrics in results.items():
-                key = task_dir if len(results) == 1 else f"{task_dir}/{task}"
-                metrics[key] = _numeric(task_metrics)
+            metrics.update(_metrics_for_task_dir(results, task_dir))
         return metrics
 
     def task_metrics(self) -> dict[str, dict[str, float]]:
@@ -154,7 +159,9 @@ class EvalReport(Artifact):
     contributions from different results distinct."""
 
 
-_EVAL_RESULT_TYPES: dict[str, type[EvalResult]] = {result_type_name(cls): cls for cls in (EvalchemyResult,)}
+_EVAL_RESULT_TYPES: dict[str, type[EvalResult]] = {
+    result_type_name(cls): cls for cls in (EvalchemyResult, FineStoreEvalchemyResult)
+}
 
 
 @dataclass(frozen=True)
