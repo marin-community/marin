@@ -76,8 +76,8 @@
     "artifact:prose",
     "competency:scientific_reasoning",
     "difficulty:medium",
-    "domain:experimental_measurement",
-    "shape:explanation"
+    "domain:chemistry",
+    "shape:answer"
   ],
   "nemo/open_qa/bd761808-13a7-5faf-9852-961422532fbe": [
     "artifact:prose",
@@ -86,13 +86,14 @@
     "shape:explanation"
   ],
   "nemo/reasoning_gym/cf876b7f-0007-40a4-ab3a-f49fe8cdd8e2": [
-    "competency:causal_reasoning",
+    "artifact:numeric_answer",
+    "competency:math",
     "difficulty:easy",
-    "domain:graph_theory",
     "shape:calculation"
   ],
   "nemo/reasoning_gym/d06d0d00-6b32-4ed1-9a73-1ee720d4aa42": [
-    "competency:knowledge_recall",
+    "artifact:prose",
+    "competency:information_extraction",
     "difficulty:easy",
     "shape:answer"
   ],
@@ -141,7 +142,8 @@
     "difficulty:medium",
     "domain:email",
     "interaction:single_tool_call",
-    "shape:stateful_domain"
+    "shape:stateful_domain",
+    "state:provider"
   ],
   "nemo/workplace/536": [
     "competency:stateful_tool_use",
