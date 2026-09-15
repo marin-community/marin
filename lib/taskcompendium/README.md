@@ -1,5 +1,7 @@
 # TaskCompendium
 
+Read [the TaskCompendium specification](SPECIFICATION.md) for the semantic schema, renderings, Harbor lowering, SkyRL integration path, and planned environment extensions.
+
 TaskCompendium stores task requirements independently of execution choices. It
 imports bounded samples from TaskTrove, R2E-Gym, GSM8K, and NeMo Gym into pinned
 `TaskSpecification` records, renders public tasks, and exports Harbor packages with
