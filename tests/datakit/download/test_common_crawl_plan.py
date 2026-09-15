@@ -5,6 +5,9 @@ import base64
 import hashlib
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
 from marin.datakit.download.common_crawl_plan import (
     CommonCrawlFilter,
     CommonCrawlIndexKind,
@@ -13,6 +16,7 @@ from marin.datakit.download.common_crawl_plan import (
     CommonCrawlSelection,
     CommonCrawlSource,
     SelectedCommonCrawlRecord,
+    discover_index_partition,
     plan_common_crawl_manifest,
     plan_common_crawl_records,
     read_common_crawl_discovery,
@@ -21,6 +25,9 @@ from marin.datakit.download.common_crawl_plan import (
     write_common_crawl_plan,
 )
 from marin.datakit.download.common_crawl_warc import main_record_from_index_row
+from zephyr import counters
+from zephyr.runners import _InProcessWorkerContext
+from zephyr.worker_context import _worker_ctx_var
 
 RECORD_ID = "<urn:uuid:019f8700-d21d-78d8-8eb1-99eaa22579da>"
 
@@ -88,6 +95,98 @@ def test_filter_selects_matching_rows_and_records_selection_signals() -> None:
         )
         is None
     )
+
+
+@pytest.mark.parametrize("record_id", [pytest.param(None, id="null"), pytest.param("absent", id="absent-column")])
+def test_discovery_preserves_main_records_without_index_record_ids(tmp_path: Path, record_id: str | None) -> None:
+    row = {
+        "url": "https://example.com/file.docx",
+        "fetch_status": 200,
+        "content_mime_type": "application/docx",
+        "content_mime_detected": None,
+        "content_digest": _digest("payload"),
+        "content_truncated": None,
+        "warc_filename": "crawl-data/example.warc.gz",
+        "warc_record_offset": 10,
+        "warc_record_length": 20,
+    }
+    if record_id != "absent":
+        row["warc_record_id"] = record_id
+    partition = tmp_path / "part.parquet"
+    pq.write_table(pa.Table.from_pylist([row]), partition)
+
+    records = list(
+        discover_index_partition(
+            partition.name,
+            source=_source("CC-MAIN-2026-30", base_url=str(tmp_path)),
+            selector=CommonCrawlFilter(declared_mime_types=frozenset({"application/docx"})),
+            batch_rows=1,
+        )
+    )
+
+    assert len(records) == 1
+    assert records[0].indexed_record.expectation.warc_record_id is None
+    discovery = write_common_crawl_discovery(records, str(tmp_path / "discovery"))
+    restored_records = list(read_common_crawl_discovery(discovery.manifest_path))
+    plan = plan_common_crawl_records(restored_records)
+    plan_summary = write_common_crawl_plan(plan, str(tmp_path / "plan"))
+    restored_tasks = read_common_crawl_tasks(plan_summary.manifest_path)
+    assert restored_tasks[0].ranges[0].records[0].expectation.warc_record_id is None
+
+
+def test_discovery_reports_invalid_selected_record_and_continues(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    partition = tmp_path / "part.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "url": "https://example.com/file.docx",
+                    "fetch_status": 200,
+                    "content_mime_type": "application/docx",
+                    "content_mime_detected": None,
+                    "content_digest": _digest("payload"),
+                    "content_truncated": None,
+                    "warc_filename": "crawl-data/example.warc.gz",
+                    "warc_record_offset": -1,
+                    "warc_record_length": 20,
+                },
+                {
+                    "url": "https://example.com/valid.docx",
+                    "fetch_status": 200,
+                    "content_mime_type": "application/docx",
+                    "content_mime_detected": None,
+                    "content_digest": _digest("valid"),
+                    "content_truncated": None,
+                    "warc_filename": "crawl-data/example.warc.gz",
+                    "warc_record_offset": 10,
+                    "warc_record_length": 20,
+                },
+            ]
+        ),
+        partition,
+    )
+
+    context = _InProcessWorkerContext(chunk_prefix="", execution_id="", stage_name="discovery")
+    token = _worker_ctx_var.set(context)
+    try:
+        records = list(
+            discover_index_partition(
+                partition.name,
+                source=_source("CC-MAIN-2026-30", base_url=str(tmp_path)),
+                selector=CommonCrawlFilter(declared_mime_types=frozenset({"application/docx"})),
+                batch_rows=1,
+            )
+        )
+        assert counters.pipeline.get_counters()["common_crawl/invalid_selected_records"] == 1
+    finally:
+        _worker_ctx_var.reset(token)
+
+    assert [record.indexed_record.record_range.offset for record in records] == [10]
+    assert "part.parquet" in caplog.text
+    assert "row 0" in caplog.text
+    assert "offset must be non-negative" in caplog.text
 
 
 def test_planner_coalesces_gap_boundary_and_keeps_sparse_record_singleton() -> None:

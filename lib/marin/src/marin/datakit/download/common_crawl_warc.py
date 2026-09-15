@@ -128,7 +128,7 @@ class UrlIndexRecordExpectation:
     """Identity fields available from the current CC-MAIN URL Index."""
 
     url: str
-    warc_record_id: str
+    warc_record_id: str | None
     content_digest: str
 
 
@@ -340,7 +340,7 @@ def main_record_from_index_row(row: Mapping[str, object], *, crawl_id: str) -> M
         record_range=_record_range_from_index_row(row, crawl_id=crawl_id),
         expectation=UrlIndexRecordExpectation(
             url=_required_string(row, "url"),
-            warc_record_id=_canonical_record_id(row.get("warc_record_id")),
+            warc_record_id=_optional_record_id(row.get("warc_record_id")),
             content_digest=_canonical_content_digest(_required_string(row, "content_digest")),
         ),
     )
@@ -490,6 +490,12 @@ def _canonical_record_id(value: object) -> str:
     else:
         raise ValueError("warc_record_id must be a UUID string or 16-byte BLOB")
     return f"<urn:uuid:{record_uuid}>"
+
+
+def _optional_record_id(value: object) -> str | None:
+    if value is None:
+        return None
+    return _canonical_record_id(value)
 
 
 def _canonical_content_digest(value: str) -> str:
@@ -653,7 +659,9 @@ def _warc_record_from_archive(record: object, payload: bytes) -> CommonCrawlWarc
 def verify_url_index_record(record: CommonCrawlWarcRecord, expected: UrlIndexRecordExpectation) -> None:
     """Verify an observed record against the fields available from CC-MAIN."""
     mismatches = []
-    if _comparable_record_id(record.warc_record_id) != _comparable_record_id(expected.warc_record_id):
+    if expected.warc_record_id is not None and (
+        _comparable_record_id(record.warc_record_id) != _comparable_record_id(expected.warc_record_id)
+    ):
         mismatches.append(f"record ID {record.warc_record_id!r} != {expected.warc_record_id!r}")
     _verify_url_and_digest(record, expected.url, expected.content_digest, mismatches)
     if mismatches:

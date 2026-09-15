@@ -11,6 +11,7 @@ The split keeps an expensive URL-index scan reusable when only transfer policy c
 
 import hashlib
 import json
+import logging
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -23,6 +24,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, prefix_join
+from zephyr import counters
 
 from marin.datakit.download.common_crawl_warc import (
     COMMON_CRAWL_DATA_URL,
@@ -40,6 +42,8 @@ PLAN_FILENAME = "plan.parquet"
 
 type JSONScalar = str | int | float | bool | None
 type IndexedRecord = MainIndexedRecord | SupplementalIndexedRecord
+
+logger = logging.getLogger(__name__)
 
 
 class CommonCrawlIndexKind(StrEnum):
@@ -315,13 +319,17 @@ def discover_index_partition(
             "warc_record_offset",
             "warc_record_length",
         ]
-        if source.index_kind is CommonCrawlIndexKind.MAIN:
+        available_columns = set(parquet.schema_arrow.names)
+        if source.index_kind is CommonCrawlIndexKind.MAIN and "warc_record_id" in available_columns:
             columns.append("warc_record_id")
-        missing = set(columns) - set(parquet.schema_arrow.names)
+        missing = set(columns) - available_columns
         if missing:
             raise ValueError(f"Index partition is missing required columns: {sorted(missing)}")
+        row_index = 0
         for batch in parquet.iter_batches(columns=columns, batch_size=batch_rows):
             for row in batch.to_pylist():
+                current_row_index = row_index
+                row_index += 1
                 selection = selector.select(row)
                 if selection is None:
                     continue
@@ -331,7 +339,14 @@ def discover_index_partition(
                         if source.index_kind is CommonCrawlIndexKind.MAIN
                         else supplemental_record_from_index_row(row, crawl_id=source.crawl_id)
                     )
-                except ValueError:
+                except ValueError as error:
+                    counters.pipeline.update_counter("common_crawl/invalid_selected_records", 1)
+                    logger.warning(
+                        "Skipping invalid selected record in index partition %r, row %d: %s",
+                        index_partition,
+                        current_row_index,
+                        error,
+                    )
                     continue
                 yield SelectedCommonCrawlRecord(source=source, indexed_record=indexed, selection=selection)
 

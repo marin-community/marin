@@ -638,6 +638,20 @@ def test_url_index_verification_rejects_identity_mismatch(field: str, value: str
         verify_url_index_record(record, expectation)
 
 
+def test_url_index_verification_without_expected_record_id_still_checks_url_and_digest() -> None:
+    payload = b"document"
+    warc = _warc_response(payload, record_id="<https://example.com/non-uuid-record-id>")
+    indexed_record = _indexed_record(warc, payload)
+    expectation = replace(indexed_record.expectation, warc_record_id=None)
+
+    with _range_session(warc) as session, _client(session) as client:
+        record = client.fetch_record(indexed_record.record_range)
+
+    verify_url_index_record(record, expectation)
+    with pytest.raises(RecordVerificationError):
+        verify_url_index_record(record, replace(expectation, url="https://example.com/different.docx"))
+
+
 def test_url_index_verification_rejects_non_success_origin_response() -> None:
     payload = b"not found"
     warc = _warc_response(payload, http_status="404 Not Found")
