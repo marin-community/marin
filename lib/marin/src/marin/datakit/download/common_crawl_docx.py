@@ -30,6 +30,7 @@ from marin.datakit.download.common_crawl_plan import (
     CommonCrawlSource,
     FetchedCommonCrawlRecord,
     common_crawl_discovery_step,
+    common_crawl_fetch_failure_counts,
     common_crawl_plan_step,
     fetch_common_crawl_task,
     read_common_crawl_tasks,
@@ -462,12 +463,14 @@ def fetch_docx_task(
     task: CommonCrawlFetchTask,
     *,
     config: CommonCrawlDocxConfig,
+    failure_output_path: str,
 ) -> Iterator[dict[str, object]]:
     """Fetch one source-local task and persist each verified DOCX payload."""
     for fetched in fetch_common_crawl_task(
         task,
         maximum_warc_record_bytes=config.maximum_warc_record_bytes,
         maximum_payload_bytes=config.maximum_payload_bytes,
+        failure_output_path=failure_output_path,
     ):
         counters.pipeline.update_counter("common_crawl_docx/fetched", 1)
         counters.pipeline.update_counter("common_crawl_docx/fetched_payload_bytes", len(fetched.observed_record.payload))
@@ -479,12 +482,17 @@ def fetch_common_crawl_docx(
     plan_output_path: str,
     config: CommonCrawlDocxConfig,
 ) -> CommonCrawlDocxStageResult:
-    """Fetch a shared Common Crawl plan into reusable payload shards."""
+    """Fetch a shared Common Crawl plan into reusable payload shards.
+
+    Failed task invocations are persisted under ``.metrics/fetch-failures`` so
+    retries do not erase their counts.
+    """
     plan = read_artifact(plan_output_path, CommonCrawlPlanSummary)
     tasks = read_common_crawl_tasks(plan.manifest_path)
+    failure_output_path = prefix_join(output_path, ".metrics/fetch-failures")
     pipeline = (
         Dataset.from_list(tasks)
-        .flat_map(partial(fetch_docx_task, config=config))
+        .flat_map(partial(fetch_docx_task, config=config, failure_output_path=failure_output_path))
         .write_parquet(
             prefix_join(output_path, "data/part-{shard:05d}-of-{total:05d}.parquet"),
             schema=FETCHED_COMMON_CRAWL_DOCX_SCHEMA,
@@ -498,7 +506,7 @@ def fetch_common_crawl_docx(
     ).execute(pipeline)
     return CommonCrawlDocxStageResult(
         data_dir=prefix_join(output_path, "data"),
-        counters=dict(outcome.counters),
+        counters={**outcome.counters, **common_crawl_fetch_failure_counts(failure_output_path)},
     )
 
 

@@ -5,17 +5,25 @@ import base64
 import gzip
 import hashlib
 import io
+import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import replace
+from pathlib import Path
+from typing import TextIO
 
 import pytest
 import requests
+from marin.datakit.download import common_crawl_plan
 from marin.datakit.download.common_crawl_plan import (
+    CommonCrawlFetchTask,
     CommonCrawlIndexKind,
     CommonCrawlSelection,
     CommonCrawlSource,
     PlannedCommonCrawlRange,
+    common_crawl_fetch_failure_counts,
+    fetch_common_crawl_task,
 )
 from marin.datakit.download.common_crawl_warc import (
     CommonCrawlClient,
@@ -44,6 +52,113 @@ from warcio.warcwriter import WARCWriter
 
 RECORD_ID = "<urn:uuid:019f8700-d21d-78d8-8eb1-99eaa22579da>"
 TARGET_URL = "https://example.com/document.docx"
+
+
+@pytest.mark.parametrize("failure_kind", ["http", "digest"])
+def test_fetch_task_failures_survive_retries_and_later_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_kind: str
+) -> None:
+    payload = b"document"
+    warc = _warc_response(payload)
+    adapter = _RangeAdapter(warc, None, 404 if failure_kind == "http" else 206, None, str(len(warc)))
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", adapter.send)
+    source = CommonCrawlSource(
+        crawl_id="CC-MAIN-2026-30",
+        index_kind=CommonCrawlIndexKind.MAIN,
+        paths_manifest_url="https://example.com/paths.gz",
+    )
+    indexed = _indexed_record(warc, b"wrong" if failure_kind == "digest" else payload)
+    planned_range = PlannedCommonCrawlRange(
+        source=source,
+        warc_filename=indexed.record_range.warc_filename,
+        start=0,
+        stop=len(warc),
+        records=(indexed,),
+        selections=(CommonCrawlSelection({}),),
+    )
+    task = CommonCrawlFetchTask(task_id=0, source=source, ranges=(planned_range,))
+    failure_dir = str(tmp_path / "failures")
+    expected_error = CommonCrawlRequestRejectedError if failure_kind == "http" else RecordVerificationError
+
+    for _ in range(2):
+        with pytest.raises(expected_error):
+            list(
+                fetch_common_crawl_task(
+                    task,
+                    maximum_warc_record_bytes=1 << 20,
+                    maximum_payload_bytes=1 << 20,
+                    failure_output_path=failure_dir,
+                )
+            )
+
+    adapter.response_status = 206
+    task = replace(task, ranges=(replace(planned_range, records=(_indexed_record(warc, payload),)),))
+    fetched = list(
+        fetch_common_crawl_task(
+            task,
+            maximum_warc_record_bytes=1 << 20,
+            maximum_payload_bytes=1 << 20,
+            failure_output_path=failure_dir,
+        )
+    )
+
+    assert fetched[0].observed_record.payload == payload
+    assert common_crawl_fetch_failure_counts(failure_dir) == {
+        "common_crawl/fetch_task_failures": 2,
+        "common_crawl/tasks_with_fetch_failures": 1,
+    }
+    reports = [json.loads(path.read_text()) for path in Path(failure_dir).glob("*.json")]
+    assert {report["error_type"] for report in reports} == {expected_error.__name__}
+    assert {report["task_id"] for report in reports} == {0}
+    assert common_crawl_fetch_failure_counts(str(tmp_path / "no-failures")) == {
+        "common_crawl/fetch_task_failures": 0,
+        "common_crawl/tasks_with_fetch_failures": 0,
+    }
+
+
+def test_fetch_report_write_failure_preserves_original_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = b"document"
+    warc = _warc_response(payload)
+    adapter = _RangeAdapter(warc, None, 404, None, str(len(warc)))
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", adapter.send)
+    source = CommonCrawlSource(
+        crawl_id="CC-MAIN-2026-30",
+        index_kind=CommonCrawlIndexKind.MAIN,
+        paths_manifest_url="https://example.com/paths.gz",
+    )
+    indexed = _indexed_record(warc, payload)
+    planned_range = PlannedCommonCrawlRange(
+        source=source,
+        warc_filename=indexed.record_range.warc_filename,
+        start=0,
+        stop=len(warc),
+        records=(indexed,),
+        selections=(CommonCrawlSelection({}),),
+    )
+    task = CommonCrawlFetchTask(task_id=0, source=source, ranges=(planned_range,))
+    failure_dir = str(tmp_path / "failures")
+
+    @contextmanager
+    def partial_write(path: str, _mode: str) -> Iterator[TextIO]:
+        with open(path, "w") as stream:
+            stream.write("{")
+            yield stream
+            raise OSError("failure report write failed")
+
+    monkeypatch.setattr(common_crawl_plan.fsspec, "open", partial_write)
+
+    with pytest.raises(CommonCrawlRequestRejectedError):
+        list(
+            fetch_common_crawl_task(
+                task,
+                maximum_warc_record_bytes=1 << 20,
+                maximum_payload_bytes=1 << 20,
+                failure_output_path=failure_dir,
+            )
+        )
+
+    assert list(Path(failure_dir).glob("*.json")) == []
+    assert list(Path(failure_dir).glob("*.tmp.*")) == []
 
 
 def _sha1_digest(payload: bytes) -> str:

@@ -11,6 +11,8 @@ The split keeps an expensive URL-index scan reusable when only transfer policy c
 
 import hashlib
 import json
+import logging
+import uuid
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
@@ -24,7 +26,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem import StoragePath, atomic_rename, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
@@ -32,6 +34,7 @@ from zephyr.execution import ZephyrContext
 from marin.datakit.download.common_crawl_warc import (
     COMMON_CRAWL_DATA_URL,
     CommonCrawlClient,
+    CommonCrawlWarcError,
     CommonCrawlWarcRecord,
     MainIndexedRecord,
     SupplementalIndexedRecord,
@@ -48,6 +51,7 @@ DEFAULT_TASK_BYTES = 256 << 20
 _MANIFEST_BATCH_ROWS = 1 << 16
 DISCOVERY_FILENAME = "records.parquet"
 PLAN_FILENAME = "plan.parquet"
+logger = logging.getLogger(__name__)
 
 type JSONScalar = str | int | float | bool | None
 type IndexedRecord = MainIndexedRecord | SupplementalIndexedRecord
@@ -255,6 +259,18 @@ class CommonCrawlDiscoverySummary(BaseModel):
     manifest_path: str
     num_sources: int
     num_records: int
+
+
+class CommonCrawlFetchFailure(BaseModel):
+    """Persisted report for one failed fetch task invocation."""
+
+    source_id: str
+    task_id: int
+    warc_filename: str
+    range_start: int
+    range_end: int
+    error_type: str
+    message: str
 
 
 @dataclass(frozen=True)
@@ -776,6 +792,7 @@ def fetch_common_crawl_task(
     *,
     maximum_warc_record_bytes: int,
     maximum_payload_bytes: int,
+    failure_output_path: str,
 ) -> Iterator[FetchedCommonCrawlRecord]:
     """Fetch every range in one task and retain index and selection provenance."""
     with CommonCrawlClient(
@@ -784,11 +801,55 @@ def fetch_common_crawl_task(
         base_url=task.source.base_url,
     ) as client:
         for selected_range in task.ranges:
-            observed = client.fetch_range(selected_range)
+            try:
+                observed = client.fetch_range(selected_range)
+            except CommonCrawlWarcError as error:
+                # Zephyr discards counters from failed attempts, so preserve each
+                # attempt separately across retries and resumed executions.
+                try:
+                    StoragePath(failure_output_path).mkdirs()
+                    failure_path = prefix_join(failure_output_path, f"{uuid.uuid4().hex}.json")
+                    failure = CommonCrawlFetchFailure(
+                        source_id=task.source.source_id,
+                        task_id=task.task_id,
+                        warc_filename=selected_range.warc_filename,
+                        range_start=selected_range.start,
+                        range_end=selected_range.stop,
+                        error_type=type(error).__name__,
+                        message=str(error),
+                    )
+                    with atomic_rename(failure_path) as temporary_path, fsspec.open(temporary_path, "w") as stream:
+                        stream.write(failure.model_dump_json())
+                except Exception:
+                    # Failure reporting is diagnostic and must not replace the
+                    # WARC exception that determines Zephyr retry behavior.
+                    logger.exception("Failed to persist failure report for Common Crawl task %s", task.task_id)
+                else:
+                    logger.warning("Common Crawl fetch task %s failed; report: %s", task.task_id, failure_path)
+                raise
             for indexed, selection, record in zip(
                 selected_range.records, selected_range.selections, observed, strict=True
             ):
                 yield FetchedCommonCrawlRecord(indexed, selection, record)
+
+
+def common_crawl_fetch_failure_counts(failure_output_path: str) -> dict[str, int]:
+    """Count failed invocations and distinct affected tasks for an output path.
+
+    Counts include retries and resumed executions sharing the report directory.
+    A task may later succeed; these represent failure attempts, not rejected records.
+    """
+    attempts = 0
+    tasks: set[tuple[str, int]] = set()
+    for path in StoragePath(prefix_join(failure_output_path, "*.json")).glob():
+        with fsspec.open(str(path), "r") as stream:
+            failure = CommonCrawlFetchFailure.model_validate_json(stream.read())
+        attempts += 1
+        tasks.add((failure.source_id, failure.task_id))
+    return {
+        "common_crawl/fetch_task_failures": attempts,
+        "common_crawl/tasks_with_fetch_failures": len(tasks),
+    }
 
 
 def _source_from_row(row: Mapping[str, object]) -> CommonCrawlSource:
