@@ -89,7 +89,7 @@ class JobService:
             raise ConnectionError("job service unavailable")
         return dict(self.jobs)
 
-    def submit(self, request, name, priority_band):
+    def submit(self, request, name, _priority_band):
         if name in self.jobs:
             return
         self.jobs[name] = JobState.RUNNING

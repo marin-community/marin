@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.storage_path import StoragePath
 
+PRIORITIES_KEY = "priorities.json"
+
 
 class Record(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -131,11 +133,11 @@ class SampleStore:
         return {path.name.removesuffix(".txt") for path in (self.root / "attempts/*.txt").glob()}
 
     def priorities(self) -> dict[str, int]:
-        saved = conditional_object(str(self.root / "priorities.json")).read()
+        saved = conditional_object(str(self.root / PRIORITIES_KEY)).read()
         return json.loads(saved.data) if saved else {}
 
     def set_priorities(self, sample_ids: list[str], priority_band: int) -> None:
-        target = conditional_object(str(self.root / "priorities.json"))
+        target = conditional_object(str(self.root / PRIORITIES_KEY))
         saved = target.read()
         priorities = json.loads(saved.data) if saved else {}
         priorities.update(dict.fromkeys(sample_ids, priority_band))

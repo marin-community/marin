@@ -28,15 +28,11 @@ Future checkpoints use batch priority unless an invocation sets their priority.
 An active job keeps its original priority. The next attempt uses the saved priority.
 The three-attempt limit still applies.
 
-For a direct submission from a clean checkout:
-
-```bash
-uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check reconcile --priority production
-```
-
-The CLI accepts `batch`, `interactive`, `production`, and `system`. Iris checks
-the caller's permission for the selected priority. Omit `--priority` to preserve
-saved priorities. Direct invocations must not overlap the Actions workflow.
+The CLI also accepts `reconcile --priority production` from a clean checkout.
+Use Actions for the shared sample store because its concurrency group
+serializes submissions. The priority choices are `batch`, `interactive`,
+`production`, and `system`. Iris checks the caller's permission for the selected
+priority. Omit `--priority` to preserve saved priorities.
 
 For a status query without job submission, run from the repository root with
 CoreWeave storage credentials and Iris authentication:
