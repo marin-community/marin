@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 REPORT_USER = "rav"
 REPORT_SLUG = "hero-completions"
+REPORT_URL_PATTERN = "reports/*.url"
 LATEST_REPORT_KEY = f"{REPORT_USER}/{REPORT_SLUG}/latest/index.html"
 COMMENT_MARKER = "<!-- hero-checkpoint-completions-v1 -->"
 ISSUES_API = "https://api.github.com/repos/marin-community/marin/issues"
@@ -109,7 +110,7 @@ def publish_daily(store: SampleStore, day: date, results: list[SampleResult]) ->
     more results arrive before publication succeeds.
     """
     report_date = day.isoformat()
-    published = sorted((store.root / "reports/*.url").glob(), key=lambda path: path.name)
+    published = sorted((store.root / REPORT_URL_PATTERN).glob(), key=lambda path: path.name)
     previous_url = published[-1].read_text() if published else ""
     if published and published[-1].name >= f"{report_date}.url":
         return previous_url
@@ -145,7 +146,7 @@ def publish_reports(store: SampleStore, day: date, comment: Callable[[str], None
         target = conditional_object(prefix_join(sites.PUBLIC_ROOT, public_result_key(key)))
         if target.version() is None:
             target.write(result.model_dump_json().encode(), expected_version=None)
-    published = sorted((store.root / "reports/*.url").glob(), key=lambda path: path.name)
+    published = sorted((store.root / REPORT_URL_PATTERN).glob(), key=lambda path: path.name)
     previous_url = published[-1].read_text() if published else ""
     manifest = report_manifest(results, day.isoformat(), previous_url)
     latest = publish_current(manifest)

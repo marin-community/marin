@@ -31,6 +31,8 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.status import render_sampling_s
 
 logger = logging.getLogger(__name__)
 
+CONTROLLER_CLUSTER = "marin"
+
 
 @click.command(help=__doc__, context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("action", type=click.Choice(["reconcile", "report", "inventory", "status"]))
@@ -47,7 +49,7 @@ def main(action: str, store_root: str) -> None:
         logger.info("Current report: %s", url)
         return
     if action == "status":
-        with connect_controller(cluster_name="marin") as endpoint:
+        with connect_controller(cluster_name=CONTROLLER_CLUSTER) as endpoint:
             with IrisClient.remote(endpoint.url, credentials=endpoint.credentials) as client:
                 jobs = client.list_jobs(prefix=f"/{JOB_USER}/")
         summary = render_sampling_summary(store.requests(), store.completed_ids(), jobs, endpoint.url)
@@ -64,7 +66,7 @@ def main(action: str, store_root: str) -> None:
         logger.info("%d permanent checkpoints", len(requests))
         return
     subprocess.run(["git", "diff", "--exit-code", "HEAD", "--"], check=True, stdout=subprocess.DEVNULL)
-    with connect_controller(cluster_name="marin") as endpoint:
+    with connect_controller(cluster_name=CONTROLLER_CLUSTER) as endpoint:
         with IrisClient.remote(endpoint.url, credentials=endpoint.credentials) as client:
             jobs = IrisSamplingJobs(
                 client,

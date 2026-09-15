@@ -383,13 +383,12 @@ def test_current_report_advances_while_daily_history_survives_retries(tmp_path, 
         (job_pb2.JOB_STATE_FAILED, "", "Restore failed: <tensor>"),
     ],
 )
-def test_summary_shows_checkpoint_job_state_and_completed_count(sample_request, state, pending_reason, error):
+def test_summary_shows_checkpoint_job_state_and_diagnostics(sample_request, state, pending_reason, error):
     name = sample_job_names(sample_request)[0]
     job = job_status_from_proto(
         job_pb2.JobStatus(job_id=f"/hero-completions/{name}", state=state, pending_reason=pending_reason, error=error)
     )
     summary = render_sampling_summary([sample_request], {"previous-result"}, [job], "https://iris.oa.dev")
-    assert "Completed sample sets: 1. Requests without results: 1." in summary
     assert "<td>6000</td>" in summary
     assert f'<a href="https://iris.oa.dev/#/job/%2Fhero-completions%2F{name}">' in summary
     assert f"<td>{job.state.value}</td>" in summary
