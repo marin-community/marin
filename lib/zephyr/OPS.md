@@ -2,7 +2,15 @@
 
 ## Dashboard
 
-See `lib/iris/OPS.md` → "Cluster Lifecycle" for `iris cluster dashboard` and `dashboard-proxy`. The proxy serves a locally-built frontend against the remote controller — restart it after frontend changes.
+Open the coordinator task in the Iris dashboard. Select its endpoint link to
+open the Zephyr dashboard.
+
+Select a pipeline to see its plan, status, counters, and metrics. The worker
+view shows all workers in the coordinator pool. Completed executions disappear
+after the driver reads the result and releases coordinator state.
+
+See `lib/iris/OPS.md` → "Cluster Lifecycle" for `iris cluster dashboard` and
+`dashboard-proxy` commands.
 
 ## Architecture
 
