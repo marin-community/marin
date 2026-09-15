@@ -59,8 +59,8 @@ class ReplayAgent(BaseAgent):
         self.steps = steps
         self.step_index = 0
         self.tool_binding = msgspec.convert(tool_binding, type=HarnessToolBinding) if tool_binding is not None else None
-        if self.tool_binding is not None and self.tool_binding.interface != "replay":
-            raise ValueError("Replay requires a replay tool interface")
+        if self.tool_binding is not None and self.tool_binding.interface != "terminal":
+            raise ValueError("Replay requires a terminal tool interface")
 
     @staticmethod
     def name() -> str:

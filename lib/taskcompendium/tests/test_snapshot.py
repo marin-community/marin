@@ -8,7 +8,7 @@ from tasktrove_verify.spec import Mode
 
 from taskcompendium.execution import (
     ChatWithTools,
-    HarborExecutionConfig,
+    HarborTaskBinding,
     HarnessToolBinding,
     environment_for_requirements,
 )
@@ -79,10 +79,9 @@ def test_overlay_export_rejects_incomplete_dependency_exclusion(tmp_path, exclud
         lower_to_harbor(
             spec,
             (Rendering("overlay", FinalState((".",), excluded_paths=excluded)),),
-            HarborExecutionConfig(
-                "replay",
+            HarborTaskBinding(
                 environment_for_requirements(spec.requirements),
-                interaction=(ChatWithTools((HarnessToolBinding("replay", "docker"),))),
+                ChatWithTools((HarnessToolBinding("terminal", "docker"),)),
             ),
             destination,
         )

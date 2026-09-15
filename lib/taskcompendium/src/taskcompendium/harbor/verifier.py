@@ -23,6 +23,7 @@ from taskcompendium.models import (
     ContainerRuntime,
     FileSubmission,
     FinalState,
+    GradingResult,
     Outcome,
     ProviderStateVerifier,
     tasktrove_verifier,
@@ -55,6 +56,20 @@ class SemanticVerifier(BaseVerifier):
             await self.environment.download_file(source, target)
 
     async def verify(self) -> VerifierResult:
+        try:
+            return await self._verify()
+        except (ExtractionError, GradingInfrastructureError):
+            raise
+        except Exception as error:
+            result = GradingResult(Outcome.INFRA_ERROR, None, {"error": f"{type(error).__name__}: {error}"})
+            self._write_result(result)
+            raise GradingInfrastructureError(json.dumps(result.detail)) from error
+
+    def _write_result(self, result: GradingResult) -> None:
+        self.trial_paths.verifier_dir.mkdir(parents=True, exist_ok=True)
+        (self.trial_paths.verifier_dir / "taskcompendium-result.json").write_bytes(msgspec.json.encode(result))
+
+    async def _verify(self) -> VerifierResult:
         root = self.task.paths.task_dir
         spec = from_json((root / "specification.json").read_bytes())
         renderings = renderings_from_json((root / "renderings.json").read_bytes())
@@ -69,11 +84,16 @@ class SemanticVerifier(BaseVerifier):
                 raise GradingInfrastructureError(
                     "Provider-state verifier interface does not match the provider environment"
                 )
+            if not (self.trial_paths.agent_dir / "response.txt").exists():
+                result = GradingResult(
+                    Outcome.EXTRACTION_ERROR, None, {"error": "Provider agent produced no final response"}
+                )
+                self._write_result(result)
+                raise ExtractionError(json.dumps(result.detail))
             result = await self.environment.grade_provider_state(
                 source_state_verifier.adapter, source_state_verifier.parameters
             )
-            self.trial_paths.verifier_dir.mkdir(parents=True, exist_ok=True)
-            (self.trial_paths.verifier_dir / "taskcompendium-result.json").write_bytes(msgspec.json.encode(result))
+            self._write_result(result)
             if result.status != Outcome.GRADED or result.reward is None:
                 raise GradingInfrastructureError(json.dumps(result.detail))
             return VerifierResult(rewards={"reward": result.reward}, stdout=json.dumps(result.detail))
@@ -115,8 +135,7 @@ class SemanticVerifier(BaseVerifier):
                     grade_attempt, spec, protocol, response, workspace, transcript, self.judge_client, step_index
                 )
 
-        self.trial_paths.verifier_dir.mkdir(parents=True, exist_ok=True)
-        (self.trial_paths.verifier_dir / "taskcompendium-result.json").write_bytes(msgspec.json.encode(result))
+        self._write_result(result)
         if result.status == Outcome.EXTRACTION_ERROR:
             raise ExtractionError(json.dumps(result.detail))
         if result.status != Outcome.GRADED or result.reward is None:

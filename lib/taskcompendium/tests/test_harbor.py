@@ -54,6 +54,16 @@ from taskcompendium.models import (
     WorkspaceState,
 )
 
+pytestmark = pytest.mark.harbor_conformance
+
+
+def _reference_execution(binding: HarborTaskBinding, agent: str) -> HarborExecutionConfig:
+    return HarborExecutionConfig(binding, HarborLaunchConfig(agent))
+
+
+def _exported_execution(task: Path) -> dict:
+    return json.loads((task / "reference-execution.json").read_text())
+
 
 def _spec() -> TaskSpecification:
     return TaskSpecification(
@@ -98,7 +108,7 @@ def _task(root: Path, protocol: Rendering | None = None, environment=None) -> Pa
 
 
 def _execution(task: Path, agent: dict) -> dict:
-    config = json.loads((task / "reference-execution.json").read_text())
+    config = _exported_execution(task)
     config["agent"] = {**config["agent"], **agent, "kwargs": {**config["agent"]["kwargs"], **agent.get("kwargs", {})}}
     return config
 
@@ -140,7 +150,7 @@ async def test_harbor_rejects_export_drift_before_starting_trial(tmp_path, filen
     target = document[0] if filename == "renderings.json" else document
     target[field] = value
     (task / filename).write_text(json.dumps(document))
-    execution = json.loads((task / "execution.json").read_text())
+    execution = _exported_execution(task)
     with pytest.raises(ValueError, match=error):
         await run_trial(task, execution, tmp_path / "trials", "drift")
     assert not (tmp_path / "trials").exists()
@@ -252,20 +262,18 @@ async def test_harbor_tool_chat_executes_shell_before_grading(tmp_path, bridge):
         {"role": "assistant", "content": "Done."},
     ]
     with _chat_endpoint(messages) as (endpoint, requests):
+        binding = HarborTaskBinding(ShellSimEnvironment(), ChatWithTools((ShellToolBinding("run_command", "shellsim"),)))
         task = lower_to_harbor(
             _spec(),
             (protocol,),
-            HarborExecutionConfig(
-                "tool_chat",
-                ShellSimEnvironment(),
-                interaction=ChatWithTools((ShellToolBinding("run_command", "shellsim"),)),
-            ),
+            binding,
             tmp_path / "tool",
+            reference_execution=_reference_execution(binding, "tool_chat"),
             agent_kwargs={"api_base": endpoint},
             model_name="fixture",
             environment_kwargs={"bridge_path": str(Path(bridge).resolve())},
         )
-        execution = json.loads((task / "execution.json").read_text())
+        execution = _exported_execution(task)
         result = await run_trial(task, execution, tmp_path / "trials", "tool")
     assert result.exception_info is None
     assert result.verifier_result.rewards == {"reward": 1.0}
@@ -300,11 +308,13 @@ async def test_harbor_judge_transport_preserves_outcome_and_provenance(tmp_path,
                 ),
             ),
         )
+        binding = HarborTaskBinding(NoEnvironment(), Chat())
         task = lower_to_harbor(
             spec,
             (Rendering("plain", AssistantFinal()),),
-            HarborTaskBinding(NoEnvironment(), Chat()),
+            binding,
             tmp_path / "judge",
+            reference_execution=_reference_execution(binding, "replay"),
         )
         execution = _execution(
             task,
@@ -334,14 +344,16 @@ async def test_multistep_chat_uses_each_semantic_verifier(tmp_path, responses, e
         base.steps[0], instructions="Compute one plus one.", verifier=TaskTroveVerifier(Mode.MATH, {"expected": "2"})
     )
     spec = msgspec.structs.replace(base, steps=(*base.steps, second), success_policy=TaskSuccessPolicy.MEAN)
+    binding = HarborTaskBinding(NoEnvironment(), Chat())
     task = lower_to_harbor(
         spec,
         (Rendering("plain", AssistantFinal()),) * 2,
-        HarborTaskBinding(NoEnvironment(), Chat()),
+        binding,
         tmp_path / "multi",
+        reference_execution=_reference_execution(binding, "replay"),
         agent_kwargs={"steps": [{"response": r, "commands": []} for r in responses]},
     )
-    result = await run_trial(task, json.loads((task / "execution.json").read_text()), tmp_path / "trials", "multi")
+    result = await run_trial(task, _exported_execution(task), tmp_path / "trials", "multi")
     assert result.exception_info is None
     assert result.verifier_result.rewards == {"reward": expected}
     assert [s.verifier_result.rewards["reward"] for s in result.step_results] == [1.0, 1.0 if expected == 1.0 else 0.0]
@@ -350,16 +362,18 @@ async def test_multistep_chat_uses_each_semantic_verifier(tmp_path, responses, e
 async def test_multistep_extraction_failure_has_no_aggregate_reward(tmp_path):
     base = _spec()
     spec = msgspec.structs.replace(base, steps=base.steps * 2, success_policy=TaskSuccessPolicy.MEAN)
+    binding = HarborTaskBinding(NoEnvironment(), Chat())
     task = lower_to_harbor(
         spec,
         (Rendering("json", AssistantFinal(JsonPath())),) * 2,
-        HarborTaskBinding(NoEnvironment(), Chat()),
+        binding,
         tmp_path / "multi",
+        reference_execution=_reference_execution(binding, "replay"),
         agent_kwargs={
             "steps": [{"response": "broken", "commands": []}, {"response": '{"answer":"3/4"}', "commands": []}]
         },
     )
-    result = await run_trial(task, json.loads((task / "execution.json").read_text()), tmp_path / "trials", "multi")
+    result = await run_trial(task, _exported_execution(task), tmp_path / "trials", "multi")
     assert result.verifier_result is None
     assert result.step_results[0].exception_info is not None
     diagnostic = json.loads((tmp_path / "trials/multi/steps/step-1/verifier/taskcompendium-result.json").read_text())
@@ -379,15 +393,17 @@ async def test_multistep_chat_preserves_required_visible_context(tmp_path, extra
     answers = ["Mira will meet Leo on Tuesday.", revised]
     responses = [json.dumps({"answer": answer}) if isinstance(extractor, JsonPath) else answer for answer in answers]
     with _chat_endpoint([{"role": "assistant", "content": response} for response in responses]) as (endpoint, requests):
+        binding = HarborTaskBinding(NoEnvironment(), Chat(), context="conversation")
         task = lower_to_harbor(
             spec,
             renderings,
-            HarborTaskBinding(NoEnvironment(), Chat(), context="conversation"),
+            binding,
             tmp_path / "multi",
+            reference_execution=_reference_execution(binding, "chat"),
             agent_kwargs={"api_base": endpoint},
             model_name="fixture",
         )
-        result = await run_trial(task, json.loads((task / "execution.json").read_text()), tmp_path / "trials", "multi")
+        result = await run_trial(task, _exported_execution(task), tmp_path / "trials", "multi")
     assert result.verifier_result.rewards == {"reward": reward}
     assert [step.verifier_result.rewards["reward"] for step in result.step_results] == [1.0, reward]
     assert [m["role"] for m in requests[0]["messages"]] == ["user"]
@@ -416,30 +432,13 @@ async def test_multistep_shellsim_releases_inputs_at_their_step(tmp_path, bridge
         steps=(first, second),
         success_policy=TaskSuccessPolicy.MEAN,
     )
+    binding = HarborTaskBinding(ShellSimEnvironment(), ChatWithTools((HarnessToolBinding("terminal", "shellsim"),)))
     task = lower_to_harbor(
         spec,
         (Rendering("file", FileSubmission("/app/answer.txt")),) * 2,
-        HarborExecutionConfig(
-            "replay",
-            environment_for_requirements(spec.requirements),
-            interaction=(
-                Chat()
-                if isinstance(environment_for_requirements(spec.requirements), NoEnvironment)
-                else ChatWithTools(
-                    (
-                        HarnessToolBinding(
-                            "replay",
-                            (
-                                "shellsim"
-                                if isinstance(environment_for_requirements(spec.requirements), ShellSimEnvironment)
-                                else "docker"
-                            ),
-                        ),
-                    )
-                )
-            ),
-        ),
+        binding,
         tmp_path / "multi",
+        reference_execution=_reference_execution(binding, "replay"),
         environment_kwargs={"bridge_path": bridge},
         agent_kwargs={
             "steps": [
@@ -453,7 +452,7 @@ async def test_multistep_shellsim_releases_inputs_at_their_step(tmp_path, bridge
             ]
         },
     )
-    result = await run_trial(task, json.loads((task / "execution.json").read_text()), tmp_path / "trials", "multi")
+    result = await run_trial(task, _exported_execution(task), tmp_path / "trials", "multi")
     assert result.exception_info is None
     assert [s.verifier_result.rewards["reward"] for s in result.step_results] == [1.0, 1.0]
 
@@ -489,31 +488,24 @@ async def test_repository_followup_uses_workspace_with_fresh_conversation(tmp_pa
             ]
         )
     with _chat_endpoint(messages) as (endpoint, requests):
+        environment = environment_for_requirements(spec.requirements)
+        binding = HarborTaskBinding(
+            environment,
+            ChatWithTools(
+                (ShellToolBinding("shell", "shellsim" if isinstance(environment, ShellSimEnvironment) else "docker"),)
+            ),
+            context="fresh",
+        )
         task = lower_to_harbor(
             spec,
             (Rendering("workspace", FinalState(("greeting.py",))),) * 2,
-            HarborExecutionConfig(
-                "tool_chat",
-                environment_for_requirements(spec.requirements),
-                context="fresh",
-                interaction=ChatWithTools(
-                    (
-                        ShellToolBinding(
-                            "shell",
-                            (
-                                "shellsim"
-                                if isinstance(environment_for_requirements(spec.requirements), ShellSimEnvironment)
-                                else "docker"
-                            ),
-                        ),
-                    )
-                ),
-            ),
+            binding,
             tmp_path / "fresh-workspace",
+            reference_execution=_reference_execution(binding, "tool_chat"),
             agent_kwargs={"api_base": endpoint},
             model_name="fixture",
         )
-        result = await run_trial(task, json.loads((task / "execution.json").read_text()), tmp_path / "trials", "fresh")
+        result = await run_trial(task, _exported_execution(task), tmp_path / "trials", "fresh")
     assert result.exception_info is None
     assert [step.verifier_result.rewards["reward"] for step in result.step_results] == [1.0, 1.0]
     assert [m["role"] for m in requests[2]["messages"]] == ["user"]
@@ -524,28 +516,32 @@ async def test_repository_followup_uses_workspace_with_fresh_conversation(tmp_pa
 @pytest.mark.docker
 async def test_chat_docker_environment_does_not_grant_model_tools(tmp_path, runtime_image):
     with _chat_endpoint() as (endpoint, requests):
+        binding = HarborTaskBinding(DockerEnvironment(runtime_image), Chat())
         task = lower_to_harbor(
             _spec(),
             (Rendering("plain", AssistantFinal()),),
-            HarborTaskBinding(DockerEnvironment(runtime_image), Chat()),
+            binding,
             tmp_path / "chat-docker",
+            reference_execution=_reference_execution(binding, "chat"),
             agent_kwargs={"api_base": endpoint},
             model_name="fixture",
         )
-        result = await run_trial(task, json.loads((task / "execution.json").read_text()), tmp_path / "trials", "chat")
+        result = await run_trial(task, _exported_execution(task), tmp_path / "trials", "chat")
     assert result.verifier_result.rewards == {"reward": 1.0}
     assert "tools" not in requests[0]
 
 
 @pytest.mark.docker
 async def test_chat_replay_cannot_execute_commands_in_docker(tmp_path, runtime_image):
+    binding = HarborTaskBinding(DockerEnvironment(runtime_image), Chat())
     task = lower_to_harbor(
         _spec(),
         (Rendering("plain", AssistantFinal()),),
-        HarborTaskBinding(DockerEnvironment(runtime_image), Chat()),
+        binding,
         tmp_path / "replay-docker",
+        reference_execution=_reference_execution(binding, "replay"),
         agent_kwargs={"commands": ["echo unauthorized"], "response": "3/4"},
     )
-    result = await run_trial(task, json.loads((task / "execution.json").read_text()), tmp_path / "trials", "replay")
+    result = await run_trial(task, _exported_execution(task), tmp_path / "trials", "replay")
     assert result.exception_info is not None
     assert result.verifier_result is None

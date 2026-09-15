@@ -14,6 +14,8 @@ import pytest
 from taskcompendium.execution import (
     ChatWithTools,
     HarborExecutionConfig,
+    HarborLaunchConfig,
+    HarborTaskBinding,
     HarnessToolBinding,
     environment_for_requirements,
 )
@@ -22,7 +24,7 @@ from taskcompendium.importers.r2egym import SNAPSHOT_EXCLUSIONS, import_row, sou
 from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import ContainerRuntime, FinalState, ImageOverlay, Rejected, Rendering
 
-pytestmark = pytest.mark.docker
+pytestmark = [pytest.mark.docker, pytest.mark.harbor_conformance]
 FIXTURE = Path(__file__).parent / "fixtures/r2egym/rows.json.gz"
 SYMPY_FIXTURE = Path(__file__).parent / "fixtures/r2egym/broadened_rows.json.gz"
 RUNTIME_DOCKERFILE = Path(__file__).parents[1] / "src/taskcompendium/harbor/r2e_runtime.Dockerfile"
@@ -116,18 +118,19 @@ async def test_real_r2egym_row_through_harbor(tmp_path, r2e_runtime_images, row_
         specification.id,
         FinalState((".",), excluded_paths=SNAPSHOT_EXCLUSIONS),
     )
+    binding = HarborTaskBinding(
+        environment_for_requirements(specification.requirements),
+        ChatWithTools((HarnessToolBinding("terminal", "docker"),)),
+    )
     task = lower_to_harbor(
         specification,
         (protocol,),
-        HarborExecutionConfig(
-            "replay",
-            environment_for_requirements(specification.requirements),
-            interaction=(ChatWithTools((HarnessToolBinding("replay", "docker"),))),
-        ),
+        binding,
         tmp_path / "task",
+        reference_execution=HarborExecutionConfig(binding, HarborLaunchConfig("replay")),
         agent_kwargs={"commands": _repair_commands(row, attempt)},
     )
-    execution = json.loads((task / "execution.json").read_text())
+    execution = json.loads((task / "reference-execution.json").read_text())
     result = await run_trial(task, execution, tmp_path / "trials", attempt)
 
     assert result.exception_info is None, result.exception_info
@@ -150,18 +153,19 @@ async def test_real_sympy_r2egym_row_through_harbor(tmp_path, sympy_runtime_imag
         specification.id,
         FinalState((".",), excluded_paths=SNAPSHOT_EXCLUSIONS),
     )
+    binding = HarborTaskBinding(
+        environment_for_requirements(specification.requirements),
+        ChatWithTools((HarnessToolBinding("terminal", "docker"),)),
+    )
     task = lower_to_harbor(
         specification,
         (rendering,),
-        HarborExecutionConfig(
-            "replay",
-            environment_for_requirements(specification.requirements),
-            interaction=(ChatWithTools((HarnessToolBinding("replay", "docker"),))),
-        ),
+        binding,
         tmp_path / "task",
+        reference_execution=HarborExecutionConfig(binding, HarborLaunchConfig("replay")),
         agent_kwargs={"commands": _repair_commands(row, attempt)},
     )
-    execution = json.loads((task / "execution.json").read_text())
+    execution = json.loads((task / "reference-execution.json").read_text())
     result = await run_trial(task, execution, tmp_path / "trials", attempt)
 
     assert result.exception_info is None, result.exception_info

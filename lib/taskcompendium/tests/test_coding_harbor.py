@@ -12,6 +12,8 @@ import pytest
 from taskcompendium.execution import (
     ChatWithTools,
     HarborExecutionConfig,
+    HarborLaunchConfig,
+    HarborTaskBinding,
     HarnessToolBinding,
     environment_for_requirements,
 )
@@ -21,7 +23,7 @@ from taskcompendium.importers.tasktrove_coding import import_task
 from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import FinalState, Rejected, Rendering
 
-pytestmark = pytest.mark.docker
+pytestmark = [pytest.mark.docker, pytest.mark.harbor_conformance]
 FIXTURES = Path(__file__).parent / "fixtures/coding"
 
 # These archives contain no oracle. These are validation-only implementations
@@ -104,18 +106,18 @@ async def test_real_coding_source_grader(tmp_path, runtime_image, family, row, p
                 CPP_SOLUTION if attempt == "good" else CPP_SOLUTION.replace("bool inside =", "bool inside = false &&")
             )
             commands = [f"printf '%s' {shlex.quote(source)} > solution.cpp"]
+    binding = HarborTaskBinding(
+        environment_for_requirements(spec.requirements), ChatWithTools((HarnessToolBinding("terminal", "docker"),))
+    )
     task = lower_to_harbor(
         spec,
         (Rendering("code", FinalState(paths)),),
-        HarborExecutionConfig(
-            "replay",
-            environment_for_requirements(spec.requirements),
-            interaction=(ChatWithTools((HarnessToolBinding("replay", "docker"),))),
-        ),
+        binding,
         tmp_path / "task",
+        reference_execution=HarborExecutionConfig(binding, HarborLaunchConfig("replay")),
         agent_kwargs={"commands": commands},
     )
-    execution = json.loads((task / "execution.json").read_text())
+    execution = json.loads((task / "reference-execution.json").read_text())
     result = await run_trial(task, execution, tmp_path / "trials", "coding")
     assert result.exception_info is None, result.exception_info
     assert result.verifier_result.rewards == {"reward": reward}

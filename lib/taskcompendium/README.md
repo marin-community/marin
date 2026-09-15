@@ -154,6 +154,18 @@ for the TaskTrove intersection and deferred cases. Existing MCQA, code, and R2E
 fixtures remain the controls; no duplicate TaskTrove import is needed merely to
 exercise another output convention.
 
+## Harbor conformance suite
+
+The Harbor conformance selector is the integration acceptance gate for this package. It lowers representative canonical specifications, runs their exported packages through Harbor’s actual `Trial` lifecycle, and checks the observable verdict for known-good, known-wrong, malformed, and missing submissions. It uses replay agents or local scripted OpenAI-compatible endpoints, so it validates the integration rather than model capability.
+
+```bash
+uv run --project lib/taskcompendium --extra harbor --group test \
+  pytest -m harbor_conformance \
+  lib/taskcompendium/tests
+```
+
+The selector includes answer-only and rendered-answer tasks; ShellSim file tasks; source-backed Docker code and R2E-Gym final-state repairs; native action prediction; and stateful, multi-step Workplace workflows. The thin native-action and stateful-workflow cells include known-good, known-wrong, malformed-submission, and verifier-outage trials. A verifier outage is retained as an `infra_error` with no reward; it is never normalized to score zero. The selector also covers private-resource isolation, extraction failures, and retained conversation. Docker is intentionally included in this explicit command. The ShellSim fixture builds its bridge with Cargo. A Qwen or other live-model smoke run may complement it, but a model’s reward is not the conformance oracle.
+
 ## Contracts
 
 Schema 0.7 stores ordered `StepSpecification` entries in a pinned semantic

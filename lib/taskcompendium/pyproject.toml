@@ -39,7 +39,7 @@ packages = ["src/taskcompendium"]
 asyncio_mode = "auto"
 timeout = 60
 addopts = "--import-mode=importlib -m 'not integration and not docker and not manual'"
-markers = ["integration: live external service", "docker: requires a Docker daemon", "manual: explicitly invoked validation"]
+markers = ["integration: live external service", "docker: requires a Docker daemon", "manual: explicitly invoked validation", "harbor_conformance: end-to-end TaskCompendium to Harbor compatibility suite"]
 
 [tool.ruff]
 extend = "../../pyproject.toml"

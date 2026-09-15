@@ -21,6 +21,8 @@ from taskcompendium.providers.nemo_workplace.provider import NemoWorkplaceEnviro
 from taskcompendium.providers.nemo_workplace.tools import get_tools
 from taskcompendium.rendering import render_task
 
+pytestmark = pytest.mark.harbor_conformance
+
 FIXTURES = Path(__file__).parent / "fixtures/nemo"
 
 
@@ -59,6 +61,9 @@ def _scripted_endpoint(steps):
     requests: list[dict] = []
     responses: list[dict] = []
     for step_index, calls in enumerate(steps, start=1):
+        if isinstance(calls, dict):
+            responses.append(calls)
+            continue
         responses.extend(
             _assistant_call(call, f"step-{step_index}-call-{call_index}") for call_index, call in enumerate(calls, 1)
         )
@@ -70,7 +75,7 @@ def _scripted_endpoint(steps):
 
         def do_POST(self):
             requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
-            message = responses[len(requests) - 1]
+            message = responses[min(len(requests) - 1, len(responses) - 1)]
             body = json.dumps(
                 {
                     "id": f"chatcmpl-{len(requests)}",
@@ -187,3 +192,61 @@ async def test_native_harbor_multistep_provider_trial_retains_state_and_conversa
     ]
     assert len(transcripts[2]) > len(transcripts[0])
     assert transcripts[2][-1]["content"] == "Completed."
+
+
+async def test_native_harbor_multistep_provider_rejects_malformed_tool_submission(tmp_path, monkeypatch):
+    sample = build_multistep_sample(FIXTURES)
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture")
+    malformed = ({"role": "assistant", "content": None, "tool_calls": "not-a-list"},)
+    with _scripted_endpoint(malformed) as (endpoint, _requests):
+        task = lower_to_harbor(
+            sample.specification,
+            sample.renderings,
+            sample.binding,
+            tmp_path / "task",
+            reference_execution=HarborExecutionConfig(sample.binding, HarborLaunchConfig("provider_chat")),
+            model_name="fixture",
+            agent_kwargs={"api_base": endpoint, "max_turns": 4},
+        )
+        result = await run_trial(
+            task, json.loads((task / "reference-execution.json").read_text()), tmp_path / "trials", "malformed"
+        )
+
+    assert result.verifier_result is None
+    assert result.step_results is not None
+    assert result.step_results[0].exception_info is not None
+    outcome = _result(tmp_path, "malformed", 1)
+    assert outcome["status"] == "extraction_error"
+    assert outcome["reward"] is None
+    assert outcome["detail"]["error"] == "Provider agent produced no final response"
+
+
+async def test_native_harbor_multistep_provider_records_verifier_crash_as_infrastructure_failure(tmp_path, monkeypatch):
+    sample = build_multistep_sample(FIXTURES)
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture")
+
+    async def crash(*_args, **_kwargs):
+        raise RuntimeError("fixture provider outage")
+
+    monkeypatch.setattr(NemoWorkplaceEnvironment, "grade_provider_state", crash)
+    with _scripted_endpoint(sample.all_good) as (endpoint, _requests):
+        task = lower_to_harbor(
+            sample.specification,
+            sample.renderings,
+            sample.binding,
+            tmp_path / "task",
+            reference_execution=HarborExecutionConfig(sample.binding, HarborLaunchConfig("provider_chat")),
+            model_name="fixture",
+            agent_kwargs={"api_base": endpoint, "max_turns": 4},
+        )
+        result = await run_trial(
+            task, json.loads((task / "reference-execution.json").read_text()), tmp_path / "trials", "infra"
+        )
+
+    assert result.verifier_result is None
+    assert result.step_results is not None
+    assert result.step_results[0].exception_info is not None
+    outcome = _result(tmp_path, "infra", 1)
+    assert outcome["status"] == "infra_error"
+    assert outcome["reward"] is None
+    assert outcome["detail"]["error"] == "RuntimeError: fixture provider outage"

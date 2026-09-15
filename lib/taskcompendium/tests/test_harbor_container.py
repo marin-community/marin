@@ -80,7 +80,7 @@ async def test_harbor_docker_trial_grades_code_and_ignores_agent_reward(tmp_path
         HarborExecutionConfig(
             "replay",
             environment_for_requirements(spec.requirements),
-            interaction=(ChatWithTools((HarnessToolBinding("replay", "docker"),))),
+            interaction=(ChatWithTools((HarnessToolBinding("terminal", "docker"),))),
         ),
         tmp_path / "task",
         agent_kwargs={
@@ -217,7 +217,7 @@ print(sum(map(int,input().split())))
         HarborExecutionConfig(
             "replay",
             environment_for_requirements(spec.requirements),
-            interaction=(ChatWithTools((HarnessToolBinding("replay", "docker"),))),
+            interaction=(ChatWithTools((HarnessToolBinding("terminal", "docker"),))),
         ),
         tmp_path / "task",
         agent_kwargs={
@@ -272,7 +272,7 @@ async def test_overlay_trial_rejects_submitted_symlink(tmp_path, overlay_image):
         HarborExecutionConfig(
             "replay",
             environment_for_requirements(spec.requirements),
-            interaction=(ChatWithTools((HarnessToolBinding("replay", "docker"),))),
+            interaction=(ChatWithTools((HarnessToolBinding("terminal", "docker"),))),
         ),
         tmp_path / "task",
         agent_kwargs={"commands": ["ln -s .venv/dependency main.py"]},
@@ -297,7 +297,7 @@ async def test_sequential_feature_preserves_workspace_and_private_step_tests(tmp
             "replay",
             environment_for_requirements(spec.requirements),
             context="fresh",
-            interaction=(ChatWithTools((HarnessToolBinding("replay", "docker"),))),
+            interaction=(ChatWithTools((HarnessToolBinding("terminal", "docker"),))),
         ),
         tmp_path / "sequential",
         agent_kwargs={

@@ -13,6 +13,8 @@ from taskcompendium.execution import (
     Chat,
     ChatWithTools,
     HarborExecutionConfig,
+    HarborLaunchConfig,
+    HarborTaskBinding,
     HarnessToolBinding,
     NoEnvironment,
     ShellSimEnvironment,
@@ -37,7 +39,21 @@ from taskcompendium.models import (
     XmlPath,
 )
 
+pytestmark = pytest.mark.harbor_conformance
+
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _replay_binding(specification: TaskSpecification) -> HarborTaskBinding:
+    environment = environment_for_requirements(specification.requirements)
+    if isinstance(environment, NoEnvironment):
+        return HarborTaskBinding(environment, Chat())
+    backend = "shellsim" if isinstance(environment, ShellSimEnvironment) else "docker"
+    return HarborTaskBinding(environment, ChatWithTools((HarnessToolBinding("terminal", backend),)))
+
+
+def _replay_execution(binding: HarborTaskBinding) -> HarborExecutionConfig:
+    return HarborExecutionConfig(binding, HarborLaunchConfig("replay"))
 
 
 def _source_task(source: str) -> TaskSpecification:
@@ -81,35 +97,16 @@ def _source_task(source: str) -> TaskSpecification:
 async def test_real_answer_harbor_replay(tmp_path, source, submission, good, bad, attempt, reward):
     specification = _source_task(source)
     response = {"good": good, "bad": bad, "empty": ""}[attempt]
+    binding = _replay_binding(specification)
     task = lower_to_harbor(
         specification,
         (Rendering("answer", submission),),
-        HarborExecutionConfig(
-            "replay",
-            environment_for_requirements(specification.requirements),
-            interaction=(
-                Chat()
-                if isinstance(environment_for_requirements(specification.requirements), NoEnvironment)
-                else ChatWithTools(
-                    (
-                        HarnessToolBinding(
-                            "replay",
-                            (
-                                "shellsim"
-                                if isinstance(
-                                    environment_for_requirements(specification.requirements), ShellSimEnvironment
-                                )
-                                else "docker"
-                            ),
-                        ),
-                    )
-                )
-            ),
-        ),
+        binding,
         tmp_path / "task",
+        reference_execution=_replay_execution(binding),
         agent_kwargs={"response": response},
     )
-    execution = json.loads((task / "execution.json").read_text())
+    execution = json.loads((task / "reference-execution.json").read_text())
 
     result = await run_trial(task, execution, tmp_path / "trials", attempt)
 
@@ -138,35 +135,16 @@ async def test_real_answer_harbor_replay(tmp_path, source, submission, good, bad
 )
 async def test_real_answer_harbor_malformed_wrapper_has_no_reward(tmp_path, source, submission, response):
     specification = _source_task(source)
+    binding = _replay_binding(specification)
     task = lower_to_harbor(
         specification,
         (Rendering("answer", submission),),
-        HarborExecutionConfig(
-            "replay",
-            environment_for_requirements(specification.requirements),
-            interaction=(
-                Chat()
-                if isinstance(environment_for_requirements(specification.requirements), NoEnvironment)
-                else ChatWithTools(
-                    (
-                        HarnessToolBinding(
-                            "replay",
-                            (
-                                "shellsim"
-                                if isinstance(
-                                    environment_for_requirements(specification.requirements), ShellSimEnvironment
-                                )
-                                else "docker"
-                            ),
-                        ),
-                    )
-                )
-            ),
-        ),
+        binding,
         tmp_path / "task",
+        reference_execution=_replay_execution(binding),
         agent_kwargs={"response": response},
     )
-    execution = json.loads((task / "execution.json").read_text())
+    execution = json.loads((task / "reference-execution.json").read_text())
 
     result = await run_trial(task, execution, tmp_path / "trials", "malformed")
 
@@ -191,19 +169,17 @@ async def test_real_answer_harbor_shellsim_grades_file_not_final_response(
     elif attempt == "missing":
         commands = []
     response = bad if attempt == "good" else good
+    binding = HarborTaskBinding(ShellSimEnvironment(), ChatWithTools((HarnessToolBinding("terminal", "shellsim"),)))
     task = lower_to_harbor(
         specification,
         (Rendering("file", FileSubmission("/app/answer.txt", extractor)),),
-        HarborExecutionConfig(
-            "replay",
-            ShellSimEnvironment(),
-            interaction=(ChatWithTools((HarnessToolBinding("replay", "shellsim"),))),
-        ),
+        binding,
         tmp_path / "task",
+        reference_execution=_replay_execution(binding),
         agent_kwargs={"commands": commands, "response": response},
         environment_kwargs={"bridge_path": str(Path(bridge).resolve())},
     )
-    execution = json.loads((task / "execution.json").read_text())
+    execution = json.loads((task / "reference-execution.json").read_text())
 
     result = await run_trial(task, execution, tmp_path / "trials", attempt)
 

@@ -9,7 +9,7 @@ from pathlib import Path
 import msgspec
 import pytest
 
-from taskcompendium.execution import Chat, HarborExecutionConfig, NoEnvironment
+from taskcompendium.execution import Chat, HarborTaskBinding, NoEnvironment
 from taskcompendium.grading import grade_attempt
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row, rendering
 from taskcompendium.lowering import lower_to_harbor
@@ -243,6 +243,6 @@ def test_predicted_action_rejects_mixed_step_output_contracts(tmp_path):
         lower_to_harbor(
             specification,
             (rendering(ROW, SHA256), Rendering("answer", AssistantFinal())),
-            HarborExecutionConfig("replay", NoEnvironment(), interaction=Chat()),
+            HarborTaskBinding(NoEnvironment(), Chat()),
             tmp_path / "task",
         )
