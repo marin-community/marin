@@ -179,7 +179,7 @@ requirements. Shared requirements, resources, source provenance, and the success
 policy belong to the concrete specification.
 
 `TaskSpec.coverage_tags` records reviewed semantic coverage labels:
-competency, shape, domain, artifact, interaction, state, context, and one
+competency, shape, subject, artifact, interaction, state, context, and one
 Snowball-calibrated `difficulty:easy`, `difficulty:medium`, or `difficulty:hard`.
 [The tagging guide](TAGGING.md) defines their semantics and the Luna labeling prompt.
 Each lowering carries those labels forward and adds result-encoding labels from its

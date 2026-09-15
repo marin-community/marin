@@ -14,7 +14,7 @@ from tasktrove_verify.spec import Mode
 SCHEMA_VERSION = "0.8"
 
 _SEMANTIC_COVERAGE_TAG_PREFIXES = frozenset(
-    {"competency", "shape", "domain", "artifact", "interaction", "state", "context", "difficulty"}
+    {"competency", "shape", "subject", "artifact", "interaction", "state", "context", "difficulty"}
 )
 
 
@@ -23,7 +23,7 @@ def _validate_coverage_tags(tags: tuple[str, ...], allowed_prefixes: frozenset[s
         raise ValueError("Coverage tags must be sorted and unique")
     for tag in tags:
         prefix, separator, value = tag.partition(":")
-        if not separator or prefix not in allowed_prefixes or not value.replace("_", "").isalnum():
+        if not separator or prefix not in allowed_prefixes or not value.replace("_", "").replace(".", "").isalnum():
             raise ValueError(f"Unsupported coverage tag: {tag}")
 
 

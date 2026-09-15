@@ -4,7 +4,7 @@ Use these labels to describe the semantic work in a `TaskSpec`. They support
 coverage analysis and sampling; they do not change execution, rendering, or
 verification.
 
-Tag sparingly. A useful label identifies a capability, task shape, domain, or
+Tag sparingly. A useful label identifies a capability, task shape, subject, or
 state that would otherwise be hard to select from the corpus. Do not turn the
 tag set into a paraphrase of the prompt.
 
@@ -44,7 +44,7 @@ express a useful, recurring distinction.
 | --- | --- | --- |
 | `competency` | The main reasoning or execution skill. | 1–2 |
 | `shape` | The kind of request or completed work. | exactly 1 |
-| `domain` | A material subject area, product, or operational domain. | 0–1 |
+| `subject` | A material subject area, product, or operational area. | 0–1 |
 | `artifact` | A substantive deliverable the model creates or changes. | 0–2 |
 | `interaction` | A meaningful ordered or tool-mediated interaction pattern. | 0–1 |
 | `state` | Meaningful mutable state that persists across the task. | 0–1 |
@@ -89,20 +89,24 @@ example, use `environment_modification` for a repository repair and
 `predicted_action` when the submission is an API action; neither is a generic
 "agentic" task.
 
-### `domain`
+### `subject`
 
-Use a domain only when it improves sampling beyond the competency label. Good
+A subject is optional. Use one only for a broad, recognizable field, product,
+or operational area that improves sampling beyond the competency label. Good
 examples are `arithmetic`, `number_theory`, `algorithms`, `python`,
 `filesystem`, `email`, `event_ticketing`, `machine_learning`, `oncology`, and
-`real_estate_law`.
+`real_estate_law`. Do not tag ordinary implementation details or generic
+functionality such as `name_handling`, `numeric_formatting`, or
+`data_type_inference` as subjects.
 
 Use dotted subtags for recurring, more specific functionality. For example, a
-React-heavy web task uses `domain:javascript.react`, and an integration problem
-uses `domain:calculus.integration`. Choose the most specific useful value rather
-than adding both its broad parent and child. Add a new subtag when the topic is
-likely to recur across the corpus; do not mint a one-off domain tag that merely
-repeats prompt wording. Omit broad labels such as `general` or `software` when a
-competency already says what is needed.
+React-heavy web task uses `subject:javascript.react`, and an integration problem
+uses `subject:calculus.integration`. Choose the most specific useful value rather
+than adding both its broad parent and child. Add a new subtag only when the topic
+is likely to recur across task families; do not mint a one-off subject tag that
+merely repeats prompt wording or identifies a narrow source package. Omit broad
+labels such as `general` or `software` when a competency already says what is
+needed.
 
 ### `artifact` and `context`
 
@@ -160,7 +164,7 @@ set of semantic coverage tags.
 Return one JSON object mapping each TaskSpec id to a sorted JSON array of tags.
 Every array must contain exactly one difficulty:* tag and exactly one shape:*
 tag. Add one main competency:* tag, and add a second only when it captures an
-independently important skill. Add domain, artifact, interaction, state, and
+independently important skill. Add subject, artifact, interaction, state, and
 context tags only when they materially improve future sampling. Most tasks
 should have three to six tags.
 
@@ -205,23 +209,26 @@ spreadsheet, dataset, tool_results, long_context, multi_document,
 cross_file, noisy, contradictory, workplace_assistant, customer_service, or
 creative_writing.
 
-domain (optional): use a material subject or operational domain such as
+subject (optional): use a material subject area or operational area such as
 arithmetic, algebra, number_theory, geometry, calculus, probability, physics,
 chemistry, biology, medicine, law, finance, business, algorithms, python,
 machine_learning, data_science, filesystem, email, event_ticketing,
-customer_relationship_management, or technical_operations. Use dotted subtags
-for recurring specific functionality: a React-heavy web task can use
-javascript.react and an integration problem can use calculus.integration. Choose
-the most specific useful value, not both a broad parent and its child. Add a new
-subtag only when it is likely to recur across the corpus; do not mint a one-off
-domain tag that repeats prompt wording. Do not use broad values such as general
-or software.
+customer_relationship_management, or technical_operations. A subject is optional:
+use one only for a broad, recognizable field, product, or operational area that
+improves sampling. Do not use ordinary implementation details or generic
+functionality such as name_handling, numeric_formatting, or data_type_inference as
+subjects. Use dotted subtags for recurring specific functionality: a React-heavy
+web task can use javascript.react and an integration problem can use
+calculus.integration. Choose the most specific useful value, not both a broad
+parent and its child. Add a new subtag only when it is likely to recur across task
+families; do not mint a one-off subject tag that repeats prompt wording or names a
+narrow source package. Do not use broad values such as general or software.
 
 difficulty (choose exactly one): easy, medium, or hard.
 
 You may add a new lowercase namespace:value tag only when it captures a useful
 recurring distinction missing above. Use only these namespaces: competency,
-shape, domain, artifact, interaction, state, context, difficulty.
+shape, subject, artifact, interaction, state, context, difficulty.
 
 Tag the task's semantic work, not its evaluator or packaging. Never tag Harbor,
 ShellSim, Docker, a container image, a verifier, a judge, reward, hidden test,

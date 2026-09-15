@@ -42,37 +42,37 @@
       "task": "nemo/code-answer/c69268d8bdb4da0685d7b187c88296c1",
       "rendering": "raw-code",
       "path": "harbor/nemo-code-answer-c69268d8bdb4da0685d7b187c88296c1-raw-code",
-      "specification_sha256": "e5586ada6c77b49323432903960a88c7c57d8ca8ce1d2fdcc53e8e279adce158"
+      "specification_sha256": "a31a094e6313e6c58d82e18e3a067919b0dd32f10b7bd5ec8743b81cdf1a9dff"
     },
     {
       "task": "nemo/code-answer/c69268d8bdb4da0685d7b187c88296c1",
       "rendering": "json",
       "path": "harbor/nemo-code-answer-c69268d8bdb4da0685d7b187c88296c1-json",
-      "specification_sha256": "e5586ada6c77b49323432903960a88c7c57d8ca8ce1d2fdcc53e8e279adce158"
+      "specification_sha256": "a31a094e6313e6c58d82e18e3a067919b0dd32f10b7bd5ec8743b81cdf1a9dff"
     },
     {
       "task": "nemo/code-answer/c69268d8bdb4da0685d7b187c88296c1",
       "rendering": "xml",
       "path": "harbor/nemo-code-answer-c69268d8bdb4da0685d7b187c88296c1-xml",
-      "specification_sha256": "e5586ada6c77b49323432903960a88c7c57d8ca8ce1d2fdcc53e8e279adce158"
+      "specification_sha256": "a31a094e6313e6c58d82e18e3a067919b0dd32f10b7bd5ec8743b81cdf1a9dff"
     },
     {
       "task": "nemo-predicted-action-100006de9c5795f992b54542d6368012170b333990b37202780ab19f60d2185f",
       "rendering": "nemo-native-final-action",
       "path": "harbor/nemo-predicted-action-100006de9c5795f992b54542d6368012170b333990b37202780ab19f60d2185f-nemo-native-final-action",
-      "specification_sha256": "8f69aaa25805cf4ef0d4cf7fa15c4e618596c39c32a50e0e2d8b88efe16db089"
+      "specification_sha256": "8a4c77c1775838b14fd19174d3e9c226990fa8cb5b22dae04684fbac70807338"
     },
     {
       "task": "nemo/workplace/0",
       "rendering": "nemo-workplace-chat",
       "path": "harbor/nemo-workplace-0-nemo-workplace-chat",
-      "specification_sha256": "9381a0fca03f86cf64c1efd090d95b7f384ffd804d3c187fcb9be29ecc271676"
+      "specification_sha256": "91a9c5c58ab5aaa1cd39ef6bcbe3a4ddfe57e93f17107575669504eca169014f"
     },
     {
       "task": "nemo/workplace/0-derived-multistep",
       "rendering": "nemo-workplace-chat",
       "path": "harbor/nemo-workplace-0-derived-multistep-nemo-workplace-chat",
-      "specification_sha256": "0452deaa7a75b725e975b77539e6e47ee3147c762ca0bbf81969a2a8fcdeac7d"
+      "specification_sha256": "d497f284c197f953d8c04071c222c93e7aa58c725954444804aef31e285b2a5a"
     }
   ],
   "runtime_image": "sha256:1e02be2c8950c47f6d8eef8bfd775abbd9c547c68d57ac6a887fd13b8ae7c8b7",

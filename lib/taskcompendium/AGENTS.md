@@ -37,7 +37,7 @@ Schema 0.8 stores all requests in `TaskSpec.steps`. Keep step-specific
 answer requirements, private resources, verifier dependencies, and context needs
 on each step. A `TaskSpec` is a pinned semantic instance; `TaskFamily` is the
 source/family instantiation interface. Instantiate once before rendering variants.
-`TaskSpec.coverage_tags` records semantic competency, task shape, domain,
+`TaskSpec.coverage_tags` records semantic competency, task shape, subject,
 artifact, interaction, state, context, and Snowball-calibrated difficulty.
 Lowerings carry those tags forward and may add only result encoding tags:
 `result:json`, `result:xml`, and `result:file`. Do not use those
