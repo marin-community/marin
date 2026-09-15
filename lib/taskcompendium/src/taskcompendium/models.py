@@ -16,6 +16,8 @@ SCHEMA_VERSION = "0.8"
 _SEMANTIC_COVERAGE_TAG_PREFIXES = frozenset(
     {"competency", "shape", "subject", "artifact", "interaction", "state", "context", "difficulty"}
 )
+_COVERAGE_TAG_VALUE = re.compile(r"[a-z0-9]+(?:[._][a-z0-9]+)*")
+_MIME_TYPE = re.compile(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+")
 
 
 def _validate_coverage_tags(tags: tuple[str, ...], allowed_prefixes: frozenset[str]) -> None:
@@ -23,7 +25,10 @@ def _validate_coverage_tags(tags: tuple[str, ...], allowed_prefixes: frozenset[s
         raise ValueError("Coverage tags must be sorted and unique")
     for tag in tags:
         prefix, separator, value = tag.partition(":")
-        if not separator or prefix not in allowed_prefixes or not value.replace("_", "").replace(".", "").isalnum():
+        valid_value = _COVERAGE_TAG_VALUE.fullmatch(value) or (
+            prefix in {"artifact", "context"} and _MIME_TYPE.fullmatch(value)
+        )
+        if not separator or prefix not in allowed_prefixes or not valid_value:
             raise ValueError(f"Unsupported coverage tag: {tag}")
 
 

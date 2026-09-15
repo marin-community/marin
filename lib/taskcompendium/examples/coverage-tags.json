@@ -469,14 +469,14 @@
     "subject:filesystem"
   ],
   "tasktrove-16634": [
-    "artifact:xml_document",
+    "artifact:application/xml",
     "competency:information_extraction",
     "difficulty:medium",
     "shape:structured_extraction",
     "subject:aviation_history"
   ],
   "tasktrove-16636": [
-    "artifact:json_document",
+    "artifact:application/json",
     "competency:information_extraction",
     "difficulty:medium",
     "shape:structured_extraction",

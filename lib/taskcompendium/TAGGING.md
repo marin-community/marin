@@ -112,17 +112,23 @@ needed.
 
 `artifact` describes what the model substantively produces or changes. Common
 values are `prose`, `numeric_answer`, `formula`, `source_code`, `program`,
-`python_module`, `python_package`, `shell_output`, `json_document`,
-`xml_document`, `csv_table`, `workspace_state`, and `native_action`.
+`python_module`, `python_package`, `shell_output`, `workspace_state`, and
+`native_action`.
 
 `context` describes material inputs or the setting. Common values include
 `repository`, `filesystem`, `source_code`, `provided_documents`,
-`json_document`, `xml_document`, `csv_table`, `tool_results`,
-`workplace_assistant`, `customer_service`, and `creative_writing`.
+`tool_results`, `workplace_assistant`, `customer_service`, and
+`creative_writing`.
+
+Either namespace may also use any normalized lowercase MIME type as its value.
+For example, use `context:application/json`, `artifact:application/xml`, or
+`artifact:text/csv`. Prefer a MIME type for a concrete document or data format;
+use the named values above for semantic classes such as source code, prose, or
+workspace state.
 
 This distinction is deliberate. A task that interprets a JSON document and
-writes an updated JSON document may use both `context:json_document` and
-`artifact:json_document`. A math task whose answer is wrapped in JSON by one
+writes an updated JSON document may use both `context:application/json` and
+`artifact:application/json`. A math task whose answer is wrapped in JSON by one
 rendering has neither semantic tag; that lowering alone receives `result:json`.
 
 ### `interaction` and `state`
@@ -193,9 +199,11 @@ shell_workflow, predicted_action, stateful_domain, or
 sequential_requirements.
 
 artifact (only for a substantive deliverable): prose, numeric_answer, formula,
-source_code, program, python_module, python_package, shell_output,
-json_document, xml_document, csv_table, spreadsheet, report, slides,
-workspace_state, multifile_artifact, or native_action.
+source_code, program, python_module, python_package, shell_output, spreadsheet,
+report, slides, workspace_state, multifile_artifact, or native_action. You may
+instead use any normalized lowercase MIME type, such as application/json,
+application/xml, text/csv, application/pdf, or image/png, for a concrete
+document or data format.
 
 interaction (only when it matters): single_tool_call, terminal,
 multi_action_workflow, conversation_revision, ordered_steps, or tool_feedback.
@@ -204,10 +212,11 @@ state (only when mutable state matters): workspace, provider, cross_app,
 guardrailed, side_effect_sensitive, or irreversible_action.
 
 context (only when it materially shapes the work): repository, filesystem,
-source_code, provided_documents, json_document, xml_document, csv_table,
-spreadsheet, dataset, tool_results, long_context, multi_document,
-cross_file, noisy, contradictory, workplace_assistant, customer_service, or
-creative_writing.
+source_code, provided_documents, spreadsheet, dataset, tool_results,
+long_context, multi_document, cross_file, noisy, contradictory,
+workplace_assistant, customer_service, or creative_writing. You may instead use
+any normalized lowercase MIME type, such as application/json, application/xml,
+text/csv, application/pdf, or image/png, for concrete input material.
 
 subject (optional): use a material subject area or operational area such as
 arithmetic, algebra, number_theory, geometry, calculus, probability, physics,
@@ -234,9 +243,9 @@ Tag the task's semantic work, not its evaluator or packaging. Never tag Harbor,
 ShellSim, Docker, a container image, a verifier, a judge, reward, hidden test,
 source dataset, or submission extraction. Never add result:json, result:xml,
 or result:file: result tags are assigned later by lowerings. Distinguish a
-substantive structured deliverable (artifact:json_document,
-artifact:xml_document, artifact:csv_table) from a structured input
-(context:json_document, context:xml_document, context:csv_table). A plain
+substantive structured deliverable (artifact:application/json,
+artifact:application/xml, artifact:text/csv) from structured input
+(context:application/json, context:application/xml, context:text/csv). A plain
 answer wrapped in JSON is not semantic structured-data work.
 
 Calibrate difficulty to Snowball's roughly 2B active model with the task's

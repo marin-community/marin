@@ -202,6 +202,22 @@ def test_coverage_tags_use_subject_namespace(math_task):
         msgspec.structs.replace(math_task, coverage_tags=("domain:calculus.integration",))
 
 
+def test_coverage_tags_accept_mime_types_for_artifact_and_context(math_task):
+    specification = msgspec.structs.replace(
+        math_task,
+        coverage_tags=(
+            "artifact:application/vnd.example+json",
+            "competency:math",
+            "context:application/json",
+            "difficulty:easy",
+            "shape:answer",
+        ),
+    )
+    assert specification.coverage_tags[0] == "artifact:application/vnd.example+json"
+    with pytest.raises(ValueError, match="Unsupported coverage tag"):
+        msgspec.structs.replace(math_task, coverage_tags=("subject:application/json",))
+
+
 def test_export_materializes_only_agent_projection(math_task, tmp_path):
     spec = msgspec.structs.replace(
         math_task,
