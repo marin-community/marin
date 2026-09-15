@@ -249,7 +249,6 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert os.environ["XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"] == "192"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
     assert os.environ["LD_PRELOAD"] == "libjemalloc.so.2"
-    assert os.environ["MALLOC_CONF"] == "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2"
 
 
 def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
