@@ -157,11 +157,60 @@ independently important skill. Add domain, artifact, interaction, state, and
 context tags only when they materially improve future sampling. Most tasks
 should have three to six tags.
 
-Use the TaskCompendium tagging guide as the preferred vocabulary. Reuse an
-existing label when it fits. You may add a new lowercase namespace:value tag
-only when it captures a useful recurring distinction missing from the guide;
-use only these namespaces: competency, shape, domain, artifact, interaction,
-state, context, difficulty.
+Use this standard vocabulary. Reuse an existing value when it fits. The
+vocabulary is intentionally broad; it is not a checklist.
+
+competency (choose one, exceptionally two):
+- reasoning and knowledge: math, quantitative_reasoning, symbolic_reasoning,
+  causal_reasoning, geometric_reasoning, spatial_reasoning, temporal_reasoning,
+  number_theoretic_reasoning, scientific_reasoning, legal_reasoning,
+  medical_science_reasoning, knowledge_recall, factual_recall,
+  information_extraction, information_search, evidence_integration,
+  constraint_satisfaction, instruction_following, problem_decomposition,
+  planning, and multi_step_workflow
+- software and technical work: algorithm_design, competitive_programming,
+  software_implementation, software_engineering, debugging, shell_scripting,
+  program_synthesis, code_comprehension, repo_navigation, test_interpretation,
+  testing, structured_data_transformation, and data_transformation_reasoning
+- tools and state: function_calling, tool_selection, tool_use,
+  stateful_tool_use, state_tracking, and workflow_execution
+
+shape (choose exactly one): answer, multiple_choice, calculation, explanation,
+constrained_generation, structured_extraction, code_generation,
+code_implementation, algorithmic_programming, environment_modification,
+shell_workflow, predicted_action, stateful_domain, or
+sequential_requirements.
+
+artifact (only for a substantive deliverable): prose, numeric_answer, formula,
+source_code, program, python_module, python_package, shell_output,
+json_document, xml_document, csv_table, spreadsheet, report, slides,
+workspace_state, multifile_artifact, or native_action.
+
+interaction (only when it matters): single_tool_call, terminal,
+multi_action_workflow, conversation_revision, ordered_steps, or tool_feedback.
+
+state (only when mutable state matters): workspace, provider, cross_app,
+guardrailed, side_effect_sensitive, or irreversible_action.
+
+context (only when it materially shapes the work): repository, filesystem,
+source_code, provided_documents, json_document, xml_document, csv_table,
+spreadsheet, dataset, tool_results, long_context, multi_document,
+cross_file, noisy, contradictory, workplace_assistant, customer_service, or
+creative_writing.
+
+domain (optional): use a material subject or operational domain such as
+arithmetic, algebra, number_theory, geometry, calculus, probability, physics,
+chemistry, biology, medicine, law, finance, business, algorithms, python,
+machine_learning, data_science, filesystem, email, event_ticketing,
+customer_relationship_management, or technical_operations. Use a more specific
+lowercase value when that will support recurring sampling; do not use broad
+values such as general or software.
+
+difficulty (choose exactly one): easy, medium, or hard.
+
+You may add a new lowercase namespace:value tag only when it captures a useful
+recurring distinction missing above. Use only these namespaces: competency,
+shape, domain, artifact, interaction, state, context, difficulty.
 
 Tag the task's semantic work, not its evaluator or packaging. Never tag Harbor,
 ShellSim, Docker, a container image, a verifier, a judge, reward, hidden test,
