@@ -99,6 +99,11 @@
       } else {
         target.append(element('pre', completion.text));
       }
+      if (source.expected) {
+        const want = document.createElement('details');
+        want.append(element('summary', 'Expected continuation'), element('pre', source.expected));
+        target.append(want);
+      }
       target.append(element('p', `${completion.token_ids.length} new tokens · stop: ${completion.stop_reason} · seed: ${source.seed} · temperature: ${data.request.spec.temperature}`));
       const raw = element('a', 'Download result and full provenance'); raw.href = entry.url; target.append(raw);
       const details = document.createElement('details'); details.append(element('summary', 'Generation settings'));

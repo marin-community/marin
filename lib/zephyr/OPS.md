@@ -12,6 +12,10 @@ after the driver reads the result and releases coordinator state.
 See `lib/iris/OPS.md` → "Cluster Lifecycle" for `iris cluster dashboard` and
 `dashboard-proxy` commands.
 
+## Shuffle inputs
+
+Zephyr reports reducer input rows, encoded payload bytes, and mapper counts to `zephyr.shuffle` in Finelog when each reducer attempt finishes. Use the [Zephyr Grafana dashboard](https://grafana.oa.dev/d/marin-zephyr) to debug slow shuffles; null sizes mean unreported and numeric zero means an empty target.
+
 ## Architecture
 
 Pull-based coordinator/worker model. Coordinator queues tasks per stage; workers poll `pull_task()`, execute shards, report results. Stages are sequential barriers — all shards in a stage must complete before the next starts (`_wait_for_stage`).

@@ -24,6 +24,10 @@ class Prompt(Record):
     text: str = Field(min_length=1)
     seed: int = Field(ge=0)
     source_url: str
+    # The continuation a factual prompt is checking for. Most prompts are open-ended
+    # and leave this unset. Sampling ignores it; the report shows it beside the
+    # completion so a reader can mark the answer without already knowing it.
+    expected: str | None = None
 
 
 class SamplingSpec(Record):
