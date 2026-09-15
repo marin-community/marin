@@ -60,6 +60,7 @@ jobs:
           service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
       - name: Reconcile every permanent checkpoint
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           SAMPLING_PRIORITY: ${{ inputs.priority }}
         run: |
           args=()
