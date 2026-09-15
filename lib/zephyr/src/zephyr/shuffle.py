@@ -438,12 +438,13 @@ def _merge_sorted_frames(
         logger.info("[shard %d] Final merge of %d frames (%d spill pass(es))", shard, len(frames), pass_index)
         yield from pl.merge_sorted(frames, key=sort_key).collect_batches()
     finally:
-        if spill_files:
+        # Per-file, so one failed delete does not strand every run after it:
+        # a spill run holds a whole fan_in group of the shard's payload.
+        for spill_file in sorted(spill_files, key=str):
             try:
-                for spill_file in sorted(spill_files, key=str):
-                    spill_file.rm()
+                spill_file.rm()
             except Exception:
-                logger.warning("Failed to delete external-sort run files under %s", spill_dir, exc_info=True)
+                logger.warning("Failed to delete external-sort run file %s", spill_file, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
