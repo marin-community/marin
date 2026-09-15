@@ -29,8 +29,14 @@ from transformers import AutoTokenizer
 
 from experiments.grug.checkpointing import LEGACY_STATE_KEY, MASTER_PARAMS_KEY
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
-from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleRequest, SampleResult, SampleStore, digest
-from experiments.grug.moe_hero_ep.ops.vibe_check.generation import generate
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
+    TOP_TOKEN_COUNT,
+    SampleRequest,
+    SampleResult,
+    SampleStore,
+    digest,
+)
+from experiments.grug.moe_hero_ep.ops.vibe_check.generation import BatchLogprobs, generate, score_expected
 from experiments.grug.moe_hero_ep.train import _apply_qb_betas
 
 COMPUTE_POLICY = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
@@ -86,6 +92,32 @@ def next_logits(model: Transformer, tokens: jax.Array, positions: jax.Array) -> 
     return jax.sharding.reshard(scores, P())
 
 
+@eqx.filter_jit
+def expected_logprobs(
+    model: Transformer, tokens: jax.Array, positions: jax.Array, targets: jax.Array
+) -> BatchLogprobs[jax.Array]:
+    """Return target and top-five log probabilities for each supplied prediction position.
+
+    Target scores have shape ``[batch, position]``. Top IDs and scores have shape
+    ``[batch, position, min(5, vocabulary)]``. All outputs are replicated.
+    """
+    hidden, _ = model(tokens)
+    selected = hidden.at[jnp.arange(tokens.shape[0])[:, None], positions].get(out_sharding=P())
+    targets = jax.sharding.reshard(targets, P())
+
+    def project(inputs):
+        state, target = inputs
+        logits = jnp.einsum("bh,hv->bv", state, model.output_proj, preferred_element_type=jnp.float32)
+        values = jax.nn.log_softmax(jax.sharding.reshard(logits, P()), axis=-1)
+        top_values, top_ids = jax.lax.top_k(values, min(TOP_TOKEN_COUNT, values.shape[-1]))
+        chosen = jnp.take_along_axis(values, target[:, None], axis=-1)[:, 0]
+        return BatchLogprobs(chosen, top_ids, top_values)
+
+    # Project one position at a time to keep the full sequence of vocabulary logits out of memory.
+    scores = jax.lax.map(project, (jnp.swapaxes(selected, 0, 1), jnp.swapaxes(targets, 0, 1)))
+    return jax.tree.map(lambda value: jax.sharding.reshard(jnp.swapaxes(value, 0, 1), P()), scores)
+
+
 def sample(request: SampleRequest, store_root: str) -> None:
     """Run one rack of native inference and commit one validated result on process zero."""
     DistributedConfig().initialize()
@@ -98,6 +130,18 @@ def sample(request: SampleRequest, store_root: str) -> None:
     prompt_ids = [tokenizer.encode(prompt.text, add_special_tokens=True) for prompt in request.spec.prompts]
     if any(not ids or len(ids) > request.spec.context_length for ids in prompt_ids):
         raise ValueError("Prompt does not fit the context")
+    expected_ids = []
+    for prompt, ids in zip(request.spec.prompts, prompt_ids, strict=True):
+        if not prompt.expected:
+            raise ValueError(f"Prompt has no expected completion: {prompt.id}")
+        expected = tokenizer.encode(prompt.expected, add_special_tokens=False)
+        if not expected or len(ids) + len(expected) > request.spec.context_length:
+            raise ValueError(f"Expected completion does not fit the context: {prompt.id}")
+        expected_ids.append(expected)
+
+    def decode(ids: list[int]) -> str:
+        return tokenizer.decode(ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
     with jax.set_mesh(mesh):
         model = COMPUTE_POLICY.cast_to_compute(restore_model(request, mesh))
@@ -109,12 +153,31 @@ def sample(request: SampleRequest, store_root: str) -> None:
             last = jax.make_array_from_callback(positions.shape, sharding, lambda index: positions[index])
             return np.asarray(next_logits(model, ids, last))
 
+        def logprobs(tokens: np.ndarray, positions: np.ndarray, targets: np.ndarray) -> BatchLogprobs[np.ndarray]:
+            arrays = [
+                jax.make_array_from_callback(value.shape, sharding, lambda index, value=value: value[index])
+                for value in (tokens, positions, targets)
+            ]
+            return jax.tree.map(np.asarray, expected_logprobs(model, *arrays))
+
+        expected_scores = score_expected(
+            request.spec,
+            prompt_ids,
+            expected_ids,
+            eos_token_id=tokenizer.eos_token_id,
+            logprobs=logprobs,
+            decode=decode,
+        )
         completions = generate(
             request.spec,
             prompt_ids,
             eos_token_id=tokenizer.eos_token_id,
             logits=logits,
-            decode=lambda ids: tokenizer.decode(ids, skip_special_tokens=True),
+            decode=decode,
+        )
+        completions = tuple(
+            completion.model_copy(update={"expected_scores": scores})
+            for completion, scores in zip(completions, expected_scores, strict=True)
         )
         if jax.process_index() == 0:
             SampleStore(store_root).save_result(
