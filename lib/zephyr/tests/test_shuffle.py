@@ -693,6 +693,33 @@ def test_merge_sorted_frames_cleans_up(tmp_path):
     assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
 
 
+def test_merge_sorted_frames_cleanup_survives_one_failed_delete(tmp_path, monkeypatch):
+    """One spill run that cannot be deleted must not strand the rest of the run files."""
+    fan_in = 4
+    frames = [_make_sorted_frame([i]) for i in range(fan_in + 1)]
+    doomed_name = "pass-0000-run-0000.spill"
+    real_rm = StoragePath.rm
+
+    def rm(self: StoragePath) -> None:
+        if self.name == doomed_name:
+            raise OSError("transient delete failure")
+        real_rm(self)
+
+    monkeypatch.setattr(StoragePath, "rm", rm)
+
+    list(
+        _merge_sorted_frames(
+            frames,
+            sort_key=_SORT_KEY_COL,
+            external_sort_dir=str(tmp_path),
+            fan_in=fan_in,
+            shard=0,
+        )
+    )
+
+    assert [path.name for path in tmp_path.iterdir()] == [doomed_name]
+
+
 def test_fan_in_groups_bounds_every_group():
     """No group exceeds fan_in, and every item survives across a size that forces multiple groups."""
     fan_in = 3
