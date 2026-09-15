@@ -53,9 +53,9 @@ A semantic instance has these top-level fields.
 
 `metadata.source` has `dataset`, `revision`, `row`, and `importer_revision`. All four are required. A source revision identifies the upstream data state; an importer revision identifies the conversion logic that produced the semantic record.
 
-`metadata.competencies` and `metadata.task_shape` describe the source task. `coverage_tags` provide a controlled, sortable taxonomy with `competency`, `shape`, `domain`, `artifact`, `interaction`, `state`, `context`, and exactly one Snowball-calibrated `difficulty` tag where a difficulty judgment is available. The taxonomy is not yet mature and is entirely a proof-of-concept.
+`metadata.competencies` and `metadata.task_shape` describe the source task. `coverage_tags` provide a controlled, sortable taxonomy with `competency`, `shape`, `domain`, `artifact`, `interaction`, `state`, `context`, and exactly one Snowball-calibrated `difficulty` tag where a difficulty judgment is available. [The tagging guide](TAGGING.md) defines the current vocabulary and review process.
 
-A rendering may add a tag to describe the output format being tested: `result:json`, `result:xml`, or `result:file`, etc. These are output encodings.
+A rendering may add a tag to describe the output format being tested: `result:json`, `result:xml`, or `result:file`, etc. These are output encodings, not semantic TaskSpec tags.
 
 ### Steps
 
