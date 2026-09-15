@@ -10,32 +10,35 @@ step from per-expert active sizes the way ``ep_ragged_all_to_all`` does. Every i
 new random routing so a warp that decodes a stale ``cu_seqlens`` is visibly wrong, and a watchdog
 reports a hang instead of waiting forever.
 
-Before the loop it prints the optimized HLO instruction order of the step so the kernel that
+Before the loop it can print the optimized HLO instruction order of the step so the kernel that
 writes ``cu_seqlens`` can be located relative to each grouped-GEMM custom call.
 
-``--fanout`` runs one process per visible GPU, one per ``--pdl-arms`` entry in sequence, and prints
-the per-arm median seconds per iteration so the cost of launching without programmatic dependent
-launch can be read off the same GPUs.
+The arms are ``on`` and ``off``, the setting of programmatic dependent launch on the QuACK
+launchers. ``--fanout`` runs ``--arms`` in sequence on every visible GPU and prints per-arm median
+seconds per iteration, so the cost of launching without PDL can be read off the same GPUs.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import re
-import subprocess
 import sys
-import threading
 import time
 
-RESULT_PREFIX = "RESULT_JSON "
-HANG_EXIT_CODE = 3
+from experiments.grug.recovery.gpu_probe_harness import (
+    ProbeResult,
+    Progress,
+    child_argv,
+    current_gpu,
+    print_summary,
+    run_arms,
+)
 
 DEFAULT_ROWS = 601_088
 DEFAULT_EXPERTS = 6
 DEFAULT_HIDDEN = 6_144
 DEFAULT_INTERMEDIATE = 3_072
+ARMS = ("on", "off")
 
 
 def _print_schedule(compiled_text: str) -> None:
@@ -72,19 +75,26 @@ def _print_schedule(compiled_text: str) -> None:
             print(f"SCHED {index:4d} OTHER {line[:160]}", flush=True)
 
 
+def _select_pdl(use_pdl: bool) -> None:
+    """Point the production launchers at the requested PDL setting before any of them is built."""
+    from levanter.grug._moe import quack_moe_cute  # noqa: PLC0415
+
+    for factory in (quack_moe_cute._build_launcher, quack_moe_cute._build_plain_launcher):
+        if factory.cache_info().currsize:
+            raise RuntimeError(f"{factory.__name__} already built a launcher; PDL must be selected first")
+    quack_moe_cute._QUACK_USE_PDL = use_pdl
+    print(f"pdl={'on' if use_pdl else 'off'}", flush=True)
+
+
 def _run(args: argparse.Namespace) -> int:
     # Imported here rather than at module level: the ``--fanout`` parent must never import JAX
     # (it would preallocate every GPU), and the QuACK stack only exists in the CUDA 13 GPU extra.
     import jax  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
     import numpy as np  # noqa: PLC0415
-    from levanter.grug._moe import quack_moe_cute  # noqa: PLC0415
     from levanter.grug._moe.sonic_cute import _expert_mlp_quack_wgrad  # noqa: PLC0415
 
-    # The launchers read this constant when they are first built, which happens at the first trace below.
-    quack_moe_cute._QUACK_USE_PDL = args.pdl == "on"
-    print(f"pdl={args.pdl}", flush=True)
-
+    _select_pdl(args.pdl == "on")
     rows, experts, hidden, inter = args.rows, args.experts, args.hidden, args.intermediate
 
     def expert_mlp(x, w13_il, w2, active_group_sizes):
@@ -122,37 +132,13 @@ def _run(args: argparse.Namespace) -> int:
         lowered = step.lower(x, w13_il, w2, sizes, cotangent)
         _print_schedule(lowered.compile().as_text())
 
-    progress = {"time": time.time(), "iteration": -1}
-    stop = threading.Event()
-
-    def watchdog() -> None:
-        while not stop.wait(1.0):
-            if time.time() - progress["time"] > args.timeout:
-                print(
-                    RESULT_PREFIX
-                    + json.dumps(
-                        {
-                            "gpu": os.environ.get("CUDA_VISIBLE_DEVICES", "?"),
-                            "pdl": args.pdl,
-                            "outcome": "hang",
-                            "iteration": progress["iteration"],
-                            "hangs": 1,
-                            "nonfinite": 0,
-                        }
-                    ),
-                    flush=True,
-                )
-                os._exit(HANG_EXIT_CODE)
-
-    threading.Thread(target=watchdog, daemon=True).start()
-
+    progress = Progress(args.pdl, args.timeout)
     nonfinite = 0
     t_start = time.time()
     completed = 0
     for iteration in range(args.iters):
         sizes = jnp.asarray(random_routing())
-        progress["iteration"] = iteration
-        progress["time"] = time.time()
+        progress.touch(iteration)
         value, _, _ = step(x, w13_il, w2, sizes, cotangent)
         value = float(value)
         completed += 1
@@ -162,97 +148,20 @@ def _run(args: argparse.Namespace) -> int:
         if not np.isfinite(value):
             nonfinite += 1
             print(f"NONFINITE iteration={iteration} value={value}", flush=True)
-        progress["time"] = time.time()
+        progress.touch()
     elapsed = time.time() - t_start
-    stop.set()
+    progress.finish()
     print(
-        RESULT_PREFIX
-        + json.dumps(
-            {
-                "gpu": os.environ.get("CUDA_VISIBLE_DEVICES", "?"),
-                "pdl": args.pdl,
-                "outcome": "ok",
-                "iteration": completed,
-                "hangs": 0,
-                "nonfinite": nonfinite,
-                "seconds_per_iter": elapsed / max(completed - 1, 1),
-            }
-        ),
+        ProbeResult(
+            args.pdl,
+            current_gpu(),
+            "ok",
+            iterations=completed,
+            nonfinite=nonfinite,
+            seconds_per_iter=elapsed / max(completed - 1, 1),
+        ).line(),
         flush=True,
     )
-    return 0
-
-
-def _fanout(args: argparse.Namespace) -> int:
-    listing = subprocess.run(
-        ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"], check=True, text=True, capture_output=True
-    )
-    gpus = [int(line) for line in listing.stdout.split() if line.strip()]
-    passthrough = [
-        "--iters",
-        str(args.iters),
-        "--rows",
-        str(args.rows),
-        "--experts",
-        str(args.experts),
-        "--hidden",
-        str(args.hidden),
-        "--intermediate",
-        str(args.intermediate),
-        "--timeout",
-        str(args.timeout),
-    ]
-    results: list[dict] = []
-    lock = threading.Lock()
-
-    def run_gpu(gpu: int) -> None:
-        for pdl in args.pdl_arms:
-            env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu))
-            cmd = [sys.executable, os.path.abspath(__file__), "--seed", str(args.seed + gpu), "--pdl", pdl, *passthrough]
-            if gpu == gpus[0] and args.dump_schedule:
-                cmd.append("--dump-schedule")
-            proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            result = None
-            tail: list[str] = []
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                line = line.rstrip("\n")
-                tail = [*tail, line][-30:]
-                if line.startswith(RESULT_PREFIX):
-                    result = json.loads(line[len(RESULT_PREFIX) :])
-                print(f"[gpu{gpu} pdl={pdl}] {line}", flush=True)
-            code = proc.wait()
-            if result is None:
-                result = {
-                    "gpu": str(gpu),
-                    "pdl": pdl,
-                    "outcome": f"exit {code}",
-                    "hangs": 0,
-                    "nonfinite": 0,
-                    "tail": tail[-10:],
-                }
-            with lock:
-                results.append(result)
-
-    threads = [threading.Thread(target=run_gpu, args=(gpu,)) for gpu in gpus]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-    print("SUMMARY_JSON " + json.dumps(results), flush=True)
-    for pdl in args.pdl_arms:
-        arm = [r for r in results if r.get("pdl") == pdl]
-        times = sorted(r["seconds_per_iter"] for r in arm if "seconds_per_iter" in r)
-        median = times[len(times) // 2] if times else float("nan")
-        lo = times[0] if times else float("nan")
-        hi = times[-1] if times else float("nan")
-        print(
-            f"TOTAL pdl={pdl} runs={len(arm)} hangs={sum(r.get('hangs', 0) for r in arm)} "
-            f"nonfinite={sum(r.get('nonfinite', 0) for r in arm)} "
-            f"other={sum(1 for r in arm if r['outcome'] not in ('ok', 'hang'))} "
-            f"median_seconds_per_iter={median:.5f} min={lo:.5f} max={hi:.5f}",
-            flush=True,
-        )
     return 0
 
 
@@ -265,18 +174,28 @@ def main() -> int:
     parser.add_argument("--experts", type=int, default=DEFAULT_EXPERTS)
     parser.add_argument("--hidden", type=int, default=DEFAULT_HIDDEN)
     parser.add_argument("--intermediate", type=int, default=DEFAULT_INTERMEDIATE)
-    parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument("--timeout", type=float, default=60.0, help="seconds without progress that count as a hang")
+    parser.add_argument("--arm-budget", type=float, default=900.0, help="seconds per arm process before it is killed")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument(
-        "--pdl", choices=("on", "off"), default="off", help="launch the QuACK GEMMs with programmatic dependent launch"
-    )
-    parser.add_argument(
-        "--pdl-arms", nargs="+", choices=("on", "off"), default=["on", "off"], help="arms to run per GPU under --fanout"
-    )
+    parser.add_argument("--pdl", choices=ARMS, default="off", help="PDL setting for this process's QuACK launchers")
+    parser.add_argument("--arms", nargs="+", choices=ARMS, default=list(ARMS), help="PDL settings to run per GPU")
     args = parser.parse_args()
-    if args.fanout:
-        return _fanout(args)
-    return _run(args)
+    if not args.fanout:
+        return _run(args)
+
+    passthrough = [
+        f"--{name}={getattr(args, name)}" for name in ("iters", "rows", "experts", "hidden", "intermediate", "timeout")
+    ]
+
+    def build_command(gpu: int, arm: str) -> list[str]:
+        extra = ["--seed", str(args.seed + gpu), "--pdl", arm, *passthrough]
+        if args.dump_schedule and gpu == 0:
+            extra.append("--dump-schedule")
+        return child_argv(__file__, extra)
+
+    results = run_arms(args.arms, build_command, budget=args.arm_budget)
+    print_summary(results, args.arms)
+    return 0
 
 
 if __name__ == "__main__":

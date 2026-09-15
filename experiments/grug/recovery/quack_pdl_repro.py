@@ -16,12 +16,12 @@ This script drives that exact kernel (production tile/cluster/CLC settings, prod
 ``cu_seqlens`` construction) with a routing that changes every iteration, so a stale read of
 the previous routing is visibly wrong, and counts hangs and corrupted outputs per arm:
 
-  prod      production configuration (PDL on, CLC on)
+  prod      production kernel configuration, launched with PDL
   nopdl     production kernel launched without PDL
   noclc     PDL on, CLC persistence off (static scheduler, single decoder warp)
   patched   PDL on, CLC on, QuACK patched so the MMA/epilogue warps also wait
-  constant  production configuration with the same routing every iteration
-  nomask    production configuration without the row mask between routing and GEMM
+  constant  PDL on with the same routing every iteration
+  nomask    PDL on without the row mask between routing and GEMM
 
 Each arm runs in its own process. ``--fanout`` runs the arm list on every visible GPU.
 """
@@ -30,17 +30,20 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
-import threading
 import time
 
-RESULT_PREFIX = "RESULT_JSON "
-HANG_EXIT_CODE = 3
+from experiments.grug.recovery.gpu_probe_harness import (
+    ProbeResult,
+    Progress,
+    child_argv,
+    current_gpu,
+    print_summary,
+    run_arms,
+)
 
 # One EP64 rank of the d6144 hero: receiver-buffer rows, local experts, hidden, intermediate.
 DEFAULT_ROWS = 601_088
@@ -86,13 +89,8 @@ def _routing_sizes(rows: int, fractions: tuple[float, ...]) -> list[int]:
     return [int(rows * f) for f in fractions]
 
 
-def _run_arm(args: argparse.Namespace) -> int:
-    arm = args.arm
-    use_pdl = arm != "nopdl"
-    use_clc = arm != "noclc"
-    if arm == "patched":
-        print(f"patched quack at {_install_patched_quack()}", flush=True)
-
+def _build_gemm_call(rows: int, inter: int, *, use_pdl: bool, use_clc: bool):
+    """Return the production ``dh`` GEMM, ``dy[M, H] @ w2[E, I, H]^T`` grouped over rows, as a JAX call."""
     # Imported here rather than at module level: the ``patched`` arm must put its QuACK copy on
     # ``sys.path`` first, the ``--fanout`` parent must never import JAX (it would preallocate
     # every GPU), and the QuACK stack only exists in the CUDA 13 GPU extra.
@@ -101,10 +99,8 @@ def _run_arm(args: argparse.Namespace) -> int:
     import cutlass.jax as cjax  # noqa: PLC0415
     import jax  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
-    import numpy as np  # noqa: PLC0415
     import quack  # noqa: PLC0415
     from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call  # noqa: PLC0415
-    from levanter.grug._moe.common import _zero_inactive_grouped_rows  # noqa: PLC0415
     from levanter.grug._moe.quack_moe_cute import _cute_dtype, _max_active_clusters  # noqa: PLC0415
     from levanter.grug._moe.sonic_cute import _QUACK_GROUPED_KW  # noqa: PLC0415
     from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100  # noqa: PLC0415
@@ -133,21 +129,18 @@ def _run_arm(args: argparse.Namespace) -> int:
 
         return launcher
 
-    tile_mn = _QUACK_GROUPED_KW["tile_mn"]
     cluster_mnk = _QUACK_GROUPED_KW["cluster_mnk"]
     launcher = _build_launcher(
         a_dtype=_cute_dtype(jnp.bfloat16),
-        tile_mn=tile_mn,
+        tile_mn=_QUACK_GROUPED_KW["tile_mn"],
         cluster_mnk=cluster_mnk,
         max_active_clusters=_max_active_clusters(cluster_mnk),
         max_swizzle=8,
         use_clc_persistence=use_clc,
         use_pdl=use_pdl,
     )
-    rows, experts, hidden, inter = args.rows, args.experts, args.hidden, args.intermediate
     ts = cjax.TensorSpec
-    # The production ``dh`` GEMM: dy[M, H] @ w2[E, I, H]^T grouped over rows (b_major="k").
-    call = cutlass_call(
+    return cutlass_call(
         launcher,
         output_shape_dtype=jax.ShapeDtypeStruct((rows, inter), jnp.bfloat16),
         input_spec=(
@@ -159,6 +152,19 @@ def _run_arm(args: argparse.Namespace) -> int:
         use_static_tensors=False,
     )
 
+
+def _run_arm(args: argparse.Namespace) -> int:
+    arm = args.arm
+    if arm == "patched":
+        print(f"patched quack at {_install_patched_quack()}", flush=True)
+    call = _build_gemm_call(args.rows, args.intermediate, use_pdl=arm != "nopdl", use_clc=arm != "noclc")
+
+    import jax  # noqa: PLC0415
+    import jax.numpy as jnp  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+    from levanter.grug._moe.common import _zero_inactive_grouped_rows  # noqa: PLC0415
+
+    rows, experts, hidden, inter = args.rows, args.experts, args.hidden, args.intermediate
     mask = arm != "nomask"
 
     @jax.jit
@@ -176,6 +182,13 @@ def _run_arm(args: argparse.Namespace) -> int:
         out = jax.lax.ragged_dot(dy, jnp.swapaxes(w2, 1, 2), sizes, preferred_element_type=jnp.float32)
         return out.astype(jnp.bfloat16)
 
+    def check(out, sizes) -> float:
+        active = int(np.sum(np.asarray(sizes)))
+        ref = reference(dy, w2, sizes)
+        diff = jnp.max(jnp.abs(out[:active].astype(jnp.float32) - ref[:active].astype(jnp.float32)))
+        scale = jnp.max(jnp.abs(ref[:active].astype(jnp.float32)))
+        return float(diff / scale)
+
     key = jax.random.PRNGKey(args.seed)
     k_dy, k_w = jax.random.split(key)
     dy = jax.random.normal(k_dy, (rows, hidden), jnp.bfloat16)
@@ -184,170 +197,49 @@ def _run_arm(args: argparse.Namespace) -> int:
     small = jnp.asarray(_routing_sizes(rows, SMALL_ROUTING), jnp.int32)
     routings = (big, big) if arm == "constant" else (big, small)
 
-    progress = {"time": time.time(), "iteration": -1}
-    stop = threading.Event()
+    progress = Progress(arm, args.timeout)
 
-    def watchdog() -> None:
-        while not stop.wait(1.0):
-            if time.time() - progress["time"] > args.timeout:
-                print(
-                    RESULT_PREFIX
-                    + json.dumps(
-                        {
-                            "arm": arm,
-                            "gpu": os.environ.get("CUDA_VISIBLE_DEVICES", "?"),
-                            "outcome": "hang",
-                            "iteration": progress["iteration"],
-                            "hangs": 1,
-                            "mismatches": 0,
-                        }
-                    ),
-                    flush=True,
-                )
-                os._exit(HANG_EXIT_CODE)
-
-    threading.Thread(target=watchdog, daemon=True).start()
-
-    # Compile both routings before timing, and check both once.
-    mismatches = 0
-    worst_ratio = 0.0
+    # Compile the kernel and the reference for both routings before timing.
     t_compile = time.time()
     for sizes in routings:
-        progress["time"] = time.time()
-        out = step(dy, w2, sizes)
-        out.block_until_ready()
-        progress["time"] = time.time()
-        ref = reference(dy, w2, sizes)
-        ref.block_until_ready()
+        progress.touch()
+        step(dy, w2, sizes).block_until_ready()
+        progress.touch()
+        reference(dy, w2, sizes).block_until_ready()
     print(f"compiled {arm} in {time.time() - t_compile:.1f}s", flush=True)
 
-    def check(out, sizes) -> float:
-        active = int(np.sum(np.asarray(sizes)))
-        ref = reference(dy, w2, sizes)
-        diff = jnp.max(jnp.abs(out[:active].astype(jnp.float32) - ref[:active].astype(jnp.float32)))
-        scale = jnp.max(jnp.abs(ref[:active].astype(jnp.float32)))
-        return float(diff / scale)
-
+    mismatches = 0
+    worst_ratio = 0.0
     t_start = time.time()
     completed = 0
     for iteration in range(args.iters):
         sizes = routings[iteration % 2]
-        progress["iteration"] = iteration
-        progress["time"] = time.time()
+        progress.touch(iteration)
         out = step(dy, w2, sizes)
         out.block_until_ready()
         completed += 1
         if iteration % args.check_every == 0:
-            progress["time"] = time.time()
+            progress.touch()
             ratio = check(out, sizes)
             worst_ratio = max(worst_ratio, ratio)
             if ratio > args.mismatch_ratio:
                 mismatches += 1
                 print(f"MISMATCH arm={arm} iteration={iteration} ratio={ratio:.4f}", flush=True)
-        progress["time"] = time.time()
+        progress.touch()
     elapsed = time.time() - t_start
-    stop.set()
+    progress.finish()
     print(
-        RESULT_PREFIX
-        + json.dumps(
-            {
-                "arm": arm,
-                "gpu": os.environ.get("CUDA_VISIBLE_DEVICES", "?"),
-                "outcome": "ok",
-                "iteration": completed,
-                "hangs": 0,
-                "mismatches": mismatches,
-                "worst_ratio": worst_ratio,
-                "seconds_per_iter": elapsed / max(completed, 1),
-            }
-        ),
+        ProbeResult(
+            arm,
+            current_gpu(),
+            "ok",
+            iterations=completed,
+            mismatches=mismatches,
+            worst_ratio=worst_ratio,
+            seconds_per_iter=elapsed / max(completed, 1),
+        ).line(),
         flush=True,
     )
-    return 0
-
-
-def _fanout(args: argparse.Namespace) -> int:
-    """Run every arm on every visible GPU, arms sequentially per GPU, GPUs in parallel.
-
-    The parent never imports JAX: initializing it here would preallocate every GPU's memory
-    away from the children. GPUs are counted with ``nvidia-smi`` unless ``--gpus`` is given.
-    """
-    if args.gpus is None:
-        listing = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"], check=True, text=True, capture_output=True
-        )
-        gpus = [int(line) for line in listing.stdout.split() if line.strip()]
-    else:
-        gpus = args.gpus
-    arms = args.arms
-    base_cmd = [sys.executable, os.path.abspath(__file__)]
-    passthrough = [
-        "--iters",
-        str(args.iters),
-        "--rows",
-        str(args.rows),
-        "--experts",
-        str(args.experts),
-        "--hidden",
-        str(args.hidden),
-        "--intermediate",
-        str(args.intermediate),
-        "--timeout",
-        str(args.timeout),
-        "--check-every",
-        str(args.check_every),
-        "--mismatch-ratio",
-        str(args.mismatch_ratio),
-    ]
-    results: list[dict] = []
-    lock = threading.Lock()
-
-    def run_gpu(gpu: int) -> None:
-        for arm in arms:
-            env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu))
-            cmd = [*base_cmd, "--arm", arm, "--seed", str(args.seed + gpu), *passthrough]
-            started = time.time()
-            proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            result = None
-            tail: list[str] = []
-            try:
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    line = line.rstrip("\n")
-                    tail.append(line)
-                    tail = tail[-30:]
-                    if line.startswith(RESULT_PREFIX):
-                        result = json.loads(line[len(RESULT_PREFIX) :])
-                    print(f"[gpu{gpu} {arm}] {line}", flush=True)
-                code = proc.wait(timeout=args.arm_budget)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                code = -9
-            if result is None:
-                result = {"arm": arm, "gpu": str(gpu), "outcome": f"exit {code}", "hangs": 0, "mismatches": 0}
-                result["tail"] = tail[-10:]
-            result["arm_seconds"] = time.time() - started
-            with lock:
-                results.append(result)
-
-    threads = [threading.Thread(target=run_gpu, args=(gpu,)) for gpu in gpus]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
-    print("SUMMARY_JSON " + json.dumps(results), flush=True)
-    by_arm: dict[str, dict] = {}
-    for result in results:
-        entry = by_arm.setdefault(result["arm"], {"runs": 0, "hangs": 0, "mismatches": 0, "other": 0})
-        entry["runs"] += 1
-        if result["outcome"] == "hang":
-            entry["hangs"] += 1
-        elif result["outcome"] != "ok":
-            entry["other"] += 1
-        entry["mismatches"] += result.get("mismatches", 0)
-    for arm, entry in by_arm.items():
-        print(f"ARM {arm}: {entry}", flush=True)
     return 0
 
 
@@ -370,11 +262,23 @@ def main() -> int:
     args = parser.parse_args()
     if args.experts != len(BIG_ROUTING):
         parser.error(f"--experts must be {len(BIG_ROUTING)} to match the routing tables")
-    if args.fanout:
-        return _fanout(args)
-    if args.arm is None:
-        parser.error("--arm or --fanout is required")
-    return _run_arm(args)
+    if not args.fanout:
+        if args.arm is None:
+            parser.error("--arm or --fanout is required")
+        return _run_arm(args)
+
+    passthrough = [
+        f"--{name.replace('_', '-')}={getattr(args, name)}"
+        for name in ("iters", "rows", "experts", "hidden", "intermediate", "timeout", "check_every", "mismatch_ratio")
+    ]
+    results = run_arms(
+        args.arms,
+        lambda gpu, arm: child_argv(__file__, ["--arm", arm, "--seed", str(args.seed + gpu), *passthrough]),
+        gpus=args.gpus,
+        budget=args.arm_budget,
+    )
+    print_summary(results, args.arms)
+    return 0
 
 
 if __name__ == "__main__":
