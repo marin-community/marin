@@ -31,7 +31,7 @@ import dataclasses
 import hashlib
 import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from enum import StrEnum
 
 import pyarrow as pa
@@ -59,7 +59,6 @@ SAMPLES_SUFFIX = ".parquet"
 # length-normalized score is the conventional headline. "accuracy" is the evalchemy chat-native
 # benchmarks' key (MATH500).
 PRIMARY_METRIC_PRIORITY = ("exact_match", "accuracy", "acc_norm", "acc", "pass@1")
-
 # Tie-break among same-base metrics that differ only in lm-eval filter. flexible-extract outranks
 # strict-match: chat models solve gsm8k-style problems but rarely emit the strict "#### N" format.
 FILTER_PRIORITY = ("flexible-extract",)
@@ -163,7 +162,23 @@ def base_metric(name: str) -> str:
     return name.split(",", 1)[0]
 
 
-def primary_metric(metrics: dict[str, float]) -> tuple[str, float] | None:
+def declared_metric(metrics: Mapping[str, float], declared: str | None) -> tuple[str, float] | None:
+    """Pick a declared base metric, or infer the primary metric when none is declared."""
+    if declared is None:
+        return primary_metric(metrics)
+    candidates = {name: value for name, value in metrics.items() if base_metric(name) == declared}
+    for metric_filter in FILTER_PRIORITY:
+        filtered = sorted(name for name in candidates if name.endswith(f",{metric_filter}"))
+        if filtered:
+            name = filtered[0]
+            return name, candidates[name]
+    if not candidates:
+        return None
+    name = min(candidates)
+    return name, candidates[name]
+
+
+def primary_metric(metrics: Mapping[str, float]) -> tuple[str, float] | None:
     """Pick the headline ``(key, value)`` from a metric dict, or None if it is empty.
 
     ``*_stderr`` never headlines; among the rest ``PRIMARY_METRIC_PRIORITY`` wins by base name,
