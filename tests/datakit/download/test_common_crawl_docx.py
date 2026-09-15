@@ -35,6 +35,7 @@ from marin.datakit.download.common_crawl_plan import (
     FetchedCommonCrawlRecord,
 )
 from marin.datakit.download.common_crawl_warc import CommonCrawlWarcRecord, content_digest, main_record_from_index_row
+from pydantic import BaseModel
 
 from experiments.datakit.common_crawl_docx_sample import sample_report_markdown
 
@@ -272,6 +273,35 @@ def test_docling_runtime_failure_uses_extraction_error_contract(monkeypatch: pyt
 
     with pytest.raises(DocxExtractionError):
         DoclingDocxExtractor().extract(_docx_payload())
+
+
+def test_docling_document_validation_failure_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    class InvalidDocumentModel(BaseModel):
+        value: int
+
+    class ValidationFailingDocument:
+        def export_to_markdown(self, **_kwargs: object) -> str:
+            InvalidDocumentModel.model_validate({"value": "invalid"})
+            raise AssertionError("unreachable")
+
+    @dataclass(frozen=True)
+    class ConversionResult:
+        document: object
+
+    class SuccessfulConverter:
+        def convert(self, _document: object) -> ConversionResult:
+            return ConversionResult(document=ValidationFailingDocument())
+
+    monkeypatch.setattr(common_crawl_docx, "_docling_converter", SuccessfulConverter)
+
+    output = process_fetched_docx(
+        fetched_docx_record(_fetched(_docx_payload())),
+        extractor=DoclingDocxExtractor(),
+        maximum_zip_entries=10,
+        maximum_uncompressed_bytes=1024,
+    )
+
+    assert output is None
 
 
 def test_extracted_record_rejects_missing_language_blocks() -> None:

@@ -15,7 +15,7 @@ from typing import Any, Protocol
 
 import pyarrow as pa
 from fray.types import ResourceConfig
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from rigging.filesystem import prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
@@ -198,9 +198,9 @@ class DoclingDocxExtractor:
 
         try:
             result = _docling_converter().convert(DocumentStream(name="document.docx", stream=io.BytesIO(payload)))
-        except (ConversionError, SecurityError, RuntimeError) as error:
+            return _extracted_document(result.document)
+        except (ConversionError, SecurityError, RuntimeError, ValidationError) as error:
             raise DocxExtractionError("Docling failed to extract the DOCX payload") from error
-        return _extracted_document(result.document)
 
 
 @dataclass(frozen=True)
