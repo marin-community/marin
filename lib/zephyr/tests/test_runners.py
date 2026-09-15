@@ -24,6 +24,7 @@ from zephyr.dataset import Dataset
 from zephyr.runners import InlineRunner, SubprocessRunner
 from zephyr.stage_io import ZephyrWorkerError
 from zephyr.stats import (
+    ZEPHYR_EXECUTION_STATS_NAMESPACE,
     ZEPHYR_STAGE_STATS_NAMESPACE,
     ZEPHYR_WORKER_STATS_NAMESPACE,
     StatsConfig,
@@ -238,7 +239,7 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
     try:
         stage_rows = query_client.query(f'SELECT * FROM "{ZEPHYR_STAGE_STATS_NAMESPACE}"')
         worker_rows = query_client.query(f'SELECT * FROM "{ZEPHYR_WORKER_STATS_NAMESPACE}"')
-        executions = query_client.query('SELECT * FROM "zephyr.execution"').to_pylist()
+        executions = query_client.query(f'SELECT * FROM "{ZEPHYR_EXECUTION_STATS_NAMESPACE}"').to_pylist()
         assert "zephyr.shuffle" not in {info.namespace for info in query_client.list_namespaces()}
     finally:
         query_client.close()
@@ -387,7 +388,7 @@ def test_shuffle_diagnostics_persist_target_sizes(local_client, tmp_path, finelo
         stage_rows = query_client.query('SELECT * FROM "zephyr.stage"').to_pylist()
         assert len({row["execution_id"] for row in stage_rows}) == 2
         reports = query_client.query('SELECT * FROM "zephyr.shuffle"').to_pylist()
-        executions = query_client.query('SELECT * FROM "zephyr.execution"').to_pylist()
+        executions = query_client.query(f'SELECT * FROM "{ZEPHYR_EXECUTION_STATS_NAMESPACE}"').to_pylist()
     finally:
         query_client.close()
     assert len(reports) == 32
@@ -425,10 +426,10 @@ def test_shuffle_diagnostics_persist_target_sizes(local_client, tmp_path, finelo
 
 def test_execution_plan_preserves_join_dependencies(local_client, tmp_path, finelog_server):
     left = Dataset.from_list([{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]).group_by(
-        key=lambda row: row["id"], reducer=lambda key, rows: next(rows), num_output_shards=2
+        key=lambda row: row["id"], reducer=lambda _key, rows: next(rows), num_output_shards=2
     )
     right = Dataset.from_list([{"id": 1, "score": 7}]).group_by(
-        key=lambda row: row["id"], reducer=lambda key, rows: next(rows), num_output_shards=2
+        key=lambda row: row["id"], reducer=lambda _key, rows: next(rows), num_output_shards=2
     )
     joined = left.sorted_merge_join(right, left_key=lambda row: row["id"], right_key=lambda row: row["id"])
     with ZephyrContext(
@@ -443,8 +444,8 @@ def test_execution_plan_preserves_join_dependencies(local_client, tmp_path, fine
 
     assert result.results == [{"id": 1, "text": "hello", "score": 7}]
     with closing(LogClient.connect(finelog_server)) as client:
-        executions = client.query('SELECT * FROM "zephyr.execution"').to_pylist()
-        reported = client.query('SELECT stage_name FROM "zephyr.stage"').to_pylist()
+        executions = client.query(f'SELECT * FROM "{ZEPHYR_EXECUTION_STATS_NAMESPACE}"').to_pylist()
+        reported = client.query(f'SELECT stage_name FROM "{ZEPHYR_STAGE_STATS_NAMESPACE}"').to_pylist()
     assert len(executions) == 1
     execution = next(row for row in executions if row["execution_id"] == result.execution_id)
     graph = json.loads(execution["stages_json"])
