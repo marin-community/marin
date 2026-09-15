@@ -9,8 +9,10 @@ all chat sources. The versioned eval corpus must already be prepared in-region.
 
 The graph compares user, assistant, and tool message bodies, excluding system and
 developer instructions and template-injected tool definitions. Exact dedup uses
-full structured-chat identity. Fuzzy dedup and eval decontamination use message
-bodies separated by blank lines. Filtered outputs retain full rendered conversations.
+full structured-chat identity. Fuzzy dedup requires identical message-body token
+sequences after case and whitespace normalization, preserving distinct rollouts.
+Eval decontamination scans message bodies separated by blank lines. Filtered
+outputs retain full rendered conversations.
 Deduplication spans only the selected SFT sources. Outputs are NormalizedData
 artifacts suitable for downstream tokenization.
 """
@@ -33,7 +35,7 @@ from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData
-from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams, VerificationMatch
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
     VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
@@ -94,6 +96,7 @@ def select_sft_sources(names: list[str] | None = None) -> dict[str, StepSpec]:
 _COMPARISON_SCHEMA = pa.schema(
     [("id", pa.string()), ("source_id", pa.string()), ("text", pa.string()), ("rendered_text", pa.string())]
 )
+SFT_VERIFICATION_PARAMS = FuzzyVerificationParams(match=VerificationMatch.TOKEN_SEQUENCE)
 
 
 def chat_comparison_record(record: dict) -> dict:
@@ -240,7 +243,7 @@ def sft_datakit_steps(
         )
         for name, source in sources.items()
     }
-    verification_params = FuzzyVerificationParams()
+    verification_params = SFT_VERIFICATION_PARAMS
     verification_store_config = FuzzyVerificationStoreConfig(
         recovery_timeout=1_800,
         ready_timeout=1_800,

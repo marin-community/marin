@@ -17,6 +17,12 @@ class VerificationRejection(StrEnum):
     MEMBER_UNIQUE = "too_many_member_unique"
     UNDER_TOKENIZED = "under_tokenized_char_jaccard_below_threshold"
     SATURATED = "saturated_token_sequence_not_contained"
+    TOKEN_SEQUENCE = "different_token_sequence"
+
+
+class VerificationMatch(StrEnum):
+    CONTAINMENT = "containment"
+    TOKEN_SEQUENCE = "token_sequence"
 
 
 class FuzzyVerificationParams(BaseModel):
@@ -25,6 +31,7 @@ class FuzzyVerificationParams(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     rule_version: str = "whitespace_3gram_subset_v3"
+    match: VerificationMatch = VerificationMatch.CONTAINMENT
     ngram_size: int = Field(default=3, ge=1)
     minimum_member_containment: float = Field(default=1.0, ge=0, le=1)
     maximum_member_unique_ngrams: int = Field(default=0, ge=0)
@@ -159,6 +166,11 @@ def verify_prepared_candidate(
     normalized_token_sequence_contained = None
     if member.chars > representative.chars:
         rejection = VerificationRejection.MEMBER_LONGER
+    elif (
+        params.match == VerificationMatch.TOKEN_SEQUENCE
+        and member.text.casefold().split() != representative.text.casefold().split()
+    ):
+        rejection = VerificationRejection.TOKEN_SEQUENCE
     elif member_containment < params.minimum_member_containment:
         rejection = VerificationRejection.CONTAINMENT
     elif member_unique > params.maximum_member_unique_ngrams:

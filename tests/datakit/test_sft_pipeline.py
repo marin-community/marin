@@ -24,7 +24,7 @@ from openai_harmony import Message, Role
 
 from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
 from experiments.datakit.reference_pipeline import SMOKE_SCALE
-from experiments.datakit.sft_pipeline import chat_comparison_record, filter_sft_source
+from experiments.datakit.sft_pipeline import SFT_VERIFICATION_PARAMS, chat_comparison_record, filter_sft_source
 
 
 @pytest.mark.parametrize("keep_clean", [True, False])
@@ -150,10 +150,18 @@ def test_sft_decontamination_scans_message_bodies_without_template_instructions(
     ]
 
 
-def test_sft_fuzzy_verification_keeps_distinct_answers_to_a_shared_prompt():
+@pytest.mark.parametrize(
+    "answers",
+    [
+        ("Use Dijkstra with a priority queue.", "Use Bellman Ford to handle negative edge weights."),
+        ("Use Dijkstra with a priority queue.", "Use Dijkstra with a priority queue. Stop when the target is settled."),
+        ("Visit node A then node B then node A.", "Visit node B then node A then node B."),
+    ],
+)
+def test_sft_fuzzy_verification_keeps_distinct_answers_to_a_shared_prompt(answers: tuple[str, str]):
     prompt = "Explain the properties of this graph and derive an algorithm to find the shortest path. " * 100
     texts = []
-    for answer in ("Use Dijkstra with a priority queue.", "Use Bellman Ford to handle negative edge weights."):
+    for answer in answers:
         messages = [
             Message.from_role_and_content(Role.USER, prompt),
             Message.from_role_and_content(Role.ASSISTANT, answer).with_channel("final"),
@@ -161,9 +169,19 @@ def test_sft_fuzzy_verification_keeps_distinct_answers_to_a_shared_prompt():
         texts.append(
             chat_comparison_record({"id": answer, "messages": [message.to_dict() for message in messages]})["text"]
         )
-    params = FuzzyVerificationParams()
+    params = SFT_VERIFICATION_PARAMS
     shorter, longer = sorted(texts, key=len)
     result = verify_prepared_candidate(
         prepare_verification_text(shorter, params), prepare_verification_text(longer, params), params
     )
     assert not result.accepted
+
+
+def test_sft_fuzzy_verification_removes_case_and_whitespace_variants():
+    params = SFT_VERIFICATION_PARAMS
+    result = verify_prepared_candidate(
+        prepare_verification_text("Explain the graph.\n\nVisit node A then node B.", params),
+        prepare_verification_text("Explain  the graph.\n\nVisit node a then node b.", params),
+        params,
+    )
+    assert result.accepted
