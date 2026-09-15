@@ -1,9 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Daily public history reports and one updated GitHub issue comment."""
+"""Current completion reports, fixed daily snapshots, and one GitHub issue comment."""
 
-import html
 import json
 import logging
 from collections.abc import Callable
@@ -59,14 +58,8 @@ def render_report(manifest: dict) -> str:
     return Path(__file__).with_name("report.html").read_text().replace("__REPORT_DATA__", data)
 
 
-def publish_latest(url: str) -> str:
-    """Update the stable report redirect after its dated page is uploaded."""
-    target = json.dumps(url).replace("<", "\\u003c")
-    page = (
-        '<!doctype html><meta charset="utf-8"><title>Latest report</title>'
-        f'<a href="{html.escape(url)}">Open the latest report</a>'
-        f"<script>location.replace({target} + location.search + location.hash)</script>"
-    )
+def publish_current(manifest: dict) -> str:
+    """Replace the current report with the available completed results."""
     target_path = StoragePath(sites.PUBLIC_ROOT) / LATEST_REPORT_KEY
     target_path.parent.mkdirs()
     fs, path = url_to_fs(str(target_path))
@@ -74,7 +67,7 @@ def publish_latest(url: str) -> str:
     with fs.open(
         path, "wb", content_type="text/html; charset=utf-8", fixed_key_metadata={"cache_control": "no-store"}
     ) as handle:
-        handle.write(page.encode())
+        handle.write(render_report(manifest).encode())
     return prefix_join(sites.PUBLIC_URL_BASE, LATEST_REPORT_KEY)
 
 
@@ -109,30 +102,26 @@ def update_issue_comment(body: str, token: str) -> None:
         response.raise_for_status()
 
 
-def publish_daily(store: SampleStore, day: date, comment: Callable[[str], None]) -> str:
-    """Publish once per UTC day, with retries independent of GPU sampling.
+def publish_daily(store: SampleStore, day: date, results: list[SampleResult]) -> str:
+    """Publish a fixed daily snapshot after the first result arrives.
 
-    The scheduled workflow serializes invocations. The first attempt freezes the daily
-    snapshot, so a retry cannot change an already linked daily report.
+    The workflow serializes callers. A retry uses the saved snapshot, even if
+    more results arrive before publication succeeds.
     """
     report_date = day.isoformat()
     published = sorted((store.root / "reports/*.url").glob(), key=lambda path: path.name)
     previous_url = published[-1].read_text() if published else ""
     if published and published[-1].name >= f"{report_date}.url":
         return previous_url
+    if not results:
+        return previous_url
     snapshot = conditional_object(str(store.root / f"reports/{report_date}.json"))
     saved = snapshot.read()
     if saved is None:
-        manifest = report_manifest(store.results(), report_date, previous_url)
+        manifest = report_manifest(results, report_date, previous_url)
         snapshot.write(json.dumps(manifest).encode(), expected_version=None)
     else:
         manifest = json.loads(saved.data)
-    for entry in manifest["entries"]:
-        key = entry["id"]
-        target = conditional_object(prefix_join(sites.PUBLIC_ROOT, public_result_key(key)))
-        if target.version() is not None:
-            continue
-        target.write(store.result(key).model_dump_json().encode(), expected_version=None)
     with TemporaryDirectory(prefix="hero-completion-report-") as directory:
         source = Path(directory) / "index.html"
         source.write_text(render_report(manifest))
@@ -144,14 +133,31 @@ def publish_daily(store: SampleStore, day: date, comment: Callable[[str], None])
             title="Hero checkpoint completions",
             summary="Completed hero samples, with a daily history report.",
         )
-    latest = publish_latest(site.url)
-    comment(
-        f"🤖 Hero checkpoint completions · {report_date} UTC\n\n"
-        f"[Full checkpoint history]({latest}) · [This daily report]({site.url})\n\n"
-        f"{len(manifest['entries'])} completed sample sets. "
-        "Select two checkpoints and a prompt to compare the samples. "
-        "The report includes raw results and generation settings.\n\n"
-        f"{COMMENT_MARKER}"
-    )
     conditional_object(str(store.root / f"reports/{report_date}.url")).write(site.url.encode(), expected_version=None)
     return site.url
+
+
+def publish_reports(store: SampleStore, day: date, comment: Callable[[str], None]) -> str:
+    """Update the current report and retain one nonempty snapshot per report day."""
+    results = store.results()
+    for result in results:
+        key = result.request.sample_id
+        target = conditional_object(prefix_join(sites.PUBLIC_ROOT, public_result_key(key)))
+        if target.version() is None:
+            target.write(result.model_dump_json().encode(), expected_version=None)
+    published = sorted((store.root / "reports/*.url").glob(), key=lambda path: path.name)
+    previous_url = published[-1].read_text() if published else ""
+    manifest = report_manifest(results, day.isoformat(), previous_url)
+    latest = publish_current(manifest)
+    daily_url = publish_daily(store, day, results)
+    links = f"[Current completions]({latest})"
+    if daily_url:
+        links += f" · [Daily snapshot]({daily_url})"
+    comment(
+        f"🤖 Hero checkpoint completions · {day.isoformat()} UTC\n\n"
+        f"{links}\n\n"
+        f"{len(results)} completed sample sets. "
+        "The current report updates hourly. Dated snapshots stay fixed.\n\n"
+        f"{COMMENT_MARKER}"
+    )
+    return latest

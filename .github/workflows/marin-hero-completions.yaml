@@ -1,4 +1,4 @@
-name: Hero checkpoint completions
+name: "Marin - Hero Completions"
 
 on:
   schedule:
@@ -48,6 +48,9 @@ jobs:
           credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
       - name: Reconcile every permanent checkpoint
         run: uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check reconcile
-      - name: Publish the daily history report
+      - name: Publish current completions and a daily snapshot
         if: always() && steps.auth.outcome == 'success'
         run: uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check report
+      - name: Write the sampling summary
+        if: always() && steps.auth.outcome == 'success'
+        run: uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check status
