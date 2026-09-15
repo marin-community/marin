@@ -144,6 +144,15 @@ def test_alert_rules_define_nodata_and_error_behavior():
         assert rule["labels"]["severity"] in VALID_SEVERITIES, rule["uid"]
 
 
+def test_finelog_alert_rules_use_error_aware_endpoints():
+    for rule in _rules():
+        if rule["uid"] == "finelog-fleet-unhealthy":
+            continue
+        for node in rule["data"]:
+            if node["datasourceUid"] == "finelog-marin":
+                assert node["model"]["url"].startswith("/alerts/"), rule["uid"]
+
+
 class _FakeIris:
     def __init__(self, name: str) -> None:
         self.target = ClusterTarget(name=name, project="p", zone="z", instance_filter="f", controller_filter="c")
