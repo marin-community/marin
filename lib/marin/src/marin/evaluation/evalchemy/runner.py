@@ -17,6 +17,8 @@ from iris.client.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from marin.evaluation.eval_measurements import task_item_count
+from marin.evaluation.eval_stats import UNGRADED_ERROR
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
 from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS
 from marin.evaluation.evalchemy.result import EvalchemyResult
@@ -136,6 +138,33 @@ def _apply_recovered_metrics(
             # The aggregate came from the original lm-eval result, which includes failed requests.
             # Recovered leaves contain successful samples for the measurement adapter to roll up.
             metrics.pop(aggregate, None)
+
+
+def _coverage_with_aggregate_counts(
+    coverage: Mapping[str, TaskCoverage], metrics: Mapping[str, Mapping[str, float]]
+) -> dict[str, TaskCoverage]:
+    """Use a harness-reported total when custom tasks omit per-sample score fields.
+
+    Some Evalchemy custom tasks compute their scores outside lm-eval and emit only provenance in
+    ``samples_*.jsonl``. The aggregate ``total_examples`` still proves how many items were scored.
+    It may replace an all-ungraded sample summary only when it exactly matches the attempted extent;
+    partial or contradictory evidence remains ungraded.
+    """
+    reconciled = dict(coverage)
+    for task, entry in coverage.items():
+        if entry.n_scored != 0 or entry.n_attempted is None or entry.errors != {UNGRADED_ERROR: entry.n_attempted}:
+            continue
+        task_metrics = metrics.get(task, {})
+        reported = task_item_count(task_metrics)
+        if reported is None or reported != entry.n_attempted:
+            continue
+        reconciled[task] = TaskCoverage(
+            n_attempted=entry.n_attempted,
+            n_scored=entry.n_attempted,
+            n_correct=None,
+            n_unanswered=entry.n_unanswered,
+        )
+    return reconciled
 
 
 def _task_dir(task: EvalTaskConfig) -> str:
@@ -318,21 +347,22 @@ class EvalchemyExecutor:
             ) from exc
         metrics = outcome.result.task_metrics()
         _apply_recovered_metrics(metrics, outcome.recovered_metrics)
+        coverage = _coverage_with_aggregate_counts(outcome.coverage, metrics)
         if not metrics:
             infrastructure_failures = sum(
-                coverage.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for coverage in outcome.coverage.values()
+                entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in coverage.values()
             )
             if not infrastructure_failures:
                 raise EvaluationError(
                     f"eval finished but no task metrics were readable under {output_dir!r}",
                     status=RunStatus.ARTIFACT_FAILED,
                     jobs=outcome.jobs,
-                    coverage=outcome.coverage,
+                    coverage=coverage,
                 )
             raise EvaluationError(
                 f"eval finished with no successful inference responses under {output_dir!r}",
                 status=RunStatus.INFRA_FAILED,
                 jobs=outcome.jobs,
-                coverage=outcome.coverage,
+                coverage=coverage,
             )
-        return EvaluationOutcome(metrics=metrics, jobs=outcome.jobs, coverage=outcome.coverage)
+        return EvaluationOutcome(metrics=metrics, jobs=outcome.jobs, coverage=coverage)
