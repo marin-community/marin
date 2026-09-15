@@ -6,6 +6,7 @@
 import logging
 import subprocess
 from dataclasses import replace
+from enum import StrEnum
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Protocol
@@ -29,6 +30,11 @@ JOB_USER = "hero-completions"
 MAX_ATTEMPTS = 3
 
 
+class SubmissionMode(StrEnum):
+    NEXT = "next"
+    ALL = "all"
+
+
 class Jobs(Protocol):
     def states(self) -> dict[str, JobState]: ...
 
@@ -42,9 +48,14 @@ def sample_job_names(request: SampleRequest) -> list[str]:
 
 
 def submit_pending(
-    store: SampleStore, jobs: Jobs, requests: list[SampleRequest], *, priority_band: int | None = None
+    store: SampleStore,
+    jobs: Jobs,
+    requests: list[SampleRequest],
+    *,
+    priority_band: int | None = None,
+    submission: SubmissionMode = SubmissionMode.NEXT,
 ) -> None:
-    """Start at most one full-checkpoint attempt. The workflow serializes callers."""
+    """Submit the next request or all discovered requests. The workflow serializes callers."""
     if priority_band is not None:
         priority_band_rank(priority_band)
     for request in requests:
@@ -53,16 +64,20 @@ def submit_pending(
         store.set_priorities([request.sample_id for request in requests], priority_band)
     # Read job states before results. Process zero can save a result during this RPC.
     states = jobs.states()
-    active = [name for name, state in states.items() if state not in TERMINAL_JOB_STATES]
-    if active:
+    active = {name for name, state in states.items() if state not in TERMINAL_JOB_STATES}
+    if active and submission == SubmissionMode.NEXT:
         logger.info("Waiting for active jobs: %s", active)
         return  # Wait for teardown even if the active job already wrote its result.
     completed = store.completed_ids()
     attempts = store.attempt_names()
     priorities = store.priorities()
+    saved_requests = store.requests()
+    if submission == SubmissionMode.ALL:
+        discovered_ids = {request.sample_id for request in requests}
+        saved_requests = [request for request in saved_requests if request.sample_id in discovered_ids]
     pending = []
     for request in sorted(
-        store.requests(),
+        saved_requests,
         key=lambda row: (
             priority_band_rank(priorities.get(row.sample_id, job_pb2.PRIORITY_BAND_BATCH)),
             -row.checkpoint.step,
@@ -72,6 +87,8 @@ def submit_pending(
         if request.sample_id in completed or store.retries_exhausted(request):
             continue
         names = sample_job_names(request)
+        if active.intersection(names):
+            continue
         for name in names:
             if name not in attempts and name not in states:
                 pending.append((request, name))
@@ -80,13 +97,14 @@ def submit_pending(
             error = "\n".join(f"{name}: {states.get(name, 'missing')}" for name in names)
             store.save_failure(request, error)  # Retain the stop marker after Iris prunes terminal jobs.
             logger.error("Sample %s: %s", request.sample_id, error)
-    if pending:
-        request, name = pending[0]
+    if not pending:
+        logger.info("No pending sample sets; %d completed", len(completed))
+        return
+    selected = pending[:1] if submission == SubmissionMode.NEXT else pending
+    for request, name in selected:
         store.save_attempt(name)  # A lost or pruned job still consumes this attempt.
         jobs.submit(request, name, priorities.get(request.sample_id, job_pb2.PRIORITY_BAND_BATCH))
         logger.info("Submitted %s for step %d", name, request.checkpoint.step)
-    else:
-        logger.info("No pending sample sets; %d completed", len(completed))
 
 
 class IrisSamplingJobs:

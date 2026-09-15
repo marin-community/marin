@@ -26,7 +26,7 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.config import (
     sampling_resources,
     sampling_spec,
 )
-from experiments.grug.moe_hero_ep.ops.vibe_check.jobs import JOB_USER, IrisSamplingJobs, submit_pending
+from experiments.grug.moe_hero_ep.ops.vibe_check.jobs import JOB_USER, IrisSamplingJobs, SubmissionMode, submit_pending
 from experiments.grug.moe_hero_ep.ops.vibe_check.publishing import publish_reports, update_issue_comment
 from experiments.grug.moe_hero_ep.ops.vibe_check.status import render_sampling_summary
 
@@ -39,13 +39,23 @@ CONTROLLER_CLUSTER = "marin"
 @click.argument("action", type=click.Choice(["reconcile", "report", "inventory", "status"]))
 @click.option("--store-root", default=STORE_ROOT, show_default=True)
 @click.option(
+    "--submission",
+    type=click.Choice([mode.value for mode in SubmissionMode]),
+    default=SubmissionMode.NEXT.value,
+    show_default=True,
+    help="Submit the next request or all unfinished checkpoints in the current discovery set.",
+)
+@click.option(
     "--priority",
     type=click.Choice([name for name in PRIORITY_BAND_NAMES if name != "system"], case_sensitive=False),
     help="Retain this priority for all discovered checkpoints. Omit to preserve saved priorities (otherwise batch).",
 )
-def main(action: str, store_root: str, priority: str | None) -> None:
+def main(action: str, store_root: str, priority: str | None, submission: str) -> None:
     if priority is not None and action != "reconcile":
         raise click.UsageError("--priority applies only to reconcile")
+    submission_mode = SubmissionMode(submission)
+    if submission_mode != SubmissionMode.NEXT and action != "reconcile":
+        raise click.UsageError("--submission applies only to reconcile")
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
     store = SampleStore(store_root)
@@ -86,7 +96,11 @@ def main(action: str, store_root: str, priority: str | None) -> None:
                 sampler_module="experiments.grug.moe_hero_ep.ops.vibe_check.sample",
             )
             submit_pending(
-                store, jobs, requests, priority_band=priority_band_value(priority) if priority is not None else None
+                store,
+                jobs,
+                requests,
+                priority_band=priority_band_value(priority) if priority is not None else None,
+                submission=submission_mode,
             )
 
 

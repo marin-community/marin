@@ -5,6 +5,13 @@ on:
     - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
+      submission:
+        description: Submit the next checkpoint or all unfinished checkpoints
+        type: choice
+        default: next
+        options:
+          - next
+          - all
       priority:
         description: Priority for all currently discovered checkpoints
         type: choice
@@ -61,13 +68,15 @@ jobs:
       - name: Reconcile every permanent checkpoint
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          SAMPLING_SUBMISSION: ${{ inputs.submission || 'next' }}
           SAMPLING_PRIORITY: ${{ inputs.priority }}
         run: |
           args=()
           if [[ -n "$SAMPLING_PRIORITY" ]]; then
             args+=(--priority "$SAMPLING_PRIORITY")
           fi
-          uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check reconcile "${args[@]}"
+          uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check reconcile \
+            --submission "$SAMPLING_SUBMISSION" "${args[@]}"
       - name: Publish current completions and a daily snapshot
         if: always() && steps.auth.outcome == 'success'
         run: uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check report
