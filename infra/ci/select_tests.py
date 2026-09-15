@@ -151,8 +151,10 @@ DEFAULT_LEG_TIMEOUT = 15
 # Levanter's accelerator lanes use the ordinary import-selected Levanter files below;
 # only the browser smoke remains a directory-triggered suite.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
+# The CI broad triggers are included so a change to the smoke job's own workflow steps
+# runs it, matching how the Levanter accelerator lanes below already select.
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
-    "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
+    "iris-e2e-smoke": ("lib/iris/", *sorted(CI_BROAD_TRIGGERS), *DEPENDENCY_MANIFESTS),
 }
 
 LEVANTER_ACCELERATOR_TRIGGERS: tuple[str, ...] = (
