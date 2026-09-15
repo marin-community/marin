@@ -7,6 +7,7 @@ import argparse
 import importlib
 import json
 import logging
+import math
 import sys
 import traceback
 from collections.abc import Callable
@@ -117,7 +118,15 @@ def negative_candidate(spec: Spec) -> str | None:
         other = "B" if spec.expected.upper() != "B" else "A"
         return f"Answer: {other}"
     if isinstance(spec, NumericSpec):
-        return f"\\boxed{{{spec.expected + 1.0}}}"
+        tolerance = max(spec.tolerance_abs, spec.tolerance_rel * abs(spec.expected))
+        tolerances = (spec.tolerance_abs, spec.tolerance_rel, tolerance)
+        if not math.isfinite(spec.expected) or not all(math.isfinite(value) and value >= 0 for value in tolerances):
+            return None
+        offset = max(2 * tolerance, 1.0)
+        for candidate in (spec.expected + offset, spec.expected - offset):
+            if math.isfinite(candidate) and abs(candidate - spec.expected) > tolerance:
+                return f"\\boxed{{{candidate}}}"
+        return "not a number"
     if isinstance(spec, ExactSpec) and len(spec.expected) > 1 and spec.ordered:
         return "\n".join(reversed(spec.expected))
     return None
