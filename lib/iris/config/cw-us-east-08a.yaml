@@ -117,12 +117,11 @@ auth:
       -----BEGIN PUBLIC KEY-----
       MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
-  # GitHub GPU workflows submit through the marin hub as service accounts.
-  # The other non-openathena identities are interactive principals.
+  # GitHub GPU workflows submit through the marin hub as github-iris; the
+  # remaining non-openathena identities are interactive principals.
   allowed_submitters:
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
-    - iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
     - wg0420@princeton.edu
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
 

@@ -1472,6 +1472,11 @@ buckets:
   - role: roles/storage.objectViewer
     members:
     - serviceAccount:pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
+- bucket: marin-public
+  grants:
+  - role: roles/storage.objectUser
+    members:
+    - serviceAccount:github-iris@hai-gcp-models.iam.gserviceaccount.com
 artifact_repositories:
 - location: europe
   repository: pypi-mirror
@@ -1599,6 +1604,7 @@ service_accounts:
   grants:
   - role: roles/iam.workloadIdentityUser
     members:
+    - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:ref:refs/heads/main
     - principalSet://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/attribute.repository/marin-community/MarinSkyRL
     - principalSet://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/attribute.repository/marin-community/evalchemy
     - principalSet://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/attribute.repository/marin-community/harbor
