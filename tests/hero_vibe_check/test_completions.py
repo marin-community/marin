@@ -262,7 +262,9 @@ def test_generation_stops_at_the_correct_boundary(sample_request, prompt_ids, pr
     def logits(tokens, positions):
         return np.eye(5)[[predicted]]
 
-    result = generate(request.spec, [prompt_ids], eos_token_id=0, logits=logits, decode=str)[0]
+    result = generate(
+        request.spec, [prompt_ids], eos_token_id=0, logits=logits, decode=lambda ids: "".join(map(str, ids))
+    )[0]
     assert result.token_ids == expected_ids
     assert result.stop_reason == reason
 
@@ -283,13 +285,25 @@ def test_sampling_streams_do_not_depend_on_prompt_order_or_early_eos(sample_requ
     def logits(tokens, positions):
         return np.tile(np.array([-1000, 1, 1, 1, 1]), (tokens.shape[0], 1))
 
-    pair = generate(spec, [[1], [2]], eos_token_id=0, logits=logits, decode=str)
+    pair = generate(spec, [[1], [2]], eos_token_id=0, logits=logits, decode=lambda ids: "".join(map(str, ids)))
     reversed_spec = spec.model_copy(update={"prompts": tuple(reversed(spec.prompts))})
-    reverse = generate(reversed_spec, [[2], [1]], eos_token_id=0, logits=logits, decode=str)
-    alone = generate(
-        spec.model_copy(update={"prompts": (other,), "batch_size": 1}), [[2]], eos_token_id=0, logits=logits, decode=str
+    reverse = generate(
+        reversed_spec, [[2], [1]], eos_token_id=0, logits=logits, decode=lambda ids: "".join(map(str, ids))
     )
-    batches = generate(spec.model_copy(update={"batch_size": 1}), [[1], [2]], eos_token_id=0, logits=logits, decode=str)
+    alone = generate(
+        spec.model_copy(update={"prompts": (other,), "batch_size": 1}),
+        [[2]],
+        eos_token_id=0,
+        logits=logits,
+        decode=lambda ids: "".join(map(str, ids)),
+    )
+    batches = generate(
+        spec.model_copy(update={"batch_size": 1}),
+        [[1], [2]],
+        eos_token_id=0,
+        logits=logits,
+        decode=lambda ids: "".join(map(str, ids)),
+    )
     assert batches == pair
     assert pair[0].token_ids == reverse[1].token_ids
     assert pair[1].token_ids == reverse[0].token_ids == alone[0].token_ids
@@ -299,7 +313,7 @@ def test_sampling_streams_do_not_depend_on_prompt_order_or_early_eos(sample_requ
         scores[tokens[:, 0] == 1] = [1000, -1000, -1000, -1000, -1000]
         return scores
 
-    early = generate(spec, [[1], [2]], eos_token_id=0, logits=early_eos, decode=str)
+    early = generate(spec, [[1], [2]], eos_token_id=0, logits=early_eos, decode=lambda ids: "".join(map(str, ids)))
     assert early[0].stop_reason == StopReason.EOS
     assert early[1].token_ids == alone[0].token_ids
 
