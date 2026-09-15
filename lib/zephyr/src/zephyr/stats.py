@@ -161,9 +161,9 @@ class PipelineMetricsResult:
 
 @dataclass(frozen=True)
 class StatsConfig:
-    """Explicit Finelog endpoint for local reporting."""
+    """Configuration for Zephyr metrics reporting."""
 
-    url: str
+    finelog_url: str
 
 
 @dataclass
@@ -215,7 +215,7 @@ class StatsWriter:
         Returns a no-op instance if the URL cannot be determined or the
         connection fails.
         """
-        resolved = config.url if config is not None else cls.resolve_url()
+        resolved = config.finelog_url if config is not None else cls.resolve_url()
         if resolved is None:
             return cls(None)
         try:
