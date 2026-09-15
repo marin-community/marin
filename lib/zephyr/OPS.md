@@ -18,6 +18,7 @@ Zephyr reports reducer input rows, encoded payload bytes, and mapper counts to `
 
 ## Execution history
 
+Execution IDs in coordinator task status link to the Marina execution viewer.
 The coordinator enqueues a `zephyr.execution` record before executing stages.
 It contains the execution ID, root and coordinator Iris job IDs, input shard
 count, and `stages_json`: stage labels, types, reduce markers, and dependencies.
