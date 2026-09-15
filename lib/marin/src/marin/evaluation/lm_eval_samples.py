@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Convert historical lm-eval output into the normalized FineStore evaluation contract.
+"""Support legacy lm-eval exports and summarize native Evalchemy output.
 
 lm-eval (and evalchemy, which drives it) writes one ``samples_<task>_<timestamp>.jsonl`` row per
 evaluated question in its own native shape. This module owns Marin's compatibility export and rebuild
 path for outputs produced without native FineStore writing. It preserves each source file it reads
-so an archive can be rebuilt from itself.
+so an archive can be rebuilt from itself. For native runs, Marin reads Evalchemy's normalized table
+to calculate record coverage; Evalchemy owns conversion from the lm-eval row shape.
 
 The same pass measures each task's coverage from the document indices in its per-sample rows.
 lm-eval's aggregate results omit attempted-item counts. The sample indices establish the intended
@@ -35,6 +36,7 @@ from finestore.eval import (
     Grading,
     Message,
     SampleKind,
+    sample_from_archive_row,
 )
 from finestore.layout import ARCHIVE_FILE, DATA_DIR, HEAD_FILE, MANIFESTS_DIR, SCHEMAS_DIR, BlobTables
 from finestore.migrations.m0001_manifest import LEGACY_SEAL_FILE
@@ -72,6 +74,8 @@ _CONTENT_TYPES = {
 # :func:`is_scratch_artifact`.
 _SCRATCH_SEGMENT = re.compile(r"(?:^|/)tmp[a-z0-9_]{6,}/")
 _INFRASTRUCTURE_ERROR_PREFIX = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}]"
+EVALCHEMY_SOURCE_ROOT = PurePosixPath(prefix_join(SOURCES_PREFIX, "evalchemy"))
+EVALCHEMY_NATIVE_SOURCE_DIR = "native"
 
 
 def is_scratch_artifact(relative_path: str) -> bool:
@@ -85,8 +89,9 @@ def is_scratch_artifact(relative_path: str) -> bool:
     return _SCRATCH_SEGMENT.search(relative_path) is not None
 
 
-# This adapter exists only for historical Marin archives. Native Evalchemy owns the corresponding
-# conversion for new runs; FineStore owns only the normalized schema and storage API.
+# Live runs are normalized by Evalchemy. These conversion helpers remain for historical exports and
+# for rebuilding an archive's table from preserved sources after damage or an interrupted migration.
+# FineStore itself owns only the normalized schema and storage API.
 _LM_EVAL_STRUCTURAL_KEYS = frozenset(
     {
         "doc",
@@ -432,6 +437,44 @@ class SampleExport:
     """Metrics rebuilt from successful samples for tasks with request failures."""
 
 
+@dataclass
+class _SampleExportBuilder:
+    task_keys: dict[str, str]
+    samples: int = 0
+    coverage: dict[str, TaskCoverage] = field(default_factory=dict)
+    recovered_metrics: dict[str, dict[str, float]] = field(default_factory=dict)
+
+    @classmethod
+    def for_sources(cls, sources: Sequence[str]) -> _SampleExportBuilder:
+        return cls(task_keys=_task_keys(sources))
+
+    def accepts(self, name: str) -> bool:
+        return name in self.task_keys
+
+    def add_source(self, name: str, payload: bytes) -> list[EvalSample]:
+        samples = _lm_eval_samples(name.rsplit("/", 1)[-1], payload)
+        self.add_samples(name, samples)
+        return samples
+
+    def add_samples(self, name: str, samples: Sequence[EvalSample]) -> None:
+        """Add one task source's already-normalized samples to the summary."""
+        self.samples += len(samples)
+        if not samples:
+            return
+        task_key = self.task_keys[name]
+        task_coverage_result, task_metrics = task_coverage_and_metrics(samples)
+        self.coverage[task_key] = task_coverage_result
+        if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
+            self.recovered_metrics[task_key] = task_metrics
+
+    def build(self) -> SampleExport:
+        return SampleExport(
+            samples=self.samples,
+            coverage=self.coverage,
+            recovered_metrics=self.recovered_metrics,
+        )
+
+
 def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> SampleExport:
     """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
 
@@ -451,31 +494,49 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> Sa
         # already stored, so a run evaluated by another mechanism keeps the archive it has.
         return SampleExport(samples=0)
     require_current_samples(out_path)
-    keys = _task_keys(sources)
+    summary = _SampleExportBuilder.for_sources(sources)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
-    count = 0
-    coverage: dict[str, TaskCoverage] = {}
-    recovered_metrics: dict[str, dict[str, float]] = {}
     try:
         for relative in artifacts:
             payload = StoragePath(prefix_join(str(root), relative)).read_bytes()
             store.add_source_artifact(relative, payload, content_type=_content_type(relative))
             # One shard per artifact keeps a multi-hundred-megabyte results tree from buffering whole.
             store.flush()
-            if relative not in keys:
+            if not summary.accepts(relative):
                 continue
-            samples = _add_lm_eval_rows(store, relative.rsplit("/", 1)[-1], payload)
-            count += len(samples)
-            if samples:
-                task_key = keys[relative]
-                task_coverage_result, task_metrics = task_coverage_and_metrics(samples)
-                coverage[task_key] = task_coverage_result
-                if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
-                    recovered_metrics[task_key] = task_metrics
+            for sample in summary.add_source(relative, payload):
+                store.add_sample(sample)
         store.seal()
     finally:
         store.close()
-    return SampleExport(samples=count, coverage=coverage, recovered_metrics=recovered_metrics)
+    return summary.build()
+
+
+def _is_native_evalchemy_source(name: str) -> bool:
+    path = PurePosixPath(name)
+    return path.is_relative_to(EVALCHEMY_SOURCE_ROOT) and path.parent.name == EVALCHEMY_NATIVE_SOURCE_DIR
+
+
+def summarize_native_eval_samples(out_path: str) -> SampleExport:
+    """Summarize Evalchemy's normalized FineStore samples without rewriting its table."""
+    reader = ReadView(out_path)
+    sources = tuple(name for name in preserved_sample_sources(out_path) if _is_native_evalchemy_source(name))
+    if not sources:
+        raise FileNotFoundError(f"archive at {out_path!r} preserves no native Evalchemy sample sources")
+
+    table = reader.scan(ARCHIVE_SAMPLES_TABLE)
+    if table is None:
+        raise FileNotFoundError(f"archive at {out_path!r} contains no normalized evaluation samples")
+    by_task: dict[str, list[EvalSample]] = {}
+    for row in table.to_pylist(maps_as_pydicts="strict"):
+        sample = sample_from_archive_row(row)
+        by_task.setdefault(sample.task, []).append(sample)
+
+    summary = _SampleExportBuilder.for_sources(sources)
+    for name in sources:
+        task = _task_from_filename(PurePosixPath(name).name, ".jsonl")
+        summary.add_samples(name, by_task.get(task, []))
+    return summary.build()
 
 
 def require_current_samples(out_path: str) -> None:
@@ -503,15 +564,20 @@ def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> 
 
     Physical LF bytes delimit records. Literal U+2028/U+2029 characters remain inside JSON strings.
     """
+    samples = _lm_eval_samples(filename, payload)
+    for sample in samples:
+        store.add_sample(sample)
+    return samples
+
+
+def _lm_eval_samples(filename: str, payload: bytes) -> list[EvalSample]:
+    """Normalize one evaluator-native JSONL payload without writing it."""
     rows = [json.loads(line) for line in payload.decode().split("\n") if line.strip()]
     if not rows:
         logger.warning("samples file %s is empty; skipping archive export", filename)
         return []
     task = _task_from_filename(filename, ".jsonl")
-    samples = [sample for raw in rows for sample in samples_from_lm_eval(task, raw)]
-    for sample in samples:
-        store.add_sample(sample)
-    return samples
+    return [sample for raw in rows for sample in samples_from_lm_eval(task, raw)]
 
 
 def preserved_sample_sources(out_path: str) -> tuple[str, ...]:

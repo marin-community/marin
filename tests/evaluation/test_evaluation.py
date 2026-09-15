@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import click
 import pytest
 from click.testing import CliRunner
+from finestore.eval import EvaluationStore
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
@@ -25,6 +26,7 @@ from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.lm_eval_samples import samples_from_lm_eval
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus, TaskCoverage, read_record
 from marin.evaluation.runner import (
@@ -190,11 +192,26 @@ def _lm_eval_generation(doc_id: int, metric: str, score: float, response: str) -
 def _write_evalchemy_output(
     output_dir: str, task_dir: str, results: dict[str, dict[str, float]], samples: dict[str, list[dict]]
 ) -> None:
-    model_dir = StoragePath(output_dir) / task_dir / "model"
-    model_dir.mkdirs()
-    (model_dir / "results_20260807.json").write_text(json.dumps({"results": results}))
-    for task, rows in samples.items():
-        (model_dir / f"samples_{task}_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    store = EvaluationStore.open(output_dir, writer_id="evalchemy-test")
+    try:
+        store.add_source_artifact(
+            f"evalchemy/{task_dir}/native/results_test.json",
+            json.dumps({"results": results}).encode(),
+            content_type="application/json",
+        )
+        for task, rows in samples.items():
+            payload = ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
+            store.add_source_artifact(
+                f"evalchemy/{task_dir}/native/samples_{task}_native.jsonl",
+                payload,
+                content_type="application/x-ndjson",
+            )
+            for row in rows:
+                for sample in samples_from_lm_eval(task, row):
+                    store.add_sample(sample)
+        store.seal()
+    finally:
+        store.close()
 
 
 def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp_path):
@@ -241,14 +258,8 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
 
 
-def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypatch):
+def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypatch):
     output_dir = str(StoragePath("memory://evalchemy-export-failure") / tmp_path.name)
-    model_dir = StoragePath(output_dir) / "gsm8k_5shot" / "model"
-    model_dir.mkdirs()
-    (model_dir / "results_20260807.json").write_text(
-        json.dumps({"results": {"gsm8k": {"exact_match,flexible-extract": 0.75}}})
-    )
-    (model_dir / "samples_gsm8k_20260807.jsonl").write_text('{"unterminated": "sample\n')
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",

@@ -140,12 +140,12 @@ and on failure, so a failed run is still accounted for -- and a failure carries 
 last 100 log lines (`log_tails`), so most failures are diagnosable straight from the record (or the
 dashboard) without cluster access.
 
-Alongside the results tree, each task's individually-scored questions are exported as parquet:
-lm-eval runs with `--log_samples`, and the orchestrator converts every `samples_*.jsonl` into a
-parquet sibling (`marin.evaluation.lm_eval_samples` normalizes lm-eval's native row shape into
-`EvalSample`, the per-sample contract in `finestore.eval`, with the parquet schema *being* the
-Pydantic model) -- load them with pandas/duckdb, or read them back with `EvalSample.model_validate`,
-to zoom into any run.
+Within its FineStore archive, each evaluator writes individually scored questions to the `samples`
+table using `EvalSample`, the shared schema in `finestore.eval`. Evalchemy writes its native
+aggregate JSON and `--log_samples` JSONL directly as FineStore source artifacts. Harbor preserves
+its native results and trajectories and writes flattened trajectory steps to the `steps` table; its
+ordinary job tree remains resume state. Load the normalized tables with
+pandas/duckdb, or read rows back with `EvalSample.model_validate`, to zoom into any run.
 
 Evaldash treats these records as the source of truth. Its background ingestor scans every configured
 object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implemented in

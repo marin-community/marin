@@ -30,6 +30,7 @@ from marin.evaluation.lm_eval_samples import (
     preserved_sample_sources,
     rebuild_lm_eval_samples,
     run_artifacts,
+    summarize_native_eval_samples,
 )
 from marin.evaluation.records import TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
@@ -80,6 +81,37 @@ def test_archive_row_round_trips_each_sample_kind():
         row = sample_to_archive_row(sample, trial_id="t")
         assert row["trial_id"] == "t"
         assert sample_from_archive_row(row) == sample
+
+
+def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
+    root = str(tmp_path / "run" / "results")
+    store = EvaluationStore.open(root, writer_id="evalchemy")
+    try:
+        store.add_source_artifact(
+            "evalchemy/gsm8k_5shot/native/samples_gsm8k_native.jsonl",
+            b'{"doc_id": 999}\n',
+            content_type="application/x-ndjson",
+        )
+        store.add_sample(
+            EvalSample(
+                task="gsm8k",
+                doc_id="0",
+                kind=SampleKind.GENERATION,
+                output="4",
+                extracted="4",
+                grading=Grading(method="lm-eval:exact_match", metric="exact_match", score=1.0, passed=True),
+                metrics={"exact_match": 1.0},
+                correct=True,
+            )
+        )
+        store.seal()
+    finally:
+        store.close()
+
+    summary = summarize_native_eval_samples(root)
+
+    assert summary.samples == 1
+    assert summary.coverage == {"gsm8k_5shot": TaskCoverage(n_attempted=1, n_scored=1, n_correct=1, n_unanswered=0)}
 
 
 def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):

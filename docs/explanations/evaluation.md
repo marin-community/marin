@@ -39,6 +39,10 @@ mechanisms such as `run_evalchemy`, `run_lm_eval`, and `run_harbor_driver` own o
 result contracts. This keeps the lifecycle common without hiding mechanism-specific configuration
 or outcomes behind a universal `do_eval` interface.
 
+Evalchemy and Harbor write their results directly into FineStore. Each evaluator preserves its native
+files as source objects and writes the shared normalized evaluation tables consumed by Evaldash;
+Marin records provenance and summarizes those outputs without rebuilding the tables after the run.
+
 - [`eval_step`][marin.experiment.evaluation.eval_step] builds one post-hoc eval artifact from an
   `EvalGroup`; combine groups and aggregate them with
   [`eval_report`][marin.experiment.evaluation.eval_report]. Concrete task menus remain in

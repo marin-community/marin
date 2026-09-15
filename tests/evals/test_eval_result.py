@@ -14,8 +14,10 @@ import json
 
 import fsspec
 import pytest
+from finestore.eval import EvaluationStore
 from marin.evaluation.evalchemy.result import (
     EvalchemyResult,
+    FineStoreEvalchemyResult,
     ReportEntry,
     compile_eval_report,
 )
@@ -60,6 +62,39 @@ _MMLU = {
         "mmlu_stem": {"acc,none": 0.38, "alias": " - stem"},
     }
 }
+
+
+def test_finestore_evalchemy_result_reads_native_aggregate_artifacts(tmp_path):
+    root = str(tmp_path / "archive")
+    store = EvaluationStore.open(root, writer_id="evalchemy")
+    try:
+        store.add_source_artifact(
+            "evalchemy/gsm8k_8shot/native/results_gsm8k.json",
+            json.dumps(_GSM8K).encode(),
+            content_type="application/json",
+        )
+        store.add_source_artifact(
+            "evalchemy/mmlu_5shot/native/results_mmlu.json",
+            json.dumps(_MMLU).encode(),
+            content_type="application/json",
+        )
+        store.seal()
+    finally:
+        store.close()
+
+    result = FineStoreEvalchemyResult(path=root)
+
+    assert result.task_metrics() == {
+        "gsm8k_8shot": {"exact_match,none": 0.3, "exact_match_stderr,none": 0.02},
+        "mmlu_5shot/mmlu": {"acc,none": 0.41},
+        "mmlu_5shot/mmlu_stem": {"acc,none": 0.38},
+    }
+
+    report = compile_eval_report(
+        [ReportEntry(root, result_type_name(FineStoreEvalchemyResult), "evalchemy")],
+        str(tmp_path / "report"),
+    )
+    assert report.task_metrics == result.task_metrics()
 
 
 def test_evalchemy_result_keys_by_task_dir(tmp_path, monkeypatch):
