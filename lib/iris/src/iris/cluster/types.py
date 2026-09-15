@@ -400,14 +400,6 @@ class TaskAttempt:
         """Get the task index from the task_id."""
         return self.task_id.require_task()[1]
 
-    def with_attempt(self, attempt_id: int) -> "TaskAttempt":
-        """Return a new TaskAttempt with the given attempt_id."""
-        return TaskAttempt(task_id=self.task_id, attempt_id=attempt_id)
-
-    def without_attempt(self) -> "TaskAttempt":
-        """Return a new TaskAttempt with attempt_id=None."""
-        return TaskAttempt(task_id=self.task_id)
-
     def __str__(self) -> str:
         return self.to_wire()
 
