@@ -253,3 +253,40 @@ therefore remains in assistant `content`; tool-enabled requests preserve its
 think markers. Returning a separate reasoning field in OpenAI chat-completion
 responses requires a MarinSkyRL wrapper change. Native Harmony wire tokens are not used by this
 renderer.
+
+## 7. Deduplicate and decontaminate SFT conversations
+
+`experiments.datakit.sft_pipeline` applies the reference Datakit deduplication and
+decontamination stages to chat sources. Matching uses user, assistant (including
+reasoning and tool calls), and tool-result message bodies separated by blank lines.
+System/developer instructions, tool definitions, and generated template syntax are
+excluded from matching. Filtered training output retains the full rendered conversation.
+
+Run in the data's region after preparing the versioned eval corpus with
+`experiments/datakit/decontam/prepare_eval_corpus.py` (its module docstring includes
+an Iris submission command). Both scripts resolve artifacts through `MARIN_PREFIX`,
+which defaults to the active Iris region’s bucket:
+
+```bash
+uv run python -m experiments.datakit.sft_pipeline \
+    --sources superior-reasoning,numinamath-1.5 \
+    --pool-workers 16 --max-concurrent 4
+```
+
+Omit `--sources` to process all entries in `all_sft_sources()`. Global exact dedup
+uses full structured-chat IDs, including template arguments. Fuzzy dedup compares
+message bodies using MinHash candidates and full-text verification; it does not
+group examples by prompt alone. Decontamination uses the reference eval bloom
+filter, which indexes eval text for matching, and its paragraph-overlap threshold. Corpus-frequency exclusions are
+disabled for SFT: repeated eval prompts must remain detectable even when many
+rollouts share them. Deduplication spans only the selected SFT sources.
+Eval content present only in excluded instructions or tool definitions is not scanned.
+
+`sft_datakit_steps(select_sft_sources(...))` accepts structured-chat normalization
+steps and exposes final steps through `.filtered`. Each final filtered step produces a
+`NormalizedData` artifact with retained rendered text in `main_output_dir`; all
+duplicate and contamination filtering has already been applied. IDs and `source_id`
+reference normalized chat IDs, rather than hashes of rendered text. The
+`dup_output_dir` points to the original chat normalizer's duplicate side output;
+global duplicate and contamination markers remain separate artifacts.
+Decontamination and fuzzy-dedup reports are written under `datakit/sft/report/`.
