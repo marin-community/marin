@@ -8,10 +8,16 @@ from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
 from haliax.jax_utils import tree_checkpoint_name
-from levanter.grug._moe.common import _CHECKPOINT_DISPATCH_INPUT, _CHECKPOINT_MOE_OUTPUT, CapacityOverflow
+from levanter.grug._moe.common import (
+    _CHECKPOINT_DISPATCH_INPUT,
+    _CHECKPOINT_MOE_OUTPUT,
+    _assignment_validity,
+    _scaled_capacity,
+    MoeDispatchCounts,
+)
 from levanter.grug.sharding import _batch_axes
 
 
@@ -78,13 +84,14 @@ def _moe_mlp_ep_fixed_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
     combine_weights_local: Float[Array, "Tlocal K"],
+    token_valid_local: Bool[Array, "Tlocal"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
+) -> tuple[Float[Array, "Tlocal H"], MoeDispatchCounts]:
     """Run fixed-capacity all-to-all dispatch, expert MLPs, and combine.
 
     ``capacity_factor`` scales each fixed (sender shard, global expert) cell as
@@ -104,16 +111,26 @@ def _moe_mlp_ep_fixed_a2a_local(
     capacity = max(int(math.ceil(capacity_factor * assignments_per_shard / num_experts)), 1)
 
     flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
+    assignment_valid = _assignment_validity(token_valid_local, tokens=tokens_per_shard, topk=topk)
+    valid_assignments = jnp.sum(assignment_valid, dtype=jnp.int32)
+    logical_capacity = _scaled_capacity(
+        valid_assignments,
+        capacity_factor=capacity_factor,
+        divisor=num_experts,
+    )
+    sortable_experts = jnp.where(assignment_valid, flat_experts, num_experts)
+    safe_experts = jnp.where(assignment_valid, flat_experts, 0)
 
-    order = jnp.argsort(flat_experts, stable=True)
+    order = jnp.argsort(sortable_experts, stable=True)
     inverse_order = jnp.argsort(order)
-    expert_counts = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
+    expert_counts = jnp.bincount(sortable_experts, length=num_experts).astype(jnp.int32)
     segment_start = jnp.cumsum(expert_counts) - expert_counts
-    sorted_rank = jnp.arange(assignments_per_shard, dtype=jnp.int32) - segment_start[flat_experts[order]]
+    sorted_experts = safe_experts[order]
+    sorted_rank = jnp.arange(assignments_per_shard, dtype=jnp.int32) - segment_start[sorted_experts]
     slot = sorted_rank[inverse_order]
-    keep = slot < capacity
-    local_expert_indices = (flat_experts % local_experts).astype(jnp.int32)
-    destination_shards = (flat_experts // local_experts).astype(jnp.int32)
+    keep = assignment_valid & (slot < logical_capacity)
+    local_expert_indices = (safe_experts % local_experts).astype(jnp.int32)
+    destination_shards = (safe_experts // local_experts).astype(jnp.int32)
     bucket_size = expert_shards * capacity
     send_size = local_experts * bucket_size
     linear_indices = jnp.where(
@@ -176,6 +193,11 @@ def _moe_mlp_ep_fixed_a2a_local(
             combine_weights_local.astype(gathered.dtype),
             preferred_element_type=jnp.float32,
         ).astype(x_local.dtype)
-        dropped_local = assignments_per_shard - jnp.sum(keep, dtype=jnp.int32)
-        dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
-    return out_local, CapacityOverflow(sender=dropped_total, receiver=jnp.zeros_like(dropped_total))
+        dropped_local = valid_assignments - jnp.sum(keep, dtype=jnp.int32)
+        counts_local = jnp.stack((dropped_local, assignments_per_shard - valid_assignments))
+        counts = jax.lax.psum(counts_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+    return out_local, MoeDispatchCounts(
+        sender_dropped=counts[0],
+        receiver_dropped=jnp.zeros_like(counts[0]),
+        padding_skipped=counts[1],
+    )

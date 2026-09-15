@@ -24,7 +24,7 @@ from levanter.grug._moe.common import (
     _prepare_moe_dispatch,
     _prepare_moe_dispatch_indices_with_assignment_ids,
     _swiglu_gate_up_backward,
-    CapacityOverflow,
+    MoeDispatchCounts,
 )
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
@@ -310,6 +310,109 @@ def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
     y_default = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, mesh=None)
     y_ring = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, implementation="ring", mesh=None)
     np.testing.assert_allclose(np.asarray(y_default), np.asarray(y_ring), rtol=1e-5, atol=1e-5)
+
+
+def test_moe_mlp_padding_matches_compact_value_and_gradients():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(52),
+        tokens=6,
+        hidden_dim=8,
+        intermediate_dim=12,
+        num_experts=4,
+        topk=2,
+    )
+    token_valid = jnp.array([True, False, True, True, False, True])
+    valid_indices = jnp.array([0, 2, 3, 5], dtype=jnp.int32)
+    cotangent = jax.random.normal(jax.random.key(53), x.shape)
+
+    def padded_output(x, w_up_gate, w_down):
+        return moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            token_valid=token_valid,
+            implementation="scatter",
+            report_capacity_overflow=True,
+        )
+
+    compact_x = x[valid_indices]
+    compact_selected_experts = selected_experts[valid_indices]
+    compact_combine_weights = combine_weights[valid_indices]
+
+    def compact_output(x, w_up_gate, w_down):
+        return moe_mlp(
+            x,
+            compact_selected_experts,
+            compact_combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="scatter",
+        )
+
+    actual, overflow = padded_output(x, w_up_gate, w_down)
+    expected_compact = compact_output(compact_x, w_up_gate, w_down)
+    expected = jnp.zeros_like(actual).at[valid_indices].set(expected_compact)
+    actual_gradients = jax.grad(
+        lambda x, w_up_gate, w_down: jnp.sum(padded_output(x, w_up_gate, w_down)[0] * cotangent),
+        argnums=(0, 1, 2),
+    )(x, w_up_gate, w_down)
+    expected_gradients = jax.grad(
+        lambda x, w_up_gate, w_down: jnp.sum(compact_output(x, w_up_gate, w_down) * cotangent[valid_indices]),
+        argnums=(0, 1, 2),
+    )(compact_x, w_up_gate, w_down)
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(actual_gradients[0][valid_indices], expected_gradients[0], rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(actual_gradients[0][~token_valid], jnp.zeros((2, x.shape[1])))
+    for actual_gradient, expected_gradient in zip(actual_gradients[1:], expected_gradients[1:], strict=True):
+        np.testing.assert_allclose(actual_gradient, expected_gradient, rtol=1e-5, atol=1e-5)
+    assert int(overflow.dropped) == 0
+    assert int(overflow.padding_skipped) == 4
+
+
+def test_moe_mlp_all_padding_has_no_expert_output_or_gradients():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(54),
+        tokens=4,
+        hidden_dim=8,
+        intermediate_dim=12,
+        num_experts=4,
+        topk=2,
+    )
+    token_valid = jnp.zeros((x.shape[0],), dtype=jnp.bool_)
+
+    def loss(x, w_up_gate, w_down):
+        out, _ = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            token_valid=token_valid,
+            implementation="scatter",
+            report_capacity_overflow=True,
+        )
+        return jnp.sum(out), out
+
+    gradients, out = jax.grad(loss, argnums=(0, 1, 2), has_aux=True)(x, w_up_gate, w_down)
+    _, overflow = moe_mlp(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        token_valid=token_valid,
+        implementation="scatter",
+        report_capacity_overflow=True,
+    )
+
+    np.testing.assert_array_equal(out, jnp.zeros_like(out))
+    for gradient in gradients:
+        np.testing.assert_array_equal(gradient, jnp.zeros_like(gradient))
+    assert int(overflow.dropped) == 0
+    assert int(overflow.padding_skipped) == x.shape[0] * selected_experts.shape[1]
 
 
 def test_deepep_local_assignment_packing_uses_local_expert_ids():
@@ -663,6 +766,11 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
             dtype=jnp.float32,
             sharding=NamedSharding(mesh, P(("data", "expert"), None)),
         )
+        token_valid = jax.ShapeDtypeStruct(
+            shape=(tokens,),
+            dtype=jnp.bool_,
+            sharding=NamedSharding(mesh, P(("data", "expert"))),
+        )
         w_up_gate = jax.ShapeDtypeStruct(
             shape=(num_experts, hidden_dim, 2 * intermediate_dim),
             dtype=jnp.float32,
@@ -674,13 +782,14 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
             sharding=NamedSharding(mesh, P("expert", None, None)),
         )
 
-        def f(x, sel, cw, up_gate, down):
+        def f(x, sel, cw, valid, up_gate, down):
             return moe_mlp(
                 x,
                 sel,
                 cw,
                 up_gate,
                 down,
+                token_valid=valid,
                 activation=ActivationFunctionEnum.silu,
                 implementation=implementation,
                 mesh=mesh,
@@ -691,7 +800,7 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
         platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
         lowered = (
             jax.jit(f)
-            .trace(x, selected_experts, combine_weights, w_up_gate, w_down)
+            .trace(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
             .lower(lowering_platforms=(platform,))
         )
         assert lowered is not None
@@ -723,6 +832,7 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
             x,
             selected_experts,
             combine_weights,
+            jnp.ones((tokens,), dtype=jnp.bool_),
             w_up_gate,
             w_down,
             activation_fn=jax.nn.silu,
@@ -734,7 +844,7 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
         fixed_a2a,
         mesh=mesh,
         in_specs=(P(), P(), P(), P(), P()),
-        out_specs=(P(), CapacityOverflow(sender=P(), receiver=P())),
+        out_specs=(P(), MoeDispatchCounts(sender_dropped=P(), receiver_dropped=P(), padding_skipped=P())),
         check_vma=False,
     )
     with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
@@ -768,8 +878,93 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
             rtol=1e-5,
             atol=1e-5,
         )
-    assert int(overflow.sender) == 4
-    assert int(overflow.receiver) == 0
+    assert int(overflow.sender_dropped) == 4
+    assert int(overflow.receiver_dropped) == 0
+    assert int(overflow.padding_skipped) == 0
+
+
+def test_fixed_all_to_all_padding_does_not_change_capacity_acceptance():
+    mesh = _make_single_expert_mesh()
+    x, _, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(55),
+        tokens=6,
+        hidden_dim=4,
+        intermediate_dim=6,
+        num_experts=2,
+        topk=2,
+    )
+    selected_experts = jnp.tile(jnp.arange(2, dtype=jnp.int32), (x.shape[0], 1))
+    token_valid = jnp.array([True, False, True, True, False, True])
+    valid_indices = jnp.array([0, 2, 3, 5], dtype=jnp.int32)
+    cotangent = jax.random.normal(jax.random.key(56), x.shape)
+
+    def fixed_a2a(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down):
+        return _moe_mlp_ep_fixed_a2a_local(
+            x,
+            selected_experts,
+            combine_weights,
+            token_valid,
+            w_up_gate,
+            w_down,
+            activation_fn=jax.nn.silu,
+            num_experts=2,
+            capacity_factor=0.5,
+        )
+
+    sharded_fixed_a2a = jax.shard_map(
+        fixed_a2a,
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P(), P(), P()),
+        out_specs=(P(), MoeDispatchCounts(sender_dropped=P(), receiver_dropped=P(), padding_skipped=P())),
+        check_vma=False,
+    )
+
+    def padded_output(x, w_up_gate, w_down):
+        return sharded_fixed_a2a(
+            x,
+            selected_experts,
+            combine_weights,
+            token_valid,
+            w_up_gate,
+            w_down,
+        )
+
+    compact_x = x[valid_indices]
+    compact_selected_experts = selected_experts[valid_indices]
+    compact_combine_weights = combine_weights[valid_indices]
+    compact_valid = jnp.ones((valid_indices.shape[0],), dtype=jnp.bool_)
+
+    def compact_output(x, w_up_gate, w_down):
+        return sharded_fixed_a2a(
+            x,
+            compact_selected_experts,
+            compact_combine_weights,
+            compact_valid,
+            w_up_gate,
+            w_down,
+        )
+
+    with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
+        actual, padded_overflow = padded_output(x, w_up_gate, w_down)
+        expected_compact, compact_overflow = compact_output(compact_x, w_up_gate, w_down)
+        actual_gradients = jax.grad(
+            lambda x, w_up_gate, w_down: jnp.sum(padded_output(x, w_up_gate, w_down)[0] * cotangent),
+            argnums=(0, 1, 2),
+        )(x, w_up_gate, w_down)
+        expected_gradients = jax.grad(
+            lambda x, w_up_gate, w_down: jnp.sum(compact_output(x, w_up_gate, w_down)[0] * cotangent[valid_indices]),
+            argnums=(0, 1, 2),
+        )(compact_x, w_up_gate, w_down)
+
+    np.testing.assert_allclose(actual[valid_indices], expected_compact, rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(actual[~token_valid], jnp.zeros((2, x.shape[1])))
+    np.testing.assert_allclose(actual_gradients[0][valid_indices], expected_gradients[0], rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(actual_gradients[0][~token_valid], jnp.zeros((2, x.shape[1])))
+    for actual_gradient, expected_gradient in zip(actual_gradients[1:], expected_gradients[1:], strict=True):
+        np.testing.assert_allclose(actual_gradient, expected_gradient, rtol=1e-5, atol=1e-5)
+    assert padded_overflow.dropped == compact_overflow.dropped == 4
+    assert int(padded_overflow.padding_skipped) == 4
+    assert int(compact_overflow.padding_skipped) == 0
 
 
 @pytest.mark.timeout(180)
@@ -800,6 +995,7 @@ def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
             x,
             selected_experts,
             combine_weights,
+            jnp.ones((tokens,), dtype=jnp.bool_),
             w_up_gate,
             w_down,
             activation_fn=jax.nn.silu,
@@ -878,6 +1074,7 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
             x,
             selected_experts,
             combine_weights,
+            jnp.ones((tokens,), dtype=jnp.bool_),
             w_up_gate,
             w_down,
             activation_fn=jax.nn.silu,
@@ -891,7 +1088,7 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
         pooled_output,
         mesh=mesh,
         in_specs=(P(), P(), P(), P()),
-        out_specs=(P(), CapacityOverflow(sender=P(), receiver=P())),
+        out_specs=(P(), MoeDispatchCounts(sender_dropped=P(), receiver_dropped=P(), padding_skipped=P())),
         check_vma=False,
     )
     with jax.set_mesh(mesh):
@@ -901,8 +1098,9 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     expected = _dense_moe_output(x, selected_experts, combine_weights * keep, w_up_gate, w_down)
 
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
-    assert int(overflow.sender) == 3
-    assert int(overflow.receiver) == 3
+    assert int(overflow.sender_dropped) == 3
+    assert int(overflow.receiver_dropped) == 3
+    assert int(overflow.padding_skipped) == 0
 
 
 @pytest.mark.parametrize("implementation", ["ring", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"])
@@ -930,6 +1128,7 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(implem
             dtype=jnp.int32,
         )
         combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(1), (4, 2)), axis=-1)
+        token_valid = jnp.asarray([True, False, True, True])
         w_up_gate = jax.random.normal(jax.random.key(2), (8, 4, 6))
         w_down = jax.random.normal(jax.random.key(3), (8, 3, 4))
         cotangent = jax.random.normal(jax.random.key(4), (4, 4))
@@ -943,7 +1142,7 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(implem
                 jax.nn.silu(gate) * up,
                 w_down[selected_experts],
             )
-            return jnp.einsum("tkh,tk->th", expert_output, combine_weights)
+            return jnp.einsum("tkh,tk->th", expert_output, combine_weights * token_valid[:, None])
 
         expected = dense_output(x, w_up_gate, w_down)
         expected_gradients = jax.grad(
@@ -952,10 +1151,12 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(implem
         )(x, w_up_gate, w_down)
 
         batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        token_sharding = NamedSharding(mesh, P(("data", "expert")))
         expert_sharding = NamedSharding(mesh, P("expert", None, None))
         x = jax.device_put(x, batch_sharding)
         selected_experts = jax.device_put(selected_experts, batch_sharding)
         combine_weights = jax.device_put(combine_weights, batch_sharding)
+        token_valid = jax.device_put(token_valid, token_sharding)
         w_up_gate = jax.device_put(w_up_gate, expert_sharding)
         w_down = jax.device_put(w_down, expert_sharding)
         cotangent = jax.device_put(cotangent, batch_sharding)
@@ -972,17 +1173,19 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(implem
                 combine_weights,
                 w_up_gate,
                 w_down,
+                token_valid=token_valid,
                 activation=jax.nn.silu,
                 implementation=implementation,
                 mesh=mesh,
                 capacity_factor=4.0,
+                report_capacity_overflow=True,
                 **extra,
             )
 
         with jax.set_mesh(mesh):
-            actual = backend_output(x, w_up_gate, w_down)
+            actual, overflow = backend_output(x, w_up_gate, w_down)
             actual_gradients = jax.grad(
-                lambda x, w_up_gate, w_down: jnp.sum(backend_output(x, w_up_gate, w_down) * cotangent),
+                lambda x, w_up_gate, w_down: jnp.sum(backend_output(x, w_up_gate, w_down)[0] * cotangent),
                 argnums=(0, 1, 2),
             )(x, w_up_gate, w_down)
 
@@ -994,6 +1197,8 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(implem
                 rtol=1e-5,
                 atol=1e-5,
             )
+        assert int(overflow.dropped) == 0
+        assert int(overflow.padding_skipped) == 2
     """
     result = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(script.replace("__IMPLEMENTATION__", implementation))],
@@ -1172,12 +1377,13 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
     relative_tolerance = _BF16_MOE_RELATIVE_TOLERANCE if dtype == jnp.bfloat16 else _FP32_MOE_RELATIVE_TOLERANCE
     x = x.astype(dtype)
     combine_weights = combine_weights.astype(dtype)
+    token_valid = jnp.arange(tokens) % 4 != 1
     w_up_gate = w_up_gate.astype(dtype)
     w_down = w_down.astype(dtype)
     cotangent = jax.random.normal(jax.random.key(24), x.shape, dtype=dtype)
 
     x_reference = x.astype(jnp.float32)
-    combine_weights_reference = combine_weights.astype(jnp.float32)
+    combine_weights_reference = combine_weights.astype(jnp.float32) * token_valid[:, None]
     w_up_gate_reference = w_up_gate.astype(jnp.float32)
     w_down_reference = w_down.astype(jnp.float32)
     cotangent_reference = cotangent.astype(jnp.float32)
@@ -1196,10 +1402,12 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
     )(x_reference, w_up_gate_reference, w_down_reference)
 
     batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+    token_sharding = NamedSharding(mesh, P(("data", "expert")))
     expert_sharding = NamedSharding(mesh, P("expert", None, None))
     x = jax.sharding.reshard(x, batch_sharding)
     selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
     combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+    token_valid = jax.sharding.reshard(token_valid, token_sharding)
     w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
     w_down = jax.sharding.reshard(w_down, expert_sharding)
     cotangent = jax.sharding.reshard(cotangent, batch_sharding)
@@ -1211,6 +1419,7 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
             combine_weights,
             w_up_gate,
             w_down,
+            token_valid=token_valid,
             implementation=implementation,
             mesh=mesh,
             report_capacity_overflow=True,
@@ -1233,7 +1442,8 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
     for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
         assert np.isfinite(np.asarray(actual_gradient)).all()
         assert relative_max_error(actual_gradient, expected_gradient) < relative_tolerance
-    assert int(overflow.total) == 0
+    assert int(overflow.dropped) == 0
+    assert int(overflow.padding_skipped) == int(jnp.sum(~token_valid)) * topk
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
@@ -1357,7 +1567,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
         w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
         w_down = jax.sharding.reshard(w_down, expert_sharding)
 
-        out, dropped = moe_mlp(
+        out, dispatch_counts = moe_mlp(
             x,
             selected_experts,
             combine_weights,
@@ -1369,8 +1579,8 @@ def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
         )
 
     assert out.shape == (tokens, hidden_dim)
-    assert dropped.total.shape == ()
-    assert int(dropped.total) > 0
+    assert dispatch_counts.dropped.shape == ()
+    assert int(dispatch_counts.dropped) > 0
 
 
 def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
@@ -1402,7 +1612,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
         w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
         w_down = jax.sharding.reshard(w_down, expert_sharding)
 
-        out, dropped = moe_mlp(
+        out, dispatch_counts = moe_mlp(
             x,
             selected_experts,
             combine_weights,
@@ -1414,8 +1624,8 @@ def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
         )
 
     assert out.shape == (tokens, hidden_dim)
-    assert dropped.total.shape == ()
-    assert int(dropped.total) > 0
+    assert dispatch_counts.dropped.shape == ()
+    assert int(dispatch_counts.dropped) > 0
 
 
 def test_ragged_a2a_receiver_clipping_respects_capacity():

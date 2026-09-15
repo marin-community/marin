@@ -40,7 +40,12 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
 from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_REQUIRED_XLA_FLAGS
-from levanter.grug.grug_moe import MoeImplementation
+from levanter.grug.grug_moe import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+    MOE_VALID_ASSIGNMENTS_METRIC,
+    MoeImplementation,
+)
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -714,6 +719,8 @@ def _drop_metrics(
     dropped_assignments: jax.Array,
     sender_dropped_assignments: jax.Array,
     receiver_dropped_assignments: jax.Array,
+    skipped_padding_assignments: jax.Array,
+    valid_assignments: jax.Array,
     *,
     batch_size: int,
     sequence_length: int,
@@ -728,18 +735,25 @@ def _drop_metrics(
     dropped_assignments_host = _sum_int64(dropped_assignments)
     sender_dropped_assignments_host = _sum_int64(sender_dropped_assignments)
     receiver_dropped_assignments_host = _sum_int64(receiver_dropped_assignments)
+    skipped_padding_assignments_host = _sum_int64(skipped_padding_assignments)
+    valid_assignments_host = _sum_int64(valid_assignments)
     if dropped_assignments_host != sender_dropped_assignments_host + receiver_dropped_assignments_host:
         raise ValueError("total dropped assignments must equal sender plus receiver dropped assignments")
-    total_assignments = batch_size * sequence_length * top_k * num_layers
-    receiver_assignments = total_assignments - sender_dropped_assignments_host
+    total_positions = batch_size * sequence_length * top_k * num_layers
+    if valid_assignments_host + skipped_padding_assignments_host != total_positions:
+        raise ValueError("valid plus skipped assignments must equal the padded batch size")
+    receiver_assignments = valid_assignments_host - sender_dropped_assignments_host
     return {
-        "moe/dropped_assignments": dropped_assignments_host,
-        "moe/drop_fraction": dropped_assignments_host / total_assignments,
+        MOE_DROPPED_ASSIGNMENTS_METRIC: dropped_assignments_host,
+        "moe/drop_fraction": dropped_assignments_host / max(valid_assignments_host, 1),
         "moe/sender_dropped_assignments": sender_dropped_assignments_host,
-        "moe/sender_drop_fraction": sender_dropped_assignments_host / total_assignments,
+        "moe/sender_drop_fraction": sender_dropped_assignments_host / max(valid_assignments_host, 1),
         "moe/receiver_dropped_assignments": receiver_dropped_assignments_host,
-        "moe/receiver_drop_fraction": receiver_dropped_assignments_host / total_assignments,
+        "moe/receiver_drop_fraction": receiver_dropped_assignments_host / max(valid_assignments_host, 1),
         "moe/receiver_drop_fraction_of_received": receiver_dropped_assignments_host / max(receiver_assignments, 1),
+        MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: skipped_padding_assignments_host,
+        "moe/skipped_padding_fraction": skipped_padding_assignments_host / total_positions,
+        MOE_VALID_ASSIGNMENTS_METRIC: valid_assignments_host,
     }
 
 
@@ -1204,11 +1218,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                             step=step,
                         )
-                    if "moe/dropped_assignments" in metrics:
+                    if MOE_DROPPED_ASSIGNMENTS_METRIC in metrics:
                         drop_metrics = _drop_metrics(
-                            metrics["moe/dropped_assignments"],
+                            metrics[MOE_DROPPED_ASSIGNMENTS_METRIC],
                             metrics["moe/sender_dropped_assignments"],
                             metrics["moe/receiver_dropped_assignments"],
+                            metrics[MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC],
+                            metrics[MOE_VALID_ASSIGNMENTS_METRIC],
                             batch_size=batch.tokens.shape[0],
                             sequence_length=batch.tokens.shape[1],
                             top_k=config.model.num_experts_per_token,

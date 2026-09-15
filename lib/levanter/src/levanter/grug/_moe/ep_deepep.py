@@ -13,15 +13,17 @@ import jax
 import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
-    CapacityOverflow,
+    _zero_inactive_grouped_rows,
+    MoeDispatchCounts,
     split_moe_w13_output,
 )
+from levanter.grug.sharding import _batch_axes
 from levanter.kernels.deepep import deepep_combine_intranode, deepep_dispatch_intranode, deepep_get_dispatch_layout
 
 
@@ -102,13 +104,14 @@ def _moe_mlp_ep_deepep_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
     combine_weights_local: Float[Array, "Tlocal K"],
+    token_valid_local: Bool[Array, "Tlocal"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
+) -> tuple[Float[Array, "Tlocal H"], MoeDispatchCounts]:
     """DeepEP dispatch/combine path for an intranode expert mesh."""
     del capacity_factor
     local_experts = moe_w13_local.shape[0]
@@ -121,6 +124,8 @@ def _moe_mlp_ep_deepep_local(
 
     ep_size = num_experts // local_experts
     max_recv_tokens = x_local.shape[0] * ep_size
+    selected_experts_local = jnp.where(token_valid_local[:, None], selected_experts_local, -1)
+    combine_weights_local = jnp.where(token_valid_local[:, None], combine_weights_local, 0)
 
     with jax.named_scope("dispatch"):
         with jax.named_scope("deepep_layout"):
@@ -160,15 +165,22 @@ def _moe_mlp_ep_deepep_local(
             num_recv_tokens=num_recv_tokens_scalar,
         )
         x_dispatch = tree_checkpoint_name(local_assignments.x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+        cumulative_group_sizes = jnp.cumsum(local_assignments.local_group_sizes).astype(jnp.int32)
 
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(
-            ragged_dot(x_dispatch, moe_w13_local, local_assignments.local_group_sizes), _CHECKPOINT_EXPERT_HIDDEN
+        w13_out = _zero_inactive_grouped_rows(
+            ragged_dot(x_dispatch, moe_w13_local, local_assignments.local_group_sizes),
+            cumulative_group_sizes,
         )
+        w13_out = tree_checkpoint_name(w13_out, _CHECKPOINT_EXPERT_HIDDEN)
         moe_dim = moe_w2_local.shape[1]
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
-        out_dispatch = tree_checkpoint_name(
+        out_dispatch = _zero_inactive_grouped_rows(
             ragged_dot(activation_fn(gate) * up, moe_w2_local, local_assignments.local_group_sizes),
+            cumulative_group_sizes,
+        )
+        out_dispatch = tree_checkpoint_name(
+            out_dispatch,
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
@@ -192,8 +204,10 @@ def _moe_mlp_ep_deepep_local(
                 num_recv_tokens,
                 is_token_in_rank,
             )
-        dropped_total = jnp.array(0, dtype=jnp.int32)
-    return out_local.astype(x_local.dtype), CapacityOverflow(
-        sender=dropped_total,
-        receiver=jnp.zeros_like(dropped_total),
+        skipped_local = jnp.sum(~token_valid_local, dtype=jnp.int32) * selected_experts_local.shape[1]
+        skipped = jax.lax.psum(skipped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+    return jnp.where(token_valid_local[:, None], out_local, 0).astype(x_local.dtype), MoeDispatchCounts(
+        sender_dropped=jnp.zeros_like(skipped),
+        receiver_dropped=jnp.zeros_like(skipped),
+        padding_skipped=skipped,
     )
