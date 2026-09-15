@@ -9,8 +9,6 @@ from dataclasses import dataclass
 
 from levanter.eval_harness_config import TaskConfig
 
-from marin.evaluation.records import MetricKind
-
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
 
 
@@ -28,9 +26,6 @@ class EvalTaskConfig:
     """Whether scoring executes model-generated code."""
     completion_only: bool = False
     """Whether generation must use the completions API even for chat-template models."""
-    primary_metric: str | None = None
-    metric_kind: MetricKind | None = None
-    expected_items: int | None = None
 
 
 def eval_task_directory(name: str, num_fewshot: int | None, task_alias: str | None) -> str:

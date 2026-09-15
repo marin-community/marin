@@ -330,10 +330,14 @@ def declared_primary_metric(record: EvalRunRecord, sample_task: str) -> str | No
     """Return the metric declaration that applies to a sample task."""
     tasks = record.evaluation.tasks
     if len(tasks) == 1:
-        return tasks[0].primary_metric
+        benchmark = tasks[0].benchmark
+        if benchmark is None:
+            return None
+        return next(metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric)
     for task in tasks:
-        if sample_task == task.name or sample_task.startswith(f"{task.name}_"):
-            return task.primary_metric
+        benchmark = task.benchmark
+        if benchmark is not None and (sample_task == benchmark.task or sample_task.startswith(f"{benchmark.task}_")):
+            return next(metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric)
     return None
 
 

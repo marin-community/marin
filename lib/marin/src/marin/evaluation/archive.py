@@ -59,9 +59,6 @@ SAMPLES_SUFFIX = ".parquet"
 # length-normalized score is the conventional headline. "accuracy" is the evalchemy chat-native
 # benchmarks' key (MATH500).
 PRIMARY_METRIC_PRIORITY = ("exact_match", "accuracy", "acc_norm", "acc", "pass@1")
-AGGREGATE_AVERAGE_SUFFIX = "_avg"
-AGGREGATE_STDERR_SUFFIX = "_std_err"
-
 # Tie-break among same-base metrics that differ only in lm-eval filter. flexible-extract outranks
 # strict-match: chat models solve gsm8k-style problems but rarely emit the strict "#### N" format.
 FILTER_PRIORITY = ("flexible-extract",)

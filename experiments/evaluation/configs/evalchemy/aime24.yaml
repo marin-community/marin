@@ -4,8 +4,5 @@ task_options:
     num_fewshot: 0
     task_alias: aime24
     generation: true
-    primary_metric: accuracy_avg
-    metric_kind: continuous
-    expected_items: 30
 max_tokens: 8192
 runtime_extras: [aime24]

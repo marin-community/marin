@@ -17,6 +17,7 @@ from iris.client.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from marin.evaluation.archive import declared_metric
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
 from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS
 from marin.evaluation.evalchemy.result import EvalchemyResult
@@ -27,7 +28,7 @@ from marin.evaluation.evalchemy.runtime import (
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
 from marin.evaluation.lm_eval_samples import export_lm_eval_samples
-from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, RunStatus, TaskCoverage
+from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalTaskRef, RunStatus, TaskCoverage
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
@@ -119,6 +120,8 @@ class EvalchemyOutcome:
     result: EvalchemyResult
     coverage: dict[str, TaskCoverage]
     recovered_metrics: dict[str, dict[str, float]]
+    canonical_metrics: dict[str, dict[str, float]]
+    tasks: tuple[EvalTaskRef, ...]
 
 
 def _apply_recovered_metrics(
@@ -136,6 +139,29 @@ def _apply_recovered_metrics(
             # The aggregate came from the original lm-eval result, which includes failed requests.
             # Recovered leaves contain successful samples for the measurement adapter to roll up.
             metrics.pop(aggregate, None)
+
+
+def _apply_recovered_canonical_metrics(
+    canonical_metrics: dict[str, dict[str, float]],
+    recovered_metrics: Mapping[str, dict[str, float]],
+    tasks: tuple[EvalTaskRef, ...],
+) -> None:
+    """Project recovered source metrics through the evaluator-recorded vocabulary."""
+    benchmarks = {task.benchmark.task: task.benchmark for task in tasks if task.benchmark is not None}
+    for task_key, recovered in recovered_metrics.items():
+        benchmark = benchmarks.get(task_key.rsplit("/", 1)[-1])
+        if benchmark is None:
+            canonical_metrics.pop(task_key, None)
+            continue
+        normalized: dict[str, float] = {}
+        for metric in benchmark.metrics:
+            picked = declared_metric(recovered, metric.source_name)
+            if picked is not None:
+                normalized[metric.name] = picked[1]
+        if normalized:
+            canonical_metrics[task_key] = normalized
+        else:
+            canonical_metrics.pop(task_key, None)
 
 
 def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir: str) -> str:
@@ -268,7 +294,6 @@ def run_evalchemy(
         export = export_lm_eval_samples(
             output_dir,
             tasks=config.tasks,
-            max_eval_instances=config.max_eval_instances,
         )
     except Exception as exc:
         raise EvalPipelineError(
@@ -289,6 +314,8 @@ def run_evalchemy(
         result=EvalchemyResult(path=output_dir),
         coverage=export.coverage,
         recovered_metrics=export.recovered_metrics,
+        canonical_metrics=export.canonical_metrics,
+        tasks=export.tasks,
     )
 
 
@@ -316,6 +343,8 @@ class EvalchemyExecutor:
             ) from exc
         metrics = outcome.result.task_metrics()
         _apply_recovered_metrics(metrics, outcome.recovered_metrics)
+        canonical_metrics = dict(outcome.canonical_metrics)
+        _apply_recovered_canonical_metrics(canonical_metrics, outcome.recovered_metrics, outcome.tasks)
         if not metrics:
             infrastructure_failures = sum(
                 coverage.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for coverage in outcome.coverage.values()
@@ -333,4 +362,10 @@ class EvalchemyExecutor:
                 jobs=outcome.jobs,
                 coverage=outcome.coverage,
             )
-        return EvaluationOutcome(metrics=metrics, jobs=outcome.jobs, coverage=outcome.coverage)
+        return EvaluationOutcome(
+            metrics=metrics,
+            canonical_metrics=canonical_metrics,
+            tasks=outcome.tasks,
+            jobs=outcome.jobs,
+            coverage=outcome.coverage,
+        )

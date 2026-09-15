@@ -3,5 +3,4 @@ task_options:
   mmlu:
     num_fewshot: 5
     task_alias: mmlu_5shot
-    primary_metric: acc
 max_tokens: 256

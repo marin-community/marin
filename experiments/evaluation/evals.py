@@ -11,8 +11,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
-from marin.evaluation.eval_stats import BINARY_METRICS
-from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyTaskOptions
+from marin.evaluation.evalchemy.config import EvalchemyConfig
 from marin.evaluation.evalchemy.runner import (
     DEFAULT_MAX_GEN_TOKS,
     DEFAULT_NUM_CONCURRENT,
@@ -22,9 +21,9 @@ from marin.evaluation.evalchemy.runner import (
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, ValidatedHarborConfig
-from marin.evaluation.harbor.runner import HARBOR_ACCURACY_METRIC, HarborExecutor
+from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, HarborRef, MetricKind
+from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, HarborRef
 from marin.evaluation.runner import EvalExecutor
 from marin.external_dependencies import EVALCHEMY
 from rigging.secrets import SecretSpec
@@ -32,7 +31,6 @@ from rigging.secrets import SecretSpec
 logger = logging.getLogger(__name__)
 
 _DAYTONA_ENVIRONMENT_TYPE = "daytona"
-_CHAT_NATIVE_TASKS = frozenset({"AIME24", "MATH500", "OlympiadBench", "HumanEvalPlus", "MBPPPlus"})
 _EVALCHEMY_CONFIG_DIR = Path(__file__).with_name("configs") / "evalchemy"
 _HARBOR_CONFIG_DIR = Path(__file__).with_name("configs") / "harbor"
 _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
@@ -68,9 +66,6 @@ class EvalchemyDefinition:
                     generation=task.generation,
                     unsafe_code=task.unsafe_code,
                     completion_only=task.completion_only,
-                    primary_metric=task.primary_metric,
-                    metric_kind=task.metric_kind,
-                    expected_items=task.expected_items,
                 )
                 for task in config.tasks
             ),
@@ -133,6 +128,7 @@ class HarborDefinition:
         return MappingProxyType(secret_env)
 
     def record_ref_for(self, config: ValidatedHarborConfig, runtime_task_limit: int | None) -> EvalRef:
+        benchmark = config.benchmark_for(runtime_task_limit)
         return EvalRef(
             name=self.name,
             mechanism="harbor",
@@ -141,8 +137,7 @@ class HarborDefinition:
                 EvalTaskRef(
                     name=config.record_dataset,
                     num_fewshot=None,
-                    primary_metric=HARBOR_ACCURACY_METRIC,
-                    metric_kind=MetricKind.BINARY,
+                    benchmark=benchmark,
                 ),
             ),
             harbor=HarborRef(
@@ -198,28 +193,6 @@ def harbor_definition(
     )
 
 
-@dataclass(frozen=True)
-class TaskProtocol:
-    primary_metric: str
-    metric_kind: MetricKind
-    expected_items: int | None
-
-
-def _task_protocol(task_name: str, options: EvalchemyTaskOptions | None) -> TaskProtocol:
-    primary_metric = options.primary_metric if options is not None else None
-    if primary_metric is None:
-        raise ValueError(f"Evalchemy task {task_name!r} must declare primary_metric")
-    metric_kind = options.metric_kind if options is not None else None
-    if metric_kind is None:
-        if primary_metric not in BINARY_METRICS:
-            raise ValueError(f"Evalchemy task {task_name!r} must declare metric_kind for metric {primary_metric!r}")
-        metric_kind = MetricKind.BINARY
-    expected_items = options.expected_items if options is not None else None
-    if task_name in _CHAT_NATIVE_TASKS and expected_items is None:
-        raise ValueError(f"Evalchemy chat-native task {task_name!r} must declare expected_items")
-    return TaskProtocol(primary_metric, metric_kind, expected_items)
-
-
 def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConfig:
     """Lower one launch file into Marin's served Evalchemy runner."""
     tasks: list[EvalTaskConfig] = []
@@ -228,7 +201,6 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         num_fewshot = config.num_fewshot
         if options is not None and options.num_fewshot is not None:
             num_fewshot = options.num_fewshot
-        protocol = _task_protocol(task_name, options)
         tasks.append(
             EvalTaskConfig(
                 name=task_name,
@@ -237,9 +209,6 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
                 generation=options.generation if options is not None else False,
                 unsafe_code=options.unsafe_code if options is not None else False,
                 completion_only=options.completion_only if options is not None else False,
-                primary_metric=protocol.primary_metric,
-                metric_kind=protocol.metric_kind,
-                expected_items=protocol.expected_items,
             )
         )
 

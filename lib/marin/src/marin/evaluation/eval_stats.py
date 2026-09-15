@@ -3,13 +3,13 @@
 
 """Eval statistics: what a run measured, over how many items, and how uncertain the answer is.
 
-A benchmark score is a proportion over a finite item set, and a run does not always grade every item
-it set out to grade. This module carries both facts as one type -- :class:`Measurement` holds the
-sufficient statistics (scored items, correct items, recorded dispersion, and the coverage of the
-attempted panel) and the intervals are derived on read, so changing the interval rule never requires
-re-deriving stored data.
+A benchmark score is a mean over a finite item set, and a run does not always grade every item it set
+out to grade. This module carries both facts as one type -- :class:`Measurement` holds the sufficient
+statistics (scored items, binary successes or recorded dispersion, and the coverage of the attempted
+panel) and the intervals are derived on read, so changing the interval rule never requires re-deriving
+stored data.
 
-The estimand is fixed once: **theta, the success rate over the items the run set out to grade.** With
+The estimand is fixed once: **theta, the mean score over the items the run set out to grade.** With
 ``c = n_scored / n_attempted``, ``theta = c * theta_obs + (1 - c) * theta_miss``. ``theta_obs`` is
 estimated from the graded items; ``theta_miss`` is not identified -- a trial that times out is more
 likely to be a hard trial -- so it is bounded rather than imputed, and the reported interval widens by
@@ -42,11 +42,9 @@ ALPHA = 0.05
 # needs a far stricter floor; see :func:`difference_interval`.
 DEFAULT_MIN_COVERAGE = 0.9
 
-# Metrics whose run-level value is a mean of per-item 0/1 outcomes, so (k, n) is recoverable and the
-# Wilson interval applies. Everything else (pass@k estimators above k=1, partial-credit graders, mean rewards)
-# takes the recorded-dispersion path. ``accuracy`` is both evalchemy's chat-native key and Harbor's
-# solved-trial rate; both are per-item binary.
-BINARY_METRICS = frozenset({"acc", "acc_norm", "exact_match", "accuracy", "pass@1"})
+# Legacy records do not carry an evaluator-declared metric kind. These known binary names select the
+# Wilson interval for that fallback path; new records use their benchmark metadata directly.
+BINARY_METRICS = frozenset({"acc", "acc_norm", "exact_match", "accuracy", "normalized_accuracy", "pass@1", "pass_at_1"})
 
 # lm-eval records a task's graded-document count under this key, beside the metrics themselves.
 SAMPLE_COUNT_METRIC = "sample_len"
