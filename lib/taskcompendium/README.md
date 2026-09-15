@@ -413,3 +413,8 @@ The [Clean `.9` review and pruning update](https://huggingface.co/datasets/open-
 attaches the release-balanced 86-archive review and removes four confirmed
 bad or unsupported examples. It contains 46 task rows and 95 lowerings; the
 remaining examples retain their original fixture provenance.
+
+The [schema 0.8 publication](https://huggingface.co/datasets/open-athena/taskcompendium-spike/tree/795eb4e480b8b083c4718fa2ab313cf7a09863b7)
+contains 63 canonical TaskSpec rows and 164 Harbor lowerings. It replaces the
+serialized public Task projection with target bindings and rendering metadata,
+and includes the reviewed coverage-label map and tagging guidance.
