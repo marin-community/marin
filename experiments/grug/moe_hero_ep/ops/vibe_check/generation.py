@@ -3,10 +3,13 @@
 
 """Bounded autoregressive decoding with one random stream per prompt."""
 
+import logging
 from collections.abc import Callable, Sequence
+from time import perf_counter
 from typing import NamedTuple
 
 import numpy as np
+from rigging.timing import RateLimiter
 
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     TOP_TOKEN_COUNT,
@@ -16,6 +19,9 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     TokenProbability,
     TokenScore,
 )
+
+logger = logging.getLogger(__name__)
+PROGRESS_INTERVAL_SECONDS = 30.0
 
 
 class BatchLogprobs[ArrayT](NamedTuple):
@@ -100,8 +106,21 @@ def score_expected(
             tokens[row, : len(full)] = full
             positions[row, : len(continuation)] = np.arange(len(prompt) - 1, len(full) - 1)
             targets[row, : len(continuation)] = continuation
+        logger.info(
+            "Expected scoring: prompts %d-%d/%d, %d reference tokens; start model pass (includes compilation)",
+            start + 1,
+            start + len(prompts),
+            len(prompt_ids),
+            sum(map(len, expected)),
+        )
+        model_started = perf_counter()
         batch_scores = logprobs(tokens, positions, targets)
+        logger.info(
+            "Expected model pass completed in %.1f seconds; decode reference token probabilities",
+            perf_counter() - model_started,
+        )
         for row, ids in enumerate(expected):
+            decode_started = perf_counter()
             scores = [
                 scored_token(
                     token,
@@ -114,6 +133,14 @@ def score_expected(
                 for index, token in enumerate(ids)
             ]
             results.append(decode_scores(scores, decode))
+            logger.info(
+                "Expected scoring: %d/%d prompts completed; prompt=%s, tokens=%d, decoding=%.1f seconds",
+                len(results),
+                len(prompt_ids),
+                spec.prompts[start + row].id,
+                len(ids),
+                perf_counter() - decode_started,
+            )
     return tuple(results)
 
 
@@ -137,6 +164,13 @@ def generate(
     results = []
     for start in range(0, len(prompt_ids), spec.batch_size):
         batch = slice(start, start + spec.batch_size)
+        logger.info(
+            "Generation: prompts %d-%d/%d, limit=%d new tokens per prompt",
+            start + 1,
+            min(start + spec.batch_size, len(prompt_ids)),
+            len(prompt_ids),
+            spec.max_new_tokens,
+        )
         results.extend(
             _generate_batch(
                 spec.model_copy(update={"prompts": spec.prompts[batch]}),
@@ -170,12 +204,25 @@ def _generate_batch(
     stops: list[StopReason | None] = [
         StopReason.CONTEXT_LIMIT if len(ids) == spec.context_length else None for ids in prompt_ids
     ]
-    for _ in range(spec.max_new_tokens):
+    started = perf_counter()
+    progress = RateLimiter(PROGRESS_INTERVAL_SECONDS)
+    model_seconds = 0.0
+    decoding_seconds = 0.0
+    logger.info("Generation: start first model pass (includes compilation); then select and decode token probabilities")
+    for step in range(spec.max_new_tokens):
         if all(stop is not None for stop in stops):
             break
+        model_started = perf_counter()
         scores = np.asarray(logits(tokens, positions), dtype=np.float64)
+        model_seconds += perf_counter() - model_started
+        if step == 0:
+            logger.info(
+                "Generation: first model pass completed in %.1f seconds; start token selection and decoding",
+                model_seconds,
+            )
         if scores.ndim != 2 or scores.shape[0] != batch_size or not np.isfinite(scores).all():
             raise ValueError("Model returned invalid logits")
+        decode_started = perf_counter()
         for row in range(len(prompt_ids)):
             if stops[row] is not None:
                 continue
@@ -209,8 +256,37 @@ def _generate_batch(
                 stops[row] = StopReason.CONTEXT_LIMIT
             elif len(generated[row]) == spec.max_new_tokens:
                 stops[row] = StopReason.MAX_NEW_TOKENS
+            if stops[row] is not None:
+                logger.info(
+                    "Prompt finished: %s, tokens=%d, stop=%s",
+                    spec.prompts[row].id,
+                    len(generated[row]),
+                    stops[row],
+                )
+        decoding_seconds += perf_counter() - decode_started
+        finished = sum(stop is not None for stop in stops)
+        if progress.should_run() or finished == len(prompt_ids):
+            elapsed = perf_counter() - started
+            token_count = sum(map(len, generated))
+            logger.info(
+                "Generation: step %d/%d, prompts finished=%d/%d, generated tokens=%d, "
+                "elapsed=%.1f seconds, tokens/sec=%.2f, model=%.1f seconds, token selection/decoding=%.1f seconds",
+                step + 1,
+                spec.max_new_tokens,
+                finished,
+                len(prompt_ids),
+                token_count,
+                elapsed,
+                token_count / elapsed,
+                model_seconds,
+                decoding_seconds,
+            )
+    logger.info(
+        "Generation loop completed in %.1f seconds; finalize text and token boundaries", perf_counter() - started
+    )
     results = []
     for row, prompt in enumerate(spec.prompts):
+        decode_started = perf_counter()
         assert stops[row] is not None
         results.append(
             Completion(
@@ -221,5 +297,14 @@ def _generate_batch(
                 stop_reason=stops[row],
                 token_scores=decode_scores(token_scores[row], decode),
             )
+        )
+        logger.info(
+            "Completion finalized: %d/%d, prompt=%s, tokens=%d, stop=%s, decoding=%.1f seconds",
+            row + 1,
+            len(spec.prompts),
+            prompt.id,
+            len(generated[row]),
+            stops[row],
+            perf_counter() - decode_started,
         )
     return tuple(results)
