@@ -101,12 +101,15 @@ functionality such as `name_handling`, `numeric_formatting`, or
 
 Use dotted subtags for recurring, more specific functionality. For example, a
 React-heavy web task uses `subject:javascript.react`, and an integration problem
-uses `subject:calculus.integration`. Choose the most specific useful value rather
-than adding both its broad parent and child. Add a new subtag only when the topic
-is likely to recur across task families; do not mint a one-off subject tag that
-merely repeats prompt wording or identifies a narrow source package. Omit broad
-labels such as `general` or `software` when a competency already says what is
-needed.
+uses `subject:calculus.integration`. Store the most specific useful value; do not
+also add its broad parent, since sampling can group a dotted prefix. A task may
+have multiple subject tags when it materially spans independent areas or sibling
+subtags, such as `subject:javascript.react` and `subject:javascript.nodejs`.
+Use that sparingly: do not list incidental technologies. Add a new subtag only
+when the topic is likely to recur across task families; do not mint a one-off
+subject tag that merely repeats prompt wording or identifies a narrow source
+package. Omit broad labels such as `general` or `software` when a competency
+already says what is needed.
 
 ### `artifact` and `context`
 
@@ -228,10 +231,14 @@ improves sampling. Do not use ordinary implementation details or generic
 functionality such as name_handling, numeric_formatting, or data_type_inference as
 subjects. Use dotted subtags for recurring specific functionality: a React-heavy
 web task can use javascript.react and an integration problem can use
-calculus.integration. Choose the most specific useful value, not both a broad
-parent and its child. Add a new subtag only when it is likely to recur across task
-families; do not mint a one-off subject tag that repeats prompt wording or names a
-narrow source package. Do not use broad values such as general or software.
+calculus.integration. Store the most specific useful value, not both a broad
+parent and its child, because sampling can group a dotted prefix. A task may have
+multiple subject tags when it materially spans independent areas or sibling
+subtags, such as javascript.react and javascript.nodejs; use this sparingly and
+do not list incidental technologies. Add a new subtag only when it is likely to
+recur across task families; do not mint a one-off subject tag that repeats prompt
+wording or names a narrow source package. Do not use broad values such as general
+or software.
 
 difficulty (choose exactly one): easy, medium, or hard.
 
