@@ -1,13 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Convert lm-eval's ``--log_samples`` output into the :mod:`marin.evaluation.archive` contract.
+"""Convert historical lm-eval output into the normalized FineStore evaluation contract.
 
 lm-eval (and evalchemy, which drives it) writes one ``samples_<task>_<timestamp>.jsonl`` row per
-evaluated question in its own native shape. This module normalizes those rows into
-:class:`~marin.evaluation.archive.EvalSample` and exports them into the run's finestore archive, preserving
-each source file it read so the archive can be rebuilt from itself. ``marin.evaluation.archive`` owns the
-contract and the archive tables; knowledge of lm-eval's row shape lives here.
+evaluated question in its own native shape. This module owns Marin's compatibility export and rebuild
+path for outputs produced without native FineStore writing. It preserves each source file it reads
+so an archive can be rebuilt from itself.
 
 The same pass measures each task's coverage from the document indices in its per-sample rows.
 lm-eval's aggregate results omit attempted-item counts. The sample indices establish the intended
@@ -24,12 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
 import rigging.filesystem.factory as factory
-from finestore.layout import ARCHIVE_FILE, DATA_DIR, HEAD_FILE, MANIFESTS_DIR, SCHEMAS_DIR, BlobTables
-from finestore.migrations.m0001_manifest import LEGACY_SEAL_FILE
-from finestore.reader import ReadView
-from rigging.filesystem.storage_path import StoragePath, prefix_join
-
-from marin.evaluation.archive import (
+from finestore.eval import (
     ARCHIVE_SAMPLES_TABLE,
     ARCHIVE_STEPS_TABLE,
     SAMPLES_PREFIX,
@@ -41,11 +35,14 @@ from marin.evaluation.archive import (
     Grading,
     Message,
     SampleKind,
-    base_metric,
-    primary_filter,
-    primary_metric,
 )
+from finestore.layout import ARCHIVE_FILE, DATA_DIR, HEAD_FILE, MANIFESTS_DIR, SCHEMAS_DIR, BlobTables
+from finestore.migrations.m0001_manifest import LEGACY_SEAL_FILE
+from finestore.reader import ReadView
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+
 from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC
+from marin.evaluation.metric_selection import base_metric, primary_filter, primary_metric
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, TaskCoverage
 
 logger = logging.getLogger(__name__)
@@ -88,12 +85,8 @@ def is_scratch_artifact(relative_path: str) -> bool:
     return _SCRATCH_SEGMENT.search(relative_path) is not None
 
 
-# --------------------------------------------------------------------------------------------------
-# lm-eval adapter: normalize one --log_samples row into the contract.
-# --------------------------------------------------------------------------------------------------
-
-# Structural lm-eval fields excluded from metric extraction. ``schema_version`` is the row-format
-# stamp and ``metrics`` is the list of metric names.
+# This adapter exists only for historical Marin archives. Native Evalchemy owns the corresponding
+# conversion for new runs; FineStore owns only the normalized schema and storage API.
 _LM_EVAL_STRUCTURAL_KEYS = frozenset(
     {
         "doc",
@@ -103,6 +96,7 @@ _LM_EVAL_STRUCTURAL_KEYS = frozenset(
         "resps",
         "filtered_resps",
         "filter",
+        "filter_variants",
         "metrics",
         "schema_version",
         "task_name",
@@ -114,13 +108,13 @@ _LM_EVAL_STRUCTURAL_KEYS = frozenset(
 
 
 def _loglikelihood_pair(entry) -> tuple[float, bool] | None:
-    """Unwrap a response entry to ``(loglikelihood, is_greedy)``, tolerating a singleton wrapper."""
+    """Unwrap a response entry to ``(loglikelihood, is_greedy)``."""
     if isinstance(entry, list) and len(entry) == 1:
         entry = entry[0]
     if (
         isinstance(entry, list)
         and len(entry) == 2
-        and isinstance(entry[0], (int, float))
+        and isinstance(entry[0], int | float)
         and not isinstance(entry[0], bool)
         and isinstance(entry[1], bool)
     ):
@@ -137,13 +131,11 @@ def _is_multiple_choice(arguments, responses) -> bool:
 
 
 def _choice_labels(doc, count: int) -> list[str]:
-    # arc-style docs carry {"choices": {"label": [...], "text": [...]}}; other tasks (mmlu,
-    # hellaswag) store choices as a plain list, which gets the A/B/C default.
     choices = doc.get("choices") if isinstance(doc, dict) else None
     labels = choices.get("label") if isinstance(choices, dict) else None
     if isinstance(labels, list) and len(labels) == count and all(isinstance(label, str) for label in labels):
         return labels
-    return [chr(ord("A") + i) for i in range(count)]
+    return [chr(ord("A") + index) for index in range(count)]
 
 
 def _resolve_target_choice(target, choices: list[Choice]) -> int | None:
@@ -153,9 +145,9 @@ def _resolve_target_choice(target, choices: list[Choice]) -> int | None:
         return target if 0 <= target < len(choices) else None
     if isinstance(target, str):
         trimmed = target.strip()
-        for i, choice in enumerate(choices):
+        for index, choice in enumerate(choices):
             if choice.label == trimmed or choice.text.strip() == trimmed:
-                return i
+                return index
         if trimmed.isdigit():
             index = int(trimmed)
             return index if 0 <= index < len(choices) else None
@@ -182,28 +174,14 @@ def _parse_chat_messages(text: str) -> list[Message] | None:
 
 
 def _sample_metrics(raw: dict) -> dict[str, float]:
-    metrics: dict[str, float] = {}
-    for key, value in raw.items():
-        if key in _LM_EVAL_STRUCTURAL_KEYS or isinstance(value, bool):
-            continue
-        if isinstance(value, (int, float)):
-            metrics[key] = float(value)
-    return metrics
-
-
-def _correct(metrics: dict[str, float]) -> bool | None:
-    picked = primary_metric(metrics)
-    if picked is None:
-        return None
-    return picked[1] >= 1.0
+    return {
+        key: float(value)
+        for key, value in raw.items()
+        if key not in _LM_EVAL_STRUCTURAL_KEYS and not isinstance(value, bool) and isinstance(value, int | float)
+    }
 
 
 def _lm_eval_grading(metrics: dict[str, float], extraction_filter: str | None) -> Grading | None:
-    """The explicit grading for an lm-eval sample: its headline metric, filter, score, and pass flag.
-
-    Per-sample rows name the extraction filter in ``filter``. Aggregate metric keys use a
-    ``,<filter>`` suffix. This accepts both encodings.
-    """
     picked = primary_metric(metrics)
     if picked is None:
         return None
@@ -219,30 +197,20 @@ def _lm_eval_grading(metrics: dict[str, float], extraction_filter: str | None) -
 
 
 def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
-    """Normalize one lm-eval ``--log_samples`` row into an :class:`EvalSample`.
-
-    Multiple-choice rows carry one ``arguments`` entry per choice (``[context, continuation]``,
-    context identical across entries) and per-choice ``[loglikelihood, is_greedy]`` responses; the
-    model's pick is the loglikelihood argmax and the gold index is resolved from ``target`` (an
-    index, a label, or the choice text). Generation rows carry a single prompt -- raw text, or a
-    JSON-encoded chat message list when the chat API served the request.
-
-    A task that applies several extraction filters emits one row per (document, filter), each with
-    its own responses and score. The grading and archive identity include the filter so every
-    variant remains available.
-    """
+    """Normalize one historical lm-eval ``--log_samples`` filter row."""
     arguments = raw.get("arguments")
     responses = raw.get("resps")
     doc = raw.get("doc")
     target = raw.get("target")
     metrics = _sample_metrics(raw)
     extraction_filter = raw.get("filter")
+    grading = _lm_eval_grading(metrics, extraction_filter if isinstance(extraction_filter, str) else None)
     common = {
         "task": task,
         "doc_id": str(raw.get("doc_id")),
         "metrics": metrics,
-        "correct": _correct(metrics),
-        "grading": _lm_eval_grading(metrics, extraction_filter if isinstance(extraction_filter, str) else None),
+        "correct": grading.passed if grading is not None else None,
+        "grading": grading,
         "target_text": target if isinstance(target, str) else json.dumps(target, ensure_ascii=False),
         "doc": doc if isinstance(doc, str) else json.dumps(doc, ensure_ascii=False),
     }
@@ -250,12 +218,14 @@ def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
     if isinstance(arguments, list) and isinstance(responses, list) and _is_multiple_choice(arguments, responses):
         labels = _choice_labels(doc, len(arguments))
         choices = []
-        for i, entry in enumerate(arguments):
+        for index, entry in enumerate(arguments):
             text = entry[1] if isinstance(entry, list) and len(entry) > 1 and isinstance(entry[1], str) else ""
-            pair = _loglikelihood_pair(responses[i])
+            pair = _loglikelihood_pair(responses[index])
             loglikelihood, is_greedy = pair if pair is not None else (None, None)
-            choices.append(Choice(label=labels[i], text=text, loglikelihood=loglikelihood, is_greedy=is_greedy))
-        scored = [(choice.loglikelihood, i) for i, choice in enumerate(choices) if choice.loglikelihood is not None]
+            choices.append(Choice(label=labels[index], text=text, loglikelihood=loglikelihood, is_greedy=is_greedy))
+        scored = [
+            (choice.loglikelihood, index) for index, choice in enumerate(choices) if choice.loglikelihood is not None
+        ]
         context = arguments[0][0] if isinstance(arguments[0], list) and isinstance(arguments[0][0], str) else ""
         return EvalSample(
             kind=SampleKind.MULTIPLE_CHOICE,
@@ -293,6 +263,33 @@ def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
     )
 
 
+def samples_from_lm_eval(task: str, raw: dict) -> list[EvalSample]:
+    """Normalize a historical Evalchemy record into its extraction-filter rows."""
+    variants = raw.get("filter_variants")
+    if not isinstance(variants, list) or not variants:
+        return [sample_from_lm_eval(task, raw)]
+
+    samples = []
+    for variant in variants:
+        if not isinstance(variant, dict):
+            raise ValueError("lm-eval filter_variants entries must be mappings")
+        metrics = variant.get("metrics", {})
+        if not isinstance(metrics, dict):
+            raise ValueError("lm-eval filter_variants metrics must be a mapping")
+        samples.append(
+            sample_from_lm_eval(
+                task,
+                {
+                    **raw,
+                    **metrics,
+                    "filter": variant.get("filter"),
+                    "filtered_resps": variant.get("filtered_resps", []),
+                },
+            )
+        )
+    return samples
+
+
 # --------------------------------------------------------------------------------------------------
 # Coverage: what a task's own sample rows say about how much of it ran.
 # --------------------------------------------------------------------------------------------------
@@ -324,7 +321,7 @@ def task_coverage_and_metrics(samples: Sequence[EvalSample]) -> tuple[TaskCovera
 
     Ungraded documents and failed requests are unscored. Empty model completions remain scored and
     count as unanswered. For tasks with several extraction filters, coverage uses the filter chosen
-    by :func:`~marin.evaluation.archive.primary_filter`. Recovered metrics retain every filter.
+    by :func:`~marin.evaluation.metric_selection.primary_filter`. Recovered metrics retain every filter.
     """
     graded: dict[str, list[EvalSample]] = {}
     recovered_values: dict[str, list[float]] = {}
@@ -511,7 +508,7 @@ def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> 
         logger.warning("samples file %s is empty; skipping archive export", filename)
         return []
     task = _task_from_filename(filename, ".jsonl")
-    samples = [sample_from_lm_eval(task, raw) for raw in rows]
+    samples = [sample for raw in rows for sample in samples_from_lm_eval(task, raw)]
     for sample in samples:
         store.add_sample(sample)
     return samples

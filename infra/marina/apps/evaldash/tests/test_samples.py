@@ -6,8 +6,7 @@ import json
 import pyarrow as pa
 import pyarrow.parquet as pq
 from evaldash.samples import fetch_artifact, fetch_samples, list_sample_tasks
-from fsspec.core import url_to_fs
-from marin.evaluation.archive import (
+from finestore.eval import (
     SAMPLES_MERGE_KEY,
     Choice,
     EvalSample,
@@ -16,6 +15,8 @@ from marin.evaluation.archive import (
     sample_to_archive_row,
     write_sample_parquet,
 )
+from fsspec.core import url_to_fs
+from marin.evaluation.harbor.trajectory import archive_trajectory
 from marin.evaluation.lm_eval_samples import export_lm_eval_samples, sample_from_lm_eval
 
 
@@ -326,7 +327,13 @@ def test_fetch_artifact_keys_cache_by_run(tmp_path):
     run_b = str(tmp_path / "b" / "results")
     for root, tag in ((run_a, "a"), (run_b, "b")):
         store = EvaluationStore.open(root, writer_id="w")
-        stored = store.add_trajectory(json.dumps({"run": tag}).encode(), task="t", doc_id="d", trial_id="trial-1")
+        stored = archive_trajectory(
+            store,
+            json.dumps({"run": tag}).encode(),
+            task="t",
+            doc_id="d",
+            trial_id="trial-1",
+        )
         assert stored.uri == uri
         store.seal()
         store.close()
