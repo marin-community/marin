@@ -128,12 +128,10 @@ def expected_logprobs(
 def sample(request: SampleRequest, store_root: str) -> None:
     """Run one rack of native inference and commit one validated result on process zero."""
     total = Timer()
-    logger.info(
-        "Initialize distributed sampler: checkpoint step=%d, sample=%s", request.checkpoint.step, request.sample_id
-    )
     DistributedConfig().initialize()
     # Each rank keeps warnings and errors. Process zero writes shared progress.
     configure_logging(logging.INFO if jax.process_index() == 0 else logging.WARNING)
+    logger.info("Sampler: checkpoint step=%d, sample=%s", request.checkpoint.step, request.sample_id)
     logger.info(
         "Distributed initialization completed in %.1f seconds: processes=%d, GPUs=%d, prompts=%d",
         total.elapsed_seconds(),
@@ -245,7 +243,7 @@ def sample(request: SampleRequest, store_root: str) -> None:
 
 
 def main() -> None:
-    configure_logging()
+    configure_logging(logging.WARNING)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--store-root", required=True)
