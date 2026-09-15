@@ -312,6 +312,58 @@ def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
     np.testing.assert_allclose(np.asarray(y_default), np.asarray(y_ring), rtol=1e-5, atol=1e-5)
 
 
+def test_moe_mlp_scatter_matches_dense_value_and_gradients():
+    x, _, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(32),
+        tokens=16,
+        hidden_dim=16,
+        intermediate_dim=24,
+        num_experts=8,
+        topk=4,
+    )
+    selected_experts = _make_unique_topk_experts(tokens=16, topk=4, num_experts=8)
+
+    def actual(x, combine_weights, w_up_gate, w_down):
+        return moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="scatter",
+            mesh=None,
+        )
+
+    def reference(x, combine_weights, w_up_gate, w_down):
+        return _dense_moe_output(x, selected_experts, combine_weights, w_up_gate, w_down)
+
+    # TPU otherwise permits reduced-precision float32 matrix products, and the
+    # grouped and dense contractions can choose different lowering schedules.
+    # This test is about dispatch/combine semantics, not matmul precision.
+    with jax.default_matmul_precision("highest"):
+        actual_value, actual_gradients = jax.value_and_grad(lambda *args: jnp.sum(actual(*args)))(
+            x,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+        reference_value, reference_gradients = jax.value_and_grad(lambda *args: jnp.sum(reference(*args)))(
+            x,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+
+    np.testing.assert_allclose(np.asarray(actual_value), np.asarray(reference_value), rtol=1e-5, atol=1e-5)
+    for actual_gradient, reference_gradient in zip(actual_gradients, reference_gradients, strict=True):
+        np.testing.assert_allclose(
+            np.asarray(actual_gradient),
+            np.asarray(reference_gradient),
+            rtol=1e-4,
+            atol=1e-4,
+        )
+
+
 def test_deepep_local_assignment_packing_uses_local_expert_ids():
     recv_x = jnp.array(
         [
