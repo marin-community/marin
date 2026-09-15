@@ -7,8 +7,9 @@ The group launcher serves a model once and hands this runner an OpenAI endpoint;
 Harbor agent at it (``hosted_vllm/<served-name>``) and runs the dataset's trials on the configured
 sandbox environment. Harbor writes each native result and normalized evaluation sample directly to
 the run's FineStore archive. This module reads Harbor's durable trial results only to compute the
-aggregate record metrics and coverage. A completed trial survives a driver killed before the job
-returns, and Harbor's own per-trial resume reads it back from that path on the next run.
+aggregate record metrics and coverage. Harbor also keeps its trial tree under the results root, so a
+completed trial survives a driver killed before the job returns and Harbor's own per-trial resume
+reads it back on the next run.
 
 The ``harbor`` dependency is optional and imported lazily, so importing this module never requires it.
 """

@@ -190,8 +190,6 @@ def _write_evalchemy_output(
     model_dir = StoragePath(output_dir) / task_dir / "model"
     model_dir.mkdirs()
     (model_dir / "results_20260807.json").write_text(json.dumps({"results": results}))
-    for task, rows in samples.items():
-        (model_dir / f"samples_{task}_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
     store = EvaluationStore.open(output_dir, writer_id="evalchemy-test")
     try:
         for task, rows in samples.items():
@@ -253,14 +251,13 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
 
 
-def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypatch):
+def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypatch):
     output_dir = str(StoragePath("memory://evalchemy-export-failure") / tmp_path.name)
     model_dir = StoragePath(output_dir) / "gsm8k_5shot" / "model"
     model_dir.mkdirs()
     (model_dir / "results_20260807.json").write_text(
         json.dumps({"results": {"gsm8k": {"exact_match,flexible-extract": 0.75}}})
     )
-    (model_dir / "samples_gsm8k_20260807.jsonl").write_text('{"unterminated": "sample\n')
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",

@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Convert historical lm-eval output into the normalized FineStore evaluation contract.
+"""Support legacy lm-eval exports and summarize native Evalchemy output.
 
 lm-eval (and evalchemy, which drives it) writes one ``samples_<task>_<timestamp>.jsonl`` row per
 evaluated question in its own native shape. This module owns Marin's compatibility export and rebuild
 path for outputs produced without native FineStore writing. It preserves each source file it reads
-so an archive can be rebuilt from itself.
+so an archive can be rebuilt from itself. For native runs, Marin reads Evalchemy's normalized table
+to calculate record coverage; Evalchemy owns conversion from the lm-eval row shape.
 
 The same pass measures each task's coverage from the document indices in its per-sample rows.
 lm-eval's aggregate results omit attempted-item counts. The sample indices establish the intended
@@ -35,6 +36,7 @@ from finestore.eval import (
     Grading,
     Message,
     SampleKind,
+    sample_from_archive_row,
 )
 from finestore.layout import ARCHIVE_FILE, DATA_DIR, HEAD_FILE, MANIFESTS_DIR, SCHEMAS_DIR, BlobTables
 from finestore.migrations.m0001_manifest import LEGACY_SEAL_FILE
@@ -73,6 +75,7 @@ _CONTENT_TYPES = {
 _SCRATCH_SEGMENT = re.compile(r"(?:^|/)tmp[a-z0-9_]{6,}/")
 _INFRASTRUCTURE_ERROR_PREFIX = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}]"
 _NATIVE_EVALCHEMY_SOURCE_ROOT = PurePosixPath(prefix_join(SOURCES_PREFIX, "evalchemy"))
+_NATIVE_SOURCE_DIR = "native"
 
 
 def is_scratch_artifact(relative_path: str) -> bool:
@@ -449,15 +452,19 @@ class _SampleExportBuilder:
 
     def add_source(self, name: str, payload: bytes) -> list[EvalSample]:
         samples = _lm_eval_samples(name.rsplit("/", 1)[-1], payload)
+        self.add_samples(name, samples)
+        return samples
+
+    def add_samples(self, name: str, samples: Sequence[EvalSample]) -> None:
+        """Add one task source's already-normalized samples to the summary."""
         self.samples += len(samples)
         if not samples:
-            return samples
+            return
         task_key = self.task_keys[name]
         task_coverage_result, task_metrics = task_coverage_and_metrics(samples)
         self.coverage[task_key] = task_coverage_result
         if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
             self.recovered_metrics[task_key] = task_metrics
-        return samples
 
     def build(self) -> SampleExport:
         return SampleExport(
@@ -506,22 +513,28 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> Sa
 
 def _is_native_evalchemy_source(name: str) -> bool:
     path = PurePosixPath(name)
-    return path.is_relative_to(_NATIVE_EVALCHEMY_SOURCE_ROOT) and path.parent.name == "native"
+    return path.is_relative_to(_NATIVE_EVALCHEMY_SOURCE_ROOT) and path.parent.name == _NATIVE_SOURCE_DIR
 
 
 def summarize_native_eval_samples(out_path: str) -> SampleExport:
-    """Summarize Evalchemy's native FineStore sources without rewriting its sample table."""
+    """Summarize Evalchemy's normalized FineStore samples without rewriting its table."""
     reader = ReadView(out_path)
     sources = tuple(name for name in preserved_sample_sources(out_path) if _is_native_evalchemy_source(name))
     if not sources:
         raise FileNotFoundError(f"archive at {out_path!r} preserves no native Evalchemy sample sources")
 
+    table = reader.scan(ARCHIVE_SAMPLES_TABLE)
+    if table is None:
+        raise FileNotFoundError(f"archive at {out_path!r} contains no normalized evaluation samples")
+    by_task: dict[str, list[EvalSample]] = {}
+    for row in table.to_pylist(maps_as_pydicts="strict"):
+        sample = sample_from_archive_row(row)
+        by_task.setdefault(sample.task, []).append(sample)
+
     summary = _SampleExportBuilder.for_sources(sources)
     for name in sources:
-        payload = reader.read_blob(name)
-        if payload is None:
-            raise FileNotFoundError(f"archive at {out_path!r} lists source blob {name!r} but cannot read it")
-        summary.add_source(name, payload)
+        task = _task_from_filename(PurePosixPath(name).name, ".jsonl")
+        summary.add_samples(name, by_task.get(task, []))
     return summary.build()
 
 
