@@ -4,6 +4,7 @@
 """Bounded autoregressive decoding with one random stream per prompt."""
 
 from collections.abc import Callable, Sequence
+from typing import NamedTuple
 
 import numpy as np
 
@@ -15,6 +16,12 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     TokenProbability,
     TokenScore,
 )
+
+
+class BatchLogprobs[ArrayT](NamedTuple):
+    token_logprobs: ArrayT
+    top_token_ids: ArrayT
+    top_logprobs: ArrayT
 
 
 def decode_scores(scores: Sequence[TokenScore], decode: Callable[[list[int]], str]) -> tuple[TokenScore, ...]:
@@ -58,7 +65,7 @@ def score_expected(
     expected_ids: Sequence[Sequence[int]],
     *,
     eos_token_id: int,
-    logprobs: Callable[[np.ndarray, np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray, np.ndarray]],
+    logprobs: Callable[[np.ndarray, np.ndarray, np.ndarray], BatchLogprobs[np.ndarray]],
     decode: Callable[[list[int]], str],
 ) -> tuple[tuple[TokenScore, ...], ...]:
     """Score references with their own prefixes, including the first expected token.
@@ -86,10 +93,16 @@ def score_expected(
             tokens[row, : len(full)] = full
             positions[row, : len(continuation)] = np.arange(len(prompt) - 1, len(full) - 1)
             targets[row, : len(continuation)] = continuation
-        values, top_ids, top_values = logprobs(tokens, positions, targets)
+        batch_scores = logprobs(tokens, positions, targets)
         for row, ids in enumerate(expected):
             scores = [
-                scored_token(token, float(values[row, index]), top_ids[row, index], top_values[row, index], decode)
+                scored_token(
+                    token,
+                    float(batch_scores.token_logprobs[row, index]),
+                    batch_scores.top_token_ids[row, index],
+                    batch_scores.top_logprobs[row, index],
+                    decode,
+                )
                 for index, token in enumerate(ids)
             ]
             results.append(decode_scores(scores, decode))

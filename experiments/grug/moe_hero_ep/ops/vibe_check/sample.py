@@ -36,7 +36,7 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     SampleStore,
     digest,
 )
-from experiments.grug.moe_hero_ep.ops.vibe_check.generation import generate, score_expected
+from experiments.grug.moe_hero_ep.ops.vibe_check.generation import BatchLogprobs, generate, score_expected
 from experiments.grug.moe_hero_ep.train import _apply_qb_betas
 
 COMPUTE_POLICY = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
@@ -95,8 +95,12 @@ def next_logits(model: Transformer, tokens: jax.Array, positions: jax.Array) -> 
 @eqx.filter_jit
 def expected_logprobs(
     model: Transformer, tokens: jax.Array, positions: jax.Array, targets: jax.Array
-) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Score all reference positions with one causal model pass and a bounded vocabulary projection."""
+) -> BatchLogprobs[jax.Array]:
+    """Return target and top-five log probabilities for each supplied prediction position.
+
+    Target scores have shape ``[batch, position]``. Top IDs and scores have shape
+    ``[batch, position, min(5, vocabulary)]``. All outputs are replicated.
+    """
     hidden, _ = model(tokens)
     selected = hidden.at[jnp.arange(tokens.shape[0])[:, None], positions].get(out_sharding=P())
     targets = jax.sharding.reshard(targets, P())
@@ -107,11 +111,11 @@ def expected_logprobs(
         values = jax.nn.log_softmax(jax.sharding.reshard(logits, P()), axis=-1)
         top_values, top_ids = jax.lax.top_k(values, min(TOP_TOKEN_COUNT, values.shape[-1]))
         chosen = jnp.take_along_axis(values, target[:, None], axis=-1)[:, 0]
-        return chosen, top_ids, top_values
+        return BatchLogprobs(chosen, top_ids, top_values)
 
     # Project one position at a time to keep the full sequence of vocabulary logits out of memory.
     scores = jax.lax.map(project, (jnp.swapaxes(selected, 0, 1), jnp.swapaxes(targets, 0, 1)))
-    return tuple(jax.sharding.reshard(jnp.swapaxes(value, 0, 1), P()) for value in scores)
+    return jax.tree.map(lambda value: jax.sharding.reshard(jnp.swapaxes(value, 0, 1), P()), scores)
 
 
 def sample(request: SampleRequest, store_root: str) -> None:
@@ -149,15 +153,12 @@ def sample(request: SampleRequest, store_root: str) -> None:
             last = jax.make_array_from_callback(positions.shape, sharding, lambda index: positions[index])
             return np.asarray(next_logits(model, ids, last))
 
-        def logprobs(
-            tokens: np.ndarray, positions: np.ndarray, targets: np.ndarray
-        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        def logprobs(tokens: np.ndarray, positions: np.ndarray, targets: np.ndarray) -> BatchLogprobs[np.ndarray]:
             arrays = [
                 jax.make_array_from_callback(value.shape, sharding, lambda index, value=value: value[index])
                 for value in (tokens, positions, targets)
             ]
-            values, top_ids, top_values = expected_logprobs(model, *arrays)
-            return np.asarray(values), np.asarray(top_ids), np.asarray(top_values)
+            return jax.tree.map(np.asarray, expected_logprobs(model, *arrays))
 
         expected_scores = score_expected(
             request.spec,
