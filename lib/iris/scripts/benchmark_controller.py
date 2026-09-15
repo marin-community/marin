@@ -99,14 +99,11 @@ from iris.cluster.controller.schema import (
     worker_attributes_table,
     workers_table,
 )
-from iris.cluster.controller.service import (
-    USER_JOB_STATES,
-    _tasks_for_listing,
-    _worker_roster,
-)
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
+from iris.cluster.controller.tasks import tasks_for_listing
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.controller.workers import worker_roster
+from iris.cluster.types import USER_JOB_STATES, AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -823,7 +820,7 @@ def load_get_autoscaler_status(harness: RpcHarness, db: ControllerDB, rps: float
 
 
 def load_get_process_status(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
-    roster = _worker_roster(db)
+    roster = worker_roster(db)
     if not roster:
         return None
     worker_id = str(next(iter(roster)))
@@ -1416,12 +1413,12 @@ def benchmark_dashboard(db: ControllerDB) -> None:
 
     # Worker roster + running map drives ListWorkers.
     def _list_workers():
-        roster = _worker_roster(db)
+        roster = worker_roster(db)
         if roster:
             with db.read_snapshot() as tx:
                 reads.running_tasks_by_worker(tx, {w[0].worker_id for w in roster})
 
-    bench(f"RPC: ListWorkers (n={len(_worker_roster(db))})", _list_workers)
+    bench(f"RPC: ListWorkers (n={len(worker_roster(db))})", _list_workers)
 
     # Sample job for ListTasks.
     with db.read_snapshot() as _tx:
@@ -1437,7 +1434,7 @@ def benchmark_dashboard(db: ControllerDB) -> None:
 
         def _list_tasks():
             with db.read_snapshot() as snap:
-                tasks = _tasks_for_listing(snap, job_id=sample_job)
+                tasks = tasks_for_listing(snap, job_id=sample_job)
             _worker_addresses_for_tasks(db, tasks)
 
         bench("RPC: ListTasks (one job)", _list_tasks)

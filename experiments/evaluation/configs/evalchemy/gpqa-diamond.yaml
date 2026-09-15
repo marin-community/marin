@@ -1,0 +1,11 @@
+tasks: [GPQADiamond]
+task_options:
+  GPQADiamond:
+    num_fewshot: 0
+    task_alias: gpqa-diamond
+    generation: true
+apply_chat_template: true
+batch_size: 1
+seed: 42
+max_tokens: 32768
+runtime_extras: [gpqadiamond]

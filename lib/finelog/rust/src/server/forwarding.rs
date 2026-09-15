@@ -51,6 +51,7 @@
 //! nothing here can take the store down.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -69,7 +70,10 @@ use tokio::task::JoinHandle;
 
 use crate::errors::StatsError;
 use crate::policies::storage_policy_for;
-use crate::proto::finelog::stats::{RegisterTableRequest, StatsServiceClient, WriteRowsRequest};
+use crate::proto::finelog::stats::{
+    RegisterTableRequest, ReportRelayNamespaceStatus, ReportRelayStatusRequest, StatsServiceClient,
+    WriteRowsRequest,
+};
 use crate::query::{
     make_ctx, run_query_over, run_within_query_timeout, QueryResult, RegisteredProvider,
 };
@@ -89,6 +93,11 @@ use crate::telemetry_policy::{FINELOG_NAMESPACE, TELEMETRY_NAMESPACE};
 /// progress. Backlogged namespaces trigger another round immediately, so throughput
 /// does not depend on this cadence.
 const FORWARD_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Relay liveness travels independently of row delivery. This cadence is short enough
+/// for a two-minute missing-heartbeat alert to tolerate several dropped reports.
+const RELAY_STATUS_INTERVAL: Duration = Duration::from_secs(30);
+const RELAY_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A relay's bounded internal scan may need to open a cold set of remote L0s.
 /// Keep its recovery budget independent of the public Query RPC deadline.
@@ -312,6 +321,8 @@ pub struct Forwarder<T = HttpsTransport> {
     /// The last source schema registered for each namespace. A local additive schema
     /// change must be sent to the hub before rows using its new columns are written.
     registered: Mutex<HashMap<String, Schema>>,
+    boot_id: String,
+    report_sequence: AtomicU64,
 }
 
 impl Forwarder<HttpsTransport> {
@@ -331,6 +342,10 @@ where
     T: connectrpc::client::ClientTransport,
     <T::ResponseBody as http_body::Body>::Error: std::fmt::Display,
 {
+    pub fn config(&self) -> &ForwardingConfig {
+        &self.config
+    }
+
     fn with_client(
         store: Arc<Store>,
         config: ForwardingConfig,
@@ -345,18 +360,27 @@ where
             lag_warning_seqs: FORWARD_LAG_WARNING_SEQS,
             warned_lag: Mutex::new(HashSet::new()),
             registered: Mutex::new(HashMap::new()),
+            boot_id: uuid::Uuid::new_v4().to_string(),
+            report_sequence: AtomicU64::new(1),
         }
     }
 
     /// Run until `stop` latches. Errors are logged and retried on the next tick; this
     /// never returns an error, because a store whose forwarding is broken must keep
     /// serving.
-    pub async fn run(&self, mut stop: watch::Receiver<bool>) {
+    pub async fn run(&self, stop: watch::Receiver<bool>) {
         tracing::info!(
             target = %self.config.target,
             cluster = %self.config.cluster,
             "finelog forwarder: started"
         );
+        let forwarding = self.run_forwarding(stop.clone());
+        let status = self.run_status_reports(stop);
+        tokio::join!(forwarding, status);
+        tracing::info!("finelog forwarder: stopped");
+    }
+
+    async fn run_forwarding(&self, mut stop: watch::Receiver<bool>) {
         if let Err(error) = self.ensure_progress_namespace().await {
             tracing::warn!(error = %error, "finelog forwarder: registering progress telemetry failed");
         }
@@ -381,7 +405,65 @@ where
                 _ = tokio::time::sleep(FORWARD_INTERVAL) => {}
             }
         }
-        tracing::info!("finelog forwarder: stopped");
+    }
+
+    async fn run_status_reports(&self, mut stop: watch::Receiver<bool>) {
+        let mut interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + RELAY_STATUS_INTERVAL,
+            RELAY_STATUS_INTERVAL,
+        );
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = stop.changed() => break,
+                _ = interval.tick() => {
+                    if let Err(error) = self.report_status().await {
+                        tracing::warn!(%error, "finelog forwarder: relay status report failed");
+                    }
+                }
+            }
+        }
+    }
+
+    async fn report_status(&self) -> Result<(), String> {
+        let mut namespaces = Vec::new();
+        for (name, _schema, stats, _policy) in self
+            .store
+            .list_namespaces_with_stats()
+            .map_err(|error| error.to_string())?
+        {
+            let published_high_water = self
+                .store
+                .namespace_published_seq(&name)
+                .map_err(|error| error.to_string())?;
+            let settled_cursor = self
+                .store
+                .forward_cursor(&self.config.target, &name)
+                .map_err(|error| error.to_string())?;
+            namespaces.push(ReportRelayNamespaceStatus {
+                namespace: Some(name),
+                visible_high_water: Some(stats.max_seq),
+                published_high_water: Some(published_high_water),
+                settled_cursor,
+                ..Default::default()
+            });
+        }
+        let request = ReportRelayStatusRequest {
+            boot_id: Some(self.boot_id.clone()),
+            report_sequence: Some(self.report_sequence.fetch_add(1, Ordering::Relaxed)),
+            target: Some(self.config.target.clone()),
+            namespaces,
+            ..Default::default()
+        };
+        let bearer = self.minter.bearer()?;
+        let options = CallOptions::default()
+            .with_timeout(RELAY_STATUS_TIMEOUT)
+            .with_header("authorization", format!("Bearer {bearer}"));
+        self.client
+            .report_relay_status_with_options(request, options)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(())
     }
 
     /// Give every live namespace one batch-sized turn. [`ForwardTurn::MoreRows`] means

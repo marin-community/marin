@@ -8,16 +8,23 @@ import pytest
 from finestore.reader import ReadView
 from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor import driver_config, runner
+from marin.evaluation.harbor.agent_context import (
+    DEFAULT_MODEL_INFO,
+    reconciled_model_info,
+    served_model_info,
+)
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
     HarborBackendsUnavailable,
     HarborDatasetKind,
+    HarborErrorTaxonomy,
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
 )
 from marin.evaluation.harbor.runner import (
     HarborExecutor,
     HarborTrial,
+    _read_trial,
     _read_trials,
     _write_archive,
 )
@@ -27,6 +34,14 @@ from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes
 from rigging.filesystem.storage_path import StoragePath
+
+_ERROR_TAXONOMY = HarborErrorTaxonomy(
+    infrastructure=frozenset({"InfrastructureError", "InternalServerError"}),
+    agent=frozenset({"AgentError", "AgentTimeoutError"}),
+    passthrough=frozenset({"PassthroughError"}),
+    undecided=frozenset({"VerifierTimeoutError"}),
+    commit="1" * 40,
+)
 
 
 def _running_model() -> RunningModel:
@@ -67,7 +82,53 @@ def _validated_config(
         workspace_dataset_path=workspace_dataset_path,
         agent=agent,
         environment="daytona",
+        error_taxonomy=_ERROR_TAXONOMY,
+        max_input_tokens=32768,
+        max_output_tokens=8192,
     )
+
+
+def test_reconciled_model_info_takes_context_limits_from_the_served_model():
+    served = served_model_info(max_model_len=1048576, max_gen_toks=393216)
+
+    assert reconciled_model_info(served, None) == {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    }
+
+
+def test_reconciled_model_info_keeps_harbor_defaults_when_the_model_states_no_limits():
+    served = served_model_info(max_model_len=None, max_gen_toks=None)
+
+    assert reconciled_model_info(served, {"input_cost_per_token": 1.5}) == {
+        **DEFAULT_MODEL_INFO,
+        "input_cost_per_token": 1.5,
+    }
+
+
+@pytest.mark.parametrize("policy_max_input_tokens", [64512, 65536])
+def test_reconciled_model_info_keeps_a_policy_limit_within_the_served_window(policy_max_input_tokens):
+    served = served_model_info(max_model_len=65536, max_gen_toks=16384)
+
+    resolved = reconciled_model_info(served, {"max_input_tokens": policy_max_input_tokens})
+
+    assert (resolved["max_input_tokens"], resolved["max_output_tokens"]) == (policy_max_input_tokens, 16384)
+
+
+@pytest.mark.parametrize(
+    ("policy", "message"),
+    [
+        ({"max_input_tokens": 64512}, r"64512.*serve\.max_model_len is only 32768"),
+        ({"max_output_tokens": 16384}, r"16384.*generation\.max_gen_toks is only 8192"),
+    ],
+)
+def test_reconciled_model_info_rejects_a_policy_limit_above_the_served_window(policy, message):
+    served = served_model_info(max_model_len=32768, max_gen_toks=8192)
+
+    with pytest.raises(ValueError, match=message):
+        reconciled_model_info(served, policy)
 
 
 def _write_job_record(job_dir: Path, n_total_trials: int) -> None:
@@ -175,7 +236,7 @@ def test_read_trials_and_archive_captures_trajectory(tmp_path):
     without_trajectory.mkdir(parents=True)
     (without_trajectory / "result.json").write_text(json.dumps({"task_name": "task-two"}))
 
-    trials = _read_trials(StoragePath(str(job_dir)))
+    trials = _read_trials(StoragePath(str(job_dir)), _ERROR_TAXONOMY)
 
     by_task = {trial.task_id: trial for trial in trials}
     assert by_task["task-one"].trajectory_path == str(with_trajectory / "agent" / "trajectory.json")
@@ -191,6 +252,36 @@ def test_read_trials_and_archive_captures_trajectory(tmp_path):
     assert reader.resolve(samples["task-one"]["trajectory_uri"]) is not None
     steps = reader.scan("steps").to_pylist()
     assert len(steps) == 1 and steps[0]["step_id"] == 1
+
+
+@pytest.mark.parametrize(
+    ("exception_type", "verifier_result", "expected_scored", "expected_error_type"),
+    [
+        (None, {"rewards": {"reward": 1.0}}, True, None),
+        ("InfrastructureError", {"rewards": {"reward": 1.0}}, False, "InfrastructureError"),
+        ("AgentError", None, True, "AgentError"),
+        ("PassthroughError", {"rewards": {"reward": 0.5}}, True, "PassthroughError"),
+        ("PassthroughError", None, False, "PassthroughError"),
+        ("VerifierTimeoutError", {"rewards": {"reward": 0.5}}, False, "VerifierTimeoutError"),
+        ("VerifierTimeoutError", None, False, "VerifierTimeoutError"),
+        ("NewHarborError", {"rewards": {"reward": 1.0}}, False, "unknown:NewHarborError"),
+    ],
+)
+def test_read_trial_applies_harbor_error_taxonomy(
+    tmp_path, exception_type, verifier_result, expected_scored, expected_error_type
+):
+    trial_dir = tmp_path / "trial"
+    trial_dir.mkdir()
+    result = {"task_name": "task", "verifier_result": verifier_result}
+    if exception_type is not None:
+        result["exception_info"] = {"exception_type": exception_type, "exception_message": "failed"}
+    result_file = trial_dir / "result.json"
+    result_file.write_text(json.dumps(result))
+
+    trial = _read_trial(StoragePath(str(result_file)), _ERROR_TAXONOMY)
+
+    assert trial.scored is expected_scored
+    assert (trial.error or {}).get("type") == expected_error_type
 
 
 def _memory_remote(protocol: str, monkeypatch) -> None:
@@ -295,7 +386,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
     assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
     assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 1.0
     assert ReadView(output_dir).is_sealed()
-    assert StoragePath(f"{output_dir}/harbor_result.json").exists()
+    assert (StoragePath.parse(output_dir) / "harbor_result.json").exists()
 
 
 def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, monkeypatch):
@@ -323,7 +414,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         nonlocal driver_starts
         driver_starts += 1
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
-        _write_job_record(job_dir, 3)
+        _write_job_record(job_dir, 4)
         completed_result = job_dir / "trial-one" / "result.json"
         completed_result.parent.mkdir(parents=True, exist_ok=True)
         if not completed_result.exists():
@@ -335,6 +426,18 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         if not zero_reward_result.exists():
             zero_reward_result.write_text(
                 json.dumps({"task_name": "trial-three", "verifier_result": {"rewards": {"reward": 0.0}}})
+            )
+        agent_failure_result = job_dir / "trial-four" / "result.json"
+        agent_failure_result.parent.mkdir(parents=True, exist_ok=True)
+        if not agent_failure_result.exists():
+            agent_failure_result.write_text(
+                json.dumps(
+                    {
+                        "task_name": "trial-four",
+                        "verifier_result": None,
+                        "exception_info": {"exception_type": "AgentError"},
+                    }
+                )
             )
         interrupted_result = job_dir / "trial-two" / "result.json"
         if driver_starts == 1:
@@ -351,6 +454,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         else:
             assert completed_result.exists()
             assert zero_reward_result.exists()
+            assert agent_failure_result.exists()
             assert not interrupted_result.exists()
             interrupted_result.parent.mkdir(parents=True, exist_ok=True)
             interrupted_result.write_text(
@@ -366,11 +470,11 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
     assert session.recovery_waits == 1
     assert driver_starts == 2
     assert outcome.metrics[executor.config.record_dataset] == {
-        "accuracy": 2 / 3,
-        "mean_reward": 2 / 3,
+        "accuracy": 0.5,
+        "mean_reward": 0.5,
         "solved": 2.0,
-        "total": 3.0,
-        "attempted": 3.0,
+        "total": 4.0,
+        "attempted": 4.0,
     }
 
 
@@ -500,7 +604,7 @@ def test_harbor_executor_fails_when_too_few_trials_were_graded(tmp_path, monkeyp
                     "task_name": "trial-one",
                     "verifier_result": {"rewards": {"reward": 0.0}},
                     "exception_info": {
-                        "exception_type": "AgentError",
+                        "exception_type": "InfrastructureError",
                         "exception_message": "model request failed",
                     },
                 }
@@ -513,18 +617,15 @@ def test_harbor_executor_fails_when_too_few_trials_were_graded(tmp_path, monkeyp
     with pytest.raises(EvaluationError) as exc_info:
         executor(_inference_session(), str(tmp_path), {})
 
-    # A trial that errored is an ungraded item, not a wrong answer: the only trial here is ungraded,
-    # so the run graded 0% of what it attempted and is rejected as an infrastructure failure.
+    # Infrastructure errors are ungraded: the run scored 0% of its attempted trials and fails the gate.
     assert exc_info.value.status is RunStatus.INFRA_FAILED
-    assert exc_info.value.coverage["failed-" + tmp_path.name].errors == {"AgentError": 1}
+    assert exc_info.value.coverage["failed-" + tmp_path.name].errors == {"InfrastructureError": 1}
     result = json.loads((tmp_path / "harbor_result.json").read_text())
-    assert result["failed_trials"] == 1
-    assert result["errors"] == {"AgentError": 1}
+    assert result["unscored_trials"] == 1
+    assert result["errors"] == {"InfrastructureError": 1}
 
 
-def test_harbor_executor_admits_a_batch_that_clears_the_completion_gate(tmp_path, monkeypatch):
-    """One timed-out trial in twenty does not discard the other nineteen. The run keeps its aggregate
-    and its error distribution, and the aggregate is over the trials a verifier actually graded."""
+def test_harbor_executor_counts_agent_failure_without_verifier_as_zero_reward(tmp_path, monkeypatch):
 
     def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
@@ -559,17 +660,72 @@ def test_harbor_executor_admits_a_batch_that_clears_the_completion_gate(tmp_path
 
     dataset = executor.config.record_dataset
     metrics = outcome.metrics[dataset]
-    assert metrics["total"] == 19.0
+    assert metrics["total"] == 20.0
     assert metrics["attempted"] == 20.0
-    # 10 of the 19 graded trials solved: dividing by 20 instead would publish the worst case as the
-    # estimate, scoring the timed-out trial as a wrong answer.
-    assert metrics["accuracy"] == pytest.approx(10 / 19)
+    assert metrics["accuracy"] == pytest.approx(10 / 20)
+    coverage = outcome.coverage[dataset]
+    assert (coverage.n_attempted, coverage.n_scored) == (20, 20)
+    assert coverage.errors == {"AgentTimeoutError": 1}
+    result = json.loads((tmp_path / "harbor_result.json").read_text())
+    assert result["errors"] == {"AgentTimeoutError": 1}
+
+
+def test_harbor_executor_counts_undecided_error_against_completion_gate(tmp_path, monkeypatch):
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 20)
+        for index in range(20):
+            trial_dir = job_dir / f"trial-{index}"
+            trial_dir.mkdir(parents=True, exist_ok=True)
+            result = {"task_name": f"task-{index}", "verifier_result": {"rewards": {"reward": 1.0}}}
+            if index == 0:
+                result = {
+                    "task_name": f"task-{index}",
+                    "verifier_result": None,
+                    "exception_info": {"exception_type": "VerifierTimeoutError"},
+                }
+            trial_dir.joinpath("result.json").write_text(json.dumps(result))
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"undecided-{tmp_path.name}")
+
+    outcome = executor(_inference_session(), str(tmp_path), {})
+
+    dataset = executor.config.record_dataset
+    assert outcome.metrics[dataset]["total"] == 19.0
     coverage = outcome.coverage[dataset]
     assert (coverage.n_attempted, coverage.n_scored) == (20, 19)
-    assert coverage.errors == {"AgentTimeoutError": 1}
+    assert coverage.errors == {"VerifierTimeoutError": 1}
 
 
-def test_harbor_executor_counts_verified_agent_timeouts_as_scored(tmp_path, monkeypatch):
+def test_harbor_executor_rejects_unknown_error_name(tmp_path, monkeypatch):
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 1)
+        trial_dir = job_dir / "trial-one"
+        trial_dir.mkdir(parents=True)
+        trial_dir.joinpath("result.json").write_text(
+            json.dumps(
+                {
+                    "task_name": "task-one",
+                    "verifier_result": {"rewards": {"reward": 1.0}},
+                    "exception_info": {"exception_type": "NewHarborError"},
+                }
+            )
+        )
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"unknown-{tmp_path.name}")
+
+    with pytest.raises(EvaluationError) as exc_info:
+        executor(_inference_session(), str(tmp_path), {})
+
+    assert exc_info.value.status is RunStatus.INFRA_FAILED
+    assert exc_info.value.coverage[executor.config.record_dataset].errors == {"unknown:NewHarborError": 1}
+
+
+@pytest.mark.parametrize("exception_type", ["AgentTimeoutError", "PassthroughError"])
+def test_harbor_executor_preserves_scored_errors(tmp_path, monkeypatch, exception_type):
     def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
         _write_job_record(job_dir, 10)
@@ -581,7 +737,7 @@ def test_harbor_executor_counts_verified_agent_timeouts_as_scored(tmp_path, monk
                 "verifier_result": {"rewards": {"reward": 1.0 if index >= 7 else 0.0}},
             }
             if index < 4:
-                result["exception_info"] = {"exception_type": "AgentTimeoutError"}
+                result["exception_info"] = {"exception_type": exception_type}
             trial_dir.joinpath("result.json").write_text(json.dumps(result))
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
@@ -594,7 +750,7 @@ def test_harbor_executor_counts_verified_agent_timeouts_as_scored(tmp_path, monk
     assert outcome.metrics[dataset]["accuracy"] == pytest.approx(0.3)
     coverage = outcome.coverage[dataset]
     assert (coverage.n_attempted, coverage.n_scored) == (10, 10)
-    assert coverage.errors == {}
+    assert coverage.errors == {exception_type: 4}
 
 
 def test_an_unreadable_job_record_reports_unknown_coverage_rather_than_complete(tmp_path, monkeypatch):
@@ -672,4 +828,4 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
 
     assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 0.0
     result = json.loads((tmp_path / "harbor_result.json").read_text())
-    assert result["failed_trials"] == 0
+    assert result["unscored_trials"] == 0

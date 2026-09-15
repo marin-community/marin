@@ -1,0 +1,57 @@
+[
+ {
+  "source": "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+  "path": "task_9748",
+  "reason": "shipped solve script does not write command_capture.txt"
+ },
+ {
+  "source": "DCAgent__code-contests-noblock",
+  "path": "code_contests-4395",
+  "reason": "constructive problem has multiple valid outputs but no special judge"
+ },
+ {
+  "source": "DCAgent__code-contests-noblock",
+  "path": "code_contests-9694",
+  "reason": "constructive problem has interchangeable witnesses but no special judge"
+ },
+ {
+  "source": "DCAgent__exp_rpt_pymethods2test-large-v2",
+  "path": "pymethods2test-2067",
+  "reason": "tests require a recurrence that the instruction does not define"
+ },
+ {
+  "source": "DCAgent__swe_rebench_v2_patched_oracle-v2",
+  "path": "pybamm-team__pybamm-809",
+  "reason": "trusted tests do not exercise the requested porosity change"
+ },
+ {
+  "source": "laion__exp_rpt_taco-v2",
+  "path": "taco-4675",
+  "reason": "bundled expected output disagrees with the bundled golden solution"
+ },
+ {
+  "source": "laion__nemotron-gym-competitive-coding-v2",
+  "path": "comp-coding-dd2a13b32896.tar.gz",
+  "reason": "problem permits any valid witness but has no special judge"
+ },
+ {
+  "source": "laion__nemotron-gym-knowledge-mcqa-v2",
+  "path": "Nemotron-RL-knowledge-mcqa-f7e357b86af7.tar.gz",
+  "reason": "clinical vignette does not supply enough information for its gold option"
+ },
+ {
+  "source": "laion__nemotron-gym-math-stack-overflow-v3",
+  "path": "Nemotron-RL-math-stack_overflow-75a68efb194b.tar.gz",
+  "reason": "compound-interest question asks for an amount without supplying a principal"
+ },
+ {
+  "source": "laion__nemotron-gym-structured-outputs-v4",
+  "path": "if-structured-v2-ae3d7b6f2860.tar.gz",
+  "reason": "required schema fields are absent from the source document"
+ },
+ {
+  "source": "laion__wizardlm-orca-v4",
+  "path": "wizardlm_orca-9163",
+  "reason": "undated legal question requests facts that are not fixed by the prompt"
+ }
+]

@@ -23,6 +23,7 @@ from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from hero_health import DROP_FRACTION_MAX, ROUTER_BIAS_MAX, ROUTER_ENTROPY_MIN
 from k8s_source import K8sFleet
+from relay_health import RelaySenderStatus
 from server import create_app
 from starlette.testclient import TestClient
 from wandb_source import WandbSource
@@ -188,6 +189,9 @@ class _FakeFinelog:
                 }
             )
         return pa.table({})
+
+    def relay_status(self) -> tuple[RelaySenderStatus, ...]:
+        return ()
 
 
 def test_every_rule_query_url_answers_on_the_bridge():
@@ -390,6 +394,14 @@ def test_finelog_health_alert_pages_critical_after_five_minutes():
     assert rule["labels"]["severity"] == "critical"
     assert rule["data"][0]["datasourceUid"] == "finelog-marin"
     assert rule["data"][0]["model"]["url"] == "/alerts/fleet_health"
+
+
+def test_finelog_relay_alert_pages_stalled_or_missing_namespaces():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "finelog-relay-stalled"]
+    assert rule["for"] == "2m"
+    assert rule["labels"]["severity"] == "critical"
+    assert rule["noDataState"] == "Alerting"
+    assert rule["data"][0]["model"]["url"] == "/alerts/relay_status"
 
 
 def test_node_deadlock_alert_pages_critical_after_five_minutes():
