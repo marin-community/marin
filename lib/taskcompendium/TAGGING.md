@@ -94,7 +94,14 @@ example, use `environment_modification` for a repository repair and
 Use a domain only when it improves sampling beyond the competency label. Good
 examples are `arithmetic`, `number_theory`, `algorithms`, `python`,
 `filesystem`, `email`, `event_ticketing`, `machine_learning`, `oncology`, and
-`real_estate_law`. Omit broad labels such as `general` or `software` when a
+`real_estate_law`.
+
+Use dotted subtags for recurring, more specific functionality. For example, a
+React-heavy web task uses `domain:javascript.react`, and an integration problem
+uses `domain:calculus.integration`. Choose the most specific useful value rather
+than adding both its broad parent and child. Add a new subtag when the topic is
+likely to recur across the corpus; do not mint a one-off domain tag that merely
+repeats prompt wording. Omit broad labels such as `general` or `software` when a
 competency already says what is needed.
 
 ### `artifact` and `context`
@@ -202,9 +209,13 @@ domain (optional): use a material subject or operational domain such as
 arithmetic, algebra, number_theory, geometry, calculus, probability, physics,
 chemistry, biology, medicine, law, finance, business, algorithms, python,
 machine_learning, data_science, filesystem, email, event_ticketing,
-customer_relationship_management, or technical_operations. Use a more specific
-lowercase value when that will support recurring sampling; do not use broad
-values such as general or software.
+customer_relationship_management, or technical_operations. Use dotted subtags
+for recurring specific functionality: a React-heavy web task can use
+javascript.react and an integration problem can use calculus.integration. Choose
+the most specific useful value, not both a broad parent and its child. Add a new
+subtag only when it is likely to recur across the corpus; do not mint a one-off
+domain tag that repeats prompt wording. Do not use broad values such as general
+or software.
 
 difficulty (choose exactly one): easy, medium, or hard.
 
