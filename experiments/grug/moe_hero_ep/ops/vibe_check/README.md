@@ -33,6 +33,7 @@ These values describe the exact token sequence. They do not measure answer corre
 Longer answers usually have lower total probabilities, so compare the same reference across checkpoints.
 An EOS token or a byte fragment with no decoded text appears as a dot.
 A Unicode character belongs to the token that completes its byte sequence.
+Candidate text also uses the preceding tokens, so a candidate can complete a partial Unicode character.
 
 Results without scores show plain text and a message that probabilities were not recorded.
 The `hero-native-v2-logprobs` release creates new requests for retained permanent checkpoints during the next workflow invocation.

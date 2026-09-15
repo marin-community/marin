@@ -46,16 +46,23 @@ def scored_token(
     top_ids: Sequence[int],
     top_logprobs: Sequence[float],
     decode: Callable[[list[int]], str],
+    *,
+    prefix_ids: Sequence[int],
 ) -> TokenScore:
     """Build one score from the model distribution before temperature scaling."""
+    prefix = list(prefix_ids)
+    prefix_text = decode(prefix).rstrip("\ufffd")
+    candidates = []
+    for token, value in zip(top_ids, top_logprobs, strict=True):
+        text = decode([*prefix, int(token)])
+        if not text.startswith(prefix_text):
+            raise ValueError("Candidate decoding changed an earlier text fragment")
+        candidates.append(TokenProbability(token_id=int(token), text=text[len(prefix_text) :], logprob=float(value)))
     return TokenScore(
         token_id=token_id,
         text="",
         logprob=logprob,
-        top_tokens=tuple(
-            TokenProbability(token_id=int(token), text=decode([int(token)]), logprob=float(value))
-            for token, value in zip(top_ids, top_logprobs, strict=True)
-        ),
+        top_tokens=tuple(candidates),
     )
 
 
@@ -102,6 +109,7 @@ def score_expected(
                     batch_scores.top_token_ids[row, index],
                     batch_scores.top_logprobs[row, index],
                     decode,
+                    prefix_ids=[*prompts[row], *ids[:index]],
                 )
                 for index, token in enumerate(ids)
             ]
@@ -182,7 +190,16 @@ def _generate_batch(
             count = min(TOP_TOKEN_COUNT, len(logprobs))
             top_ids = np.argpartition(-logprobs, count - 1)[:count]
             top_ids = top_ids[np.argsort(-logprobs[top_ids], kind="stable")]
-            token_scores[row].append(scored_token(token, float(logprobs[token]), top_ids, logprobs[top_ids], decode))
+            token_scores[row].append(
+                scored_token(
+                    token,
+                    float(logprobs[token]),
+                    top_ids,
+                    logprobs[top_ids],
+                    decode,
+                    prefix_ids=tokens[row, : positions[row] + 1].tolist(),
+                )
+            )
             generated[row].append(token)
             positions[row] += 1
             tokens[row, positions[row]] = token
