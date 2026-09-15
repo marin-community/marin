@@ -363,13 +363,22 @@ def task_coverage_and_metrics(
     Ungraded documents and failed requests are unscored. Empty model completions remain scored and
     count as unanswered. For tasks with several extraction filters, coverage uses the filter chosen
     by :func:`~marin.evaluation.metric_selection.primary_filter`. Recovered metrics retain every filter.
+
+    A task whose rows carry no per-item score at all is scored by its aggregate: Evalchemy's AIME24
+    and OlympiadBench grade the whole item set at once and write only ``accuracy_avg``. Every
+    document such a task enumerated counts as scored, since the aggregate scorer graded them all,
+    and no per-item pass tally exists. lm-eval rows always carry their metric keys, so a row without
+    any is never an lm-eval grading failure.
     """
     graded: dict[str, list[EvalSample]] = {}
     recovered_values: dict[str, list[float]] = {}
     recovered_doc_ids: set[str] = set()
-    seen: set[str] = set()
+    by_doc: dict[str, list[EvalSample]] = {}
+    aggregate_scored = bool(samples) and not any(sample.metrics for sample in samples)
     for sample in samples:
-        seen.add(sample.doc_id)
+        by_doc.setdefault(sample.doc_id, []).append(sample)
+        if aggregate_scored:
+            continue
         if sample.grading is not None:
             graded.setdefault(sample.doc_id, []).append(sample)
             if not _is_infrastructure_error(sample):
@@ -381,19 +390,23 @@ def task_coverage_and_metrics(
     headline = primary_filter(
         {sample.grading.filter for rows in graded.values() for sample in rows if sample.grading.filter}
     )
-    graded_samples = [
-        next((sample for sample in rows if sample.grading.filter == headline), rows[0]) for rows in graded.values()
-    ]
+    if aggregate_scored:
+        graded_samples = [rows[0] for rows in by_doc.values()]
+    else:
+        graded_samples = [
+            next((sample for sample in rows if sample.grading.filter == headline), rows[0]) for rows in graded.values()
+        ]
     infrastructure_errors = [sample for sample in graded_samples if _is_infrastructure_error(sample)]
     scored = [sample for sample in graded_samples if not _is_infrastructure_error(sample)]
-    ungraded = len(seen) - len(graded_samples)
+    ungraded = len(by_doc) - len(graded_samples)
     # A pass/fail grade is the only one with a Bernoulli count behind it; a partial-credit score
-    # (a rubric, an edit distance) has no numerator to record.
-    binary = all(sample.grading.score in (0.0, 1.0) for sample in scored)
+    # (a rubric, an edit distance) has no numerator to record, and neither does an aggregate-scored
+    # task.
+    binary = not aggregate_scored and all(sample.grading.score in (0.0, 1.0) for sample in scored)
     errors = {"ungraded": ungraded} if ungraded else {}
     if infrastructure_errors:
         errors[EVALCHEMY_INFRASTRUCTURE_ERROR] = len(infrastructure_errors)
-    extent = _document_extent(seen)
+    extent = _document_extent(by_doc)
     if n_attempted is not None and extent is not None and extent > n_attempted:
         raise ValueError(f"sample document extent {extent} exceeds intended count {n_attempted}")
     coverage = TaskCoverage(
