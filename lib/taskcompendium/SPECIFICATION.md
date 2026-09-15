@@ -149,7 +149,7 @@ A lowering maps a semantic `TaskSpec` instance and its selected renderings to a 
 
 ### Target bindings
 
-A target binding is the target-owned compatibility contract attached to one lowering. It says how a target satisfies the `TaskSpec` requirements and how the target exposes the resulting action surface. It is separate from the semantic record because several bindings may satisfy the same requirements.
+A target binding says how one target runs a `TaskSpec`: the environment it uses and the tools it exposes. Several bindings may satisfy the same task requirements.
 
 A target binding includes:
 
