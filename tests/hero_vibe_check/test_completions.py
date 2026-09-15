@@ -7,7 +7,9 @@ from datetime import UTC, date, datetime
 import httpx
 import numpy as np
 import pytest
+from iris.client.workload_codec import job_status_from_proto
 from iris.resources.state import JobState
+from iris.rpc import job_pb2
 from marin.publish import sites
 
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
@@ -21,14 +23,15 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     StopReason,
 )
 from experiments.grug.moe_hero_ep.ops.vibe_check.generation import generate
-from experiments.grug.moe_hero_ep.ops.vibe_check.jobs import submit_pending
+from experiments.grug.moe_hero_ep.ops.vibe_check.jobs import sample_job_names, submit_pending
 from experiments.grug.moe_hero_ep.ops.vibe_check.publishing import (
     COMMENT_MARKER,
-    publish_daily,
+    publish_reports,
     render_report,
     report_manifest,
     update_issue_comment,
 )
+from experiments.grug.moe_hero_ep.ops.vibe_check.status import render_sampling_summary
 
 NOW = datetime(2026, 9, 12, 10, tzinfo=UTC)
 
@@ -301,43 +304,99 @@ def test_sampling_streams_do_not_depend_on_prompt_order_or_early_eos(sample_requ
     assert early[1].token_ids == alone[0].token_ids
 
 
-def test_daily_publication_preserves_history_across_retries_and_new_days(tmp_path, monkeypatch, sample_request):
-    request = sample_request
+def report_data(path):
+    embedded = path.read_text().split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0]
+    return json.loads(embedded)
+
+
+def test_empty_report_updates_after_results_arrive_without_freezing_an_empty_day(tmp_path, monkeypatch, sample_request):
     public = tmp_path / "public"
     monkeypatch.setattr(sites, "PUBLIC_ROOT", str(public))
     store = SampleStore(str(tmp_path / "private"))
-    store.save_result(completed(request))
     comments = []
+    url = publish_reports(store, date(2026, 9, 12), comments.append)
+    latest = public / "rav/hero-completions/latest/index.html"
+    assert report_data(latest)["entries"] == []
+    assert not list((tmp_path / "private/reports").glob("*"))
+    assert not (public / "rav/hero-completions/2026.09.12/index.html").exists()
+
+    store.save_result(completed(sample_request))
+    assert publish_reports(store, date(2026, 9, 12), comments.append) == url
+    assert [entry["id"] for entry in report_data(latest)["entries"]] == [sample_request.sample_id]
+    daily = public / "rav/hero-completions/2026.09.12/index.html"
+    assert report_data(daily)["entries"] == report_data(latest)["entries"]
+
+
+@pytest.mark.parametrize("failure", ["upload", "comment"])
+def test_current_report_advances_while_daily_history_survives_retries(tmp_path, monkeypatch, sample_request, failure):
+    public = tmp_path / "public"
+    monkeypatch.setattr(sites, "PUBLIC_ROOT", str(public))
+    store = SampleStore(str(tmp_path / "private"))
+    store.save_result(completed(sample_request))
+    comments = []
+    publish_site = sites.publish_site
+
+    def lose_upload_response(*args, **kwargs):
+        publish_site(*args, **kwargs)
+        raise ConnectionError("Upload response lost")
 
     def fail_comment(body):
         raise ConnectionError("GitHub unavailable")
 
-    with pytest.raises(ConnectionError):
-        publish_daily(store, date(2026, 9, 12), fail_comment)
+    with monkeypatch.context() as patch:
+        if failure == "upload":
+            patch.setattr(sites, "publish_site", lose_upload_response)
+        with pytest.raises(ConnectionError):
+            publish_reports(store, date(2026, 9, 12), fail_comment if failure == "comment" else comments.append)
     page = public / "rav/hero-completions/2026.09.12/index.html"
-    first_page = page.read_text()
-    newer = request.model_copy(update={"checkpoint": request.checkpoint.model_copy(update={"step": 24000})})
+    first_page = page.read_bytes()
+    newer = sample_request.model_copy(
+        update={"checkpoint": sample_request.checkpoint.model_copy(update={"step": 24000})}
+    )
     store.save_result(completed(newer))
-    url = publish_daily(store, date(2026, 9, 12), comments.append)
-    assert page.read_text() == first_page
-    assert newer.sample_id not in first_page
-    assert SampleResult.model_validate_json(
-        (public / f"rav/hero-completions/results/{request.sample_id}.json").read_bytes()
-    ) == completed(request)
-    assert url in comments[0]
-    publish_daily(store, date(2026, 9, 12), comments.append)
-    assert len(comments) == 1
+    url = publish_reports(store, date(2026, 9, 12), comments.append)
     latest = public / "rav/hero-completions/latest/index.html"
-    assert f'href="{url}"' in latest.read_text()
-    next_url = publish_daily(store, date(2026, 9, 13), comments.append)
-    assert next_url != url
-    assert f'href="{next_url}"' in latest.read_text()
-    assert page.read_text() == first_page
+    assert page.read_bytes() == first_page
+    assert [entry["step"] for entry in report_data(latest)["entries"]] == [24000, 6000]
+    assert [entry["step"] for entry in report_data(page)["entries"]] == [6000]
+    for request in [sample_request, newer]:
+        assert SampleResult.model_validate_json(
+            (public / f"rav/hero-completions/results/{request.sample_id}.json").read_bytes()
+        ) == completed(request)
+    assert url in comments[-1]
+    publish_reports(store, date(2026, 9, 12), comments.append)
+    assert page.read_bytes() == first_page
+    assert [entry["step"] for entry in report_data(latest)["entries"]] == [24000, 6000]
     assert len(comments) == 2
-    assert next_url in comments[1]
-    next_page = (public / "rav/hero-completions/2026.09.13/index.html").read_text()
-    assert request.sample_id in next_page and newer.sample_id in next_page
-    assert url in next_page
+    publish_reports(store, date(2026, 9, 13), comments.append)
+    assert page.read_bytes() == first_page
+    next_page = public / "rav/hero-completions/2026.09.13/index.html"
+    assert [entry["step"] for entry in report_data(next_page)["entries"]] == [24000, 6000]
+    assert report_data(next_page)["previous_url"].endswith("/2026.09.12/index.html")
+
+
+@pytest.mark.parametrize(
+    ("state", "pending_reason", "error"),
+    [
+        (job_pb2.JOB_STATE_PENDING, "Queued for peer cw-us-east-08a to report free capacity", ""),
+        (job_pb2.JOB_STATE_RUNNING, "", ""),
+        (job_pb2.JOB_STATE_FAILED, "", "Restore failed: <tensor>"),
+    ],
+)
+def test_summary_shows_checkpoint_job_state_and_diagnostics(sample_request, state, pending_reason, error):
+    name = sample_job_names(sample_request)[0]
+    job = job_status_from_proto(
+        job_pb2.JobStatus(job_id=f"/hero-completions/{name}", state=state, pending_reason=pending_reason, error=error)
+    )
+    summary = render_sampling_summary([sample_request], {"previous-result"}, [job], "https://iris.oa.dev")
+    assert "<td>6000</td>" in summary
+    assert f'<a href="https://iris.oa.dev/#/job/%2Fhero-completions%2F{name}">' in summary
+    assert f"<td>{job.state.value}</td>" in summary
+    if pending_reason:
+        assert f"<td>{pending_reason}</td>" in summary
+    if error:
+        assert "Restore failed: &lt;tensor&gt;" in summary
+        assert "<tensor>" not in summary
 
 
 def test_report_data_cannot_close_its_script_element(sample_request):

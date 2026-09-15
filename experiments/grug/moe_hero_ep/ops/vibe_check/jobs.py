@@ -36,6 +36,10 @@ class Jobs(Protocol):
         ...
 
 
+def sample_job_names(request: SampleRequest) -> list[str]:
+    return [f"hero-completions-{request.sample_id}-a{attempt}" for attempt in range(1, MAX_ATTEMPTS + 1)]
+
+
 def submit_pending(store: SampleStore, jobs: Jobs, requests: list[SampleRequest]) -> None:
     """Start at most one full-checkpoint attempt. The workflow serializes callers."""
     for request in requests:
@@ -52,7 +56,7 @@ def submit_pending(store: SampleStore, jobs: Jobs, requests: list[SampleRequest]
     for request in sorted(store.requests(), key=lambda row: (row.checkpoint.step, row.sample_id), reverse=True):
         if request.sample_id in completed or store.retries_exhausted(request):
             continue
-        names = [f"hero-completions-{request.sample_id}-a{attempt}" for attempt in range(1, MAX_ATTEMPTS + 1)]
+        names = sample_job_names(request)
         for name in names:
             if name not in attempts and name not in states:
                 pending.append((request, name))

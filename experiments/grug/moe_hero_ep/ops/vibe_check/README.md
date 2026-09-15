@@ -1,13 +1,15 @@
 # Hero checkpoint completions
 
 This workflow samples retained permanent checkpoints in the configured hero runs.
-It discovers checkpoints hourly and publishes a daily comparison report after
-08:00 UTC. It updates one comment on [issue 8827](https://github.com/marin-community/marin/issues/8827)
+It discovers checkpoints and updates the current comparison report hourly.
+It also saves one nonempty daily snapshot. The report day starts at 08:00 UTC.
+It updates one comment on [issue 8827](https://github.com/marin-community/marin/issues/8827)
 with the report link.
 
 The [latest report](https://storage.googleapis.com/marin-public/rav/hero-completions/latest/index.html)
 lets readers select two checkpoints and a prompt. It links to raw result JSON
-for completed sample sets. The first successful publication creates this URL.
+for completed sample sets. The first successful publication creates this URL. It shows an empty report
+until the first result arrives. Later publications replace it with the available results.
 
 ## Inputs and sampling
 
@@ -35,11 +37,11 @@ for completed sample sets. The first successful publication creates this URL.
 | Requests, attempts, results, and failure markers | `s3://marin-us-east-02a/marin/users/rav/hero-completions/` |
 | Public result JSON | `gs://marin-public/rav/hero-completions/results/` |
 | Daily HTML reports | `gs://marin-public/rav/hero-completions/YYYY.MM.DD/` |
-| Latest report redirect | `gs://marin-public/rav/hero-completions/latest/index.html` |
+| Current report | `gs://marin-public/rav/hero-completions/latest/index.html` |
 
 The HTML page loads result JSON from public GCS. Checkpoint tensors stay in CoreWeave storage.
 
-The [Actions workflow](../../../../../.github/workflows/hero-completions.yaml) runs from `main`.
+The [Actions workflow](../../../../../.github/workflows/marin-hero-completions.yaml) runs from `main`.
 It needs repository secrets `CW_ACCESS_KEY_ID`, `CW_SECRET_ACCESS_KEY`, and
 `IRIS_CI_GCP_SA_KEY`, plus issue-write permission for its GitHub token.
 Before deployment, approve the account in `IRIS_CI_GCP_SA_KEY` for Iris IAP,
@@ -55,8 +57,8 @@ For a read-only inventory, run from the repository root with CoreWeave credentia
 uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check inventory
 ```
 
-To run the scheduled workflow on demand, use `gh workflow run hero-completions.yaml --ref main`.
-This runs discovery and publication with the same daily publication limit.
+To run the scheduled workflow on demand, use `gh workflow run marin-hero-completions.yaml --ref main`.
+This runs discovery, report publication, and the status summary.
 For one request, use the same sampler inside a 64-GPU job at the request's source commit:
 
 ```bash
@@ -68,11 +70,23 @@ Copy a saved `requests/<sample-id>.json` from the S3 root for `completion-reques
 For a new request, use `SampleRequest` in [completions.py](completions.py).
 It pins the checkpoint, prompt bank, generation settings, and source commit.
 
-Actions runs `reconcile` hourly and `report` daily. Keep these invocations in its
+Actions runs `reconcile`, `report`, and `status` hourly. Keep these invocations in its
 `hero-checkpoint-completions` concurrency group. Direct sampler jobs do not use this limit.
-Report retries reuse the day's saved snapshot and do not start GPU jobs.
-The report reads completed result files, including results from previous prompt banks.
-Check Actions and Iris for workflow failures and active jobs.
+The current report reads completed results from all prompt banks on each invocation.
+An empty result set does not create a daily snapshot. After the first result arrives,
+publication saves the day's snapshot before upload. Retries reuse that snapshot,
+but the current report can include newer results. Previously published daily pages stay fixed.
+Report publication does not start GPU jobs.
+
+The Actions summary shows the completed count, checkpoint steps, Iris job links,
+job states, and queue or error details. The summary step also runs after submission
+or publication errors if authentication succeeds. A successful submission does not
+mean that sampling started or completed. The sampler can wait for 64 free GB200 GPUs.
+For a read-only status summary, run:
+
+```bash
+uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check status
+```
 
 Each sample set gets three total job attempts. Failures, preemptions, missing jobs,
 and scheduling timeouts use this budget. Requests keep their original source commit for retries.
