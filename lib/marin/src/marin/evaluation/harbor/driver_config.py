@@ -120,6 +120,7 @@ class ValidatedHarborConfig:
     error_taxonomy: HarborErrorTaxonomy
     max_input_tokens: int
     max_output_tokens: int
+    verifier_env_keys: tuple[str, ...] = ()
 
     @property
     def record_dataset(self) -> str:
@@ -243,6 +244,9 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
     revision = payload.get("dataset_revision")
     if revision is not None and not isinstance(revision, str):
         raise ValueError(f"Harbor preflight returned invalid dataset revision metadata for {path}")
+    verifier_env_keys = payload.get("verifier_env_keys")
+    if not isinstance(verifier_env_keys, list) or any(not isinstance(key, str) or not key for key in verifier_env_keys):
+        raise ValueError(f"Harbor preflight returned invalid verifier environment metadata for {path}")
     try:
         dataset_kind = HarborDatasetKind(required_string("dataset_kind"))
     except ValueError as exc:
@@ -302,6 +306,7 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
         workspace_dataset_path=workspace_dataset_path,
         agent=required_string("agent"),
         environment=required_string("environment"),
+        verifier_env_keys=tuple(verifier_env_keys),
         error_taxonomy=error_taxonomy,
         max_input_tokens=required_int("max_input_tokens"),
         max_output_tokens=required_int("max_output_tokens"),

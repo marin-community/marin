@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hero checkpoint completions</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+    body { max-width: 1500px; margin: auto; padding: 24px; }
+    h1 { margin-bottom: 0; } h2 { font-size: 1.1rem; }
+    a { color: light-dark(#154a95, #94c5ff); }
+    .muted { opacity: .75; }
+    .controls, .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    label { display: block; } select { width: 100%; padding: 10px; margin-top: 6px; }
+    article { min-width: 0; border: 1px solid #8886; border-radius: 8px; padding: 18px; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.6 ui-monospace, monospace; }
+    .prompt { border-bottom: 1px solid #8886; padding-bottom: 12px; }
+    .svg-preview { display: block; width: 100%; height: 360px; object-fit: contain; background: white; border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; margin: 24px 0; }
+    td, th { text-align: left; padding: 8px; border-bottom: 1px solid #8886; overflow-wrap: anywhere; }
+    #prompt-control { margin: 20px 0; max-width: 700px; }
+    #error { color: light-dark(#ac1e1e, #ffabab); }
+    @media (max-width: 800px) { .controls, .comparison { grid-template-columns: 1fr; } body { padding: 12px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Hero checkpoint completions</h1>
+    <p class="muted">Completed sample sets · Native base-model continuations</p>
+    <p id="summary"></p>
+    <p><a href="https://github.com/marin-community/marin/issues/8827">Discussion and prompt sources</a>
+       · <a id="previous" hidden>Earlier daily snapshot</a></p>
+  </header>
+  <div class="controls">
+    <label>Checkpoint A<select id="left"></select></label>
+    <label>Checkpoint B<select id="right"></select></label>
+  </div>
+  <label id="prompt-control">Prompt<select id="prompt"></select></label>
+  <p id="error" role="alert"></p>
+  <div class="comparison"><article id="a"></article><article id="b"></article></div>
+  <details><summary>All completed sample sets</summary>
+    <table><thead><tr><th>Checkpoint</th><th>Sample set</th></tr></thead><tbody id="inventory"></tbody></table>
+  </details>
+  <p class="muted">Generated text can be incorrect or harmful. SVG output has an image preview and source text. These samples use fixed seeds.</p>
+  <script id="report-data" type="application/json">__REPORT_DATA__</script>
+  <script>
+    const report = JSON.parse(document.getElementById('report-data').textContent);
+    const byId = Object.fromEntries(report.entries.map(entry => [entry.id, entry]));
+    const left = document.getElementById('left');
+    const right = document.getElementById('right');
+    const prompt = document.getElementById('prompt');
+    const cache = new Map();
+    let draw = 0;
+    function element(tag, text) { const node = document.createElement(tag); node.textContent = text; return node; }
+    function label(entry) { return `${entry.step.toLocaleString()} · ${entry.run_id} · ${entry.id.slice(0, 8)}`; }
+    document.getElementById('summary').textContent = `Report: ${report.date} UTC. ${report.entries.length} completed sample sets.`;
+    if (report.previous_url) {
+      const previous = document.getElementById('previous'); previous.href = report.previous_url; previous.hidden = false;
+    }
+    for (const entry of report.entries) {
+      for (const select of [left, right]) { const option = element('option', label(entry)); option.value = entry.id; select.append(option); }
+      const row = document.createElement('tr');
+      for (const value of [`${entry.step} · ${entry.run_id}`, entry.id.slice(0, 12)]) row.append(element('td', value));
+      document.getElementById('inventory').append(row);
+    }
+    async function result(id) {
+      if (!id) return null;
+      if (!cache.has(id)) {
+        const response = await fetch(byId[id].url);
+        if (!response.ok) throw new Error(`Cannot load sample ${id}: HTTP ${response.status}`);
+        cache.set(id, await response.json());
+      }
+      return cache.get(id);
+    }
+    function svgPreview(text) {
+      const svg = text.match(/<svg\b[\s\S]*<\/svg\s*>/);
+      if (!svg) return element('p', 'No completed SVG image in this output.');
+      const preview = document.createElement('img');
+      preview.className = 'svg-preview';
+      preview.alt = 'Generated SVG image of a cat on a unicycle';
+      preview.addEventListener('error', () => preview.replaceWith(element('p', 'Cannot display this SVG image.')));
+      // The image context disables scripts and external resources in generated SVG.
+      preview.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg[0]);
+      return preview;
+    }
+    function panel(target, id, data, promptId) {
+      target.replaceChildren();
+      if (!id) { target.append(element('p', 'No completed sample sets.')); return; }
+      const entry = byId[id]; target.append(element('h2', label(entry)));
+      const source = data.request.spec.prompts.find(item => item.id === promptId);
+      const completion = data.completions.find(item => item.prompt_id === promptId);
+      if (!source || !completion) { target.append(element('p', 'This prompt is not in this sample set.')); return; }
+      const input = element('pre', source.text); input.className = 'prompt'; target.append(input);
+      if (promptId === 'svg-cat-unicycle') {
+        target.append(svgPreview(completion.text));
+        const sourceCode = document.createElement('details');
+        sourceCode.append(element('summary', 'SVG source'), element('pre', completion.text));
+        target.append(sourceCode);
+      } else {
+        target.append(element('pre', completion.text));
+      }
+      target.append(element('p', `${completion.token_ids.length} new tokens · stop: ${completion.stop_reason} · seed: ${source.seed} · temperature: ${data.request.spec.temperature}`));
+      const raw = element('a', 'Download result and full provenance'); raw.href = entry.url; target.append(raw);
+      const details = document.createElement('details'); details.append(element('summary', 'Generation settings'));
+      details.append(element('pre', JSON.stringify({checkpoint: data.request.checkpoint, source_revision: data.request.source_revision, ...data.request.spec, prompts: undefined}, null, 2)));
+      target.append(details);
+    }
+    async function render() {
+      const ticket = ++draw;
+      document.getElementById('error').textContent = '';
+      try {
+        const [a, b] = await Promise.all([result(left.value), result(right.value)]);
+        if (ticket !== draw) return;
+        const selected = prompt.value || new URLSearchParams(location.hash.slice(1)).get('prompt');
+        const prompts = new Map();
+        for (const data of [a, b]) for (const row of data?.request.spec.prompts || []) prompts.set(row.id, row);
+        prompt.replaceChildren();
+        for (const row of prompts.values()) { const option = element('option', `${row.id} — ${row.text.slice(0, 90)}`); option.value = row.id; prompt.append(option); }
+        if (prompts.has(selected)) prompt.value = selected;
+        panel(document.getElementById('a'), left.value, a, prompt.value);
+        panel(document.getElementById('b'), right.value, b, prompt.value);
+        history.replaceState(null, '', '#' + new URLSearchParams({a: left.value, b: right.value, prompt: prompt.value}));
+      } catch (error) { if (ticket === draw) document.getElementById('error').textContent = String(error); }
+    }
+    const selection = new URLSearchParams(location.hash.slice(1));
+    left.value = byId[selection.get('a')] ? selection.get('a') : (report.entries[0]?.id || '');
+    right.value = byId[selection.get('b')] ? selection.get('b') : (report.entries[1]?.id || left.value);
+    for (const select of [left, right, prompt]) select.addEventListener('change', render);
+    render();
+  </script>
+</body>
+</html>

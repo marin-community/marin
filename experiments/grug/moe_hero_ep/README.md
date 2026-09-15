@@ -194,8 +194,8 @@ group `moe-hero-ep-small-abl` and carry Paloma and uncheatable evaluation at `--
 ### Scaling ladder
 
 `launch_scaling_ladder.py` trains one uniform hero recipe at five widths so a narrow rung predicts
-the `d6144` hero (which is the hero itself). Every rung shares the hero data (the Harrier
-2026.08.18 two-phase mixture on the Marin tokenizer, simulated against the 18.75T target budget),
+the `d6144` hero (which is the hero itself). Every rung shares the data schedule below on the
+Marin tokenizer (simulated against 18.75T for small runs; raw sampling above 1e23 training FLOPs),
 the offloaded MuonH optimizer, the hero mixed precision, 384 experts / top-8, the ragged
 all-to-all transport, the QB histogram estimator at 10k bins, and a dropless held-out eval. Only
 the width and the rack count vary; the rack count, batch, step budget, eval cadence, and
@@ -217,6 +217,10 @@ durable output root, and a rolling temporary checkpoint every hour goes to regio
 storage with the shared 14-day lifecycle TTL. One temporary checkpoint is kept. A hardware fault, a
 host out-of-memory, or a preemption thus costs at most one hour of training. The training job
 retries 1000 times on failure and 100 times on preemption.
+
+The [new mixture](../../../docs/reports/hero-mixture-log.md) starts at ~27.7%
+of training, with cooldown weights at ~80% (hero steps 108,000 and 312,192).
+Before using `trigger_hero.sh`, wait for permanent `step-108000` to finish and stop the old run.
 
 Launch or resume the production d6144 hero with `trigger_hero.sh`. The trigger first comments on
 [issue #8506](https://github.com/marin-community/marin/issues/8506) with the full `HEAD` commit,
