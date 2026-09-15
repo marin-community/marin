@@ -122,7 +122,8 @@
     "difficulty:medium",
     "domain:email",
     "interaction:single_tool_call",
-    "shape:stateful_domain"
+    "shape:stateful_domain",
+    "state:provider"
   ],
   "nemo/workplace/0-derived-multistep": [
     "competency:multi_step_workflow",
@@ -131,7 +132,8 @@
     "difficulty:hard",
     "domain:email",
     "interaction:multi_action_workflow",
-    "shape:derived_stateful_domain"
+    "shape:sequential_requirements",
+    "state:provider"
   ],
   "nemo/workplace/1163": [
     "competency:stateful_tool_use",
@@ -152,149 +154,191 @@
   "r2egym/269e2a176b9b2b8e00be46f5a59e840625879bf9": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:medium",
     "domain:data_type_inference",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/2d9617bd0cb1f0ba61771258410ab8fae8e7e24d": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:hard",
     "domain:orange_context_management",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/3758d8594d8738e51b3a738e06858ae7fc3cbdf1": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:medium",
     "domain:orange_data_conversion",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/4651e73c8ea9a502d4fd6ee25f33ece07b693b37": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:hard",
     "domain:orange_widgets",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/70a4df334835bcb9ea7c6b0eb11b4f5f7e117f36": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:easy",
     "domain:numeric_formatting",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/74ffccc1d4a1dbb877490c9d6b59e6f501d5e438": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:easy",
     "domain:numpy_type_consistency",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/7c9de553a279791535aa8ec927bef47801b819f1": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:medium",
     "domain:orange_serialization",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/7f5c9dace89a846e6fb7aed86e4ff7eb05e01dc0": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:medium",
     "domain:feature_selection",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/9764be4fa30b1ae85db3b875039f0a2983531a9d": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:medium",
     "domain:orange_data_conversion",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/9b5494e26f407b75e79699c9d40be6df1d80a040": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:medium",
     "domain:machine_learning",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/a95245e37f35446f9870feb68f5ebb97d1c279ce": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:medium",
     "domain:orange_serialization",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/aae8c47f823197a04010a74570793464eb7352fe": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:medium",
     "domain:orange_widgets",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/ad202ae0d526f208bfde4ed9ef47190f078be7de": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:medium",
     "domain:orange_widgets",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/b0d83c555eda061014ae1d04dc0af07a569650e6": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:hard",
     "domain:sympy_units",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/b983e25212aa3c006c37089ef970688e3c01c369": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:medium",
     "domain:orange_context_management",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/d61803f7181e7ad525d4bb1dd71ca500bb41617e": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:easy",
     "domain:data_summary",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/df34d9081e1fbe25466980b17a082ce210e821b5": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:medium",
     "domain:discretization",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/e48a32f29bd3736e53efb7290cae64d5688357d6": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:medium",
     "domain:name_generation",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/ea8c3b0ce9ff87f849b1462aab0b34bd3e35d4ed": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:medium",
     "domain:orange_data_model",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/ef8363b650134f6415704b064573707a6d304ca3": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:easy",
     "domain:time_binning",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "r2egym/f5b986b11e518191441420df8f8b84154c92e81c": [
     "artifact:source_code",
     "competency:debugging",
+    "context:repository",
     "difficulty:easy",
     "domain:time_binning",
-    "shape:environment_modification"
+    "shape:environment_modification",
+    "state:workspace"
   ],
   "synthetic/conversational-revision": [
     "competency:instruction_following",
@@ -306,21 +350,24 @@
     "artifact:source_code",
     "competency:software_engineering",
     "difficulty:easy",
-    "shape:sequential_requirements"
+    "shape:sequential_requirements",
+    "state:workspace"
   ],
   "tasktrove-0": [
     "artifact:program",
     "competency:algorithm_design",
     "difficulty:hard",
     "domain:computational_geometry",
-    "shape:algorithmic_programming"
+    "shape:algorithmic_programming",
+    "state:workspace"
   ],
   "tasktrove-1": [
     "artifact:program",
-    "competency:graph_algorithms",
+    "competency:algorithm_design",
     "difficulty:hard",
     "domain:graph_theory",
-    "shape:algorithmic_programming"
+    "shape:algorithmic_programming",
+    "state:workspace"
   ],
   "tasktrove-114": [
     "artifact:numeric_answer",
@@ -342,7 +389,7 @@
     "shape:explanation"
   ],
   "tasktrove-11677": [
-    "competency:physics_reasoning",
+    "competency:scientific_reasoning",
     "context:experimental_measurement",
     "difficulty:hard",
     "domain:particle_physics",
@@ -350,7 +397,7 @@
   ],
   "tasktrove-11678": [
     "artifact:formula",
-    "competency:physics_reasoning",
+    "competency:scientific_reasoning",
     "difficulty:medium",
     "domain:optics",
     "shape:calculation"
@@ -360,29 +407,31 @@
     "context:experimental_observations",
     "difficulty:medium",
     "domain:causal_inference",
-    "shape:classification"
+    "shape:answer"
   ],
   "tasktrove-1487": [
     "artifact:python_package",
     "competency:software_implementation",
     "difficulty:medium",
     "domain:python",
-    "shape:code_implementation"
+    "shape:code_implementation",
+    "state:workspace"
   ],
   "tasktrove-1488": [
     "artifact:python_module",
     "competency:software_implementation",
     "difficulty:easy",
     "domain:python",
-    "shape:code_implementation"
+    "shape:code_implementation",
+    "state:workspace"
   ],
   "tasktrove-1489": [
     "artifact:python_module",
-    "competency:machine_learning_software",
     "competency:software_implementation",
     "difficulty:hard",
-    "domain:python",
-    "shape:code_implementation"
+    "domain:machine_learning",
+    "shape:code_implementation",
+    "state:workspace"
   ],
   "tasktrove-16158": [
     "artifact:shell_output",
@@ -390,7 +439,8 @@
     "difficulty:easy",
     "domain:filesystem",
     "interaction:terminal",
-    "shape:shell_workflow"
+    "shape:shell_workflow",
+    "state:workspace"
   ],
   "tasktrove-16159": [
     "artifact:shell_output",
@@ -398,7 +448,8 @@
     "difficulty:easy",
     "domain:filesystem",
     "interaction:terminal",
-    "shape:shell_workflow"
+    "shape:shell_workflow",
+    "state:workspace"
   ],
   "tasktrove-16160": [
     "artifact:shell_output",
@@ -406,7 +457,8 @@
     "difficulty:easy",
     "domain:filesystem",
     "interaction:terminal",
-    "shape:shell_workflow"
+    "shape:shell_workflow",
+    "state:workspace"
   ],
   "tasktrove-16634": [
     "artifact:xml_document",
@@ -441,13 +493,13 @@
     "shape:multiple_choice"
   ],
   "tasktrove-openqa-80f6c461ebcf.tar.gz": [
-    "competency:calculus_reasoning",
+    "competency:math",
     "difficulty:medium",
     "domain:multivariable_calculus",
     "shape:explanation"
   ],
   "tasktrove-openqa-c7e9374b56ea.tar.gz": [
-    "competency:biology_reasoning",
+    "competency:scientific_reasoning",
     "difficulty:medium",
     "domain:microbiology",
     "shape:explanation"

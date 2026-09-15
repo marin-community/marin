@@ -66,13 +66,13 @@
       "task": "nemo/workplace/0",
       "rendering": "nemo-workplace-chat",
       "path": "harbor/nemo-workplace-0-nemo-workplace-chat",
-      "specification_sha256": "310ce5d6362bec55719874fbb17cb4b4c6d6ab620cc3abd0214435c6df33b4a9"
+      "specification_sha256": "9381a0fca03f86cf64c1efd090d95b7f384ffd804d3c187fcb9be29ecc271676"
     },
     {
       "task": "nemo/workplace/0-derived-multistep",
       "rendering": "nemo-workplace-chat",
       "path": "harbor/nemo-workplace-0-derived-multistep-nemo-workplace-chat",
-      "specification_sha256": "10615d27da66f3ab1a6baafbace6eb6b8d7c69e1b73adfd00f2bd51e2f423698"
+      "specification_sha256": "0452deaa7a75b725e975b77539e6e47ee3147c762ca0bbf81969a2a8fcdeac7d"
     }
   ],
   "runtime_image": "sha256:1e02be2c8950c47f6d8eef8bfd775abbd9c547c68d57ac6a887fd13b8ae7c8b7",
