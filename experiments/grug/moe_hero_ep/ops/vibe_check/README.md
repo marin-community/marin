@@ -14,6 +14,30 @@ gh workflow run marin-hero-completions.yaml --ref main
 Read the Actions summary for Iris job links, queue state, and errors.
 A successful submission does not mean that sampling started or completed.
 
+To produce completions for all currently retained checkpoints at production
+priority, start the workflow once:
+
+```bash
+gh workflow run marin-hero-completions.yaml --ref main -f priority=production
+```
+
+The workflow saves this priority for the discovered requests and their retries.
+Hourly invocations continue those requests at the saved priority, with one
+64-GPU sampling job at a time. Completed sample sets do not run again.
+Future checkpoints use batch priority unless an invocation sets their priority.
+An active job keeps its original priority. The next attempt uses the saved priority.
+The three-attempt limit still applies.
+
+For a direct submission from a clean checkout:
+
+```bash
+uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check reconcile --priority production
+```
+
+The CLI accepts `batch`, `interactive`, `production`, and `system`. Iris checks
+the caller's permission for the selected priority. Omit `--priority` to preserve
+saved priorities. Direct invocations must not overlap the Actions workflow.
+
 For a status query without job submission, run from the repository root with
 CoreWeave storage credentials and Iris authentication:
 

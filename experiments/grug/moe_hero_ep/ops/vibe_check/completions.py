@@ -130,6 +130,17 @@ class SampleStore:
     def attempt_names(self) -> set[str]:
         return {path.name.removesuffix(".txt") for path in (self.root / "attempts/*.txt").glob()}
 
+    def priorities(self) -> dict[str, int]:
+        saved = conditional_object(str(self.root / "priorities.json")).read()
+        return json.loads(saved.data) if saved else {}
+
+    def set_priorities(self, sample_ids: list[str], priority_band: int) -> None:
+        target = conditional_object(str(self.root / "priorities.json"))
+        saved = target.read()
+        priorities = json.loads(saved.data) if saved else {}
+        priorities.update(dict.fromkeys(sample_ids, priority_band))
+        target.write(json.dumps(priorities).encode(), expected_version=saved.version if saved else None)
+
     def save_attempt(self, name: str) -> None:
         conditional_object(str(self.root / f"attempts/{name}.txt")).write(b"", expected_version=None)
 
