@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import click
 import pytest
 from click.testing import CliRunner
-from finestore.eval import EvaluationStore, samples_from_lm_eval
+from finestore.eval import EvaluationStore
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
@@ -26,6 +26,7 @@ from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.lm_eval_samples import samples_from_lm_eval
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus, TaskCoverage, read_record
 from marin.evaluation.runner import (
