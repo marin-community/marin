@@ -30,9 +30,10 @@ The three-attempt limit still applies.
 
 The CLI also accepts `reconcile --priority production` from a clean checkout.
 Use Actions for the shared sample store because its concurrency group
-serializes submissions. The priority choices are `batch`, `interactive`,
-`production`, and `system`. Iris checks the caller's permission for the selected
-priority. Omit `--priority` to preserve saved priorities.
+serializes submissions. The priority choices are `batch`, `interactive`, and
+`production`. Manual workflow runs default to `batch`. Scheduled runs preserve
+saved priorities. Iris checks the caller's permission for the selected priority.
+Omit the CLI's `--priority` option to preserve saved priorities.
 
 For a status query without job submission, run from the repository root with
 CoreWeave storage credentials and Iris authentication:

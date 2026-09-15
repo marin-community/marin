@@ -8,13 +8,11 @@ on:
       priority:
         description: Priority for all currently discovered checkpoints
         type: choice
-        default: preserve
+        default: batch
         options:
-          - preserve
           - batch
           - interactive
           - production
-          - system
 
 permissions:
   contents: read
@@ -62,10 +60,10 @@ jobs:
           service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
       - name: Reconcile every permanent checkpoint
         env:
-          SAMPLING_PRIORITY: ${{ inputs.priority || 'preserve' }}
+          SAMPLING_PRIORITY: ${{ inputs.priority }}
         run: |
           args=()
-          if [[ "$SAMPLING_PRIORITY" != preserve ]]; then
+          if [[ -n "$SAMPLING_PRIORITY" ]]; then
             args+=(--priority "$SAMPLING_PRIORITY")
           fi
           uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check reconcile "${args[@]}"

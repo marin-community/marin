@@ -40,7 +40,7 @@ CONTROLLER_CLUSTER = "marin"
 @click.option("--store-root", default=STORE_ROOT, show_default=True)
 @click.option(
     "--priority",
-    type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
+    type=click.Choice([name for name in PRIORITY_BAND_NAMES if name != "system"], case_sensitive=False),
     help="Retain this priority for all discovered checkpoints. Omit to preserve saved priorities (otherwise batch).",
 )
 def main(action: str, store_root: str, priority: str | None) -> None:
