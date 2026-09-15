@@ -4,13 +4,24 @@
 """Bounded Finelog query for one standalone or MarinSkyRL-embedded vLLM serve."""
 
 import math
+import threading
 from dataclasses import dataclass
 from enum import StrEnum
+
+import duckdb
+import pyarrow as pa
+import pyarrow.compute as pc
+from finelog.errors import QueryResultTooLargeError
 
 VLLM_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 # Leave room for latency/outcome series and bounded producer tables in the shared result.
 VLLM_MAX_POINTS = 360
 VLLM_MAX_RESULT_ROWS = 10_000
+VLLM_MAX_SAMPLES = 1_000_000
+VLLM_MAX_SERIES = 50_000
+# Grafana and the bridge share one CPU and 2 GiB. Serialize these bounded local
+# projections; the existing cache still coalesces every panel of an overview.
+_PROJECTION_LOCK = threading.Lock()
 VLLM_MIN_BUCKET_MS = 15_000
 VLLM_SCRAPE_INTERVAL_MS = 60_000
 VLLM_HISTOGRAM_COHERENCE_MS = 15_000
@@ -25,6 +36,8 @@ VLLM_OVERVIEW_SECTIONS = frozenset(
         "freshness",
         "freshness_detail",
         "latency",
+        "length_finish_fraction",
+        "output_length_distribution",
         "request_outcome",
         "request_rate",
         "saturation",
@@ -49,6 +62,7 @@ class VllmOverviewQuery:
     """Validated SQL and canonical parameters for one vLLM overview."""
 
     sql: str
+    samples_sql: str
     identity_field: VllmIdentityField
     identity: str
     start_ms: int
@@ -174,7 +188,7 @@ def vllm_overview_query(
     histogram_component = _case_for(_histogram_component_mapping(), "name")
     histogram_source_family = _case_for(_histogram_source_mapping(), "name")
 
-    sql = f"""
+    samples_sql = f"""
 WITH base AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
            service,
@@ -210,6 +224,31 @@ WITH base AS (
       AND name IN ({metric_names})
       AND timestamp_ms >= {scan_start_ms}
       AND timestamp_ms < {end_ms}
+)
+SELECT origin_cluster, service, name, kind, resource_attributes_json, attributes_json,
+       array_agg(named_struct('timestamp_ms', timestamp_ms, 'seq', seq, 'value', value)) AS points
+FROM (SELECT * FROM base LIMIT {VLLM_MAX_SAMPLES + 1}) AS bounded_samples
+GROUP BY 1, 2, 3, 4, 5, 6
+LIMIT {VLLM_MAX_SERIES + 1}
+""".strip()
+    # Retain the whole leading coherence interval and one predecessor per
+    # series. Older points can affect neither an in-window delta nor freshness.
+    coherence_start_ms = start_ms - start_ms % VLLM_HISTOGRAM_COHERENCE_MS
+    sql = f"""
+WITH base AS MATERIALIZED (
+    SELECT origin_cluster, service, name, kind, resource_attributes_json, attributes_json,
+           point.timestamp_ms AS timestamp_ms, point.seq AS seq, point.value AS value
+    FROM (
+        SELECT * EXCLUDE (points), unnest(list_concat(
+            list_slice(list_filter(points, p -> p.timestamp_ms < {coherence_start_ms}), -1, -1),
+            list_filter(points, p -> p.timestamp_ms >= {coherence_start_ms})
+        )) AS point
+        FROM (SELECT * REPLACE (
+            list_sort(points) AS points,
+            CAST(resource_attributes_json AS resource_labels) AS resource_attributes_json,
+            CAST(attributes_json AS metric_labels) AS attributes_json
+        ) FROM series)
+    )
 ), cumulative_samples AS (
     SELECT *,
            LAG(value) OVER (
@@ -446,6 +485,10 @@ WITH base AS (
     GROUP BY 1, 2, 3, 4, 5, 6
 ), coherent_histogram_increments AS (
     SELECT samples.sample_t,
+           samples.origin_cluster,
+           samples.service,
+           samples.resource_attributes_json,
+           samples.producer_identity,
            samples.family,
            samples.component,
            samples.upper_bound,
@@ -459,6 +502,18 @@ WITH base AS (
      AND samples.source_family = validity.source_family
      AND samples.sample_t = validity.sample_t
     WHERE validity.valid_sample = 1
+), engine_itl AS (
+    SELECT producer_identity || ' @ ' || origin_cluster || ':' || service || ':' || resource_attributes_json AS series,
+           SUM(CASE WHEN component = 'sum' THEN delta ELSE 0 END)
+               / NULLIF(SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END), 0) AS value,
+           SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) AS samples
+    FROM coherent_histogram_increments
+    WHERE family = 'inter_token_latency'
+    GROUP BY 1
+    HAVING SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) > 0
+), ranked_engine_itl AS (
+    SELECT *, ROW_NUMBER() OVER (ORDER BY series) AS producer_rank
+    FROM engine_itl
 ), histogram_time_means AS (
     SELECT {start_ms} + (sample_t - {start_ms}) - (sample_t - {start_ms}) % {bucket_ms} AS t,
            family,
@@ -487,6 +542,15 @@ WITH base AS (
            bucket_count,
            MAX(bucket_count) OVER (PARTITION BY family) AS total_count
     FROM histogram_buckets
+), output_length_distribution AS (
+    SELECT upper_bound,
+           bucket_count - COALESCE(LAG(bucket_count) OVER (
+               ORDER BY CASE WHEN upper_bound IN ('+Inf', 'Inf') THEN 1e308
+                             ELSE CAST(upper_bound AS DOUBLE) END
+           ), 0) AS value,
+           total_count
+    FROM histogram_ranked_buckets
+    WHERE family = 'output_tokens'
 ), histogram_quantiles AS (
     SELECT family,
            MIN(CASE
@@ -518,11 +582,12 @@ WITH base AS (
            END AS value,
            samples
     FROM histogram_stats
-    -- A UNION per statistic would repeat the histogram pipeline in Finelog's plan.
+    -- Share the histogram pipeline across statistics.
     CROSS JOIN (VALUES ('mean'), ('p50'), ('p90'), ('p99')) AS quantile(stat)
 ), outcome_increments AS (
     SELECT timestamp_ms,
            service,
+           name,
            COALESCE(
                json_get(attributes_json, 'finished_reason'),
                json_get(attributes_json, 'finish_reason'),
@@ -538,6 +603,12 @@ WITH base AS (
     SELECT outcome, SUM(delta) AS value
     FROM outcome_increments
     GROUP BY 1
+), length_finish_fraction AS (
+    SELECT SUM(CASE WHEN outcome = 'length' THEN delta ELSE 0 END) / NULLIF(SUM(delta), 0) AS value,
+           SUM(delta) AS samples
+    FROM outcome_increments
+    WHERE name = 'request_success_total'
+    HAVING SUM(delta) > 0
 ), outcome_source_rates AS (
     SELECT {start_ms} + (timestamp_ms - {start_ms})
                - (timestamp_ms - {start_ms}) % CASE
@@ -812,6 +883,21 @@ WITH base AS (
 
     UNION ALL
 
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'engine_summary' AS section,
+           'inter_token_latency_mean' AS metric,
+           'observed' AS stat,
+           series AS series,
+           value AS value,
+           's' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(samples AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM ranked_engine_itl
+    WHERE producer_rank <= {VLLM_MAX_FRESHNESS_DETAILS}
+
+    UNION ALL
+
     SELECT t AS t,
            'saturation' AS section,
            'iteration_tokens' AS metric,
@@ -910,6 +996,34 @@ WITH base AS (
            CAST(NULL AS BIGINT) AS samples,
            CAST(NULL AS DOUBLE) AS gap_seconds
     FROM outcome_totals
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'length_finish_fraction' AS section,
+           'length_finish_fraction' AS metric,
+           'fraction' AS stat,
+           'length / all engine finishes' AS series,
+           value AS value,
+           'ratio' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(samples AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM length_finish_fraction
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'output_length_distribution' AS section,
+           'output_tokens' AS metric,
+           'interval_count' AS stat,
+           upper_bound AS series,
+           value AS value,
+           'requests' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(total_count AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM output_length_distribution
 
     UNION ALL
 
@@ -1018,14 +1132,47 @@ ORDER BY section,
          t,
          metric,
          stat,
+         CASE WHEN section = 'output_length_distribution'
+              THEN CASE WHEN series IN ('+Inf', 'Inf') THEN 1e308 ELSE CAST(series AS DOUBLE) END
+              ELSE 0 END,
          series
 LIMIT {VLLM_MAX_RESULT_ROWS + 1}
 """.strip()
     return VllmOverviewQuery(
         sql=sql,
+        samples_sql=samples_sql,
         identity_field=identity_field,
         identity=identity,
         start_ms=start_ms,
         end_ms=end_ms,
         bucket_ms=bucket_ms,
     )
+
+
+def vllm_overview_table(overview: VllmOverviewQuery, series: pa.Table, *, max_rows: int) -> pa.Table:
+    """Project one compact Finelog scan into the shared diagnostic result."""
+    sample_count = pc.sum(pc.list_value_length(series["points"])).as_py() or 0
+    if series.num_rows > VLLM_MAX_SERIES or sample_count > VLLM_MAX_SAMPLES:
+        raise QueryResultTooLargeError("vLLM sample budget exceeded")
+    with (
+        _PROJECTION_LOCK,
+        duckdb.connect(config={"threads": 1, "memory_limit": "512MB", "temp_directory": ""}) as database,
+    ):
+        database.register("series", series)
+        # Dictionary labels stay compact through repeated window and histogram
+        # joins. Ordered dictionaries preserve the original string tie breaks.
+        for column, label_type in (
+            ("resource_attributes_json", "resource_labels"),
+            ("attributes_json", "metric_labels"),
+        ):
+            database.execute(
+                f"CREATE TYPE {label_type} AS ENUM (SELECT DISTINCT {column} FROM series UNION SELECT '' ORDER BY 1)"
+            )
+        database.execute("CREATE MACRO json_get(d, f) AS json_extract_string(CAST(d AS VARCHAR), concat('$.', f))")
+        try:
+            table = database.execute(overview.sql).to_arrow_table()
+        except duckdb.OutOfMemoryException as err:
+            raise QueryResultTooLargeError("vLLM projection memory budget exceeded") from err
+    if table.num_rows > max_rows:
+        raise QueryResultTooLargeError(f"vLLM overview returned more than {max_rows} rows")
+    return table

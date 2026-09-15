@@ -15,6 +15,7 @@ dependencies = [
     "marin-finelog >= 0.2.0",
     "google-cloud-compute >= 1.19",
     "starlette >= 0.40",
+    "duckdb >= 1.4.3, < 2",
     "uvicorn >= 0.32",
     # RS256-signed JWTs for GitHub App auth (github_app.py). The [crypto] extra
     # pulls cryptography, already resolved transitively via google-auth.
