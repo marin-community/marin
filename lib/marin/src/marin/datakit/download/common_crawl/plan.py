@@ -31,7 +31,7 @@ from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 
-from marin.datakit.download.common_crawl_warc import (
+from marin.datakit.download.common_crawl.warc import (
     COMMON_CRAWL_DATA_URL,
     CommonCrawlClient,
     CommonCrawlWarcError,

@@ -14,6 +14,16 @@ from statistics import median
 import fsspec
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
+from marin.datakit.download.common_crawl.plan import (
+    DISCOVERY_SCHEMA,
+    CommonCrawlDiscoverySummary,
+    CommonCrawlIndexKind,
+    CommonCrawlSource,
+    common_crawl_plan_step,
+    discover_index_partition,
+    selected_common_crawl_record,
+)
+from marin.datakit.download.common_crawl.warc import common_crawl_index_partitions
 from marin.datakit.download.common_crawl_docx import (
     COMMON_CRAWL_DOCX_SCHEMA,
     CommonCrawlDocxConfig,
@@ -27,16 +37,6 @@ from marin.datakit.download.common_crawl_docx import (
     fetch_common_crawl_docx,
     identify_common_crawl_docx_language,
 )
-from marin.datakit.download.common_crawl_plan import (
-    DISCOVERY_SCHEMA,
-    CommonCrawlDiscoverySummary,
-    CommonCrawlIndexKind,
-    CommonCrawlSource,
-    common_crawl_plan_step,
-    discover_index_partition,
-    selected_common_crawl_record,
-)
-from marin.datakit.download.common_crawl_warc import common_crawl_index_partitions
 from marin.datakit.normalize import DedupMode, NormalizedData, normalize_step
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote

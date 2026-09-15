@@ -9,6 +9,12 @@ from dataclasses import dataclass
 import pytest
 from docx import Document
 from marin.datakit.download import common_crawl_docx
+from marin.datakit.download.common_crawl.plan import (
+    CommonCrawlIndexKind,
+    CommonCrawlSource,
+    FetchedCommonCrawlRecord,
+)
+from marin.datakit.download.common_crawl.warc import CommonCrawlWarcRecord, content_digest, main_record_from_index_row
 from marin.datakit.download.common_crawl_docx import (
     DOCX_MIME_TYPE,
     CommonCrawlDocxConfig,
@@ -29,12 +35,6 @@ from marin.datakit.download.common_crawl_docx import (
     process_fetched_docx,
     validate_docx,
 )
-from marin.datakit.download.common_crawl_plan import (
-    CommonCrawlIndexKind,
-    CommonCrawlSource,
-    FetchedCommonCrawlRecord,
-)
-from marin.datakit.download.common_crawl_warc import CommonCrawlWarcRecord, content_digest, main_record_from_index_row
 from pydantic import BaseModel
 
 from experiments.datakit.common_crawl_docx_sample import sample_report_markdown

@@ -21,7 +21,7 @@ from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 
-from marin.datakit.download.common_crawl_plan import (
+from marin.datakit.download.common_crawl.plan import (
     CommonCrawlDiscoveryOptions,
     CommonCrawlFetchTask,
     CommonCrawlPlanOptions,

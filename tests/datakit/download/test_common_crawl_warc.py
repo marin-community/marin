@@ -15,8 +15,8 @@ from typing import TextIO
 
 import pytest
 import requests
-from marin.datakit.download import common_crawl_plan
-from marin.datakit.download.common_crawl_plan import (
+from marin.datakit.download.common_crawl import plan as common_crawl_plan
+from marin.datakit.download.common_crawl.plan import (
     CommonCrawlFetchTask,
     CommonCrawlIndexKind,
     CommonCrawlSelection,
@@ -25,7 +25,7 @@ from marin.datakit.download.common_crawl_plan import (
     common_crawl_fetch_failure_counts,
     fetch_common_crawl_task,
 )
-from marin.datakit.download.common_crawl_warc import (
+from marin.datakit.download.common_crawl.warc import (
     CommonCrawlClient,
     CommonCrawlDownloadError,
     CommonCrawlIndexManifestError,

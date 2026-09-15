@@ -5,7 +5,7 @@ import base64
 import hashlib
 from pathlib import Path
 
-from marin.datakit.download.common_crawl_plan import (
+from marin.datakit.download.common_crawl.plan import (
     CommonCrawlFilter,
     CommonCrawlIndexKind,
     CommonCrawlPlanOptions,
@@ -20,7 +20,7 @@ from marin.datakit.download.common_crawl_plan import (
     write_common_crawl_discovery,
     write_common_crawl_plan,
 )
-from marin.datakit.download.common_crawl_warc import main_record_from_index_row
+from marin.datakit.download.common_crawl.warc import main_record_from_index_row
 
 RECORD_ID = "<urn:uuid:019f8700-d21d-78d8-8eb1-99eaa22579da>"
 
