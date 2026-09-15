@@ -43,7 +43,7 @@ def _wait_for_all_tasks_ready(
     poll_interval: float,
 ) -> None:
     ctx = iris_ctx()
-    endpoint_name = f"{MEGASCALE_READY_ENDPOINT_PREFIX}{job_info.task_index}"
+    endpoint_name = job_info.scoped_endpoint_name(f"{MEGASCALE_READY_ENDPOINT_PREFIX}{job_info.task_index}")
     endpoint_id = ctx.registry.register(endpoint_name, job_info.advertise_host)
     atexit.register(ctx.registry.unregister, endpoint_id)
 
@@ -51,7 +51,9 @@ def _wait_for_all_tasks_ready(
         missing = [
             task_index
             for task_index in range(job_info.num_tasks)
-            if ctx.resolver.resolve(f"{MEGASCALE_READY_ENDPOINT_PREFIX}{task_index}").is_empty
+            if ctx.resolver.resolve(
+                job_info.scoped_endpoint_name(f"{MEGASCALE_READY_ENDPOINT_PREFIX}{task_index}")
+            ).is_empty
         ]
         if missing:
             logger.info("Waiting for Iris tasks before Megascale init; missing task indexes: %s", missing)
@@ -70,11 +72,12 @@ def _coordinator_address(
     job_info: JobInfo,
     *,
     port: int,
-    endpoint_name: str,
+    base_endpoint_name: str,
     timeout: float,
     poll_interval: float,
 ) -> str:
     ctx = iris_ctx()
+    endpoint_name = job_info.scoped_endpoint_name(base_endpoint_name)
 
     if job_info.task_index == 0:
         coordinator = f"{job_info.advertise_host}:{port}"
@@ -132,7 +135,7 @@ def megascale_env_for_iris_task(
         MEGASCALE_COORDINATOR_ADDRESS: _coordinator_address(
             job_info,
             port=port,
-            endpoint_name=endpoint_name,
+            base_endpoint_name=endpoint_name,
             timeout=timeout,
             poll_interval=poll_interval,
         ),
