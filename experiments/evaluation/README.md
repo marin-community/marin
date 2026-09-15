@@ -140,10 +140,11 @@ and on failure, so a failed run is still accounted for -- and a failure carries 
 last 100 log lines (`log_tails`), so most failures are diagnosable straight from the record (or the
 dashboard) without cluster access.
 
-Alongside the results tree, each evaluator writes its individually scored questions to the FineStore
-`samples` table using `EvalSample`, the shared schema in `finestore.eval`. Evalchemy also preserves
-its native `--log_samples` JSONL, while Harbor preserves its native results and trajectories and
-writes flattened trajectory steps to the `steps` table. Load the normalized tables with
+Within its FineStore archive, each evaluator writes individually scored questions to the `samples`
+table using `EvalSample`, the shared schema in `finestore.eval`. Evalchemy writes its native
+aggregate JSON and `--log_samples` JSONL directly as FineStore source artifacts. Harbor preserves
+its native results and trajectories and writes flattened trajectory steps to the `steps` table; its
+ordinary job tree remains resume state. Load the normalized tables with
 pandas/duckdb, or read rows back with `EvalSample.model_validate`, to zoom into any run.
 
 Evaldash treats these records as the source of truth. Its background ingestor scans every configured

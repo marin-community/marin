@@ -12,7 +12,11 @@ import functools
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
+from finestore.eval import SOURCES_PREFIX
+from finestore.layout import BlobTables
+from finestore.reader import ReadView
 from pydantic import Field
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -22,6 +26,8 @@ from marin.execution.artifact import Artifact, result_type_name
 logger = logging.getLogger(__name__)
 
 _REPORT_FILE = "report.json"
+_EVALCHEMY_SOURCE_ROOT = PurePosixPath(SOURCES_PREFIX, "evalchemy")
+_NATIVE_SOURCE_DIR = "native"
 
 
 def _numeric(values: dict) -> dict[str, float]:
@@ -77,6 +83,50 @@ class EvalchemyResult(EvalResult):
             results = json.loads(result_file.read_text()).get("results", {})
             for task, task_metrics in results.items():
                 # One entry -> the dir is the whole identity; several (a group task) -> namespace them.
+                key = task_dir if len(results) == 1 else f"{task_dir}/{task}"
+                metrics[key] = _numeric(task_metrics)
+        return metrics
+
+    def task_metrics(self) -> dict[str, dict[str, float]]:
+        return dict(self._task_metrics)
+
+    def averages(self) -> dict[str, float]:
+        return {}
+
+
+class FineStoreEvalchemyResult(EvalResult):
+    """Per-task metrics from Evalchemy aggregate artifacts stored in FineStore."""
+
+    @functools.cached_property
+    def _task_metrics(self) -> dict[str, dict[str, float]]:
+        reader = ReadView(self.path)
+        result_sources: list[tuple[str, str]] = []
+        for key in reader.keys(BlobTables.DESCRIPTORS):
+            name = key[0]
+            if not isinstance(name, str):
+                continue
+            path = PurePosixPath(name)
+            if not path.is_relative_to(_EVALCHEMY_SOURCE_ROOT):
+                continue
+            relative = path.relative_to(_EVALCHEMY_SOURCE_ROOT)
+            if (
+                len(relative.parts) != 3
+                or relative.parts[1] != _NATIVE_SOURCE_DIR
+                or not relative.name.startswith("results_")
+                or relative.suffix != ".json"
+            ):
+                continue
+            result_sources.append((name, relative.parts[0]))
+        if not result_sources:
+            raise FileNotFoundError(f"no Evalchemy aggregate artifacts in FineStore archive {self.path}")
+
+        metrics: dict[str, dict[str, float]] = {}
+        for name, task_dir in sorted(result_sources):
+            payload = reader.read_blob(name)
+            if payload is None:
+                raise FileNotFoundError(f"FineStore archive {self.path} lists {name!r} but cannot read it")
+            results = json.loads(payload).get("results", {})
+            for task, task_metrics in results.items():
                 key = task_dir if len(results) == 1 else f"{task_dir}/{task}"
                 metrics[key] = _numeric(task_metrics)
         return metrics

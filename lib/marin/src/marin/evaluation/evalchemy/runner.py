@@ -15,11 +15,10 @@ from enum import StrEnum
 
 from iris.client.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
 from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS
-from marin.evaluation.evalchemy.result import EvalchemyResult
+from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_EXTRA_PACKAGES,
     EVALCHEMY_PYTHON_VERSION,
@@ -116,7 +115,7 @@ class EvalchemyOutcome:
     """A completed result tree, child job identity, coverage, and recovered partial-task metrics."""
 
     jobs: dict[str, str]
-    result: EvalchemyResult
+    result: FineStoreEvalchemyResult
     coverage: dict[str, TaskCoverage]
     recovered_metrics: dict[str, dict[str, float]]
 
@@ -179,17 +178,6 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
             "max_length": config.max_length,
         }
     )
-
-
-def _verify_durable_artifacts(output_dir: str) -> None:
-    results = StoragePath(prefix_join(output_dir, "**/results_*.json")).glob()
-    logger.info(
-        "Durable Evalchemy artifacts under %s: %d result file(s)",
-        output_dir,
-        len(results),
-    )
-    if not results:
-        raise RuntimeError(f"no Evalchemy results_*.json landed under {output_dir!r}")
 
 
 def _evalchemy_client_command(runtime: EvalchemyRuntimeConfig) -> tuple[str, ...]:
@@ -270,7 +258,8 @@ def run_evalchemy(
         raise ValueError(f"Evalchemy output_dir {output_dir!r} is not an object-store path")
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
     try:
-        _verify_durable_artifacts(output_dir)
+        result = FineStoreEvalchemyResult(path=output_dir)
+        result.task_metrics()
         export = summarize_native_eval_samples(output_dir)
     except Exception as exc:
         raise EvalPipelineError(
@@ -288,7 +277,7 @@ def run_evalchemy(
     )
     return EvalchemyOutcome(
         jobs={_EVAL_JOB_ROLE: eval_job},
-        result=EvalchemyResult(path=output_dir),
+        result=result,
         coverage=export.coverage,
         recovered_metrics=export.recovered_metrics,
     )

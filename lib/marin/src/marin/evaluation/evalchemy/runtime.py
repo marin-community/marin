@@ -16,8 +16,8 @@ EVALCHEMY_REQUIREMENT = EVALCHEMY.requirement(("serve-eval",))
 EVALCHEMY_PYTHON_VERSION = "3.12"
 _PYTHON_ABI = f"cp{EVALCHEMY_PYTHON_VERSION.replace('.', '')}"
 
-# The Marin client uploads both GCS and CoreWeave S3 artifacts. Evalchemy's lean endpoint core
-# includes fsspec but intentionally leaves cloud filesystem implementations to its caller.
+# FineStore writes evaluator artifacts to both GCS and CoreWeave S3. Evalchemy's lean endpoint core
+# leaves those cloud filesystem implementations to its caller.
 #
 # Keep CPU-only PyTorch as a compatibility floor for benchmark orchestration and grading code.
 # Inference stays in the separately served model process; direct wheel URLs prevent uv from

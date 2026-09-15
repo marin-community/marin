@@ -7,10 +7,9 @@ Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG`` (the parent builds it in
 :mod:`marin.evaluation.evalchemy.runner`), so nothing else in Marin needs to import here.
 Each task runs through the evalchemy fork's ``evalchemy`` CLI once (one invocation per task so each
 carries its own ``num_fewshot``) with lm-eval's ``local-completions`` (or ``local-chat-completions``)
-API model pointed at the served URL. Its ``results_*.json`` tree is uploaded to ``out_path/<dir>/``
-for :class:`~marin.evaluation.evalchemy.result.EvalchemyResult` to read back. ``out_path`` is an
-object-store URL the parent resolved under ``marin_prefix()``; for an ``s3://`` destination the pod's
-injected ``FSSPEC_S3`` (endpoint + virtual-host addressing) is applied by fsspec automatically.
+API model pointed at the served URL. Evalchemy writes its aggregate JSON, sample JSONL, and normalized
+sample rows directly to the FineStore archive at ``out_path``. The ordinary ``--output_path`` is a
+temporary directory used for Evalchemy's local completion check and is discarded after each task.
 """
 
 from __future__ import annotations
@@ -22,8 +21,6 @@ import sys
 import tempfile
 import urllib.request
 from pathlib import Path
-
-import fsspec
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
 
@@ -134,8 +131,8 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         str(gen_budget),
         "--output_path",
         output_path,
-        # Per-question JSONL remains beside the results JSON. Evalchemy also writes both native
-        # artifacts and normalized tables directly to the shared FineStore root.
+        # FineStore owns the durable native artifacts and normalized sample rows. Evalchemy keeps
+        # its aggregate JSON in this temporary directory only for the completion check below.
         "--log_samples",
         "--finestore_output_path",
         config["out_path"],
@@ -178,20 +175,6 @@ def scored_results(local_out: str) -> bool:
     return False
 
 
-def upload_task_output(out_fs, local_out: str, dest: str) -> None:
-    """Replace ``dest`` with the task tree ``local_out`` holds.
-
-    fsspec ``put(local_out, dest, recursive=True)`` copies the tempdir's *contents* into ``dest`` only
-    while ``dest`` does not yet exist; once it does — a retried evaluation reuses the same durable
-    ``dest`` — ``put`` nests the tempdir under it as ``dest/tmp<random>/...``, leaving a second complete
-    task tree that later reads must deduplicate. Removing ``dest`` first makes every attempt write
-    exactly one tree.
-    """
-    if out_fs.exists(dest):
-        out_fs.rm(dest, recursive=True)
-    out_fs.put(local_out, dest, recursive=True)
-
-
 def main() -> None:
     config = json.loads(os.environ[CONFIG_ENV_KEY])
     tasks = config["tasks"]
@@ -199,11 +182,6 @@ def main() -> None:
         raise SystemExit("run_evalchemy_client requires at least one task")
 
     out_path = config["out_path"].rstrip("/")
-    # Raw fsspec, not rigging's StoragePath: the uvx environment carries fsspec + s3fs/gcsfs, not rigging.
-    # For an s3:// destination the pod's injected FSSPEC_S3 (endpoint + virtual-host addressing) is
-    # applied by fsspec, so url_to_fs needs no extra config. out_path is region-local (the eval child
-    # is pinned to the serve region), so no cross-region copy.
-    out_fs, _ = fsspec.core.url_to_fs(out_path)
     served = served_max_length(config["base_url"])
     available_context = served - _CONTEXT_MARGIN if served is not None else None
     configured_context = config.get("max_length")
@@ -212,26 +190,20 @@ def main() -> None:
     print(f"served max_model_len: {served} (lm-eval max_length={max_length})", flush=True)
     failures: list[str] = []
     for task in tasks:
-        dest = f"{out_path}/{task['dir']}"
         with tempfile.TemporaryDirectory() as local_out:
             # Evalchemy is installed beside the uvx environment's interpreter.
             cmd = build_command(config, task, local_out, sys.executable, max_length)
             print(f"running evalchemy: {' '.join(cmd)}", flush=True)
-            # Upload whatever the task produced before reacting to its exit code, so one task's failure
-            # does not discard another task's already-scored output.
             result = subprocess.run(cmd)
             produced = os.listdir(local_out)
             scored = scored_results(local_out)
-            if produced:
-                upload_task_output(out_fs, local_out, dest)
-                print(f"uploaded {len(produced)} path(s) to {dest}", flush=True)
         if result.returncode != 0:
             failures.append(f"{task['name']}: evalchemy exited {result.returncode}")
         elif not produced:
             failures.append(f"{task['name']}: produced no artifacts")
         elif not scored:
             failures.append(f"{task['name']}: results are empty (every request to the endpoint failed?)")
-    print(f"evalchemy client wrote results for {len(tasks)} task(s) to {out_path}", flush=True)
+    print(f"evalchemy client wrote {len(tasks)} task result(s) to FineStore at {out_path}", flush=True)
     if failures:
         raise SystemExit("evalchemy task failures: " + "; ".join(failures))
 
