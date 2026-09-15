@@ -17,6 +17,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 import cloudpickle
 from fray.actor import ActorGroup, ActorHandle, current_actor
@@ -81,6 +82,7 @@ MAX_STATUS_TEXT_LENGTH = 1000
 MAX_CONCURRENT_PIPELINES = 16
 MAX_CONCURRENT_RESULT_READS = 16
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
+ZEPHYR_EXECUTIONS_APPLET_URL = "https://applets.marina.oa.dev/a/6c2b0dc9-9a31-4777-82d4-e759c0292aa3/"
 
 # Seconds between worker-job liveness probes. Each probe is a GetJobState RPC to
 # the Iris controller, and the coordinator loop ticks every 0.5s, so probing once
@@ -628,7 +630,8 @@ class ZephyrCoordinator:
         detail_lines: list[str] = []
         summary_lines: list[str] = []
         for execution_id, plan_stages, stage_index, completed, total, in_flight, queued in snapshot:
-            detail_lines.append(f"**{execution_id}**")
+            execution_url = f"{ZEPHYR_EXECUTIONS_APPLET_URL}#/execution/{quote(execution_id, safe='')}"
+            detail_lines.append(f"**[{execution_id}]({execution_url})**")
             for idx, stage in enumerate(plan_stages):
                 stage_desc = _get_stage_description(stage)
                 detail_lines.append(f"- **{stage_desc}**" if idx == stage_index else f"- {stage_desc}")
