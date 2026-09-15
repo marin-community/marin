@@ -13,6 +13,7 @@ from pathlib import Path
 import click
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
+from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.grug.moe_hero_ep.hero_recipe import HERO_PROCESSES_PER_TASK
@@ -37,7 +38,14 @@ CONTROLLER_CLUSTER = "marin"
 @click.command(help=__doc__, context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("action", type=click.Choice(["reconcile", "report", "inventory", "status"]))
 @click.option("--store-root", default=STORE_ROOT, show_default=True)
-def main(action: str, store_root: str) -> None:
+@click.option(
+    "--priority",
+    type=click.Choice([name for name in PRIORITY_BAND_NAMES if name != "system"], case_sensitive=False),
+    help="Retain this priority for all discovered checkpoints. Omit to preserve saved priorities (otherwise batch).",
+)
+def main(action: str, store_root: str, priority: str | None) -> None:
+    if priority is not None and action != "reconcile":
+        raise click.UsageError("--priority applies only to reconcile")
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
     store = SampleStore(store_root)
@@ -77,7 +85,9 @@ def main(action: str, store_root: str) -> None:
                 HERO_PROCESSES_PER_TASK,
                 sampler_module="experiments.grug.moe_hero_ep.ops.vibe_check.sample",
             )
-            submit_pending(store, jobs, requests)
+            submit_pending(
+                store, jobs, requests, priority_band=priority_band_value(priority) if priority is not None else None
+            )
 
 
 if __name__ == "__main__":

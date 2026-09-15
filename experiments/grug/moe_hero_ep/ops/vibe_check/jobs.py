@@ -17,6 +17,7 @@ from iris.client.client import IrisClient, JobAlreadyExists
 from iris.cluster.types import Entrypoint, EnvironmentSpec
 from iris.resources.state import TERMINAL_JOB_STATES, JobState
 from iris.rpc import job_pb2
+from iris.rpc.proto_display import priority_band_rank
 from marin.training.training import resolve_training_env
 from rigging.timing import Duration
 
@@ -31,7 +32,7 @@ MAX_ATTEMPTS = 3
 class Jobs(Protocol):
     def states(self) -> dict[str, JobState]: ...
 
-    def submit(self, request: SampleRequest, name: str) -> None:
+    def submit(self, request: SampleRequest, name: str, priority_band: int) -> None:
         """Submit with ERROR-on-exists. Never replace an existing job."""
         ...
 
@@ -40,10 +41,16 @@ def sample_job_names(request: SampleRequest) -> list[str]:
     return [f"hero-completions-{request.sample_id}-a{attempt}" for attempt in range(1, MAX_ATTEMPTS + 1)]
 
 
-def submit_pending(store: SampleStore, jobs: Jobs, requests: list[SampleRequest]) -> None:
+def submit_pending(
+    store: SampleStore, jobs: Jobs, requests: list[SampleRequest], *, priority_band: int | None = None
+) -> None:
     """Start at most one full-checkpoint attempt. The workflow serializes callers."""
+    if priority_band is not None:
+        priority_band_rank(priority_band)
     for request in requests:
         store.save_request(request)
+    if priority_band is not None:
+        store.set_priorities([request.sample_id for request in requests], priority_band)
     # Read job states before results. Process zero can save a result during this RPC.
     states = jobs.states()
     active = [name for name, state in states.items() if state not in TERMINAL_JOB_STATES]
@@ -52,8 +59,16 @@ def submit_pending(store: SampleStore, jobs: Jobs, requests: list[SampleRequest]
         return  # Wait for teardown even if the active job already wrote its result.
     completed = store.completed_ids()
     attempts = store.attempt_names()
+    priorities = store.priorities()
     pending = []
-    for request in sorted(store.requests(), key=lambda row: (row.checkpoint.step, row.sample_id), reverse=True):
+    for request in sorted(
+        store.requests(),
+        key=lambda row: (
+            priority_band_rank(priorities.get(row.sample_id, job_pb2.PRIORITY_BAND_BATCH)),
+            -row.checkpoint.step,
+            row.sample_id,
+        ),
+    ):
         if request.sample_id in completed or store.retries_exhausted(request):
             continue
         names = sample_job_names(request)
@@ -68,7 +83,7 @@ def submit_pending(store: SampleStore, jobs: Jobs, requests: list[SampleRequest]
     if pending:
         request, name = pending[0]
         store.save_attempt(name)  # A lost or pruned job still consumes this attempt.
-        jobs.submit(request, name)
+        jobs.submit(request, name, priorities.get(request.sample_id, job_pb2.PRIORITY_BAND_BATCH))
         logger.info("Submitted %s for step %d", name, request.checkpoint.step)
     else:
         logger.info("No pending sample sets; %d completed", len(completed))
@@ -100,7 +115,7 @@ class IrisSamplingJobs:
             job.job_id.name: job.state for job in self.client.list_jobs(prefix=f"/{JOB_USER}/") if job.job_id.is_root
         }
 
-    def submit(self, request: SampleRequest, name: str) -> None:
+    def submit(self, request: SampleRequest, name: str, priority_band: int) -> None:
         resources = replace(self.resources, target_cluster=request.target_cluster)
         if not isinstance(resources.device, GpuConfig):
             raise ValueError("Native sampling requires GPU resources")
@@ -159,7 +174,7 @@ class IrisSamplingJobs:
                             max_retries_failure=0,
                             max_retries_preemption=0,
                             max_task_failures=0,
-                            priority_band=job_pb2.PRIORITY_BAND_BATCH,
+                            priority_band=priority_band,
                             existing_job_policy=job_pb2.EXISTING_JOB_POLICY_ERROR,
                         )
                     except JobAlreadyExists:
