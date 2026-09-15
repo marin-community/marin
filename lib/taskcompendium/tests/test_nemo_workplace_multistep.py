@@ -9,7 +9,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
-import msgspec
 import pytest
 
 from taskcompendium.execution import HarborExecutionConfig, HarborLaunchConfig
@@ -19,7 +18,7 @@ from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import ContextRequirement, Outcome, ProviderStateVerifier
 from taskcompendium.providers.nemo_workplace.provider import NemoWorkplaceEnvironment
 from taskcompendium.providers.nemo_workplace.tools import get_tools
-from taskcompendium.rendering import render_task
+from taskcompendium.rendering import render_instruction
 
 pytestmark = pytest.mark.harbor_conformance
 
@@ -117,7 +116,9 @@ async def test_derived_workplace_uses_cumulative_provider_state_and_hides_privat
     derivation = next(resource for resource in sample.specification.resources if resource.path == "derivation.json")
     assert json.loads(derivation.content.data)["kind"] == "explicit_derived_workflow"
 
-    public = msgspec.json.encode(render_task(sample.specification, sample.renderings)).decode()
+    public = "\n".join(
+        render_instruction(sample.specification, rendering, index) for index, rendering in enumerate(sample.renderings)
+    )
     assert "ground_truth" not in public
     assert "source-row.json" not in public
     assert "derivation.json" not in public
@@ -170,7 +171,6 @@ async def test_native_harbor_multistep_provider_trial_retains_state_and_conversa
     assert result.verifier_result.rewards == {"reward": sum(expected_rewards) / len(expected_rewards)}
     assert [step.verifier_result.rewards["reward"] for step in result.step_results] == expected_rewards
     assert [_result(tmp_path, attempt_name, index)["reward"] for index in range(1, 4)] == expected_rewards
-    assert execution["agent"]["kwargs"]["retain_conversation"] is True
     assert len(requests) == sum(len(calls) + 1 for calls in attempt)
     second_step_request = requests[len(attempt[0]) + 1]
     assert [message["role"] for message in second_step_request["messages"]] == [

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import msgspec
 
-from taskcompendium.execution import ChatWithTools, HarborTaskBinding, ProviderEnvironment, ProviderToolBinding
+from taskcompendium.execution import HarborTaskBinding, ProviderEnvironment, ProviderToolBinding
 from taskcompendium.importers.nemo_workplace import (
     _PROVIDER_IMPORT_PATH,
     DATASET,
@@ -32,7 +32,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     TaskSuccessPolicy,
 )
 from taskcompendium.providers.nemo_workplace.provider import ADAPTER, SEED_SHA256
@@ -75,7 +75,7 @@ _NOTIFY_CARLOS = ProviderCall(
 class WorkplaceMultistepSample:
     """One derived, source-pinned workflow plus independent scripted attempts."""
 
-    specification: TaskSpecification
+    specification: TaskSpec
     renderings: tuple[Rendering, ...]
     binding: HarborTaskBinding
     all_good: tuple[tuple[ProviderCall, ...], ...]
@@ -117,7 +117,7 @@ def build_multistep_sample(fixture_root: Path) -> WorkplaceMultistepSample:
     """Build a three-request derived workflow whose later calls require prior provider mutations."""
     data = (fixture_root / FIXTURE_NAME).read_bytes()
     source_specification = import_row(data)
-    if not isinstance(source_specification, TaskSpecification):
+    if not isinstance(source_specification, TaskSpec):
         raise ValueError(source_specification.detail)
     all_good = ((_REPLY, _CREATE_FOLLOW_UP), (_MOVE_TO_IN_PROGRESS,), (_MOVE_TO_IN_REVIEW, _NOTIFY_CARLOS))
     cumulative = (
@@ -152,7 +152,7 @@ def build_multistep_sample(fixture_root: Path) -> WorkplaceMultistepSample:
             context_requirement=ContextRequirement.PRIOR_CONVERSATION,
         ),
     )
-    specification = TaskSpecification(
+    specification = TaskSpec(
         id="nemo/workplace/0-derived-multistep",
         requirements=TaskRequirements(action_interfaces=(INTERFACE,)),
         resources=(
@@ -174,8 +174,7 @@ def build_multistep_sample(fixture_root: Path) -> WorkplaceMultistepSample:
                 _PROVIDER_IMPORT_PATH,
                 {"interface": msgspec.to_builtins(INTERFACE), "seed_sha256": SEED_SHA256},
             ),
-            ChatWithTools((ProviderToolBinding(INTERFACE.name),)),
-            context="conversation",
+            (ProviderToolBinding(INTERFACE.name),),
         ),
         all_good=all_good,
         later_wrong=(

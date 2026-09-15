@@ -10,8 +10,6 @@ from pathlib import Path
 import pytest
 
 from taskcompendium.execution import (
-    Chat,
-    ChatWithTools,
     HarborExecutionConfig,
     HarborLaunchConfig,
     HarborTaskBinding,
@@ -35,7 +33,7 @@ from taskcompendium.models import (
     Rejected,
     Rendering,
     Source,
-    TaskSpecification,
+    TaskSpec,
     XmlPath,
 )
 
@@ -44,19 +42,19 @@ pytestmark = pytest.mark.harbor_conformance
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def _replay_binding(specification: TaskSpecification) -> HarborTaskBinding:
+def _replay_binding(specification: TaskSpec) -> HarborTaskBinding:
     environment = environment_for_requirements(specification.requirements)
     if isinstance(environment, NoEnvironment):
-        return HarborTaskBinding(environment, Chat())
+        return HarborTaskBinding(environment)
     backend = "shellsim" if isinstance(environment, ShellSimEnvironment) else "docker"
-    return HarborTaskBinding(environment, ChatWithTools((HarnessToolBinding("terminal", backend),)))
+    return HarborTaskBinding(environment, (HarnessToolBinding("terminal", backend),))
 
 
 def _replay_execution(binding: HarborTaskBinding) -> HarborExecutionConfig:
     return HarborExecutionConfig(binding, HarborLaunchConfig("replay"))
 
 
-def _source_task(source: str) -> TaskSpecification:
+def _source_task(source: str) -> TaskSpec:
     if source == "gsm8k":
         retained = json.loads((FIXTURES / "gsm8k.json").read_text())
         row = retained["rows"][0]
@@ -169,7 +167,7 @@ async def test_real_answer_harbor_shellsim_grades_file_not_final_response(
     elif attempt == "missing":
         commands = []
     response = bad if attempt == "good" else good
-    binding = HarborTaskBinding(ShellSimEnvironment(), ChatWithTools((HarnessToolBinding("terminal", "shellsim"),)))
+    binding = HarborTaskBinding(ShellSimEnvironment(), (HarnessToolBinding("terminal", "shellsim"),))
     task = lower_to_harbor(
         specification,
         (Rendering("file", FileSubmission("/app/answer.txt", extractor)),),

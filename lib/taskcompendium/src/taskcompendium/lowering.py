@@ -12,8 +12,6 @@ import tomlkit
 from tasktrove_verify.spec import Mode
 
 from taskcompendium.execution import (
-    Chat,
-    ChatWithTools,
     DockerEnvironment,
     HarborExecutionConfig,
     HarborLaunchConfig,
@@ -30,8 +28,8 @@ from taskcompendium.models import (
     EXECUTABLE_MODES,
     HARBOR_REVISION,
     AssistantFinal,
+    Capability,
     ContainerRuntime,
-    ContextRequirement,
     FileSubmission,
     FinalActionSubmission,
     FinalState,
@@ -40,25 +38,23 @@ from taskcompendium.models import (
     ProviderStateVerifier,
     Rendering,
     ResourceRole,
-    TaskSpecification,
+    TaskSpec,
     TaskSuccessPolicy,
     tasktrove_verifier,
     verifier_runtime,
 )
-from taskcompendium.rendering import render_task
+from taskcompendium.rendering import render_instruction, result_tags
 from taskcompendium.resources import materialize_resources
 from taskcompendium.serialization import specification_hash, to_json
 
-LOWERING_VERSION = "0.7"
+LOWERING_VERSION = "0.8"
 
 
 def validate_lowering(
-    specification: TaskSpecification, protocol: Rendering, binding: HarborTaskBinding, step_index: int = 0
+    specification: TaskSpec, protocol: Rendering, binding: HarborTaskBinding, step_index: int = 0
 ) -> None:
     """Reject incompatible interactions, environments, answer formats, and runtimes."""
     step = specification.steps[step_index]
-    if step.context_requirement == ContextRequirement.PRIOR_CONVERSATION and binding.context != "conversation":
-        raise ValueError("Step requires prior conversation context")
     source = tasktrove_verifier(step.verifier)
     if source is not None:
         source_verifier(source)
@@ -71,14 +67,15 @@ def validate_lowering(
     if isinstance(step.verifier, ProviderStateVerifier) and step.verifier.interface not in semantic.action_interfaces:
         raise ValueError("Provider-state verifier must match a declared task action interface")
     validate_requirements(semantic, actual)
-    if isinstance(binding.interaction, Chat):
+    if not binding.tools:
         if bool(semantic.capabilities) or not isinstance(protocol.submission, AssistantFinal | FinalActionSubmission):
-            raise ValueError("Chat requires direct model submissions and no semantic environment requirement")
+            raise ValueError(
+                "An empty tool list requires direct model submissions and no semantic environment requirement"
+            )
         if any(ResourceRole.AGENT in r.roles for r in (*specification.resources, *step.resources)):
-            raise ValueError("Filesystem inputs require ChatWithTools")
-    elif isinstance(binding.interaction, ChatWithTools):
-        if not binding.interaction.tools or isinstance(actual, NoEnvironment):
-            raise ValueError("ChatWithTools requires tools backed by an environment")
+            raise ValueError("Filesystem inputs require explicit tool bindings")
+    elif isinstance(actual, NoEnvironment):
+        raise ValueError("Tool bindings require an environment")
     validate_workspace_submission(specification, protocol, step_index)
     if isinstance(protocol.submission, FinalState):
         if specification.steps[step_index].answer_requirements.kind != "final_state" or not protocol.submission.paths:
@@ -119,7 +116,7 @@ def validate_lowering(
         raise ValueError("Rendering-provided filesystems currently require /app as workdir")
 
 
-def validate_workspace_submission(specification: TaskSpecification, protocol: Rendering, step_index: int = 0) -> None:
+def validate_workspace_submission(specification: TaskSpec, protocol: Rendering, step_index: int = 0) -> None:
     """Validate exclusions before either snapshot export or container launch."""
     runtime = verifier_runtime(specification.steps[step_index].verifier)
     submission = protocol.submission
@@ -136,7 +133,7 @@ def validate_workspace_submission(specification: TaskSpecification, protocol: Re
         raise ValueError("Snapshot exclusions must cover every preserved image dependency directory")
     for resource in (*specification.resources, *specification.steps[step_index].resources):
         if resource.path.split("/")[0] in runtime.workspace.preserved_directories:
-            raise ValueError("Task resources cannot replace preserved image dependency directories")
+            raise ValueError("TaskSpec resources cannot replace preserved image dependency directories")
 
 
 def resolve_harbor_execution(
@@ -183,10 +180,8 @@ def resolve_harbor_execution(
         agent["import_path"] = agents[agent_name]
     else:
         agent["name"] = agent_name
-    if agent_name in {"chat", "tool_chat", "provider_chat"}:
-        agent["kwargs"]["retain_conversation"] = binding.context == "conversation"
-    if agent_name in {"tool_chat", "replay"} and isinstance(binding.interaction, ChatWithTools):
-        agent["kwargs"]["tool_binding"] = msgspec.to_builtins(binding.interaction.tools[0])
+    if agent_name in {"tool_chat", "replay"} and binding.tools:
+        agent["kwargs"]["tool_binding"] = msgspec.to_builtins(binding.tools[0])
     if model_name is not None:
         agent["model_name"] = model_name
     return {
@@ -197,7 +192,7 @@ def resolve_harbor_execution(
 
 
 def lower_to_harbor(
-    specification: TaskSpecification,
+    specification: TaskSpec,
     renderings: tuple[Rendering, ...],
     binding: HarborTaskBinding,
     destination: Path,
@@ -225,8 +220,15 @@ def lower_to_harbor(
         raise ValueError("Final-action Harbor runs require a final-action submission for every step")
     for index, rendering in enumerate(renderings):
         validate_lowering(specification, rendering, binding, index)
-    task = render_task(specification, renderings)
-    validate_requirements(task.requirements, binding.environment)
+    capabilities = set(specification.requirements.capabilities)
+    if any(isinstance(rendering.submission, (FileSubmission, FinalState)) for rendering in renderings):
+        capabilities.add(Capability.FILESYSTEM)
+    if any(ResourceRole.AGENT in resource.roles for resource in specification.resources) or any(
+        ResourceRole.AGENT in resource.roles for step in specification.steps for resource in step.resources
+    ):
+        capabilities.add(Capability.FILESYSTEM)
+    requirements = msgspec.structs.replace(specification.requirements, capabilities=tuple(sorted(capabilities)))
+    validate_requirements(requirements, binding.environment)
     multiple = len(specification.steps) > 1
     if multiple and any(
         r.path == "setup.sh" and ResourceRole.AGENT in r.roles for step in specification.steps for r in step.resources
@@ -244,23 +246,24 @@ def lower_to_harbor(
     destination.mkdir(parents=True)
     environment_dir = destination / "environment"
     environment_dir.mkdir()
-    if task.resources:
-        materialize_resources(task.resources, environment_dir / "inputs")
+    agent_resources = tuple(resource for resource in specification.resources if ResourceRole.AGENT in resource.roles)
+    if agent_resources:
+        materialize_resources(agent_resources, environment_dir / "inputs")
     (destination / "tests").mkdir()
     (destination / "tests/test.sh").write_text("#!/bin/sh\necho 'Use the TaskCompendium verifier adapter' >&2\nexit 1\n")
     specification_json = to_json(specification)
     (destination / "specification.json").write_bytes(specification_json)
-    (destination / "task.json").write_bytes(msgspec.json.encode(task))
     (destination / "renderings.json").write_bytes(msgspec.json.encode(renderings))
     (destination / "binding.json").write_bytes(msgspec.json.encode(binding))
     step_names = [f"step-{index + 1}" for index in range(len(renderings))]
-    for index, task_step in enumerate(task.steps):
+    for index, step in enumerate(specification.steps):
         step_dir = destination / "steps" / step_names[index] if multiple else destination
         step_dir.mkdir(parents=True, exist_ok=True)
-        (step_dir / "instruction.md").write_text(task_step.instructions)
-        if task_step.resources:
-            public_dir = step_dir / "workdir" if multiple else environment_dir / "inputs"
-            materialize_resources(task_step.resources, public_dir)
+        (step_dir / "instruction.md").write_text(render_instruction(specification, renderings[index], index))
+        public_dir = step_dir / "workdir" if multiple else environment_dir / "inputs"
+        agent_step_resources = tuple(resource for resource in step.resources if ResourceRole.AGENT in resource.roles)
+        if agent_step_resources:
+            materialize_resources(agent_step_resources, public_dir)
     task_config: dict[str, Any] = {
         "version": "1.0",
         "environment": {"allow_internet": False},
@@ -307,6 +310,7 @@ def lower_to_harbor(
         "harbor_revision": HARBOR_REVISION,
         "verifier_runtimes": [msgspec.to_builtins(verifier_runtime(step.verifier)) for step in specification.steps],
         "binding": msgspec.to_builtins(binding),
+        "coverage_tags": tuple(sorted((*specification.coverage_tags, *result_tags(renderings)))),
         "source": msgspec.to_builtins(specification.metadata.source),
     }
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

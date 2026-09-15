@@ -16,7 +16,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
 )
 
 _FAMILY = "math-answer"
@@ -38,7 +38,7 @@ def _converter(metadata: dict[str, Any]) -> str:
     return value if isinstance(value, str) else ""
 
 
-def import_task(archive: TaskArchive) -> TaskSpecification | Rejected:
+def import_task(archive: TaskArchive) -> TaskSpec | Rejected:
     """Convert a supported deterministic TaskTrove math archive."""
     source = archive.source
     if archive.family != _FAMILY:
@@ -74,7 +74,7 @@ def import_task(archive: TaskArchive) -> TaskSpecification | Rejected:
         return Rejected(source, RejectionReason.UNDERSPECIFIED, str(error))
     tags = metadata.get("tags", ())
     competencies = tuple(tag for tag in tags if isinstance(tag, str)) if isinstance(tags, list) else ()
-    return TaskSpecification(
+    return TaskSpec(
         id=f"tasktrove-{source.row}",
         requirements=TaskRequirements(),
         resources=(),

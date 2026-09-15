@@ -13,9 +13,10 @@ import pytest
 from tasktrove_verify.spec import Mode
 
 from taskcompendium.execution import (
-    ChatWithTools,
     DockerEnvironment,
     HarborExecutionConfig,
+    HarborLaunchConfig,
+    HarborTaskBinding,
     HarnessToolBinding,
     environment_for_requirements,
 )
@@ -40,7 +41,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     TaskTroveVerifier,
     WorkspaceState,
 )
@@ -86,7 +87,7 @@ HTTPServer(('127.0.0.1', 8765), Endpoint).serve_forever()
 
 
 def _spec(image, setup_commands=()):
-    return TaskSpecification(
+    return TaskSpec(
         id="native-agent/sum",
         requirements=TaskRequirements(
             (Capability.FILESYSTEM, Capability.SHELL, Capability.PROCESS),
@@ -173,16 +174,13 @@ async def test_native_terminus_executes_terminal_commands(
             spec = import_task(read_archive(archive.read_bytes(), "1972", "qa-short-answer"))
             assert not isinstance(spec, Rejected)
             protocol = Rendering("mcq", FileSubmission(output_path, extractor))
+        binding = HarborTaskBinding(DockerEnvironment(runtime_image), (HarnessToolBinding("terminal", "docker"),))
         task = lower_to_harbor(
             spec,
             (protocol,),
-            HarborExecutionConfig(
-                "terminus-2",
-                DockerEnvironment(runtime_image),
-                timeout=45,
-                interaction=ChatWithTools((HarnessToolBinding("terminus-2", "docker"),)),
-            ),
+            binding,
             tmp_path / "task",
+            reference_execution=HarborExecutionConfig(binding, HarborLaunchConfig("terminus-2")),
             model_name="openai/gpt-4o",
             agent_kwargs={
                 "api_base": f"http://127.0.0.1:{server.server_port}/v1",
@@ -191,7 +189,7 @@ async def test_native_terminus_executes_terminal_commands(
                 "enable_summarize": False,
             },
         )
-        execution = json.loads((task / "execution.json").read_text())
+        execution = json.loads((task / "reference-execution.json").read_text())
         result = await run_trial(task, execution, tmp_path / "trials", "terminus")
     finally:
         server.shutdown()
@@ -215,20 +213,19 @@ async def test_preinstalled_native_mini_swe_agent_executes_bash(tmp_path, runtim
         " except OSError: time.sleep(.05)\nelse: raise RuntimeError('fixture endpoint failed to start')"
     )
     spec = _spec(runtime_image, (start + "\npython3 -c " + shlex.quote(ready),))
+    binding = HarborTaskBinding(
+        environment_for_requirements(spec.requirements), (HarnessToolBinding("terminal", "docker"),)
+    )
     task = lower_to_harbor(
         spec,
         (Rendering("code", FinalState(("main.py",))),),
-        HarborExecutionConfig(
-            "mini-swe-agent",
-            environment_for_requirements(spec.requirements),
-            timeout=45,
-            interaction=ChatWithTools((HarnessToolBinding("mini-swe-agent", "docker"),)),
-        ),
+        binding,
         tmp_path / "task",
+        reference_execution=HarborExecutionConfig(binding, HarborLaunchConfig("mini-swe-agent")),
         model_name="openai/gpt-4o",
         agent_env={"OPENAI_API_BASE": "http://127.0.0.1:8765/v1", "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
     )
-    execution = json.loads((task / "execution.json").read_text())
+    execution = json.loads((task / "reference-execution.json").read_text())
     result = await run_trial(task, execution, tmp_path / "trials", "mini")
     assert result.exception_info is None, result.exception_info
     assert result.verifier_result.rewards == {"reward": reward}

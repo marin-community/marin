@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from taskcompendium.execution import (
-    Chat,
     HarborExecutionConfig,
     HarborLaunchConfig,
     HarborTaskBinding,
@@ -49,7 +48,7 @@ def _task(tmp_path: Path):
     archive = read_archive((FIXTURES / "json-row-16636.tar.gz").read_bytes(), "16636", "other")
     specification = import_task(archive)
     assert not isinstance(specification, Rejected)
-    binding = HarborTaskBinding(environment_for_requirements(specification.requirements), Chat())
+    binding = HarborTaskBinding(environment_for_requirements(specification.requirements))
     return lower_to_harbor(
         specification,
         (Rendering("structured", AssistantFinal()),),
@@ -63,7 +62,7 @@ def _xml_task(tmp_path: Path):
     archive = read_archive((FIXTURES / "xml-row-16634.tar.gz").read_bytes(), "16634", "other")
     specification = import_task(archive)
     assert not isinstance(specification, Rejected)
-    binding = HarborTaskBinding(environment_for_requirements(specification.requirements), Chat())
+    binding = HarborTaskBinding(environment_for_requirements(specification.requirements))
     return lower_to_harbor(
         specification,
         (Rendering("structured-xml", AssistantFinal()),),

@@ -26,7 +26,7 @@ from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import ActionInterface, AssistantFinal, Outcome, ProviderStateVerifier, Rejected, Rendering
 from taskcompendium.providers.nemo_workplace.provider import NemoWorkplaceEnvironment
 from taskcompendium.providers.nemo_workplace.tools import get_tools
-from taskcompendium.rendering import render_task
+from taskcompendium.rendering import render_instruction
 
 FIXTURES = Path(__file__).parent / "fixtures/nemo"
 REIMPORT_FIXTURES = FIXTURES / "reimport"
@@ -95,7 +95,7 @@ async def test_hub_workplace_rows_preserve_source_identity_and_authoritative_sta
     assert await _dispatch(environment, calls)
     assert (await environment.grade_provider_state(verifier.adapter, verifier.parameters)).reward == 1.0
 
-    public = msgspec.json.encode(render_task(specification, (Rendering("chat", AssistantFinal()),))).decode()
+    public = render_instruction(specification, Rendering("chat", AssistantFinal()))
     assert "ground_truth" not in public
     assert "source-provenance.json" not in public
     assert provider_binding().environment.interface == verifier.interface
@@ -139,7 +139,7 @@ async def test_workplace_sessions_are_fresh_and_concurrent():
 
 def test_workplace_public_task_hides_private_seed_and_verifier_data():
     sample = build_sample(FIXTURES)
-    public = msgspec.json.encode(render_task(sample.specification, (sample.rendering,))).decode()
+    public = render_instruction(sample.specification, sample.rendering)
     private = msgspec.json.encode(sample.specification).decode()
 
     assert "provider_state" not in public

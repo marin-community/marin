@@ -21,7 +21,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     WorkspaceState,
     relative_path,
 )
@@ -95,9 +95,7 @@ def _instructions(instructions: str) -> str:
     return "\n".join(lines).split("\n## Available Tools\n", 1)[0].strip()
 
 
-def import_task(
-    archive: TaskArchive, *, verifier_runtime: ContainerRuntime | None = None
-) -> TaskSpecification | Rejected:
+def import_task(archive: TaskArchive, *, verifier_runtime: ContainerRuntime | None = None) -> TaskSpec | Rejected:
     """Use ShellSim for the task world and a pinned Docker image for its original checker."""
     source = archive.source
     if archive.family != FAMILY:
@@ -131,7 +129,7 @@ def import_task(
         return Rejected(source, RejectionReason.BROKEN_GRADER, str(error))
     tags = metadata.get("tags", ())
     competencies = tuple(tag for tag in tags if isinstance(tag, str)) if isinstance(tags, list) else ()
-    return TaskSpecification(
+    return TaskSpec(
         id=f"tasktrove-{source.row}",
         requirements=environment,
         resources=resources,

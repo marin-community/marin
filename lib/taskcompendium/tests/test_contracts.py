@@ -11,8 +11,6 @@ import pytest
 from tasktrove_verify.spec import Mode
 
 from taskcompendium.execution import (
-    Chat,
-    ChatWithTools,
     DockerEnvironment,
     HarborExecutionConfig,
     HarborLaunchConfig,
@@ -42,23 +40,22 @@ from taskcompendium.models import (
     ResourceRole,
     Source,
     StepSpecification,
-    Task,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     TaskSuccessPolicy,
     TaskTroveVerifier,
     WorkspaceState,
     XmlPath,
 )
-from taskcompendium.rendering import render_task
+from taskcompendium.rendering import render_instruction, result_tags
 from taskcompendium.resources import materialize
 from taskcompendium.serialization import from_json, read_parquet, specification_hash, to_json, write_parquet
 
 
 @pytest.fixture
 def math_task():
-    return TaskSpecification(
+    return TaskSpec(
         id="unit/math",
         requirements=TaskRequirements(),
         resources=(),
@@ -153,25 +150,30 @@ def test_format_is_semantic_and_cannot_be_replaced_by_wrapper(math_task):
         validate_lowering(
             spec,
             Rendering("xml", AssistantFinal(XmlPath())),
-            HarborTaskBinding(NoEnvironment(), Chat()),
+            HarborTaskBinding(NoEnvironment()),
         )
-    with pytest.raises(ValueError, match="Chat requires"):
+    with pytest.raises(ValueError, match="empty tool list"):
         validate_lowering(
             math_task,
             Rendering("file", FileSubmission("/app/a")),
-            HarborTaskBinding(NoEnvironment(), Chat()),
+            HarborTaskBinding(NoEnvironment()),
         )
 
 
-def test_rendered_task_keeps_semantic_coverage_and_adds_result_encoding(math_task):
+def test_lowering_result_tags_add_output_encoding(math_task):
     specification = msgspec.structs.replace(
         math_task,
         coverage_tags=("competency:math", "difficulty:easy", "shape:answer"),
     )
-    task = render_task(specification, (Rendering("json", AssistantFinal(JsonPath())),))
-    assert task.coverage_tags == ("competency:math", "difficulty:easy", "result:json", "shape:answer")
-    file_task = render_task(specification, (Rendering("file", FileSubmission("/app/answer.json", JsonPath())),))
-    assert file_task.coverage_tags == (
+    json_rendering = Rendering("json", AssistantFinal(JsonPath()))
+    assert tuple(sorted((*specification.coverage_tags, *result_tags((json_rendering,))))) == (
+        "competency:math",
+        "difficulty:easy",
+        "result:json",
+        "shape:answer",
+    )
+    file_rendering = Rendering("file", FileSubmission("/app/answer.json", JsonPath()))
+    assert tuple(sorted((*specification.coverage_tags, *result_tags((file_rendering,))))) == (
         "competency:math",
         "difficulty:easy",
         "result:file",
@@ -199,7 +201,7 @@ def test_export_materializes_only_agent_projection(math_task, tmp_path):
         (Rendering("file", FileSubmission("/app/answer.txt")),),
         HarborTaskBinding(
             ShellSimEnvironment(),
-            ChatWithTools((ShellToolBinding("shell", "shellsim"),)),
+            (ShellToolBinding("shell", "shellsim"),),
         ),
         tmp_path / "export",
     )
@@ -299,44 +301,38 @@ def test_serialized_exact_verifier_rejects_execution_runtime(math_task):
 
 
 @pytest.mark.parametrize(
-    "agent,environment,interaction",
+    "environment,tools",
     [
-        ("tool_chat", {"kind": "shellsim"}, {"kind": "chat_with_tools", "tools": []}),
         (
-            "tool_chat",
             {"kind": "shellsim"},
-            {"kind": "chat_with_tools", "tools": [{"kind": "shell", "name": "shell", "backend": "docker"}]},
+            [{"kind": "shell", "name": "shell", "backend": "docker"}],
         ),
         (
-            "terminus-2",
             {"kind": "docker", "image": "sha256:" + "1" * 64},
-            {
-                "kind": "chat_with_tools",
-                "tools": [{"kind": "harness", "interface": "mini-swe-agent", "backend": "docker"}],
-            },
+            [{"kind": "harness", "interface": "mini-swe-agent", "backend": "docker"}],
         ),
         (
-            "tool_chat",
             {"kind": "none"},
-            {"kind": "chat_with_tools", "tools": [{"kind": "shell", "name": "shell", "backend": "shellsim"}]},
+            [{"kind": "shell", "name": "shell", "backend": "shellsim"}],
         ),
     ],
 )
-def test_binding_json_rejects_unimplementable_tool_bindings(agent, environment, interaction):
+def test_binding_json_rejects_unimplementable_tool_bindings(environment, tools):
     with pytest.raises((msgspec.ValidationError, ValueError)):
-        msgspec.json.decode(json.dumps({"environment": environment, "interaction": interaction}), type=HarborTaskBinding)
+        msgspec.json.decode(json.dumps({"environment": environment, "tools": tools}), type=HarborTaskBinding)
 
 
-def test_binding_json_requires_explicit_interaction():
-    with pytest.raises(msgspec.ValidationError, match="interaction"):
-        msgspec.json.decode('{"environment":{"kind":"none"}}', type=HarborTaskBinding)
+def test_binding_json_defaults_to_an_empty_tool_list():
+    assert msgspec.json.decode('{"environment":{"kind":"none"}}', type=HarborTaskBinding) == HarborTaskBinding(
+        NoEnvironment()
+    )
 
 
 def test_terminal_binding_accepts_multiple_harbor_agents_without_selecting_one():
     environment = DockerEnvironment("sha256:" + "1" * 64)
     binding = HarborTaskBinding(
         environment,
-        ChatWithTools((HarnessToolBinding("terminal", "docker"),)),
+        (HarnessToolBinding("terminal", "docker"),),
     )
     for agent in ("replay", "terminus-2", "mini-swe-agent"):
         resolved = resolve_harbor_execution(
@@ -355,21 +351,20 @@ def test_export_rejects_tool_binding_override_before_writing(math_task, tmp_path
         lower_to_harbor(
             math_task,
             (Rendering("plain", AssistantFinal()),),
-            HarborTaskBinding(NoEnvironment(), Chat()),
+            HarborTaskBinding(NoEnvironment()),
             destination,
             agent_kwargs={"tool_binding": {"kind": "harness", "interface": "terminal", "backend": "docker"}},
         )
     assert not destination.exists()
 
 
-def test_public_task_preserves_instance_across_harnesses_and_hides_private_data(math_task, tmp_path):
+def test_lowering_keeps_private_data_out_of_agent_projection(math_task, tmp_path):
     spec = msgspec.structs.replace(
         math_task,
         resources=(Resource("oracle.txt", (ResourceRole.ORACLE,), Embedded(b"secret rationale")),),
     )
     renderings = (Rendering("plain", AssistantFinal()),)
-    public = render_task(spec, renderings)
-    binding = HarborTaskBinding(NoEnvironment(), Chat())
+    binding = HarborTaskBinding(NoEnvironment())
     for agent in ("chat", "replay"):
         path = lower_to_harbor(
             spec,
@@ -378,35 +373,33 @@ def test_public_task_preserves_instance_across_harnesses_and_hides_private_data(
             tmp_path / agent,
             reference_execution=HarborExecutionConfig(binding, HarborLaunchConfig(agent)),
         )
-        assert msgspec.json.decode((path / "task.json").read_bytes(), type=Task) == public
-        assert (path / "instruction.md").read_text() == public.steps[0].instructions
+        assert not (path / "task.json").exists()
+        assert (path / "instruction.md").read_text() == render_instruction(spec, renderings[0])
         assert (path / "binding.json").is_file()
+        assert not (path / "environment/inputs").exists()
         assert not (path / "execution.json").exists()
-    payload = msgspec.to_builtins(public)
-    assert public.specification_sha256 == specification_hash(spec)
-    assert public.resources == ()
-    assert "verifier" not in payload["steps"][0]
-    assert "secret rationale" not in msgspec.json.encode(public).decode()
-    file_task = render_task(spec, (Rendering("file-json", FileSubmission("/app/answer.json", JsonPath())),))
-    assert file_task.id == public.id
-    assert file_task.specification_sha256 == public.specification_sha256
-    assert file_task.requirements.capabilities == (Capability.FILESYSTEM,)
+        assert "secret rationale" not in (path / "instruction.md").read_text()
+        assert json.loads((path / "manifest.json").read_text())["specification_sha256"] == specification_hash(spec)
     assert grade_attempt(spec, renderings[0], "3/4", tmp_path).reward == 1.0
 
 
-def test_public_rendering_rejects_changes_to_intrinsic_submission(math_task):
+def test_lowering_rejects_changes_to_intrinsic_submission(math_task):
     state = msgspec.structs.replace(
         math_task,
         steps=(msgspec.structs.replace(math_task.steps[0], answer_requirements=AnswerRequirements("final_state")),),
     )
     with pytest.raises(ValueError, match="final-state"):
-        render_task(state, (Rendering("plain", AssistantFinal()),))
+        validate_lowering(
+            state,
+            Rendering("plain", AssistantFinal()),
+            HarborTaskBinding(ShellSimEnvironment(), (ShellToolBinding("shell", "shellsim"),)),
+        )
     literal = msgspec.structs.replace(
         math_task,
         steps=(msgspec.structs.replace(math_task.steps[0], answer_requirements=AnswerRequirements("literal")),),
     )
     with pytest.raises(ValueError, match="Intrinsic"):
-        render_task(literal, (Rendering("json", AssistantFinal(JsonPath())),))
+        validate_lowering(literal, Rendering("json", AssistantFinal(JsonPath())), HarborTaskBinding(NoEnvironment()))
 
 
 def test_provider_matching_preserves_capabilities_and_pinned_state():

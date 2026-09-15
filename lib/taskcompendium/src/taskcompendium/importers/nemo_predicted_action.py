@@ -27,7 +27,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     ToolCallComparatorConfig,
 )
 
@@ -118,7 +118,7 @@ def _instructions(messages: Any) -> str:
     return "\n\n".join(turns)
 
 
-def import_row(row: dict[str, Any], expected_sha256: str) -> TaskSpecification | Rejected:
+def import_row(row: dict[str, Any], expected_sha256: str) -> TaskSpec | Rejected:
     """Convert one canonical source row while retaining its scorer configuration privately."""
     source = Source(DATASET, REVISION, expected_sha256, IMPORTER_REVISION)
     if canonical_sha256(row) != expected_sha256:
@@ -147,7 +147,7 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> TaskSpecification |
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
-    return TaskSpecification(
+    return TaskSpec(
         id=f"nemo-predicted-action-{canonical_sha256({'responses_create_params': request})}",
         requirements=TaskRequirements(),
         resources=(

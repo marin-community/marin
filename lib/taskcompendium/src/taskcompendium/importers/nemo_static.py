@@ -23,7 +23,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     TaskTroveVerifier,
 )
 
@@ -166,7 +166,7 @@ def import_hub_row(
     split: str,
     offset: int,
     judge: JudgeConfig | None = None,
-) -> TaskSpecification | Rejected:
+) -> TaskSpec | Rejected:
     """Convert one reviewed static NeMo row while retaining its source privately."""
     source = _source(corpus, offset)
     try:
@@ -209,7 +209,7 @@ def import_hub_row(
             raise ValueError(f"unsupported static corpus {corpus.value}")
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         return Rejected(source, RejectionReason.BROKEN_GRADER, str(error))
-    return TaskSpecification(
+    return TaskSpec(
         id=task_id,
         requirements=TaskRequirements(),
         resources=_resources(data, corpus, split, offset),

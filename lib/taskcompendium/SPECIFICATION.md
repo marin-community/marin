@@ -1,17 +1,24 @@
-# TaskCompendium specification
+# TaskCompendium spec
 
-TaskCompendium stores reproducible task semantics separately from task presentation and execution. A record says what problem the model must solve, what state must exist, what may be submitted, and how success is determined. A rendering chooses how that submission is presented. A lowering adapts the rendered task to a runtime such as Harbor.
+The goal of TaskCompendium is to provide a source-agnostic and target-agnostic semantic representation of tasks for model evaluation and training. It should support a wide range of task shapes, including:
 
-The current schema version is 0.7. Harbor is the only implemented execution target. The MCP, browser, and interactive-environment sections describe planned extensions; they do not describe current schema fields or supported exports.
+- Single-step tasks in a stateless "chat" format.
+- Tasks that require a specific initial state, such as a Docker image, a pinned repository, or a provider action surface.
+- Multi-step tasks with ordered requests, each with its own submission and correctness check.
+
+TaskCompendium stores reproducible task semantics separately from task presentation and execution. Each record specifies what problem the model needs to solve, what state must exist, what needs to be submitted, and how success is determined. A rendering chooses how that submission is presented. A lowering adapts the rendered task to a runtime such as Harbor or a direct chat rollout.
+
+As of 2026-09-14, Harbor is the only implemented execution target. Supporting non-agentic, "pure chat" rollouts in MarinSkyRL (jointly with Harbor rollouts) should be straightforward.
+
+The MCP, browser, and interactive-environment sections describe planned extensions; they do not describe current schema fields or supported exports.
 
 ## Objects and ownership
 
 ```mermaid
 flowchart TD
-    F[TaskSpec source family] -->|instantiate source key| S[TaskSpecification]
-    S -->|choose rendering for each step| T[Public Task]
-    S -->|choose environment binding| L[Lowering]
-    T --> L
+    S[TaskSpec]
+    S -->|choose rendering and target binding| L[Lowering]
+    B[Rendering Bank] --> L
     L --> H[Harbor package]
     H --> X[Harness execution]
     X --> R[Trace and outcome]
@@ -19,23 +26,20 @@ flowchart TD
     R --> V
 ```
 
-`TaskSpec` is a source-family interface. Its `instantiate(key)` method converts one pinned source row into either a `TaskSpecification` or a `Rejected` record. Importers implement this interface for datasets such as TaskTrove, GSM8K, R2E-Gym, and NeMo Gym.
+`TaskSpec` represents a semantic task without a specific rendering or environment. Instead, it declares some instructions, answer requirements, and verifier contracts, and environment requirements.
 
-`TaskSpecification` is one immutable semantic instance. It includes private verifier data. It is the unit written to the dataset and hashed for provenance.
+Importers implement this interface for datasets such as TaskTrove, GSM8K, R2E-Gym, and NeMo Gym. Where possible, these importers are deterministic. However, they are often heavily LLM-assisted and thus non-deterministic. They may reject a source row if it cannot be faithfully represented in TaskCompendium, or if the task is broken, underspecified, or otherwise unsuitable.
 
-`Task` is the model-visible projection of one `TaskSpecification` under a chosen set of renderings. It excludes verifier and oracle resources.
+`Lowering` is the only public projection. It is a target-specific package derived from a specification, its renderings, and an environment binding. It contains the model-visible instructions, declared tools, and agent resources for that target. A launch then selects a compatible harness, model endpoint, and runtime policy.
 
-A lowering is a target-specific package derived from a specification, its renderings, and an environment binding. It must not recover or alter task semantics. A launch then selects a compatible harness, model endpoint, and runtime policy.
+For instance, a GSM8K row may be imported as a `TaskSpec` with one step, a text answer requirement, and a verifier that checks the answer against the gold. A rendering may choose to extract the answer from `/app/answer.json`, meaning that the environment would need filesystem access. A Harbor lowering may select a Docker image. The launch may then choose a Harbor agent, model endpoint, and retry policy.
 
-TaskCompendium does not yet define a serialized trace schema. Execution produces traces outside task data. For Harbor, the authoritative record is the Harbor trial tree: its result document, agent and verifier artifacts, and any environment artifacts. A future common trace schema should record messages, tool calls and results, model identity, launch configuration, submission, verifier outcome, and artifact references.
-
-## TaskSpecification
+## TaskSpec
 
 A semantic instance has these top-level fields.
 
 | Field | Meaning |
 | --- | --- |
-| `schema_version` | Version of the TaskCompendium semantic schema. Current records use `0.7`. |
 | `id` | Stable TaskCompendium identifier for the fixed instance. |
 | `metadata` | Source provenance plus descriptive labels. |
 | `steps` | Ordered requests and their private success criteria. At least one step is required. |
@@ -48,9 +52,9 @@ A semantic instance has these top-level fields.
 
 `metadata.source` has `dataset`, `revision`, `row`, and `importer_revision`. All four are required. A source revision identifies the upstream data state; an importer revision identifies the conversion logic that produced the semantic record.
 
-`metadata.competencies` and `metadata.task_shape` describe the source task. `coverage_tags` provide a controlled, sortable taxonomy with `competency`, `shape`, `domain`, `artifact`, `interaction`, `state`, `context`, and exactly one Snowball-calibrated `difficulty` tag where a difficulty judgment is available.
+`metadata.competencies` and `metadata.task_shape` describe the source task. `coverage_tags` provide a controlled, sortable taxonomy with `competency`, `shape`, `domain`, `artifact`, `interaction`, `state`, `context`, and exactly one Snowball-calibrated `difficulty` tag where a difficulty judgment is available. The taxonomy is not yet mature and is entirely a proof-of-concept.
 
-A rendering may add `result:json`, `result:xml`, or `result:file`. These are output encodings. They do not claim that a task requires substantive JSON, XML, or file-manipulation work.
+A rendering may add a tag to describe the output format being tested: `result:json`, `result:xml`, or `result:file`, etc. These are output encodings.
 
 ### Steps
 
@@ -64,7 +68,7 @@ Each `StepSpecification` has the following fields.
 | `verifier` | Private correctness contract for this step. |
 | `context_requirement` | `instruction_and_workspace` needs only the current instruction and workspace. `prior_conversation` requires the accumulated visible history from preceding steps. |
 
-For Harbor, a binding with `context: conversation` retains the full sequence of preceding user, assistant, and tool messages. A step with `prior_conversation` requires that binding. `instruction_and_workspace` is a minimum requirement: a conversation binding may still retain prior turns. Importers should use `prior_conversation` only after a step that can produce the needed history.
+For Harbor, every ordered TaskCompendium run retains the full sequence of preceding user, assistant, and tool messages. `prior_conversation` marks a step that depends on this history. `instruction_and_workspace` is a minimum requirement: the history remains available, but the task does not rely on it. Importers should use `prior_conversation` only after a step that can produce the needed history.
 
 An ordered static task can therefore express a workflow whose later request depends on an earlier request and its workspace or conversation. It cannot express an adaptive counterparty that decides the next user message from the model's prior action. That requires the interactive-environment extension described below.
 
@@ -74,11 +78,24 @@ An ordered static task can therefore express a workflow whose later request depe
 
 | Field | Meaning |
 | --- | --- |
-| `capabilities` | Semantic requirements currently drawn from `filesystem`, `shell`, and `process`. A capability states what must be available. It does not choose ShellSim, Docker, or an agent. |
-| `state` | `WorkspaceState`: optional image digest, working directory, setup commands, and additional non-overlapping workspace roots. An image must be immutable. |
+| `capabilities` | Semantic requirements currently drawn from `filesystem`, `shell`, and `process`. A capability states what features must be available in the host environment. It does not choose ShellSim, Docker, or an agent. |
+| `state` | `WorkspaceState`: optional image digest, working directory, setup commands, and additional non-overlapping workspace roots. |
 | `action_interfaces` | Named, versioned stateful action surfaces with a seed digest. The current provider implementation uses this for Workplace. It is separate from shell and filesystem capabilities. |
 
-A Docker image in `state` is an initial-state requirement when task behavior depends on it. It does not by itself grant the model a shell or process tool. A task requiring an answer in `/app/answer.txt` requires a filesystem submission convention; a task requiring command execution declares the shell or process capability separately.
+A Docker image in `state` is an initial-state requirement when task behavior depends on it. A task requiring an answer in `/app/answer.txt` requires a filesystem submission convention; a task requiring command execution declares the shell or process capability separately.
+
+An action interface is a package of tools plus the persistent world they act on. The current Workplace example is pinned from [NVIDIA's Nemotron RL Workplace Assistant dataset](https://huggingface.co/datasets/nvidia/Nemotron-RL-agent-workplace_assistant). It has:
+
+```
+Tools: email_reply, create_task, move_task, look_up_employee, ...
+State: inboxes, projects, task boards, directory records
+Seed: the specific initial company snapshot
+Rules: how each tool mutates state and what it returns
+```
+
+Action Interfaces are not fully baked. They're meant to cover non-shell, non-filesystem stateful providers. They should be versioned and pinned to a specific seed state.
+
+MCPs are similar to action interfaces, but we haven't yet defined a stable MCP contract.
 
 ### Resources and visibility
 
@@ -86,7 +103,7 @@ Every resource has a normalized relative path, content, roles, and an executable
 
 | Role | Visibility and purpose |
 | --- | --- |
-| `agent` | Materialized into the model's task environment or public task projection. |
+| `agent` | Materialized into the lowering's agent-visible environment. |
 | `verifier` | Available only while evaluating a submission. |
 | `oracle` | Private reference material. It cannot also be agent-visible. |
 
@@ -94,11 +111,10 @@ Resources can be shared by the whole specification or attached to one step. A pa
 
 ### Verifiers and outcomes
 
-Verifier variants preserve source-specific semantics without forcing every source into one universal grader format. Current variants include TaskTrove verifier contracts, instruction constraints, predicted native actions, provider-state checks, and code-answer wrappers around isolated source verifiers.
+Verifier variants preserve source-specific semantics without forcing every source into one universal grader format.
+Verifiers can either come from a small taxonomy of TaskTrove-like verifiers or be custom per-task (via an arbitrary script with arbitrary resources). They are private and not agent-visible. A verifier may require a specific environment, such as a pinned Docker image, a provider action interface, etc.
 
-Executable source verification runs in an isolated container. Model judges carry an explicit model policy and a restricted `JudgeView`; they are not agent-visible. A verifier receives the extracted submission and, when appropriate, final workspace state, provider state, and a retained transcript.
-
-Every verifier receives the declared submission. File and final-state renderings supply the requested workspace evidence. Provider-state verifiers query the authoritative provider state. A transcript is available to verifier implementations, but a judge receives it only when its `JudgeView` permits it. Conversation retention is selected by the execution binding; a step's context requirement constrains which bindings are valid.
+LLM-as-judge is stubbed here.
 
 A verifier returns one of four outcomes.
 
@@ -111,7 +127,7 @@ A verifier returns one of four outcomes.
 
 A malformed source record becomes `Rejected` during import when its semantics cannot be preserved or trusted. Rejection reasons include broken graders, source gold leakage, underspecification, null answers that pass, unsupported environments, and duplicates.
 
-## Renderings and public Task records
+## Renderings
 
 A `Rendering` chooses the submission convention for one step. Its `id` identifies the convention; `submission` is one of:
 
@@ -120,31 +136,15 @@ A `Rendering` chooses the submission convention for one step. Its `id` identifie
 - `FinalState`, with paths whose final workspace state is submitted;
 - `FinalActionSubmission`, with source-advertised function definitions for a native final action.
 
-`render_task(specification, renderings)` requires one rendering per semantic step. It produces a public `Task` containing:
+`render_instruction(specification, rendering, step_index)` produces the model-visible instruction for one step. The lowering then materializes only `agent` resources, exposes the selected tools, and records rendering-added result tags. It adds filesystem capability when public files or a file/final-state submission requires it.
 
-- the specification ID and semantic hash;
-- public instructions and only `agent` resources;
-- the selected submission contracts and context requirements;
-- requirements, including filesystem capability added by a file/final-state submission or public files;
-- metadata and coverage tags.
-
-| Task field | Meaning |
-| --- | --- |
-| `id` | Semantic instance ID. |
-| `specification_sha256` | Hash of the complete private semantic specification. |
-| `steps` | Public `TaskStep` records with instructions, public resources, submission contract, and context requirement. |
-| `requirements` | Semantic requirements after adding filesystem access required by public files or the selected submission convention. |
-| `resources` | Public shared resources. |
-| `metadata` | Source provenance and source-level labels. |
-| `coverage_tags` | Semantic coverage tags plus rendering-added result-encoding tags. |
-
-Private verifier inputs, expected actions, judge prompts, source archives, and gold state do not appear in `Task`.
+Private verifier inputs, expected actions, judge prompts, source archives, and gold state do not appear in a lowering's agent-visible surface.
 
 A rendering may add a short output instruction, such as “Write your submission to `/app/answer.txt`.” It must not add evaluation instructions. The task request should still read as a natural request from the original domain.
 
 ## Lowering
 
-A lowering maps a semantic instance and its public rendering to a runtime package. It selects a compatible environment implementation and tool exposure, then validates that both meet the semantic requirements. It does not select the model or a particular agent strategy.
+A lowering maps a semantic `TaskSpec` instance and its selected renderings to a runtime package. It selects a compatible environment implementation and tool exposure, then validates that both meet the semantic requirements. It does not select the model or a particular agent strategy.
 
 The current Harbor lowering is `lower_to_harbor(specification, renderings, binding, destination)`. It validates:
 
@@ -160,27 +160,15 @@ A successful lowering writes these important artifacts.
 | File | Contents |
 | --- | --- |
 | `specification.json` | Canonical private semantic specification. |
-| `task.json` | Public rendered task. |
 | `renderings.json` | Selected per-step output conventions. |
 | `binding.json` | Environment and model-visible interaction requirements for this Harbor package. |
 | `task.toml` | Harbor task layout, workspace, image, and step configuration. |
 | `manifest.json` | Specification hash, source provenance, rendering identity, Harbor revision, lowering version, and verifier-runtime identity. |
 | `environment/inputs` and step workdirs | Materialized agent-visible resources. |
 
-A reference execution may additionally write `reference-execution.json`. It is a test or example launch artifact. It is not part of canonical task identity.
-
 ### Harbor bindings and launches
 
-`HarborTaskBinding` is the current Harbor-side representation of an environment and interaction requirement. Its environment variant is `NoEnvironment`, `ShellSimEnvironment`, `DockerEnvironment`, or `ProviderEnvironment`; the provider variant carries an adapter import path and private configuration. A binding also contains interaction mode (`chat` or `chat_with_tools`), an explicit tool binding, and conversation retention mode.
-
-`HarborLaunchConfig` chooses a compatible Harbor agent such as `chat`, `tool_chat`, `provider_chat`, or a terminal agent. `HarborExecutionConfig` combines a binding with a launch only when an execution is about to start. Model endpoint, model name, timeouts, retries, and agent-specific arguments are launch policy.
-
-This split is intentional:
-
-- the task says it needs a filesystem, a pinned repository state, or a versioned provider action surface;
-- the environment fulfills those requirements;
-- the binding exposes a suitable model-facing interface for Harbor;
-- the launch selects the agent loop that can use that interface.
+`HarborTaskBinding` is the current Harbor-side representation of an environment and tool requirement. Its environment variant is currently `NoEnvironment`, `ShellSimEnvironment`, `DockerEnvironment`, or `ProviderEnvironment`; the provider variant carries an adapter import path and private configuration. Its `tools` tuple is empty for chat and otherwise declares the explicit model-facing tool binding. The current adapters accept one tool binding.
 
 A future non-Harbor lowering should use the same semantic specification and rendering. It must define its own binding and launch types instead of embedding Harbor fields in task data.
 
@@ -197,26 +185,26 @@ The selector is an integration contract, not a measure of model capability. It c
 
 ## SkyRL integration
 
-TaskCompendium should provide semantic task data and execution adapters to MarinSkyRL. It should not make SkyRL or a specific rollout engine part of a `TaskSpecification`.
-
 ### First stage: Harbor-backed generation
 
-The first SkyRL integration should lower every supported selected task through Harbor. A SkyRL generator selects a canonical specification, a rendering, and a compatible Harbor binding; it then emits a Harbor package and launch configuration. Harbor executes the rollout and returns its trace and semantic outcome. SkyRL consumes the rollout tokens, tool trajectory, final submission, reward, and failure status from that result.
+The pinned MarinSkyRL runtime exposes `entrypoint: terminal_bench_generate` for a non-training rollout-generation run. It loads each item in `data.train_data`, expands it by `generator.n_samples_per_prompt`, runs a Harbor `TrajectoryRunner`, and emits the normalized trajectories. `TrajectoryRunner` is the current generic interface; `GeneratorInterface` is a historical name and should not be reintroduced.
 
-This stage keeps one execution implementation for every supported task shape. It also ensures that direct-chat, ShellSim, Docker, provider, and multi-step behavior pass the same conformance gate before any training integration relies on them.
+TaskCompendium selects a canonical specification, rendering, and compatible Harbor binding before that run. It materializes each selected lowering as a native Harbor package directory. MarinSkyRL's `TerminalBenchTaskDataset` consumes a directory whose immediate children are these packages, identified by their `instruction.md`; it does not need to know TaskCompendium's private semantic schema. Harbor then executes the rollout and returns its trace and semantic outcome. SkyRL consumes the rollout tokens, tool trajectory, final submission, reward, and failure status from that result.
 
-### Second stage: TaskCompendium Generator
+This keeps one execution implementation for every supported task shape. It also ensures that direct-chat, ShellSim, Docker, provider, and multi-step behavior pass the same conformance gate before a generation or training integration relies on them.
 
-After the Harbor path is stable, add a TaskCompendium-owned generator with two explicit lowerings:
+### Later: direct TaskCompendium generation targets
+
+After the Harbor path is stable, add TaskCompendium-owned selection and lowering for two explicit targets:
 
 | Target | Use | Scope |
 | --- | --- | --- |
 | Harbor | Agentic execution, environments, tools, stateful providers, and ordered workflows. | Reuses the Harbor package and trace. |
-| Non-agentic chat | Direct assistant-response rollouts. | Supports tasks whose public Task has a direct final submission and no required action loop. |
+| Non-agentic chat | Direct assistant-response rollouts. | Supports renderings with a direct final submission and no required action loop. |
 
-The generator should choose the target from the task's requirements and the requested training mode. It should not infer that a Docker image permits a chat-only rollout to execute commands. A direct chat lowering serializes the rendered messages, stop conditions, submission extractor, and private verifier invocation; it does not emulate an agent loop.
+Selection chooses the target from task requirements and the requested training mode; a target adapter owns its executable data format.
 
-The generator boundary should preserve these invariants:
+The generation boundary should preserve these invariants:
 
 1. Source provenance and the semantic specification hash identify the task independently of the target.
 2. Rendering chooses the public prompt and submission convention before target lowering.
@@ -234,7 +222,7 @@ An MCP-backed task needs a pinned environment bundle. A proposed `McpServiceRequ
 
 The environment starts the service bundle with Docker Compose or an equivalent allocator. It owns ports, credentials, account fixtures, mutable seed state, and teardown. The harness acts as the MCP client: it initializes each server, calls `tools/list`, and translates the discovered tool schemas into its model provider's tool interface. The model receives normal function/tool definitions and tool-result messages; it does not launch containers or speak MCP JSON-RPC itself.
 
-Record the pinned images, compose manifest, discovered tool schemas and checksum, server revisions, reset result, and every MCP call/result in the trace. Keep credentials, private initial state, and verifier resources out of the public `Task`.
+Record the pinned images, compose manifest, discovered tool schemas and checksum, server revisions, reset result, and every MCP call/result in the trace. Keep credentials, private initial state, and verifier resources out of the agent-visible lowering.
 
 MCP discovery policy belongs to the harness. A small environment can expose every discovered tool at the first model turn. A large environment may expose a constrained discovery tool and reveal schemas incrementally. The task requirement identifies the service behavior; the policy for presenting schemas is a target-level choice.
 
@@ -252,6 +240,8 @@ Avoid a universal canonical tool wire format. The stable contract is the declare
 
 ### Reactive user simulations and interactive environments
 
+Harbor AFAICT only supports static ordered steps. A reactive user simulator is a future extension that can adapt to model actions and produce the next user event. It should be a first-class environment, not a fixed list of `StepSpecification` records.
+
 A reactive user simulator is an environment, not a fixed list of `StepSpecification` records. It owns conversational state, observes model actions, produces the next user event, defines termination, and provides a private success check. The task declaration should identify the simulator version, initial state digest, turn and cost budget, and required interaction capability.
 
 A future `InteractiveEnvironment` protocol should expose operations analogous to `reset`, `observe`, `act`, `is_terminal`, `submit`, and `grade`. Its trace must retain the generated user events and environment transitions. Static ordered steps remain useful for fixed workflows; they should not be overloaded to imitate adaptive dialogue.
@@ -260,8 +250,7 @@ A future `InteractiveEnvironment` protocol should expose operations analogous to
 
 Some future environments will need leases, checkpoint/restore, cleanup, and credential injection. These belong to environment allocation. Task records should pin the resource identities and reset semantics needed for reproduction, while a scheduler provides ephemeral credentials and network placement. A failed teardown or unavailable dependency is infrastructure failure, never a task reward of zero.
 
-## Compatibility rules
 
-A target adapter may reject a task when it cannot preserve the semantic contract. Examples include an interactive protocol lowered to static chat, a process-required task without an isolated process environment, a stateful provider with a mismatched action-interface seed, or an executable source verifier without its pinned runtime.
+### LLM-as-judge
 
-Rejecting an unsupported task is preferable to exporting a task that appears runnable but changes its environment, success condition, or available actions.
+This isn't implemented but in principle a verifier could be an LLM that checks the model's submission against a reference answer and/or rubric. The verifier would receive the submission and reference answer, and return a score or pass/fail judgment. Presumably the judge should also declare what capacity of model it requires.

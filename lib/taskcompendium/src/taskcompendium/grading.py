@@ -42,7 +42,7 @@ from taskcompendium.models import (
     PredictedActionVerifier,
     Rendering,
     ResourceRole,
-    TaskSpecification,
+    TaskSpec,
     TaskTroveVerifier,
 )
 from taskcompendium.predicted_action import action_from_transcript, compare
@@ -55,9 +55,7 @@ def source_verifier(verifier: TaskTroveVerifier) -> Spec:
     return parse_spec(tomlkit.dumps({"mode": verifier.mode.value, **parameters}))
 
 
-def _candidate(
-    specification: TaskSpecification, protocol: Rendering, response: str | None, workspace: Path
-) -> str | None:
+def _candidate(specification: TaskSpec, protocol: Rendering, response: str | None, workspace: Path) -> str | None:
     submission = protocol.submission
     if isinstance(submission, FinalState):
         return None
@@ -81,7 +79,7 @@ def _candidate(
 
 
 def grade_attempt(
-    specification: TaskSpecification,
+    specification: TaskSpec,
     protocol: Rendering,
     response: str | None,
     workspace: Path,
@@ -129,7 +127,7 @@ def grade_attempt(
 
 
 def _grade_attempt(
-    specification: TaskSpecification,
+    specification: TaskSpec,
     protocol: Rendering,
     response: str | None,
     workspace: Path,

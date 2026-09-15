@@ -33,7 +33,7 @@ def _read(uri: str) -> bytes:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    schema = commands.add_parser("schema", help="Write the versioned TaskSpecification JSON schema")
+    schema = commands.add_parser("schema", help="Write the versioned TaskSpec JSON schema")
     schema.add_argument("--output", type=Path, required=True)
     validate = commands.add_parser("validate", help="Validate a specification against its pinned verifier ontology")
     validate.add_argument("input")

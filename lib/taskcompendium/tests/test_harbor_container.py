@@ -12,8 +12,9 @@ import pytest
 from tasktrove_verify.spec import Mode
 
 from taskcompendium.execution import (
-    ChatWithTools,
     HarborExecutionConfig,
+    HarborLaunchConfig,
+    HarborTaskBinding,
     HarnessToolBinding,
     environment_for_requirements,
 )
@@ -36,7 +37,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     TaskTroveVerifier,
     WorkspaceState,
 )
@@ -45,7 +46,7 @@ pytestmark = pytest.mark.docker
 
 
 def _spec(image, mode=Mode.STDIO, parameters=None, resources=()):
-    return TaskSpecification(
+    return TaskSpec(
         id="code/sum",
         requirements=TaskRequirements(
             (Capability.FILESYSTEM, Capability.SHELL, Capability.PROCESS), WorkspaceState(image)
@@ -74,20 +75,20 @@ def _spec(image, mode=Mode.STDIO, parameters=None, resources=()):
 async def test_harbor_docker_trial_grades_code_and_ignores_agent_reward(tmp_path, runtime_image, source, reward):
     spec = _spec(runtime_image)
     protocol = Rendering("code", FinalState(("main.py", "reward.txt")))
+    binding = HarborTaskBinding(
+        environment_for_requirements(spec.requirements), (HarnessToolBinding("terminal", "docker"),)
+    )
     task = lower_to_harbor(
         spec,
         (protocol,),
-        HarborExecutionConfig(
-            "replay",
-            environment_for_requirements(spec.requirements),
-            interaction=(ChatWithTools((HarnessToolBinding("terminal", "docker"),))),
-        ),
+        binding,
         tmp_path / "task",
+        reference_execution=HarborExecutionConfig(binding, HarborLaunchConfig("replay")),
         agent_kwargs={
             "commands": [f"printf '%s' {shlex.quote(source)} > main.py", "echo 1 > reward.txt"],
         },
     )
-    execution = json.loads((task / "execution.json").read_text())
+    execution = json.loads((task / "reference-execution.json").read_text())
     result = await run_trial(task, execution, tmp_path / "trials", "code")
     assert result.exception_info is None
     assert result.verifier_result.rewards == {"reward": reward}
@@ -211,15 +212,15 @@ for path in ['/input/specification.json', '/result/result.json']:
         raise AssertionError('candidate escaped isolation')
 print(sum(map(int,input().split())))
 """
+    binding = HarborTaskBinding(
+        environment_for_requirements(spec.requirements), (HarnessToolBinding("terminal", "docker"),)
+    )
     task = lower_to_harbor(
         spec,
         (Rendering("overlay", FinalState((".",), excluded_paths=(".venv",))),),
-        HarborExecutionConfig(
-            "replay",
-            environment_for_requirements(spec.requirements),
-            interaction=(ChatWithTools((HarnessToolBinding("terminal", "docker"),))),
-        ),
+        binding,
         tmp_path / "task",
+        reference_execution=HarborExecutionConfig(binding, HarborLaunchConfig("replay")),
         agent_kwargs={
             "commands": [
                 "rm deleted.txt; echo tampered > .venv/dependency",
@@ -227,7 +228,9 @@ print(sum(map(int,input().split())))
             ]
         },
     )
-    result = await run_trial(task, json.loads((task / "execution.json").read_text()), tmp_path / "trials", "overlay")
+    result = await run_trial(
+        task, json.loads((task / "reference-execution.json").read_text()), tmp_path / "trials", "overlay"
+    )
     assert result.exception_info is None
     assert result.verifier_result.rewards == {"reward": 1.0}
 
@@ -266,18 +269,20 @@ async def test_overlay_trial_rejects_submitted_symlink(tmp_path, overlay_image):
             ),
         ),
     )
+    binding = HarborTaskBinding(
+        environment_for_requirements(spec.requirements), (HarnessToolBinding("terminal", "docker"),)
+    )
     task = lower_to_harbor(
         spec,
         (Rendering("overlay", FinalState((".",), excluded_paths=(".venv",))),),
-        HarborExecutionConfig(
-            "replay",
-            environment_for_requirements(spec.requirements),
-            interaction=(ChatWithTools((HarnessToolBinding("terminal", "docker"),))),
-        ),
+        binding,
         tmp_path / "task",
+        reference_execution=HarborExecutionConfig(binding, HarborLaunchConfig("replay")),
         agent_kwargs={"commands": ["ln -s .venv/dependency main.py"]},
     )
-    result = await run_trial(task, json.loads((task / "execution.json").read_text()), tmp_path / "trials", "symlink")
+    result = await run_trial(
+        task, json.loads((task / "reference-execution.json").read_text()), tmp_path / "trials", "symlink"
+    )
     assert result.exception_info is not None
     assert result.verifier_result is None
 
@@ -290,16 +295,15 @@ async def test_sequential_feature_preserves_workspace_and_private_step_tests(tmp
         "\noriginal = greet\ndef greet(name, uppercase=False):\n"
         "    value = original(name)\n    return value.upper() if uppercase else value\n"
     )
+    binding = HarborTaskBinding(
+        environment_for_requirements(spec.requirements), (HarnessToolBinding("terminal", "docker"),)
+    )
     task = lower_to_harbor(
         spec,
         (Rendering("workspace", FinalState(("greeting.py",))),) * 2,
-        HarborExecutionConfig(
-            "replay",
-            environment_for_requirements(spec.requirements),
-            context="fresh",
-            interaction=(ChatWithTools((HarnessToolBinding("terminal", "docker"),))),
-        ),
+        binding,
         tmp_path / "sequential",
+        reference_execution=HarborExecutionConfig(binding, HarborLaunchConfig("replay")),
         agent_kwargs={
             "steps": [
                 {"commands": [f"printf '%s' {shlex.quote(first)} > greeting.py"], "response": ""},
@@ -313,7 +317,9 @@ async def test_sequential_feature_preserves_workspace_and_private_step_tests(tmp
             ]
         },
     )
-    result = await run_trial(task, json.loads((task / "execution.json").read_text()), tmp_path / "trials", "sequential")
+    result = await run_trial(
+        task, json.loads((task / "reference-execution.json").read_text()), tmp_path / "trials", "sequential"
+    )
     assert result.exception_info is None
     assert [s.verifier_result.rewards["reward"] for s in result.step_results] == [1.0, reward]
     assert result.verifier_result.rewards == {"reward": reward}

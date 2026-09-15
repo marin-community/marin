@@ -7,7 +7,6 @@ import pytest
 from tasktrove_verify.spec import Mode
 
 from taskcompendium.execution import (
-    ChatWithTools,
     HarborTaskBinding,
     HarnessToolBinding,
     environment_for_requirements,
@@ -25,7 +24,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     TaskTroveVerifier,
     WorkspaceState,
 )
@@ -35,7 +34,7 @@ IMAGE = "sha256:" + "1" * 64
 
 
 def _specification():
-    return TaskSpecification(
+    return TaskSpec(
         id="overlay",
         requirements=TaskRequirements(
             (Capability.FILESYSTEM, Capability.SHELL, Capability.PROCESS), WorkspaceState(IMAGE)
@@ -81,7 +80,7 @@ def test_overlay_export_rejects_incomplete_dependency_exclusion(tmp_path, exclud
             (Rendering("overlay", FinalState((".",), excluded_paths=excluded)),),
             HarborTaskBinding(
                 environment_for_requirements(spec.requirements),
-                ChatWithTools((HarnessToolBinding("terminal", "docker"),)),
+                (HarnessToolBinding("terminal", "docker"),),
             ),
             destination,
         )

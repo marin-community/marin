@@ -11,7 +11,7 @@ from typing import Any
 
 import msgspec
 
-from taskcompendium.execution import ChatWithTools, HarborTaskBinding, ProviderEnvironment, ProviderToolBinding
+from taskcompendium.execution import HarborTaskBinding, ProviderEnvironment, ProviderToolBinding
 from taskcompendium.models import (
     ActionInterface,
     AnswerRequirements,
@@ -27,7 +27,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
 )
 from taskcompendium.providers.nemo_workplace.provider import ADAPTER, SEED_SHA256
 from taskcompendium.providers.nemo_workplace.tools import get_tools
@@ -56,7 +56,7 @@ class ProviderCall:
 class WorkplaceSample:
     """One source-pinned Workplace specification and its explicit private execution choice."""
 
-    specification: TaskSpecification
+    specification: TaskSpec
     rendering: Rendering
     binding: HarborTaskBinding
     known_good: tuple[ProviderCall, ...]
@@ -122,11 +122,11 @@ def provider_binding() -> HarborTaskBinding:
             _PROVIDER_IMPORT_PATH,
             {"interface": msgspec.to_builtins(INTERFACE), "seed_sha256": SEED_SHA256},
         ),
-        ChatWithTools((ProviderToolBinding(INTERFACE.name),)),
+        (ProviderToolBinding(INTERFACE.name),),
     )
 
 
-def import_row(data: bytes) -> TaskSpecification | Rejected:
+def import_row(data: bytes) -> TaskSpec | Rejected:
     """Import id 0 without exposing its seed, source row, or target actions publicly."""
     source = _source("0")
     if hashlib.sha256(data).hexdigest() != FIXTURE_SHA256:
@@ -147,7 +147,7 @@ def import_row(data: bytes) -> TaskSpecification | Rejected:
             raise ValueError("Workplace routing metadata is missing")
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         return Rejected(source, RejectionReason.UNRECOVERABLE_SOURCE, str(error))
-    return TaskSpecification(
+    return TaskSpec(
         id="nemo/workplace/0",
         requirements=TaskRequirements(action_interfaces=(INTERFACE,)),
         resources=(Resource(_SOURCE_ROW_PATH, (ResourceRole.VERIFIER,), Embedded(data)),),
@@ -166,7 +166,7 @@ def import_row(data: bytes) -> TaskSpecification | Rejected:
     )
 
 
-def import_hub_row(data: bytes, *, split: str, offset: int) -> TaskSpecification | Rejected:
+def import_hub_row(data: bytes, *, split: str, offset: int) -> TaskSpec | Rejected:
     """Import a pinned Workplace Hub row into the shared seeded provider."""
     source = _source(str(offset))
     try:
@@ -191,7 +191,7 @@ def import_hub_row(data: bytes, *, split: str, offset: int) -> TaskSpecification
         "split": split,
         "offset": str(offset),
     }
-    return TaskSpecification(
+    return TaskSpec(
         id=f"nemo/workplace/{offset}",
         requirements=TaskRequirements(action_interfaces=(INTERFACE,)),
         resources=(

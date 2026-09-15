@@ -22,7 +22,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     WorkspaceState,
     relative_path,
 )
@@ -211,7 +211,7 @@ def import_task(
     *,
     python_image: str | None = None,
     native_image: str | None = None,
-) -> TaskSpecification | Rejected:
+) -> TaskSpec | Rejected:
     """Convert one retained coding archive using caller-resolved immutable images.
 
     Image resolution is deliberately an input to this importer: source Dockerfile
@@ -255,7 +255,7 @@ def import_task(
         return Rejected(source, RejectionReason.UNSUPPORTED_ENVIRONMENT, str(error))
     except (KeyError, UnicodeDecodeError, ValueError, tomllib.TOMLDecodeError) as error:
         return Rejected(source, RejectionReason.BROKEN_GRADER, str(error))
-    return TaskSpecification(
+    return TaskSpec(
         id=f"tasktrove-{source.row}",
         requirements=environment,
         resources=resources,

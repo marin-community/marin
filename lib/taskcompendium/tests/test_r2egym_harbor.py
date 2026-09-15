@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from taskcompendium.execution import (
-    ChatWithTools,
     HarborExecutionConfig,
     HarborLaunchConfig,
     HarborTaskBinding,
@@ -120,7 +119,7 @@ async def test_real_r2egym_row_through_harbor(tmp_path, r2e_runtime_images, row_
     )
     binding = HarborTaskBinding(
         environment_for_requirements(specification.requirements),
-        ChatWithTools((HarnessToolBinding("terminal", "docker"),)),
+        (HarnessToolBinding("terminal", "docker"),),
     )
     task = lower_to_harbor(
         specification,
@@ -155,7 +154,7 @@ async def test_real_sympy_r2egym_row_through_harbor(tmp_path, sympy_runtime_imag
     )
     binding = HarborTaskBinding(
         environment_for_requirements(specification.requirements),
-        ChatWithTools((HarnessToolBinding("terminal", "docker"),)),
+        (HarnessToolBinding("terminal", "docker"),),
     )
     task = lower_to_harbor(
         specification,

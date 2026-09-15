@@ -7,7 +7,6 @@ import hashlib
 import json
 from pathlib import Path
 
-import msgspec
 import pytest
 from tasktrove_verify.modes.grade_ifeval import resolve_checks
 from tasktrove_verify.spec import Constraint, Mode
@@ -30,7 +29,7 @@ from taskcompendium.models import (
     Rendering,
     ResourceRole,
 )
-from taskcompendium.rendering import render_task
+from taskcompendium.rendering import render_instruction
 
 FIXTURES = Path(__file__).parent / "fixtures/nemo"
 IMAGE = "python@sha256:" + "a" * 64
@@ -69,8 +68,7 @@ def test_instruction_import_keeps_constraints_and_raw_source_private():
         "source-row.json"
     }
 
-    task = render_task(specification, (Rendering("answer", AssistantFinal()),))
-    public = msgspec.json.encode(task).decode()
+    public = render_instruction(specification, Rendering("answer", AssistantFinal()))
     assert "instruction_constraints" not in public
     assert "source-row.json" not in public
     assert "last_word:last_word_answer" not in public
@@ -126,8 +124,7 @@ def test_collection_instruction_rows_preserve_hub_source_identity(offset, identi
         "offset": str(provenance["offset"]),
     }
 
-    task = render_task(specification, (Rendering("answer", AssistantFinal()),))
-    public = msgspec.json.encode(task).decode()
+    public = render_instruction(specification, Rendering("answer", AssistantFinal()))
     assert "instruction_id_list" not in public
     assert "source-row.json" not in public
 
@@ -153,8 +150,7 @@ def test_code_import_is_answer_only_and_retains_hidden_test_bundle():
     assert "code_from_response" not in private["check_code_answer.py"].content.data.decode()
     assert "without Markdown fences" not in step.instructions
 
-    task = render_task(specification, (Rendering("answer", AssistantFinal()),))
-    public = msgspec.json.encode(task).decode()
+    public = render_instruction(specification, Rendering("answer", AssistantFinal()))
     assert "unit_tests" not in public
     assert "check_code_answer.py" not in public
     assert "source-row.json" not in public
@@ -210,7 +206,6 @@ def test_collection_code_rows_preserve_hub_offsets_and_private_test_data(offset)
         "offset": str(offset),
     }
 
-    task = render_task(specification, (Rendering("answer", AssistantFinal()),))
-    public = msgspec.json.encode(task).decode()
+    public = render_instruction(specification, Rendering("answer", AssistantFinal()))
     assert "unit_tests" not in public
     assert "source-provenance.json" not in public

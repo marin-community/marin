@@ -20,7 +20,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     TaskTroveVerifier,
 )
 
@@ -37,7 +37,7 @@ def _gold(answer: str) -> str | None:
     return matches[0].strip()
 
 
-def import_row(question: str, answer: str, source: Source) -> TaskSpecification | Rejected:
+def import_row(question: str, answer: str, source: Source) -> TaskSpec | Rejected:
     """Convert one GSM8K row, retaining the full rationale as an oracle resource."""
     if source.dataset != DATASET or source.revision != REVISION:
         return Rejected(source, RejectionReason.UNRECOVERABLE_SOURCE, "GSM8K source is not the pinned revision")
@@ -48,7 +48,7 @@ def import_row(question: str, answer: str, source: Source) -> TaskSpecification 
         return Rejected(
             source, RejectionReason.BROKEN_GRADER, "GSM8K answer must contain exactly one #### gold delimiter"
         )
-    return TaskSpecification(
+    return TaskSpec(
         id=f"gsm8k-{source.row}",
         requirements=TaskRequirements(),
         resources=(Resource("oracle/reasoning.txt", (ResourceRole.ORACLE,), Embedded(answer.encode())),),
@@ -64,11 +64,11 @@ def import_row(question: str, answer: str, source: Source) -> TaskSpecification 
 
 
 @dataclass(frozen=True)
-class Gsm8kTaskSpec:
+class Gsm8kTaskFamily:
     """Pinned source family; keyed rows are resolved once before any rendering."""
 
     rows: Mapping[str, tuple[str, str]]
 
-    def instantiate(self, key: str) -> TaskSpecification | Rejected:
+    def instantiate(self, key: str) -> TaskSpec | Rejected:
         question, answer = self.rows[key]
         return import_row(question, answer, Source(DATASET, REVISION, key, IMPORTER_REVISION))

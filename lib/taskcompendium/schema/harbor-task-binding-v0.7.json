@@ -31,34 +31,34 @@
             }
           }
         },
-        "interaction": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Chat"
-            },
-            {
-              "$ref": "#/$defs/ChatWithTools"
+        "tools": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ShellToolBinding"
+              },
+              {
+                "$ref": "#/$defs/HarnessToolBinding"
+              },
+              {
+                "$ref": "#/$defs/ProviderToolBinding"
+              }
+            ],
+            "discriminator": {
+              "propertyName": "kind",
+              "mapping": {
+                "shell": "#/$defs/ShellToolBinding",
+                "harness": "#/$defs/HarnessToolBinding",
+                "provider": "#/$defs/ProviderToolBinding"
+              }
             }
-          ],
-          "discriminator": {
-            "propertyName": "kind",
-            "mapping": {
-              "chat": "#/$defs/Chat",
-              "chat_with_tools": "#/$defs/ChatWithTools"
-            }
-          }
-        },
-        "context": {
-          "enum": [
-            "conversation",
-            "fresh"
-          ],
-          "default": "fresh"
+          },
+          "default": []
         }
       },
       "required": [
-        "environment",
-        "interaction"
+        "environment"
       ],
       "additionalProperties": false
     },
@@ -202,61 +202,6 @@
         "name",
         "version",
         "seed_sha256"
-      ],
-      "additionalProperties": false
-    },
-    "Chat": {
-      "title": "Chat",
-      "type": "object",
-      "properties": {
-        "kind": {
-          "enum": [
-            "chat"
-          ]
-        }
-      },
-      "required": [
-        "kind"
-      ],
-      "additionalProperties": false
-    },
-    "ChatWithTools": {
-      "title": "ChatWithTools",
-      "type": "object",
-      "properties": {
-        "kind": {
-          "enum": [
-            "chat_with_tools"
-          ]
-        },
-        "tools": {
-          "type": "array",
-          "items": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/ShellToolBinding"
-              },
-              {
-                "$ref": "#/$defs/HarnessToolBinding"
-              },
-              {
-                "$ref": "#/$defs/ProviderToolBinding"
-              }
-            ],
-            "discriminator": {
-              "propertyName": "kind",
-              "mapping": {
-                "shell": "#/$defs/ShellToolBinding",
-                "harness": "#/$defs/HarnessToolBinding",
-                "provider": "#/$defs/ProviderToolBinding"
-              }
-            }
-          }
-        }
-      },
-      "required": [
-        "kind",
-        "tools"
       ],
       "additionalProperties": false
     },

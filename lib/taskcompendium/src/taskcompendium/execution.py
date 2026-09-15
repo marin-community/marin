@@ -54,10 +54,6 @@ class ProviderEnvironment(msgspec.Struct, frozen=True, tag_field="kind", tag="pr
 EnvironmentConfig = NoEnvironment | ShellSimEnvironment | DockerEnvironment | ProviderEnvironment
 
 
-class Chat(msgspec.Struct, frozen=True, tag_field="kind", tag="chat", forbid_unknown_fields=True):
-    pass
-
-
 class ShellToolBinding(msgspec.Struct, frozen=True, tag_field="kind", tag="shell", forbid_unknown_fields=True):
     name: str
     backend: Literal["shellsim", "docker"]
@@ -84,29 +80,20 @@ class ProviderToolBinding(msgspec.Struct, frozen=True, tag_field="kind", tag="pr
             raise ValueError("Provider bindings require an action-interface name")
 
 
-class ChatWithTools(msgspec.Struct, frozen=True, tag_field="kind", tag="chat_with_tools", forbid_unknown_fields=True):
-    tools: tuple[ShellToolBinding | HarnessToolBinding | ProviderToolBinding, ...]
-
-    def __post_init__(self) -> None:
-        if not self.tools:
-            raise ValueError("ChatWithTools requires explicit tool bindings")
-
-
 class HarborTaskBinding(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     """Task-owned Harbor requirements, independent of the selected harness."""
 
     environment: EnvironmentConfig
-    interaction: Chat | ChatWithTools
-    context: Literal["fresh", "conversation"] = "fresh"
+    tools: tuple[ShellToolBinding | HarnessToolBinding | ProviderToolBinding, ...] = ()
 
     def __post_init__(self) -> None:
-        if isinstance(self.interaction, Chat):
+        if not self.tools:
             return
         if isinstance(self.environment, NoEnvironment):
             raise ValueError("Tool bindings require an execution environment")
-        if len(self.interaction.tools) != 1:
+        if len(self.tools) != 1:
             raise ValueError("The supported Harbor adapters require exactly one tool binding")
-        binding = self.interaction.tools[0]
+        binding = self.tools[0]
         if isinstance(binding, ProviderToolBinding):
             if not isinstance(self.environment, ProviderEnvironment):
                 raise ValueError("Provider tool bindings require a provider environment")
@@ -132,11 +119,11 @@ class HarborLaunchConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True
 
 def validate_launch(binding: HarborTaskBinding, launch: HarborLaunchConfig) -> None:
     """Check that one Harbor launch can satisfy a task-owned binding."""
-    if isinstance(binding.interaction, Chat):
+    if not binding.tools:
         if launch.agent not in {"chat", "replay"}:
             raise ValueError("Selected agent requires explicit tool bindings")
         return
-    tool = binding.interaction.tools[0]
+    tool = binding.tools[0]
     if isinstance(tool, ProviderToolBinding):
         if launch.agent != "provider_chat":
             raise ValueError("Provider tool bindings require the provider_chat agent")

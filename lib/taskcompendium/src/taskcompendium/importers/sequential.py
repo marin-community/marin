@@ -17,14 +17,14 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     TaskSuccessPolicy,
     TaskTroveVerifier,
     WorkspaceState,
 )
 
 
-def greeting_task(image: str) -> TaskSpecification:
+def greeting_task(image: str) -> TaskSpec:
     """Request an initial greeting API, then extend it without breaking callers."""
     initial_test = b"""import sys
 sys.path.insert(0, '/app')
@@ -52,7 +52,7 @@ def test_uppercase():
         "Extend greet in /app/greeting.py with an optional uppercase=False argument. "
         "When true, uppercase the entire greeting. Preserve existing behavior for callers that omit it.",
     )
-    return TaskSpecification(
+    return TaskSpec(
         id="synthetic/sequential-greeting",
         requirements=TaskRequirements(
             (Capability.FILESYSTEM, Capability.SHELL, Capability.PROCESS), WorkspaceState(image)
@@ -86,9 +86,9 @@ def test_uppercase():
     )
 
 
-def sentence_revision_task() -> TaskSpecification:
+def sentence_revision_task() -> TaskSpec:
     """Revise a previous answer whose content is available only in conversation."""
-    return TaskSpecification(
+    return TaskSpec(
         id="synthetic/conversational-revision",
         requirements=TaskRequirements(),
         resources=(),

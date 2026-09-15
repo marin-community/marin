@@ -10,7 +10,7 @@ from pathlib import Path
 
 from coverage_labels import label
 
-from taskcompendium.execution import Chat, HarborTaskBinding, NoEnvironment
+from taskcompendium.execution import HarborTaskBinding, NoEnvironment
 from taskcompendium.importers import nemo, nemo_predicted_action, nemo_workplace, nemo_workplace_multistep
 from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import (
@@ -20,7 +20,7 @@ from taskcompendium.models import (
     PlainText,
     Rejected,
     Rendering,
-    TaskSpecification,
+    TaskSpec,
     XmlPath,
 )
 from taskcompendium.serialization import read_parquet, specification_hash, to_json, write_parquet
@@ -28,7 +28,7 @@ from taskcompendium.serialization import read_parquet, specification_hash, to_js
 FIXTURES = Path(__file__).resolve().parents[1] / "tests/fixtures/nemo"
 
 
-def accepted(result: TaskSpecification | Rejected) -> TaskSpecification:
+def accepted(result: TaskSpec | Rejected) -> TaskSpec:
     if isinstance(result, Rejected):
         raise ValueError(f"Pinned first-wave fixture was rejected: {result}")
     return result
@@ -38,8 +38,8 @@ def build(output: Path, runtime_image: str) -> None:
     """Export six semantic instances and their supported rendering variants."""
     output.mkdir(parents=True, exist_ok=False)
     (output / "specifications").mkdir()
-    answer_binding = HarborTaskBinding(NoEnvironment(), Chat())
-    variants: list[tuple[TaskSpecification, tuple[Rendering, ...], HarborTaskBinding]] = []
+    answer_binding = HarborTaskBinding(NoEnvironment())
+    variants: list[tuple[TaskSpec, tuple[Rendering, ...], HarborTaskBinding]] = []
     for aggregation in ("binary", "fraction"):
         spec = accepted(
             nemo.load_instruction_sample(FIXTURES / "instruction-following-17616.json", aggregation=aggregation)

@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from taskcompendium.execution import (
-    ChatWithTools,
     DockerEnvironment,
     HarborExecutionConfig,
     HarborLaunchConfig,
@@ -56,7 +55,7 @@ async def test_real_nl2bash_shellsim_with_original_checker(tmp_path, runtime_ima
         if provider == "shellsim"
         else DockerEnvironment(runtime_image, state.workdir, state.setup_commands, state.additional_directories)
     )
-    binding = HarborTaskBinding(environment, ChatWithTools((HarnessToolBinding("terminal", provider),)))
+    binding = HarborTaskBinding(environment, (HarnessToolBinding("terminal", provider),))
     task = lower_to_harbor(
         spec,
         (Rendering("shell", FinalState((".", "/output/command_capture.txt"))),),

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from coverage_labels import label
 
-from taskcompendium.execution import Chat, HarborTaskBinding, NoEnvironment
+from taskcompendium.execution import HarborTaskBinding, NoEnvironment
 from taskcompendium.importers.nemo_static import StaticCorpus, import_hub_row
 from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import (
@@ -22,7 +22,7 @@ from taskcompendium.models import (
     JudgeView,
     Rejected,
     Rendering,
-    TaskSpecification,
+    TaskSpec,
     XmlPath,
 )
 from taskcompendium.serialization import read_parquet, specification_hash, to_json, write_parquet
@@ -49,7 +49,7 @@ RENDERINGS = (
 )
 
 
-def _accepted(result: TaskSpecification | Rejected) -> TaskSpecification:
+def _accepted(result: TaskSpec | Rejected) -> TaskSpec:
     if isinstance(result, Rejected):
         raise ValueError(f"Pinned static row was rejected: {result.detail}")
     return result
@@ -59,7 +59,7 @@ def build(output: Path, judge: JudgeConfig) -> None:
     """Export reviewed rows and formatting lowerings to native Harbor packages."""
     output.mkdir(parents=True, exist_ok=False)
     (output / "specifications").mkdir()
-    binding = HarborTaskBinding(NoEnvironment(), Chat())
+    binding = HarborTaskBinding(NoEnvironment())
     specifications = []
     inputs = []
     for name, corpus, split, offset in ROWS:

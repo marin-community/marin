@@ -10,12 +10,12 @@ from typing import BinaryIO, cast
 
 import fsspec
 
-from taskcompendium.models import Embedded, PublicResource, Resource, ResourceRole, TaskSpecification
+from taskcompendium.models import Embedded, Resource, ResourceRole, TaskSpec
 
 MAX_RESOURCE_BYTES = 64 * 1024 * 1024
 
 
-def resource_bytes(resource: Resource | PublicResource, max_bytes: int = MAX_RESOURCE_BYTES) -> bytes:
+def resource_bytes(resource: Resource, max_bytes: int = MAX_RESOURCE_BYTES) -> bytes:
     if isinstance(resource.content, Embedded):
         data = resource.content.data
     else:
@@ -36,7 +36,7 @@ def contained_path(root: Path, relative: str) -> Path:
     return candidate
 
 
-def materialize(specification: TaskSpecification, role: ResourceRole, root: Path, step_index: int | None = None) -> None:
+def materialize(specification: TaskSpec, role: ResourceRole, root: Path, step_index: int | None = None) -> None:
     root.mkdir(parents=True, exist_ok=True)
     resources = (
         specification.resources
@@ -46,7 +46,7 @@ def materialize(specification: TaskSpecification, role: ResourceRole, root: Path
     materialize_resources((resource for resource in resources if role in resource.roles), root)
 
 
-def materialize_resources(resources: Iterable[Resource | PublicResource], root: Path) -> None:
+def materialize_resources(resources: Iterable[Resource], root: Path) -> None:
     """Write already selected resources into an owned directory."""
     root.mkdir(parents=True, exist_ok=True)
     for resource in resources:

@@ -19,7 +19,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     TaskTroveVerifier,
 )
 
@@ -83,7 +83,7 @@ def _judge_verifier(archive: TaskArchive, judge: JudgeConfig) -> TaskTroveVerifi
     return TaskTroveVerifier(mode, parameters, judge, implementation_revision=archive.release.verifier_revision)
 
 
-def import_task(archive: TaskArchive, judge: JudgeConfig) -> TaskSpecification | Rejected:
+def import_task(archive: TaskArchive, judge: JudgeConfig) -> TaskSpec | Rejected:
     """Convert a cleaned TaskTrove reference-answer judge archive.
 
     The model endpoint is deliberately supplied by the caller; source archives never carry
@@ -102,7 +102,7 @@ def import_task(archive: TaskArchive, judge: JudgeConfig) -> TaskSpecification |
         return Rejected(source, RejectionReason.UNRECOVERABLE_SOURCE, str(error))
     tags = metadata.get("tags", ())
     competencies = tuple(tag for tag in tags if isinstance(tag, str)) if isinstance(tags, list) else ()
-    return TaskSpecification(
+    return TaskSpec(
         id=f"tasktrove-{source.row}",
         requirements=TaskRequirements(),
         resources=(),

@@ -25,7 +25,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     TaskTroveVerifier,
 )
 
@@ -172,7 +172,7 @@ def _import_instruction_following(
     aggregation: Literal["binary", "fraction"] | None = None,
     source_row: str | None = None,
     source_provenance: dict[str, str] | None = None,
-) -> TaskSpecification | Rejected:
+) -> TaskSpec | Rejected:
     """Convert one NeMo Gym IFEval record, preserving source aggregation semantics."""
     try:
         row = _row(data)
@@ -211,7 +211,7 @@ def _import_instruction_following(
                 Embedded(json.dumps(source_provenance, sort_keys=True, separators=(",", ":")).encode()),
             )
         )
-    return TaskSpecification(
+    return TaskSpec(
         id=f"nemo/ifeval/{identifier}/{effective_aggregation}",
         requirements=TaskRequirements(),
         resources=tuple(resources),
@@ -228,14 +228,14 @@ def _import_instruction_following(
 
 def import_instruction_following(
     data: bytes, *, aggregation: Literal["binary", "fraction"] | None = None
-) -> TaskSpecification | Rejected:
+) -> TaskSpec | Rejected:
     """Convert one NeMo Gym IFEval record, preserving source aggregation semantics."""
     return _import_instruction_following(data, aggregation=aggregation)
 
 
 def import_hub_instruction_row(
     data: bytes, *, split: str, offset: int, aggregation: Literal["binary", "fraction"] | None = None
-) -> TaskSpecification | Rejected:
+) -> TaskSpec | Rejected:
     """Convert a selected IFEval Hub row while retaining its split and offset privately."""
     return _import_instruction_following(
         data,
@@ -256,7 +256,7 @@ def _import_code_answer(
     verifier_image: str | None,
     source_row: str | None = None,
     source_provenance: dict[str, str] | None = None,
-) -> TaskSpecification | Rejected:
+) -> TaskSpec | Rejected:
     """Convert one NeMo Gym code response task to an isolated private checker."""
     try:
         row = _row(data)
@@ -309,7 +309,7 @@ def _import_code_answer(
                 Embedded(json.dumps(source_provenance, sort_keys=True, separators=(",", ":")).encode()),
             )
         )
-    return TaskSpecification(
+    return TaskSpec(
         id=f"nemo/code-answer/{identifier}",
         requirements=TaskRequirements(),
         resources=tuple(resources),
@@ -324,14 +324,14 @@ def _import_code_answer(
     )
 
 
-def import_code_answer(data: bytes, *, verifier_image: str | None = None) -> TaskSpecification | Rejected:
+def import_code_answer(data: bytes, *, verifier_image: str | None = None) -> TaskSpec | Rejected:
     """Convert one pinned NeMo Gym code response task to an isolated private checker."""
     return _import_code_answer(data, verifier_image=verifier_image)
 
 
 def import_hub_code_row(
     data: bytes, *, split: str, offset: int, verifier_image: str | None = None
-) -> TaskSpecification | Rejected:
+) -> TaskSpec | Rejected:
     """Convert a selected Hub row while retaining its split and offset privately."""
     return _import_code_answer(
         data,
@@ -343,11 +343,11 @@ def import_hub_code_row(
 
 def load_instruction_sample(
     path: Path, *, aggregation: Literal["binary", "fraction"] | None = None
-) -> TaskSpecification | Rejected:
+) -> TaskSpec | Rejected:
     """Load one already-pinned instruction-following row for a build or test."""
     return import_instruction_following(path.read_bytes(), aggregation=aggregation)
 
 
-def load_code_sample(path: Path, *, verifier_image: str | None = None) -> TaskSpecification | Rejected:
+def load_code_sample(path: Path, *, verifier_image: str | None = None) -> TaskSpec | Rejected:
     """Load one already-pinned code-answer row for a build or test."""
     return import_code_answer(path.read_bytes(), verifier_image=verifier_image)

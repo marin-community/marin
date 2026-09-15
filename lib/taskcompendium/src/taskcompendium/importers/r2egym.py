@@ -24,7 +24,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     TaskTroveVerifier,
     WorkspaceState,
     relative_path,
@@ -103,7 +103,7 @@ def import_row(
     source: Source | None = None,
     *,
     verifier_runtime: ContainerRuntime | None = None,
-) -> TaskSpecification | Rejected:
+) -> TaskSpec | Rejected:
     """Convert one complete R2E-Gym row, or return a concrete rejection.
 
     R2E tests execute the source repository's Python environment.  The task
@@ -235,7 +235,7 @@ def import_row(
         "args": ["--require-xvfb"] if _REQUIRES_XVFB[row["repo_name"]] else [],
     }
     verifier = TaskTroveVerifier(Mode.SCRIPT, parameters, runtime=verifier_runtime)
-    return TaskSpecification(
+    return TaskSpec(
         id=f"r2egym/{row_id}",
         steps=(
             StepSpecification(
@@ -257,7 +257,7 @@ def import_row(
 
 def import_rows(
     rows: Iterable[Mapping[str, Any]], *, verifier_runtime: ContainerRuntime | None = None
-) -> tuple[TaskSpecification | Rejected, ...]:
+) -> tuple[TaskSpec | Rejected, ...]:
     """Import rows while retaining one result per source row."""
     return tuple(import_row(row, verifier_runtime=verifier_runtime) for row in rows)
 

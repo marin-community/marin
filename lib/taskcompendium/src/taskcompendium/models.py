@@ -11,12 +11,11 @@ from typing import Any, Literal
 import msgspec
 from tasktrove_verify.spec import Mode
 
-SCHEMA_VERSION = "0.7"
+SCHEMA_VERSION = "0.8"
 
 _SEMANTIC_COVERAGE_TAG_PREFIXES = frozenset(
     {"competency", "shape", "domain", "artifact", "interaction", "state", "context", "difficulty"}
 )
-_TASK_COVERAGE_TAG_PREFIXES = _SEMANTIC_COVERAGE_TAG_PREFIXES | {"result"}
 
 
 def _validate_coverage_tags(tags: tuple[str, ...], allowed_prefixes: frozenset[str]) -> None:
@@ -441,7 +440,7 @@ class StepSpecification(msgspec.Struct, frozen=True, forbid_unknown_fields=True,
             raise ValueError("Step instructions are required")
 
 
-class TaskSpecification(msgspec.Struct, frozen=True, forbid_unknown_fields=True, kw_only=True):
+class TaskSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True, kw_only=True):
     """One fixed semantic instance, including private correctness criteria."""
 
     id: str
@@ -570,34 +569,3 @@ class Rejected(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     source: Source
     reason: RejectionReason
     detail: str
-
-
-class PublicResource(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    path: str
-    content: Embedded | ResourceRef
-    executable: bool = False
-
-    def __post_init__(self) -> None:
-        relative_path(self.path)
-
-
-class TaskStep(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    instructions: str
-    resources: tuple[PublicResource, ...]
-    submission: AssistantFinal | FileSubmission | FinalState | FinalActionSubmission
-    context_requirement: ContextRequirement
-
-
-class Task(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    """Public rendered instance; private evaluation stays with its specification."""
-
-    id: str
-    specification_sha256: str
-    steps: tuple[TaskStep, ...]
-    requirements: TaskRequirements
-    resources: tuple[PublicResource, ...]
-    metadata: TaskMetadata
-    coverage_tags: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        _validate_coverage_tags(self.coverage_tags, _TASK_COVERAGE_TAG_PREFIXES)

@@ -15,8 +15,6 @@ import pytest
 from tasktrove_verify.spec import Mode
 
 from taskcompendium.execution import (
-    Chat,
-    ChatWithTools,
     DockerEnvironment,
     HarborExecutionConfig,
     HarborLaunchConfig,
@@ -48,7 +46,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
     TaskSuccessPolicy,
     TaskTroveVerifier,
     WorkspaceState,
@@ -65,8 +63,8 @@ def _exported_execution(task: Path) -> dict:
     return json.loads((task / "reference-execution.json").read_text())
 
 
-def _spec() -> TaskSpecification:
-    return TaskSpecification(
+def _spec() -> TaskSpec:
+    return TaskSpec(
         id="test/math",
         requirements=TaskRequirements(),
         resources=(),
@@ -82,21 +80,18 @@ def _spec() -> TaskSpecification:
 
 def _task(root: Path, protocol: Rendering | None = None, environment=None) -> Path:
     selected_environment = environment or NoEnvironment()
+    tools = (
+        ()
+        if isinstance(selected_environment, NoEnvironment)
+        else (
+            HarnessToolBinding(
+                "terminal", "shellsim" if isinstance(selected_environment, ShellSimEnvironment) else "docker"
+            ),
+        )
+    )
     binding = HarborTaskBinding(
         selected_environment,
-        (
-            Chat()
-            if isinstance(selected_environment, NoEnvironment)
-            else ChatWithTools(
-                (
-                    (
-                        HarnessToolBinding("terminal", "shellsim")
-                        if isinstance(selected_environment, ShellSimEnvironment)
-                        else HarnessToolBinding("terminal", "docker")
-                    ),
-                )
-            )
-        ),
+        tools,
     )
     return lower_to_harbor(
         _spec(),
@@ -262,7 +257,7 @@ async def test_harbor_tool_chat_executes_shell_before_grading(tmp_path, bridge):
         {"role": "assistant", "content": "Done."},
     ]
     with _chat_endpoint(messages) as (endpoint, requests):
-        binding = HarborTaskBinding(ShellSimEnvironment(), ChatWithTools((ShellToolBinding("run_command", "shellsim"),)))
+        binding = HarborTaskBinding(ShellSimEnvironment(), (ShellToolBinding("run_command", "shellsim"),))
         task = lower_to_harbor(
             _spec(),
             (protocol,),
@@ -308,7 +303,7 @@ async def test_harbor_judge_transport_preserves_outcome_and_provenance(tmp_path,
                 ),
             ),
         )
-        binding = HarborTaskBinding(NoEnvironment(), Chat())
+        binding = HarborTaskBinding(NoEnvironment())
         task = lower_to_harbor(
             spec,
             (Rendering("plain", AssistantFinal()),),
@@ -344,7 +339,7 @@ async def test_multistep_chat_uses_each_semantic_verifier(tmp_path, responses, e
         base.steps[0], instructions="Compute one plus one.", verifier=TaskTroveVerifier(Mode.MATH, {"expected": "2"})
     )
     spec = msgspec.structs.replace(base, steps=(*base.steps, second), success_policy=TaskSuccessPolicy.MEAN)
-    binding = HarborTaskBinding(NoEnvironment(), Chat())
+    binding = HarborTaskBinding(NoEnvironment())
     task = lower_to_harbor(
         spec,
         (Rendering("plain", AssistantFinal()),) * 2,
@@ -362,7 +357,7 @@ async def test_multistep_chat_uses_each_semantic_verifier(tmp_path, responses, e
 async def test_multistep_extraction_failure_has_no_aggregate_reward(tmp_path):
     base = _spec()
     spec = msgspec.structs.replace(base, steps=base.steps * 2, success_policy=TaskSuccessPolicy.MEAN)
-    binding = HarborTaskBinding(NoEnvironment(), Chat())
+    binding = HarborTaskBinding(NoEnvironment())
     task = lower_to_harbor(
         spec,
         (Rendering("json", AssistantFinal(JsonPath())),) * 2,
@@ -388,12 +383,10 @@ async def test_multistep_extraction_failure_has_no_aggregate_reward(tmp_path):
 async def test_multistep_chat_preserves_required_visible_context(tmp_path, extractor, revised, reward):
     spec = sentence_revision_task()
     renderings = (Rendering("answer", AssistantFinal(extractor)),) * 2
-    with pytest.raises(ValueError, match="prior conversation"):
-        lower_to_harbor(spec, renderings, HarborTaskBinding(NoEnvironment(), Chat()), tmp_path / "invalid")
     answers = ["Mira will meet Leo on Tuesday.", revised]
     responses = [json.dumps({"answer": answer}) if isinstance(extractor, JsonPath) else answer for answer in answers]
     with _chat_endpoint([{"role": "assistant", "content": response} for response in responses]) as (endpoint, requests):
-        binding = HarborTaskBinding(NoEnvironment(), Chat(), context="conversation")
+        binding = HarborTaskBinding(NoEnvironment())
         task = lower_to_harbor(
             spec,
             renderings,
@@ -432,7 +425,7 @@ async def test_multistep_shellsim_releases_inputs_at_their_step(tmp_path, bridge
         steps=(first, second),
         success_policy=TaskSuccessPolicy.MEAN,
     )
-    binding = HarborTaskBinding(ShellSimEnvironment(), ChatWithTools((HarnessToolBinding("terminal", "shellsim"),)))
+    binding = HarborTaskBinding(ShellSimEnvironment(), (HarnessToolBinding("terminal", "shellsim"),))
     task = lower_to_harbor(
         spec,
         (Rendering("file", FileSubmission("/app/answer.txt")),) * 2,
@@ -458,7 +451,7 @@ async def test_multistep_shellsim_releases_inputs_at_their_step(tmp_path, bridge
 
 
 @pytest.mark.docker
-async def test_repository_followup_uses_workspace_with_fresh_conversation(tmp_path, runtime_image):
+async def test_repository_followup_retains_conversation_and_workspace(tmp_path, runtime_image):
     spec = greeting_task(runtime_image)
     first = "def greet(name):\n    return f'Hello, {name}!'\n"
     extension = (
@@ -491,10 +484,7 @@ async def test_repository_followup_uses_workspace_with_fresh_conversation(tmp_pa
         environment = environment_for_requirements(spec.requirements)
         binding = HarborTaskBinding(
             environment,
-            ChatWithTools(
-                (ShellToolBinding("shell", "shellsim" if isinstance(environment, ShellSimEnvironment) else "docker"),)
-            ),
-            context="fresh",
+            (ShellToolBinding("shell", "shellsim" if isinstance(environment, ShellSimEnvironment) else "docker"),),
         )
         task = lower_to_harbor(
             spec,
@@ -508,15 +498,15 @@ async def test_repository_followup_uses_workspace_with_fresh_conversation(tmp_pa
         result = await run_trial(task, _exported_execution(task), tmp_path / "trials", "fresh")
     assert result.exception_info is None
     assert [step.verifier_result.rewards["reward"] for step in result.step_results] == [1.0, 1.0]
-    assert [m["role"] for m in requests[2]["messages"]] == ["user"]
+    assert [m["role"] for m in requests[2]["messages"]] == ["user", "assistant", "tool", "assistant", "user"]
     assert "uppercase" not in requests[0]["messages"][0]["content"]
-    assert first in json.loads(requests[3]["messages"][2]["content"])["stdout"]
+    assert first in json.loads(requests[3]["messages"][-1]["content"])["stdout"]
 
 
 @pytest.mark.docker
 async def test_chat_docker_environment_does_not_grant_model_tools(tmp_path, runtime_image):
     with _chat_endpoint() as (endpoint, requests):
-        binding = HarborTaskBinding(DockerEnvironment(runtime_image), Chat())
+        binding = HarborTaskBinding(DockerEnvironment(runtime_image))
         task = lower_to_harbor(
             _spec(),
             (Rendering("plain", AssistantFinal()),),
@@ -533,7 +523,7 @@ async def test_chat_docker_environment_does_not_grant_model_tools(tmp_path, runt
 
 @pytest.mark.docker
 async def test_chat_replay_cannot_execute_commands_in_docker(tmp_path, runtime_image):
-    binding = HarborTaskBinding(DockerEnvironment(runtime_image), Chat())
+    binding = HarborTaskBinding(DockerEnvironment(runtime_image))
     task = lower_to_harbor(
         _spec(),
         (Rendering("plain", AssistantFinal()),),

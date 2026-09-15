@@ -4,7 +4,7 @@ Read [the TaskCompendium specification](SPECIFICATION.md) for the semantic schem
 
 TaskCompendium stores task requirements independently of execution choices. It
 imports bounded samples from TaskTrove, R2E-Gym, GSM8K, and NeMo Gym into pinned
-`TaskSpecification` records, renders public tasks, and exports Harbor packages with
+`TaskSpec` records and exports Harbor lowerings with
 separate execution configuration and private verification information.
 
 This is a spike. Training, marinskyrl integration, Snowball serving, and difficulty
@@ -95,8 +95,8 @@ a registry image pinned with `@sha256:`; rebuild and export with the resolved im
 when using another machine. Build recipes alone do not preserve every transitive
 OS package version.
 
-Each export contains `task.toml`, `binding.json`, public `task.json`, a manifest,
-private `specification.json`, and `renderings.json`. Single-step instructions live in
+Each export contains `task.toml`, `binding.json`, a manifest, private
+`specification.json`, and `renderings.json`. Single-step instructions live in
 `instruction.md`; multi-step instructions live under `steps/step-N/instruction.md`.
 `binding.json` records the task-owned environment shape, declared tool interface, and
 conversation requirement. It never selects a model or a harness.
@@ -145,9 +145,9 @@ follow-up task, move it to In Progress, then move it to In Review and send a
 specified notification. Harbor retains provider state and conversation between
 requests; each private step check includes earlier mutations. See the
 [full requests](examples/first_wave/workplace-multistep.md). It writes semantic
-JSON/Parquet and public tasks alongside those exports. Model
+JSON/Parquet and lowerings alongside those exports. Model
 endpoints remain explicit execution inputs. The tests use private scripted
-attempts and local HTTP fixtures; generated public tasks contain neither those
+attempts and local HTTP fixtures; agent-visible lowering artifacts contain neither those
 attempts nor the source verification payloads. Source provenance distinguishes
 verified Gym fixtures from their associated Hugging Face dataset revisions.
 
@@ -170,19 +170,19 @@ The selector includes answer-only and rendered-answer tasks; ShellSim file tasks
 
 ## Contracts
 
-Schema 0.7 stores ordered `StepSpecification` entries in a pinned semantic
-`TaskSpecification`. `taskcompendium.rendering.TaskSpec` defines the source/family
-interface `instantiate(key) -> TaskSpecification | Rejected`. Instantiating one source row
+Schema 0.8 stores ordered `StepSpecification` entries in a pinned semantic
+`TaskSpec`. `taskcompendium.rendering.TaskFamily` defines the source/family
+interface `instantiate(key) -> TaskSpec | Rejected`. Instantiating one source row
 fixes its identity before rendering. Each step records
 instructions, intrinsic answer requirements, verifier, resources, and context
 requirements. Shared requirements, resources, source provenance, and the success
 policy belong to the concrete specification.
 
-`TaskSpecification.coverage_tags` records reviewed semantic coverage labels:
+`TaskSpec.coverage_tags` records reviewed semantic coverage labels:
 competency, shape, domain, artifact, interaction, state, context, and one
 Snowball-calibrated `difficulty:easy`, `difficulty:medium`, or `difficulty:hard`.
-`Task.coverage_tags` carries those labels forward and adds result-encoding labels
-from its rendering: `result:json`, `result:xml`, or `result:file`. Result tags
+Each lowering carries those labels forward and adds result-encoding labels from its
+rendering: `result:json`, `result:xml`, or `result:file`. Result tags
 describe only how the answer is submitted. A task that substantively produces or
 consumes structured data uses semantic competency or artifact tags as well.
 
@@ -192,19 +192,17 @@ immutable image identity. Empty requirements describe answer-only tasks. The ima
 identifies required starting state; it does not select an environment provider.
 Repository repairs preserve their exact image and dependency state.
 
-`Rendering` selects submission location and extraction. Rendering produces a public
-`Task` with ordered `TaskStep` inputs, public resources, requirements, and submission
-contracts. Call `taskcompendium.rendering.render_task(spec, renderings)` to create
-this projection without Harbor. Its `specification_sha256` links back to the pinned
-instance, and `PublicResource` omits internal resource roles and private metadata.
-It excludes private verifiers and oracle material. File submission may
-add capability requirements without changing the pinned semantic instance.
+`Rendering` selects submission location and extraction. A lowering renders each
+instruction, materializes only agent resources, exposes the selected tools, and
+records the submission contracts. Its `specification_sha256` links back to the
+pinned instance. It excludes private verifiers and oracle material. File submission
+may add capability requirements without changing the pinned semantic instance.
 
 Environment implementations and task bindings live in `taskcompendium.execution`.
-`HarborTaskBinding` declares the required environment shape, public interaction, and
-fresh or retained conversation. `HarborLaunchConfig` selects a compatible agent only
+`HarborTaskBinding` declares the required environment shape and public tools. An
+empty tool list is chat; nonempty bindings expose the declared tools. `HarborLaunchConfig` selects a compatible agent only
 when Harbor starts a rollout. `HarborExecutionConfig` is their resolved pair and is
-kept solely for explicit reference executions. The public `Task` names none of them.
+kept solely for explicit reference executions. The semantic record names none of them.
 
 `lower_to_harbor(spec, renderings, binding, destination)` writes a task package from
 one compatible submission convention per step. It writes `binding.json`, never an
@@ -216,8 +214,8 @@ describe judges, verifiers, rewards, hidden tests, or grading procedures. Import
 rewrite known source evaluation boilerplate while keeping actual behavior and format
 requirements. Verifier and oracle resources remain private.
 
-`Chat()` exposes no tools even when the binding uses Docker. `ChatWithTools` requires
-an explicit binding, and the supported adapters currently accept exactly one:
+An empty `tools` tuple exposes no tools even when the binding uses Docker. A nonempty
+tuple is an explicit tool binding, and the supported adapters currently accept exactly one:
 
 - `ShellToolBinding(name="shell", backend="shellsim")` exposes a model function named
   `shell` with one required string argument, `command`. Use backend `docker` for a
@@ -245,8 +243,8 @@ bindings and reactive user conversations remain deferred.
 
 The supported providers are no environment, ShellSim, Docker, and Workplace. ShellSim supplies
 filesystem and supported shell operations; Docker also supplies native processes.
-Capability compatibility includes the actions actually exposed to the model, so
-`Chat()` in Docker does not grant filesystem access. A provider must also preserve
+Capability compatibility includes the actions actually exposed to the model, so an
+empty tool list in Docker does not grant filesystem access. A provider must also preserve
 the required workspace and immutable image state.
 
 Executable verifier modes (`stdio`, `pytest`, `script`, `junit`, `gotest`) require
@@ -260,7 +258,7 @@ The shell example uses ShellSim actions and a separate container for its checker
 Other source semantics use tagged verifier variants. `ConstraintVerifier` records
 binary or fractional constraint aggregation. `CodeAnswerVerifier` materializes an
 extracted code answer inside an isolated checker container, without adding tools
-to the public task. `PredictedActionVerifier` compares submitted native calls;
+to the agent-visible lowering. `PredictedActionVerifier` compares submitted native calls;
 `ProviderStateVerifier` checks mutations in a domain provider. These private
 contracts are independent of the selected answer rendering.
 
@@ -280,27 +278,26 @@ while retaining per-step results. A graded incorrect answer remains a valid zero
 under the selected aggregation policy. The sequential greeting example uses `final`; its last private test suite
 checks both the original API and the requested extension.
 
-A step requiring prior conversation cannot run in fresh mode. The direct-chat and
-shell-tool adapters can retain their own agent-visible exchanges through Harbor's
-repeated agent calls. Native agent conversation resumption is unsupported by this
-pin and rejected. Fresh native-agent steps still share the persistent workspace.
+Every TaskCompendium Harbor agent retains the full agent-visible exchange across
+ordered steps. `prior_conversation` marks a semantic dependency on that history;
+`instruction_and_workspace` means the task does not rely on it. Native Harbor agents
+without resumable conversation remain unsupported for ordered tasks.
 
 The examples contrast these context requirements:
 
 | Task | Step sequence | Required context | Exported execution |
 | --- | --- | --- | --- |
 | `synthetic/conversational-revision` | Produce a specified sentence, then change its meeting day without repeating the sentence in the follow-up | Prior conversation for step two | Chat with retained history, plain-text or JSON answers |
-| `synthetic/sequential-greeting` | Implement `greet(name)`, then add an uppercase option preserving existing behavior | Current instruction and workspace | Fresh conversation per step, persistent Docker workspace |
+| `synthetic/sequential-greeting` | Implement `greet(name)`, then add an uppercase option preserving existing behavior | Current instruction and workspace | Retained conversation, persistent Docker workspace |
 
 Each step has one instruction string. Later instructions and step resources are
 released only when that step starts. Both examples use final-step scoring. The
 revision's fixed initial sentence makes its revised answer deterministic; the
 repository's final tests cover both the original behavior and the extension.
-The revision rejects fresh context, and adapters that cannot retain conversations
-reject conversation mode. Local HTTP-fixture tests inspect the actual model
-requests to check history retention and absence of future instructions. A Docker
-tool-chat trial checks that a fresh second conversation can read and extend the
-first step's file. These checks use scripted responses, not live model rollouts.
+Local HTTP-fixture tests inspect the actual model requests to check history
+retention and absence of future instructions. A Docker tool-chat trial checks that
+the retained second step can read and extend the first step's file. These checks use
+scripted responses, not live model rollouts.
 
 
 Resources have `agent`, `verifier`, and/or `oracle` roles. Small resources are embedded;

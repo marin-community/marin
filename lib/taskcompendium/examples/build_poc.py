@@ -14,8 +14,6 @@ from coverage_labels import label
 from tasktrove_verify.spec import Mode
 
 from taskcompendium.execution import (
-    Chat,
-    ChatWithTools,
     DockerEnvironment,
     HarborTaskBinding,
     HarnessToolBinding,
@@ -61,7 +59,6 @@ from taskcompendium.models import (
     Rendering,
     XmlPath,
 )
-from taskcompendium.rendering import TaskSpec
 from taskcompendium.serialization import read_parquet, specification_hash, to_json, write_parquet
 
 FIXTURES = Path(__file__).resolve().parents[1] / "tests/fixtures"
@@ -154,7 +151,7 @@ def build(output: Path, runtime_image: str | None, r2e_runtimes: dict[str, Conta
     raw = path.read_bytes()
     inputs.append({"path": path.name, "sha256": hashlib.sha256(raw).hexdigest()})
     data = json.loads(raw)
-    family: TaskSpec = gsm8k.Gsm8kTaskSpec(
+    family = gsm8k.Gsm8kTaskFamily(
         {f'{data["split"]}/{row["row"]}': (row["data"]["question"], row["data"]["answer"]) for row in data["rows"]}
     )
     for row in data["rows"]:
@@ -193,8 +190,6 @@ def build(output: Path, runtime_image: str | None, r2e_runtimes: dict[str, Conta
                         Rendering(name, AssistantFinal(extractor)),
                         HarborTaskBinding(
                             selected_environment,
-                            Chat(),
-                            context="conversation",
                         ),
                     )
                     for name, extractor in (("chat-plain", PlainText()), ("chat-json", JsonPath()))
@@ -205,7 +200,7 @@ def build(output: Path, runtime_image: str | None, r2e_runtimes: dict[str, Conta
                         Rendering("workspace", FinalState(("greeting.py",))),
                         HarborTaskBinding(
                             selected_environment,
-                            ChatWithTools((HarnessToolBinding("terminal", "docker"),)),
+                            (HarnessToolBinding("terminal", "docker"),),
                         ),
                     )
                 ]
@@ -258,24 +253,23 @@ def build(output: Path, runtime_image: str | None, r2e_runtimes: dict[str, Conta
             environment = selected_environment
             if isinstance(protocol.submission, FileSubmission) and isinstance(environment, NoEnvironment):
                 environment = ShellSimEnvironment()
+            tools = (
+                ()
+                if isinstance(environment, NoEnvironment)
+                else (
+                    (
+                        ShellToolBinding("shell", "shellsim")
+                        if isinstance(environment, ShellSimEnvironment)
+                        else HarnessToolBinding("terminal", "docker")
+                    ),
+                )
+            )
             lowerings.append(
                 (
                     protocol,
                     HarborTaskBinding(
                         environment,
-                        (
-                            Chat()
-                            if isinstance(environment, NoEnvironment)
-                            else ChatWithTools(
-                                (
-                                    (
-                                        ShellToolBinding("shell", "shellsim")
-                                        if isinstance(environment, ShellSimEnvironment)
-                                        else HarnessToolBinding("terminal", "docker")
-                                    ),
-                                )
-                            )
-                        ),
+                        tools,
                     ),
                 )
             )
@@ -286,7 +280,7 @@ def build(output: Path, runtime_image: str | None, r2e_runtimes: dict[str, Conta
                         Rendering(f"shellsim-file-{name}", FileSubmission(f"/app/{filename}", extractor)),
                         HarborTaskBinding(
                             ShellSimEnvironment(),
-                            ChatWithTools((ShellToolBinding("shell", "shellsim"),)),
+                            (ShellToolBinding("shell", "shellsim"),),
                         ),
                     )
                 )
@@ -295,7 +289,7 @@ def build(output: Path, runtime_image: str | None, r2e_runtimes: dict[str, Conta
                         Rendering(f"shellsim-tool-chat-file-{name}", FileSubmission(f"/app/{filename}", extractor)),
                         HarborTaskBinding(
                             ShellSimEnvironment(),
-                            ChatWithTools((ShellToolBinding("shell", "shellsim"),)),
+                            (ShellToolBinding("shell", "shellsim"),),
                         ),
                     )
                 )
@@ -305,7 +299,7 @@ def build(output: Path, runtime_image: str | None, r2e_runtimes: dict[str, Conta
                             Rendering(f"docker-terminal-file-{name}", FileSubmission(f"/app/{filename}", extractor)),
                             HarborTaskBinding(
                                 DockerEnvironment(runtime_image),
-                                ChatWithTools((HarnessToolBinding("terminal", "docker"),)),
+                                (HarnessToolBinding("terminal", "docker"),),
                             ),
                         )
                     )
@@ -315,7 +309,7 @@ def build(output: Path, runtime_image: str | None, r2e_runtimes: dict[str, Conta
                     msgspec.structs.replace(protocols[0], id="terminal-workspace"),
                     HarborTaskBinding(
                         selected_environment,
-                        ChatWithTools((HarnessToolBinding("terminal", "docker"),)),
+                        (HarnessToolBinding("terminal", "docker"),),
                     ),
                 )
             )

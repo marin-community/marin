@@ -17,7 +17,7 @@ from taskcompendium.models import (
     StepSpecification,
     TaskMetadata,
     TaskRequirements,
-    TaskSpecification,
+    TaskSpec,
 )
 
 _MCQ_FAMILY = "qa-short-answer"
@@ -75,7 +75,7 @@ def _defective_descending_gold(instructions: str, expected: tuple[str, ...]) -> 
     )
 
 
-def import_task(archive: TaskArchive) -> TaskSpecification | Rejected:
+def import_task(archive: TaskArchive) -> TaskSpec | Rejected:
     """Convert a cleaned TaskTrove answer-only archive."""
     source = archive.source
     if archive.family not in _SUPPORTED_FAMILIES:
@@ -134,7 +134,7 @@ def import_task(archive: TaskArchive) -> TaskSpecification | Rejected:
         return Rejected(source, RejectionReason.UNRECOVERABLE_SOURCE, f"invalid task.toml: {error}")
     tags = metadata.get("tags", ())
     competencies = tuple(tag for tag in tags if isinstance(tag, str)) if isinstance(tags, list) else ()
-    return TaskSpecification(
+    return TaskSpec(
         id=f"tasktrove-{source.row}",
         requirements=TaskRequirements(),
         resources=(),

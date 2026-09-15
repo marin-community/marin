@@ -58,6 +58,7 @@ class ReplayAgent(BaseAgent):
         self.commands = commands or []
         self.steps = steps
         self.step_index = 0
+        self.history: list[dict[str, Any]] = []
         self.tool_binding = msgspec.convert(tool_binding, type=HarnessToolBinding) if tool_binding is not None else None
         if self.tool_binding is not None and self.tool_binding.interface != "terminal":
             raise ValueError("Replay requires a terminal tool interface")
@@ -73,7 +74,8 @@ class ReplayAgent(BaseAgent):
         pass
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
-        transcript: list[dict[str, Any]] = [{"role": "user", "content": instruction}]
+        transcript = self.history
+        transcript.append({"role": "user", "content": instruction})
         if self.steps is None:
             response, commands = self.response, self.commands
         else:
@@ -100,13 +102,11 @@ class DirectChatAgent(BaseAgent):
         api_key: str = "",
         max_tokens: int = 4096,
         request_timeout: float = 120,
-        retain_conversation: bool = False,
         chat_template_kwargs: dict[str, Any] | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.api_base = api_base.rstrip("/")
-        self.retain_conversation = retain_conversation
         self.history: list[dict[str, Any]] = []
         self.api_key = api_key
         self.max_tokens = max_tokens
@@ -149,7 +149,7 @@ class DirectChatAgent(BaseAgent):
         return payload["choices"][0]["message"]
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
-        transcript = self.history if self.retain_conversation else []
+        transcript = self.history
         transcript.append({"role": "user", "content": instruction})
         message = await asyncio.to_thread(self._completion, transcript)
         if message.get("tool_calls") or not isinstance(message.get("content"), str):
@@ -173,7 +173,7 @@ class ShellToolAgent(DirectChatAgent):
         return "taskcompendium-shell-tool"
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
-        transcript = self.history if self.retain_conversation else []
+        transcript = self.history
         transcript.append({"role": "user", "content": instruction})
         for _ in range(self.max_turns):
             message = await asyncio.to_thread(self._completion, transcript, [shell_tool_definition(self.tool_binding)])
@@ -232,7 +232,7 @@ class ActionOutputAgent(DirectChatAgent):
             raise ValueError("No final-action contract for Harbor step")
         contract = self.output_contracts[self.step_index]
         self.step_index += 1
-        transcript = self.history if self.retain_conversation else []
+        transcript = self.history
         transcript.append({"role": "user", "content": instruction})
         message = await asyncio.to_thread(self._completion, transcript, action_output_definitions(contract))
         calls = message.get("tool_calls", [])
@@ -261,6 +261,7 @@ class ActionOutputReplayAgent(BaseAgent):
         self.output_contracts = [msgspec.convert(contract, type=FinalActionSubmission) for contract in output_contracts]
         self.actions = actions
         self.step_index = 0
+        self.history: list[dict[str, Any]] = []
 
     @staticmethod
     def name() -> str:
@@ -293,7 +294,8 @@ class ActionOutputReplayAgent(BaseAgent):
         if not calls and (not contract.allow_message or not isinstance(action.get("content"), str)):
             raise ValueError("Replay action must be a permitted message or function call")
         message = {"role": "assistant", **action}
-        transcript = [{"role": "user", "content": instruction}, message]
+        transcript = self.history
+        transcript.extend(({"role": "user", "content": instruction}, message))
         _record(self.logs_dir, transcript, action.get("content") or "", context)
 
 
@@ -313,7 +315,7 @@ class ProviderToolAgent(DirectChatAgent):
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         if not isinstance(environment, ProviderActionEnvironment):
             raise ValueError("Provider tool agent requires a provider action environment")
-        transcript = self.history if self.retain_conversation else []
+        transcript = self.history
         transcript.append({"role": "user", "content": instruction})
         tools = await environment.native_tool_definitions()
         for _ in range(self.max_turns):

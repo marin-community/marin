@@ -1,8 +1,8 @@
 {
-  "$ref": "#/$defs/TaskSpecification",
+  "$ref": "#/$defs/TaskSpec",
   "$defs": {
-    "TaskSpecification": {
-      "title": "TaskSpecification",
+    "TaskSpec": {
+      "title": "TaskSpec",
       "description": "One fixed semantic instance, including private correctness criteria.",
       "type": "object",
       "properties": {
@@ -40,7 +40,7 @@
         },
         "schema_version": {
           "type": "string",
-          "default": "0.7"
+          "default": "0.8"
         }
       },
       "required": [

@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 import taskcompendium.grading as grading
-from taskcompendium.execution import Chat, HarborExecutionConfig, HarborLaunchConfig, HarborTaskBinding, NoEnvironment
+from taskcompendium.execution import HarborExecutionConfig, HarborLaunchConfig, HarborTaskBinding, NoEnvironment
 from taskcompendium.harbor.runner import run_trial
 from taskcompendium.importers.nemo import load_code_sample, load_instruction_sample
 from taskcompendium.importers.nemo_predicted_action import import_row, replay_action
@@ -57,7 +57,7 @@ async def test_nemo_ifeval_harbor_preserves_aggregation_and_response_format(
 ):
     specification = load_instruction_sample(FIXTURES / "instruction-following-17616.json", aggregation=aggregation)
     assert not isinstance(specification, Rejected)
-    binding = HarborTaskBinding(NoEnvironment(), Chat())
+    binding = HarborTaskBinding(NoEnvironment())
     task = lower_to_harbor(
         specification,
         (Rendering(f"nemo-ifeval-{format_id}", submission),),
@@ -110,7 +110,7 @@ async def test_nemo_code_answer_harbor_uses_private_isolated_grader(
     )
     assert not isinstance(specification, Rejected)
     response = "" if attempt == "empty" else _attempts()["code_answer"][attempt]
-    binding = HarborTaskBinding(NoEnvironment(), Chat())
+    binding = HarborTaskBinding(NoEnvironment())
     task = lower_to_harbor(
         specification,
         (Rendering("nemo-code-answer", submission),),
@@ -147,7 +147,7 @@ async def test_nemo_code_answer_harbor_rejects_malformed_structured_wrappers(
         FIXTURES / "code-answer-c69268d8bdb4da0685d7b187c88296c1.json", verifier_image=runtime_image
     )
     assert not isinstance(specification, Rejected)
-    binding = HarborTaskBinding(NoEnvironment(), Chat())
+    binding = HarborTaskBinding(NoEnvironment())
     task = lower_to_harbor(
         specification,
         (Rendering("nemo-code-answer", submission),),
@@ -181,7 +181,7 @@ async def test_nemo_predicted_action_harbor_distinguishes_correct_wrong_and_malf
         action_data = attempts[attempt]
         action = replay_action(action_data["name"], action_data["arguments"])
     reward = 1.0 if attempt == "good" else 0.0
-    binding = HarborTaskBinding(NoEnvironment(), Chat())
+    binding = HarborTaskBinding(NoEnvironment())
     task = lower_to_harbor(
         specification,
         (protocol,),
@@ -220,7 +220,7 @@ async def test_nemo_predicted_action_harbor_records_verifier_crash_as_infrastruc
     protocol = action_rendering(row, provenance["canonical_json_sha256"])
     action_data = attempts["good"]
     action = replay_action(action_data["name"], action_data["arguments"])
-    binding = HarborTaskBinding(NoEnvironment(), Chat())
+    binding = HarborTaskBinding(NoEnvironment())
     task = lower_to_harbor(
         specification,
         (protocol,),

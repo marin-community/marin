@@ -14,7 +14,7 @@ run imported scripts, tests, or submitted programs on the host verifier runtime.
 ## Agent-facing task instructions
 
 Write the task request directly. `StepSpecification.instructions`, rendered prompts,
-and public task resources must not disclose evaluation machinery: judges, judgers,
+and agent-visible resources must not disclose evaluation machinery: judges, judgers,
 verifiers, graders, rewards, evaluation scores, hidden tests, or reference answers.
 Keep these in verifier/oracle metadata and resources, never in agent-facing text.
 
@@ -33,22 +33,22 @@ for source templates that leak evaluation details. Keep source archives unchange
 
 ## Ordered steps
 
-Schema 0.7 stores all requests in `TaskSpecification.steps`. Keep step-specific
+Schema 0.8 stores all requests in `TaskSpec.steps`. Keep step-specific
 answer requirements, private resources, verifier dependencies, and context needs
-on each step. A `TaskSpecification` is a pinned semantic instance; `TaskSpec` is the
+on each step. A `TaskSpec` is a pinned semantic instance; `TaskFamily` is the
 source/family instantiation interface. Instantiate once before rendering variants.
-`TaskSpecification.coverage_tags` records semantic competency, task shape, domain,
+`TaskSpec.coverage_tags` records semantic competency, task shape, domain,
 artifact, interaction, state, context, and Snowball-calibrated difficulty.
-`render_task` carries those tags into the public `Task` and may add only result
-encoding tags: `result:json`, `result:xml`, and `result:file`. Do not use those
+Lowerings carry those tags forward and may add only result encoding tags:
+`result:json`, `result:xml`, and `result:file`. Do not use those
 tags to claim substantive JSON/XML production or consumption work; use semantic
 competency and artifact tags for that.
 `Rendering` controls submission conventions; `HarborTaskBinding`
-in `execution.py` controls the required environment shape, public tools, and conversation mode; Harbor selects the agent at launch.
+in `execution.py` controls the required environment shape and public tools; Harbor selects the agent at launch.
 Pass one rendering per step to `lower_to_harbor`.
 
-Use Harbor's native multi-step lifecycle. Reject unsupported success policies or
-conversation modes before export. Preserve per-step extraction and infrastructure
+Use Harbor's native multi-step lifecycle and retain ordered conversation history.
+Reject unsupported success policies before export. Preserve per-step extraction and infrastructure
 failures; never report an aggregate that hides a missing or failed step.
 
 Executable verifier modes require `TaskTroveVerifier.runtime`. Trusted answer checks
@@ -56,7 +56,7 @@ and model judges must not declare a runtime. Judge model/service configuration
 belongs in `TaskTroveVerifier.judge`; extraction belongs in `Rendering`.
 
 
-## Capabilities and public tasks
+## Capabilities and lowerings
 
 Task requirements declare operations and initial state. Use `TaskRequirements` and
 `WorkspaceState`, preserving immutable resource/image identities where needed.
@@ -64,10 +64,10 @@ Do not put ShellSim, Docker provider configuration, an agent name, or harness to
 bindings in the semantic record. Source Docker packaging alone does not establish
 native-process requirements.
 
-Render public `Task`/`TaskStep` records with instructions, public resources,
-requirements, and submission contracts only. Never serialize private verifiers or
-oracle data into public tasks. Keep the pinned verifier unchanged across provider
-and harness choices. Environment compatibility checks must cover both supplied
+Lowerings render instructions, materialize agent resources, expose selected tools,
+and record submission contracts. Never serialize private verifiers or oracle data
+into agent-visible artifacts. Keep the pinned verifier unchanged across provider and
+harness choices. Environment compatibility checks must cover both supplied
 capabilities and required state.
 
 Provider implementations and tool bindings belong in `execution.py`. Harbor owns
@@ -76,8 +76,8 @@ universal tool schema or force reactive user simulators into static task steps.
 
 ## Tool bindings
 
-Require explicit `HarborTaskBinding.interaction`. Do not infer model tool
-access from Docker or ShellSim. Shell bindings specify the exposed function name
+Use `HarborTaskBinding.tools` to declare model tool access; an empty tuple is chat.
+Do not infer tool access from Docker or ShellSim. Shell bindings specify the exposed function name
 and backend; native/replay bindings specify their harness interface and backend.
 Reject incompatible bindings. Keep tool availability separate from submission
 location and final-state verification. `ProviderToolBinding` binds a declared `ActionInterface` to a provider adapter.

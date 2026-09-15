@@ -9,7 +9,7 @@ from pathlib import Path
 import msgspec
 import pytest
 
-from taskcompendium.execution import Chat, HarborTaskBinding, NoEnvironment
+from taskcompendium.execution import HarborTaskBinding, NoEnvironment
 from taskcompendium.grading import grade_attempt
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row, rendering
 from taskcompendium.lowering import lower_to_harbor
@@ -28,7 +28,7 @@ from taskcompendium.models import (
     ToolCallComparatorConfig,
 )
 from taskcompendium.predicted_action import compare
-from taskcompendium.rendering import render_task
+from taskcompendium.rendering import render_instruction
 
 ROW = {
     "responses_create_params": {
@@ -81,8 +81,7 @@ def test_predicted_action_keeps_native_public_contract_and_private_expected_acti
     assert not isinstance(spec, Rejected)
     protocol = rendering(ROW, SHA256)
     assert isinstance(protocol.submission, FinalActionSubmission)
-    public = msgspec.to_builtins(render_task(spec, (protocol,)))
-    serialized = json.dumps(public)
+    serialized = json.dumps(msgspec.to_builtins(protocol.submission))
     assert "lookup_order" in serialized
     assert '{\\"order_id\\": 17}' not in serialized
     assert "expected_action" not in serialized
@@ -212,11 +211,10 @@ def test_private_expected_action_never_changes_the_public_contract():
     second = import_row(changed, canonical_sha256(changed))
     assert not isinstance(second, Rejected)
     second = msgspec.structs.replace(second, metadata=first.metadata)
-    first_public = msgspec.to_builtins(render_task(first, (rendering(ROW, SHA256),)))
-    second_public = msgspec.to_builtins(render_task(second, (rendering(changed, canonical_sha256(changed)),)))
-    first_public.pop("specification_sha256")
-    second_public.pop("specification_sha256")
-    assert first_public == second_public
+    first_instruction = render_instruction(first, rendering(ROW, SHA256))
+    second_instruction = render_instruction(second, rendering(changed, canonical_sha256(changed)))
+    assert first_instruction == second_instruction
+    assert rendering(ROW, SHA256).submission == rendering(changed, canonical_sha256(changed)).submission
 
 
 def test_predicted_action_rejects_unsupported_source_history():
@@ -243,6 +241,6 @@ def test_predicted_action_rejects_mixed_step_output_contracts(tmp_path):
         lower_to_harbor(
             specification,
             (rendering(ROW, SHA256), Rendering("answer", AssistantFinal())),
-            HarborTaskBinding(NoEnvironment(), Chat()),
+            HarborTaskBinding(NoEnvironment()),
             tmp_path / "task",
         )

@@ -22,7 +22,7 @@ from taskcompendium.models import (
     Rendering,
     ResourceRef,
     ResourceRole,
-    TaskSpecification,
+    TaskSpec,
     verifier_runtime,
 )
 from taskcompendium.resources import resource_bytes
@@ -30,7 +30,7 @@ from taskcompendium.serialization import to_json
 
 
 def grade_in_container(
-    specification: TaskSpecification,
+    specification: TaskSpec,
     protocol: Rendering,
     response: str | None,
     workspace: Path,

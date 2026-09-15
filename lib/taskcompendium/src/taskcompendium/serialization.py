@@ -13,10 +13,10 @@ import msgspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from taskcompendium.models import SCHEMA_VERSION, Rendering, TaskSpecification
+from taskcompendium.models import SCHEMA_VERSION, Rendering, TaskSpec
 
 
-def to_json(specification: TaskSpecification) -> bytes:
+def to_json(specification: TaskSpec) -> bytes:
     """Encode a canonical task document, independent of container serialization."""
     # Struct constructors accept integers for float fields. Normalize through the
     # typed decoder so JSON and Arrow round trips retain the same content hash.
@@ -24,8 +24,8 @@ def to_json(specification: TaskSpecification) -> bytes:
     return json.dumps(msgspec.to_builtins(normalized), sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
 
 
-def from_json(data: bytes | str) -> TaskSpecification:
-    return msgspec.json.decode(data, type=TaskSpecification)
+def from_json(data: bytes | str) -> TaskSpec:
+    return msgspec.json.decode(data, type=TaskSpec)
 
 
 def rendering_from_json(data: bytes | str) -> Rendering:
@@ -36,12 +36,12 @@ def renderings_from_json(data: bytes | str) -> tuple[Rendering, ...]:
     return msgspec.json.decode(data, type=tuple[Rendering, ...])
 
 
-def specification_hash(specification: TaskSpecification) -> str:
+def specification_hash(specification: TaskSpec) -> str:
     return hashlib.sha256(to_json(specification)).hexdigest()
 
 
 def json_schema() -> dict[str, Any]:
-    return msgspec.json.schema(TaskSpecification)
+    return msgspec.json.schema(TaskSpec)
 
 
 _TEXT = pa.string()
@@ -84,7 +84,7 @@ ARROW_SCHEMA = pa.schema(
 )
 
 
-def _arrow_row(specification: TaskSpecification) -> dict[str, Any]:
+def _arrow_row(specification: TaskSpec) -> dict[str, Any]:
     row = msgspec.to_builtins(specification)
     for step in row["steps"]:
         step["verifier"] = json.dumps(step["verifier"], sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -99,7 +99,7 @@ def _without_padding(value: Any) -> Any:
     return value
 
 
-def write_parquet(specifications: Iterable[TaskSpecification], uri: str, batch_size: int = 256) -> int:
+def write_parquet(specifications: Iterable[TaskSpec], uri: str, batch_size: int = 256) -> int:
     """Stream self-contained task records to a local or fsspec destination."""
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
@@ -118,7 +118,7 @@ def write_parquet(specifications: Iterable[TaskSpecification], uri: str, batch_s
     return count
 
 
-def read_parquet(uri: str) -> Iterator[TaskSpecification]:
+def read_parquet(uri: str) -> Iterator[TaskSpec]:
     """Read task records while restoring tagged variants and verifier value types."""
     with fsspec.open(uri, "rb") as stream:
         parquet = pq.ParquetFile(stream)
@@ -129,4 +129,4 @@ def read_parquet(uri: str) -> Iterator[TaskSpecification]:
                 row = _without_padding(row)
                 for step in row["steps"]:
                     step["verifier"] = json.loads(step["verifier"])
-                yield msgspec.convert(row, type=TaskSpecification)
+                yield msgspec.convert(row, type=TaskSpec)

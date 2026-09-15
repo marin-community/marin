@@ -7,7 +7,6 @@ import hashlib
 import json
 from pathlib import Path
 
-import msgspec
 import pytest
 from tasktrove_verify.spec import Mode
 
@@ -25,7 +24,7 @@ from taskcompendium.models import (
     ResourceRole,
     TaskTroveVerifier,
 )
-from taskcompendium.rendering import render_task
+from taskcompendium.rendering import render_instruction
 
 FIXTURES = Path(__file__).parent / "fixtures/nemo/static"
 JUDGE = JudgeConfig(JudgeModelPolicy("fixture", "small", "fixture", "https://fixture.invalid/v1"), JudgeView())
@@ -86,8 +85,7 @@ def test_static_rows_use_shared_verifiers_and_keep_source_private(name, corpus, 
         resource.path: resource for resource in specification.resources if ResourceRole.VERIFIER in resource.roles
     }
     assert set(private) == {"source-row.json", "source-provenance.json"}
-    task = render_task(specification, (Rendering("plain", AssistantFinal()),))
-    public = msgspec.json.encode(task).decode()
+    public = render_instruction(specification, Rendering("plain", AssistantFinal()))
     for hidden in ("expected_answer", "reward_profiles", "source-row.json", "references"):
         assert hidden not in public
     assert r"\boxed" not in specification.steps[0].instructions

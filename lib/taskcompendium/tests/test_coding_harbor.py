@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from taskcompendium.execution import (
-    ChatWithTools,
     HarborExecutionConfig,
     HarborLaunchConfig,
     HarborTaskBinding,
@@ -107,7 +106,7 @@ async def test_real_coding_source_grader(tmp_path, runtime_image, family, row, p
             )
             commands = [f"printf '%s' {shlex.quote(source)} > solution.cpp"]
     binding = HarborTaskBinding(
-        environment_for_requirements(spec.requirements), ChatWithTools((HarnessToolBinding("terminal", "docker"),))
+        environment_for_requirements(spec.requirements), (HarnessToolBinding("terminal", "docker"),)
     )
     task = lower_to_harbor(
         spec,

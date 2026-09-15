@@ -5,17 +5,17 @@
 
 import json
 import re
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-import openai
 from tasktrove_verify.modes.grade_ifeval import resolve_checks
 from tasktrove_verify.modes.grade_judge import CHECKLIST_PROMPT, REFERENCE_PROMPT, normalize
 from tasktrove_verify.spec import RUBRIC_CHECKLIST, RUBRIC_REFERENCE, JudgeSpec, Spec
 
 from taskcompendium.grading_paths import submission_relative
-from taskcompendium.models import GradingResult, JudgeModelPolicy, Outcome, TaskSpecification, TaskTroveVerifier
+from taskcompendium.models import GradingResult, JudgeModelPolicy, Outcome, TaskSpec, TaskTroveVerifier
 from taskcompendium.resources import contained_path
 
 _SCORE = re.compile(r"(?:^|\n)SCORE: (0|0\.5|1)\s*\Z")
@@ -39,18 +39,30 @@ class OpenAIJudgeClient:
         self.api_key = api_key
 
     def complete(self, prompt: str, policy: JudgeModelPolicy, timeout: float) -> JudgeReply:
-        with openai.OpenAI(base_url=policy.base_url, api_key=self.api_key) as client:
-            response = client.chat.completions.create(
-                model=policy.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=policy.temperature,
-                timeout=timeout,
-            )
-        return JudgeReply(response.choices[0].message.content or "", response.model, response.system_fingerprint)
+        body = json.dumps(
+            {
+                "model": policy.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": policy.temperature,
+            }
+        ).encode()
+        request = urllib.request.Request(
+            f"{policy.base_url.rstrip('/')}/chat/completions",
+            data=body,
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.load(response)
+        return JudgeReply(
+            payload["choices"][0]["message"].get("content") or "",
+            payload["model"],
+            payload.get("system_fingerprint"),
+        )
 
 
 def grade_judge_attempt(
-    specification: TaskSpecification,
+    specification: TaskSpec,
     contract: Spec,
     candidate: str,
     workspace: Path,
