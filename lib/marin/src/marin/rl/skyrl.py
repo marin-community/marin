@@ -17,7 +17,9 @@ from pathlib import PurePosixPath
 from typing import Literal, cast
 
 import fsspec
-from rigging.filesystem.storage_path import prefix_join
+import yaml
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.utils import discover_hf_checkpoints
@@ -25,7 +27,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import sanitize_job_name
 from marin.external_dependencies import MARIN_SKYRL
-from marin.training.training import LevanterCheckpoint, temporary_storage_base_path
+from marin.training.training import LevanterCheckpoint
 
 _EXECUTION = "skyrl_execution"
 _LAUNCHER_PYTHON = "3.12"
@@ -33,6 +35,13 @@ _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
+SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
+
+
+def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
+    """Return the lifecycle-managed storage path for a SkyRL run."""
+    temporary_root = marin_temp_bucket(ttl_days=ttl_days, source_prefix=output_path)
+    return str(StoragePath(temporary_root) / _TEMPORARY_OUTPUT_PREFIX / StoragePath(output_path).key)
 
 
 class SkyRLRuntimeProfile(StrEnum):
@@ -84,7 +93,7 @@ class SkyRLRetentionPolicy:
     """
 
     resume_checkpoint_count: int = 2
-    temporary_storage_ttl_days: int = 14
+    temporary_storage_ttl_days: int = SKYRL_TEMPORARY_STORAGE_TTL_DAYS
 
     def __post_init__(self) -> None:
         if not 1 <= self.resume_checkpoint_count <= 5:
@@ -305,6 +314,32 @@ class SkyRLOutputPaths:
     terminal_manifest_uri: str
 
 
+# The trainer strategy each runtime profile installs the closure for. A profile decides which
+# dependencies reach the pod; `trainer.strategy` decides which backend the trainer then asks for.
+# Nothing downstream reconciles them, so a mismatch installs one backend and runs another.
+_STRATEGY_FOR_PROFILE = {
+    SkyRLRuntimeProfile.FSDP: "fsdp2",
+    SkyRLRuntimeProfile.MEGATRON: "megatron",
+}
+
+
+def _effective_strategy(config_yaml: str, overrides: tuple[str, ...]) -> str | None:
+    """Return the trainer strategy the launched run will use, or None when nothing names one.
+
+    MarinSkyRL applies overrides as Hydra arguments after the config, so the last override naming
+    `trainer.strategy` wins. `trainer:` with nothing under it names no strategy.
+    """
+    for override in reversed(overrides):
+        key, separator, value = override.lstrip("+").partition("=")
+        if separator and key == "trainer.strategy":
+            return value.strip("'\"")
+    declared = yaml.safe_load(config_yaml)
+    if not isinstance(declared, dict):
+        return None
+    trainer = declared.get("trainer")
+    return trainer.get("strategy") if isinstance(trainer, dict) else None
+
+
 @dataclass(frozen=True)
 class SkyRLLaunchRequest:
     run_id: str
@@ -318,6 +353,16 @@ class SkyRLLaunchRequest:
     output: SkyRLOutputPaths
     seed: int
     overrides: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Reject a runtime profile that does not install the strategy the config asks for."""
+        strategy = _effective_strategy(self.config_yaml, self.overrides)
+        expected = _STRATEGY_FOR_PROFILE.get(self.runtime.profile)
+        if strategy is not None and expected is not None and strategy != expected:
+            raise ValueError(
+                f"runtime profile {self.runtime.profile.value!r} installs the {expected!r} backend, "
+                f"but config_yaml asks for trainer.strategy={strategy!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -461,10 +506,9 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         if ctx.is_fingerprint:
             temporary_root = "<temporary_output_path>"
         else:
-            temporary_root = temporary_storage_base_path(
+            temporary_root = skyrl_temporary_run_path(
                 ctx.output_path,
                 ttl_days=spec.retention.temporary_storage_ttl_days,
-                category=_TEMPORARY_OUTPUT_PREFIX,
             )
         attempts_root = prefix_join(temporary_root, "attempts")
         output = SkyRLOutputPaths(

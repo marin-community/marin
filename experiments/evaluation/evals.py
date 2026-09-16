@@ -122,9 +122,10 @@ class HarborDefinition:
     family: str | None = None
 
     def secret_env_for(self, config: ValidatedHarborConfig) -> Mapping[str, SecretSpec]:
-        if config.environment == _DAYTONA_ENVIRONMENT_TYPE:
-            return _DAYTONA_SECRET_ENV
-        return MappingProxyType({})
+        secret_env = dict(_DAYTONA_SECRET_ENV) if config.environment == _DAYTONA_ENVIRONMENT_TYPE else {}
+        for key in config.verifier_env_keys:
+            secret_env.setdefault(key, (f"env:{key}",))
+        return MappingProxyType(secret_env)
 
     def record_ref_for(self, config: ValidatedHarborConfig, runtime_task_limit: int | None) -> EvalRef:
         return EvalRef(
@@ -288,7 +289,7 @@ EVALS.update(
         "aider": harbor_definition("aider"),
         "medagentbench": harbor_definition("medagentbench"),
         "financeagent": harbor_definition("financeagent"),
-        "grug-opencode-id": harbor_definition("grug-opencode-id"),
+        "ot-tblite": harbor_definition("ot-tblite"),
     }
 )
 
@@ -330,9 +331,8 @@ NLP_EVALS: tuple[str, ...] = (
     "gsm8k-0shot",
 )
 
-# The Evalchemy chat benchmarks that run greedily in the lean uvx runtime. Chat-template models only.
-# GPQADiamond is omitted because its sampled requests carry a seed the TPU vLLM backend rejects.
-# MMLU-Pro, CruxEval, MRCR, IFBench, and FinanceBench have no working task on the pinned fork.
+# The short general-purpose chat suite. Longer publication-policy benchmarks are file-backed under
+# configs/evalchemy and validated on H100; GPQADiamond's seeded requests remain incompatible with TPU vLLM.
 CHAT_EVALS: tuple[str, ...] = ("math500", "aime24", "olympiadbench")
 
 MATH_EVALS: tuple[str, ...] = ("math500", "aime24", "gsm8k-0shot")

@@ -31,7 +31,9 @@ fetch server-side, so nothing outside the container reaches it.
 ```
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
+GET /finelog/marin/relay_status                  direct regional relay heartbeats
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
+GET /finelog/marin/alerts/relay_status           stale relay/table rows + value(0|1)
 GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
 GET /finelog/marin/alerts/loss_spikes            active hero runs + loss-spike value(0|1)
 GET /finelog/marin/alerts/training_telemetry     watched hero runs + silent-telemetry value(0|1)
@@ -86,6 +88,11 @@ result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub 
 at or above 5 seconds is slow. Clusters' finelog row adds effective pod
 resources, restart history, probe presence, node placement, PVC class/capacity, and
 recent matching Kubernetes Warning events.
+
+`relay_status` comes from a complete snapshot each regional Finelog sends directly to
+the hub every 30 seconds. It does not travel through the row-forwarding path. The alert
+fires when a regional heartbeat is two minutes old, the required node-agent namespace
+is absent, or a nonzero publication/forwarding lag has made no progress for ten minutes.
 
 Iris: the bridge owns each query behind a fixed endpoint and returns flat rows, so the
 dashboard never sends raw admin SQL. `jobs` (root jobs by state — in-flight plus 24h
@@ -223,11 +230,15 @@ of repeating the Kubernetes object name.
 | Node | Node details | `nodes.json` | What is happening on one physical GPU node? | cluster, node |
 | Workload | Jobs | `jobs.json` | What is running, queued, and stuck? | cluster, job |
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
-| Workload | RL runs | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
+| Workload | RL Post-training | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
 | Workload | Inference overview | `inference_overview.json` | Is inference progressing, and are responses slow or queues growing? | identity kind, serve |
 | Workload | Inference diagnostics | `inference.json` | Which engines, request stages, or workload changes explain the slowdown? | identity kind, serve |
 | Services | Infra | `infra.json` | Are nightly runs, main CI, workers, and hero training healthy? | none |
+
+Getting a run onto the RL Post-training view is a MarinSkyRL-side question: which launch paths export
+the telemetry environment, what a run id should look like, and which panels a synchronous run
+leaves blank by design. MarinSkyRL documents it at `docs/grafana-rl-runs.md`.
 
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old

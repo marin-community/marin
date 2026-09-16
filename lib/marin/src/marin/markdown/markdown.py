@@ -131,12 +131,10 @@ def _title_part(title: str | None) -> str:
 
 
 class MyMarkdownConverter(MarkdownConverter):
-    def __init__(self, config: HtmlToMarkdownConfig, **kwargs):
+    def __init__(self, config: HtmlToMarkdownConfig):
         self.include_links = config.include_links
         self.include_images = config.include_images
-
-        kwargs = config.markdownify_kwargs
-        super().__init__(**kwargs)
+        super().__init__(**config.markdownify_kwargs)
 
     def convert_hn(self, n, el, text, parent_tags):
         if "_inline" in parent_tags:

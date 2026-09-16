@@ -20,7 +20,7 @@ use crate::query::{make_ctx, run_query_over};
 use crate::server::auth::AuthPolicy;
 use crate::server::ingest_health::{IngestHealth, HEALTH_OK};
 use crate::server::test_support::{disk_store, serve, PUB_A};
-use crate::server::{build_app_with_config, ServerConfig};
+use crate::server::{build_app_with_config, ForwardingConfig, ServerConfig};
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{Column, Schema};
 use crate::store::Store;
@@ -81,6 +81,33 @@ async fn get_text(client: &TestHttpClient, addr: SocketAddr, path: &str) -> Stri
     assert_eq!(response.status(), StatusCode::OK, "GET {path}");
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+#[tokio::test]
+async fn list_relay_status_accepts_connect_json_for_independent_consumers() {
+    let (addr, _) = serve(
+        disk_store("relay-status-connect-json"),
+        AuthPolicy::allow_localhost(),
+    )
+    .await;
+    let response = http_client()
+        .request(
+            Request::post(format!(
+                "http://{addr}/finelog.stats.StatsService/ListRelayStatus"
+            ))
+            .header("connect-protocol-version", "1")
+            .header("content-type", "application/json")
+            .body(full_body(Bytes::from_static(b"{}")))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&payload).unwrap(),
+        json!({})
+    );
 }
 
 async fn serve_with_config(store: Arc<Store>, config: ServerConfig) -> SocketAddr {
@@ -588,6 +615,76 @@ async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info()
     )
     .await;
     assert_eq!(posted.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn forwarding_introspection_distinguishes_unseeded_lag_caught_up_and_unconfigured() {
+    const NAMESPACE: &str = "telemetry_v1.trainer";
+    const TARGET: &str = "https://hub.example.test";
+
+    let store = disk_store("forwarding-introspection");
+    let forwarding = ForwardingConfig {
+        target: TARGET.to_string(),
+        cluster: "source-cluster".to_string(),
+    };
+    let addr = serve_with_config(
+        Arc::clone(&store),
+        ServerConfig::default().with_forwarding(forwarding),
+    )
+    .await;
+    let client = http_client();
+    let batch_id = "c47ac10b-58cc-4372-a567-0e02b2c3d470";
+    let posted = post(
+        &client,
+        addr,
+        batch(batch_id),
+        Some(batch_id),
+        Some("application/json"),
+        None,
+    )
+    .await;
+    assert_eq!(posted.status, StatusCode::OK);
+    store
+        .await_persisted(NAMESPACE, 1, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let path = format!("/api/forwarding?namespace={NAMESPACE}");
+    let unseeded: Value = serde_json::from_str(&get_text(&client, addr, &path).await).unwrap();
+    assert_eq!(unseeded["configured"], true);
+    assert_eq!(unseeded["cluster"], "source-cluster");
+    assert_eq!(unseeded["visibleHighWater"], 2);
+    assert_eq!(unseeded["publishedHighWater"], 0);
+    assert_eq!(unseeded["publicationLagSeqPositions"], 2);
+    assert_eq!(unseeded["target"]["target"], TARGET);
+    assert!(unseeded["target"]["settledCursor"].is_null());
+    assert!(unseeded["target"]["forwardingLagSeqPositions"].is_null());
+
+    store
+        .set_forward_cursor(TARGET, NAMESPACE, 0)
+        .await
+        .unwrap();
+    let caught_up: Value = serde_json::from_str(&get_text(&client, addr, &path).await).unwrap();
+    assert_eq!(caught_up["target"]["settledCursor"], 0);
+    assert_eq!(caught_up["target"]["forwardingLagSeqPositions"], 0);
+
+    store
+        .set_forward_cursor(TARGET, NAMESPACE, 1)
+        .await
+        .unwrap();
+    let cursor_ahead: Value = serde_json::from_str(&get_text(&client, addr, &path).await).unwrap();
+    assert_eq!(cursor_ahead["target"]["settledCursor"], 1);
+    assert_eq!(cursor_ahead["target"]["forwardingLagSeqPositions"], 0);
+
+    let unconfigured_addr = serve_with_config(Arc::clone(&store), ServerConfig::default()).await;
+    let unconfigured: Value =
+        serde_json::from_str(&get_text(&client, unconfigured_addr, &path).await).unwrap();
+    assert_eq!(unconfigured["configured"], false);
+    assert!(unconfigured["cluster"].is_null());
+    assert_eq!(unconfigured["visibleHighWater"], 2);
+    assert_eq!(unconfigured["publishedHighWater"], 0);
+    assert_eq!(unconfigured["publicationLagSeqPositions"], 2);
+    assert!(unconfigured["target"].is_null());
 }
 
 #[tokio::test]

@@ -12,8 +12,17 @@ import pyarrow as pa
 import pytest
 from cache import TtlCache
 from config import ClusterTarget
-from conftest import FINELOG_DEPLOYMENTS_PATH, bridge_config, deployment, healthy_k8s_routes, k8s_api, make_k8s_source
-from finelog.errors import QueryResultTooLargeError
+from conftest import (
+    FINELOG_DEPLOYMENTS_PATH,
+    absent_namespace_error,
+    bridge_config,
+    deployment,
+    healthy_k8s_routes,
+    k8s_api,
+    make_k8s_source,
+    queried_namespace,
+)
+from finelog.errors import QueryResultTooLargeError, StatsError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from hero_health import (
@@ -37,6 +46,7 @@ from loom_alerts import (
     SlackThread,
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
+from relay_health import RelayNamespaceStatus, RelaySenderStatus
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
@@ -67,6 +77,7 @@ class FakeSource:
         table: pa.Table | None = None,
         raises: Exception | None = None,
         health: FinelogHealth | None = None,
+        relay_status: tuple[RelaySenderStatus, ...] = (),
     ) -> None:
         self._table = table if table is not None else pa.table({})
         self._raises = raises
@@ -81,6 +92,7 @@ class FakeSource:
             error_class="",
             error="",
         )
+        self._relay_status = relay_status
         self.queries: list[str] = []
 
     @property
@@ -95,6 +107,9 @@ class FakeSource:
 
     def health(self) -> FinelogHealth:
         return self._health
+
+    def relay_status(self) -> tuple[RelaySenderStatus, ...]:
+        return self._relay_status
 
 
 def _client(
@@ -121,6 +136,69 @@ def _client(
 
 def _get(client: TestClient, sql: str, **params):
     return client.get("/finelog/marin/query", params={"sql": sql, "from": FROM_MS, "to": TO_MS, **params})
+
+
+class NamespaceSource(FakeSource):
+    """A finelog holding only some namespaces, answering the rest the way DataFusion does."""
+
+    def __init__(self, present: set[str], rows: pa.Table) -> None:
+        super().__init__(rows)
+        self._present = present
+
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        self.queries.append(sql)
+        if queried_namespace(sql) not in self._present:
+            raise absent_namespace_error(sql)
+        return self._table
+
+
+def _producers(client: TestClient, **params):
+    return client.get(
+        "/finelog/marin/v1/rl/producers",
+        params={"run": "run-1", "clusters": "cw-rno2a", "from": FROM_MS, "to": TO_MS, **params},
+    )
+
+
+_PRODUCER_ROW = finelog_result(
+    producer=["marinskyrl"],
+    role=["trainer"],
+    attempt=["a"],
+    metric_source=[""],
+    signals=[4],
+    records=[540],
+    last_record_ms=[1_784_257_200_000],
+)
+
+
+def test_the_producer_census_answers_when_a_namespace_is_absent():
+    """A namespace the deployment has never held is dropped from the census rather than failing it."""
+    source = NamespaceSource({"telemetry_v1.marinskyrl", "telemetry_v1.vllm"}, _PRODUCER_ROW)
+
+    resp = _producers(_client(source))
+
+    assert resp.status_code == 200
+    assert len(resp.json()) == 2
+    assert any("telemetry_v1.harbor" in sql for sql in source.queries), "harbor was never attempted"
+
+
+def test_the_producer_census_reports_a_real_query_failure_rather_than_an_empty_table():
+    """A deployment that is down must not be indistinguishable from one with no producers.
+
+    The route lets it out, as `/query` does, and Starlette answers 500; what matters is that a
+    failure which is not an absent table is never mistaken for "this run has no producers".
+    """
+    source = FakeSource(
+        _ONE_ROW, raises=StatsError("Error during planning: column 'resource_attributes_json' not found")
+    )
+
+    with pytest.raises(StatsError):
+        _producers(_client(source))
+
+
+def test_the_producer_census_rejects_a_request_naming_no_cluster():
+    resp = _producers(_client(FakeSource(_PRODUCER_ROW)), clusters="")
+
+    assert resp.status_code == 400
 
 
 def test_query_returns_json_rows_with_millis_timestamps():
@@ -1287,6 +1365,37 @@ def test_finelog_fleet_alert_marks_slow_and_unresponsive_servers():
     ]
 
 
+def test_relay_status_routes_expose_the_snapshot_and_an_explicit_healthy_value():
+    now_ms = round(datetime.now(UTC).timestamp() * 1000)
+    relay = RelaySenderStatus(
+        cluster="cw-a",
+        boot_id="boot",
+        report_sequence=2,
+        target="https://hub",
+        received_at_ms=now_ms,
+        namespaces=(
+            RelayNamespaceStatus(
+                namespace="telemetry_v1.node_agent",
+                visible_high_water=12,
+                published_high_water=11,
+                settled_cursor=10,
+                publication_progress_at_ms=now_ms,
+                cursor_progress_at_ms=now_ms,
+            ),
+        ),
+    )
+    client = _client(FakeSource(relay_status=(relay,)))
+
+    assert client.get("/finelog/marin/relay_status").json()[0]["cluster"] == "cw-a"
+    row = next(row for row in client.get("/finelog/marin/alerts/relay_status").json() if row["cluster"] == "cw-a")
+    assert row == {
+        "cluster": "cw-a",
+        "namespace": "telemetry_v1.node_agent",
+        "state": "healthy",
+        "value": 0,
+    }
+
+
 def test_workload_overview_counts_issue_rows_and_keeps_explicit_zeros():
     assert workload_overview([], []) == [{"pending_pods": 0, "crashlooping_containers": 0}]
     assert workload_overview(
@@ -1349,3 +1458,15 @@ def test_cache_prunes_expired_entries_on_write():
     for i in range(50):
         cache.get_or_compute(f"bucket-{i}", lambda i=i: i)
     assert len(cache) == 0
+
+
+def test_the_producer_census_refuses_a_window_wider_than_it_will_scan():
+    # max_rows bounds the answer, not the scan, so an unbounded window is a request to read the
+    # whole retained table.
+    resp = _producers(
+        _client(FakeSource(_PRODUCER_ROW)),
+        **{"from": str(int(FROM_MS) - 30 * 24 * 60 * 60 * 1000), "to": TO_MS},
+    )
+
+    assert resp.status_code == 400
+    assert "maximum" in resp.json()["error"]

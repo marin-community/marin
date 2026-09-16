@@ -793,6 +793,10 @@ def run_stage(
             # reads all per-mapper sidecars in parallel, filters for its own
             # target shard, then merges the sorted chunks and reduces per key.
             reader = ScatterReader.from_sidecars(list(ctx.shard), ctx.shard_idx)
+            stage_counters = counters.current_stage()
+            stage_counters.set_counter(counters.SHUFFLE_INPUT_ROWS, reader.shard_payload_rows)
+            stage_counters.set_counter(counters.SHUFFLE_PAYLOAD_BYTES, reader.shard_payload_bytes)
+            stage_counters.set_counter(counters.SHUFFLE_NUM_SOURCES, reader.contributing_sidecars)
             stream = _reduce_gen(reader, op.key_fn, op.reducer_fn, external_sort_dir)
             op_index += 1
 

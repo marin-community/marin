@@ -13,9 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from finestore.admin import set_table_metadata
-from finestore.reader import ReadView
-from fsspec.core import url_to_fs
-from marin.evaluation.archive import (
+from finestore.eval import (
     Choice,
     EvalSample,
     EvaluationStore,
@@ -25,6 +23,8 @@ from marin.evaluation.archive import (
     sample_to_archive_row,
     write_sample_parquet,
 )
+from finestore.reader import ReadView
+from fsspec.core import url_to_fs
 from marin.evaluation.lm_eval_samples import (
     export_lm_eval_samples,
     preserved_sample_sources,

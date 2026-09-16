@@ -57,7 +57,11 @@ _PREFLIGHT_MAX_INPUT_TOKENS = 262144
 _PREFLIGHT_MAX_OUTPUT_TOKENS = 65536
 
 
-def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> list[Mapping[str, object]]:
+def _install_fake_harbor_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    verifier_env_keys: tuple[str, ...] = (),
+) -> list[Mapping[str, object]]:
     received: list[Mapping[str, object]] = []
 
     def preflight(requests):
@@ -75,6 +79,7 @@ def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> list[Mapp
                     workspace_dataset_path=None,
                     agent="opencode",
                     environment="daytona",
+                    verifier_env_keys=verifier_env_keys,
                     error_taxonomy=HarborErrorTaxonomy(
                         infrastructure=frozenset({"InfrastructureError"}),
                         agent=frozenset({"AgentError"}),
@@ -510,6 +515,36 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
     assert {evaluation.identity.eval_runtime for evaluation in batch.evaluations} == {HARBOR_RUNTIME}
     assert all(evaluation.identity.eval_ref.harbor.config_digest for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.task_limit == 1 for evaluation in batch.evaluations)
+
+
+def test_build_evaluation_batch_routes_declared_verifier_host_secrets(monkeypatch, tmp_path):
+    _install_fake_harbor_preflight(monkeypatch, verifier_env_keys=("TOGETHER_API_KEY",))
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    config_path = _write_harbor_config(tmp_path / "simpleqa.yaml")
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=(),
+        evalchemy_definitions=(),
+        harbor_definitions=(HarborDefinition("simpleqa", config_path),),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    assert batch.secret_env == {
+        "DAYTONA_API_KEY": (
+            "env:DAYTONA_API_KEY",
+            "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
+        ),
+        "TOGETHER_API_KEY": ("env:TOGETHER_API_KEY",),
+    }
+    assert batch.evaluations[0].secret_env_keys == ("DAYTONA_API_KEY", "TOGETHER_API_KEY")
 
 
 def test_resolve_eval_keys_validates_programmatic_selections() -> None:

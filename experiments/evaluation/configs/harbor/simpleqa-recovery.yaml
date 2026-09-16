@@ -1,0 +1,24 @@
+n_concurrent_trials: 16
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 3
+  include_exceptions:
+    - InternalServerError
+    - APIConnectionError
+    - APITimeoutError
+  exclude_exceptions: []
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+environment:
+  type: daytona
+agents:
+  - name: terminus-2
+datasets:
+  - name: simpleqa
+    version: "1.0"
+verifier:
+  env:
+    OPENAI_API_KEY: "${TOGETHER_API_KEY}"
+    OPENAI_BASE_URL: "https://api.together.xyz/v1"
+    MODEL_NAME: "openai/gpt-oss-120b"

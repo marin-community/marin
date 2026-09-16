@@ -149,7 +149,7 @@ def reconcile_user_budget_tiers(
 
     Unlisted users don't get a row; their effective budget and max_band come
     from :class:`UserBudgetDefaults` at read time (see
-    :func:`compute_effective_band` and the launch-job guard in service.py).
+    :func:`compute_effective_band` and the launch guard in `jobs.py`).
 
     Returns the number of (user_id, tier) pairs applied; duplicate user_ids
     across tiers are counted per-apply since the later tier overwrites.
