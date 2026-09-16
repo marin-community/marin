@@ -58,7 +58,7 @@ class PythonToolRequest:
         return json.dumps(dataclasses.asdict(self)).encode()
 
     @classmethod
-    def from_json(cls, payload: object, *, name: str | None = None) -> "PythonToolRequest":
+    def from_payload(cls, payload: object, *, name: str | None = None) -> "PythonToolRequest":
         if not isinstance(payload, dict):
             raise ValueError("Tool request must be an object")
         source = payload.get("source")
@@ -156,7 +156,7 @@ async def _invoke_tool(request: PythonToolRequest) -> bytes:
 
 
 def _main() -> None:
-    request = PythonToolRequest.from_json(json.load(sys.stdin))
+    request = PythonToolRequest.from_payload(json.load(sys.stdin))
     result = asyncio.run(_invoke_tool(request))
     sys.stdout.buffer.write(result)
 

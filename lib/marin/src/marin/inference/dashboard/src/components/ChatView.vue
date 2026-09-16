@@ -72,7 +72,7 @@ watch(
   },
 )
 
-async function useExample(example: ChatExample) {
+async function applyExample(example: ChatExample) {
   if (example.pythonTools !== undefined) {
     props.conversation.pythonTools = example.pythonTools
     showTools.value = true
@@ -167,7 +167,6 @@ function toolResultMessage(call: ToolCall, content: string): ChatMessage {
 async function complete(reply: ChatMessage, messages: ModelMessage[], pythonTools: string, signal: AbortSignal) {
   let rawContent = ''
   let reasoningStream = ''
-  let toolCalls: ToolCall[] = []
   let thinkingStartedAt: number | null = null
 
   const body: Record<string, unknown> = {
@@ -189,9 +188,8 @@ async function complete(reply: ChatMessage, messages: ModelMessage[], pythonTool
     reply.thinking = reasoningStream + split.thinking
     if (pythonTools) {
       const inline = inlineToolCalls(split.visible)
-      toolCalls = inline.calls
       reply.content = inline.visible
-      reply.toolCalls = toolCalls
+      reply.toolCalls = inline.calls
     } else {
       reply.content = split.visible
       reply.toolCalls = []
@@ -231,7 +229,7 @@ async function callTool(call: ToolCall, source: string, signal: AbortSignal): Pr
               v-for="example in CHAT_EXAMPLES"
               :key="example.label"
               class="rounded-xl border border-surface-border bg-surface-raised px-4 py-3 text-left text-sm text-text-secondary transition-colors hover:border-accent hover:text-text"
-              @click="useExample(example)"
+              @click="applyExample(example)"
             >
               <span>{{ example.label }}</span>
               <span v-if="example.pythonTools" class="mt-1 block font-mono text-[0.68rem] uppercase tracking-wide text-accent">

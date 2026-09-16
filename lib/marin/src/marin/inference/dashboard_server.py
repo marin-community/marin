@@ -77,7 +77,7 @@ async def _invoke_tool_request(request: Request) -> Response:
     except json.JSONDecodeError:
         return JSONResponse({"error": "tool request must be JSON"}, status_code=400)
     try:
-        tool_request = PythonToolRequest.from_json(payload, name=request.path_params["name"])
+        tool_request = PythonToolRequest.from_payload(payload, name=request.path_params["name"])
     except PythonToolSourceTooLarge:
         return JSONResponse({"error": "Python tool source is too large"}, status_code=413)
     except ValueError as exc:
