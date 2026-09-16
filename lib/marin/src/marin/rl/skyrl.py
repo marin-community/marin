@@ -234,6 +234,11 @@ class ArtifactDataSource:
 
 
 @dataclass(frozen=True)
+class TaskCompendiumDataSource(ArtifactDataSource):
+    """A directory of native TaskCompendium lowering packages."""
+
+
+@dataclass(frozen=True)
 class TaskTroveDataSource:
     """A metadata-selected cohort from one packed TaskTrove Clean release."""
 
@@ -268,7 +273,7 @@ class TaskTroveDataSource:
         )
 
 
-type SkyRLDataSource = ArtifactDataSource | TaskTroveDataSource
+type SkyRLDataSource = ArtifactDataSource | TaskCompendiumDataSource | TaskTroveDataSource
 
 
 @dataclass(frozen=True)
@@ -486,6 +491,11 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             f"++terminal_bench_config.trials_dir='{prefix_join(attempts_root, 'trace_jobs')}'",
             f"++generator.trajectory_retention.output_path='{prefix_join(attempts_root, 'trajectories')}'",
         )
+        if any(isinstance(source, TaskCompendiumDataSource) for source in (*spec.train_data, *spec.validation_data)):
+            retention_overrides = (
+                *retention_overrides,
+                f"++taskcompendium.archive_uri='{prefix_join(ctx.output_path, 'semantic-attempts')}'",
+            )
         request = SkyRLLaunchRequest(
             run_id=f"{step_name}-{spec.version}",
             attempt_id=attempt_id,
