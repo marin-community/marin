@@ -457,7 +457,6 @@ class WorkerView:
     total_tpu_count: int
     device_type: str
     device_variant: str
-    attributes: dict
     healthy: bool
     active: bool
     consecutive_failures: int
@@ -474,7 +473,6 @@ def _worker_view(row, liveness) -> WorkerView:
         total_tpu_count=row.total_tpu_count,
         device_type=row.device_type,
         device_variant=row.device_variant,
-        attributes=getattr(row, "attributes", {}),
         healthy=liveness.healthy,
         active=liveness.active,
         consecutive_failures=liveness.consecutive_failures,
@@ -1141,10 +1139,7 @@ def mark_all_slices_ready(group: ScalingGroup) -> None:
             group.mark_slice_ready(handle.slice_id, worker_ids)
 
 
-def make_gcp_provider(
-    config: ScaleGroupConfig,
-    zone: str = "us-central1-a",
-) -> tuple[GcpWorkerProvider, InMemoryGcpService]:
+def make_gcp_provider(zone: str = "us-central1-a") -> tuple[GcpWorkerProvider, InMemoryGcpService]:
     """Create a GcpWorkerProvider backed by InMemoryGcpService(DRY_RUN).
 
     Returns both the provider and the backing service so tests can inject

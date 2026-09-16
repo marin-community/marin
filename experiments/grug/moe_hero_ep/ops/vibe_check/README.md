@@ -6,12 +6,17 @@
 The report compares three completions per prompt across retained permanent hero
 checkpoints. The three samples use different seeds, fixed across checkpoints.
 Expected-answer token probabilities are computed once per prompt and checkpoint.
+They include a final end-of-sequence (EOS) token, which measures the probability
+of stopping after the reference. The report shows EOS and includes it in the totals.
 Token colors show model probabilities. Hover, focus, or tap a token for its
 probability and the five most likely alternatives.
 Each prompt in [prompts.json](prompts.json) includes an expected answer, which
 is scored separately. Open-ended expected answers are examples, and probability
 does not measure answer correctness. Probabilities use the model distribution
 before temperature scaling.
+The sampler encodes each prompt and reference together. It rejects references
+that change the prompt tokens. Put fixed formatting, such as a function-header
+newline, in the prompt.
 
 ## Run
 
