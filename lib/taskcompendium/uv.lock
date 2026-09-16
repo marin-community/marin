@@ -751,7 +751,7 @@ wheels = [
 [[package]]
 name = "harbor"
 version = "0.8.1"
-source = { git = "https://github.com/marin-community/harbor.git?rev=9551f376157d90104011107dcbf9ca3621228126#9551f376157d90104011107dcbf9ca3621228126" }
+source = { git = "https://github.com/marin-community/harbor.git?rev=93147ea9e07b04ec8d2eb5afd2916386f1aacc69#93147ea9e07b04ec8d2eb5afd2916386f1aacc69" }
 dependencies = [
     { name = "dirhash" },
     { name = "fastapi" },
@@ -2363,7 +2363,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "fsspec", specifier = ">=2025.3.0" },
-    { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=9551f376157d90104011107dcbf9ca3621228126" },
+    { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=93147ea9e07b04ec8d2eb5afd2916386f1aacc69" },
     { name = "msgspec", specifier = ">=0.18" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "pyarrow", specifier = ">=23" },

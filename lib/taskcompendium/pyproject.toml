@@ -30,7 +30,7 @@ test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
 
 [tool.uv.sources]
 tasktrove-verify = { git = "https://github.com/marin-community/marin.git", rev = "b76d03131cd88bd9fc711dba206659027edba3a8", subdirectory = "lib/tasktrove-verify" }
-harbor = { git = "https://github.com/marin-community/harbor.git", rev = "9551f376157d90104011107dcbf9ca3621228126" }
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "93147ea9e07b04ec8d2eb5afd2916386f1aacc69" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskcompendium"]

@@ -213,7 +213,8 @@ kept solely for explicit reference executions. The semantic record names none of
 `lower_to_harbor(spec, renderings, binding, destination)` writes a task package from
 one compatible submission convention per step. It writes `binding.json`, never an
 agent-specific `execution.json`. A package may be launched by any Harbor configuration
-that satisfies the binding.
+that satisfies the binding and selects `taskcompendium.harbor.verifier:SemanticVerifier`.
+It contains no `tests/test.sh`; Harbor rejects a launch that omits the custom verifier.
 
 Agent-facing instructions state the task and output requirements directly. They never
 describe judges, verifiers, rewards, hidden tests, or grading procedures. Importers

@@ -121,6 +121,15 @@ async def test_harbor_replay_semantic_grading(tmp_path, response, reward):
     assert outcome["status"] == "graded"
 
 
+async def test_harbor_export_without_custom_verifier_is_rejected(tmp_path):
+    task = _task(tmp_path)
+    execution = _exported_execution(task)
+    del execution["verifier"]
+
+    with pytest.raises(FileNotFoundError, match=r"tests/test\.sh"):
+        await run_trial(task, execution, tmp_path / "trials", "missing-verifier")
+
+
 async def test_harbor_no_tool_rejects_execution_without_reward(tmp_path):
     task = _task(tmp_path)
     execution = _execution(

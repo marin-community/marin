@@ -116,7 +116,7 @@ Submission extraction belongs to the rendering: it recovers an answer from plain
 
 Common math and MCQA checks can run directly; executable checks declare their own isolated runtime and dependencies. A common representation should not require booting Docker to grade a math answer. Use the cheapest verifier that adequately checks the task; where deterministic checks are incomplete, supplement them with a judge.
 
-The spike runs on a pinned Marin fork of Harbor, with TaskCompendium environment, agent, and verifier plugins. The private verifier is stored in `specification.json`; the launch selects `SemanticVerifier`, which reads it and evaluates the submission. The exported `tests/test.sh` deliberately fails if someone runs the package without that adapter. The separate specification, rendering, binding, and manifest JSON files make the spike inspectable; this duplication is an export implementation choice, not a requirement of the representation.
+The spike runs on a pinned Marin fork of Harbor, with TaskCompendium environment, agent, and verifier plugins. The private verifier is stored in `specification.json`; the launch selects `SemanticVerifier`, which reads it and evaluates the submission. The export contains no `tests/test.sh`; Harbor requires an explicit custom-verifier launch to run it. The separate specification, rendering, binding, and manifest JSON files make the spike inspectable; this duplication is an export implementation choice, not a requirement of the representation.
 
 We haven't fully specced LLM-as-judge yet but it fits here.
 

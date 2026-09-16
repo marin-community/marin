@@ -270,8 +270,6 @@ def lower_to_harbor(
     agent_resources = tuple(resource for resource in specification.resources if ResourceRole.AGENT in resource.roles)
     if agent_resources:
         materialize_resources(agent_resources, environment_dir / "inputs")
-    (destination / "tests").mkdir()
-    (destination / "tests/test.sh").write_text("#!/bin/sh\necho 'Use the TaskCompendium verifier adapter' >&2\nexit 1\n")
     specification_json = to_json(specification)
     (destination / "specification.json").write_bytes(specification_json)
     (destination / "renderings.json").write_bytes(msgspec.json.encode(renderings))
