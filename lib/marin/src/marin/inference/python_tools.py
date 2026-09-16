@@ -63,12 +63,6 @@ def python_tools_from_source(source: str) -> tuple[PythonTool, ...]:
     namespace: dict[str, object] = {"__name__": "__chat_python_tools__"}
     exec(compile(module, "<chat-python-tools>", "exec"), namespace)
     functions = tuple(namespace[definition.name] for definition in definitions)
-    if not all(inspect.isfunction(function) for function in functions):
-        raise ValueError("Python tool source must define functions")
-    return python_tools(functions)
-
-
-def python_tools(functions: tuple[object, ...]) -> tuple[PythonTool, ...]:
     tools = tuple(_python_tool(function) for function in functions)
     names = [tool.name for tool in tools]
     duplicates = sorted(name for name in set(names) if names.count(name) > 1)

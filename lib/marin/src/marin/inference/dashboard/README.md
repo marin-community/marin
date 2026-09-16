@@ -20,7 +20,7 @@ regenerated artifact alongside the source change.
 
 ## Custom Python tools
 
-Open **Python tools** below the Chat composer to define functions for the active
+Open **Python tools** above the Chat composer to define functions for the active
 conversation. The source is stored with the conversation in browser storage.
 The two Python-tool cards on an empty chat populate the editor with working
 examples and send a prompt that asks the model to use them.
@@ -42,8 +42,7 @@ For each model request, the UI adds the source to the system message inside a
 <tool_call>{"name":"lookup_weather","arguments":{"city":"Paris"}}</tool_call>
 ```
 
-The UI accepts tagged calls as well as structured OpenAI tool-call responses,
-runs each function in the Iris service, returns its JSON result in a
+The UI runs each tagged call in the Iris service, returns its JSON result in a
 `<tool_result>` XML element, and asks the model to continue. Argument and return
 annotations are validated with Pydantic. Each call runs in a fresh subprocess
 with a 10-second timeout, and source is limited to 64 KiB. One model response

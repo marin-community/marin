@@ -3,8 +3,10 @@ import { nextTick, onUnmounted, ref, watch } from 'vue'
 import { invokeTool, requestCompletion } from '../lib/api'
 import { CHAT_EXAMPLES } from '../lib/examples'
 import type { ChatExample } from '../lib/examples'
+import { modelMessages } from '../lib/python_tools'
+import type { ModelMessage } from '../lib/python_tools'
 import { splitThinking } from '../lib/thinking'
-import { executableToolCalls, inlineToolCalls, mergeToolCallDeltas } from '../lib/tool_calls'
+import { executableToolCalls, inlineToolCalls } from '../lib/tool_calls'
 import type { ChatMessage, Conversation, SamplingParams, ToolCall } from '../lib/types'
 import MessageBubble from './MessageBubble.vue'
 
@@ -106,7 +108,7 @@ async function send(text?: string) {
       reply = conversation.messages[conversation.messages.length - 1]
       emit('persist')
 
-      await complete(reply, request, Boolean(pythonTools), abort.signal)
+      await complete(reply, request, pythonTools, abort.signal)
       const calls = reply.toolCalls ?? []
       conversation.updatedAt = Date.now()
       emit('persist')
@@ -167,79 +169,9 @@ function appendCancelledToolResults(conversation: Conversation, reply: ChatMessa
   }
 }
 
-type ModelMessage = {
-  role: 'system' | 'user' | 'assistant'
-  content: string
-}
-
-function modelMessages(conversation: Conversation, pythonTools: string): ModelMessage[] {
-  const request: ModelMessage[] = []
-  const system = [conversation.system.trim(), pythonTools ? pythonToolInstructions(pythonTools) : '']
-    .filter(Boolean)
-    .join('\n\n')
-  if (system) request.push({ role: 'system', content: system })
-  for (let index = 0; index < conversation.messages.length; index += 1) {
-    const message = conversation.messages[index]
-    if (message.role === 'assistant') {
-      request.push({
-        role: 'assistant',
-        content: [message.content, ...(message.toolCalls ?? []).map(pythonToolCallMessage)].filter(Boolean).join('\n'),
-      })
-    } else if (message.role === 'tool') {
-      const results = [pythonToolResultMessage(message)]
-      while (conversation.messages[index + 1]?.role === 'tool') {
-        index += 1
-        results.push(pythonToolResultMessage(conversation.messages[index]))
-      }
-      request.push({
-        role: 'user',
-        content: results.join('\n'),
-      })
-    } else {
-      request.push({ role: 'user', content: message.content })
-    }
-  }
-  return request
-}
-
-function pythonToolInstructions(source: string): string {
-  const cdataSource = source.split(']]>').join(']]]]><![CDATA[>')
-  return `The user provided executable Python functions inside this XML block:
-<python_tools><![CDATA[
-${cdataSource}
-]]></python_tools>
-Call a function only by emitting this exact XML form with JSON arguments:
-<tool_call>{"name":"function_name","arguments":{"parameter":"value"}}</tool_call>
-The application will execute the function and return a <tool_result> XML element in the next user message. Use that
-result to answer the user or make another call. Do not invent functions outside the block.`
-}
-
-function pythonToolCallMessage(call: ToolCall): string {
-  let arguments_: unknown = {}
-  try {
-    const parsed = JSON.parse(call.function.arguments)
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) arguments_ = parsed
-  } catch {
-    // The matching tool result tells the model that its arguments were invalid.
-  }
-  return `<tool_call>${JSON.stringify({ name: call.function.name, arguments: arguments_ })}</tool_call>`
-}
-
-function pythonToolResultMessage(message: ChatMessage): string {
-  let result: unknown = message.content
-  try {
-    result = JSON.parse(message.content)
-  } catch {
-    // Tool endpoints normally return JSON; preserve unexpected output as a string.
-  }
-  const payload = JSON.stringify({ name: message.name, result }).split(']]>').join(']]]]><![CDATA[>')
-  return `<tool_result><![CDATA[${payload}]]></tool_result>`
-}
-
-async function complete(reply: ChatMessage, messages: ModelMessage[], toolsEnabled: boolean, signal: AbortSignal) {
+async function complete(reply: ChatMessage, messages: ModelMessage[], pythonTools: string, signal: AbortSignal) {
   let rawContent = ''
   let reasoningStream = ''
-  let structuredCalls: ToolCall[] = []
   let fallbackCalls: ToolCall[] = []
   let thinkingStartedAt: number | null = null
 
@@ -257,17 +189,14 @@ async function complete(reply: ChatMessage, messages: ModelMessage[], toolsEnabl
     const reasoning = delta.reasoning_content ?? delta.reasoning
     if (reasoning) reasoningStream += reasoning
     if (delta.content) rawContent += delta.content
-    if (toolsEnabled && Array.isArray(delta.tool_calls)) {
-      structuredCalls = mergeToolCallDeltas(structuredCalls, delta.tool_calls)
-    }
 
     const split = splitThinking(rawContent)
     reply.thinking = reasoningStream + split.thinking
-    if (toolsEnabled) {
+    if (pythonTools) {
       const inline = inlineToolCalls(split.visible)
       fallbackCalls = inline.calls
       reply.content = inline.visible
-      reply.toolCalls = executableToolCalls(structuredCalls.length ? structuredCalls : fallbackCalls)
+      reply.toolCalls = executableToolCalls(fallbackCalls)
     } else {
       reply.content = split.visible
       reply.toolCalls = []
@@ -278,7 +207,7 @@ async function complete(reply: ChatMessage, messages: ModelMessage[], toolsEnabl
     }
   })
 
-  if (toolsEnabled) reply.toolCalls = executableToolCalls(structuredCalls.length ? structuredCalls : fallbackCalls)
+  if (pythonTools) reply.toolCalls = executableToolCalls(fallbackCalls)
   if (thinkingStartedAt !== null && reply.thinkingSeconds === null) {
     reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
   }
