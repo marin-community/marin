@@ -180,6 +180,45 @@ def _job_dir(output_dir: str, job_name: str) -> StoragePath:
     return _jobs_dir(output_dir) / job_name
 
 
+def _final_attempt_dir(trial_dir: StoragePath, trial_uri: str | None) -> StoragePath | None:
+    """Rebase Harbor's recorded final-attempt URI onto the trial directory we read.
+
+    Harbor records the winning attempt as an absolute ``trial_uri`` (``<trial>/attempts/NNN``) in
+    ``result.json`` and writes that attempt's trajectory under ``<attempt>/agent/trajectory.json``.
+    Rebasing the tail after the trial segment onto ``trial_dir`` keeps the lookup correct even when the
+    job tree is read from a copy of the path Harbor originally wrote. Returns ``None`` when no attempt
+    is recorded or the URI does not descend from this trial.
+    """
+    if not trial_uri:
+        return None
+    segments = StoragePath(trial_uri).segments
+    if trial_dir.name not in segments:
+        return None
+    last = len(segments) - 1 - segments[::-1].index(trial_dir.name)
+    attempt = trial_dir
+    for segment in segments[last + 1 :]:
+        attempt = attempt / segment
+    return attempt
+
+
+def _trajectory_path(trial_dir: StoragePath, trial_uri: str | None) -> str | None:
+    """Locate a trial's durable trajectory, preferring the final attempt Harbor recorded.
+
+    Newer Harbor nests the trajectory under ``<trial>/attempts/NNN/agent/trajectory.json`` and points
+    ``trial_uri`` at that attempt; older runs wrote it directly under ``<trial>/agent/trajectory.json``.
+    We check the recorded attempt first, then fall back to the legacy in-trial location.
+    """
+    candidates = []
+    attempt_dir = _final_attempt_dir(trial_dir, trial_uri)
+    if attempt_dir is not None:
+        candidates.append(attempt_dir / "agent" / "trajectory.json")
+    candidates.append(trial_dir / "agent" / "trajectory.json")
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> HarborTrial:
     """Normalize one Harbor result and locate its durable trajectory."""
     trial_dir = result_file.parent
@@ -205,8 +244,7 @@ def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> Harb
     else:
         error["type"] = f"{_UNKNOWN_ERROR_PREFIX}{exception_type or _UNKNOWN_ERROR}"
         scored = False
-    trajectory_file = trial_dir / "agent" / "trajectory.json"
-    trajectory_path = str(trajectory_file) if trajectory_file.exists() else None
+    trajectory_path = _trajectory_path(trial_dir, data.get("trial_uri"))
     return HarborTrial(
         task_id=task_id,
         trial_id=trial_dir.name,

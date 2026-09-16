@@ -254,6 +254,33 @@ def test_read_trials_and_archive_captures_trajectory(tmp_path):
     assert len(steps) == 1 and steps[0]["step_id"] == 1
 
 
+def test_read_trial_resolves_trajectory_from_recorded_final_attempt(tmp_path):
+    """Harbor nests the trajectory under the final attempt and records that attempt in trial_uri.
+
+    Fails before the fix: the exporter only looked at ``<trial>/agent/trajectory.json`` and reported no
+    trajectory for a trial whose artifact lives under ``attempts/NNN``.
+    """
+    trial_dir = tmp_path / "job" / "103__rvK8oHQ"
+    attempt_dir = trial_dir / "attempts" / "000"
+    (attempt_dir / "agent").mkdir(parents=True)
+    (attempt_dir / "agent" / "trajectory.json").write_text(json.dumps({"steps": []}))
+    (trial_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "task_name": "ds-1000/103",
+                "verifier_result": {"rewards": {"reward": 1.0}},
+                # An absolute URI under a different root: rebasing its tail onto the trial directory we
+                # actually read must still resolve, so a relocated job tree is not lost.
+                "trial_uri": "s3://relocated-bucket/marin/103__rvK8oHQ/attempts/000",
+            }
+        )
+    )
+
+    trial = _read_trial(StoragePath(str(trial_dir / "result.json")), _ERROR_TAXONOMY)
+
+    assert trial.trajectory_path == str(attempt_dir / "agent" / "trajectory.json")
+
+
 @pytest.mark.parametrize(
     ("exception_type", "verifier_result", "expected_scored", "expected_error_type"),
     [
