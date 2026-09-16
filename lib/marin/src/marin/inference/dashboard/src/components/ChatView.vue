@@ -207,13 +207,8 @@ async function complete(reply: AssistantMessage, messages: ModelMessage[], pytho
   }
 }
 
-async function callTool(call: ToolCall, source: string, signal: AbortSignal): Promise<string> {
-  try {
-    return await invokeTool(call.name, source, call.arguments, signal)
-  } catch (error) {
-    if (isAbortError(error)) throw error
-    return JSON.stringify({ error: 'tool request failed', details: String(error) })
-  }
+function callTool(call: ToolCall, source: string, signal: AbortSignal): Promise<string> {
+  return invokeTool(call.name, source, call.arguments, signal)
 }
 </script>
 

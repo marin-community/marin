@@ -32,13 +32,6 @@ async function copy() {
   setTimeout(() => (copied.value = false), 1200)
 }
 
-function prettyJson(value: string): string {
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2)
-  } catch {
-    return value
-  }
-}
 </script>
 
 <template>
@@ -56,7 +49,7 @@ function prettyJson(value: string): string {
         {{ message.name }} result
       </summary>
       <pre class="mt-2 overflow-x-auto whitespace-pre-wrap break-words text-text-muted">{{
-        prettyJson(message.content)
+        JSON.stringify(JSON.parse(message.content), null, 2)
       }}</pre>
     </details>
   </div>
