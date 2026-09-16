@@ -45,8 +45,11 @@ GRID = "#b8b8b8"
 MINIMUM = "#111111"
 FIGURE_WIDTH = 1080
 FIGURE_HEIGHT = 820
-STATIC_FIGURE_WIDTH = 7.2
-STATIC_FIGURE_HEIGHT = 4.6
+STATIC_FIGURE_WIDTH = 5.5  # ICLR text width, so the fonts render at their nominal size
+STATIC_FIGURE_HEIGHT = 2.8
+STATIC_MARGINS_IN = {"left": 0.5, "right": 0.06, "bottom": 0.4, "top": 0.48}
+STATIC_TABLE_ROW_HEIGHT_IN = 0.098
+STATIC_TABLE_FONT_SIZE = 5.5
 STATIC_DPI = 300
 DEEPSEEK_COLORS = (
     "#1f77b4",
@@ -103,6 +106,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--atlas-dir", type=Path, default=DEFAULT_ATLAS_DIR)
     parser.add_argument("--design", type=Path, default=DEFAULT_DESIGN)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--height", type=float, default=STATIC_FIGURE_HEIGHT, help="static figure height in inches")
     return parser.parse_args()
 
 
@@ -457,13 +461,13 @@ def build_figure(points: pd.DataFrame, metadata: dict[str, CurveMetadata]) -> go
 
 def style_static_axis(axis: Axes) -> None:
     axis.set_xlim(-0.01, 1.01)
-    axis.set_ylim(0.78, 4.28)
+    axis.set_ylim(0.78, 4.45)
     axis.set_xticks(np.linspace(0.0, 1.0, 6))
     axis.set_yticks(np.arange(1.0, 4.1, 0.5))
     axis.yaxis.set_major_formatter(FuncFormatter(lambda value, _position: f"{value:g}"))
     axis.set_axisbelow(True)
     axis.grid(color=GRID, linewidth=0.65, linestyle="-", alpha=0.72)
-    axis.tick_params(axis="both", colors=INK, labelsize=7.5, width=0.8, length=3)
+    axis.tick_params(axis="both", colors=INK, labelsize=7, width=0.8, length=2.5)
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
     for name in ("left", "bottom"):
@@ -476,11 +480,12 @@ def add_static_legend_table(
     *,
     rows: list[list[str]],
     colors: list[str],
+    row_height: float,
 ) -> None:
+    """Draw the legend table in the panel's upper left; `row_height` is an axes fraction."""
     x = 0.012
     width = 0.78
     table_top = 0.985
-    row_height = 0.047
     table_height = row_height * (len(rows) + 1)
     table_bottom = table_top - table_height
     box_bottom = table_bottom - 0.012
@@ -509,14 +514,14 @@ def add_static_legend_table(
             "$D/S_{\\mathrm{SC}}$",
             "$E_{\\mathrm{SC}}^*$",
         ],
-        colWidths=[0.075, 0.125, 0.09, 0.26, 0.225, 0.225],
+        colWidths=[0.06, 0.13, 0.02, 0.36, 0.21, 0.22],
         cellLoc="right",
         colLoc="right",
         bbox=[x + 0.006, table_bottom, width - 0.012, table_height],
     )
     table.set_zorder(11)
     table.auto_set_font_size(False)
-    table.set_fontsize(6.6)
+    table.set_fontsize(STATIC_TABLE_FONT_SIZE)
     for (row_index, column_index), cell in table.get_celld().items():
         cell.set_facecolor("white")
         cell.set_edgecolor("none")
@@ -536,7 +541,7 @@ def add_static_legend_table(
         marker = table[(row_index, 0)].get_text()
         marker.set_text("●")
         marker.set_color(color)
-        marker.set_fontsize(9.0)
+        marker.set_fontsize(7.0)
         marker.set_path_effects([path_effects.withStroke(linewidth=0.55, foreground=INK)])
 
 
@@ -547,6 +552,7 @@ def add_static_panel(
     metadata: dict[str, CurveMetadata],
     curve_refs: tuple[str, ...],
     colors: list[str],
+    table_row_height: float,
 ) -> None:
     legend_rows: list[list[str]] = []
     for curve_ref, color in zip(curve_refs, colors, strict=True):
@@ -603,14 +609,14 @@ def add_static_panel(
             ]
         )
 
-    add_static_legend_table(axis, rows=legend_rows, colors=colors)
+    add_static_legend_table(axis, rows=legend_rows, colors=colors, row_height=table_row_height)
 
 
-def build_static_figure(points: pd.DataFrame, metadata: dict[str, CurveMetadata]) -> MatplotlibFigure:
+def build_static_figure(points: pd.DataFrame, metadata: dict[str, CurveMetadata], height: float) -> MatplotlibFigure:
     with plt.rc_context(
         {
             "font.family": "DejaVu Sans",
-            "font.size": 8,
+            "font.size": 7,
             "text.usetex": False,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
@@ -622,10 +628,19 @@ def build_static_figure(points: pd.DataFrame, metadata: dict[str, CurveMetadata]
         figure, axes = plt.subplots(
             1,
             2,
-            figsize=(STATIC_FIGURE_WIDTH, STATIC_FIGURE_HEIGHT),
+            figsize=(STATIC_FIGURE_WIDTH, height),
             sharey=False,
         )
-        figure.subplots_adjust(left=0.09, right=0.99, bottom=0.14, top=0.86, wspace=0.24)
+        bottom = STATIC_MARGINS_IN["bottom"] / height
+        top = 1.0 - STATIC_MARGINS_IN["top"] / height
+        figure.subplots_adjust(
+            left=STATIC_MARGINS_IN["left"] / STATIC_FIGURE_WIDTH,
+            right=1.0 - STATIC_MARGINS_IN["right"] / STATIC_FIGURE_WIDTH,
+            bottom=bottom,
+            top=top,
+            wspace=0.24,
+        )
+        table_row_height = STATIC_TABLE_ROW_HEIGHT_IN / (height * (top - bottom))
 
         add_static_panel(
             axes[0],
@@ -633,6 +648,7 @@ def build_static_figure(points: pd.DataFrame, metadata: dict[str, CurveMetadata]
             metadata=metadata,
             curve_refs=REPLAY_DISPLAY_CURVES,
             colors=list(REPLAY_DISPLAY_COLORS),
+            table_row_height=table_row_height,
         )
         add_static_panel(
             axes[1],
@@ -640,12 +656,13 @@ def build_static_figure(points: pd.DataFrame, metadata: dict[str, CurveMetadata]
             metadata=metadata,
             curve_refs=SCALE_CURVES,
             colors=list(SCALE_DISPLAY_COLORS),
+            table_row_height=table_row_height,
         )
 
         for axis in axes:
             style_static_axis(axis)
-            axis.set_xlabel(r"StarCoder mixture fraction, $p$", fontsize=8.5, color=INK, labelpad=7)
-        axes[0].set_ylabel("Programming Languages BPB (lower is better)", fontsize=8.5, color=INK, labelpad=8)
+            axis.set_xlabel(r"StarCoder mixture fraction, $p$", fontsize=7.5, color=INK, labelpad=4)
+        axes[0].set_ylabel("Programming Languages BPB", fontsize=7.5, color=INK, labelpad=5)
 
         common_epoch_scale = float(np.mean([metadata[curve].epochs_at_full_share for curve in SCALE_CURVES]))
         top_axis = axes[1].secondary_xaxis(
@@ -654,8 +671,8 @@ def build_static_figure(points: pd.DataFrame, metadata: dict[str, CurveMetadata]
         )
         top_ticks = np.linspace(0.0, common_epoch_scale, 6)
         top_axis.set_xticks(top_ticks, labels=[f"{value:.0f}" for value in top_ticks])
-        top_axis.set_xlabel("Materialized StarCoder epochs", fontsize=8.5, color=INK, labelpad=3)
-        top_axis.tick_params(colors=INK, labelsize=7.5, width=0.8, length=0, pad=2)
+        top_axis.set_xlabel("Materialized StarCoder epochs", fontsize=7.5, color=INK, labelpad=2)
+        top_axis.tick_params(colors=INK, labelsize=7, width=0.8, length=0, pad=1.5)
         top_axis.spines["top"].set_visible(False)
 
         panel_titles = (
@@ -666,12 +683,12 @@ def build_static_figure(points: pd.DataFrame, metadata: dict[str, CurveMetadata]
             bounds = axis.get_position()
             figure.text(
                 (bounds.x0 + bounds.x1) / 2,
-                0.955,
+                1.0 - 0.03 / height,
                 title,
                 ha="center",
                 va="top",
                 color=INK,
-                fontsize=9.6,
+                fontsize=8.5,
                 fontweight="bold",
                 linespacing=1.2,
             )
@@ -683,6 +700,7 @@ def write_outputs(
     figure: go.Figure,
     points: pd.DataFrame,
     metadata: dict[str, CurveMetadata],
+    height: float,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     html = pio.to_html(
@@ -693,7 +711,7 @@ def write_outputs(
     )
     (output_dir / "index.html").write_text(html, encoding="utf-8")
     with plt.rc_context({"pdf.fonttype": 42, "ps.fonttype": 42}):
-        static_figure = build_static_figure(points, metadata)
+        static_figure = build_static_figure(points, metadata, height)
         static_figure.savefig(output_dir / "figure.png", dpi=STATIC_DPI)
         static_figure.savefig(output_dir / "figure.pdf")
         plt.close(static_figure)
@@ -723,7 +741,7 @@ def main() -> None:
     args = parse_args()
     points, metadata = load_inputs(args.atlas_dir, args.design)
     figure = build_figure(points, metadata)
-    write_outputs(args.output_dir, figure, points, metadata)
+    write_outputs(args.output_dir, figure, points, metadata, args.height)
 
 
 if __name__ == "__main__":

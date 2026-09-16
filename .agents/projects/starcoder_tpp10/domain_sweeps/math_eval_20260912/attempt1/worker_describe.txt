@@ -1,0 +1,7 @@
+Job: /calvinxu/tpp10-finemath-math-eval/finemath-math-proxies (/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: Cumulative failed task attempts exceeded max_task_failures: failures=1, limit=0; Exit code: 1. stderr:     <class 'tuple'>.
+
+  TASK  STATE      EXIT  DURATION                   PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  failed        1  1 minute and 2.85 seconds  -           -          Exit code: 1. stderr:     <class 'tuple'>.

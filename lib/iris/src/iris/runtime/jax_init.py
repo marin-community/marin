@@ -23,17 +23,18 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
-from iris.actor.resolver import Resolver
-from iris.client.client import iris_ctx
+from iris.client.client import IrisContext, iris_ctx
 from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.cluster.platforms.types import find_free_port
 from iris.cluster.runtime.env import SCRATCH_CACHE_PATH
+from iris.cluster.types import JobName
 from iris.env_resources import TaskResources
 from iris.hooks.multigpu import (
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
 )
+from iris.resources.state import TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ _JAX_DIST_HEARTBEAT_TIMEOUT = 100
 # Rank 0 can spend up to 60 seconds in tracker teardown before joining peers.
 # Leave the same margin again while bounding a rank stuck below Python.
 _JAX_DIST_SHUTDOWN_TIMEOUT = 120
+_COORDINATOR_ATTEMPT_UID_KEY = "jax_coordinator_attempt_uid"
 
 
 class _AutotuneCacheRole(enum.StrEnum):
@@ -257,15 +259,17 @@ _COORDINATOR_PENDING_CODES = frozenset({Code.NOT_FOUND, Code.UNIMPLEMENTED, Code
 
 
 def _poll_for_coordinator(
-    resolver: Resolver,
+    ctx: IrisContext,
+    coordinator_task: JobName,
     endpoint_name: str,
     timeout: float,
     poll_interval: float,
 ) -> str:
-    """Poll the endpoint registry until the coordinator address appears.
+    """Wait for an endpoint owned by the coordinator's current live attempt.
 
     Args:
-        resolver: Namespaced resolver for this job.
+        ctx: Job context with registry and controller access.
+        coordinator_task: Task hosting global process zero.
         endpoint_name: Name of the coordinator endpoint.
         timeout: Maximum seconds to wait.
         poll_interval: Initial backoff delay in seconds.
@@ -276,13 +280,38 @@ def _poll_for_coordinator(
     Raises:
         TimeoutError: If the coordinator is not found within timeout.
     """
+    if ctx.client is None:
+        raise RuntimeError("JAX coordinator discovery requires a controller client")
+    resolver = ctx.resolver
     backoff = ExponentialBackoff(initial=poll_interval, maximum=max(poll_interval, 30.0))
     deadline = Deadline.from_now(Duration.from_seconds(timeout))
     while True:
         try:
             resolved = resolver.resolve(endpoint_name)
             if not resolved.is_empty:
-                return resolved.first().url
+                # A crashed coordinator can leave a leased endpoint behind. Consult
+                # its own attempt, not the peer's potentially different retry count.
+                status = ctx.client.task_status(coordinator_task, deadline=deadline)
+                current_uid = next(
+                    (
+                        attempt.attempt_uid
+                        for attempt in status.attempts
+                        if attempt.attempt_number == status.current_attempt_number
+                    ),
+                    None,
+                )
+                if current_uid and status.state in (TaskState.ASSIGNED, TaskState.BUILDING, TaskState.RUNNING):
+                    addresses = {
+                        endpoint.url
+                        for endpoint in resolved.endpoints
+                        if endpoint.metadata.get(_COORDINATOR_ATTEMPT_UID_KEY) == current_uid
+                    }
+                    if len(addresses) > 1:
+                        raise RuntimeError(f"Conflicting JAX coordinator addresses for attempt {current_uid}")
+                    if addresses:
+                        address = addresses.pop()
+                        logger.info("JAX coordinator %s verified for attempt %s", address, current_uid)
+                        return address
         except ConnectError as e:
             if e.code not in _COORDINATOR_PENDING_CODES:
                 raise
@@ -300,15 +329,15 @@ def _parse_local_device_ids(raw: str | None) -> list[int] | None:
     return [int(part) for part in raw.split(",") if part]
 
 
-def _attempt_endpoint_name(endpoint_name: str, attempt_id: int) -> str:
-    return f"{endpoint_name}-attempt-{attempt_id}"
-
-
 def _register_coordinator(job_info: JobInfo, port: int | None, endpoint_name: str) -> str:
     """Choose and publish global process 0's coordinator address."""
+    if not job_info.attempt_uid:
+        raise RuntimeError("JAX coordinator registration requires IRIS_ATTEMPT_UID")
     coordinator = f"{job_info.advertise_host}:{resolve_coordinator_port(job_info, port)}"
     ctx = iris_ctx()
-    endpoint_id = ctx.registry.register(endpoint_name, coordinator)
+    endpoint_id = ctx.registry.register(
+        endpoint_name, coordinator, metadata={_COORDINATOR_ATTEMPT_UID_KEY: job_info.attempt_uid}
+    )
     atexit.register(ctx.registry.unregister, endpoint_id)
     return coordinator
 
@@ -352,7 +381,7 @@ def _initialize_supervised_jax(
         coordinator = _register_coordinator(job_info, port, endpoint_name)
     else:
         ctx = iris_ctx()
-        coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
+        coordinator = _poll_for_coordinator(ctx, job_info.job_id.task(0), endpoint_name, poll_timeout, poll_interval)
 
     logger.info(
         "initialize_jax (supervised): process_id=%d/%d local_device_ids=%s coordinator=%s",
@@ -396,7 +425,9 @@ def initialize_jax(
             ``IRIS_PORT_JAX`` named port and otherwise asks the kernel to select
             an available port. Pass a port only to pin it.
         endpoint_name: Base name for coordinator discovery. Iris scopes the
-            registered name to the current task attempt.
+            registered name to the child job so concurrent sibling jobs in one
+            hierarchy cannot share a coordinator. Peers verify its attempt UID
+            against the controller before joining, ignoring stale retry leases.
         poll_timeout: Maximum seconds for non-coordinator tasks to wait for the
             coordinator endpoint to register. Defaults to ``_JAX_DIST_INIT_TIMEOUT``
             so a slow coordinator host on a large-gang cold restart does not abort
@@ -426,7 +457,7 @@ def initialize_jax(
 
     job_info = get_job_info()
     if job_info is not None:
-        endpoint_name = _attempt_endpoint_name(endpoint_name, job_info.attempt_id)
+        endpoint_name = job_info.scoped_endpoint_name(endpoint_name)
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
 
     # Supervised (multi-process-per-task) mode short-circuits the task-derived
@@ -477,7 +508,7 @@ def initialize_jax(
         )
     else:
         ctx = iris_ctx()
-        coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
+        coordinator = _poll_for_coordinator(ctx, job_info.job_id.task(0), endpoint_name, poll_timeout, poll_interval)
         jax.distributed.initialize(
             coordinator,
             job_info.num_tasks,

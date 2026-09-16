@@ -1,0 +1,21 @@
+# StarCoder target validation at the mean selected mixture
+
+One target run was submitted at nominal StarCoder fraction 8/15 (53.333333%). This is the equal-weight mean of six matched proxy selections: 50%, 50%, 65%, 50%, 50%, 55%. It measures the loss of their averaged mixture. The earlier diagnostic instead averaged losses at the six individual choices.
+
+The target keeps the existing Qwen3 configuration: 301,241,344 total parameters, 3,012,296,704 tokens, 11,491 steps, batch size 128, sequence length 2,048, and trainer/data seed 20260910. It uses the same finite StarCoder parent, six web components, optimizer and schedule. Cost is 6.6639e18 training FLOPs. Block allocation gives 786,422 StarCoder sequences, or 53.4672515% of consumed sequences and 8.4627023 epochs. This submission contains one target and its native PALOMA evaluation.
+
+The Iris parent `/calvinxu/starcoder-tpp10-mean-selection` was acknowledged on 14 September 2026 at 01:06:24 UTC. It uses interactive priority, one CPU, 4 GB RAM and nonpreemptible placement in us-central1-a. Its child requests the original regional v5p-8. The TPU child `/calvinxu/starcoder-tpp10-mean-selection/verified_training-dc11170c` and its parent have succeeded. The child recovered from one preemption; both exited zero with no failures. Its runtime/source receipts and all 12 cache checks passed; its first optimizer step completed at 01:10:19 UTC. All output, checkpoint and cache paths are in central1.
+
+`plan.json` pins the code, runtime, allocation and original data preparation identities. A changed plan is rejected. Resubmission skips successful artifacts only when their recorded fingerprint matches. Independent review, recipe parity, allocator checks, lint, typecheck and region validation passed. `bundle_receipt.json` verifies 29 source pins and the plan inside the 23.2 MiB workspace bundle. `submission.log` and the Fieldbook JSON files retain submission evidence.
+
+The collector retains final-step native PALOMA BPB, token loss and schema version. For mean natural-log loss per scored token, BPB = token_loss × 11,612,631 / (28,741,166 × ln(2)). These are the audited scored-token and byte counts. The collector requires schema-2 BPB agreement within 5e-5 BPB. Regret uses the existing twelve-point target minimum, 0.7655645236 BPB; regret reduction compares with the unmatched choice's target loss, 0.8006188044 BPB. Regret reduction (%) = 100 × [1 − (new target loss − reference minimum) / (unmatched target loss − reference minimum)]. The new point does not redefine that reference-grid minimum.
+
+To reproduce collection from the repository root:
+
+```bash
+uv run python -m experiments.domain_phase_mix.launch_starcoder_tpp10_mean_selection --plan .agents/projects/starcoder_tpp10/mean_selection_20260913/plan.json --collect .agents/projects/starcoder_tpp10/mean_selection_20260913/result.json
+```
+
+The completed run measures 0.7744325345176816 normalized BPB (native schema-2 BPB 0.7744324207305908). The durable final checkpoint is step-11490 and its metadata marks it non-temporary. Result collection verifies final-step metrics, fingerprint 8bace5e8, and pinned code/runtime receipts. Target regret is 0.008868010917602143 BPB, +1.1583623123% above the unchanged reference minimum; 74.7020600082% of unmatched regret is avoided. Figure 3 now uses this measured result, with both stacked bars at nominal 53.3333% and an 8.46-epoch top tick. The six individually selected fractions are averaged for proposal selection; left-panel curves continue to average trainer seeds for display. See `result.json`, `result.csv`, `final_checkpoint_verification.json`, and the paper’s `revision_notes/20260913_figure3_mean_selection_result/CC_CHANGES.md`.
+
+The manuscript is [main.pdf](</Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/main.pdf>), Figure 3. Its asset is `figures/epoch_matching_tpp10.pdf`, builder is `revision_notes/20260912_outline_figures/build_epoch_matching.py`, and source caption/protocol are `sections/simulated_epoching.tex` and Appendix B.1 in `sections/appendix.tex`, all relative to that paper directory. The outline and consolidated `CC_CHANGES.md` must agree with the adopted result.

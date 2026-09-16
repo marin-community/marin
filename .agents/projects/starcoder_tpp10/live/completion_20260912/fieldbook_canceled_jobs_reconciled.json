@@ -1,0 +1,122 @@
+[
+  {
+    "attrs": {
+      "marin.callable_sha256": "d798624c64d9ae436c443e7ecc0f16994d8426ef1e04bd73632dc13cfe8d9a6b",
+      "marin.priority": "batch"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T12:49:24Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-cffa480f",
+    "external_system": "iris",
+    "failure_reason": "Canceled during the authorized interactive migration; replacement completed. Verified by interactive_migration_20260912/post_cancel_tree.txt.",
+    "finished_at": null,
+    "id": "job_01m2887zcrt1b98711g8whxbta",
+    "launcher": "iris",
+    "name": "verified_training-cffa480f",
+    "retry_of": "job_01m27nbx618gzmf7j8s2q0bnjy",
+    "run_id": "run_01m27mq30yq05gy5dfxx7jhdpe",
+    "started_at": null,
+    "status": "killed",
+    "updated_at": "2026-09-13T00:10:25Z"
+  },
+  {
+    "attrs": {
+      "marin.callable_sha256": "553a31161eebe5f2b618d3c15636eca2f5e8997aa8c37731c49953d745d3e9f1",
+      "marin.priority": "batch"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T12:49:30Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9",
+    "external_system": "iris",
+    "failure_reason": "Canceled during the authorized interactive migration; replacement completed. Verified by interactive_migration_20260912/post_cancel_tree.txt.",
+    "finished_at": null,
+    "id": "job_01m28885360s0qfeq7zgv8amwp",
+    "launcher": "iris",
+    "name": "verified_training-e24265b9",
+    "retry_of": "job_01m27nbmdgmkxs09b158brhh6t",
+    "run_id": "run_01m27mq0dnp8akz8698eszx60r",
+    "started_at": null,
+    "status": "killed",
+    "updated_at": "2026-09-13T00:10:25Z"
+  },
+  {
+    "attrs": {
+      "marin.callable_sha256": "fdd36a93872710d60185f5f894ecaabb44ab01fbf590f5ae65776553bba66d17",
+      "marin.priority": "batch"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T12:49:38Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590",
+    "external_system": "iris",
+    "failure_reason": "Canceled during the authorized interactive migration; replacement completed. Verified by interactive_migration_20260912/post_cancel_tree.txt.",
+    "finished_at": null,
+    "id": "job_01m2888dcrv7n6qc7s7h613p9q",
+    "launcher": "iris",
+    "name": "verified_training-aa2a4590",
+    "retry_of": "job_01m27nbbgjkw62gnda5yeye0nt",
+    "run_id": "run_01m27mpxta54khxb3s64prvpbb",
+    "started_at": null,
+    "status": "killed",
+    "updated_at": "2026-09-13T00:10:25Z"
+  },
+  {
+    "attrs": {
+      "marin.callable_sha256": "2e960bca6d5345e57cb2cb665c9c449d1c44fc7e7f283bcab7048a09f19f8b87",
+      "marin.priority": "batch"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T12:49:46Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9",
+    "external_system": "iris",
+    "failure_reason": "Canceled during the authorized interactive migration; replacement completed. Verified by interactive_migration_20260912/post_cancel_tree.txt.",
+    "finished_at": null,
+    "id": "job_01m2888mrajkpcrmvtv46xttkj",
+    "launcher": "iris",
+    "name": "verified_training-e7af7ef9",
+    "retry_of": "job_01m27nb31f97q9tee2a13h3fkb",
+    "run_id": "run_01m27mpv1b6nrwtved53w0qbdd",
+    "started_at": null,
+    "status": "killed",
+    "updated_at": "2026-09-13T00:10:25Z"
+  },
+  {
+    "attrs": {
+      "marin.callable_sha256": "3b6c83ee7e71b6fc9e6c6a8802c14144e459323435ac123748a76626cc4c98df",
+      "marin.priority": "batch"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T12:49:52Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+    "external_system": "iris",
+    "failure_reason": "Canceled during the authorized interactive migration; replacement completed. Verified by interactive_migration_20260912/post_cancel_tree.txt.",
+    "finished_at": null,
+    "id": "job_01m2888tdmr8vjmykx5t0792pg",
+    "launcher": "iris",
+    "name": "verified_training-15f44e0d",
+    "retry_of": "job_01m27nast1z1qt39qk5ww0sh4e",
+    "run_id": "run_01m27mprdmnq7716cf7as9t2zy",
+    "started_at": null,
+    "status": "killed",
+    "updated_at": "2026-09-13T00:10:26Z"
+  }
+]

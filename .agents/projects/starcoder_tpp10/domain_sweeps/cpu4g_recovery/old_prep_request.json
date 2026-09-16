@@ -1,0 +1,38 @@
+{
+  "resources": {
+    "cpu_millicores": 2000,
+    "memory_bytes": "8589934592",
+    "device": {},
+    "disk_bytes": "34359738368"
+  },
+  "constraints": [
+    {
+      "key": "region",
+      "op": "CONSTRAINT_OP_EQ",
+      "value": {
+        "string_value": "us-central1"
+      },
+      "mode": "CONSTRAINT_MODE_REQUIRED"
+    },
+    {
+      "key": "zone",
+      "op": "CONSTRAINT_OP_EQ",
+      "value": {
+        "string_value": "us-central1-a"
+      },
+      "mode": "CONSTRAINT_MODE_REQUIRED"
+    },
+    {
+      "key": "preemptible",
+      "op": "CONSTRAINT_OP_EQ",
+      "value": {
+        "string_value": "false"
+      },
+      "mode": "CONSTRAINT_MODE_REQUIRED"
+    }
+  ],
+  "bundle_id": "7b1f5152da2e20a6a95514f5a6004bf0428ae34520f6d172cf884aa4850a5828",
+  "priority_band": "PRIORITY_BAND_INTERACTIVE",
+  "replicas": 1,
+  "job_id": "/calvinxu/tpp10-domain-sweeps/prepare_subset-1430c306"
+}

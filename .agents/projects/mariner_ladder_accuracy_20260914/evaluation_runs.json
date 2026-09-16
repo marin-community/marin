@@ -1,0 +1,52 @@
+[
+  {
+    "attrs": {
+      "eval.checkpoint_step": 22056,
+      "eval.checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/hf/step-22056",
+      "eval.retain_all_samples": true,
+      "eval.task_leaves": 67
+    },
+    "created_at": "2026-09-14T05:51:00Z",
+    "deleted_at": null,
+    "description": "Full standard-accuracy evaluation of final 1e21 checkpoint, all 67 overlap-suite leaves with per-example outputs. No new training.",
+    "existed": false,
+    "experiment_id": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+    "experiment_ids": [
+      "exp_01kvvvv6zxrf0j7tkp4f7k6y66"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m2f7g0wknzqq5prazf680a9r",
+    "idempotency_key": "mariner-ladder-accuracy67-20260914-proportional_1e21-2f1a48",
+    "kind": "analysis",
+    "name": "proportional_1e21-2f1a48_accuracy67",
+    "parent_run_id": "run_01kvvvwj657tsjqbhqpcmkdn8f",
+    "status": "active",
+    "updated_at": "2026-09-14T05:51:00Z"
+  },
+  {
+    "attrs": {
+      "eval.checkpoint_step": 22056,
+      "eval.checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/hf/step-22056",
+      "eval.retain_all_samples": true,
+      "eval.task_leaves": 67
+    },
+    "created_at": "2026-09-14T05:51:00Z",
+    "deleted_at": null,
+    "description": "Full standard-accuracy evaluation of final 1e21 checkpoint, all 67 overlap-suite leaves with per-example outputs. No new training.",
+    "existed": false,
+    "experiment_id": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+    "experiment_ids": [
+      "exp_01kvvvv6zxrf0j7tkp4f7k6y66"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m2f7g16506yna154azs3m4wr",
+    "idempotency_key": "mariner-ladder-accuracy67-20260914-unimax8_1e21-d685cd",
+    "kind": "analysis",
+    "name": "unimax8_1e21-d685cd_accuracy67",
+    "parent_run_id": "run_01kvvvwj8n4hza9yt79bg2g0jz",
+    "status": "active",
+    "updated_at": "2026-09-14T05:51:00Z"
+  }
+]

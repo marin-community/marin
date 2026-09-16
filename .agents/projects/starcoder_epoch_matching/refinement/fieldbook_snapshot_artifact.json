@@ -1,0 +1,17 @@
+{
+  "attrs": {
+    "fieldbook.local_mtime_at_capture": 1788928870.879798,
+    "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/initial_snapshot.json",
+    "fieldbook.local_size_at_capture": 13742
+  },
+  "content_hash": "sha256:96f53b5913a827072c0dbd78c84dee9ae421daf1a5d4f613926c6fa7408ffec7",
+  "created_at": "2026-09-09T04:41:15Z",
+  "deleted_at": null,
+  "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+  "id": "art_01m227gpp6hpmje2kr14ajpmth",
+  "job_id": null,
+  "run_id": null,
+  "type": "report",
+  "updated_at": "2026-09-09T04:41:40Z",
+  "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/initial_snapshot.json"
+}

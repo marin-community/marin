@@ -31,7 +31,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 import numpy as np
-from scipy.optimize import minimize, nnls
+from scipy.optimize import least_squares, minimize, minimize_scalar, nnls
 from scipy.stats import qmc
 
 from experiments.domain_phase_mix import olmix_loglinear_fit as olmix_loglinear
@@ -89,6 +89,14 @@ LOG_SPACE_SHAPE_KEYS = frozenset({"rate", "saturation_epochs", "benefit_offset"}
 QUALITY_SCRAMBLE_SEED = 20_260_904
 # Bounded log-deficit link: the linear predictor is capped at the largest training log-deficit plus this margin.
 LINK_CAP_MARGIN = 0.5
+# Fitted-floor link: the floor sits kappa swarm gaps (anchor minus swarm minimum) below the anchor, or a noise
+# margin below it when the swarm never moved the task. Kappa is chosen per task by inner CV (FittedFloorModel);
+# the Gaussian prior on log kappa only regularizes the free-kappa solve and is weak against 280 rows.
+FITTED_FLOOR_KAPPA_PRIOR = 2.5
+FITTED_FLOOR_KAPPA_PRIOR_SD = 0.5
+FITTED_FLOOR_KAPPA_BOUNDS = (1.0, 4.0)
+FITTED_FLOOR_NOISE_MARGIN_SDS = 3.0
+FITTED_FLOOR_MAX_NFEV = 400
 CC_PREFIX = "dolma3_cc/"
 # Round-4 mechanisms: unique-token benefit input (share of the budget, times this scale so a 10 % bucket is 1),
 # and per-bucket harm-onset covariates.
@@ -279,6 +287,16 @@ class Features:
             label=f"{self.label}|weight_coordinate",
         )
 
+    def with_common_inventory(self) -> Features:
+        """Keep the epoch scale but give every bucket the mean pool size, dropping the per-bucket information."""
+        inventory = np.full(self.buckets, float(np.mean(self.inventory)))
+        return dataclasses.replace(
+            self,
+            exposures=self.weights * inventory[None, :],
+            inventory=inventory,
+            label=f"{self.label}|common_inventory",
+        )
+
     def with_families(self, families: Families, tag: str) -> Features:
         return dataclasses.replace(self, families=families, label=f"{self.label}|{tag}")
 
@@ -328,6 +346,8 @@ class LinkKind(StrEnum):
     LOG_DEFICIT = "log_deficit"
     LOG_DEFICIT_BOUNDED = "log_deficit_bounded"
     LOG_FLOOR_MARGIN = "log_floor_margin"
+    KAPPA_FLOOR = "kappa_floor"
+    FITTED_FLOOR = "fitted_floor"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -347,6 +367,14 @@ class HeadSpec:
     # Column scale for ``scale_columns``: root-mean-square (compact retained state and its
     # descendants) or maximum absolute value (the retained power law's own head).
     scale_rule: str = "rms"
+    # Fitted-floor link: anchor value (NaN means the training median), the task's repeat-noise SD (0 disables
+    # the noise margin), and the prior on kappa.
+    floor_anchor: float = float("nan")
+    noise_sd: float = 0.0
+    floor_kappa_prior: float = FITTED_FLOOR_KAPPA_PRIOR
+    floor_kappa_prior_sd: float = FITTED_FLOOR_KAPPA_PRIOR_SD
+    floor_kappa_bounds: tuple[float, float] = FITTED_FLOOR_KAPPA_BOUNDS
+    noise_margin_sds: float = FITTED_FLOOR_NOISE_MARGIN_SDS
 
 
 @dataclasses.dataclass(frozen=True)
@@ -356,6 +384,8 @@ class FittedHead:
     floor: float
     active: int
     cap: float = float("inf")
+    kappa: float = float("nan")
+    converged: bool = True
 
 
 @dataclasses.dataclass(frozen=True)
@@ -369,11 +399,28 @@ class Design:
             raise ValueError("design columns, ridge multipliers, and names must agree")
 
 
+def floor_anchor_and_gap(response: np.ndarray, spec: HeadSpec) -> tuple[float, float]:
+    """Anchor (proportional value, or the training median) and the swarm gap below it for the fitted floor."""
+    anchor = float(np.median(response)) if math.isnan(spec.floor_anchor) else float(spec.floor_anchor)
+    gap = anchor - float(np.min(response))
+    if gap <= 0.0:
+        # The anchor is at or below every training row: use the training spread as the gap scale.
+        gap = max(float(np.std(response)), 1e-3 * abs(anchor), 1e-6)
+    return anchor, gap
+
+
+def fitted_floor(kappa: float, anchor: float, gap: float, spec: HeadSpec) -> float:
+    return anchor - max(kappa * gap, spec.noise_margin_sds * spec.noise_sd)
+
+
 def link_floor(response: np.ndarray, spec: HeadSpec) -> float:
     if spec.link is LinkKind.IDENTITY:
         return float("nan")
     if spec.link in (LinkKind.LOG_DEFICIT, LinkKind.LOG_DEFICIT_BOUNDED):
         return spec.floor_fraction * float(np.min(response))
+    if spec.link in (LinkKind.KAPPA_FLOOR, LinkKind.FITTED_FLOOR):
+        anchor, gap = floor_anchor_and_gap(response, spec)
+        return fitted_floor(spec.floor_kappa_prior, anchor, gap, spec)
     low = float(np.min(response))
     span = float(np.max(response) - low)
     scale = max(span, LOG_LINK_FLOOR_SPAN_FRACTION * max(low, 1e-6))
@@ -438,6 +485,84 @@ def _nonnegative_solve(
     return intercept, coefficients
 
 
+def _fitted_floor_solve(
+    matrix: np.ndarray,
+    response: np.ndarray,
+    ridge: float,
+    multipliers: np.ndarray,
+    spec: HeadSpec,
+    intercept: float,
+    coefficients: np.ndarray,
+) -> tuple[float, np.ndarray, float, float, bool]:
+    """Bounded nonlinear least squares in response space for y = floor(kappa) + exp(c + X beta).
+
+    Starts from the log-space NNLS solution at the prior floor. Parameters: log kappa within the bounds, a free
+    intercept, and nonnegative coefficients; residuals are the response-space errors, the ridge rows on the
+    coefficients, and the Gaussian prior on log kappa scaled by the warm start's residual SD. Returns the
+    intercept, the coefficients, the floor, kappa, and whether the solver converged.
+    """
+    anchor, gap = floor_anchor_and_gap(response, spec)
+    low, high = spec.floor_kappa_bounds
+    log_prior = math.log(spec.floor_kappa_prior)
+    start_floor = fitted_floor(spec.floor_kappa_prior, anchor, gap, spec)
+    warm = start_floor + np.exp(np.clip(intercept + matrix @ coefficients, -LINK_CLIP, LINK_CLIP))
+    residual_sd = max(float(np.std(response - warm)), 1e-4 * max(abs(anchor), 1e-6))
+    prior_scale = residual_sd / spec.floor_kappa_prior_sd
+    # The ridge rows act on the log-space coefficients; in response space a unit of coefficient moves the
+    # prediction by about one deficit, so the rows are scaled by the mean deficit to keep the same strength.
+    deficit_scale = max(float(np.mean(warm - start_floor)), 1e-6)
+    ridge_scale = np.sqrt(ridge * multipliers) * deficit_scale
+    margin = spec.noise_margin_sds * spec.noise_sd
+    width = matrix.shape[1]
+
+    def unpack(vector: np.ndarray) -> tuple[float, float, np.ndarray]:
+        return float(vector[0]), float(vector[1]), vector[2:]
+
+    def residuals(vector: np.ndarray) -> np.ndarray:
+        log_kappa, c, beta = unpack(vector)
+        floor = anchor - max(math.exp(log_kappa) * gap, margin)
+        fitted = floor + np.exp(np.clip(c + matrix @ beta, -LINK_CLIP, LINK_CLIP))
+        return np.concatenate([response - fitted, ridge_scale * beta, [(log_kappa - log_prior) * prior_scale]])
+
+    def jacobian(vector: np.ndarray) -> np.ndarray:
+        log_kappa, c, beta = unpack(vector)
+        kappa_term = math.exp(log_kappa) * gap
+        expo = np.exp(np.clip(c + matrix @ beta, -LINK_CLIP, LINK_CLIP))
+        rows = len(response)
+        out = np.zeros((rows + width + 1, width + 2))
+        out[:rows, 0] = kappa_term if kappa_term >= margin else 0.0
+        out[:rows, 1] = -expo
+        out[:rows, 2:] = -expo[:, None] * matrix
+        out[rows : rows + width, 2:] = np.diag(ridge_scale)
+        out[rows + width, 0] = prior_scale
+        return out
+
+    start = np.concatenate([[log_prior, intercept], np.maximum(coefficients, 0.0)])
+    # Equal bounds pin kappa; the solver needs an open interval, so a hair of width is allowed around it.
+    log_low, log_high = math.log(low), math.log(high)
+    if log_high - log_low < 1e-9:
+        log_low, log_high = log_low - 1e-6, log_high + 1e-6
+    lower = np.concatenate([[log_low, -np.inf], np.zeros(width)])
+    upper = np.concatenate([[log_high, np.inf], np.full(width, np.inf)])
+    start = np.minimum(np.maximum(start, lower + 1e-12), upper - 1e-12)
+    solution = least_squares(
+        residuals,
+        start,
+        jac=jacobian,
+        bounds=(lower, upper),
+        method="trf",
+        x_scale="jac",
+        max_nfev=FITTED_FLOOR_MAX_NFEV,
+    )
+    if solution.status < 1:
+        # Not converged (nfev exhausted or bad input): keep the log-space warm start at the prior floor rather
+        # than a half-optimized head, and say so.
+        return intercept, np.asarray(coefficients, dtype=float), start_floor, spec.floor_kappa_prior, False
+    log_kappa, c, beta = unpack(solution.x)
+    kappa = math.exp(log_kappa)
+    return c, np.asarray(beta, dtype=float), anchor - max(kappa * gap, margin), kappa, True
+
+
 def fit_head(design: Design, response: np.ndarray, ridge: float, spec: HeadSpec) -> FittedHead:
     """Fit the linear head of one model on the supplied rows."""
     floor = link_floor(response, spec)
@@ -476,18 +601,32 @@ def fit_head(design: Design, response: np.ndarray, ridge: float, spec: HeadSpec)
                 break
     else:
         raise ValueError(f"unsupported head {spec.kind}")
+    kappa = float("nan")
+    converged = True
+    if spec.link is LinkKind.KAPPA_FLOOR:
+        kappa = spec.floor_kappa_prior
+    if spec.link is LinkKind.FITTED_FLOOR:
+        if spec.kind is not HeadKind.NNLS:
+            raise ValueError("the fitted-floor link needs the nonnegative head as its warm start")
+        intercept, coefficients, floor, kappa, converged = _fitted_floor_solve(
+            matrix, response, ridge, design.ridge, spec, intercept, np.asarray(coefficients, dtype=float)
+        )
+        target = link_forward(response, floor, spec)
     active = int(
         np.count_nonzero(
             np.abs(coefficients) > DSP_ACTIVE_TOL * max(1.0, float(np.max(np.abs(coefficients), initial=0.0)))
         )
     )
-    cap = float(np.max(target)) + spec.cap_margin if spec.link is LinkKind.LOG_DEFICIT_BOUNDED else float("inf")
+    capped = spec.link in (LinkKind.LOG_DEFICIT_BOUNDED, LinkKind.KAPPA_FLOOR, LinkKind.FITTED_FLOOR)
+    cap = float(np.max(target)) + spec.cap_margin if capped else float("inf")
     return FittedHead(
         intercept=float(intercept),
         coefficients=np.asarray(coefficients, dtype=float),
         floor=floor,
         active=active,
         cap=cap,
+        kappa=kappa,
+        converged=converged,
     )
 
 
@@ -523,6 +662,27 @@ def softplus_harm(exposure: np.ndarray, threshold: np.ndarray | float) -> np.nda
     return softplus(np.log1p(np.maximum(exposure, 0.0)) - threshold) ** 2
 
 
+def softplus_hinge_harm(exposure: np.ndarray, threshold: np.ndarray | float) -> np.ndarray:
+    """Unsquared softplus harm: linear rather than quadratic growth above the threshold in log-epochs."""
+    return softplus(np.log1p(np.maximum(exposure, 0.0)) - threshold)
+
+
+def softplus_raw_epoch_harm(exposure: np.ndarray, threshold: np.ndarray | float) -> np.ndarray:
+    """Squared softplus of raw epochs past the critical count e^threshold - 1, scaled by that count.
+
+    Agrees with ``softplus_harm`` to first order at the critical count and stays convex in epochs everywhere,
+    growing quadratically where the log-epoch harm bends over; the convexity check of Appendix H.
+    """
+    critical = np.expm1(threshold)
+    return softplus((np.maximum(exposure, 0.0) - critical) / (1.0 + critical)) ** 2
+
+
+def softplus_raw_epoch_hinge_harm(exposure: np.ndarray, threshold: np.ndarray | float) -> np.ndarray:
+    """Unsquared version of ``softplus_raw_epoch_harm``: the slowest-growing convex harm in epochs (linear)."""
+    critical = np.expm1(threshold)
+    return softplus((np.maximum(exposure, 0.0) - critical) / (1.0 + critical))
+
+
 def bounded_harm(exposure: np.ndarray, log_exponent: np.ndarray | float) -> np.ndarray:
     unit = np.maximum(exposure - 1.0, 0.0) / DSP_DAMAGE_KNEE
     powered = unit ** np.exp(log_exponent)
@@ -556,7 +716,9 @@ class FamilyOptions:
     bucket_signal: bool = True
     family_signal: str = "none"  # none | sum | mean | pair_discount
     hierarchical: bool = False
-    # Harm kinds: none, softplus_family, softplus_bucket, softplus_group_sum, literal_shared,
+    # Harm kinds: none, softplus_family, softplus_bucket, softplus_bucket_sum, softplus_bucket_hinge,
+    # softplus_bucket_raw, softplus_bucket_raw_hinge (convex in raw epochs),
+    # softplus_group_sum, literal_shared,
     # literal_family, overload_family, bounded_bucket.
     harm: str = "softplus_family"
     member_replay: bool = False
@@ -705,6 +867,23 @@ def family_design(features: Features, shape: Shape, options: FamilyOptions) -> D
         pieces.append(softplus_harm(exposure, threshold))
         ridge.extend([1.0] * features.buckets)
         names.extend(f"bucket_overexposure:{index}" for index in range(features.buckets))
+    elif options.harm == "softplus_bucket_sum":
+        # One harm amplitude per task: the per-bucket squared-softplus harms summed into a single column.
+        pieces.append(softplus_harm(exposure, threshold).sum(axis=1, keepdims=True))
+        ridge.append(1.0)
+        names.append("bucket_overexposure_sum")
+    elif options.harm == "softplus_bucket_hinge":
+        pieces.append(softplus_hinge_harm(exposure, threshold))
+        ridge.extend([1.0] * features.buckets)
+        names.extend(f"bucket_overexposure_hinge:{index}" for index in range(features.buckets))
+    elif options.harm == "softplus_bucket_raw":
+        pieces.append(softplus_raw_epoch_harm(exposure, threshold))
+        ridge.extend([1.0] * features.buckets)
+        names.extend(f"bucket_overexposure_raw:{index}" for index in range(features.buckets))
+    elif options.harm == "softplus_bucket_raw_hinge":
+        pieces.append(softplus_raw_epoch_hinge_harm(exposure, threshold))
+        ridge.extend([1.0] * features.buckets)
+        names.extend(f"bucket_overexposure_raw_hinge:{index}" for index in range(features.buckets))
     elif options.harm == "softplus_bucket_hierarchical":
         bucket_harm = softplus_harm(exposure, threshold)
         shrink = float(shape["harm_shrink"])
@@ -957,6 +1136,16 @@ def _cv_rmse(design: Design, response: np.ndarray, ridge: float, spec: HeadSpec,
         error += float(np.sum((prediction - response[validation]) ** 2))
         count += len(validation)
     return math.sqrt(error / count)
+
+
+def _cv_rmse_folds(design: Design, response: np.ndarray, ridge: float, spec: HeadSpec, inner: InnerFolds) -> np.ndarray:
+    """Per-inner-fold out-of-fold RMSE, for a standard error of the pooled inner-CV score."""
+    values = []
+    for train, validation in inner:
+        head = fit_head(Design(design.values[train], design.ridge, design.names), response[train], ridge, spec)
+        prediction = predict_head(head, design.values[validation], spec)
+        values.append(float(np.sqrt(np.mean((prediction - response[validation]) ** 2))))
+    return np.asarray(values)
 
 
 def _grid_edges(shape: Shape, grid: Sequence[Shape]) -> int:
@@ -1268,6 +1457,327 @@ class GridModel:
         return self.shape_dof
 
 
+PER_BUCKET_SHAPE_KEYS = ("rate", "power", "threshold")
+PER_BUCKET_SWEEPS = 2
+PER_BUCKET_IMPROVEMENT = 1e-9
+
+
+def per_bucket_shape(shape: Shape, buckets: int) -> Shape:
+    """One (rate, power, threshold) triple per bucket, every bucket starting from the shared shape."""
+    return {f"{key}:{index}": float(shape[key]) for key in PER_BUCKET_SHAPE_KEYS for index in range(buckets)}
+
+
+def is_per_bucket_shape(shape: Shape) -> bool:
+    return any(":" in key for key in shape)
+
+
+def per_bucket_shape_arrays(shape: Shape, buckets: int) -> dict[str, np.ndarray]:
+    return {
+        key: np.asarray([float(shape[f"{key}:{index}"]) for index in range(buckets)], dtype=float)
+        for key in PER_BUCKET_SHAPE_KEYS
+    }
+
+
+def per_bucket_columns(
+    exposure: np.ndarray, rate: np.ndarray | float, power: np.ndarray | float, threshold: np.ndarray | float
+) -> tuple[np.ndarray, np.ndarray]:
+    """The successor design's two columns of one bucket (or of every bucket, with per-bucket arrays)."""
+    return -weibull_response(exposure, rate, power), softplus_harm(exposure, threshold)
+
+
+def per_bucket_weibull_softplus_design(features: Features, shape: Shape) -> Design:
+    """The successor design (Weibull benefit and softplus harm per bucket) with bucket-specific shapes."""
+    arrays = per_bucket_shape_arrays(shape, features.buckets)
+    benefit, harm = per_bucket_columns(
+        features.exposures, arrays["rate"][None, :], arrays["power"][None, :], arrays["threshold"][None, :]
+    )
+    names = tuple(f"bucket_signal:{index}" for index in range(features.buckets)) + tuple(
+        f"bucket_overexposure:{index}" for index in range(features.buckets)
+    )
+    return Design(np.concatenate([benefit, harm], axis=1), np.ones(2 * features.buckets), names)
+
+
+@dataclasses.dataclass(frozen=True)
+class PerBucketShapeGridModel:
+    """The shared-shape grid model with one (rate, power, threshold) per bucket: the shape-sharing ablation.
+
+    The shared grid optimum seeds a coordinate descent in which every bucket in turn tries each grid shape with the
+    other buckets fixed, scored by the same inner-CV error at the same ridge, for at most ``sweeps`` passes or until
+    a pass changes nothing; the ridge is then re-selected over its grid. Only the successor design (Weibull benefit
+    and softplus harm per bucket) is supported. ``free_keys`` restricts which shape parameters vary per bucket; the
+    others stay at the shared optimum (one threshold per bucket, for instance).
+    """
+
+    shared: GridModel
+    head: HeadSpec
+    sweeps: int = PER_BUCKET_SWEEPS
+    free_keys: tuple[str, ...] = PER_BUCKET_SHAPE_KEYS
+
+    @property
+    def model_id(self) -> str:
+        return self.shared.model_id
+
+    @property
+    def shape_dof(self) -> int:
+        return self.shared.shape_dof
+
+    @property
+    def ridge_grid(self) -> tuple[float, ...]:
+        return self.shared.ridge_grid
+
+    def _grid(self) -> GridModel:
+        return dataclasses.replace(self.shared, head=self.head)
+
+    def head_for(self, shape: Shape, link: LinkKind | None = None) -> HeadSpec:
+        return self._grid().head_for(shape, link)
+
+    def design(self, features: Features, shape: Shape) -> Design:
+        if is_per_bucket_shape(shape):
+            return cached_design(f"{self.model_id}#per_bucket", features, shape, per_bucket_weibull_softplus_design)
+        return self._grid().design(features, shape)
+
+    def fit(self, features: Features, response: np.ndarray, train: np.ndarray, inner: InnerFolds, seed: int) -> Fitted:
+        grid = self._grid()
+        selected = grid.fit(features, response, train, inner, seed)
+        buckets = features.buckets
+        spec = grid.head_for(selected.shape)
+        ridge = float(selected.ridge)
+        shape: dict[str, float] = dict(per_bucket_shape(selected.shape, buckets))
+        base = per_bucket_weibull_softplus_design(features, shape)
+        values = base.values.copy()
+        score = _cv_rmse(Design(values, base.ridge, base.names), response, ridge, spec, inner)
+        fixed_keys = tuple(key for key in PER_BUCKET_SHAPE_KEYS if key not in self.free_keys)
+        candidates = tuple(
+            candidate
+            for candidate in grid.candidate_shapes(features)
+            if all(float(candidate[key]) == float(selected.shape[key]) for key in fixed_keys)
+        )
+        evaluations = 0
+        sweeps = 0
+        for _ in range(self.sweeps):
+            sweeps += 1
+            changed = False
+            for bucket in range(buckets):
+                current = tuple(shape[f"{key}:{bucket}"] for key in PER_BUCKET_SHAPE_KEYS)
+                best_value, best_triple = score, None
+                for candidate in candidates:
+                    triple = tuple(float(candidate[key]) for key in PER_BUCKET_SHAPE_KEYS)
+                    if triple == current:
+                        continue
+                    benefit, harm = per_bucket_columns(features.exposures[:, bucket], *triple)
+                    trial = values.copy()
+                    trial[:, bucket] = benefit
+                    trial[:, buckets + bucket] = harm
+                    value = _cv_rmse(Design(trial, base.ridge, base.names), response, ridge, spec, inner)
+                    evaluations += 1
+                    if math.isfinite(value) and value < best_value - PER_BUCKET_IMPROVEMENT:
+                        best_value, best_triple = value, triple
+                if best_triple is not None:
+                    for key, value in zip(PER_BUCKET_SHAPE_KEYS, best_triple, strict=True):
+                        shape[f"{key}:{bucket}"] = value
+                    benefit, harm = per_bucket_columns(features.exposures[:, bucket], *best_triple)
+                    values[:, bucket] = benefit
+                    values[:, buckets + bucket] = harm
+                    score = best_value
+                    changed = True
+            if not changed:
+                break
+        for candidate_ridge in grid.ridge_grid:
+            value = _cv_rmse(Design(values, base.ridge, base.names), response, float(candidate_ridge), spec, inner)
+            evaluations += 1
+            if math.isfinite(value) and value < score - PER_BUCKET_IMPROVEMENT:
+                score, ridge = value, float(candidate_ridge)
+        design = self.design(features, shape)
+        head = fit_head(Design(design.values[train], design.ridge, design.names), response[train], ridge, spec)
+        edges = sum(
+            _grid_edges({key: shape[f"{key}:{index}"] for key in PER_BUCKET_SHAPE_KEYS}, candidates)
+            for index in range(buckets)
+        )
+        return Fitted(
+            shape=shape,
+            ridge=ridge,
+            head=head,
+            diagnostics={
+                **selected.diagnostics,
+                "inner_cv_rmse": score,
+                "shared_inner_cv_rmse": float(selected.diagnostics["inner_cv_rmse"]),
+                "shared_shape": _shape_key(selected.shape),
+                "free_keys": ",".join(self.free_keys),
+                "candidates": int(selected.diagnostics["candidates"]) + evaluations,
+                "sweeps": sweeps,
+                "boundary_hits": (
+                    edges + int(ridge in (grid.ridge_grid[0], grid.ridge_grid[-1]) and len(grid.ridge_grid) > 1)
+                ),
+                "effective_rank": effective_rank(design.values[train]),
+                "columns": design.values.shape[1],
+                "fitted_dof": head.active + 1 + len(PER_BUCKET_SHAPE_KEYS) * buckets,
+                "nonlinear_dof": len(PER_BUCKET_SHAPE_KEYS) * buckets,
+                "refine_evaluations": 0,
+                "link": str(spec.link),
+            },
+            cv_table=selected.cv_table,
+        )
+
+    def predict(self, fitted: Fitted, features: Features, rows: np.ndarray) -> np.ndarray:
+        design = self.design(features, fitted.shape)
+        link = LinkKind(str(fitted.diagnostics["link"])) if "link" in fitted.diagnostics else None
+        return predict_head(fitted.head, design.values[rows], self.head_for(fitted.shape, link))
+
+    def nonlinear_dof(self, features: Features) -> int:
+        return len(PER_BUCKET_SHAPE_KEYS) * features.buckets
+
+
+FITTED_FLOOR_SEARCH_EVALUATIONS = 24
+INFINITE_CV_PENALTY = 1e3
+FLAT_PROFILE_FRACTION = 0.1
+
+
+@dataclasses.dataclass(frozen=True)
+class FittedFloorModel:
+    """A grid model whose link and floor position are chosen per task by inner CV.
+
+    Shape and ridge come from the base grid model, whose head is the fast log-space fit at the prior floor. At
+    that shape and ridge four heads compete on the inner-CV error: the identity link (plain additive), the
+    log-space fit at the fixed 0.95 floor (the bounded log-deficit link), the log-space fit at a floor position
+    kappa chosen by a bounded scalar search, and the response-space fit at its own searched kappa. Tasks the
+    swarm never moved keep the additive or fixed-floor form; tasks it moved get the floor the swarm's own
+    curvature supports.
+    """
+
+    base: GridModel | PerBucketShapeGridModel
+    kappa_bounds: tuple[float, float] = FITTED_FLOOR_KAPPA_BOUNDS
+    search_evaluations: int = FITTED_FLOOR_SEARCH_EVALUATIONS
+    candidate_links: tuple[LinkKind, ...] = (
+        LinkKind.IDENTITY,
+        LinkKind.LOG_DEFICIT_BOUNDED,
+        LinkKind.KAPPA_FLOOR,
+        LinkKind.FITTED_FLOOR,
+    )
+    # "argmin": the inner-CV minimizer of kappa. "one_se_upper": the largest kappa whose inner-CV error is
+    # within one inner-fold standard error of the minimum, so an unidentified profile errs toward a low floor.
+    kappa_rule: str = "argmin"
+    permissive_grid: int = 12
+    # Tasks whose inner-CV profile is monotone (argmin within FLAT_PROFILE_FRACTION of the upper bound in log
+    # space) were never moved by the swarm; their floor is not identified and gets this default instead of the
+    # bound. None keeps the bound.
+    flat_profile_kappa: float | None = None
+    # Re-select the shape and ridge at the fitted kappa this many times (0 keeps the two-stage fit, in which the
+    # grid is scored at the prior kappa and kappa is then searched with that shape fixed).
+    joint_rounds: int = 0
+    # A fixed multiplier for every task: no search, no flat-profile rule (the fixed-gamma simplification tests).
+    fixed_kappa: float | None = None
+
+    @property
+    def model_id(self) -> str:
+        return self.base.model_id
+
+    def _spec(self, shape: Shape, link: LinkKind, kappa: float = float("nan")) -> HeadSpec:
+        spec = dataclasses.replace(self.base.head_for(shape), link=link)
+        if link in (LinkKind.KAPPA_FLOOR, LinkKind.FITTED_FLOOR):
+            spec = dataclasses.replace(spec, floor_kappa_prior=kappa, floor_kappa_bounds=(kappa, kappa))
+        return spec
+
+    def _search_kappa(
+        self, design: Design, response: np.ndarray, ridge: float, shape: Shape, link: LinkKind, inner: InnerFolds
+    ) -> tuple[float, float, int]:
+        low, high = self.kappa_bounds
+
+        def objective(log_kappa: float) -> float:
+            value = _cv_rmse(design, response, ridge, self._spec(shape, link, math.exp(log_kappa)), inner)
+            # A non-finite fold prediction must not derail the bracketing search.
+            return value if math.isfinite(value) else INFINITE_CV_PENALTY
+
+        search = minimize_scalar(
+            objective,
+            bounds=(math.log(low), math.log(high)),
+            method="bounded",
+            options={"maxiter": self.search_evaluations, "xatol": 0.02},
+        )
+        kappa, score, count = float(math.exp(search.x)), float(search.fun), int(search.nfev)
+        if self.flat_profile_kappa is not None and math.log(kappa) >= (1 - FLAT_PROFILE_FRACTION) * math.log(high):
+            kappa = float(self.flat_profile_kappa)
+            score = objective(math.log(kappa))
+            count += 1
+        if self.kappa_rule == "argmin":
+            return kappa, score, count
+        if self.kappa_rule != "one_se_upper":
+            raise ValueError(f"unknown kappa rule {self.kappa_rule}")
+        folds = _cv_rmse_folds(design, response, ridge, self._spec(shape, link, kappa), inner)
+        tolerance = score + float(np.std(folds, ddof=1) / math.sqrt(len(folds))) if len(folds) > 1 else score
+        chosen = kappa
+        for candidate in np.exp(np.linspace(math.log(kappa), math.log(high), self.permissive_grid))[1:]:
+            count += 1
+            if objective(math.log(candidate)) <= tolerance:
+                chosen = float(candidate)
+            else:
+                break
+        return chosen, score, count
+
+    def fit(self, features: Features, response: np.ndarray, train: np.ndarray, inner: InnerFolds, seed: int) -> Fitted:
+        base = self.base
+        selected = base.fit(features, response, train, inner, seed)
+        evaluations = 0
+        for _ in range(self.joint_rounds):
+            design = base.design(features, selected.shape)
+            kappa, _, count = self._search_kappa(
+                design, response, selected.ridge, selected.shape, LinkKind.KAPPA_FLOOR, inner
+            )
+            evaluations += count
+            base = dataclasses.replace(base, head=dataclasses.replace(base.head, floor_kappa_prior=kappa))
+            selected = base.fit(features, response, train, inner, seed)
+        design = base.design(features, selected.shape)
+        scores: dict[str, float] = {}
+        kappas: dict[str, float] = {}
+        specs: dict[str, HeadSpec] = {}
+        for link in self.candidate_links:
+            if link in (LinkKind.KAPPA_FLOOR, LinkKind.FITTED_FLOOR) and self.fixed_kappa is not None:
+                kappa, count = float(self.fixed_kappa), 0
+                score = _cv_rmse(design, response, selected.ridge, self._spec(selected.shape, link, kappa), inner)
+                kappas[str(link)] = kappa
+                specs[str(link)] = self._spec(selected.shape, link, kappa)
+            elif link in (LinkKind.KAPPA_FLOOR, LinkKind.FITTED_FLOOR):
+                kappa, score, count = self._search_kappa(design, response, selected.ridge, selected.shape, link, inner)
+                evaluations += count
+                kappas[str(link)] = kappa
+                specs[str(link)] = self._spec(selected.shape, link, kappa)
+            else:
+                specs[str(link)] = self._spec(selected.shape, link)
+                score = _cv_rmse(design, response, selected.ridge, specs[str(link)], inner)
+            scores[str(link)] = score
+        chosen = min(scores, key=lambda key: (scores[key], key))
+        spec = specs[chosen]
+        head = fit_head(Design(design.values[train], design.ridge, design.names), response[train], selected.ridge, spec)
+        return Fitted(
+            shape=selected.shape,
+            ridge=selected.ridge,
+            head=head,
+            diagnostics={
+                **selected.diagnostics,
+                "inner_cv_rmse": scores[chosen],
+                "selection_inner_cv_rmse": selected.diagnostics["inner_cv_rmse"],
+                "link": chosen,
+                "kappa": head.kappa,
+                "floor": head.floor,
+                "converged": bool(head.converged),
+                "kappa_search_evaluations": evaluations,
+                **{f"{name}_inner_cv_rmse": value for name, value in scores.items()},
+                **{f"{name}_kappa": value for name, value in kappas.items()},
+                "fitted_dof": head.active + 1 + self.base.shape_dof + int(chosen in kappas),
+                "nonlinear_dof": self.base.shape_dof + int(chosen in kappas),
+            },
+            cv_table=selected.cv_table,
+        )
+
+    def predict(self, fitted: Fitted, features: Features, rows: np.ndarray) -> np.ndarray:
+        design = self.base.design(features, fitted.shape)
+        link = LinkKind(str(fitted.diagnostics["link"]))
+        spec = self._spec(fitted.shape, link, float(fitted.diagnostics["kappa"]))
+        return predict_head(fitted.head, design.values[rows], spec)
+
+    def nonlinear_dof(self, features: Features) -> int:
+        return self.base.nonlinear_dof(features) + 1
+
+
 @dataclasses.dataclass(frozen=True)
 class FoldMeanModel:
     model_id: str = "fold_mean"
@@ -1402,12 +1912,25 @@ class OlmixTaskwiseModel:
     model_id: str = "olmix_loglinear_taskwise"
     n_starts: int = olmix_loglinear.FIT_N_STARTS
     analytic_gradient: bool = True
+    # "exposure" fits the same law on materialized epochs (a per-column rescaling); "log_epoch" on log(1 + E_i),
+    # which turns the law into a product of powers of (1 + E_i), the transform that helped most on the OLMix
+    # proxy swarms.
+    coordinate: str = "weight"
+
+    def _matrix(self, features: Features) -> np.ndarray:
+        if self.coordinate == "weight":
+            return features.weights
+        if self.coordinate == "exposure":
+            return features.exposures
+        if self.coordinate == "log_epoch":
+            return np.log1p(np.maximum(features.exposures, 0.0))
+        raise ValueError(f"unknown OLMix coordinate {self.coordinate}")
 
     def fit(self, features: Features, response: np.ndarray, train: np.ndarray, inner: InnerFolds, seed: int) -> Fitted:
         del inner
         solver = fit_olmix_loglinear_analytic if self.analytic_gradient else olmix_loglinear.fit_olmix_loglinear_model
         fit = solver(
-            features.weights[train],
+            self._matrix(features)[train],
             response[train],
             delta=olmix_loglinear.DEFAULT_HUBER_DELTA,
             seed=seed,
@@ -1420,7 +1943,7 @@ class OlmixTaskwiseModel:
             {
                 "converged": True,
                 "boundary_hits": int(abs(fit.log_c) >= olmix_loglinear.MAX_LOG_MAGNITUDE - 1e-9),
-                "effective_rank": effective_rank(features.weights[train]),
+                "effective_rank": effective_rank(self._matrix(features)[train]),
                 "columns": features.buckets,
                 "fitted_dof": features.buckets + 1,
                 "nonlinear_dof": features.buckets + 1,
@@ -1431,7 +1954,7 @@ class OlmixTaskwiseModel:
         )
 
     def predict(self, fitted: Fitted, features: Features, rows: np.ndarray) -> np.ndarray:
-        return np.asarray(fitted.head.predict(features.weights[rows]), dtype=float)
+        return np.asarray(fitted.head.predict(self._matrix(features)[rows]), dtype=float)
 
     def nonlinear_dof(self, features: Features) -> int:
         return features.buckets + 1
@@ -2387,3 +2910,401 @@ LOG_LINK_FLOOR_MARGINS = (0.02, 0.08)
 
 def log_link_shapes() -> tuple[Shape, ...]:
     return tuple({"floor_margin": margin} for margin in LOG_LINK_FLOOR_MARGINS)
+
+
+# ---------------------------------------------------------------------------------------------
+# Conventional nonlinear comparators (reader/PI review, 2026-09-08): generic responses that can turn
+# in a bucket's exposure without the benefit/harm forms, fitted under the frozen procedure's protocol.
+# ---------------------------------------------------------------------------------------------
+
+SPLINE_KNOT_QUANTILES = (0.25, 0.5, 0.75)
+# A bucket needs this many distinct positive exposures for a spline; rarer buckets fall back to a quadratic.
+SPLINE_MIN_DISTINCT = 5
+HELLINGER_GAMMA_GRID = (0.5, 1.0, 2.0, 4.0, 8.0, 16.0)
+HELLINGER_RIDGE_GRID = (1e-4, 1e-3, 1e-2, 1e-1, 1.0)
+
+
+def log_epochs(features: Features) -> np.ndarray:
+    return np.log1p(np.maximum(features.exposures, 0.0))
+
+
+def log_quadratic_design(features: Features, shape: Shape) -> Design:
+    """Additive quadratic in log-epochs: a linear and a squared column per bucket, for a signed head."""
+    del shape
+    u = log_epochs(features)
+    values = np.concatenate([u, u**2], axis=1)
+    names = tuple(f"log_epoch:{index}" for index in range(features.buckets)) + tuple(
+        f"log_epoch_sq:{index}" for index in range(features.buckets)
+    )
+    return Design(values, np.ones(values.shape[1]), names)
+
+
+def natural_cubic_basis(x: np.ndarray, knots: np.ndarray) -> np.ndarray:
+    """Natural cubic spline basis without the constant: x and K-2 curvature columns for K knots (ESL eq. 5.4-5.5)."""
+    knots = np.asarray(knots, dtype=float)
+    last = knots[-1]
+
+    def truncated(k: int) -> np.ndarray:
+        return (np.maximum(x - knots[k], 0.0) ** 3 - np.maximum(x - last, 0.0) ** 3) / (last - knots[k])
+
+    reference = truncated(len(knots) - 2)
+    return np.stack([x, *[truncated(k) - reference for k in range(len(knots) - 2)]], axis=1)
+
+
+def spline_knots(features: Features) -> tuple[np.ndarray | None, ...]:
+    """Per-bucket knots at the positive log-epoch quartiles of ``features``; None where too few distinct values."""
+    u = log_epochs(features)
+    knots: list[np.ndarray | None] = []
+    for index in range(features.buckets):
+        column = u[:, index]
+        positive = np.unique(column[column > 0.0])
+        if len(positive) < SPLINE_MIN_DISTINCT:
+            knots.append(None)
+            continue
+        interior = np.quantile(positive, SPLINE_KNOT_QUANTILES)
+        merged = np.unique(np.concatenate([[positive.min()], interior, [positive.max()]]))
+        knots.append(merged if len(merged) >= 3 else None)
+    return tuple(knots)
+
+
+def natural_spline_design_at(knots: tuple[np.ndarray | None, ...]) -> Callable[[Features, Shape], Design]:
+    """The additive natural cubic spline in log-epochs with fixed knots, so a fit's basis carries to other mixtures.
+
+    Buckets with no knots (too few distinct positive exposures in the swarm) use the quadratic columns.
+    """
+
+    def build(features: Features, shape: Shape) -> Design:
+        del shape
+        if len(knots) != features.buckets:
+            raise ValueError("spline knots do not match the bucket count")
+        u = log_epochs(features)
+        pieces: list[np.ndarray] = []
+        names: list[str] = []
+        for index, bucket_knots in enumerate(knots):
+            column = u[:, index]
+            if bucket_knots is None:
+                basis = np.stack([column, column**2], axis=1)
+            else:
+                basis = natural_cubic_basis(column, bucket_knots)
+            pieces.append(basis)
+            names.extend(f"spline:{index}:{k}" for k in range(basis.shape[1]))
+        values = np.concatenate(pieces, axis=1)
+        return Design(values, np.ones(values.shape[1]), tuple(names))
+
+    return build
+
+
+def natural_spline_design(features: Features, shape: Shape) -> Design:
+    """Additive natural cubic spline in log-epochs, knots at each bucket's positive-exposure quartiles.
+
+    The knots come from ``features`` itself; models bind them to the swarm at build time
+    (``natural_spline_design_at``) so that bank and proposal predictions use the fitted basis.
+    """
+    return natural_spline_design_at(spline_knots(features))(features, shape)
+
+
+def hellinger_kernel(left: np.ndarray, right: np.ndarray, gamma: float) -> np.ndarray:
+    """exp(-gamma * H^2) with the squared Hellinger distance H^2(w, w') = 1 - sum_i sqrt(w_i w'_i)."""
+    affinity = np.sqrt(np.maximum(left, 0.0)) @ np.sqrt(np.maximum(right, 0.0)).T
+    return np.exp(-gamma * np.clip(1.0 - affinity, 0.0, None))
+
+
+@dataclasses.dataclass(frozen=True)
+class KernelRidgeHead:
+    """Dual coefficients of a kernel ridge fit; mirrors the FittedHead attributes the benchmark reads.
+
+    The training weights are stored, not their row indices: the bank stage predicts from a different feature set.
+    """
+
+    intercept: float
+    coefficients: np.ndarray
+    train_weights: np.ndarray
+    gamma: float
+    floor: float = float("nan")
+    active: int = 0
+    cap: float = float("inf")
+    kappa: float = float("nan")
+    converged: bool = True
+
+
+@dataclasses.dataclass(frozen=True)
+class HellingerKernelRidgeModel:
+    """Kernel ridge regression on the mixture simplex with the Hellinger kernel; gamma and ridge by inner CV."""
+
+    model_id: str = "hellinger_krr"
+    gamma_grid: tuple[float, ...] = HELLINGER_GAMMA_GRID
+    ridge_grid: tuple[float, ...] = HELLINGER_RIDGE_GRID
+
+    @staticmethod
+    def _solve(kernel: np.ndarray, response: np.ndarray, ridge: float) -> tuple[float, np.ndarray]:
+        intercept = float(response.mean())
+        alphas = np.linalg.solve(kernel + ridge * np.eye(len(response)), response - intercept)
+        return intercept, alphas
+
+    def fit(self, features: Features, response: np.ndarray, train: np.ndarray, inner: InnerFolds, seed: int) -> Fitted:
+        del seed
+        weights = features.weights
+        table = np.full((len(self.gamma_grid), len(self.ridge_grid)), np.inf)
+        best: tuple[float, int, int] | None = None
+        for gamma_index, gamma in enumerate(self.gamma_grid):
+            full = hellinger_kernel(weights, weights, gamma)
+            for ridge_index, ridge in enumerate(self.ridge_grid):
+                error = 0.0
+                count = 0
+                for inner_train, validation in inner:
+                    intercept, alphas = self._solve(full[np.ix_(inner_train, inner_train)], response[inner_train], ridge)
+                    prediction = intercept + full[np.ix_(validation, inner_train)] @ alphas
+                    error += float(np.sum((prediction - response[validation]) ** 2))
+                    count += len(validation)
+                score = math.sqrt(error / count)
+                table[gamma_index, ridge_index] = score
+                candidate = (score, gamma_index, ridge_index)
+                if best is None or candidate < best:
+                    best = candidate
+        if best is None or not math.isfinite(best[0]):
+            raise ValueError(f"{self.model_id}: no finite inner-CV candidate")
+        score, gamma_index, ridge_index = best
+        gamma, ridge = self.gamma_grid[gamma_index], self.ridge_grid[ridge_index]
+        train_rows = np.asarray(train)
+        intercept, alphas = self._solve(
+            hellinger_kernel(weights[train_rows], weights[train_rows], gamma), response[train_rows], ridge
+        )
+        head = KernelRidgeHead(intercept, alphas, weights[train_rows], gamma, active=len(train_rows))
+        return Fitted(
+            {"gamma": float(gamma)},
+            float(ridge),
+            head,
+            {
+                "inner_cv_rmse": score,
+                "candidates": len(self.gamma_grid) * len(self.ridge_grid),
+                "converged": True,
+                "boundary_hits": (
+                    int(gamma_index in (0, len(self.gamma_grid) - 1)) + int(ridge_index in (0, len(self.ridge_grid) - 1))
+                ),
+                "effective_rank": len(train_rows),
+                "columns": len(train_rows),
+                "fitted_dof": len(train_rows) + 1,
+                "nonlinear_dof": 1,
+            },
+            cv_table=table,
+        )
+
+    def predict(self, fitted: Fitted, features: Features, rows: np.ndarray) -> np.ndarray:
+        head = fitted.head
+        kernel = hellinger_kernel(features.weights[rows], head.train_weights, head.gamma)
+        return head.intercept + kernel @ head.coefficients
+
+    def nonlinear_dof(self, features: Features) -> int:
+        del features
+        return 1
+
+
+# ---------------------------------------------------------------------------------------------
+# Nonparametric comparators (PI request, 2026-09-08): RegMix's gradient-boosted trees and a small MLP on the
+# mixture weights, hyperparameters chosen by the same inner folds. Libraries are imported lazily.
+# ---------------------------------------------------------------------------------------------
+
+LIGHTGBM_LEARNING_RATE = 0.01
+LIGHTGBM_ESTIMATOR_GRID = (100, 300, 1000)
+LIGHTGBM_LEAF_GRID = (4, 8, 31)
+LIGHTGBM_SEED = 42
+MLP_HIDDEN_LAYERS = (64, 64)
+MLP_ALPHA_GRID = (1e-4, 1e-3, 1e-2)
+MLP_MAX_ITER = 3000
+MLP_SEED = 0
+
+
+@dataclasses.dataclass(frozen=True)
+class EstimatorHead:
+    """A fitted scikit-learn-style estimator with its input and target scaling; mirrors FittedHead's attributes."""
+
+    estimator: Any
+    x_mean: np.ndarray
+    x_scale: np.ndarray
+    y_mean: float
+    y_scale: float
+    intercept: float = 0.0
+    coefficients: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros(0))
+    floor: float = float("nan")
+    active: int = 0
+    cap: float = float("inf")
+    kappa: float = float("nan")
+    converged: bool = True
+
+
+def _standardize(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    mean = matrix.mean(axis=0)
+    scale = matrix.std(axis=0)
+    scale[scale < 1e-12] = 1.0
+    return mean, scale
+
+
+def _inner_cv_rmse_estimator(
+    make: Callable[[], Any], matrix: np.ndarray, response: np.ndarray, inner: InnerFolds
+) -> float:
+    error = 0.0
+    count = 0
+    for train, validation in inner:
+        mean, scale = _standardize(matrix[train])
+        y_mean = float(response[train].mean())
+        y_scale = float(response[train].std()) or 1.0
+        estimator = make()
+        estimator.fit((matrix[train] - mean) / scale, (response[train] - y_mean) / y_scale)
+        prediction = y_mean + y_scale * estimator.predict((matrix[validation] - mean) / scale)
+        if not np.isfinite(prediction).all():
+            return float("inf")
+        error += float(np.sum((prediction - response[validation]) ** 2))
+        count += len(validation)
+    return math.sqrt(error / count)
+
+
+def _fit_estimator_head(make: Callable[[], Any], matrix: np.ndarray, response: np.ndarray) -> EstimatorHead:
+    mean, scale = _standardize(matrix)
+    y_mean = float(response.mean())
+    y_scale = float(response.std()) or 1.0
+    estimator = make()
+    estimator.fit((matrix - mean) / scale, (response - y_mean) / y_scale)
+    return EstimatorHead(estimator, mean, scale, y_mean, y_scale, active=len(response))
+
+
+def _predict_estimator_head(head: EstimatorHead, matrix: np.ndarray) -> np.ndarray:
+    return head.y_mean + head.y_scale * head.estimator.predict((matrix - head.x_mean) / head.x_scale)
+
+
+@dataclasses.dataclass(frozen=True)
+class LightGBMModel:
+    """RegMix's regressor: gradient-boosted trees on the mixture weights, learning rate 0.01, seed 42.
+
+    RegMix chooses the number of trees by early stopping on a held-out split; here the tree count and the leaf
+    count are chosen by the inner folds so the tuning budget matches the other comparators.
+    """
+
+    model_id: str = "lightgbm_regmix"
+    estimator_grid: tuple[int, ...] = LIGHTGBM_ESTIMATOR_GRID
+    leaf_grid: tuple[int, ...] = LIGHTGBM_LEAF_GRID
+
+    def _make(self, n_estimators: int, num_leaves: int) -> Callable[[], Any]:
+        import lightgbm  # noqa: PLC0415
+
+        def make() -> Any:
+            return lightgbm.LGBMRegressor(
+                boosting_type="gbdt",
+                objective="regression",
+                n_estimators=n_estimators,
+                learning_rate=LIGHTGBM_LEARNING_RATE,
+                num_leaves=num_leaves,
+                min_child_samples=5,
+                random_state=LIGHTGBM_SEED,
+                verbosity=-1,
+            )
+
+        return make
+
+    def fit(self, features: Features, response: np.ndarray, train: np.ndarray, inner: InnerFolds, seed: int) -> Fitted:
+        del seed
+        matrix = features.weights
+        table = np.full((len(self.estimator_grid), len(self.leaf_grid)), np.inf)
+        best: tuple[float, int, int] | None = None
+        for i, n_estimators in enumerate(self.estimator_grid):
+            for j, num_leaves in enumerate(self.leaf_grid):
+                score = _inner_cv_rmse_estimator(self._make(n_estimators, num_leaves), matrix, response, inner)
+                table[i, j] = score
+                candidate = (score, i, j)
+                if best is None or candidate < best:
+                    best = candidate
+        if best is None or not math.isfinite(best[0]):
+            raise ValueError(f"{self.model_id}: no finite inner-CV candidate")
+        score, i, j = best
+        head = _fit_estimator_head(self._make(self.estimator_grid[i], self.leaf_grid[j]), matrix[train], response[train])
+        return Fitted(
+            {"n_estimators": float(self.estimator_grid[i]), "num_leaves": float(self.leaf_grid[j])},
+            0.0,
+            head,
+            {
+                "inner_cv_rmse": score,
+                "candidates": table.size,
+                "converged": True,
+                "boundary_hits": int(i in (0, len(self.estimator_grid) - 1)) + int(j in (0, len(self.leaf_grid) - 1)),
+                "effective_rank": matrix.shape[1],
+                "columns": matrix.shape[1],
+                "fitted_dof": int(self.estimator_grid[i] * self.leaf_grid[j]),
+                "nonlinear_dof": 2,
+            },
+            cv_table=table,
+        )
+
+    def predict(self, fitted: Fitted, features: Features, rows: np.ndarray) -> np.ndarray:
+        return _predict_estimator_head(fitted.head, features.weights[rows])
+
+    def nonlinear_dof(self, features: Features) -> int:
+        del features
+        return 2
+
+
+@dataclasses.dataclass(frozen=True)
+class MLPModel:
+    """A small multilayer perceptron on standardized mixture weights; weight decay chosen by the inner folds."""
+
+    model_id: str = "mlp_weights"
+    hidden_layers: tuple[int, ...] = MLP_HIDDEN_LAYERS
+    alpha_grid: tuple[float, ...] = MLP_ALPHA_GRID
+
+    def _make(self, alpha: float) -> Callable[[], Any]:
+        from sklearn.neural_network import MLPRegressor  # noqa: PLC0415
+
+        def make() -> Any:
+            return MLPRegressor(
+                hidden_layer_sizes=self.hidden_layers,
+                activation="relu",
+                alpha=alpha,
+                learning_rate_init=1e-3,
+                max_iter=MLP_MAX_ITER,
+                random_state=MLP_SEED,
+            )
+
+        return make
+
+    def fit(self, features: Features, response: np.ndarray, train: np.ndarray, inner: InnerFolds, seed: int) -> Fitted:
+        del seed
+        matrix = features.weights
+        table = np.full((len(self.alpha_grid), 1), np.inf)
+        best: tuple[float, int] | None = None
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            for i, alpha in enumerate(self.alpha_grid):
+                score = _inner_cv_rmse_estimator(self._make(alpha), matrix, response, inner)
+                table[i, 0] = score
+                if best is None or (score, i) < best:
+                    best = (score, i)
+            if best is None or not math.isfinite(best[0]):
+                raise ValueError(f"{self.model_id}: no finite inner-CV candidate")
+            score, i = best
+            head = _fit_estimator_head(self._make(self.alpha_grid[i]), matrix[train], response[train])
+        return Fitted(
+            {"alpha": float(self.alpha_grid[i])},
+            float(self.alpha_grid[i]),
+            head,
+            {
+                "inner_cv_rmse": score,
+                "candidates": len(self.alpha_grid),
+                "converged": True,
+                "boundary_hits": int(i in (0, len(self.alpha_grid) - 1)),
+                "effective_rank": matrix.shape[1],
+                "columns": matrix.shape[1],
+                "fitted_dof": int(
+                    sum(
+                        a * b
+                        for a, b in zip((matrix.shape[1], *self.hidden_layers), (*self.hidden_layers, 1), strict=True)
+                    )
+                ),
+                "nonlinear_dof": 1,
+            },
+            cv_table=table,
+        )
+
+    def predict(self, fitted: Fitted, features: Features, rows: np.ndarray) -> np.ndarray:
+        return _predict_estimator_head(fitted.head, features.weights[rows])
+
+    def nonlinear_dof(self, features: Features) -> int:
+        del features
+        return 1

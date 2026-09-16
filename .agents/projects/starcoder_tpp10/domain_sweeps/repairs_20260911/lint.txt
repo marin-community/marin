@@ -1,0 +1,15 @@
+  Ruff linter............................. ok
+  Black formatter (lib/levanter/pyproject.toml) ok
+  License headers (lib/levanter/etc/license_header.txt) ok
+  Ruff linter............................. ok
+  Black formatter......................... ok
+  License headers (etc/license_header.txt) ok
+  Pyrefly type checker.................... ok
+  Large files............................. ok
+  Python AST.............................. ok
+  Merge conflicts......................... ok
+  Trailing whitespace..................... ok
+  End-of-file newline..................... ok
+============================================================
+OK
+============================================================

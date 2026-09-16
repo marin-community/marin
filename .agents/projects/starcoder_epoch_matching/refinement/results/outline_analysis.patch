@@ -1,0 +1,26 @@
+--- outline_before_analysis.md
++++ outline.md
+@@ -65,7 +65,7 @@
+ 1. Explain why a small full-pool proxy can see fresh examples where the target repeats data, even at identical mixture weights.
+ 2. Give the subset construction `eq:simulated-epoching` after that motivation, with source attribution and rounding qualification. Explain fixed-subset conditional error and the absence of independent subset replication in the controlled ladders.
+ 3. Distinguish a target epoch cap from matching proxy observations. A cap E_i<=K bounds w_i<=K P_i/D_target; it does not estimate heterogeneous bucket responses or reproduce target repetition.
+-4. **Placeholder experiment and plot (`fig:epoch-matching`):** target, unmatched proxy, matched proxy; common mixture grid; observed selections and target regret. The five-point pilot was unfavorable and the ten-run refinement is adaptive. Keep those records below and in the experiment ledger, but the manuscript's experiment/figure remain placeholders until the planned comparison is ready. Do not assume a positive result.
++4. **Placeholder experiment and plot (`fig:epoch-matching`):** target, unmatched proxy, matched proxy; common mixture grid; observed selections and target regret. The five-point pilot and ten-run adaptive refinement are complete and unfavorable. On the ten-point grid, unmatched selects p=1 (target regret 0.031826 BPB), matched p=0.2 (0.063770 BPB), and target p=0.7; matched-minus-unmatched regret is +0.031944 BPB. This setting does not supply the intended positive demonstration. Keep the manuscript experiment/figure placeholder while deciding the next protocol; retain the complete negative result in the evidence record and Fieldbook.
+ 5. **Placeholder experiment and plot (`fig:static-cap`):** three-domain static epoch-cap sweep. Domain identities and the exact cap/mixture protocol still require PI clarification. Do not silently substitute independent two-bucket sweeps or invent a winning result.
+ 6. Retain controlled-ladder evidence as appendix support: model-size scaling at fixed tokens barely moves the observed minimum; more tokens favor more repetition; fixed-TPP scaling shifts it more modestly. Grid minima, subset differences and scale confounding limit interpretation.
+ 7. Give the practical single-scale swarm allocation (`eq:swarm-budget`), with calibration repeats reserved. Target-TPP matching is empirical guidance for a specified target; the current 39-bucket reference alone does not test that rule. Preserve capacity and fixed-subset limitations and the qualified potentially-conservative-transfer observation.
+@@ -168,6 +168,14 @@
+ [Build verified: main text through page 9, references from page 10, 38 pages total. Figure 20 is set to `0.9\linewidth` so Appendix G fits on page 35. No underlying empirical figure asset was changed.]
+ 
+ # Detailed evidence and revision record
++
++## StarCoder pilot and adaptive refinement analysis — 9 September 2026
++
++All 20 child artifacts are verified complete: 19 distinct proxies and the corrected target p=1 endpoint. Refinement parent finished 8 September at 22:10:04 PDT. The added fractions {0.2,0.4,0.5,0.6,0.9} move the matched proxy minimum from 0.3 to 0.2; unmatched remains strictly decreasing through p=1 and target remains minimized at p=0.7. Target losses at the two proxy selections are 0.851813 (matched) and 0.819869 (unmatched), versus 0.788043 at the target grid minimum. Regrets are 0.063770/0.031826, so matching raises observed grid regret by 0.031944 BPB. No confidence interval or expected-performance superiority claim is supported by these fixed-seed, fixed-subset measurements.
++
++The matched curve rises 1.429004 BPB above its own minimum at p=1, versus 0.031826 for the target. Maximum epochs still match (26.5 versus 26.4607; at most 0.174% allocator discrepancy). The proxy has only 6.06 tokens per nonembedding parameter and a 10.486M-token matched subset; horizon and subset effects are possible explanations, not isolated causes. The negative pilot is preserved; this refinement is adaptive and does not independently confirm a benefit. Keep the main-text figure placeholder; no new stage or experiment was released. A separately specified subset-sensitivity diagnostic is the recommendation, not an approved launch.
++
++Report/CC handoff: `/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/RESULTS.md`; that directory also contains raw and excess plots, curve CSV, primary analysis JSON and independent verification. Fieldbook `exp_01m21p4aw15bpvhnswz8gtwn0d`. All 20 metrics, final evaluations and checkpoints are registered. The report supersedes the earlier pending-refinement state below; historical entries remain intact.
+ 
+ [The material below preserves the complete pre-restructure outline, with headings demoted to distinguish it from the governing paragraph order above. Historical section numbers, display positions and captions are superseded by the current outline and manuscript. Numerical tables, source paths, decisions and dated experiment records remain available. In particular the inherited Sobol design provenance, temporary historical Olmix policy decision, completed negative epoch-matching pilot and adaptive refinement are retained.]
+ 

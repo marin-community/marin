@@ -1,0 +1,11 @@
+Review ONLY a small operational addition to an already reviewed TPP10 experiment. Read-only, do not edit or submit anything. The user has authorized preparation plus calibration. Preparation is already running as /calvinxu/starcoder-tpp10-prepare. We need the 8-run calibration parent to wait on successful preparation and verify exact immutable caches before training, without changing any reviewed training/data fingerprints or releasing further stages.
+
+Read these exact files in /Users/calvinxu/Projects/Work/Marin/marin:
+- experiments/domain_phase_mix/await_starcoder_tpp10_calibration.py (the only new implementation)
+- .agents/projects/starcoder_tpp10/releases/calibration_authorization.json
+- .agents/projects/starcoder_tpp10/live/submitted_calibration.txt
+- experiments/domain_phase_mix/launch_starcoder_tpp10.py (validate_release, main, code_pins)
+- experiments/domain_phase_mix/prepare_starcoder_tpp10.py (verify_caches and main)
+- lib/iris/src/iris/client/client.py (Job.wait and iris_ctx APIs)
+
+Check for any concrete failure to gate submission, pin identities, handle failed preparation, reuse completed training on parent preemption, or preserve regional placement. Do not revisit the statistical experiment. One concise verdict with blocking issues first; at most 500 words. No tools other than Read/Grep/Glob; do not delegate.

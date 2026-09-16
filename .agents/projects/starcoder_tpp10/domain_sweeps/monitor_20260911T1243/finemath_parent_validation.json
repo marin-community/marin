@@ -1,0 +1,13 @@
+{
+  "status": "passed",
+  "caches": {
+    "finemath_3plus/parent": {
+      "path": "gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/parent/2026.09.11",
+      "fingerprint": "60e2a8fa",
+      "tokens": 190316544,
+      "receipt_sha256": "526b9de24d1edc258c6a7ad02cadadb872922715d768f1d88bfb296de9ab10e4",
+      "artifact_status": "SUCCESS"
+    }
+  },
+  "checked_at": "2026-09-11T12:44:33.148901+00:00"
+}

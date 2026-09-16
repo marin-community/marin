@@ -1,0 +1,18 @@
+[
+  {
+    "path": "/tmp/starcoder-tpp10-refinement-batch-recovery-workspace.zip",
+    "sha256": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+    "files": 4513,
+    "changed_library_files": [],
+    "eval_sha256": "b67cc96335f667982a0fe43618215734140c28392be215a88177979c712dee2c",
+    "eval_contains_schema_version": false
+  },
+  {
+    "path": "/tmp/starcoder-tpp10-refinement-batch-workspace.zip",
+    "sha256": "d251569f1fea6d484253cda7f9945dda8c9a4632541aa8c32888db8c627a2735",
+    "files": 4512,
+    "changed_library_files": [],
+    "eval_sha256": "b67cc96335f667982a0fe43618215734140c28392be215a88177979c712dee2c",
+    "eval_contains_schema_version": false
+  }
+]

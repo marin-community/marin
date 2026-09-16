@@ -1,0 +1,95 @@
+{
+  "checked_at": "2026-09-12T22:59:51.906332+00:00",
+  "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+  "previous_checked_at": "2026-09-12T22:39:35.621794+00:00",
+  "scope": "Two remaining StarCoder target refinement artifacts only. No tensors or training data read.",
+  "previously_verified_refinements": 43,
+  "newly_verified_complete": 0,
+  "rows": [
+    {
+      "run_name": "tpp10_target_p065_s20260910",
+      "arm": "target",
+      "percent": 65,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128,
+      "tokens": 3012296704,
+      "support_sequences": 92928,
+      "fingerprint": "97b113a1",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09",
+      "artifact_status": "RUNNING",
+      "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+      "temporary_checkpoint_records": [
+        {
+          "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09/checkpoints/step-8769/metadata.json",
+          "generation": "1789253973552174",
+          "metadata_sha256": "c21df4cf644c5ce33121a20f09d3a2f3078b3ab8c05a0afd3c61db7ceebb6c17",
+          "metadata": {
+            "step": 8769,
+            "timestamp": "2026-09-12T22:59:33.460345",
+            "is_temporary": true
+          }
+        }
+      ],
+      "temporary_objects_listed": 6,
+      "prior_temporary_checkpoint_records": [
+        {
+          "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09/checkpoints/step-7112/metadata.json",
+          "generation": "1789252768646907",
+          "metadata_sha256": "6db04f31b5ce55e778d012676632700ce3fac50b054d08fc3669476bc0d1f0f7",
+          "metadata": {
+            "step": 7112,
+            "timestamp": "2026-09-12T22:39:28.556824",
+            "is_temporary": true
+          }
+        }
+      ],
+      "temporary_checkpoint_advanced": true,
+      "final_metadata_exists": false
+    },
+    {
+      "run_name": "tpp10_target_p080_s20260910",
+      "arm": "target",
+      "percent": 80,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128,
+      "tokens": 3012296704,
+      "support_sequences": 92928,
+      "fingerprint": "4ab6f469",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910/2026.09.09",
+      "artifact_status": "RUNNING",
+      "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+      "temporary_checkpoint_records": [
+        {
+          "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910/2026.09.09/checkpoints/step-7217/metadata.json",
+          "generation": "1789253971017847",
+          "metadata_sha256": "04e8b5196a0d32509b4d0cf55591fbff2eed1a9f00f185d7a9b77c6ff27a2012",
+          "metadata": {
+            "step": 7217,
+            "timestamp": "2026-09-12T22:59:30.930149",
+            "is_temporary": true
+          }
+        }
+      ],
+      "temporary_objects_listed": 7,
+      "prior_temporary_checkpoint_records": [
+        {
+          "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910/2026.09.09/checkpoints/step-5572/metadata.json",
+          "generation": "1789252767517031",
+          "metadata_sha256": "7733813288c857a64acf3ccfaa128ce47548c2cd20f1dc76288b35c63ec36b35",
+          "metadata": {
+            "step": 5572,
+            "timestamp": "2026-09-12T22:39:27.424212",
+            "is_temporary": true
+          }
+        }
+      ],
+      "temporary_checkpoint_advanced": true,
+      "final_metadata_exists": false
+    }
+  ],
+  "verified_refinement_total": 43
+}

@@ -1,0 +1,94 @@
+{
+  "job": {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-interactive",
+    "state": "JOB_STATE_RUNNING",
+    "exit_code": 0,
+    "error": "",
+    "started_at": {
+      "epoch_ms": "1789248894158"
+    },
+    "failure_count": 0,
+    "preemption_count": 0,
+    "name": "/calvinxu/starcoder-tpp10-refinement-interactive",
+    "submitted_at": {
+      "epoch_ms": "1789248886984"
+    },
+    "resources": {
+      "cpu_millicores": 2000,
+      "memory_bytes": "8589934592",
+      "device": {},
+      "disk_bytes": "34359738368"
+    },
+    "task_state_counts": {
+      "running": 1
+    },
+    "task_count": 1,
+    "completed_count": 0,
+    "pending_reason": "",
+    "has_children": true,
+    "parent_job_id": "",
+    "backend_id": "default",
+    "cluster": "local",
+    "peer_status": "PEER_STATUS_NONE"
+  },
+  "request": {
+    "name": "/calvinxu/starcoder-tpp10-refinement-interactive",
+    "resources": {
+      "cpu_millicores": 2000,
+      "memory_bytes": "8589934592",
+      "device": {},
+      "disk_bytes": "34359738368"
+    },
+    "constraints": [
+      {
+        "key": "region",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "us-central1"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      },
+      {
+        "key": "zone",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "us-central1-a"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      },
+      {
+        "key": "preemptible",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "false"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      }
+    ],
+    "priority_band": "PRIORITY_BAND_INTERACTIVE",
+    "bundle_id": "b66dcc0d2406e598a2ad0335bda2934ccf80da4c86e7f158e1bfdbee3990bcbe",
+    "entrypoint": {
+      "setup_commands": [
+        "set -e\ncd \"$IRIS_WORKDIR\"\necho 'syncing deps'\nuv sync $([ -f uv.lock ] && echo '--frozen' || echo '') --link-mode symlink --python 3.12 --all-packages --no-dev --extra cpu\nif grep -q 'editable = true' pyproject.toml 2>/dev/null; then echo 'rust-dev mode: building native extensions'; for crate in lib/*/pyproject.toml; do grep -q 'build-backend = \"maturin\"' \"$crate\" 2>/dev/null && uv pip install -e \"$(dirname \"$crate\")\"; done; fi\n",
+        "cd \"$IRIS_WORKDIR\" 2>/dev/null || true\nif [ -d \"$IRIS_VENV\" ]; then\n  echo 'installing iris runtime deps'\n  uv pip install --link-mode symlink cloudpickle py-spy memray || echo '[iris setup] runtime deps install failed; continuing'\nfi\n"
+      ],
+      "run_command": {
+        "argv": [
+          "python",
+          "-m",
+          "experiments.domain_phase_mix.launch_starcoder_tpp10_refinement",
+          "--release",
+          ".agents/projects/starcoder_tpp10/releases/refinement.json",
+          "--plan-path",
+          ".agents/projects/starcoder_tpp10/live/refinement_plan.json",
+          "--max-concurrent",
+          "45",
+          "--submit"
+        ]
+      }
+    },
+    "timeout": {
+      "milliseconds": "172800000"
+    }
+  }
+}

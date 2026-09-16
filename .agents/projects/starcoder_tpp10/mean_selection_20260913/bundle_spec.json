@@ -1,0 +1,13 @@
+{
+  "includes": [
+    ".agents/projects/starcoder_tpp10/mean_selection_20260913/plan.json",
+    "experiments/domain_phase_mix/starcoder_tpp10_assets/*"
+  ],
+  "excludes": [
+    "^(checkpoints|cache|logs|wandb|tmp)/",
+    "^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$",
+    "^\\.agents/(?!projects/starcoder_tpp10/mean_selection_20260913/plan\\.json$).*",
+    "^(docs|tests)/",
+    "^lib/[^/]+/tests/"
+  ]
+}

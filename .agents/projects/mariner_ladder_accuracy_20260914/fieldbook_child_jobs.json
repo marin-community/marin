@@ -1,0 +1,50 @@
+[
+  {
+    "attrs": {
+      "eval.parent_iris_job": "/calvinxu/mariner-ladder-accuracy-1e21-v5p-20260914",
+      "eval.plan_sha256": "9ba0b1dc80e072d59f832f86bc73dde81d801bb47fb46d28a66a2c37f984f94c"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-14T05:58:41Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+    "external_id": "/calvinxu/mariner-ladder-accuracy-1e21-v5p-20260914/mariner-ladder-accuracy-proportional_1e21-2f1a48-9ba0b1dc80e0",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m2f7y2kndvmxevgy40n97cm8",
+    "launcher": "iris",
+    "name": "accuracy67-proportional_1e21-2f1a48",
+    "retry_of": null,
+    "run_id": "run_01m2f7g0wknzqq5prazf680a9r",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-14T05:58:41Z"
+  },
+  {
+    "attrs": {
+      "eval.parent_iris_job": "/calvinxu/mariner-ladder-accuracy-1e21-v5p-20260914",
+      "eval.plan_sha256": "9ba0b1dc80e072d59f832f86bc73dde81d801bb47fb46d28a66a2c37f984f94c"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-14T05:58:42Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+    "external_id": "/calvinxu/mariner-ladder-accuracy-1e21-v5p-20260914/mariner-ladder-accuracy-unimax8_1e21-d685cd-9ba0b1dc80e0",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m2f7y3m61whra6z2fnh23yxx",
+    "launcher": "iris",
+    "name": "accuracy67-unimax8_1e21-d685cd",
+    "retry_of": null,
+    "run_id": "run_01m2f7g16506yna154azs3m4wr",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-14T05:58:42Z"
+  }
+]

@@ -1,0 +1,18 @@
+{
+  "attrs": {
+    "session_id": "ses_01m2brcsm6qqm90rgm8w9h989a"
+  },
+  "author": null,
+  "body": "# StarCoder refinement returned to interactive\n\nThe five unfinished recipes were resubmitted under `/calvinxu/starcoder-tpp10-refinement-interactive` at 21:34:47 UTC on 12 September. The user explicitly requested interactive priority. The original launcher now runs directly, so its TPU jobs inherit the interactive parent. Fieldbook parent: `job_01m2brkhtb9efqaha5s1c4q57b`. `submit.sh` is the exact launch command.\n\nThe replacement retains plan `99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40`, all 45 recipe identities and the original release. Native bundle, 27 scientific source/asset/lock pins, selection-launcher hash and regional placement passed preflight. Parent resources remain 2 CPU / 8 GiB on-demand in us-central1-a, with zero automatic retries. The frozen launcher retains `--max-concurrent 45` and skips verified completed artifacts.\n\nBefore submission, the old batch-recovery tree was canceled and all 35 jobs were verified terminal. All 40 completed outputs retained their status, fingerprints and permanent checkpoint metadata. The four unfinished targets retain checkpoints at steps 10759, 6958, 2283 and 728 for p55, p60, p65 and p80; matched p80 (trainer 20260911/subset 20260914) has no checkpoint. All five output leases were verified inactive; none was deleted. `post_cancel_audit.json` records the gate.\n\n| Recipe | Saved checkpoint step |\n| --- | ---: |\n| `tpp10_target_p055_s20260910` | 10759 |\n| `tpp10_target_p060_s20260910` | 6958 |\n| `tpp10_target_p065_s20260910` | 2283 |\n| `tpp10_target_p080_s20260910` | 728 |\n| `tpp10_matched_p080_s20260911_d20260914` | None |\n\nMonitor only the new parent. Verify exactly these five child identities, their effective interactive priority, regional placement and checkpoint restoration. Store live evidence in this directory and track the current command in `scratch/20260912_starcoder_refinement_completion_monitoring_state.json`. Require all 45 artifacts to match the frozen config fingerprint, permanent final checkpoint metadata, child runtime receipt and final PALOMA metric, with finished W&B state and matching final metrics. The exact collector commands and all-complete checks are in [Completion commands](../completion_20260912/README.md#completion-commands), followed by the complete 12-coordinate common-grid analysis and approved paper figure procedure. The heartbeat is active and must preserve interactive priority on any authorized recovery. Never restart the superseded batch parent.\n\n\nAt 21:37 UTC the coordinator dispatched exactly five children. Each requested INTERACTIVE with the unchanged TPU resources and central1-a constraints; all five received TPU workers and entered BUILDING. Checkpoint restoration and final training completion remain separate verification steps. Live receipts are recorded in `live_dispatch.json` as the children start.\n",
+  "body_format": "markdown",
+  "created_at": "2026-09-12T21:40:52Z",
+  "deleted_at": null,
+  "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+  "entity_type": "experiment",
+  "id": "note_01m2bs1tx4rem40nfy9bp1qecg",
+  "note_type": "handoff",
+  "resolved_at": null,
+  "status": "open",
+  "title": "Five StarCoder refinements moved to interactive and assigned TPUs",
+  "updated_at": "2026-09-12T21:40:52Z"
+}

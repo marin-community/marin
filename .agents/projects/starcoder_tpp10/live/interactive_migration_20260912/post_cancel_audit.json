@@ -1,0 +1,28 @@
+{
+  "checked_at": "2026-09-12T21:34:29.470328+00:00",
+  "status": "passed",
+  "safe_to_relaunch": true,
+  "checks": {
+    "all35_tree_jobs_terminal": true,
+    "all40_successful_artifact_statuses_unchanged": true,
+    "all40_successful_fingerprints_unchanged": true,
+    "all40_permanent_checkpoint_metadata_unchanged": true,
+    "all5_pending_checkpoint_object_sets_unchanged": true,
+    "all5_pending_leases_inactive": true
+  },
+  "pending_run_names": [
+    "tpp10_target_p055_s20260910",
+    "tpp10_target_p060_s20260910",
+    "tpp10_target_p065_s20260910",
+    "tpp10_target_p080_s20260910",
+    "tpp10_matched_p080_s20260911_d20260914"
+  ],
+  "lease_last_expired_at": "2026-09-12T21:33:49.942659+00:00",
+  "evidence": [
+    "post_cancel_tree.txt",
+    "post_cancel_artifact_states.json",
+    "post_cancel_checkpoint_comparison.json",
+    "post_cancel_lease_times.json"
+  ],
+  "mutations": "None performed by this auditing agent; root owns authorized cancellation and resubmission."
+}

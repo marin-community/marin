@@ -62,6 +62,14 @@ PACKAGES = {
         "link_bounded_coupling_kappa_1": "bounded link + coupling",
     },
     "delphi_coupling_followup_20260906/incumbent_coupling": {"wspu_coupling_kappa_1": "WSPU + coupling"},
+    "delphi_fitted_floor_round2_selection_20260907": {
+        "weibull_softplus_unscaled@fitted_floor_link": "WSPU, fitted-floor link",
+        "weibull_softplus_unscaled@fitted_floor_link_three": "WSPU, fitted-floor link (three heads)",
+        "weibull_softplus_unscaled@fitted_floor_link_permissive": "WSPU, fitted-floor link (permissive)",
+    },
+    "delphi_single_head_selection_20260907": {
+        "weibull_softplus_unscaled@kappa_floor_link": "WSPU, kappa-floor link (one head)",
+    },
 }
 PLOTTED = (
     "WSPU",

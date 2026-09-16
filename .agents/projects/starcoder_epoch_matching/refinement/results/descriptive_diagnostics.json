@@ -1,0 +1,39 @@
+{
+  "status": "post-hoc descriptive diagnostics; not a promotion criterion or statistical test",
+  "grid": [
+    0.0,
+    0.1,
+    0.2,
+    0.3,
+    0.4,
+    0.5,
+    0.6,
+    0.7,
+    0.9,
+    1.0
+  ],
+  "n": 10,
+  "arms": {
+    "unmatched": {
+      "spearman_against_target": 0.7454545454545454,
+      "excess_curve_rmse_bpb": 0.13177419435999518,
+      "centered_curve_rmse_bpb": 0.09585648900460576,
+      "p1_rise_above_own_minimum_bpb": 0.0
+    },
+    "matched": {
+      "spearman_against_target": -0.28484848484848485,
+      "excess_curve_rmse_bpb": 0.5991586966707128,
+      "centered_curve_rmse_bpb": 0.48125943576392666,
+      "p1_rise_above_own_minimum_bpb": 1.4290043115615845
+    }
+  },
+  "target_p1_rise_above_own_minimum_bpb": 0.03182625770568848,
+  "nominal_epochs": {
+    "target_max": 26.46067415730337,
+    "unmatched_max": 0.9925093632958801,
+    "matched_max": 26.5,
+    "target_at_own_minimum": 18.52247191011236,
+    "matched_at_own_minimum": 5.3
+  },
+  "regret_ratio_matched_to_unmatched": 2.003683824135322
+}

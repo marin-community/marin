@@ -1,0 +1,348 @@
+{
+  "design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+  "launch_plan_sha256": "bd6a7202d816fc472dedb371fe1689451856306fc9d0b9aa15341769e4bef52b",
+  "stage": "refinement",
+  "metric": "eval/paloma/dolma_100_programing_languages-llama3/bpb",
+  "complete": true,
+  "grid": [
+    0.0,
+    0.1,
+    0.2,
+    0.3,
+    0.4,
+    0.5,
+    0.6,
+    0.7,
+    0.9,
+    1.0
+  ],
+  "proxy_trainer_seeds": [
+    20260711
+  ],
+  "new_measurements_used": 20,
+  "proxy_measurements_used": 19,
+  "proxy_curve_points": 20,
+  "shared_zero_weight_sources": [
+    "epmatch_unmatched_c000_s20260711"
+  ],
+  "target_trainer_seed": 20260711,
+  "target_minimum": {
+    "weight": 0.7,
+    "tied_weights": [
+      0.7
+    ],
+    "bpb": 0.7880429029464722
+  },
+  "selection": {
+    "unmatched": {
+      "selected_weight": 1.0,
+      "absolute_weight_displacement_from_target_minimum": 0.30000000000000004,
+      "tied_weights": [
+        1.0
+      ],
+      "proxy_mean_bpb": 0.9089168310165405,
+      "target_bpb_at_selected_weight": 0.8198691606521606,
+      "target_grid_regret": 0.03182625770568848
+    },
+    "matched": {
+      "selected_weight": 0.2,
+      "absolute_weight_displacement_from_target_minimum": 0.49999999999999994,
+      "tied_weights": [
+        0.2
+      ],
+      "proxy_mean_bpb": 1.1632834672927856,
+      "target_bpb_at_selected_weight": 0.8518126606941223,
+      "target_grid_regret": 0.06376975774765015
+    }
+  },
+  "delta_target_regret": 0.03194350004196167,
+  "curves": {
+    "unmatched": [
+      {
+        "starcoder_weight": 0.0,
+        "mean_bpb": 2.014068603515625,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.1,
+        "mean_bpb": 1.2048306465148926,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.2,
+        "mean_bpb": 1.0997356176376343,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.3,
+        "mean_bpb": 1.052184820175171,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.4,
+        "mean_bpb": 1.0017962455749512,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.5,
+        "mean_bpb": 0.9794742465019226,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.6,
+        "mean_bpb": 0.9597709774971008,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.7,
+        "mean_bpb": 0.9418837428092957,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.9,
+        "mean_bpb": 0.9163249731063843,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 1.0,
+        "mean_bpb": 0.9089168310165405,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      }
+    ],
+    "matched": [
+      {
+        "starcoder_weight": 0.0,
+        "mean_bpb": 2.014068603515625,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.1,
+        "mean_bpb": 1.221239686012268,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.2,
+        "mean_bpb": 1.1632834672927856,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.3,
+        "mean_bpb": 1.1901698112487793,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.4,
+        "mean_bpb": 1.2436186075210571,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.5,
+        "mean_bpb": 1.3555514812469482,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.6,
+        "mean_bpb": 1.5118560791015625,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.7,
+        "mean_bpb": 1.7630075216293335,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.9,
+        "mean_bpb": 2.2323997020721436,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 1.0,
+        "mean_bpb": 2.59228777885437,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      }
+    ],
+    "target": [
+      {
+        "starcoder_weight": 0.0,
+        "mean_bpb": 1.573216438293457,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.1,
+        "mean_bpb": 0.9132958650588988,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.2,
+        "mean_bpb": 0.8518126606941223,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.3,
+        "mean_bpb": 0.8213925957679749,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.4,
+        "mean_bpb": 0.8039188385009766,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.5,
+        "mean_bpb": 0.7982456684112549,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.6,
+        "mean_bpb": 0.792351245880127,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.7,
+        "mean_bpb": 0.7880429029464722,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 0.9,
+        "mean_bpb": 0.8038912415504456,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      },
+      {
+        "starcoder_weight": 1.0,
+        "mean_bpb": 0.8198691606521606,
+        "trainer_seed_sd": null,
+        "n_measurements": 1,
+        "trainer_seeds": [
+          20260711
+        ]
+      }
+    ]
+  },
+  "interpretation": {
+    "selection_grid": "adaptive refinement grid",
+    "target_regret": "descriptive, conditional on the fixed target data and trainer seed",
+    "delta_target_regret": "matched minus unmatched; negative values favor matching",
+    "weight_displacement": "absolute distance from the lowest-weight exact target minimum",
+    "replication": "proxy trainer seeds share the same fixed data pool",
+    "zero_weight": "matched and unmatched reuse one web-only run per trainer seed",
+    "tie_rule": "exact measured ties are reported; the lowest mixture weight is selected",
+    "fingerprints": "all input fingerprints match the checked launch plan; the collector verifies artifact records",
+    "statistical_superiority_test": false
+  }
+}

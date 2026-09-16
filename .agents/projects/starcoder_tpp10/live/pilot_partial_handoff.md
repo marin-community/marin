@@ -1,0 +1,9 @@
+TPP10 pilot status: 51/57 final endpoints verified at 2026-09-11T03:06:28.619638Z. All 50 proxy runs and the reused p=1 target are complete. The initial job check for this refresh found 44 new children succeeded and six target children running, with no errors or queued jobs. No job changes were necessary.
+
+The complete proxy curves have distinct grid selections: both unmatched trainer seeds choose p=1.0; all three matched subsets choose p=0.5, with both trainer seeds agreeing for every subset. Mean minimum BPB is 1.061733 for unmatched and 1.158346, 1.161024 and 1.156841 for matched. Target-regret and curve-transfer conclusions remain unresolved until the target sweep finishes. All observations, subset/seed curves and adverse outcomes must be retained.
+
+At 2026-09-11T03:05:24.426067Z, the remaining target runs were 38-92% through 11,491 updates. Their W&B summaries were advancing within seconds of collection. The slowest had roughly 89 minutes remaining at its run-average rate, conditional on uninterrupted throughput; this is not a guaranteed finish time.
+
+Artifacts: live/pilot_partial_results.json, pilot_partial_metrics.csv, pilot_proxy_results.json, pilot_proxy_curves.png, and pilot_target_progress.json under .agents/projects/starcoder_tpp10/. The diagnostic plot was visually inspected. Fieldbook has the current job states and endpoint metrics; the older 37-endpoint snapshot was cross-checked against the fresh values, resolving its source-drift warning. CC_CHANGES.md records the partial result. Scientific source files, manuscript and outline are unchanged.
+
+Next: after all target runs complete, collect the entire archived live/pilot_plan.json with the existing launcher collector, then run analyze_starcoder_tpp10 and inspect its figures. The full-plan collector and analysis must retain their completeness checks. Dense remains unreleased.

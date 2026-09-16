@@ -1,0 +1,197 @@
+[
+  {
+    "attrs": {},
+    "created_at": "2026-09-09T20:17:35Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": true,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m23x35xcmrgr41k46a2hk7h3",
+    "idempotency_key": "starcoder-tpp10.tpp10_unmatched_p050_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_unmatched_p050_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T20:17:35Z"
+  },
+  {
+    "attrs": {
+      "experiment.fingerprint": "ea94a64a",
+      "experiment.output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260910_d20260912/2026.09.09",
+      "experiment.plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "experiment.stage": "calibration"
+    },
+    "created_at": "2026-09-09T20:17:55Z",
+    "deleted_at": null,
+    "description": "TPP10 fixed-mixture calibration; training awaits verified prepared caches.",
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m23x3t4aryrceke6mcvx62wh",
+    "idempotency_key": "starcoder-tpp10.tpp10_matched_p050_s20260910_d20260912",
+    "kind": "datapoint",
+    "name": "tpp10_matched_p050_s20260910_d20260912",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T20:17:55Z"
+  },
+  {
+    "attrs": {
+      "experiment.fingerprint": "ddbddc21",
+      "experiment.output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p050_s20260911/2026.09.09",
+      "experiment.plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "experiment.stage": "calibration"
+    },
+    "created_at": "2026-09-09T20:17:56Z",
+    "deleted_at": null,
+    "description": "TPP10 fixed-mixture calibration; training awaits verified prepared caches.",
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m23x3tcr23jc93zwydghpjhg",
+    "idempotency_key": "starcoder-tpp10.tpp10_unmatched_p050_s20260911",
+    "kind": "datapoint",
+    "name": "tpp10_unmatched_p050_s20260911",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T20:17:56Z"
+  },
+  {
+    "attrs": {
+      "experiment.fingerprint": "e55bc8dd",
+      "experiment.output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260911_d20260912/2026.09.09",
+      "experiment.plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "experiment.stage": "calibration"
+    },
+    "created_at": "2026-09-09T20:17:56Z",
+    "deleted_at": null,
+    "description": "TPP10 fixed-mixture calibration; training awaits verified prepared caches.",
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m23x3tnavn911yc7wxnvdt5h",
+    "idempotency_key": "starcoder-tpp10.tpp10_matched_p050_s20260911_d20260912",
+    "kind": "datapoint",
+    "name": "tpp10_matched_p050_s20260911_d20260912",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T20:17:56Z"
+  },
+  {
+    "attrs": {
+      "experiment.fingerprint": "f4e03c84",
+      "experiment.output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p050_s20260910_b128/2026.09.09",
+      "experiment.plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "experiment.stage": "calibration"
+    },
+    "created_at": "2026-09-09T20:17:56Z",
+    "deleted_at": null,
+    "description": "TPP10 fixed-mixture calibration; training awaits verified prepared caches.",
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m23x3txmynwsk6tbytntctq6",
+    "idempotency_key": "starcoder-tpp10.tpp10_unmatched_p050_s20260910_b128",
+    "kind": "datapoint",
+    "name": "tpp10_unmatched_p050_s20260910_b128",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T20:17:56Z"
+  },
+  {
+    "attrs": {
+      "experiment.fingerprint": "ed85fdb6",
+      "experiment.output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260910_d20260912_b128/2026.09.09",
+      "experiment.plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "experiment.stage": "calibration"
+    },
+    "created_at": "2026-09-09T20:17:56Z",
+    "deleted_at": null,
+    "description": "TPP10 fixed-mixture calibration; training awaits verified prepared caches.",
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m23x3v62h0qrh4vdfjs5e389",
+    "idempotency_key": "starcoder-tpp10.tpp10_matched_p050_s20260910_d20260912_b128",
+    "kind": "datapoint",
+    "name": "tpp10_matched_p050_s20260910_d20260912_b128",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T20:17:56Z"
+  },
+  {
+    "attrs": {
+      "experiment.fingerprint": "948187ef",
+      "experiment.output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p050_s20260911_b128/2026.09.09",
+      "experiment.plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "experiment.stage": "calibration"
+    },
+    "created_at": "2026-09-09T20:17:57Z",
+    "deleted_at": null,
+    "description": "TPP10 fixed-mixture calibration; training awaits verified prepared caches.",
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m23x3vedrgetr7703tf4aqz4",
+    "idempotency_key": "starcoder-tpp10.tpp10_unmatched_p050_s20260911_b128",
+    "kind": "datapoint",
+    "name": "tpp10_unmatched_p050_s20260911_b128",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T20:17:57Z"
+  },
+  {
+    "attrs": {
+      "experiment.fingerprint": "0dc56dea",
+      "experiment.output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260911_d20260912_b128/2026.09.09",
+      "experiment.plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "experiment.stage": "calibration"
+    },
+    "created_at": "2026-09-09T20:17:57Z",
+    "deleted_at": null,
+    "description": "TPP10 fixed-mixture calibration; training awaits verified prepared caches.",
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m23x3vps73arj78djdbg11dk",
+    "idempotency_key": "starcoder-tpp10.tpp10_matched_p050_s20260911_d20260912_b128",
+    "kind": "datapoint",
+    "name": "tpp10_matched_p050_s20260911_d20260912_b128",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T20:17:57Z"
+  }
+]

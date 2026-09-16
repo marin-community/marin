@@ -483,8 +483,13 @@ def _submit_iris_job(
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
     pip_packages: list[str] | None = None,
+    max_retries_failure: int = 0,
+    max_task_failures: int = 0,
 ) -> None:
     """Submit ``raw_fn(output_path)`` as a Fray job and block until completion.
+
+    ``max_retries_failure`` and ``max_task_failures`` are the wrapper's retry policy (see
+    :class:`~marin.execution.remote.RemoteCallable`); the defaults fail the job on its first task failure.
 
     ``raw_fn`` is wrapped to also persist its return value via
     :func:`~marin.execution.artifact.write_step_record` inside the submitted job, since Fray
@@ -507,6 +512,8 @@ def _submit_iris_job(
             pip_packages=pip_packages,
             env_vars=env_vars,
         ),
+        max_retries_failure=max_retries_failure,
+        max_task_failures=max_task_failures,
     )
     handle = current_client().submit(request)
     handle.wait(raise_on_failure=True)
@@ -525,10 +532,14 @@ def _run_iris_job(step: StepSpec, output_path: str) -> None:
     assert step.resources is not None
     env_vars = None
     pip_dependency_groups = None
+    max_retries_failure = 0
+    max_task_failures = 0
     if isinstance(step.fn, RemoteCallable):
         raw_fn = step.fn.fn
         env_vars = step.fn.env_vars
         pip_dependency_groups = step.fn.pip_dependency_groups
+        max_retries_failure = step.fn.max_retries_failure
+        max_task_failures = step.fn.max_task_failures
     else:
         raw_fn = step.fn
     assert raw_fn is not None, f"Step {step.name} has no callable"
@@ -539,14 +550,16 @@ def _run_iris_job(step: StepSpec, output_path: str) -> None:
         step.resources,
         env_vars=env_vars,
         pip_dependency_groups=pip_dependency_groups,
+        max_retries_failure=max_retries_failure,
+        max_task_failures=max_task_failures,
     )
 
 
 def _run_remote_step(step: StepSpec, output_path: str) -> None:
     """Submit the step's ``RemoteCallable`` to Fray.
 
-    Carries the wrapper's ``env_vars``, ``pip_dependency_groups``, and
-    ``pip_packages`` through to the submitted job's environment.
+    Carries the wrapper's ``env_vars``, ``pip_dependency_groups``, ``pip_packages`` and retry policy
+    through to the submitted job.
     """
     assert isinstance(step.fn, RemoteCallable)
     _submit_iris_job(
@@ -557,4 +570,6 @@ def _run_remote_step(step: StepSpec, output_path: str) -> None:
         env_vars=step.fn.env_vars,
         pip_dependency_groups=step.fn.pip_dependency_groups,
         pip_packages=step.fn.pip_packages,
+        max_retries_failure=step.fn.max_retries_failure,
+        max_task_failures=step.fn.max_task_failures,
     )

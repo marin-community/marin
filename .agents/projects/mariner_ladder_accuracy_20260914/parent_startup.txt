@@ -1,0 +1,7 @@
+Job: /calvinxu/mariner-ladder-accuracy-1e21-20260914 (/calvinxu/mariner-ladder-accuracy-1e21-20260914)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: Cumulative failed task attempts exceeded max_task_failures: failures=1, limit=0; Exit code: 1. stderr: connectrpc.errors.ConnectError: Job /calvinxu/mariner-ladder-accuracy-1e21-20260914/mariner-ladder-accuracy-proportional_1e21-2f1a48-4ba9833e9725 is unschedulable: no groups in zone us-east5-a; did you mean us-east5-b? (constraints: [Constraint(key='device-type', op=<ConstraintOp.EQ: 0>, values=(AttributeValue(value='tpu'),), mode=0), Constraint(key='device-variant', op=<ConstraintOp.EQ: 0>, values=(AttributeValue(value='v6e-8'),), mode=0), Constraint(key='zone', op=<ConstraintOp.EQ: 0>, values=(AttributeValue(value='us-east5-a'),), mode=0), Constraint(key='region', op=<ConstraintOp.EQ: 0>, values=(AttributeValue(value='us-east5'),), mode=0)])
+
+  TASK  STATE      EXIT  DURATION                    PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  failed        1  1 minute and 29.94 seconds  -           -          Exit code: 1. stderr: connectrpc.errors.ConnectError: Job /calvinxu/mariner-ladder-accuracy-1e21-20260914/mariner-lad...

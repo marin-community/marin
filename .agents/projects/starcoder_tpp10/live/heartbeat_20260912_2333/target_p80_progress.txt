@@ -1,0 +1,5 @@
+Not all requested scopes were granted by the authorization server, missing scopes email.
+[23:31:52] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | I20260912 23:31:48 139905147319104 tqdm_loggable.tqdm_logging Progress on:train 9.91kit/11.5kit rate:1.4it/s remaining:18:46 elapsed:1:52:53 postfix:loss=1.79
+[23:32:51] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | I20260912 23:32:49 139905147319104 tqdm_loggable.tqdm_logging Progress on:train 10.0kit/11.5kit rate:1.4it/s remaining:17:30 elapsed:1:53:54 postfix:loss=1.87
+[23:33:52] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | I20260912 23:33:49 139905147319104 tqdm_loggable.tqdm_logging Progress on:train 10.1kit/11.5kit rate:1.4it/s remaining:16:50 elapsed:1:54:54 postfix:loss=1.69
+

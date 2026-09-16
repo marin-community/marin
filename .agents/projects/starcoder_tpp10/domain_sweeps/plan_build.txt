@@ -1,0 +1,1 @@
+{"plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b", "runs": 28, "training_flops": 9.364336359612875e+19}

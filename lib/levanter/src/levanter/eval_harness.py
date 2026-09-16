@@ -63,21 +63,6 @@ from levanter.tokenizers import MarinTokenizer
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.py_utils import set_global_rng_seeds
 
-# The pinned lm-eval fork reads attributes such as `transformers.AutoModelForVision2Seq` (removed in
-# transformers>=5) at import time, raising AttributeError rather than ImportError. Catch both so a
-# broken or absent fork degrades to "lm-eval unavailable" instead of crashing the run.
-try:
-    from lm_eval import evaluator
-    from lm_eval.api.instance import Instance
-    from lm_eval.api.model import TemplateLM
-    from lm_eval.models.utils import handle_stop_sequences, postprocess_generated_text
-except (ImportError, AttributeError):
-    TemplateLM = object
-    Instance = object
-    evaluator = object
-    handle_stop_sequences = None
-    postprocess_generated_text = None
-
 import haliax as hax
 from haliax.partitioning import ResourceMapping, round_axis_for_partitioning
 from tqdm_loggable.auto import tqdm
@@ -92,6 +77,21 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
+
+# Training without lm-eval remains available, but requesting evaluation must expose the import failure.
+_LM_EVAL_IMPORT_ERROR: Exception | None = None
+try:
+    from lm_eval import evaluator
+    from lm_eval.api.instance import Instance
+    from lm_eval.api.model import TemplateLM
+    from lm_eval.models.utils import handle_stop_sequences, postprocess_generated_text
+except (ImportError, AttributeError) as exc:
+    _LM_EVAL_IMPORT_ERROR = exc
+    TemplateLM = object
+    Instance = object
+    evaluator = object
+    handle_stop_sequences = None
+    postprocess_generated_text = None
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +220,26 @@ class ProfilerConfig:
 # 3. When a request is received (and it's not STOP) we process the request. The results are broadcast to all
 #    devices, and process 0 records htem.
 # 4. When a STOP request is received, we stop the loop and process 0 returns the results.
+
+
+GENERATION_MAX_SEQS = 32
+"""Concurrent sequences (and padded query tokens per decode round) for harness generation.
+
+Every decode round runs the model and the paged-attention kernel on ``max_tokens_per_round`` padded tokens, which
+defaults to ``max_seqs``; at 256 the round cost dominated generation on v6e regardless of how many sequences were live.
+"""
+RPA_SMEM_BUDGET_BYTES = 896 * 1024
+"""Scalar-memory budget for the TPU ragged paged attention page table (1 MiB of SMEM, minus headroom)."""
+
+
+def _paged_attention_max_seqs(max_seq_len: int, page_size: int, max_seqs: int = 256) -> int:
+    """Largest sequence capacity whose int32 page table fits the TPU ragged paged attention kernel's SMEM.
+
+    The kernel prefetches ``page_indices[max_seqs, pages_per_seq]`` into 1 MiB of scalar memory; 256 sequences of
+    8192 tokens in 8-token pages fill it exactly and fail to compile.
+    """
+    pages_per_seq = -(-max_seq_len // page_size)
+    return max(1, min(max_seqs, RPA_SMEM_BUDGET_BYTES // (4 * pages_per_seq)))
 
 
 class _LmEvalHarnessWorker:
@@ -887,12 +907,15 @@ class LevanterHarnessLM(TemplateLM):
 
         # [ChiHeem,2025-10-06] TODO: Pass this from marin to allow users to
         # optimize the inference based on hardware and model.
+        page_size = 8
+        max_seqs = min(GENERATION_MAX_SEQS, _paged_attention_max_seqs(max_length, page_size))
         engine_cfg = InferenceEngineConfig(
             max_stop_seqs=max_stop_seqs,
             max_stop_tokens=max_stop_tokens,
             max_seq_len=max_length,
-            max_seqs=256,
-            page_size=8,
+            max_seqs=max_seqs,
+            max_tokens_per_round=max_seqs,
+            page_size=page_size,
             compute_dtype=jnp.bfloat16,
             hbm_utilization=0.5,
         )
@@ -1107,6 +1130,7 @@ class LmEvalHarnessConfig:
         """
         logger.info("Loading tasks...")
         import lm_eval.tasks as tasks  # noqa: PLC0415  # optional dep: lm_eval
+        from levanter.eval_harness_metrics import task_config_with_smooth_metrics  # noqa: PLC0415  # optional lm_eval
 
         manager = tasks.TaskManager()
         # we need to do it this way b/c i can't figure out how to run e.g. hellaswag 0 shot and 10 shot in a single run
@@ -1114,8 +1138,11 @@ class LmEvalHarnessConfig:
         for task in tqdm(self.to_task_spec()):
             try:
                 if isinstance(task, str):
-                    task_dict = _call_with_retry(lambda t=task: tasks.get_task_dict(t, manager))
-                    this_tasks.update(task_dict)
+                    this_tasks.update(
+                        _call_with_retry(
+                            lambda t=task: manager.load_config(task_config_with_smooth_metrics({"task": t}))
+                        )
+                    )
                 else:
                     our_name = task.get("task_alias", task["task"]) if isinstance(task, dict) else task
                     assert isinstance(our_name, str)
@@ -1132,7 +1159,7 @@ class LmEvalHarnessConfig:
         logger.info(f"Loaded {len(this_tasks)} tasks")
         return this_tasks
 
-    def _get_task_and_rename(self, manager, our_name, task: dict | str):
+    def _get_task_and_rename(self, manager, our_name, task: dict):
         """
         Get a task from the task manager and rename it to our_name.
         LM Eval Harness doesn't seem to want to run multiple instances of the same task with different fewshot settings,
@@ -1140,11 +1167,10 @@ class LmEvalHarnessConfig:
 
         Uses retry logic with exponential backoff to handle HuggingFace rate limits.
         """
-        import lm_eval.tasks as tasks  # noqa: PLC0415  # optional dep: lm_eval
+        from levanter.eval_harness_metrics import task_config_with_smooth_metrics  # noqa: PLC0415  # optional lm_eval
 
-        task_name = task if isinstance(task, str) else task["task"]
-
-        task_dict = _call_with_retry(lambda: tasks.get_task_dict([copy.deepcopy(task)], manager))
+        task_name = task["task"]
+        task_dict = _call_with_retry(lambda: manager.load_config(task_config_with_smooth_metrics(copy.deepcopy(task))))
         assert len(task_dict) == 1, f"Expected 1 task, got {len(task_dict)}"
         try:
             this_task = self._rename_tasks_for_eval_harness(task_dict, task_name, our_name)
@@ -1257,6 +1283,14 @@ class EvalHarnessMainConfig:
         return load_tokenizer(self.tokenizer)
 
 
+def ensure_lm_eval_available() -> None:
+    """Fail before loading data or weights if the optional evaluation runtime is broken."""
+    if _LM_EVAL_IMPORT_ERROR is not None:
+        raise ImportError(
+            "lm-eval could not be imported; install the lm_eval extra with its pinned dependencies"
+        ) from _LM_EVAL_IMPORT_ERROR
+
+
 def run_lm_eval_harness(
     config: LmEvalHarnessConfig,
     model,
@@ -1283,6 +1317,7 @@ def run_lm_eval_harness(
         - "averages": A dictionary with macro and micro averages for all metrics.
         Otherwise, returns None.
     """
+    ensure_lm_eval_available()
     # Build the tasks dictionary
     tasks_to_run = config.to_task_dict()
 
@@ -1451,6 +1486,7 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
     Args:
         config: Configuration containing model, tokenizer, and evaluation settings
     """
+    ensure_lm_eval_available()
     config.trainer.initialize()
     # Ensure __main__ logger is at INFO level for profiler messages
     logger.setLevel(logging.INFO)
@@ -1607,6 +1643,7 @@ def lm_eval_harness(
     Returns:
         Callback function that can be used with the trainer
     """
+    ensure_lm_eval_available()
     tasks_to_run = config.to_task_dict()
 
     def lm_eval_harness(step: StepInfo, force=False):

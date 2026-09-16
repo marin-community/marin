@@ -1,0 +1,262 @@
+[
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "7ddb4981",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c000_s20260711/2026.09.08",
+      "protocol.arm": "unmatched",
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.starcoder_weight": 0.0
+    },
+    "created_at": "2026-09-09T00:29:37Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m21s3ygbad71jayy463ra4e6",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_unmatched_c000_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_unmatched_c000_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T00:29:37Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "beb8af66",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c032_s20260711/2026.09.08",
+      "protocol.arm": "unmatched",
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.starcoder_weight": 0.1
+    },
+    "created_at": "2026-09-09T00:29:37Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m21s3ywyw9k8yhr44ykp3m3v",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_unmatched_c032_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_unmatched_c032_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T00:29:37Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "282d6270",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c032_s20260711/2026.09.08",
+      "protocol.arm": "matched",
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.starcoder_weight": 0.1
+    },
+    "created_at": "2026-09-09T00:29:37Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m21s3z6wf9q2h70emsme5vwd",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_matched_c032_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_matched_c032_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T00:29:37Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "a3748a61",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c057_s20260711/2026.09.08",
+      "protocol.arm": "unmatched",
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.starcoder_weight": 0.3
+    },
+    "created_at": "2026-09-09T00:29:38Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m21s3zh5esx088brcedse1yk",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_unmatched_c057_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_unmatched_c057_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T00:29:38Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "d9b0c70f",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c057_s20260711/2026.09.08",
+      "protocol.arm": "matched",
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.starcoder_weight": 0.3
+    },
+    "created_at": "2026-09-09T00:29:38Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m21s3zxz98qbnv9h5f29ke77",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_matched_c057_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_matched_c057_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T00:29:38Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "4b536552",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c109_s20260711/2026.09.08",
+      "protocol.arm": "unmatched",
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.starcoder_weight": 0.7
+    },
+    "created_at": "2026-09-09T00:29:38Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m21s4085jba74vkevwqt7hvv",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_unmatched_c109_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_unmatched_c109_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T00:29:38Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "46fe3934",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c109_s20260711/2026.09.08",
+      "protocol.arm": "matched",
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.starcoder_weight": 0.7
+    },
+    "created_at": "2026-09-09T00:29:39Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m21s40j44t4vm28zsze2v2bc",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_matched_c109_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_matched_c109_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T00:29:39Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "ac32abe4",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c124_s20260711/2026.09.08",
+      "protocol.arm": "unmatched",
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.starcoder_weight": 1.0
+    },
+    "created_at": "2026-09-09T00:29:39Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m21s40yr9sd9nt3xz9f2ajbr",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_unmatched_c124_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_unmatched_c124_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T00:29:39Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "0949c68a",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c124_s20260711/2026.09.08",
+      "protocol.arm": "matched",
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.starcoder_weight": 1.0
+    },
+    "created_at": "2026-09-09T00:29:39Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m21s418phn29qpnkygd5c381",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_matched_c124_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_matched_c124_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T00:29:39Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "ee2d7c61",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_target_c124_s20260711/2026.09.08",
+      "protocol.arm": "target",
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.starcoder_weight": 1.0
+    },
+    "created_at": "2026-09-09T00:29:40Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m21s41jgqwd1kdf1stxr9ak9",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_target_c124_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_target_c124_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T00:29:40Z"
+  }
+]

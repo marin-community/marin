@@ -1,0 +1,13 @@
+I20260911 05:00:27 8553706816 iris.cluster.config Loading config from lib/iris/config/marin.yaml
+I20260911 05:00:27 8553706816 finelog.client.log_client LogClient resolved /system/log-server -> https://iris.oa.dev/proxy/system.log-server (log)
+Not all requested scopes were granted by the authorization server, missing scopes email.
+[11:40:25] task=/calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af/0 attempt=0 | I0911 11:40:18.546466      27 google_auth_provider.cc:181] Running on GCE, using service account iris-worker@hai-gcp-models.iam.gserviceaccount.com
+[11:41:04] task=/calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af/0 attempt=0 | I20260911 11:41:04 levanter.store.cache Cache ledger written to gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/000
+[11:41:11] task=/calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af/0 attempt=0 | I20260911 11:41:04 experiments.domain_phase_mix.prepare_tpp10_domain_sweeps Parquet bytes delivered: 20751769 for gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00090-of-00128.parquet
+[11:41:11] task=/calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af/0 attempt=0 | I20260911 11:41:04 experiments.domain_phase_mix.prepare_tpp10_domain_sweeps Prepared FineMath shard 1/16
+[11:41:50] task=/calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af/0 attempt=0 | I20260911 11:41:47 levanter.store.cache Cache ledger written to gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/001
+[11:41:50] task=/calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af/0 attempt=0 | I20260911 11:41:48 experiments.domain_phase_mix.prepare_tpp10_domain_sweeps Parquet bytes delivered: 21969718 for gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00016-of-00128.parquet
+[11:41:50] task=/calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af/0 attempt=0 | I20260911 11:41:48 experiments.domain_phase_mix.prepare_tpp10_domain_sweeps Prepared FineMath shard 2/16
+[11:42:36] task=/calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af/0 attempt=0 | I20260911 11:42:36 levanter.store.cache Cache ledger written to gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/002
+[11:42:36] task=/calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af/0 attempt=0 | I20260911 11:42:36 experiments.domain_phase_mix.prepare_tpp10_domain_sweeps Parquet bytes delivered: 21291480 for gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00096-of-00128.parquet
+[11:42:36] task=/calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af/0 attempt=0 | I20260911 11:42:36 experiments.domain_phase_mix.prepare_tpp10_domain_sweeps Prepared FineMath shard 3/16

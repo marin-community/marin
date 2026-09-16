@@ -311,6 +311,7 @@ scale_groups:
 # reconcile_user_budget_tiers upserts these tiers into user_budgets on every
 # controller start. It never deletes, so a row set with `iris user budget set`
 # outlives a restart and is overwritten only when the user is listed here.
+# Authenticated submissions use the verified principal (email), not the job prefix.
 #
 # Unlisted submitters have no row and fall through to UserBudgetDefaults at
 # read time — a small INTERACTIVE budget that silently degrades to BATCH once
@@ -336,7 +337,7 @@ user_budgets:
       - eczech
       - tonyhlee
       - kevin
-      - calvinxu
+      - pinlinxu@stanford.edu
       - moojink
       - michaelryan
       - kaiyue

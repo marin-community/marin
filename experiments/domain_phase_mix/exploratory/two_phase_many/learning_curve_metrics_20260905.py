@@ -14,6 +14,7 @@ on the same subsets and folds.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
 import sys
@@ -35,6 +36,26 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     learning_curve_fits_20260905 as fits,
 )
+
+# Studies: the fits module, the primary model, and the comparator every paired difference is taken against.
+STUDIES = {
+    "legacy": ("experiments.domain_phase_mix.exploratory.two_phase_many.learning_curve_fits_20260905", "wspu", "olmix"),
+    "mariner": (
+        "experiments.domain_phase_mix.exploratory.two_phase_many.learning_curve_mariner_fits_20260908",
+        "mariner",
+        "olmix",
+    ),
+}
+PRIMARY = "wspu"
+COMPARATOR = "olmix"
+
+
+def select_study(name: str) -> None:
+    """Point this module at one study's fits module and model roles."""
+    global fits, PRIMARY, COMPARATOR
+    module_name, PRIMARY, COMPARATOR = STUDIES[name]
+    fits = importlib.import_module(module_name)
+
 
 LOGGER = logging.getLogger("learning_curve_metrics")
 
@@ -340,7 +361,9 @@ def hyperparameter_rows(record: RecordSet, components: tuple[str, ...]) -> list[
     return rows
 
 
-def collect(record_dir: Path, draws: int, sizes: tuple[int, ...]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def collect(
+    record_dir: Path, draws: int, sizes: tuple[int, ...], strict: bool = True
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Metric rows, hyperparameter rows and completeness for every requested (target, model, k, draw)."""
     panel = benchmark.load_panel(fits.PANEL)
     metric_rows: list[dict[str, Any]] = []
@@ -352,7 +375,7 @@ def collect(record_dir: Path, draws: int, sizes: tuple[int, ...]) -> tuple[pd.Da
         for model in fits.MODEL_KEYS:
             for k in sizes:
                 for draw in range(draws):
-                    record, status = load_record_set(target, model, k, draw, len(components), record_dir)
+                    record, status = load_record_set(target, model, k, draw, len(components), record_dir, strict=strict)
                     completeness.append({"target": target, "model": model, "k": k, "draw": draw, "status": status})
                     if record is None:
                         continue
@@ -391,7 +414,7 @@ def interval_rows(values: np.ndarray, generator: np.random.Generator) -> dict[st
 
 
 def summarize(metrics: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Per-(target, model, evaluation, stratum, k) summaries and paired WSPU minus OLMix differences."""
+    """Per-(target, model, evaluation, stratum, k) summaries and paired primary-minus-comparator differences."""
     generator = np.random.default_rng(BOOTSTRAP_SEED)
     keys = ["target", "evaluation", "stratum", "fold", "k"]
     summary_rows = []
@@ -405,17 +428,21 @@ def summarize(metrics: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
                 summary_rows.append(
                     base | {"model": model, "metric": metric} | interval_rows(frame[metric].to_numpy(float), generator)
                 )
-        if set(by_model) >= {"wspu", "olmix"}:
-            shared = by_model["wspu"].index.intersection(by_model["olmix"].index)
+        for other in by_model:
+            if other == PRIMARY or PRIMARY not in by_model:
+                continue
+            shared = by_model[PRIMARY].index.intersection(by_model[other].index)
             for metric in present:
-                wspu = by_model["wspu"].loc[shared, metric].to_numpy(float)
-                olmix = by_model["olmix"].loc[shared, metric].to_numpy(float)
-                difference = wspu - olmix
+                primary = by_model[PRIMARY].loc[shared, metric].to_numpy(float)
+                comparator = by_model[other].loc[shared, metric].to_numpy(float)
+                difference = primary - comparator
                 finite = np.isfinite(difference)
                 better = (difference[finite] < 0) if metric in LOWER_IS_BETTER else (difference[finite] > 0)
                 fraction = float(better.mean()) if finite.any() and metric not in UNDIRECTED else float("nan")
                 paired_rows.append(
-                    base | {"metric": metric, "wspu_better_fraction": fraction} | interval_rows(difference, generator)
+                    base
+                    | {"metric": metric, "comparator": other, "primary_better_fraction": fraction}
+                    | interval_rows(difference, generator)
                 )
     return pd.DataFrame(summary_rows), pd.DataFrame(paired_rows)
 
@@ -449,11 +476,15 @@ def data_efficiency(summary: pd.DataFrame) -> pd.DataFrame:
                     & summary["fold"].eq(-1)
                     & summary["metric"].eq(metric)
                 ].sort_values("k")
-                curves[model] = frame.set_index("k")["mean"].dropna()
-            if any(curve.empty for curve in curves.values()):
+                curve = frame.set_index("k")["mean"].dropna()
+                if not curve.empty:
+                    curves[model] = curve
+            if PRIMARY not in curves:
                 continue
             lower = metric in LOWER_IS_BETTER
-            for model, other in (("wspu", "olmix"), ("olmix", "wspu")):
+            others = [other for other in fits.MODEL_KEYS if other != PRIMARY and other in curves]
+            pairs = [(PRIMARY, other) for other in others] + [(other, PRIMARY) for other in others]
+            for model, other in pairs:
                 reference_k = int(curves[other].index.max())
                 reference = float(curves[other].loc[reference_k])
                 curve = curves[model]
@@ -525,33 +556,34 @@ def write_report(path: Path, summary: pd.DataFrame, paired: pd.DataFrame, comple
                 & paired["evaluation"].eq(evaluation)
                 & paired["stratum"].eq(stratum)
                 & paired["metric"].eq(metric)
+                & paired["comparator"].eq(COMPARATOR)
             ].set_index("k")
             frame = pd.DataFrame(
                 {
-                    "draws": pivot[("n_draws", "wspu")] if ("n_draws", "wspu") in pivot else np.nan,
-                    "wspu": pivot[("mean", "wspu")] if ("mean", "wspu") in pivot else np.nan,
-                    "wspu_95": (
-                        pivot[("t_low", "wspu")].map("{:.3f}".format)
+                    "draws": pivot[("n_draws", PRIMARY)] if ("n_draws", PRIMARY) in pivot else np.nan,
+                    PRIMARY: pivot[("mean", PRIMARY)] if ("mean", PRIMARY) in pivot else np.nan,
+                    f"{PRIMARY}_95": (
+                        pivot[("t_low", PRIMARY)].map("{:.3f}".format)
                         + ".."
-                        + pivot[("t_high", "wspu")].map("{:.3f}".format)
-                        if ("t_low", "wspu") in pivot
+                        + pivot[("t_high", PRIMARY)].map("{:.3f}".format)
+                        if ("t_low", PRIMARY) in pivot
                         else ""
                     ),
-                    "olmix": pivot[("mean", "olmix")] if ("mean", "olmix") in pivot else np.nan,
-                    "olmix_95": (
-                        pivot[("t_low", "olmix")].map("{:.3f}".format)
+                    COMPARATOR: pivot[("mean", COMPARATOR)] if ("mean", COMPARATOR) in pivot else np.nan,
+                    f"{COMPARATOR}_95": (
+                        pivot[("t_low", COMPARATOR)].map("{:.3f}".format)
                         + ".."
-                        + pivot[("t_high", "olmix")].map("{:.3f}".format)
-                        if ("t_low", "olmix") in pivot
+                        + pivot[("t_high", COMPARATOR)].map("{:.3f}".format)
+                        if ("t_low", COMPARATOR) in pivot
                         else ""
                     ),
-                    "wspu_minus_olmix": diff["mean"] if not diff.empty else np.nan,
+                    f"{PRIMARY}_minus_{COMPARATOR}": diff["mean"] if not diff.empty else np.nan,
                     "paired_95": (
                         diff["t_low"].map("{:.3f}".format) + ".." + diff["t_high"].map("{:.3f}".format)
                         if not diff.empty
                         else ""
                     ),
-                    "wspu_better": diff["wspu_better_fraction"] if not diff.empty else np.nan,
+                    f"{PRIMARY}_better": diff["primary_better_fraction"] if not diff.empty else np.nan,
                 }
             )
             lines += [f"## {target}: {evaluation}/{stratum} {metric}", "", frame.to_markdown(floatfmt=".4f"), ""]
@@ -560,13 +592,25 @@ def write_report(path: Path, summary: pd.DataFrame, paired: pd.DataFrame, comple
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--record-dir", type=Path, default=fits.RECORD_DIR)
-    parser.add_argument("--output-dir", type=Path, default=fits.OUTPUT_DIR)
+    parser.add_argument("--study", choices=tuple(STUDIES), default="legacy")
+    parser.add_argument("--record-dir", type=Path, default=None, help="defaults to the study's record directory")
+    parser.add_argument("--output-dir", type=Path, default=None, help="defaults to the study's output directory")
     parser.add_argument("--draws", type=int, required=True)
-    parser.add_argument("--sizes", type=int, nargs="*", default=list(fits.SUBSET_SIZES))
+    parser.add_argument("--sizes", type=int, nargs="*", default=None, help="defaults to the study's subset sizes")
+    parser.add_argument(
+        "--allow-stale",
+        action="store_true",
+        help="score records written under an earlier protocol hash (models added later change the hash)",
+    )
     args = parser.parse_args()
+    select_study(args.study)
+    args.record_dir = args.record_dir or fits.RECORD_DIR
+    args.output_dir = args.output_dir or fits.OUTPUT_DIR
+    args.sizes = args.sizes or list(fits.SUBSET_SIZES)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    metrics, parameters, completeness = collect(args.record_dir, args.draws, tuple(args.sizes))
+    metrics, parameters, completeness = collect(
+        args.record_dir, args.draws, tuple(args.sizes), strict=not args.allow_stale
+    )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     completeness.to_csv(args.output_dir / COMPLETENESS, index=False)
     LOGGER.info("completeness:\n%s", completeness.groupby(["model", "status"]).size().to_string())

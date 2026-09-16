@@ -1,0 +1,12 @@
+{
+  "proxy_points": 14,
+  "target_points": 14,
+  "target_finished": 10,
+  "target_queued": 4,
+  "proxy_training_flops": 3.487240456e+17,
+  "target_training_flops": 9.329463962e+19,
+  "target_to_proxy_per_point": 267.53142146960687,
+  "target_training_flops_retained_progress_lower_bound": 8.290356739757028e+19,
+  "target_training_flops_remaining_from_saved_steps": 1.0391072222429729e+19,
+  "exclude": "eval, compilation, preparation and lost/replayed steps; not a billing estimate"
+}

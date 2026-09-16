@@ -1,0 +1,121 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789124713.6276338,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/plan.json",
+      "fieldbook.local_size_at_capture": 20394
+    },
+    "content_hash": "sha256:9816241e3793539230f285d3fc0fd7388b16ab85f5d500d4480746e207ab9df8",
+    "created_at": "2026-09-11T11:08:16Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m282esf8pq20hw65rnwgckpk",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T11:08:16Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/plan.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789124785.466018,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/release.json",
+      "fieldbook.local_size_at_capture": 1302
+    },
+    "content_hash": "sha256:d289404e3a9e3abff2c36a72241d3465a8499b47aa1d7510a57c47500aaecb7e",
+    "created_at": "2026-09-11T11:08:16Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m282esrp357x96xv0wmp8p3j",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T11:08:16Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/release.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789124577.0195749,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cc_implementation.md",
+      "fieldbook.local_size_at_capture": 7475
+    },
+    "content_hash": "sha256:6d3054b75572e7a08ce7b675dde77e1e7398c4fd5974858068eefda29c576331",
+    "created_at": "2026-09-11T11:08:16Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m282et22nncgx6fq0j4qpsxz",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T11:08:16Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cc_implementation.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789124725.2499223,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cc_followup.md",
+      "fieldbook.local_size_at_capture": 5428
+    },
+    "content_hash": "sha256:791f80ad3ebb7c1be7904fd28a4328cdbc54d7963ab10ba61566f31773785f9d",
+    "created_at": "2026-09-11T11:08:17Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m282etbtxsyw4r6ehv2xnpk4",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T11:08:17Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cc_followup.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789124836.2778125,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/bundle_preflight.json",
+      "fieldbook.local_size_at_capture": 687
+    },
+    "content_hash": "sha256:bb522b1e3967dceef7b5ad78069a3da7ee34ac5ad820964fde10a915d8a0bb46",
+    "created_at": "2026-09-11T11:08:17Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m282etmazz9a3pka2b0y9wyf",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T11:08:17Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/bundle_preflight.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789124793.882885,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/refinement_batch_reuse_audit.json",
+      "fieldbook.local_size_at_capture": 12655
+    },
+    "content_hash": "sha256:26257a2654af8ee110c3ced83864e3eab797680855571008845590d8d1f649e1",
+    "created_at": "2026-09-11T11:08:17Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m282etx06vypjejp421g3fds",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T11:08:17Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/refinement_batch_reuse_audit.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789124627.9473503,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/refinement_pre_migration.json",
+      "fieldbook.local_size_at_capture": 473
+    },
+    "content_hash": "sha256:0e2d0cc90eba30da9ec787ba2882ecb3f272cf0a6a753484d83b6c9c8bbbcd82",
+    "created_at": "2026-09-11T11:08:18Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m282ev6q4a9abesfbsyr1rgt",
+    "job_id": null,
+    "run_id": null,
+    "type": "checkpoint",
+    "updated_at": "2026-09-11T11:08:18Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/refinement_pre_migration.json"
+  }
+]

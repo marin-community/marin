@@ -1,0 +1,1502 @@
+[
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_000.jsonl.zst",
+    "bytes": 923954,
+    "generation": "1765310929182558"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_001.jsonl.zst",
+    "bytes": 1463263,
+    "generation": "1765310929510108"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_002.jsonl.zst",
+    "bytes": 1308598,
+    "generation": "1765310929395295"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_003.jsonl.zst",
+    "bytes": 1159844,
+    "generation": "1765311008879907"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_004.jsonl.zst",
+    "bytes": 1315901,
+    "generation": "1765310929623567"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_005.jsonl.zst",
+    "bytes": 1079516,
+    "generation": "1765310930058852"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_006.jsonl.zst",
+    "bytes": 1557401,
+    "generation": "1765310930235340"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_007.jsonl.zst",
+    "bytes": 1500387,
+    "generation": "1765310930319890"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_008.jsonl.zst",
+    "bytes": 1387339,
+    "generation": "1765310930181539"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_009.jsonl.zst",
+    "bytes": 1091438,
+    "generation": "1765310930500966"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_010.jsonl.zst",
+    "bytes": 1370862,
+    "generation": "1765310930710923"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_011.jsonl.zst",
+    "bytes": 1123682,
+    "generation": "1765310947601232"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_012.jsonl.zst",
+    "bytes": 1695195,
+    "generation": "1765310931083648"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_013.jsonl.zst",
+    "bytes": 1179927,
+    "generation": "1765310931006794"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_014.jsonl.zst",
+    "bytes": 1542567,
+    "generation": "1765310931211233"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_015.jsonl.zst",
+    "bytes": 1262613,
+    "generation": "1765310931206049"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_016.jsonl.zst",
+    "bytes": 1608453,
+    "generation": "1765310931336748"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_017.jsonl.zst",
+    "bytes": 1428540,
+    "generation": "1765310931577387"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_018.jsonl.zst",
+    "bytes": 1279277,
+    "generation": "1765310931746534"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_019.jsonl.zst",
+    "bytes": 1318127,
+    "generation": "1765310937949470"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_020.jsonl.zst",
+    "bytes": 1808278,
+    "generation": "1765310932320816"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_021.jsonl.zst",
+    "bytes": 1241649,
+    "generation": "1765310931943998"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_022.jsonl.zst",
+    "bytes": 1201867,
+    "generation": "1765310932137089"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_023.jsonl.zst",
+    "bytes": 1266363,
+    "generation": "1765310932465684"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_024.jsonl.zst",
+    "bytes": 1218937,
+    "generation": "1765310932787538"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_025.jsonl.zst",
+    "bytes": 1234202,
+    "generation": "1765310932772671"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_026.jsonl.zst",
+    "bytes": 1471916,
+    "generation": "1765310932996699"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_027.jsonl.zst",
+    "bytes": 1357079,
+    "generation": "1765310932951574"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_028.jsonl.zst",
+    "bytes": 1299240,
+    "generation": "1765310933243754"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_029.jsonl.zst",
+    "bytes": 1370149,
+    "generation": "1765310933213839"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_030.jsonl.zst",
+    "bytes": 1684876,
+    "generation": "1765310933225644"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_031.jsonl.zst",
+    "bytes": 1116001,
+    "generation": "1765310933608753"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_032.jsonl.zst",
+    "bytes": 1542222,
+    "generation": "1765310933658358"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_033.jsonl.zst",
+    "bytes": 1825876,
+    "generation": "1765310933873790"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_034.jsonl.zst",
+    "bytes": 1598757,
+    "generation": "1765310933840826"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_035.jsonl.zst",
+    "bytes": 1345445,
+    "generation": "1765310934080840"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_036.jsonl.zst",
+    "bytes": 1607844,
+    "generation": "1765310934052826"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_037.jsonl.zst",
+    "bytes": 1214544,
+    "generation": "1765310934107676"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_038.jsonl.zst",
+    "bytes": 1041128,
+    "generation": "1765310934269841"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_039.jsonl.zst",
+    "bytes": 1310037,
+    "generation": "1765310934385842"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_040.jsonl.zst",
+    "bytes": 1311390,
+    "generation": "1765310934619058"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_041.jsonl.zst",
+    "bytes": 1264825,
+    "generation": "1765310934456467"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_042.jsonl.zst",
+    "bytes": 1292281,
+    "generation": "1765310934863539"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_043.jsonl.zst",
+    "bytes": 1407010,
+    "generation": "1765310934809442"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_044.jsonl.zst",
+    "bytes": 1009433,
+    "generation": "1765311008582473"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_045.jsonl.zst",
+    "bytes": 1317824,
+    "generation": "1765310934687717"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_046.jsonl.zst",
+    "bytes": 1497762,
+    "generation": "1765310935025611"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_047.jsonl.zst",
+    "bytes": 1025271,
+    "generation": "1765310935177977"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_048.jsonl.zst",
+    "bytes": 1229588,
+    "generation": "1765310935935626"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_049.jsonl.zst",
+    "bytes": 1047040,
+    "generation": "1765310935528734"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_050.jsonl.zst",
+    "bytes": 1472974,
+    "generation": "1765310935611389"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_051.jsonl.zst",
+    "bytes": 1122406,
+    "generation": "1765310935682424"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_052.jsonl.zst",
+    "bytes": 1319258,
+    "generation": "1765310942263462"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_053.jsonl.zst",
+    "bytes": 1478237,
+    "generation": "1765310935773755"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_054.jsonl.zst",
+    "bytes": 1601542,
+    "generation": "1765310935990285"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_055.jsonl.zst",
+    "bytes": 1618632,
+    "generation": "1765310936253817"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_056.jsonl.zst",
+    "bytes": 1136217,
+    "generation": "1765310936303331"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_057.jsonl.zst",
+    "bytes": 1253057,
+    "generation": "1765310936459901"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_058.jsonl.zst",
+    "bytes": 1213108,
+    "generation": "1765310936423087"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_059.jsonl.zst",
+    "bytes": 1488619,
+    "generation": "1765310936645847"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_060.jsonl.zst",
+    "bytes": 1692087,
+    "generation": "1765310936880349"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_061.jsonl.zst",
+    "bytes": 1158826,
+    "generation": "1765310937015501"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_062.jsonl.zst",
+    "bytes": 1739654,
+    "generation": "1765310937294643"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_063.jsonl.zst",
+    "bytes": 1080641,
+    "generation": "1765310937200857"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_064.jsonl.zst",
+    "bytes": 1529982,
+    "generation": "1765310937256688"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_065.jsonl.zst",
+    "bytes": 1407000,
+    "generation": "1765310937287593"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_066.jsonl.zst",
+    "bytes": 1219522,
+    "generation": "1765310937758253"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_067.jsonl.zst",
+    "bytes": 1374110,
+    "generation": "1765310937805181"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_068.jsonl.zst",
+    "bytes": 1643257,
+    "generation": "1765310938001083"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_069.jsonl.zst",
+    "bytes": 1595645,
+    "generation": "1765310938045688"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_070.jsonl.zst",
+    "bytes": 1030420,
+    "generation": "1765310938112924"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_071.jsonl.zst",
+    "bytes": 985338,
+    "generation": "1765310938022146"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_072.jsonl.zst",
+    "bytes": 1285115,
+    "generation": "1765310938446673"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_073.jsonl.zst",
+    "bytes": 1278802,
+    "generation": "1765310938521013"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_074.jsonl.zst",
+    "bytes": 1280404,
+    "generation": "1765310938691832"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_075.jsonl.zst",
+    "bytes": 1368661,
+    "generation": "1765310938735439"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_076.jsonl.zst",
+    "bytes": 1556516,
+    "generation": "1765310938720610"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_077.jsonl.zst",
+    "bytes": 1529001,
+    "generation": "1765310938824518"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_078.jsonl.zst",
+    "bytes": 1357670,
+    "generation": "1765310939112665"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_079.jsonl.zst",
+    "bytes": 1363693,
+    "generation": "1765310939199907"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_080.jsonl.zst",
+    "bytes": 1090605,
+    "generation": "1765310939187449"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_081.jsonl.zst",
+    "bytes": 1365791,
+    "generation": "1765310939433602"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_082.jsonl.zst",
+    "bytes": 1245337,
+    "generation": "1765310939775281"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_083.jsonl.zst",
+    "bytes": 1632268,
+    "generation": "1765310939551824"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_084.jsonl.zst",
+    "bytes": 1158198,
+    "generation": "1765310939566886"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_085.jsonl.zst",
+    "bytes": 1457416,
+    "generation": "1765311008781790"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_086.jsonl.zst",
+    "bytes": 1378066,
+    "generation": "1765310939895560"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_087.jsonl.zst",
+    "bytes": 1360838,
+    "generation": "1765310939891812"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_088.jsonl.zst",
+    "bytes": 1088418,
+    "generation": "1765310940359442"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_089.jsonl.zst",
+    "bytes": 1087098,
+    "generation": "1765310940323036"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_090.jsonl.zst",
+    "bytes": 1347367,
+    "generation": "1765310940417371"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_091.jsonl.zst",
+    "bytes": 1279884,
+    "generation": "1765310940398826"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_092.jsonl.zst",
+    "bytes": 1211369,
+    "generation": "1765310940535561"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_093.jsonl.zst",
+    "bytes": 1511739,
+    "generation": "1765310947802562"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_094.jsonl.zst",
+    "bytes": 1498231,
+    "generation": "1765310940569580"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_095.jsonl.zst",
+    "bytes": 1324550,
+    "generation": "1765310941061511"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_096.jsonl.zst",
+    "bytes": 1284606,
+    "generation": "1765310941054466"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_097.jsonl.zst",
+    "bytes": 1680614,
+    "generation": "1765310941188615"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_098.jsonl.zst",
+    "bytes": 1133585,
+    "generation": "1765310941266165"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/test/arXiv_099.jsonl.zst",
+    "bytes": 1086326,
+    "generation": "1765310941570920"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_000.jsonl.zst",
+    "bytes": 219047026,
+    "generation": "1765310948596695"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_001.jsonl.zst",
+    "bytes": 226123838,
+    "generation": "1765310950078289"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_002.jsonl.zst",
+    "bytes": 268678417,
+    "generation": "1765310949979169"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_003.jsonl.zst",
+    "bytes": 248381410,
+    "generation": "1765310949913091"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_004.jsonl.zst",
+    "bytes": 241852577,
+    "generation": "1765310949287078"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_005.jsonl.zst",
+    "bytes": 260686633,
+    "generation": "1765310951667754"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_006.jsonl.zst",
+    "bytes": 272263549,
+    "generation": "1765310953176412"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_007.jsonl.zst",
+    "bytes": 262187318,
+    "generation": "1765310956965719"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_008.jsonl.zst",
+    "bytes": 267396091,
+    "generation": "1765310956831680"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_009.jsonl.zst",
+    "bytes": 216638040,
+    "generation": "1765310956446334"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_010.jsonl.zst",
+    "bytes": 265009842,
+    "generation": "1765310958372744"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_011.jsonl.zst",
+    "bytes": 220825859,
+    "generation": "1765310958008864"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_012.jsonl.zst",
+    "bytes": 327250704,
+    "generation": "1765310961953212"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_013.jsonl.zst",
+    "bytes": 234087595,
+    "generation": "1765310959490111"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_014.jsonl.zst",
+    "bytes": 282042317,
+    "generation": "1765310959157559"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_015.jsonl.zst",
+    "bytes": 260622653,
+    "generation": "1765310961068378"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_016.jsonl.zst",
+    "bytes": 276008389,
+    "generation": "1765310962319790"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_017.jsonl.zst",
+    "bytes": 285589335,
+    "generation": "1765310963494477"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_018.jsonl.zst",
+    "bytes": 264731528,
+    "generation": "1765310967170981"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_019.jsonl.zst",
+    "bytes": 276482067,
+    "generation": "1765310969015874"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_020.jsonl.zst",
+    "bytes": 301361565,
+    "generation": "1765310968072638"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_021.jsonl.zst",
+    "bytes": 240445297,
+    "generation": "1765310966583809"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_022.jsonl.zst",
+    "bytes": 263058376,
+    "generation": "1765310968298430"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_023.jsonl.zst",
+    "bytes": 250188982,
+    "generation": "1765310970200561"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_024.jsonl.zst",
+    "bytes": 246152941,
+    "generation": "1765310968450647"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_025.jsonl.zst",
+    "bytes": 243131289,
+    "generation": "1765311016532591"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_026.jsonl.zst",
+    "bytes": 249841670,
+    "generation": "1765310971357736"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_027.jsonl.zst",
+    "bytes": 231585266,
+    "generation": "1765310970557995"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_028.jsonl.zst",
+    "bytes": 264112327,
+    "generation": "1765310973421228"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_029.jsonl.zst",
+    "bytes": 257527311,
+    "generation": "1765310976119266"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_030.jsonl.zst",
+    "bytes": 324279000,
+    "generation": "1765310979841942"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_031.jsonl.zst",
+    "bytes": 229111546,
+    "generation": "1765310977132069"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_032.jsonl.zst",
+    "bytes": 238398435,
+    "generation": "1765310977870076"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_033.jsonl.zst",
+    "bytes": 295493514,
+    "generation": "1765310979927040"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_034.jsonl.zst",
+    "bytes": 308160433,
+    "generation": "1765311149488081"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_035.jsonl.zst",
+    "bytes": 267147907,
+    "generation": "1765310979814417"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_036.jsonl.zst",
+    "bytes": 235071831,
+    "generation": "1765310978190902"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_037.jsonl.zst",
+    "bytes": 258211954,
+    "generation": "1765310981062969"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_038.jsonl.zst",
+    "bytes": 228100055,
+    "generation": "1765310981525851"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_039.jsonl.zst",
+    "bytes": 254958384,
+    "generation": "1765310985101482"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_040.jsonl.zst",
+    "bytes": 243161153,
+    "generation": "1765310985778670"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_041.jsonl.zst",
+    "bytes": 234284897,
+    "generation": "1765310985694586"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_042.jsonl.zst",
+    "bytes": 273393651,
+    "generation": "1765310989538717"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_043.jsonl.zst",
+    "bytes": 281858478,
+    "generation": "1765310989447498"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_044.jsonl.zst",
+    "bytes": 244959213,
+    "generation": "1765310987678737"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_045.jsonl.zst",
+    "bytes": 258935104,
+    "generation": "1765310989588226"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_046.jsonl.zst",
+    "bytes": 283627512,
+    "generation": "1765310992564998"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_047.jsonl.zst",
+    "bytes": 218204140,
+    "generation": "1765310988980347"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_048.jsonl.zst",
+    "bytes": 246422954,
+    "generation": "1765310995365149"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_049.jsonl.zst",
+    "bytes": 227302112,
+    "generation": "1765310994667243"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_050.jsonl.zst",
+    "bytes": 271132102,
+    "generation": "1765310995183671"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_051.jsonl.zst",
+    "bytes": 274825447,
+    "generation": "1765311003234232"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_052.jsonl.zst",
+    "bytes": 267411233,
+    "generation": "1765310997997083"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_053.jsonl.zst",
+    "bytes": 264321562,
+    "generation": "1765310998507692"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_054.jsonl.zst",
+    "bytes": 259961263,
+    "generation": "1765310999372800"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_055.jsonl.zst",
+    "bytes": 273188154,
+    "generation": "1765311000603395"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_056.jsonl.zst",
+    "bytes": 212294207,
+    "generation": "1765311001357918"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_057.jsonl.zst",
+    "bytes": 254957746,
+    "generation": "1765311004029606"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_058.jsonl.zst",
+    "bytes": 246238273,
+    "generation": "1765311004703917"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_059.jsonl.zst",
+    "bytes": 263553079,
+    "generation": "1765311004871372"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_060.jsonl.zst",
+    "bytes": 297412704,
+    "generation": "1765311008962339"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_061.jsonl.zst",
+    "bytes": 224307019,
+    "generation": "1765311006609082"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_062.jsonl.zst",
+    "bytes": 300945992,
+    "generation": "1765311010618254"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_063.jsonl.zst",
+    "bytes": 204088490,
+    "generation": "1765311008334090"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_064.jsonl.zst",
+    "bytes": 264051692,
+    "generation": "1765311010865926"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_065.jsonl.zst",
+    "bytes": 251793786,
+    "generation": "1765311011619841"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_066.jsonl.zst",
+    "bytes": 223783261,
+    "generation": "1765311012530160"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_067.jsonl.zst",
+    "bytes": 259635074,
+    "generation": "1765311014608673"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_068.jsonl.zst",
+    "bytes": 275165839,
+    "generation": "1765311020881226"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_069.jsonl.zst",
+    "bytes": 265017404,
+    "generation": "1765311016118830"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_070.jsonl.zst",
+    "bytes": 196622760,
+    "generation": "1765311015595801"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_071.jsonl.zst",
+    "bytes": 259586112,
+    "generation": "1765311017895034"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_072.jsonl.zst",
+    "bytes": 303344408,
+    "generation": "1765311019833478"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_073.jsonl.zst",
+    "bytes": 247432248,
+    "generation": "1765311018541842"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_074.jsonl.zst",
+    "bytes": 251326394,
+    "generation": "1765311018892146"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_075.jsonl.zst",
+    "bytes": 246003971,
+    "generation": "1765311020674866"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_076.jsonl.zst",
+    "bytes": 263998869,
+    "generation": "1765311019635184"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_077.jsonl.zst",
+    "bytes": 261819695,
+    "generation": "1765311020867798"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_078.jsonl.zst",
+    "bytes": 241983647,
+    "generation": "1765311020294417"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_079.jsonl.zst",
+    "bytes": 244362548,
+    "generation": "1765311209177861"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_080.jsonl.zst",
+    "bytes": 224260434,
+    "generation": "1765311022292333"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_081.jsonl.zst",
+    "bytes": 251417488,
+    "generation": "1765311022163930"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_082.jsonl.zst",
+    "bytes": 272694974,
+    "generation": "1765311026990471"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_083.jsonl.zst",
+    "bytes": 270887386,
+    "generation": "1765311026850144"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_084.jsonl.zst",
+    "bytes": 267719791,
+    "generation": "1765311025605902"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_085.jsonl.zst",
+    "bytes": 287811438,
+    "generation": "1765311028458015"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_086.jsonl.zst",
+    "bytes": 226744823,
+    "generation": "1765311026535303"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_087.jsonl.zst",
+    "bytes": 255494711,
+    "generation": "1765311027828881"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_088.jsonl.zst",
+    "bytes": 232326461,
+    "generation": "1765311028524336"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_089.jsonl.zst",
+    "bytes": 231994580,
+    "generation": "1765311029361833"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_090.jsonl.zst",
+    "bytes": 240144115,
+    "generation": "1765311028018728"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_091.jsonl.zst",
+    "bytes": 266077450,
+    "generation": "1765311029772566"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_092.jsonl.zst",
+    "bytes": 260834447,
+    "generation": "1765311031054122"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_093.jsonl.zst",
+    "bytes": 289464144,
+    "generation": "1765311031853730"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_094.jsonl.zst",
+    "bytes": 266005202,
+    "generation": "1765311030883567"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_095.jsonl.zst",
+    "bytes": 231627345,
+    "generation": "1765311030567126"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_096.jsonl.zst",
+    "bytes": 245000012,
+    "generation": "1765311033377565"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_097.jsonl.zst",
+    "bytes": 265407783,
+    "generation": "1765311036600803"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_098.jsonl.zst",
+    "bytes": 220501348,
+    "generation": "1765311034861169"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/train/arXiv_099.jsonl.zst",
+    "bytes": 243144157,
+    "generation": "1765311035771242"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_000.jsonl.zst",
+    "bytes": 1276647,
+    "generation": "1765311029866388"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_001.jsonl.zst",
+    "bytes": 1061280,
+    "generation": "1765311029440856"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_002.jsonl.zst",
+    "bytes": 1205569,
+    "generation": "1765311029497336"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_003.jsonl.zst",
+    "bytes": 1153701,
+    "generation": "1765311029896708"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_004.jsonl.zst",
+    "bytes": 1116807,
+    "generation": "1765311030910754"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_005.jsonl.zst",
+    "bytes": 1124158,
+    "generation": "1765311030434973"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_006.jsonl.zst",
+    "bytes": 1184152,
+    "generation": "1765311030578268"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_007.jsonl.zst",
+    "bytes": 1395178,
+    "generation": "1765311030609439"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_008.jsonl.zst",
+    "bytes": 1195095,
+    "generation": "1765311031139447"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_009.jsonl.zst",
+    "bytes": 908075,
+    "generation": "1765311030999428"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_010.jsonl.zst",
+    "bytes": 1326491,
+    "generation": "1765311031319989"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_011.jsonl.zst",
+    "bytes": 1103015,
+    "generation": "1765311031409211"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_012.jsonl.zst",
+    "bytes": 1759843,
+    "generation": "1765311031689755"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_013.jsonl.zst",
+    "bytes": 1099115,
+    "generation": "1765311032136678"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_014.jsonl.zst",
+    "bytes": 1662729,
+    "generation": "1765311031828646"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_015.jsonl.zst",
+    "bytes": 1237072,
+    "generation": "1765311031929420"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_016.jsonl.zst",
+    "bytes": 1753572,
+    "generation": "1765311031974947"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_017.jsonl.zst",
+    "bytes": 1464941,
+    "generation": "1765311032416762"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_018.jsonl.zst",
+    "bytes": 1553652,
+    "generation": "1765311032322836"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_019.jsonl.zst",
+    "bytes": 1533393,
+    "generation": "1765311032388957"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_020.jsonl.zst",
+    "bytes": 1707836,
+    "generation": "1765311032610128"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_021.jsonl.zst",
+    "bytes": 1188112,
+    "generation": "1765311201989008"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_022.jsonl.zst",
+    "bytes": 1260372,
+    "generation": "1765311032876664"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_023.jsonl.zst",
+    "bytes": 1398632,
+    "generation": "1765311032661202"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_024.jsonl.zst",
+    "bytes": 1187942,
+    "generation": "1765311033613409"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_025.jsonl.zst",
+    "bytes": 1431597,
+    "generation": "1765311032778122"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_026.jsonl.zst",
+    "bytes": 1158584,
+    "generation": "1765311033037065"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_027.jsonl.zst",
+    "bytes": 1344698,
+    "generation": "1765311033104537"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_028.jsonl.zst",
+    "bytes": 1390730,
+    "generation": "1765311033802740"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_029.jsonl.zst",
+    "bytes": 1505105,
+    "generation": "1765311033410592"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_030.jsonl.zst",
+    "bytes": 1728693,
+    "generation": "1765311033531263"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_031.jsonl.zst",
+    "bytes": 1228678,
+    "generation": "1765311033568136"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_032.jsonl.zst",
+    "bytes": 1079774,
+    "generation": "1765311033712437"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_033.jsonl.zst",
+    "bytes": 1692424,
+    "generation": "1765311033876686"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_034.jsonl.zst",
+    "bytes": 1399222,
+    "generation": "1765311034098282"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_035.jsonl.zst",
+    "bytes": 1732329,
+    "generation": "1765311034273528"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_036.jsonl.zst",
+    "bytes": 1148481,
+    "generation": "1765311034403341"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_037.jsonl.zst",
+    "bytes": 1379788,
+    "generation": "1765311034606607"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_038.jsonl.zst",
+    "bytes": 1117857,
+    "generation": "1765311034729402"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_039.jsonl.zst",
+    "bytes": 1317958,
+    "generation": "1765311040839643"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_040.jsonl.zst",
+    "bytes": 1190382,
+    "generation": "1765311040731111"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_041.jsonl.zst",
+    "bytes": 1059830,
+    "generation": "1765311040666069"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_042.jsonl.zst",
+    "bytes": 1361911,
+    "generation": "1765311035342188"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_043.jsonl.zst",
+    "bytes": 1474011,
+    "generation": "1765311034930786"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_044.jsonl.zst",
+    "bytes": 1307432,
+    "generation": "1765311035035639"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_045.jsonl.zst",
+    "bytes": 1264662,
+    "generation": "1765311035021914"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_046.jsonl.zst",
+    "bytes": 1670964,
+    "generation": "1765311035205787"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_047.jsonl.zst",
+    "bytes": 1002992,
+    "generation": "1765311035353291"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_048.jsonl.zst",
+    "bytes": 1255241,
+    "generation": "1765311035359103"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_049.jsonl.zst",
+    "bytes": 1052790,
+    "generation": "1765311035966301"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_050.jsonl.zst",
+    "bytes": 1766876,
+    "generation": "1765311036584333"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_051.jsonl.zst",
+    "bytes": 1245964,
+    "generation": "1765311036379230"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_052.jsonl.zst",
+    "bytes": 1488742,
+    "generation": "1765311036099340"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_053.jsonl.zst",
+    "bytes": 1270082,
+    "generation": "1765311036453620"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_054.jsonl.zst",
+    "bytes": 1414394,
+    "generation": "1765311036065503"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_055.jsonl.zst",
+    "bytes": 1515016,
+    "generation": "1765311036019605"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_056.jsonl.zst",
+    "bytes": 1181360,
+    "generation": "1765311036084747"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_057.jsonl.zst",
+    "bytes": 1144143,
+    "generation": "1765311036467637"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_058.jsonl.zst",
+    "bytes": 1200829,
+    "generation": "1765311036792266"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_059.jsonl.zst",
+    "bytes": 1472837,
+    "generation": "1765311036968033"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_060.jsonl.zst",
+    "bytes": 1724204,
+    "generation": "1765311036864107"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_061.jsonl.zst",
+    "bytes": 1190589,
+    "generation": "1765311037183036"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_062.jsonl.zst",
+    "bytes": 1284448,
+    "generation": "1765311037128937"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_063.jsonl.zst",
+    "bytes": 880837,
+    "generation": "1765311201877949"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_064.jsonl.zst",
+    "bytes": 1318919,
+    "generation": "1765311037413812"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_065.jsonl.zst",
+    "bytes": 1402778,
+    "generation": "1765311037276169"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_066.jsonl.zst",
+    "bytes": 1334194,
+    "generation": "1765311037335052"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_067.jsonl.zst",
+    "bytes": 1399158,
+    "generation": "1765311037543169"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_068.jsonl.zst",
+    "bytes": 1359029,
+    "generation": "1765311037467017"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_069.jsonl.zst",
+    "bytes": 1384868,
+    "generation": "1765311037824125"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_070.jsonl.zst",
+    "bytes": 1308602,
+    "generation": "1765311037675994"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_071.jsonl.zst",
+    "bytes": 1000896,
+    "generation": "1765311037898932"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_072.jsonl.zst",
+    "bytes": 1441774,
+    "generation": "1765311037954242"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_073.jsonl.zst",
+    "bytes": 1311677,
+    "generation": "1765311038020808"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_074.jsonl.zst",
+    "bytes": 1125250,
+    "generation": "1765311037958776"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_075.jsonl.zst",
+    "bytes": 1281403,
+    "generation": "1765311038218564"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_076.jsonl.zst",
+    "bytes": 1289291,
+    "generation": "1765311038380582"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_077.jsonl.zst",
+    "bytes": 1539927,
+    "generation": "1765311038507688"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_078.jsonl.zst",
+    "bytes": 1272105,
+    "generation": "1765311038549273"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_079.jsonl.zst",
+    "bytes": 1202591,
+    "generation": "1765311038705885"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_080.jsonl.zst",
+    "bytes": 1137384,
+    "generation": "1765311038695146"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_081.jsonl.zst",
+    "bytes": 1157772,
+    "generation": "1765311038948492"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_082.jsonl.zst",
+    "bytes": 1433145,
+    "generation": "1765311039102041"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_083.jsonl.zst",
+    "bytes": 1454110,
+    "generation": "1765311039028695"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_084.jsonl.zst",
+    "bytes": 1586036,
+    "generation": "1765311039277316"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_085.jsonl.zst",
+    "bytes": 1326902,
+    "generation": "1765311039238091"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_086.jsonl.zst",
+    "bytes": 1318467,
+    "generation": "1765311039351794"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_087.jsonl.zst",
+    "bytes": 1429327,
+    "generation": "1765311039417257"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_088.jsonl.zst",
+    "bytes": 1214579,
+    "generation": "1765311039724063"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_089.jsonl.zst",
+    "bytes": 1344652,
+    "generation": "1765311039386170"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_090.jsonl.zst",
+    "bytes": 1047698,
+    "generation": "1765311039659510"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_091.jsonl.zst",
+    "bytes": 1452620,
+    "generation": "1765311039888995"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_092.jsonl.zst",
+    "bytes": 1243482,
+    "generation": "1765311039756795"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_093.jsonl.zst",
+    "bytes": 1420967,
+    "generation": "1765311040066102"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_094.jsonl.zst",
+    "bytes": 1179016,
+    "generation": "1765311040266803"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_095.jsonl.zst",
+    "bytes": 1131822,
+    "generation": "1765311040191640"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_096.jsonl.zst",
+    "bytes": 1375299,
+    "generation": "1765311040010819"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_097.jsonl.zst",
+    "bytes": 1506509,
+    "generation": "1765311040166816"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_098.jsonl.zst",
+    "bytes": 1016785,
+    "generation": "1765311040350766"
+  },
+  {
+    "name": "raw/proof-pile-2-f1b1d8/arxiv/validation/arXiv_099.jsonl.zst",
+    "bytes": 1282232,
+    "generation": "1765311040481757"
+  }
+]

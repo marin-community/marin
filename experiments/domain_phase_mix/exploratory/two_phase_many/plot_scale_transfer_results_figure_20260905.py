@@ -18,6 +18,7 @@ regret of the proxy-scale winner) because rank correlation alone does not say wh
 picks a good mixture.
 
 The combined paper figure stacks the first two rows; every row is also written standalone.
+Use --all-pairs to render all three rows from the archived summary without recomputing statistics.
 Only the three baselines are labelled, and their labels are placed automatically: each candidate
 offset is scored by the points, dashed line, statistics box, other labels and leader lines it
 would cover or cross.
@@ -30,7 +31,7 @@ import hashlib
 import itertools
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -153,6 +154,8 @@ class PanelDrawing:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--all-pairs", action="store_true", help="combine all rows using the archived statistics")
+    parser.add_argument("--summary", type=Path, default=DEFAULT_OUTPUT_DIR / "summary.json")
     parser.add_argument(
         "--combined-width", type=float, default=COMBINED_FIGURE_SIZE[0], help="combined figure width in inches"
     )
@@ -409,7 +412,7 @@ def plot_rank_panel(
     axis.set_xlabel(f"Rank at {row.proxy_label}", fontsize=8.2, color=INK, labelpad=4)
     axis.set_ylabel(f"Rank at {row.target_label}", fontsize=8.2, color=INK, labelpad=4)
     axis.set_xlim(-0.04 * max_rank, 1.04 * max_rank)
-    axis.set_ylim(-0.04 * max_rank, 1.24 * max_rank)
+    axis.set_ylim(-0.04 * max_rank, 1.06 * max_rank)
     s_low, s_high = stats["spearman_ci95"]
     k_low, k_high = stats["kendall_ci95"]
     text = stats_box(
@@ -643,11 +646,26 @@ def build_combined_figure(
     with plt.rc_context(PLOT_STYLE):
         figure, axes = plt.subplots(len(rows), 2, figsize=size)
         figure.subplots_adjust(left=0.085, right=0.885, bottom=0.075, top=0.92, wspace=0.30, hspace=0.52)
+        if len(rows) == 3:
+            figure.subplots_adjust(left=0.10, right=0.85, bottom=0.065, top=0.915, wspace=0.39, hspace=0.69)
         letters = iter("ABCDEFGH")
         panels: list[PanelDrawing] = []
         for row_index, row in enumerate(rows):
             pair = (axes[row_index, 0], axes[row_index, 1])
-            panels.extend(draw_row(figure, pair, row, stats[row.key], letters=(next(letters), next(letters))))
+            row_letters = (next(letters), next(letters))
+            row_panels = draw_row(figure, pair, row, stats[row.key], letters=row_letters)
+            panels.extend(row_panels)
+            if len(rows) == 3:
+                pair[0].set_xlabel("Source BPB", fontsize=7.5)
+                pair[0].set_ylabel("Target BPB", fontsize=7.5)
+                pair[1].set_xlabel("Rank at source", fontsize=7.5)
+                pair[1].set_ylabel("Rank at target", fontsize=7.5)
+                for panel, letter in zip(row_panels, row_letters, strict=True):
+                    panel.axis.set_title("")
+                    panel.stats_text.set_position((0.01, 1.035))
+                    panel.stats_text.set_verticalalignment("bottom")
+                    panel.stats_text.set_fontsize(6.2)
+                    panel.stats_text.set_text(f"{letter}. {panel.stats_text.get_text()}")
         figure.canvas.draw()
         for panel in panels:
             place_labels(figure, panel)
@@ -703,6 +721,20 @@ def save(figure: Figure, stem: Path) -> None:
 def main() -> None:
     args = parse_args()
     rows = load_rows()
+    if args.all_pairs:
+        summary = json.loads(args.summary.read_text())
+        for relative_path, expected_hash in summary["inputs"].items():
+            if sha256_of(SCRIPT_DIR / relative_path) != expected_hash:
+                raise ValueError(f"Archived transfer input changed: {relative_path}")
+        stats = {row.key: summary["rows"][row.key]["correlation"] for row in rows}
+        if any(stats[row.key]["n"] != len(row.frame) for row in rows):
+            raise ValueError("Archived transfer row counts changed")
+        rows = tuple(replace(row, header=f"{row.proxy_label} → {row.target_label}") for row in rows)
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        figure = build_combined_figure(rows, stats, (args.combined_width, args.combined_height))
+        save(figure, args.output_dir / "r3_scale_transfer_all_pairs")
+        print(f"Rendered {len(rows)} pairs using unchanged statistics from {args.summary}")
+        return
     rng = np.random.default_rng(BOOTSTRAP_SEED)
     stats = {row.key: correlation_summary(row.frame, rng) for row in rows}
     args.output_dir.mkdir(parents=True, exist_ok=True)

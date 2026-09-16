@@ -1,0 +1,1 @@
+region-local launch safety check passed

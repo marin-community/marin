@@ -315,6 +315,14 @@ memory before its first optimizer update.
 Keep inspection read-only. Record the state, attempt, exit reason, and resource request
 before restarting or signalling anything.
 
+For a retry stuck in JAX initialization, compare process 0's coordinator address with
+the addresses peers join in the same attempt. A crashed process can leave a leased
+endpoint behind. Bootstrap publishes `jax_coordinator_attempt_uid` metadata and checks
+it against task 0's current controller attempt before accepting an address. Peer-local
+retry numbers are not a shared generation: they can differ across hosts. Preserve
+child-job endpoint isolation, and verify checkpoint restoration after an authorized
+runtime recovery rather than treating `RUNNING` as training progress.
+
 ### Log filtering
 
 The Iris dashboard's full-log filter accepts a regular expression. For example,

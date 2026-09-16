@@ -1,0 +1,174 @@
+[
+  {
+    "attrs": {
+      "marin.callable_sha256": "3b6c83ee7e71b6fc9e6c6a8802c14144e459323435ac123748a76626cc4c98df",
+      "marin.priority": "batch"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T12:49:52Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m2888tdmr8vjmykx5t0792pg",
+    "launcher": "iris",
+    "name": "verified_training-15f44e0d",
+    "retry_of": "job_01m27nast1z1qt39qk5ww0sh4e",
+    "run_id": "run_01m27mprdmnq7716cf7as9t2zy",
+    "started_at": null,
+    "status": "running",
+    "updated_at": "2026-09-11T13:07:27Z"
+  },
+  {
+    "attrs": {},
+    "created_at": "2026-09-11T12:49:52Z",
+    "deleted_at": null,
+    "failure_reason": null,
+    "finished_at": null,
+    "job_id": "job_01m2888tdmr8vjmykx5t0792pg",
+    "role": "train",
+    "run_id": "run_01m27mprdmnq7716cf7as9t2zy",
+    "started_at": null,
+    "status": "running",
+    "updated_at": "2026-09-11T13:07:28Z"
+  },
+  {
+    "attrs": {},
+    "author": null,
+    "body": "Target p=55 batch refinement verified running on TPU. It restored the original saved step-3010 checkpoint (2.37 GiB) and completed resumed step 3011 at 13:07:24 UTC; original run and output identities are preserved. W&B had logged through step 3402 before migration, so resumed metrics below that step are suppressed as expected. During catch-up, monitor Iris runtime steps and checkpoint movement rather than W&B timestamps alone. Refinement coverage remains 11 completed recipes, one training and 33 queued for TPU capacity. FineMath matched-subset preparation remains queued for CPU capacity, with all other five domain caches verified complete. No new-domain training result, manual resubmission, or code/cluster/scientific change.",
+    "body_format": "markdown",
+    "created_at": "2026-09-11T13:09:16Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m289cbntyzezp0j3jtxcjc5v",
+    "note_type": "checkpoint",
+    "resolved_at": null,
+    "status": "open",
+    "title": "Target p55 restored step 3010 and completed its first resumed step",
+    "updated_at": "2026-09-11T13:09:16Z"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789132124.4906547,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1305/refinement_resume_validation.json",
+      "fieldbook.local_size_at_capture": 635
+    },
+    "content_hash": "sha256:356567687ab678bb499792bf6fa1410182baab4a82daa74576bcc251211a5191",
+    "created_at": "2026-09-11T13:09:16Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m289cc04f169rks30bh65632",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T13:09:16Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1305/refinement_resume_validation.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789132047.500118,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1305/p055_checkpoint_inventory.json",
+      "fieldbook.local_size_at_capture": 483
+    },
+    "content_hash": "sha256:9effcbe44075f1d18c44e26e1aad12a88500c8dfea69bd5ddcecb35ba1ecae1f",
+    "created_at": "2026-09-11T13:09:17Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m289cc8n2jfd60egxt8zjm67",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T13:09:17Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1305/p055_checkpoint_inventory.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789132064.1514342,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1305/refinement_resume_logs.txt",
+      "fieldbook.local_size_at_capture": 5741
+    },
+    "content_hash": "sha256:25ced37e57b6ee235d8adcb2b6a95abc67107696022ed1728e3ea50dd736b2ba",
+    "created_at": "2026-09-11T13:09:17Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m289ccmx4phjq0gmczq67a4g",
+    "job_id": null,
+    "run_id": null,
+    "type": "log",
+    "updated_at": "2026-09-11T13:09:17Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1305/refinement_resume_logs.txt"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789132124.4908707,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1305/status.json",
+      "fieldbook.local_size_at_capture": 1412
+    },
+    "content_hash": "sha256:ba96beca6e6c79592cdce2c8f7caec1719ab375a893798e68241cb6305528225",
+    "created_at": "2026-09-11T13:09:17Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m289cd0pn2rg25anyt94j20j",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T13:09:17Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1305/status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789132124.4909933,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/post_submission_status.json",
+      "fieldbook.local_size_at_capture": 1412
+    },
+    "content_hash": "sha256:ba96beca6e6c79592cdce2c8f7caec1719ab375a893798e68241cb6305528225",
+    "created_at": "2026-09-11T11:22:41Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m283961sm11n8j3fxffszns6",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T13:09:18Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/post_submission_status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789132124.4913216,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md",
+      "fieldbook.local_size_at_capture": 8293
+    },
+    "content_hash": "sha256:f74d8871227b60ccc08ed1c2201576ee74c342b6f43b5124ab64f5b8f076d165",
+    "created_at": "2026-09-11T11:20:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28353vf9qqwr0bn6rh2vaw5",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T13:09:18Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789132124.4914439,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/CC_CHANGES.md",
+      "fieldbook.local_size_at_capture": 8153
+    },
+    "content_hash": "sha256:5f63ef195e970110f867538c9c8a45e972261b438d905bcc7da0718b5a33346e",
+    "created_at": "2026-09-11T11:20:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28353jzk1j9e9e0yxzpthww",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T13:09:18Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/CC_CHANGES.md"
+  }
+]

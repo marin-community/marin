@@ -1,0 +1,561 @@
+{
+  "parent": {
+    "attrs": {},
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": "uv run iris --config lib/iris/config/marin.yaml job run --no-wait \\\n  --enable-extra-resources --cpu 1 --memory 4GB --disk 32GB --timeout 172800 \\\n  --max-retries 0 --max-preemption-retries 0 --priority interactive \\\n  --extra cpu --no-preemptible --region us-central1 --zone us-central1-a \\\n  --job-name tpp10-wikipedia-math-eval \\\n  --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/spec.json \\\n  --bundle-include 'experiments/domain_phase_mix/tpp10_domain_sweeps_assets/*' \\\n  --bundle-include 'experiments/domain_phase_mix/starcoder_tpp10_assets/*' \\\n  --exclude '^(checkpoints|cache|logs|wandb|tmp)/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' \\\n  --exclude '^\\.agents/(?!projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/spec\\.json$).*' \\\n  --exclude '^(docs|tests)/' \\\n  --exclude '^lib/[^/]+/tests/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/' \\\n  -e MARIN_PREFIX gs://marin-us-central1 \\\n  -- python -m experiments.domain_phase_mix.evaluate_tpp10_wikipedia_math \\\n  --spec .agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/spec.json --submit\n",
+    "created_at": "2026-09-12T07:39:13Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-wikipedia-math-eval",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m2a8wr132mc6rk4azc38v87p",
+    "launcher": "iris",
+    "name": "Wikipedia proxy MATH-500 and GSM8K likelihood",
+    "retry_of": null,
+    "run_id": null,
+    "started_at": null,
+    "status": "succeeded",
+    "updated_at": "2026-09-12T07:48:01Z"
+  },
+  "child": {
+    "attrs": {},
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-12T07:46:36Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-wikipedia-math-eval/wikipedia-math-proxies",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+    "launcher": null,
+    "name": "Wikipedia proxy math likelihood worker",
+    "retry_of": null,
+    "run_id": null,
+    "started_at": null,
+    "status": "succeeded",
+    "updated_at": "2026-09-12T07:48:01Z"
+  },
+  "points": [
+    {
+      "run_id": "run_01m2a6fmr88j62h2b54p6bj8g5",
+      "percent": 0,
+      "artifact": {
+        "attrs": {},
+        "content_hash": null,
+        "created_at": "2026-09-12T07:46:36Z",
+        "deleted_at": null,
+        "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+        "id": "art_01m2a9a8gmvbyd468zq030k4zd",
+        "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+        "run_id": "run_01m2a6fmr88j62h2b54p6bj8g5",
+        "type": "eval-result",
+        "updated_at": "2026-09-12T07:48:01Z",
+        "uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_unmatched_p000_s20260910.json"
+      },
+      "metrics": []
+    },
+    {
+      "run_id": "run_01m2a8w1nfkagnr5j1hwqc62j5",
+      "percent": 5,
+      "artifact": {
+        "attrs": {},
+        "content_hash": null,
+        "created_at": "2026-09-12T07:48:02Z",
+        "deleted_at": null,
+        "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+        "id": "art_01m2a9cw1496gqa2rrk4evngn4",
+        "job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+        "run_id": "run_01m2a8w1nfkagnr5j1hwqc62j5",
+        "type": "eval-result",
+        "updated_at": "2026-09-12T07:48:02Z",
+        "uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_wikipedia_matched_p005_s20260910.json"
+      },
+      "metrics": [
+        {
+          "created_at": "2026-09-12T07:48:03Z",
+          "deleted_at": null,
+          "id": "met_01m2a9cx41f3r41ff7ajhc710w",
+          "metric_name": "math500/reference_solution_loss",
+          "run_id": "run_01m2a8w1nfkagnr5j1hwqc62j5",
+          "source_artifact_id": "art_01m2a9cw1496gqa2rrk4evngn4",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:03Z",
+          "value": 3.1844968795776367
+        },
+        {
+          "created_at": "2026-09-12T07:48:03Z",
+          "deleted_at": null,
+          "id": "met_01m2a9cxcv6pa8xa83a9cv8j3x",
+          "metric_name": "math500/reference_solution_perplexity",
+          "run_id": "run_01m2a8w1nfkagnr5j1hwqc62j5",
+          "source_artifact_id": "art_01m2a9cw1496gqa2rrk4evngn4",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:03Z",
+          "value": 24.15513240771685
+        },
+        {
+          "created_at": "2026-09-12T07:48:03Z",
+          "deleted_at": null,
+          "id": "met_01m2a9cxne6awe079gfr2whrfz",
+          "metric_name": "gsm8k/reference_solution_loss",
+          "run_id": "run_01m2a8w1nfkagnr5j1hwqc62j5",
+          "source_artifact_id": "art_01m2a9cw1496gqa2rrk4evngn4",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:03Z",
+          "value": 2.9890758991241455
+        },
+        {
+          "created_at": "2026-09-12T07:48:04Z",
+          "deleted_at": null,
+          "id": "met_01m2a9cxycg87jyekkkt21rcsb",
+          "metric_name": "gsm8k/reference_solution_perplexity",
+          "run_id": "run_01m2a8w1nfkagnr5j1hwqc62j5",
+          "source_artifact_id": "art_01m2a9cw1496gqa2rrk4evngn4",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:04Z",
+          "value": 19.867314603155315
+        }
+      ]
+    },
+    {
+      "run_id": "run_01m2a8w1yz6r551gekde4v4mr7",
+      "percent": 10,
+      "artifact": {
+        "attrs": {},
+        "content_hash": null,
+        "created_at": "2026-09-12T07:48:04Z",
+        "deleted_at": null,
+        "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+        "id": "art_01m2a9cy7p37jeaz78k98rzryp",
+        "job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+        "run_id": "run_01m2a8w1yz6r551gekde4v4mr7",
+        "type": "eval-result",
+        "updated_at": "2026-09-12T07:48:04Z",
+        "uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_wikipedia_matched_p010_s20260910.json"
+      },
+      "metrics": [
+        {
+          "created_at": "2026-09-12T07:48:05Z",
+          "deleted_at": null,
+          "id": "met_01m2a9czbwnemccqvd0q2zzv0a",
+          "metric_name": "math500/reference_solution_loss",
+          "run_id": "run_01m2a8w1yz6r551gekde4v4mr7",
+          "source_artifact_id": "art_01m2a9cy7p37jeaz78k98rzryp",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:05Z",
+          "value": 3.139112710952759
+        },
+        {
+          "created_at": "2026-09-12T07:48:05Z",
+          "deleted_at": null,
+          "id": "met_01m2a9czmf9fwhr3bwjm5kwrbj",
+          "metric_name": "math500/reference_solution_perplexity",
+          "run_id": "run_01m2a8w1yz6r551gekde4v4mr7",
+          "source_artifact_id": "art_01m2a9cy7p37jeaz78k98rzryp",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:05Z",
+          "value": 23.083376142647822
+        },
+        {
+          "created_at": "2026-09-12T07:48:06Z",
+          "deleted_at": null,
+          "id": "met_01m2a9czxqteqqws08tv8dqf4n",
+          "metric_name": "gsm8k/reference_solution_loss",
+          "run_id": "run_01m2a8w1yz6r551gekde4v4mr7",
+          "source_artifact_id": "art_01m2a9cy7p37jeaz78k98rzryp",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:06Z",
+          "value": 2.988698959350586
+        },
+        {
+          "created_at": "2026-09-12T07:48:06Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d06yyj2jgrkb2bzch4gg",
+          "metric_name": "gsm8k/reference_solution_perplexity",
+          "run_id": "run_01m2a8w1yz6r551gekde4v4mr7",
+          "source_artifact_id": "art_01m2a9cy7p37jeaz78k98rzryp",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:06Z",
+          "value": 19.85982723331996
+        }
+      ]
+    },
+    {
+      "run_id": "run_01m2a8w2badsm15w9heneqf9av",
+      "percent": 20,
+      "artifact": {
+        "attrs": {},
+        "content_hash": null,
+        "created_at": "2026-09-12T07:48:06Z",
+        "deleted_at": null,
+        "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+        "id": "art_01m2a9d0facb8032f1cz52qps4",
+        "job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+        "run_id": "run_01m2a8w2badsm15w9heneqf9av",
+        "type": "eval-result",
+        "updated_at": "2026-09-12T07:48:06Z",
+        "uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_wikipedia_matched_p020_s20260910.json"
+      },
+      "metrics": [
+        {
+          "created_at": "2026-09-12T07:48:07Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d1hb5v6dc35mmnygm5z0",
+          "metric_name": "math500/reference_solution_loss",
+          "run_id": "run_01m2a8w2badsm15w9heneqf9av",
+          "source_artifact_id": "art_01m2a9d0facb8032f1cz52qps4",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:07Z",
+          "value": 3.085094690322876
+        },
+        {
+          "created_at": "2026-09-12T07:48:08Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d1tdy993n16905pe8h5y",
+          "metric_name": "math500/reference_solution_perplexity",
+          "run_id": "run_01m2a8w2badsm15w9heneqf9av",
+          "source_artifact_id": "art_01m2a9d0facb8032f1cz52qps4",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:08Z",
+          "value": 21.869537577608774
+        },
+        {
+          "created_at": "2026-09-12T07:48:08Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d232natanbjsgwnsp5wt",
+          "metric_name": "gsm8k/reference_solution_loss",
+          "run_id": "run_01m2a8w2badsm15w9heneqf9av",
+          "source_artifact_id": "art_01m2a9d0facb8032f1cz52qps4",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:08Z",
+          "value": 2.9245293140411377
+        },
+        {
+          "created_at": "2026-09-12T07:48:08Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d2bq1ddnw78jy3p1b4ry",
+          "metric_name": "gsm8k/reference_solution_perplexity",
+          "run_id": "run_01m2a8w2badsm15w9heneqf9av",
+          "source_artifact_id": "art_01m2a9d0facb8032f1cz52qps4",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:08Z",
+          "value": 18.62545724518157
+        }
+      ]
+    },
+    {
+      "run_id": "run_01m2a8w2r5882sebpd3fxg9fk8",
+      "percent": 30,
+      "artifact": {
+        "attrs": {},
+        "content_hash": null,
+        "created_at": "2026-09-12T07:48:08Z",
+        "deleted_at": null,
+        "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+        "id": "art_01m2a9d2mgfjsxze5qa5gd8mxe",
+        "job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+        "run_id": "run_01m2a8w2r5882sebpd3fxg9fk8",
+        "type": "eval-result",
+        "updated_at": "2026-09-12T07:48:08Z",
+        "uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_wikipedia_matched_p030_s20260910.json"
+      },
+      "metrics": [
+        {
+          "created_at": "2026-09-12T07:48:10Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d3rgyqcf3e0yrnw4zgmz",
+          "metric_name": "math500/reference_solution_loss",
+          "run_id": "run_01m2a8w2r5882sebpd3fxg9fk8",
+          "source_artifact_id": "art_01m2a9d2mgfjsxze5qa5gd8mxe",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:10Z",
+          "value": 3.0528039932250977
+        },
+        {
+          "created_at": "2026-09-12T07:48:10Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d41cpjzsk97kgvd5sayr",
+          "metric_name": "math500/reference_solution_perplexity",
+          "run_id": "run_01m2a8w2r5882sebpd3fxg9fk8",
+          "source_artifact_id": "art_01m2a9d2mgfjsxze5qa5gd8mxe",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:10Z",
+          "value": 21.174634791296235
+        },
+        {
+          "created_at": "2026-09-12T07:48:10Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d4a9jcrkpzjj34g6ncag",
+          "metric_name": "gsm8k/reference_solution_loss",
+          "run_id": "run_01m2a8w2r5882sebpd3fxg9fk8",
+          "source_artifact_id": "art_01m2a9d2mgfjsxze5qa5gd8mxe",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:10Z",
+          "value": 2.9872682094573975
+        },
+        {
+          "created_at": "2026-09-12T07:48:10Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d4jtbby1rs9kjna4rq7z",
+          "metric_name": "gsm8k/reference_solution_perplexity",
+          "run_id": "run_01m2a8w2r5882sebpd3fxg9fk8",
+          "source_artifact_id": "art_01m2a9d2mgfjsxze5qa5gd8mxe",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:10Z",
+          "value": 19.831433104918908
+        }
+      ]
+    },
+    {
+      "run_id": "run_01m2a8w318zsr8kdae83s53dtc",
+      "percent": 50,
+      "artifact": {
+        "attrs": {},
+        "content_hash": null,
+        "created_at": "2026-09-12T07:48:11Z",
+        "deleted_at": null,
+        "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+        "id": "art_01m2a9d4w0r23k881jf95mg5gv",
+        "job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+        "run_id": "run_01m2a8w318zsr8kdae83s53dtc",
+        "type": "eval-result",
+        "updated_at": "2026-09-12T07:48:11Z",
+        "uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_wikipedia_matched_p050_s20260910.json"
+      },
+      "metrics": [
+        {
+          "created_at": "2026-09-12T07:48:12Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d5yrxhc80ycba50ya36m",
+          "metric_name": "math500/reference_solution_loss",
+          "run_id": "run_01m2a8w318zsr8kdae83s53dtc",
+          "source_artifact_id": "art_01m2a9d4w0r23k881jf95mg5gv",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:12Z",
+          "value": 3.1059441566467285
+        },
+        {
+          "created_at": "2026-09-12T07:48:12Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d66yn9pqm9c31z1h1gwg",
+          "metric_name": "math500/reference_solution_perplexity",
+          "run_id": "run_01m2a8w318zsr8kdae83s53dtc",
+          "source_artifact_id": "art_01m2a9d4w0r23k881jf95mg5gv",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:12Z",
+          "value": 22.330292319358144
+        },
+        {
+          "created_at": "2026-09-12T07:48:12Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d6f8443a2vjh1wk1te87",
+          "metric_name": "gsm8k/reference_solution_loss",
+          "run_id": "run_01m2a8w318zsr8kdae83s53dtc",
+          "source_artifact_id": "art_01m2a9d4w0r23k881jf95mg5gv",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:12Z",
+          "value": 2.9598138332366943
+        },
+        {
+          "created_at": "2026-09-12T07:48:13Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d6r13sznvhcn9a99xbpb",
+          "metric_name": "gsm8k/reference_solution_perplexity",
+          "run_id": "run_01m2a8w318zsr8kdae83s53dtc",
+          "source_artifact_id": "art_01m2a9d4w0r23k881jf95mg5gv",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:13Z",
+          "value": 19.294379448957088
+        }
+      ]
+    },
+    {
+      "run_id": "run_01m2a8w3bfz5fxfgje8tnw2xx5",
+      "percent": 70,
+      "artifact": {
+        "attrs": {},
+        "content_hash": null,
+        "created_at": "2026-09-12T07:48:13Z",
+        "deleted_at": null,
+        "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+        "id": "art_01m2a9d70nf4awmgc448s5gve6",
+        "job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+        "run_id": "run_01m2a8w3bfz5fxfgje8tnw2xx5",
+        "type": "eval-result",
+        "updated_at": "2026-09-12T07:48:13Z",
+        "uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_wikipedia_matched_p070_s20260910.json"
+      },
+      "metrics": [
+        {
+          "created_at": "2026-09-12T07:48:14Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d84fv7w28y7myzsmnqsn",
+          "metric_name": "math500/reference_solution_loss",
+          "run_id": "run_01m2a8w3bfz5fxfgje8tnw2xx5",
+          "source_artifact_id": "art_01m2a9d70nf4awmgc448s5gve6",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:14Z",
+          "value": 3.245333671569824
+        },
+        {
+          "created_at": "2026-09-12T07:48:14Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d8cs724m5nym5vhbprth",
+          "metric_name": "math500/reference_solution_perplexity",
+          "run_id": "run_01m2a8w3bfz5fxfgje8tnw2xx5",
+          "source_artifact_id": "art_01m2a9d70nf4awmgc448s5gve6",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:14Z",
+          "value": 25.670274072012607
+        },
+        {
+          "created_at": "2026-09-12T07:48:15Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d8nng0yfhdhaf2e54bkf",
+          "metric_name": "gsm8k/reference_solution_loss",
+          "run_id": "run_01m2a8w3bfz5fxfgje8tnw2xx5",
+          "source_artifact_id": "art_01m2a9d70nf4awmgc448s5gve6",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:15Z",
+          "value": 3.1810760498046875
+        },
+        {
+          "created_at": "2026-09-12T07:48:15Z",
+          "deleted_at": null,
+          "id": "met_01m2a9d8y30p0011vpnq3eg5rs",
+          "metric_name": "gsm8k/reference_solution_perplexity",
+          "run_id": "run_01m2a8w3bfz5fxfgje8tnw2xx5",
+          "source_artifact_id": "art_01m2a9d70nf4awmgc448s5gve6",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:15Z",
+          "value": 24.072642983188135
+        }
+      ]
+    },
+    {
+      "run_id": "run_01m2a8w3rfawj89wsb32s0w9ne",
+      "percent": 100,
+      "artifact": {
+        "attrs": {},
+        "content_hash": null,
+        "created_at": "2026-09-12T07:48:15Z",
+        "deleted_at": null,
+        "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+        "id": "art_01m2a9d9719wpb69sr48q1nhxf",
+        "job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+        "run_id": "run_01m2a8w3rfawj89wsb32s0w9ne",
+        "type": "eval-result",
+        "updated_at": "2026-09-12T07:48:15Z",
+        "uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_wikipedia_matched_p100_s20260910.json"
+      },
+      "metrics": [
+        {
+          "created_at": "2026-09-12T07:48:16Z",
+          "deleted_at": null,
+          "id": "met_01m2a9da8fy0zrm5ffv81x7jc4",
+          "metric_name": "math500/reference_solution_loss",
+          "run_id": "run_01m2a8w3rfawj89wsb32s0w9ne",
+          "source_artifact_id": "art_01m2a9d9719wpb69sr48q1nhxf",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:16Z",
+          "value": 4.8021321296691895
+        },
+        {
+          "created_at": "2026-09-12T07:48:17Z",
+          "deleted_at": null,
+          "id": "met_01m2a9dahjr0zb6da27t4w4kqm",
+          "metric_name": "math500/reference_solution_perplexity",
+          "run_id": "run_01m2a8w3rfawj89wsb32s0w9ne",
+          "source_artifact_id": "art_01m2a9d9719wpb69sr48q1nhxf",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:17Z",
+          "value": 121.76976987321625
+        },
+        {
+          "created_at": "2026-09-12T07:48:17Z",
+          "deleted_at": null,
+          "id": "met_01m2a9dat8ee43s4p4f6v9btr1",
+          "metric_name": "gsm8k/reference_solution_loss",
+          "run_id": "run_01m2a8w3rfawj89wsb32s0w9ne",
+          "source_artifact_id": "art_01m2a9d9719wpb69sr48q1nhxf",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:17Z",
+          "value": 5.56103515625
+        },
+        {
+          "created_at": "2026-09-12T07:48:17Z",
+          "deleted_at": null,
+          "id": "met_01m2a9db2sp5x86cqy9hyt339y",
+          "metric_name": "gsm8k/reference_solution_perplexity",
+          "run_id": "run_01m2a8w3rfawj89wsb32s0w9ne",
+          "source_artifact_id": "art_01m2a9d9719wpb69sr48q1nhxf",
+          "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T07:48:17Z",
+          "value": 260.09193281028945
+        }
+      ]
+    }
+  ]
+}

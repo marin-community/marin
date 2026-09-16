@@ -1,0 +1,66 @@
+{
+  "checked_at": "2026-09-12T23:53:16.502231+00:00",
+  "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+  "previous_checked_at": "2026-09-12T23:34:40.788123+00:00",
+  "scope": "Remaining StarCoder target p80 refinement artifact only. No tensors or training data read.",
+  "previously_verified_refinements": 44,
+  "newly_verified_complete": 1,
+  "rows": [
+    {
+      "run_name": "tpp10_target_p080_s20260910",
+      "arm": "target",
+      "percent": 80,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128,
+      "tokens": 3012296704,
+      "support_sequences": 92928,
+      "fingerprint": "4ab6f469",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910/2026.09.09",
+      "artifact_status": "SUCCESS",
+      "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+      "value": 0.770405113697052,
+      "step": 11490,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910/2026.09.09/checkpoints/step-11490",
+        "metadata_sha256": "de0eb2aeb447b83e79795b622ac9f1b308f3a8ee9ffe1f806b5485e0e3c52fae",
+        "metadata": {
+          "step": 11490,
+          "timestamp": "2026-09-12T23:51:40.076341",
+          "is_temporary": false
+        }
+      },
+      "runtime_verified": true,
+      "wandb_state": "finished",
+      "temporary_checkpoint_records": [],
+      "temporary_objects_listed": 0,
+      "prior_temporary_checkpoint_records": [
+        {
+          "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910/2026.09.09/checkpoints/step-9697/metadata.json",
+          "generation": "1789255782259225",
+          "metadata_sha256": "aabc3b3d9d883868ea9818e983566520b24057501ec841fbc6eab6116229b497",
+          "metadata": {
+            "step": 9697,
+            "timestamp": "2026-09-12T23:29:42.052028",
+            "is_temporary": true
+          }
+        }
+      ],
+      "temporary_checkpoint_advanced": false,
+      "final_metadata_exists": true,
+      "final_metadata_object": {
+        "uri": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910/2026.09.09/checkpoints/step-11490/metadata.json",
+        "generation": "1789257100177636",
+        "metadata_sha256": "de0eb2aeb447b83e79795b622ac9f1b308f3a8ee9ffe1f806b5485e0e3c52fae",
+        "metadata": {
+          "step": 11490,
+          "timestamp": "2026-09-12T23:51:40.076341",
+          "is_temporary": false
+        }
+      }
+    }
+  ],
+  "verified_refinement_total": 45
+}

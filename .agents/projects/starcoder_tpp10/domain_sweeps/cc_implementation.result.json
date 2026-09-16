@@ -1,0 +1,68 @@
+{
+  "is_error": false,
+  "duration_api_ms": 229204,
+  "num_turns": 9,
+  "stop_reason": "end_turn",
+  "session_id": "875daf68-2b08-47ac-ba7f-77294cb92faa",
+  "total_cost_usd": 1.9523220000000001,
+  "usage": {
+    "input_tokens": 12,
+    "cache_creation_input_tokens": 81256,
+    "cache_read_input_tokens": 1386954,
+    "output_tokens": 17849,
+    "output_tokens_details": {
+      "thinking_tokens": 13607
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 81256,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 7295,
+        "cache_read_input_tokens": 250137,
+        "cache_creation_input_tokens": 9934,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 9934
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard"
+  },
+  "modelUsage": {
+    "claude-opus-5[1m]": {
+      "inputTokens": 12,
+      "outputTokens": 17849,
+      "cacheReadInputTokens": 1386954,
+      "cacheCreationInputTokens": 81256,
+      "webSearchRequests": 0,
+      "costUSD": 1.9523220000000001,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "canonicalModel": "claude-opus-5",
+      "provider": "firstParty"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "## Implementation review \u2014 TPP10 domain sweeps\n\nRead: the three new modules, the test file, `IMPLEMENTATION_PLAN.md`, plus narrow sections of `mixture.py`, `datasets.py`, `fray/types.py`. Frozen modules confirmed only imported, never edited; `code_pins()` (`launch_tpp10_domain_sweeps.py:44-52`) covers the four new files and the new assets directory, and correctly leaves `starcoder_tpp10_assets/` to `original.code_pins()`, so frozen recipe identities and the 45-run refinement remain intact.\n\n### What verifies correctly\n\n**Pools and identity.** Quotas are exact: `PARENT_SEQUENCES * SEQ_LEN` = 190,316,544 (`prepare:161`), subset checked at `MATCHED_SEQUENCES * SEQ_LEN` = 10,485,760 (`prepare:257`), with `indices_sha256` compared to the frozen `parent_permutation_sha256` / `subset_indices_sha256[20260912]` (`prepare:260-267`). FineMath splits 190,316,544/16 = 11,894,784 exactly; Wikipedia 95,158,272 per shard (`prepare:117`). Resume identity is sound: `write_part` reuses only receipt-identical parts, and `ParquetRecipe` embeds the reader hash (`prepare:108, 125`).\n\n**Allocator and shuffle preservation.** The focus alias deliberately stays `\"starcoder\"` (`launch:119-125`), so the name-derived shuffle key and insertion order are unchanged; `MixtureDataset` drops zero-weight components (`mixture.py:84-88`) and indexes by insertion order, not name (`:89, :143-169`). `test_tpp10_domain_sweeps.py:104-115` proves this on real `train_sets`: extended config equals frozen config, p=0 streams identical across domains, p=5 web streams equal the p=0 baseline, p=100 focus-only, and the two domains' focus streams differ. Optimizer/schedule/model come from `original.training_step` untouched (`launch:81`).\n\n**Evaluation wiring.** Seven Uncheatable caches enter as zero-weight `components` (`launch:89-92`); `train_sets` skips them (asserted at `test:105`), so their validation-only layout never triggers a missing `/train` open, while `tagged_eval_sets` still builds them \u2014 the same pattern the frozen launcher uses for PALOMA. `max_eval_batches=None` (`launch:98`) gives complete finite evals. `final_metrics` (`launch:179-200`) requires all eight final-step scores, finite and non-conflicting; `uncheatable.checkpoint_metadata` enforces permanent, non-temporary final checkpoints with matching fingerprints. `macro_bpb` is the equal seven-component mean (`launch:221`).\n\n**Counts, costs, scope.** 2 domains \u00d7 2 arms \u00d7 7 percents = 28; `submit` asserts exactly 2 matched-p100 execution checks and 26 remaining at `max_concurrent=26` (`launch:287-300`). `training_flops` = 14 \u00d7 (2.4908860401647616e16 + 6.66390282503612e18) = 9.36434e19, matching SPEC. `prepare_controls` selects exactly the two p=0 checkpoints at seed 20260910 and maps the unmatched one to \"matched\" (`launch:244-247, 313`) \u2014 correct, since matched aliases unmatched at p=0. No unmatched arm, no repeat subsets, no StarCoder training. `analyze` ties to smaller p, marks boundary minima, reports neighbour losses and measured target regret (`analyze:23-41`), with correct index guards.\n\n### Blocking fixes\n\n**1. Hardware policy is not expressed in code.** `ResourceConfig.preemptible` defaults to **True** (`fray/types.py:438`). Neither `CPU` (`prepare:34`) nor `TPU` (`launch:33`) sets it, so all 28 TPU runs and both prep jobs would schedule preemptible \u2014 directly contrary to the stated non-preemptible requirement. Likewise no interactive priority, no `max_retries_preemption`/`max_retries_failure` pinned to 0, and no 48h deadline appear anywhere in the new modules. *Fix:* add `preemptible=False` to both configs and pass the priority/retry/deadline fields explicitly at the `remote(...)` call sites (`prepare:174-177, 192, 212`; `launch:69-74, 251-256`). `with_tpu` forwards `**kwargs` to `ResourceConfig`, so `preemptible=False` is a valid addition. Note `force_run_failed=True` (`launch:273, 293, 300`) re-runs failed steps on re-invocation; that is manual resume, not auto-retry, but state it in the release record.\n\n**2. Evaluation-population parity between the survey and the reused controls is never asserted.** `submit` builds training-time caches from `ASSETS/evaluation.json` (`launch:275`) while `prepare_controls` builds them from `ASSETS/control_evaluation.json` (`launch:238-240`). Only the former is compared to `plan[\"evaluation_paths\"]` (`launch:276`). If the two files' `sources`/`tokenizer_pins` diverge, the 28 new endpoints and the two p=0 controls score different populations \u2014 exactly what SPEC:55 forbids, and it would surface only after all training. *Fix:* before submission assert `evaluation.json[\"sources\"] == control_evaluation.json[\"sources\"]` and `evaluation.json[\"tokenizer_pins\"] == control_evaluation.json[\"tokenizer_pins\"]`, and that `prepare_caches` on both returns identical paths for the seven components.\n\n**3. No pre-training check that the seven components become eval sets.** `test:105` asserts they are *absent* from train streams but nothing asserts they are *present* as tagged eval sets. If the tag naming or `tagged_eval_sets` resolution differs from the expected `eval/uncheatable_eval/{name}/bpb` keys in `final_metrics:181`, every run completes and then fails collection \u2014 up to 6.66e18 FLOPs per target run. *Fix:* add a config-level assertion (no training) that the materialized `data.tagged_eval_sets(...)` tags cover the seven names plus `experiment.PRIMARY_METRIC`'s PALOMA set.\n\n**4. FineMath parquet memory at 2 CPU / 8 GB.** The byte bound (`prepare:86`, `size_bytes + 32 MiB`) guards re-reads but not resident memory; `iter_batches` materializes a full row group's `text` column before slicing to `batch_size=128`. Objects are 502\u2013512 MB compressed (SPEC:39), so one row group can decompress to several GB. *Fix:* read `parquet.metadata.row_group(i).total_byte_size` from the footer first and fail closed above a budget, or raise the FineMath prep job's RAM. Wikipedia keeps the frozen `4 \u00d7 quota` compressed bound (`prepare_starcoder_tpp10.py:110` \u2192 363 MiB/shard); that fails closed, but probe it regionally before the batch.\n\n### Non-blocking\n\n- `submit` drops the frozen launcher's `reviewer` requirement, checking only `approved`/`plan_sha256` (`launch:265`). Restore it for provenance.\n- `prepare_parquet` never verifies `raw.implementation_sha256` against `file_sha256(Path(original.__file__))`, unlike `original.prepare_raw:191-192`.\n- `verify_caches` skips `receipt[\"design_sha256\"]` for `/raw` steps (`prepare:250-267`).\n- `prepare_controls` writes into the same `uncheatable/{spec_sha256}/` namespace as the separate ongoing Figure-5 evaluation; `verified_result` guards but is TOCTOU. Coordinate so the two p=0 controls are not evaluated concurrently by both jobs.\n- `original_data.verify_caches` result at `launch:269` is discarded rather than folded into the preflight record.\n\n### Verdict\n\nThe scientific setting I cleared is implemented faithfully: pools, allocator parity, shuffle-key preservation, run count, cost, control reuse and the evaluation objective all check out, and the stream-equality test is genuine evidence rather than a mock. **Submission is acceptable after fixes 1\u20134**, all of which are local, cheap, and verifiable without training. Fix 1 is the one that would otherwise silently violate an explicit user constraint; fixes 2 and 3 are the ones that would otherwise waste the full 9.36e19 FLOP budget before failing. No numerical artifacts or manuscript files were touched.",
+  "ttft_ms": 2159,
+  "ttft_stream_ms": 1823,
+  "time_to_request_ms": 51,
+  "type": "result",
+  "duration_ms": 229738,
+  "uuid": "6facd7ca-4a2e-4ec2-861d-faa360094a3b"
+}

@@ -1,0 +1,104 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789347908.391672,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/mean_selection_20260913/plan.json",
+      "fieldbook.local_size_at_capture": 6182
+    },
+    "content_hash": null,
+    "created_at": "2026-09-14T01:11:15Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2eqfsqhjphba1h7kn1dq8gf",
+    "job_id": "job_01m2eq6g7am42rg90yytpvvxr6",
+    "run_id": "run_01m2eq6fva59907aatmt7fqyxh",
+    "type": "manifest",
+    "updated_at": "2026-09-14T01:11:15Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/mean_selection_20260913/plan.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789347941.7389657,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/mean_selection_20260913/bundle_receipt.json",
+      "fieldbook.local_size_at_capture": 656
+    },
+    "content_hash": null,
+    "created_at": "2026-09-14T01:11:16Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2eqft230m2t7fy6946nwghg",
+    "job_id": "job_01m2eq6g7am42rg90yytpvvxr6",
+    "run_id": "run_01m2eq6fva59907aatmt7fqyxh",
+    "type": "validation-report",
+    "updated_at": "2026-09-14T01:11:16Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/mean_selection_20260913/bundle_receipt.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789348036.4970179,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/mean_selection_20260913/review.json",
+      "fieldbook.local_size_at_capture": 457
+    },
+    "content_hash": null,
+    "created_at": "2026-09-14T01:11:16Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2eqftf3ztx44kkwv23xpg0a",
+    "job_id": "job_01m2eq6g7am42rg90yytpvvxr6",
+    "run_id": "run_01m2eq6fva59907aatmt7fqyxh",
+    "type": "validation-report",
+    "updated_at": "2026-09-14T01:11:16Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/mean_selection_20260913/review.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789347939.1371686,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/mean_selection_20260913/region_safety.txt",
+      "fieldbook.local_size_at_capture": 40
+    },
+    "content_hash": null,
+    "created_at": "2026-09-14T01:11:17Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2eqfttys1ek5t6ks7ssz88q",
+    "job_id": "job_01m2eq6g7am42rg90yytpvvxr6",
+    "run_id": "run_01m2eq6fva59907aatmt7fqyxh",
+    "type": "validation-report",
+    "updated_at": "2026-09-14T01:11:17Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/mean_selection_20260913/region_safety.txt"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789348221.5727081,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/mean_selection_20260913/live_receipts.json",
+      "fieldbook.local_size_at_capture": 13853
+    },
+    "content_hash": null,
+    "created_at": "2026-09-14T01:11:17Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2eqfv4cw8fzac0wy4wybmyz",
+    "job_id": "job_01m2eq6g7am42rg90yytpvvxr6",
+    "run_id": "run_01m2eq6fva59907aatmt7fqyxh",
+    "type": "validation-report",
+    "updated_at": "2026-09-14T01:11:17Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/mean_selection_20260913/live_receipts.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789348275.638664,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/mean_selection_20260913/README.md",
+      "fieldbook.local_size_at_capture": 3668
+    },
+    "content_hash": null,
+    "created_at": "2026-09-14T01:11:17Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2eqfvh671r3ssnvza0dm1re",
+    "job_id": "job_01m2eq6g7am42rg90yytpvvxr6",
+    "run_id": "run_01m2eq6fva59907aatmt7fqyxh",
+    "type": "report",
+    "updated_at": "2026-09-14T01:11:17Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/mean_selection_20260913/README.md"
+  }
+]

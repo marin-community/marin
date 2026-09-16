@@ -1,0 +1,12 @@
+{
+  "notes": [
+    {
+      "id": "note_01m2bqczn00pek8pm2vv3sa2n0",
+      "entity_type": "experiment",
+      "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "note_type": "next-action",
+      "title": "StarCoder refinement completion: verified 40/45 and five batch TPU queue waits",
+      "body": "# StarCoder refinement completion check, 12 September 2026\n\nThe 40 completed refinement artifacts were rechecked against the frozen plan, including exact config fingerprints, permanent final checkpoint metadata, child runtime receipts, finite final-step PALOMA scores, and finished W&B runs with matching metrics.\n\nFive recipes remain queued under `/calvinxu/starcoder-tpp10-refinement-batch-recovery`: target p=55, 60, 65, 80 and matched p=80 (trainer 20260911, subset 20260914). The current coordinator is healthy and the five TPU jobs already use BATCH priority. Central1 v5p preemptible capacity is quota-blocked (2048 limit); this is not a CPU coordinator bottleneck. No jobs were canceled, duplicated, or resubmitted.\n\nSaved temporary target checkpoints survive at steps 10759, 6958, 2283, 728 of 11491 respectively; the pending matched run has no checkpoint. Exact generation and metadata hashes are in `pending_checkpoint_receipt.json`. Successful final endpoints are in `verified_endpoints.json`. The parent has a 48-hour execution timeout ending 13 September 12:38:22 UTC (parent start verified from Iris); if it expires, first confirm terminal descendants and inactive leases before using the existing recovery command. Keep all frozen fingerprints and success reuse.\n\nFinal plots should be rebuilt only after the missing endpoints pass the same checks; no point is imputed and no incomplete target regret is reported.\n"
+    }
+  ]
+}

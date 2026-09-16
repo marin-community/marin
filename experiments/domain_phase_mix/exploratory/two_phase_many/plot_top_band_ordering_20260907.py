@@ -31,7 +31,7 @@ INK = "#111111"
 GRID = "#b8b8b8"
 PAPER = "white"
 SERIES = (
-    ("WSPU", "WSPU", "#178A72", "-"),
+    ("WSPU", "WSPU", "#469C76", "-"),
     ("DSP", "DSP", "#E69F00", "-"),
     ("OLMix", "Olmix", "#CC79A7", "-"),
     ("bank kernel LOSO, TV 0.05", "Measured neighbours (held-out source)", "#0072B2", "-"),

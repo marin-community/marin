@@ -1,0 +1,10 @@
+[
+  {
+    "user_id": "pinlinxu@stanford.edu",
+    "budget_limit": "75000",
+    "budget_spent": "63",
+    "max_band": "PRIORITY_BAND_INTERACTIVE",
+    "effective_band": "PRIORITY_BAND_INTERACTIVE",
+    "utilization_percent": 0.084
+  }
+]

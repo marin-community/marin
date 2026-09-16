@@ -42,7 +42,7 @@ BENCHMARK_DIR = SCRIPT_DIR / "reference_outputs" / "single_phase_observatory_ben
 ATLAS_DIR = SCRIPT_DIR / "reference_outputs" / "starcoder_all_tied_curves_canonical_dsp_20260902"
 OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "starcoder_link_gate_plots_20260906"
 MODELS = (
-    ("weibull_softplus_unscaled", "WSPU (identity link)", "#178A72"),
+    ("weibull_softplus_unscaled", "WSPU (identity link)", "#469C76"),
     ("weibull_softplus_unscaled@log_deficit_bounded_link", "WSPU, bounded log-deficit link", "#D55E00"),
     ("dsp_total_exposure", "DSP (benchmark)", "#6C6F7D"),
 )

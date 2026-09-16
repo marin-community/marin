@@ -73,8 +73,7 @@ def main(config: ConvertLmConfig):
     if config.use_cpu:
         exit_stack.enter_context(local_cpu_mesh())
     else:
-        # exit_stack.enter_context(Mesh(jax.local_devices(), "dev"))
-        exit_stack.enter_context(config.trainer.device_mesh)
+        exit_stack.enter_context(config.trainer.use_device_mesh())
         exit_stack.enter_context(haliax.axis_mapping(config.trainer.parameter_axis_mapping))
 
     with exit_stack:

@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "region": "us-east5",
+  "zone": "us-east5-a",
+  "cache_uri": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1",
+  "cache_manifest_sha256": "d9fd4365f4367f163714febc124221f5382ffd2c6c2b28bb6d42775f292846ad",
+  "output_root": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914",
+  "tpu_type": "v5p-8",
+  "max_length": 4096,
+  "batch_size": 8,
+  "seed": 0,
+  "runtime_versions": {
+    "lm-eval": "0.4.10",
+    "datasets": "4.8.5",
+    "transformers": "5.12.1",
+    "jax": "0.11.1",
+    "jaxlib": "0.11.1"
+  },
+  "lm_eval_revision": "f7d0b116146bd616b59d0b991549120f197369a4",
+  "source_hashes": {
+    "experiments/domain_phase_mix/evaluate_mariner_ladder_accuracy.py": "5cba28e6f131673ad1f5cf43912fd70e70107d0964c2c6b35235db693348dc01",
+    "experiments/evals/olmo_base_easy_overlap.py": "39a848b00eec01dfb7863280ecbd1ffa308530d66c406c459677b561849a7347",
+    "lib/levanter/src/levanter/eval_harness.py": "d278057cf233a617b50ddb57a532b23c4b0f3449c903a0b7b53131ef3f855409",
+    "lib/levanter/src/levanter/eval_harness_config.py": "03daa3b2d4a2600fba71f463569912c578b02d297a356fda1465754254ae4a28",
+    "lib/levanter/src/levanter/eval_harness_metrics.py": "4ab5fa4d5efa8fe04f0e58849e3a8f83c4ca749af99c1fbcbbc6f01b0a0b2931",
+    "lib/levanter/src/levanter/data/packing.py": "61b3e1af1b60f6205038ede06fe367e326add2bc663c5d598839fb8b06590046",
+    "lib/levanter/src/levanter/data/loader.py": "ab49d929d2b2d58e8e0f369453c611512ed35a9c967e14fc3731a66cb79b6a5c",
+    "lib/levanter/src/levanter/utils/jax_utils.py": "fadbfc228b71898d477268cde932cc0e6ef6b10e03b30d9fd01d46e20a62021a",
+    "lib/levanter/src/levanter/utils/background_iterable.py": "974a2bfdfedf80b995c8af5d5b2c4d268951ef8d5c8e7573d43360ed315665fd",
+    "lib/levanter/src/levanter/models/qwen.py": "241b086569a8aa23b3a006a4be3ebc9142c45cdda8eaef81a19dabc77526b66b",
+    "lib/levanter/src/levanter/models/llama.py": "f4ebbfbff8708d76e300d70e70c1393ff9553e46c251c38de3d71cd5b948de57",
+    "lib/levanter/src/levanter/compat/hf_checkpoints.py": "0bedd25779e7adb1070e8afd116131cb3cb4346c3e9179d1847ed9ec91fba9a5",
+    "lib/levanter/src/levanter/tokenizers.py": "c49f9f74dc25e683ee9dba413c4008ecbc78a4bac864cba4647a129d6eb0dcb3",
+    "lib/levanter/src/levanter/trainer.py": "c45bd422f0ae23a4efd45610becaa8409d101b4bcaa396fca1e1348847eca03c",
+    "lib/levanter/src/levanter/distributed.py": "e96cccd01287e9a6e6c4fdf94811250d0ed498148be1d7495d159b9871b80123",
+    "lib/marin/src/marin/evaluation/eval_dataset_cache.py": "3763f6b931744114f468e3e24d2bde7c8c57119febf5427cc7cb206fb65314be",
+    "lib/marin/src/marin/evaluation/evaluation_config.py": "44b74bac25cd17b17e6016a6e315b367b3cf557c8e2d1bb307869aac0d8b3e5a",
+    "lib/marin/src/marin/execution/remote.py": "23e8517a4d315180adfe085fc2539a76662a79babab33e12ee6a187224064f60",
+    "lib/marin/src/marin/training/run_environment.py": "3e1b0cca3563df838b178254f76ace751521e3fb829de22cd40220ffaea41151",
+    "uv.lock": "24e90ca4f0968e121f962737c8fdc11777d2bd1defe5bd596f932d27d2f92cd0"
+  },
+  "uv_lock_sha256": "24e90ca4f0968e121f962737c8fdc11777d2bd1defe5bd596f932d27d2f92cd0",
+  "rows": [
+    {
+      "name": "proportional_1e21-2f1a48",
+      "method": "Proportional",
+      "checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/hf/step-22056",
+      "checkpoint_step": 22056,
+      "checkpoint_files": {
+        "chat_template.jinja": {
+          "size": 5112,
+          "generation": "1782589801243300",
+          "crc32c": "jSXcIQ=="
+        },
+        "config.json": {
+          "size": 2561,
+          "generation": "1782589801255621",
+          "crc32c": "/apMrQ=="
+        },
+        "model-00001-of-00003.safetensors": {
+          "size": 4933674712,
+          "generation": "1782589695412775",
+          "crc32c": "sbpiJA=="
+        },
+        "model-00002-of-00003.safetensors": {
+          "size": 4928580272,
+          "generation": "1782589754319623",
+          "crc32c": "FrFlug=="
+        },
+        "model-00003-of-00003.safetensors": {
+          "size": 3670220688,
+          "generation": "1782589799131671",
+          "crc32c": "1/A8Vg=="
+        },
+        "model.safetensors.index.json": {
+          "size": 22613,
+          "generation": "1782589801246980",
+          "crc32c": "kQyzZw=="
+        },
+        "special_tokens_map.json": {
+          "size": 301,
+          "generation": "1782589801248063",
+          "crc32c": "3GMMKA=="
+        },
+        "tokenizer.json": {
+          "size": 17209892,
+          "generation": "1782589801450161",
+          "crc32c": "cv2h3Q=="
+        },
+        "tokenizer_config.json": {
+          "size": 44004,
+          "generation": "1782589801249936",
+          "crc32c": "RvZI5A=="
+        }
+      },
+      "source_training_experiment": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+      "training_metadata": {
+        "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/checkpoints/step-22056/metadata.json",
+        "sha256": "a0503a9ce5f21d0a9d59c45f3a55ecdd007bcb79a2601921e58ce898a8e1ab3b",
+        "data": {
+          "step": 22056,
+          "timestamp": "2026-06-27T19:46:02.274098",
+          "is_temporary": false
+        }
+      }
+    }
+  ]
+}

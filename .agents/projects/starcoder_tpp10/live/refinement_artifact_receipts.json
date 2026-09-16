@@ -1,0 +1,225 @@
+{
+  "artifacts": {
+    ".agents/projects/starcoder_tpp10/live/refinement_plan.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789110145.6764708,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/refinement_plan.json",
+        "fieldbook.local_size_at_capture": 24220
+      },
+      "content_hash": "sha256:c456342e7bec3fecd464b640910c20ba80095476df77ed9d04903b223c49b0f3",
+      "created_at": "2026-09-11T07:19:26Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m27nbseh3fp780w3r39xvse2",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-11T07:19:26Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/refinement_plan.json"
+    },
+    ".agents/projects/starcoder_tpp10/releases/refinement.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789110208.6665547,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/releases/refinement.json",
+        "fieldbook.local_size_at_capture": 952
+      },
+      "content_hash": "sha256:70765f007e4720eb91776270a9ce6050cd19082430d76b8beec656d3902e9baf",
+      "created_at": "2026-09-11T07:19:26Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m27nbsszr7jtnfgpcwv7m7ja",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-11T07:19:26Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/releases/refinement.json"
+    },
+    ".agents/projects/starcoder_tpp10/live/submitted_refinement.txt": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789110523.0657413,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/submitted_refinement.txt",
+        "fieldbook.local_size_at_capture": 1083
+      },
+      "content_hash": "sha256:2912f413b7223587fabf0a8ad432a89730a0017ca5f06d3a5aeea7f921a28afa",
+      "created_at": "2026-09-11T07:19:27Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m27nbt5z16t3hg2r647ew0af",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-11T07:19:27Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/submitted_refinement.txt"
+    },
+    ".agents/projects/starcoder_tpp10/live/refinement_preflight.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789110273.2427487,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/refinement_preflight.json",
+        "fieldbook.local_size_at_capture": 719
+      },
+      "content_hash": "sha256:7c252a261095f1b6df5da029c954d87555e1e76e48005ccbdd36cda822bb8ca2",
+      "created_at": "2026-09-11T07:19:27Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m27nbth0gfrvp85zvspxq9as",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-11T07:19:27Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/refinement_preflight.json"
+    },
+    ".agents/projects/starcoder_tpp10/live/refinement_workspace_receipt.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789110905.0648658,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/refinement_workspace_receipt.json",
+        "fieldbook.local_size_at_capture": 963
+      },
+      "content_hash": "sha256:2bba20a657257b4d0bbc6760dee9fd54decf693e743d01f5dc80a71fab62d89e",
+      "created_at": "2026-09-11T07:19:27Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m27nbtw8jfc4ycjv1wr182z8",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-11T07:19:27Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/refinement_workspace_receipt.json"
+    },
+    ".agents/projects/starcoder_tpp10/live/refinement_child_mapping.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789111057.6536531,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/refinement_child_mapping.json",
+        "fieldbook.local_size_at_capture": 11470
+      },
+      "content_hash": "sha256:1cc8e5848eeeed2aedca9100b914337c43c1e7df11ed5b702e7a46b275feec02",
+      "created_at": "2026-09-11T07:19:28Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m27nbv7yes2spdw348mxyhh2",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-11T07:19:28Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/refinement_child_mapping.json"
+    },
+    "experiments/domain_phase_mix/launch_starcoder_tpp10_refinement.py": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789110098.6622388,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/launch_starcoder_tpp10_refinement.py",
+        "fieldbook.local_size_at_capture": 4446
+      },
+      "content_hash": "sha256:1a77be61b822e93c909e6b556dd51c87e8977de75ba0c6a10df039b5b7fc6d40",
+      "created_at": "2026-09-11T07:19:28Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m27nbvrw8cy16ytc26q0c2dk",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-11T07:19:28Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/launch_starcoder_tpp10_refinement.py"
+    },
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/CHANGES.md": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789110782.6707635,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/CHANGES.md",
+        "fieldbook.local_size_at_capture": 4367
+      },
+      "content_hash": "sha256:24aaa5d7e6e8270b90b924ce8adf196eb9e8353da49567caa07c5023675d6975",
+      "created_at": "2026-09-11T07:19:29Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m27nbw3trhwystvjehrz0zf8",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-11T07:19:29Z",
+      "uri": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/CHANGES.md"
+    },
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/validation.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789110965.6208076,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/validation.json",
+        "fieldbook.local_size_at_capture": 450
+      },
+      "content_hash": "sha256:32a59f88df87e6146bc7aca5955e92f5ec7211af18ee2d88cb11966982158641",
+      "created_at": "2026-09-11T07:19:29Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m27nbwf7qp433xy97jxrvvb6",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-11T07:19:29Z",
+      "uri": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/validation.json"
+    },
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/after/main.pdf": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789110396.5955284,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/after/main.pdf",
+        "fieldbook.local_size_at_capture": 1557709
+      },
+      "content_hash": "sha256:30fc56d3aabd7cc96ce15e2f43cd2e24a4e38a51a1d4b0e5aad44d1a018cdf8d",
+      "created_at": "2026-09-11T07:19:29Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m27nbwxx1ezdkas3q6ee70gw",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-11T07:19:29Z",
+      "uri": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/after/main.pdf"
+    },
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/epoch_matching_tpp10.pdf": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789104561.5099897,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/epoch_matching_tpp10.pdf",
+        "fieldbook.local_size_at_capture": 120462
+      },
+      "content_hash": "sha256:09a576063620664f250ffd705ce8d9cdbdc1bd8b5185c6da86e400a762752263",
+      "created_at": "2026-09-11T07:19:30Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m27nbx9xvyyxz00f912wcn45",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-11T07:19:30Z",
+      "uri": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/epoch_matching_tpp10.pdf"
+    }
+  },
+  "validation": {
+    "attrs": {},
+    "check_name": "refinement_frozen_recipes_and_regional_release",
+    "created_at": "2026-09-11T07:19:31Z",
+    "deleted_at": null,
+    "details": {},
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "expected_value": "45 unchanged dense recipes; 27 pins; central1-a nonpreemptible parent; exact submitted bundle",
+    "id": "val_01m27nbyfd3dzx33cgzh7ea0na",
+    "measured_value": "45 recipes; dense/pilot hashes unchanged; 27 pins; regional safety passed; submitted bundle identical to preflight",
+    "session_id": "ses_01m27m1y08wka3j74hqrpxrcth",
+    "source_artifact_id": "art_01m27nbtw8jfc4ycjv1wr182z8",
+    "source_job_id": null,
+    "status": "pass",
+    "updated_at": "2026-09-11T07:19:31Z"
+  },
+  "paper_validation": {
+    "attrs": {},
+    "check_name": "paper_measured_tpp10_figure",
+    "created_at": "2026-09-11T07:19:31Z",
+    "deleted_at": null,
+    "details": {},
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "expected_value": "Verified observed data, no fitted overlay, clean build and visual layout",
+    "id": "val_01m27nbyrm6gvns769ptmk0rt9",
+    "measured_value": "57 endpoints reverified; canonical analysis reproduced; Figure 5 page 7; references page 10; no undefined references or overfull boxes",
+    "session_id": "ses_01m27m1y08wka3j74hqrpxrcth",
+    "source_artifact_id": "art_01m27nbwf7qp433xy97jxrvvb6",
+    "source_job_id": null,
+    "status": "pass",
+    "updated_at": "2026-09-11T07:19:31Z"
+  }
+}

@@ -1,0 +1,129 @@
+{
+  "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/consistent_bpb_20260912/analysis.json",
+  "source_sha256": "b2372efc978c4fc0ed316883414721d9e0b1ec3685b0795748200535eb824582",
+  "metric_definition": {
+    "id": "scored_byte_bpb_from_token_loss_v1",
+    "schema_version": 2,
+    "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+    "formula": "token_average_loss * scored_tokens / (scored_bytes * ln(2))",
+    "population": {
+      "examples": 5673,
+      "tokens": 11612631,
+      "bytes": 28741166
+    },
+    "population_counts_sha256": "7c7258e80208b230394cbee4ce1f41436d6c248d5d02e4ad86d24d05b5c32f4a",
+    "total_records": 102,
+    "reported_schema_counts": {
+      "legacy_unversioned": 97,
+      "2": 5
+    },
+    "normalization_source_sha256": {
+      "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/all_102_final_metric_records.json": "83b627a5b1799eb13bb6be6a7e5e02d7165eb60bdc1833fccd72316ed97f70eb",
+      "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/population_counts.json": "2dae669cdaa9e543eb9aab50d0f6da78ba46ab3ace9a1cc067110348301beef7"
+    },
+    "schema2_reconstruction_tolerance_bpb": 5e-05
+  },
+  "allocation_source_sha256": "561124284d1d90b4e25fcb873f232ff5b9cbd6afb9f81dbaf20faed770497167",
+  "selected_materialized_epochs": {
+    "matched_proxy": 7.937890625,
+    "unmatched_proxy": 0.871900826446281,
+    "target_at_matched_choice": 7.937187930440771,
+    "target_at_unmatched_choice": 15.827823691460056
+  },
+  "target_epoch_ticks": {
+    "30": 4.7684551480716255,
+    "50": 7.937187930440771,
+    "70": 11.097925275482094,
+    "100": 15.827823691460056
+  },
+  "builder_sha256": "ed9f0be03806f6383a97b3c4c82c947a28ea72a47541edc7b4372b8ae3723b56",
+  "target_reference_grid_percent": [
+    0,
+    10,
+    30,
+    40,
+    50,
+    55,
+    60,
+    65,
+    70,
+    80,
+    90,
+    100
+  ],
+  "target_reference_minimum_bpb": 0.7655645236000794,
+  "pilot_plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+  "refinement_plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+  "matched_subset_selections": [
+    {
+      "subset_seed": 20260912,
+      "selected_percent": 50,
+      "target_regret_bpb": 0.010102815719440272,
+      "paired_regret_difference_bpb": -0.024951465065844225,
+      "trainer_seed_selections": [
+        50,
+        50
+      ],
+      "excess_curve_rmse_bpb": 0.06576169718333202,
+      "spearman": 0.7902097902097903
+    },
+    {
+      "subset_seed": 20260913,
+      "selected_percent": 50,
+      "target_regret_bpb": 0.010102815719440272,
+      "paired_regret_difference_bpb": -0.024951465065844225,
+      "trainer_seed_selections": [
+        65,
+        50
+      ],
+      "excess_curve_rmse_bpb": 0.06485451913679324,
+      "spearman": 0.7972027972027973
+    },
+    {
+      "subset_seed": 20260914,
+      "selected_percent": 50,
+      "target_regret_bpb": 0.010102815719440272,
+      "paired_regret_difference_bpb": -0.024951465065844225,
+      "trainer_seed_selections": [
+        50,
+        55
+      ],
+      "excess_curve_rmse_bpb": 0.0640563467269511,
+      "spearman": 0.7692307692307694
+    }
+  ],
+  "selected_percent": {
+    "unmatched": 100,
+    "matched": 50
+  },
+  "target_selected_percent": 70,
+  "target_penalty_bpb": {
+    "unmatched": 0.0350542807852845,
+    "matched": 0.010102815719440272
+  },
+  "target_training_seeds": 1,
+  "target_excess_percent_of_minimum": {
+    "unmatched": 4.578879990473067,
+    "matched": 1.3196556799591
+  },
+  "excess_loss_reduction_percent": 71.17950934060711,
+  "avoided_percentage_points": 3.259224310513967,
+  "total_target_loss_reduction_percent": 3.1165224860037477,
+  "percent_definition": "Both axes use absolute BPB. Lower annotations: 100*(target loss - common-grid minimum)/minimum. Upper stacked label: fraction of unmatched excess eliminated; all bracket heights are BPB differences.",
+  "proxy_trainer_seeds_per_point": 2,
+  "matched_subset_curves": 3,
+  "refinement_complete": 45,
+  "refinement_planned": 45,
+  "displayed_x_ranges": {
+    "proxy": [
+      0.1,
+      1.0
+    ],
+    "target": [
+      0.3,
+      1.0
+    ]
+  },
+  "fits_sha256": "30e82ea406f74d86ddb3c6236864c9d90e9aa739d86de7c1b67306dd054ea9e0",
+  "note": "Lines are descriptive MARINER fits. All displayed selections and regret brackets retain observed grid values."
+}

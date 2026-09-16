@@ -1,0 +1,234 @@
+{
+  "math_unique_receipts": 31,
+  "math_plotted_rows": 32,
+  "checks": [
+    {
+      "run_name": "tpp10_unmatched_p000_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_unmatched_p000_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p000_s20260910/2026.09.09/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_wikipedia_matched_p005_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_wikipedia_matched_p005_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p005_s20260910/2026.09.11/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_wikipedia_matched_p010_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_wikipedia_matched_p010_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p010_s20260910/2026.09.11/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_wikipedia_matched_p020_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_wikipedia_matched_p020_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p020_s20260910/2026.09.11/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_wikipedia_matched_p030_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_wikipedia_matched_p030_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p030_s20260910/2026.09.11/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_wikipedia_matched_p050_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_wikipedia_matched_p050_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p050_s20260910/2026.09.11/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_wikipedia_matched_p070_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_wikipedia_matched_p070_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p070_s20260910/2026.09.11/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_wikipedia_matched_p100_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/tpp10_wikipedia_matched_p100_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p100_s20260910/2026.09.11/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_target_p000_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_target_p000_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p000_s20260910/2026.09.09/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_wikipedia_target_p005_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_wikipedia_target_p005_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p005_s20260910/2026.09.11/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_wikipedia_target_p010_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_wikipedia_target_p010_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p010_s20260910/2026.09.11/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_wikipedia_target_p020_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_wikipedia_target_p020_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p020_s20260910/2026.09.11/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_wikipedia_target_p030_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_wikipedia_target_p030_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p030_s20260910/2026.09.11/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_wikipedia_target_p050_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_wikipedia_target_p050_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p050_s20260910/2026.09.11/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_wikipedia_target_p070_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_wikipedia_target_p070_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p070_s20260910/2026.09.11/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_wikipedia_target_p100_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_wikipedia_target_p100_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p100_s20260910/2026.09.11/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_unmatched_p000_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/8d4f18d0a9dfbf4a065a09e621bf35f67e9547874f8b3392af0d3aaf57f938e8/tpp10_unmatched_p000_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p000_s20260910/2026.09.09/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_matched_p005_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/8d4f18d0a9dfbf4a065a09e621bf35f67e9547874f8b3392af0d3aaf57f938e8/tpp10_finemath_3plus_matched_p005_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p005_s20260910/2026.09.11/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_matched_p010_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/8d4f18d0a9dfbf4a065a09e621bf35f67e9547874f8b3392af0d3aaf57f938e8/tpp10_finemath_3plus_matched_p010_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p010_s20260910/2026.09.11/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_matched_p020_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/8d4f18d0a9dfbf4a065a09e621bf35f67e9547874f8b3392af0d3aaf57f938e8/tpp10_finemath_3plus_matched_p020_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p020_s20260910/2026.09.11/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_matched_p030_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/8d4f18d0a9dfbf4a065a09e621bf35f67e9547874f8b3392af0d3aaf57f938e8/tpp10_finemath_3plus_matched_p030_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p030_s20260910/2026.09.11/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_matched_p050_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/8d4f18d0a9dfbf4a065a09e621bf35f67e9547874f8b3392af0d3aaf57f938e8/tpp10_finemath_3plus_matched_p050_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p050_s20260910/2026.09.11/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_matched_p070_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/8d4f18d0a9dfbf4a065a09e621bf35f67e9547874f8b3392af0d3aaf57f938e8/tpp10_finemath_3plus_matched_p070_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p070_s20260910/2026.09.11/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_matched_p100_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/8d4f18d0a9dfbf4a065a09e621bf35f67e9547874f8b3392af0d3aaf57f938e8/tpp10_finemath_3plus_matched_p100_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p100_s20260910/2026.09.11/checkpoints/step-2531",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p005_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_finemath_3plus_target_p005_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p005_s20260910/2026.09.11/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p010_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_finemath_3plus_target_p010_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p010_s20260910/2026.09.11/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p020_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_finemath_3plus_target_p020_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p020_s20260910/2026.09.11/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p030_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_finemath_3plus_target_p030_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p030_s20260910/2026.09.11/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p050_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_finemath_3plus_target_p050_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p050_s20260910/2026.09.11/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p070_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_finemath_3plus_target_p070_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p070_s20260910/2026.09.11/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p100_s20260910",
+      "receipt_uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_finemath_3plus_target_p100_s20260910.json",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p100_s20260910/2026.09.11/checkpoints/step-11490",
+      "receipt_matches": true,
+      "metadata_matches": true
+    }
+  ],
+  "native_snapshot": "gs://marin-us-central1/experiments/tpp10_bpb_repair/6c7f6700b8cbf69e363a07ba5e3d3ecfb98c55aa1dd429dce936007b91b5983b/result_snapshots/2c3b8286420202d3a30a34c920780473ba8eece3e48f33b5464de4e493de330f.json",
+  "native_snapshot_matches": true,
+  "native_complete": true,
+  "native_rows": 28,
+  "checked_at": "2026-09-13T21:30:09.060678+00:00",
+  "unique_checkpoints": 30,
+  "live_iris_parents": {
+    "/calvinxu/tpp10-target-math-completion": "succeeded",
+    "/calvinxu/tpp10-finemath-target-completion": "succeeded",
+    "/calvinxu/tpp10-native-record-closeout": "succeeded"
+  }
+}

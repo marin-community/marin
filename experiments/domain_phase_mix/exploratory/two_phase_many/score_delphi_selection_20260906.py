@@ -46,6 +46,7 @@ def diverse_order(prediction: np.ndarray, weights: np.ndarray) -> np.ndarray:
 
 def collect(output: Path, repeats: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     data = benchmark.read_npz(output / "inputs" / "panel.npz")
+    splits = pd.read_csv(output / "inputs" / "splits.csv")
     records = []
     diagnostics = []
     reproduction = []
@@ -54,6 +55,12 @@ def collect(output: Path, repeats: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.
         bank = benchmark.read_npz(output / "inputs" / f"{target}_bank_features.npz")
         aggregate_weights = data[f"{target}_aggregation_weights"]
         for method in METHODS:
+            if method not in benchmark.BASELINES and method != "wspu_direct_macro":
+                required = [output / "alternative_shards" / method / target / f"r0_f{fold}.npz" for fold in range(-1, 5)]
+                if not all(path.exists() for path in required):
+                    # Alternatives left unfitted by the package (delphi_selection_models --skip-specs) are not scored.
+                    print(f"skipping unfitted alternative {method} for {target}", flush=True)
+                    continue
             bank_replicates = []
             for repeat in range(repeats):
                 for fold in ((-1, 0, 1, 2, 3, 4) if repeat == 0 else (0, 1, 2, 3, 4)):
@@ -217,6 +224,7 @@ def metrics_row(
 
 
 def score_predictions(output: Path, predictions: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    splits = pd.read_csv(output / "inputs" / "splits.csv")
     data = benchmark.read_npz(output / "inputs" / "panel.npz")
     results = []
     assignments = []
@@ -241,7 +249,8 @@ def score_predictions(output: Path, predictions: pd.DataFrame) -> tuple[pd.DataF
         row_ids = labels.coordinate_id.to_numpy(str)
         prediction_matrix = []
         block_metrics = []
-        for method in METHODS:
+        fitted_methods = [method for method in METHODS if method in set(predictions.method)]
+        for method in fitted_methods:
             bank = (
                 predictions[
                     predictions.method.eq(method)
@@ -281,8 +290,10 @@ def score_predictions(output: Path, predictions: pd.DataFrame) -> tuple[pd.DataF
                 predictions.method.eq(method) & predictions.target.eq(target) & predictions.population.eq("panel_oof")
             ]
             for repeat, frame in panel.groupby("repeat"):
-                if len(frame) != 280 or frame.row_id.duplicated().any():
-                    raise ValueError("Every canonical row must have one out-of-fold prediction per repeat")
+                # Calibration rows (the pinned proportional run) are never scored out of fold.
+                scored = splits[(splits.repeat == repeat) & (splits.fold >= 0) & (splits.role == "test")].row.nunique()
+                if len(frame) != scored or frame.row_id.duplicated().any():
+                    raise ValueError("Every scored canonical row must have one out-of-fold prediction per repeat")
                 for fold in [-1, *sorted(frame.fold.unique())]:
                     sub = frame if fold == -1 else frame[frame.fold.eq(fold)]
                     rows = sub.row_id.to_numpy(int)
@@ -337,7 +348,8 @@ def score_predictions(output: Path, predictions: pd.DataFrame) -> tuple[pd.DataF
 
 def paired_sources(metrics: pd.DataFrame, loso: pd.DataFrame) -> pd.DataFrame:
     frame = metrics[metrics.stratum.str.startswith("source_block:") & metrics.rows.ge(5) & metrics.policy.eq("point")]
-    references = [(spec.name, spec.parent) for spec in alternatives.SPECS]
+    fitted = set(metrics.method)
+    references = [(spec.name, spec.parent) for spec in alternatives.SPECS if spec.name in fitted]
     references += [(method, benchmark.BASELINES[0]) for method in METHODS if method != benchmark.BASELINES[0]]
     references += [("source_disjoint_method_selection", benchmark.BASELINES[0])]
     loso = loso.assign(method="source_disjoint_method_selection")

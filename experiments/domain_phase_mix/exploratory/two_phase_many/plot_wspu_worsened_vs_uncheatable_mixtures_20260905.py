@@ -6,7 +6,7 @@
 # dependencies = ["matplotlib>=3.9", "numpy", "pandas"]
 # ///
 
-"""Compare the cap-6 WSPU optima for the full Uncheatable aggregate and for its three worsened components.
+"""Compare the additive variant's cap-6 optima for the full Uncheatable aggregate and for its three worsened components.
 
 One horizontal grouped-bar chart: for every runtime bucket, one bar per mixture with the
 bucket's materialized epochs written at the bar end, plus a tick at the proportional weight.
@@ -16,6 +16,7 @@ Rows are sorted by the weight the three-component optimum adds relative to the f
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -23,6 +24,12 @@ import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import TOP_LEVEL_DOMAIN_TOKEN_COUNTS  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_OUTPUTS = SCRIPT_DIR / "reference_outputs"
@@ -35,7 +42,7 @@ WORSENED_ID = "wspu_worsened_cap06"
 PAPER = "#ffffff"
 INK = "#111111"
 GRID = "#b8b8b8"
-FULL_COLOR = "#178A72"
+FULL_COLOR = "#469C76"
 WORSENED_COLOR = "#D95F32"
 FIGURE_SIZE = (7.4, 5.9)
 # Two columns: Common Crawl cells on the left, the other Dolma 3 sources and Dolmino on the right, top-aligned
@@ -65,6 +72,16 @@ LABEL_PAD_PERCENT = 0.25
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--full-table", type=Path, default=FULL_SWEEP, help="candidate table of the full optimum")
+    parser.add_argument("--full-id", default=FULL_ID)
+    parser.add_argument(
+        "--worsened-table", type=Path, default=WORSENED_SWEEP, help="candidate table of the trio optimum"
+    )
+    parser.add_argument("--worsened-id", default=WORSENED_ID)
+    parser.add_argument("--full-label", default="Full Uncheatable optimum (cap 6)")
+    parser.add_argument("--worsened-label", default="News, fiction and Wikipedia optimum (cap 6)")
+    parser.add_argument("--note", default="Additive-variant optima at epoch cap 6; bar labels give materialized epochs")
+    parser.add_argument("--stem", default="mixture_comparison_cap06", help="output file stem")
     return parser.parse_args()
 
 
@@ -131,18 +148,24 @@ def column_rows(frame: pd.DataFrame) -> dict[str, list[tuple[str, str]]]:
     return {"left": left, "right": right}
 
 
-def load_mixtures() -> pd.DataFrame:
-    """Per-bucket weights and materialized epochs of the two cap-6 optima, with the proportional weight."""
-    full = pd.read_csv(FULL_SWEEP)
-    full = full[full["candidate_id"].eq(FULL_ID)].set_index("domain")
-    worsened = pd.read_csv(WORSENED_SWEEP)
-    worsened = worsened[worsened["candidate_id"].eq(WORSENED_ID)].set_index("domain")
+def load_mixtures(full_table: Path, full_id: str, worsened_table: Path, worsened_id: str) -> pd.DataFrame:
+    """Per-bucket weights and materialized epochs of the two optima, with the proportional weight."""
+    full = pd.read_csv(full_table)
+    full = full[full["candidate_id"].eq(full_id)].set_index("domain")
+    worsened = pd.read_csv(worsened_table)
+    worsened = worsened[worsened["candidate_id"].eq(worsened_id)].set_index("domain")
+    if full.empty or worsened.empty:
+        raise ValueError(f"missing candidate rows for {full_id!r} or {worsened_id!r}")
     if set(full.index) != set(worsened.index):
         raise ValueError("the two sweeps do not share the same buckets")
     worsened = worsened.loc[full.index]
-    if not np.allclose(full["proportional_weight"], worsened["proportional_weight"]):
-        raise ValueError("proportional weights differ between the sweeps")
-    if not np.allclose(worsened["full_uncheatable_optimum_weight"], full["weight"]):
+    tokens = pd.Series({domain: float(TOP_LEVEL_DOMAIN_TOKEN_COUNTS[domain]) for domain in full.index})
+    proportional = tokens / tokens.sum()
+    if "proportional_weight" in full and not np.allclose(full["proportional_weight"], proportional):
+        raise ValueError("the full table's proportional weights do not match the pool sizes")
+    if "full_uncheatable_optimum_weight" in worsened and not np.allclose(
+        worsened["full_uncheatable_optimum_weight"], full["weight"]
+    ):
         raise ValueError("the worsened sweep's copy of the full optimum does not match the full sweep")
     frame = pd.DataFrame(
         {
@@ -150,7 +173,7 @@ def load_mixtures() -> pd.DataFrame:
             "full_epochs": full["materialized_epochs"],
             "worsened_weight": worsened["weight"],
             "worsened_epochs": worsened["materialized_epochs"],
-            "proportional_weight": full["proportional_weight"],
+            "proportional_weight": proportional,
         }
     )
     frame["label"] = [bucket_label(domain) for domain in frame.index]
@@ -241,7 +264,7 @@ def draw_column(axis: plt.Axes, frame: pd.DataFrame, rows: list[tuple[str, str]]
     return float(-ys.min() + 2 * COLUMN_PAD)
 
 
-def build_figure(frame: pd.DataFrame) -> plt.Figure:
+def build_figure(frame: pd.DataFrame, *, full_label: str, worsened_label: str, note: str) -> plt.Figure:
     columns = column_rows(frame)
     x_max = 100.0 * max(frame["full_weight"].max(), frame["worsened_weight"].max()) + 3.5
     with plt.rc_context(PLOT_STYLE):
@@ -259,8 +282,8 @@ def build_figure(frame: pd.DataFrame) -> plt.Figure:
         )
         draw_column(right_axis, frame, columns["right"], x_max)
         handles = [
-            Patch(facecolor=FULL_COLOR, label="Full Uncheatable optimum (cap 6)"),
-            Patch(facecolor=WORSENED_COLOR, label="News, fiction and Wikipedia optimum (cap 6)"),
+            Patch(facecolor=FULL_COLOR, label=full_label),
+            Patch(facecolor=WORSENED_COLOR, label=worsened_label),
             Line2D([0], [0], linestyle="none", marker="|", markersize=9, markeredgewidth=1.1, color=INK, label=TICK),
         ]
         figure.legend(
@@ -275,7 +298,7 @@ def build_figure(frame: pd.DataFrame) -> plt.Figure:
         figure.text(
             0.5,
             0.985,
-            "WSPU optima at epoch cap 6; bar labels give materialized epochs",
+            note,
             ha="center",
             va="top",
             fontsize=9.6,
@@ -289,15 +312,15 @@ def build_figure(frame: pd.DataFrame) -> plt.Figure:
 def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    frame = load_mixtures()
+    frame = load_mixtures(args.full_table, args.full_id, args.worsened_table, args.worsened_id)
     frame.loc[[key for kind, key in ordered_rows(frame) if kind == "bucket"]].to_csv(
-        args.output_dir / "mixture_comparison_cap06.csv"
+        args.output_dir / f"{args.stem}.csv"
     )
-    figure = build_figure(frame)
-    figure.savefig(args.output_dir / "mixture_comparison_cap06.png", dpi=STATIC_DPI)
-    figure.savefig(args.output_dir / "mixture_comparison_cap06.pdf")
+    figure = build_figure(frame, full_label=args.full_label, worsened_label=args.worsened_label, note=args.note)
+    figure.savefig(args.output_dir / f"{args.stem}.png", dpi=STATIC_DPI)
+    figure.savefig(args.output_dir / f"{args.stem}.pdf")
     plt.close(figure)
-    print(f"Wrote {args.output_dir / 'mixture_comparison_cap06.png'}")
+    print(f"Wrote {args.output_dir / f'{args.stem}.png'}")
 
 
 if __name__ == "__main__":

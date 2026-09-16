@@ -1,0 +1,726 @@
+{
+  "tpp10_wikipedia_matched_p005_s20260910": {
+    "attrs": {
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:24Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": true,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282d7e5hsbvm8ctksnf4nev",
+    "idempotency_key": "tpp10_wikipedia_matched_p005_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_wikipedia_matched_p005_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:24Z"
+  },
+  "tpp10_wikipedia_matched_p010_s20260910": {
+    "attrs": {
+      "marin.arm": "matched",
+      "marin.domain": "wikipedia",
+      "marin.fingerprint": "8473c67d",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p010_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:50Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e0ncm05y19ragxp559sa",
+    "idempotency_key": "tpp10_wikipedia_matched_p010_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_wikipedia_matched_p010_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:50Z"
+  },
+  "tpp10_wikipedia_matched_p020_s20260910": {
+    "attrs": {
+      "marin.arm": "matched",
+      "marin.domain": "wikipedia",
+      "marin.fingerprint": "2cca0d99",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p020_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:51Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e10v365eg5m92450126c",
+    "idempotency_key": "tpp10_wikipedia_matched_p020_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_wikipedia_matched_p020_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:51Z"
+  },
+  "tpp10_wikipedia_matched_p030_s20260910": {
+    "attrs": {
+      "marin.arm": "matched",
+      "marin.domain": "wikipedia",
+      "marin.fingerprint": "22b4d41f",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p030_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:51Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e1a1qj84eyhs2tpvfnvd",
+    "idempotency_key": "tpp10_wikipedia_matched_p030_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_wikipedia_matched_p030_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:51Z"
+  },
+  "tpp10_wikipedia_matched_p050_s20260910": {
+    "attrs": {
+      "marin.arm": "matched",
+      "marin.domain": "wikipedia",
+      "marin.fingerprint": "d3239fd4",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p050_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:51Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e1jq43rt2ejhhf6nqpb7",
+    "idempotency_key": "tpp10_wikipedia_matched_p050_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_wikipedia_matched_p050_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:51Z"
+  },
+  "tpp10_wikipedia_matched_p070_s20260910": {
+    "attrs": {
+      "marin.arm": "matched",
+      "marin.domain": "wikipedia",
+      "marin.fingerprint": "5176efbf",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p070_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:52Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e1z4r5bwpeynph01pdex",
+    "idempotency_key": "tpp10_wikipedia_matched_p070_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_wikipedia_matched_p070_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:52Z"
+  },
+  "tpp10_wikipedia_matched_p100_s20260910": {
+    "attrs": {
+      "marin.arm": "matched",
+      "marin.domain": "wikipedia",
+      "marin.fingerprint": "a853b1a5",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p100_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:52Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e28vgv6zk13g9qjvr4rt",
+    "idempotency_key": "tpp10_wikipedia_matched_p100_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_wikipedia_matched_p100_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:52Z"
+  },
+  "tpp10_wikipedia_target_p005_s20260910": {
+    "attrs": {
+      "marin.arm": "target",
+      "marin.domain": "wikipedia",
+      "marin.fingerprint": 54246867,
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p005_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:52Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e2jvnbsazz79bpf609yd",
+    "idempotency_key": "tpp10_wikipedia_target_p005_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_wikipedia_target_p005_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:52Z"
+  },
+  "tpp10_wikipedia_target_p010_s20260910": {
+    "attrs": {
+      "marin.arm": "target",
+      "marin.domain": "wikipedia",
+      "marin.fingerprint": "bbe58448",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p010_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:53Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e2twrkapjf6b96xfpgyf",
+    "idempotency_key": "tpp10_wikipedia_target_p010_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_wikipedia_target_p010_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:53Z"
+  },
+  "tpp10_wikipedia_target_p020_s20260910": {
+    "attrs": {
+      "marin.arm": "target",
+      "marin.domain": "wikipedia",
+      "marin.fingerprint": "79ebc3c2",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p020_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:53Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e37h7qzxy4q27ynqs31f",
+    "idempotency_key": "tpp10_wikipedia_target_p020_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_wikipedia_target_p020_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:53Z"
+  },
+  "tpp10_wikipedia_target_p030_s20260910": {
+    "attrs": {
+      "marin.arm": "target",
+      "marin.domain": "wikipedia",
+      "marin.fingerprint": "c25c16fa",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p030_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:53Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e3fyecqczanqc9m66c7s",
+    "idempotency_key": "tpp10_wikipedia_target_p030_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_wikipedia_target_p030_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:53Z"
+  },
+  "tpp10_wikipedia_target_p050_s20260910": {
+    "attrs": {
+      "marin.arm": "target",
+      "marin.domain": "wikipedia",
+      "marin.fingerprint": "88a32a5c",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p050_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:54Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e3spqeadj7aw0n0y6qye",
+    "idempotency_key": "tpp10_wikipedia_target_p050_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_wikipedia_target_p050_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:54Z"
+  },
+  "tpp10_wikipedia_target_p070_s20260910": {
+    "attrs": {
+      "marin.arm": "target",
+      "marin.domain": "wikipedia",
+      "marin.fingerprint": "021fb1cb",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p070_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:54Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e42rh3w9c5dtvsh55j6v",
+    "idempotency_key": "tpp10_wikipedia_target_p070_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_wikipedia_target_p070_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:54Z"
+  },
+  "tpp10_wikipedia_target_p100_s20260910": {
+    "attrs": {
+      "marin.arm": "target",
+      "marin.domain": "wikipedia",
+      "marin.fingerprint": "12f413d5",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p100_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:54Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e4bq8g3k2zaevr4w3yz7",
+    "idempotency_key": "tpp10_wikipedia_target_p100_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_wikipedia_target_p100_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:54Z"
+  },
+  "tpp10_finemath_3plus_matched_p005_s20260910": {
+    "attrs": {
+      "marin.arm": "matched",
+      "marin.domain": "finemath_3plus",
+      "marin.fingerprint": "22cd3e74",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p005_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:54Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e4m6vdnwwmk9fskmybzb",
+    "idempotency_key": "tpp10_finemath_3plus_matched_p005_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_finemath_3plus_matched_p005_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:54Z"
+  },
+  "tpp10_finemath_3plus_matched_p010_s20260910": {
+    "attrs": {
+      "marin.arm": "matched",
+      "marin.domain": "finemath_3plus",
+      "marin.fingerprint": "0ba80871",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p010_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:55Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e50evfq0xhknh0get2eb",
+    "idempotency_key": "tpp10_finemath_3plus_matched_p010_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_finemath_3plus_matched_p010_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:55Z"
+  },
+  "tpp10_finemath_3plus_matched_p020_s20260910": {
+    "attrs": {
+      "marin.arm": "matched",
+      "marin.domain": "finemath_3plus",
+      "marin.fingerprint": "0a03b570",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p020_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:55Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e5cry942rz4qfjxcjqn8",
+    "idempotency_key": "tpp10_finemath_3plus_matched_p020_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_finemath_3plus_matched_p020_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:55Z"
+  },
+  "tpp10_finemath_3plus_matched_p030_s20260910": {
+    "attrs": {
+      "marin.arm": "matched",
+      "marin.domain": "finemath_3plus",
+      "marin.fingerprint": "ecb1661f",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p030_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:55Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e5n1dx822dc3pqbnx8q1",
+    "idempotency_key": "tpp10_finemath_3plus_matched_p030_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_finemath_3plus_matched_p030_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:55Z"
+  },
+  "tpp10_finemath_3plus_matched_p050_s20260910": {
+    "attrs": {
+      "marin.arm": "matched",
+      "marin.domain": "finemath_3plus",
+      "marin.fingerprint": "f1aac662",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p050_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:56Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e5zdcf4pz1gnhw5qdprn",
+    "idempotency_key": "tpp10_finemath_3plus_matched_p050_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_finemath_3plus_matched_p050_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:56Z"
+  },
+  "tpp10_finemath_3plus_matched_p070_s20260910": {
+    "attrs": {
+      "marin.arm": "matched",
+      "marin.domain": "finemath_3plus",
+      "marin.fingerprint": "d7f2adfb",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p070_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:56Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e67vf92y6gjgmgpn4gpx",
+    "idempotency_key": "tpp10_finemath_3plus_matched_p070_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_finemath_3plus_matched_p070_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:56Z"
+  },
+  "tpp10_finemath_3plus_matched_p100_s20260910": {
+    "attrs": {
+      "marin.arm": "matched",
+      "marin.domain": "finemath_3plus",
+      "marin.fingerprint": "5a5a6129",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p100_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:56Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e6n4n9p9ycbwcsy302tz",
+    "idempotency_key": "tpp10_finemath_3plus_matched_p100_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_finemath_3plus_matched_p100_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:56Z"
+  },
+  "tpp10_finemath_3plus_target_p005_s20260910": {
+    "attrs": {
+      "marin.arm": "target",
+      "marin.domain": "finemath_3plus",
+      "marin.fingerprint": "cd15f7bd",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p005_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:57Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e6y0vpgw04vrywa27mwn",
+    "idempotency_key": "tpp10_finemath_3plus_target_p005_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_finemath_3plus_target_p005_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:57Z"
+  },
+  "tpp10_finemath_3plus_target_p010_s20260910": {
+    "attrs": {
+      "marin.arm": "target",
+      "marin.domain": "finemath_3plus",
+      "marin.fingerprint": "cddbbe61",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p010_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:57Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e7ah0bvyrajxhc7tr20y",
+    "idempotency_key": "tpp10_finemath_3plus_target_p010_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_finemath_3plus_target_p010_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:57Z"
+  },
+  "tpp10_finemath_3plus_target_p020_s20260910": {
+    "attrs": {
+      "marin.arm": "target",
+      "marin.domain": "finemath_3plus",
+      "marin.fingerprint": "eac63280",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p020_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:57Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e7kwe8a3x4gdfcn1znmv",
+    "idempotency_key": "tpp10_finemath_3plus_target_p020_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_finemath_3plus_target_p020_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:57Z"
+  },
+  "tpp10_finemath_3plus_target_p030_s20260910": {
+    "attrs": {
+      "marin.arm": "target",
+      "marin.domain": "finemath_3plus",
+      "marin.fingerprint": "c1a0bf9e",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p030_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:58Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e802bn0z14qb1whz7hb5",
+    "idempotency_key": "tpp10_finemath_3plus_target_p030_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_finemath_3plus_target_p030_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:58Z"
+  },
+  "tpp10_finemath_3plus_target_p050_s20260910": {
+    "attrs": {
+      "marin.arm": "target",
+      "marin.domain": "finemath_3plus",
+      "marin.fingerprint": "ccaa1599",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p050_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:58Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e890rabs0ttghv2ena7m",
+    "idempotency_key": "tpp10_finemath_3plus_target_p050_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_finemath_3plus_target_p050_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:58Z"
+  },
+  "tpp10_finemath_3plus_target_p070_s20260910": {
+    "attrs": {
+      "marin.arm": "target",
+      "marin.domain": "finemath_3plus",
+      "marin.fingerprint": "066c48ff",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p070_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:59Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e8n76khqwmzkyy0dr1hj",
+    "idempotency_key": "tpp10_finemath_3plus_target_p070_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_finemath_3plus_target_p070_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:59Z"
+  },
+  "tpp10_finemath_3plus_target_p100_s20260910": {
+    "attrs": {
+      "marin.arm": "target",
+      "marin.domain": "finemath_3plus",
+      "marin.fingerprint": "9c2ae241",
+      "marin.output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p100_s20260910/2026.09.11",
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b"
+    },
+    "created_at": "2026-09-11T11:07:59Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m282e8y00xtx0zzgbv90zxpc",
+    "idempotency_key": "tpp10_finemath_3plus_target_p100_s20260910",
+    "kind": "datapoint",
+    "name": "tpp10_finemath_3plus_target_p100_s20260910",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:59Z"
+  }
+}

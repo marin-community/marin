@@ -1,0 +1,10 @@
+{
+  "uri": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p8of15_s20260910/2026.09.09/checkpoints/step-11490/metadata.json",
+  "metadata_sha256": "1333148db2963d3f4f439edc3632ee4c21f21b8b5ab78bd775c127c01527d97c",
+  "metadata": {
+    "step": 11490,
+    "timestamp": "2026-09-14T03:35:57.354561",
+    "is_temporary": false
+  },
+  "expected_final_step": 11490
+}

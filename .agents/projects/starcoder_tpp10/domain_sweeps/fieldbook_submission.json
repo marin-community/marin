@@ -1,0 +1,26 @@
+{
+  "attrs": {
+    "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b",
+    "marin.priority": "interactive",
+    "marin.region": "us-central1",
+    "marin.zone": "us-central1-a"
+  },
+  "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+  "code_dirty": true,
+  "command": "uv run iris --config lib/iris/config/marin.yaml job run --no-wait \\\n  --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 172800 \\\n  --max-retries 0 --max-preemption-retries 0 --priority interactive \\\n  --extra cpu --no-preemptible --region us-central1 --zone us-central1-a \\\n  --job-name tpp10-domain-sweeps \\\n  --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/plan.json \\\n  --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/release.json \\\n  --bundle-include 'experiments/domain_phase_mix/tpp10_domain_sweeps_assets/*' \\\n  --exclude '^(checkpoints|logs|wandb)/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' \\\n  --exclude '^\\.agents/(?!projects/starcoder_tpp10/domain_sweeps/(plan|release)\\.json$).*' \\\n  --exclude '^(docs|tests)/' \\\n  --exclude '^lib/[^/]+/tests/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/' \\\n  -e MARIN_PREFIX gs://marin-us-central1 \\\n  -e WANDB_API_KEY \"$WANDB_API_KEY\" \\\n  -- python -m experiments.domain_phase_mix.launch_tpp10_domain_sweeps \\\n  --plan .agents/projects/starcoder_tpp10/domain_sweeps/plan.json \\\n  --release .agents/projects/starcoder_tpp10/domain_sweeps/release.json --submit\n",
+  "created_at": "2026-09-11T11:07:59Z",
+  "deleted_at": null,
+  "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+  "external_id": null,
+  "external_system": null,
+  "failure_reason": null,
+  "finished_at": null,
+  "id": "job_01m282e98jx2e0wv6p67gawx0p",
+  "launcher": "iris",
+  "name": "tpp10-domain-sweeps",
+  "retry_of": null,
+  "run_id": null,
+  "started_at": null,
+  "status": "submitting",
+  "updated_at": "2026-09-11T11:07:59Z"
+}

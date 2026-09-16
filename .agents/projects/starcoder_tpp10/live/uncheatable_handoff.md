@@ -1,0 +1,9 @@
+The active Uncheatable evaluation is /calvinxu/starcoder-tpp10-uncheatable-ram32. Both v5p-8 children are queued for occupied TPUs; the coordinator is running, and all seven central1 caches are finished (7,810,444 tokens before per-component packing). No Uncheatable checkpoint result exists yet. The final frozen specification is live/uncheatable_spec_ram32.json, hash 9417770a83fe5a1b30811e6f3c10cc91295e8d984df306a65a128de876312dca. It keeps all 57 Figure 5 pilot checkpoints, seven component scores and their equal mean, original trainer/subset averaging, and the PALOMA restoration control.
+
+The first coordinator was canceled before assignment to use the supported two-core CPU class. The second completed caches but both TPU children stayed queued behind the 224-GiB default host-memory request. That tree was canceled before evaluation; the final job reuses its caches with explicit 8 CPU/32 GiB per v5p-8 evaluator. Cache preparation now writes each one-file set locally without distributed merge workers. Parent-tag numpy metrics are converted to Python scalars for JSON receipts. No training run was changed or duplicated.
+
+When both children complete, collect and render from the repository root:
+
+uv run python -m experiments.domain_phase_mix.evaluate_starcoder_tpp10_uncheatable --spec .agents/projects/starcoder_tpp10/live/uncheatable_spec_ram32.json --collect .agents/projects/starcoder_tpp10/live/uncheatable_results
+
+The collector requires all 57 exact checkpoint identities and matching PALOMA controls. Inspect curves.png visually, report observed minima and target-grid regrets without a fitted overlay, and examine the saved seven component scores if the aggregate differs from the programming-language result. Update Fieldbook and CC_CHANGES.md with the measured conclusion. This is a companion plot; do not replace the manuscript figure without the user's direction.

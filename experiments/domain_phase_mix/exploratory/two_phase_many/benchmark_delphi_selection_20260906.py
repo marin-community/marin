@@ -40,7 +40,10 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[3]
 REFERENCE = SCRIPT_DIR / "reference_outputs"
-DEFAULT_OUTPUT = REFERENCE / "delphi_offline_selection_20260906"
+# 2026-09-08 package: identical panel and bank, with the proportional calibration row pinned to training in every
+# fold (see pin_calibration); the 2026-09-06 package is kept for the numbers recorded before the protocol fix.
+DEFAULT_OUTPUT = REFERENCE / "delphi_offline_selection_20260908"
+UNPINNED_OUTPUT = REFERENCE / "delphi_offline_selection_20260906"
 HISTORICAL = REFERENCE / "single_phase_observatory_benchmark_20260902"
 FROZEN_BANK = HISTORICAL / "heldout_round3_canonical" / "external_heldout_predictions.csv"
 PANEL = "delphi_3e18_39bucket"
@@ -114,12 +117,23 @@ def prepare(output: Path) -> None:
             },
         )
     rows = np.arange(280)
+    # The proportional run is calibration data (it anchors the floored surrogate): always trained on, never scored.
+    calibration = np.asarray(
+        [index for index, run in enumerate(panel.runs) if harness.CALIBRATION_RUN_MARKER in str(run)], dtype=int
+    )
+    if len(calibration) != 1:
+        raise ValueError(f"expected one proportional calibration row, found {len(calibration)}")
     manifest = []
     for repeat in range(5):
-        outer = harness.olmix_benchmark.block_labels(features.weights, 5, SEED + 100 * repeat)
+        outer = harness.pin_calibration(
+            harness.olmix_benchmark.block_labels(features.weights, 5, SEED + 100 * repeat), calibration
+        )
         for fold in range(5):
             train = rows[outer != fold]
-            inner = harness.olmix_benchmark.block_labels(features.weights[train], 3, SEED + 10000 * repeat + 100 * fold)
+            inner = harness.pin_calibration(
+                harness.olmix_benchmark.block_labels(features.weights[train], 3, SEED + 10000 * repeat + 100 * fold),
+                np.flatnonzero(np.isin(train, calibration)),
+            )
             for row in rows:
                 position = np.flatnonzero(train == row)
                 manifest.append(
@@ -131,7 +145,9 @@ def prepare(output: Path) -> None:
                         "inner_fold": int(inner[position[0]]) if len(position) else -1,
                     }
                 )
-    final_inner = harness.olmix_benchmark.block_labels(features.weights, 3, harness.HELDOUT_INNER_SEED)
+    final_inner = harness.pin_calibration(
+        harness.olmix_benchmark.block_labels(features.weights, 3, harness.HELDOUT_INNER_SEED), calibration
+    )
     manifest.extend(
         {"repeat": 0, "fold": -1, "row": int(row), "role": "train", "inner_fold": int(final_inner[row])} for row in rows
     )

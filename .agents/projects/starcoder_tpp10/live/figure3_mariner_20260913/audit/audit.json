@@ -1,0 +1,1212 @@
+{
+  "scope": "Archived source audit on 2026-09-13; no training, checkpoint evaluation, cloud payload reads, or canonical mutations.",
+  "conclusion": "The target p060 slope change exists in saved token loss and remains under a common BPB factor. No residual metric, plot-mapping, nominal-allocation, or checked configuration bug identified. Its causal source is unresolved.",
+  "population": {
+    "examples": 5673,
+    "tokens": 11612631,
+    "bytes": 28741166
+  },
+  "population_canonical_sha256": "7c7258e80208b230394cbee4ce1f41436d6c248d5d02e4ad86d24d05b5c32f4a",
+  "conversion_factor": 0.582909028651567,
+  "verified_raw_artifacts": 102,
+  "verified_curve_means": 60,
+  "max_curve_mean_error": 0.0,
+  "reported_schema_counts": {
+    "None": 97,
+    "2": 5
+  },
+  "max_schema2_bpb_reconstruction_error": 1.851067024105646e-07,
+  "current_paper_hashes": {
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/figures/epoch_matching_tpp10.pdf": "7d4d01d2688f9481fc17bc032df836691082804d2cb93e4674d2f68f2b148b8f",
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/figures/epoch_matching_tpp10.png": "3f004dfdce09d7dd66c465316e119c58eb7389ea92dd22a14946ca84e3c02ba5"
+  },
+  "paper_input_matches_corrected_analysis": true,
+  "paper_builder_and_allocation_match_receipt": true,
+  "source_hash_checks": [
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/pilot_plan.json",
+      "sha256": "4a60c10d04b57c8d3dc4807efaaec54c6cfe3e4df1f6c7004c71ead57c94e38a",
+      "matches_recorded_hash": true
+    },
+    {
+      "path": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/pilot_metrics.csv",
+      "sha256": "263395e98471389c0c339ce0a24697217014085f07c44c3c3fdc715aea0336bd",
+      "matches_recorded_hash": true
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/refinement_plan.json",
+      "sha256": "c456342e7bec3fecd464b640910c20ba80095476df77ed9d04903b223c49b0f3",
+      "matches_recorded_hash": true
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/verified_endpoints.json",
+      "sha256": "d453914f60b164dda8c59f99260c8facb68118faa8c97f027d087216a5db74d1",
+      "matches_recorded_hash": true
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/all_102_final_metric_records.json",
+      "sha256": "83b627a5b1799eb13bb6be6a7e5e02d7165eb60bdc1833fccd72316ed97f70eb",
+      "matches_recorded_hash": true
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/population_counts.json",
+      "sha256": "2dae669cdaa9e543eb9aab50d0f6da78ba46ab3ace9a1cc067110348301beef7",
+      "matches_recorded_hash": true
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/consistent_bpb_20260912/metric_provenance.json",
+      "sha256": "71aea0d912dae58372c8a63219ceecba8a42f6add2e201b4e359e88d16973527",
+      "matches_recorded_hash": true
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/plot_starcoder_tpp10_refinement.py",
+      "sha256": "7729da9711741f7fe93e6a510df49b7d07ecbab9f2881fea1d216313f64c9bd5",
+      "matches_recorded_hash": true
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/analyze_starcoder_tpp10.py",
+      "sha256": "e332709a4eac55c0c286c2d4e1142bca44c8e4640dc4e6606d9234842b1b2618",
+      "matches_recorded_hash": true
+    }
+  ],
+  "local_curves": [
+    {
+      "arm": "target",
+      "subset_seed": null,
+      "points": [
+        {
+          "percent": 50,
+          "bpb": 0.7756673393195197,
+          "token_loss_mean": 1.3306833505630493,
+          "run_names": [
+            "tpp10_target_p050_s20260910"
+          ]
+        },
+        {
+          "percent": 55,
+          "bpb": 0.7701349690829891,
+          "token_loss_mean": 1.3211923837661743,
+          "run_names": [
+            "tpp10_target_p055_s20260910"
+          ]
+        },
+        {
+          "percent": 60,
+          "bpb": 0.7694386281196114,
+          "token_loss_mean": 1.319997787475586,
+          "run_names": [
+            "tpp10_target_p060_s20260910"
+          ]
+        },
+        {
+          "percent": 65,
+          "bpb": 0.7665562587791359,
+          "token_loss_mean": 1.3150529861450195,
+          "run_names": [
+            "tpp10_target_p065_s20260910"
+          ]
+        },
+        {
+          "percent": 70,
+          "bpb": 0.7655645236000794,
+          "token_loss_mean": 1.3133516311645508,
+          "run_names": [
+            "tpp10_target_p070_s20260910"
+          ]
+        }
+      ],
+      "adjacent_deltas_bpb": {
+        "50_to_55": -0.005532370236530637,
+        "55_to_60": -0.0006963409633776729,
+        "60_to_65": -0.002882369340475477,
+        "65_to_70": -0.0009917351790564854
+      },
+      "p060_above_p055_p065_chord_bpb": 0.001093014188548902
+    },
+    {
+      "arm": "unmatched",
+      "subset_seed": null,
+      "points": [
+        {
+          "percent": 50,
+          "bpb": 1.0951940324787643,
+          "token_loss_mean": 1.8788421154022217,
+          "run_names": [
+            "tpp10_unmatched_p050_s20260910",
+            "tpp10_unmatched_p050_s20260911"
+          ]
+        },
+        {
+          "percent": 55,
+          "bpb": 1.085302391311535,
+          "token_loss_mean": 1.861872673034668,
+          "run_names": [
+            "tpp10_unmatched_p055_s20260910",
+            "tpp10_unmatched_p055_s20260911"
+          ]
+        },
+        {
+          "percent": 60,
+          "bpb": 1.0845571654197332,
+          "token_loss_mean": 1.8605942130088806,
+          "run_names": [
+            "tpp10_unmatched_p060_s20260910",
+            "tpp10_unmatched_p060_s20260911"
+          ]
+        },
+        {
+          "percent": 65,
+          "bpb": 1.0720462371281094,
+          "token_loss_mean": 1.8391312956809998,
+          "run_names": [
+            "tpp10_unmatched_p065_s20260910",
+            "tpp10_unmatched_p065_s20260911"
+          ]
+        },
+        {
+          "percent": 70,
+          "bpb": 1.0636281968629724,
+          "token_loss_mean": 1.8246898651123047,
+          "run_names": [
+            "tpp10_unmatched_p070_s20260910",
+            "tpp10_unmatched_p070_s20260911"
+          ]
+        }
+      ],
+      "adjacent_deltas_bpb": {
+        "50_to_55": -0.009891641167229404,
+        "55_to_60": -0.0007452258918017041,
+        "60_to_65": -0.012510928291623813,
+        "65_to_70": -0.008418040265137039
+      },
+      "p060_above_p055_p065_chord_bpb": 0.0058828511999111655
+    },
+    {
+      "arm": "matched",
+      "subset_seed": 20260912,
+      "points": [
+        {
+          "percent": 50,
+          "bpb": 1.126984002190692,
+          "token_loss_mean": 1.9333788752555847,
+          "run_names": [
+            "tpp10_matched_p050_s20260910_d20260912",
+            "tpp10_matched_p050_s20260911_d20260912"
+          ]
+        },
+        {
+          "percent": 55,
+          "bpb": 1.1337089979091557,
+          "token_loss_mean": 1.9449158310890198,
+          "run_names": [
+            "tpp10_matched_p055_s20260910_d20260912",
+            "tpp10_matched_p055_s20260911_d20260912"
+          ]
+        },
+        {
+          "percent": 60,
+          "bpb": 1.1363837018500649,
+          "token_loss_mean": 1.9495043754577637,
+          "run_names": [
+            "tpp10_matched_p060_s20260910_d20260912",
+            "tpp10_matched_p060_s20260911_d20260912"
+          ]
+        },
+        {
+          "percent": 65,
+          "bpb": 1.1380798038762703,
+          "token_loss_mean": 1.952414095401764,
+          "run_names": [
+            "tpp10_matched_p065_s20260910_d20260912",
+            "tpp10_matched_p065_s20260911_d20260912"
+          ]
+        },
+        {
+          "percent": 70,
+          "bpb": 1.1360913651139177,
+          "token_loss_mean": 1.9490028619766235,
+          "run_names": [
+            "tpp10_matched_p070_s20260910_d20260912",
+            "tpp10_matched_p070_s20260911_d20260912"
+          ]
+        }
+      ],
+      "adjacent_deltas_bpb": {
+        "50_to_55": 0.006724995718463633,
+        "55_to_60": 0.0026747039409091844,
+        "60_to_65": 0.0016961020262054038,
+        "65_to_70": -0.0019884387623525512
+      },
+      "p060_above_p055_p065_chord_bpb": 0.0004893009573518903
+    },
+    {
+      "arm": "matched",
+      "subset_seed": 20260913,
+      "points": [
+        {
+          "percent": 50,
+          "bpb": 1.1289550341661643,
+          "token_loss_mean": 1.9367602467536926,
+          "run_names": [
+            "tpp10_matched_p050_s20260910_d20260913",
+            "tpp10_matched_p050_s20260911_d20260913"
+          ]
+        },
+        {
+          "percent": 55,
+          "bpb": 1.1292118971909249,
+          "token_loss_mean": 1.937200903892517,
+          "run_names": [
+            "tpp10_matched_p055_s20260910_d20260913",
+            "tpp10_matched_p055_s20260911_d20260913"
+          ]
+        },
+        {
+          "percent": 60,
+          "bpb": 1.1326849159864159,
+          "token_loss_mean": 1.9431589841842651,
+          "run_names": [
+            "tpp10_matched_p060_s20260910_d20260913",
+            "tpp10_matched_p060_s20260911_d20260913"
+          ]
+        },
+        {
+          "percent": 65,
+          "bpb": 1.1321186916235693,
+          "token_loss_mean": 1.9421876072883606,
+          "run_names": [
+            "tpp10_matched_p065_s20260910_d20260913",
+            "tpp10_matched_p065_s20260911_d20260913"
+          ]
+        },
+        {
+          "percent": 70,
+          "bpb": 1.134608661261401,
+          "token_loss_mean": 1.9464592337608337,
+          "run_names": [
+            "tpp10_matched_p070_s20260910_d20260913",
+            "tpp10_matched_p070_s20260911_d20260913"
+          ]
+        }
+      ],
+      "adjacent_deltas_bpb": {
+        "50_to_55": 0.00025686302476057854,
+        "55_to_60": 0.003473018795491001,
+        "60_to_65": -0.0005662243628465902,
+        "65_to_70": 0.002489969637831768
+      },
+      "p060_above_p055_p065_chord_bpb": 0.0020196215791687955
+    },
+    {
+      "arm": "matched",
+      "subset_seed": 20260914,
+      "points": [
+        {
+          "percent": 50,
+          "bpb": 1.125549940058,
+          "token_loss_mean": 1.9309186935424805,
+          "run_names": [
+            "tpp10_matched_p050_s20260910_d20260914",
+            "tpp10_matched_p050_s20260911_d20260914"
+          ]
+        },
+        {
+          "percent": 55,
+          "bpb": 1.1275203813840173,
+          "token_loss_mean": 1.9342990517616272,
+          "run_names": [
+            "tpp10_matched_p055_s20260910_d20260914",
+            "tpp10_matched_p055_s20260911_d20260914"
+          ]
+        },
+        {
+          "percent": 60,
+          "bpb": 1.1295855698314359,
+          "token_loss_mean": 1.9378419518470764,
+          "run_names": [
+            "tpp10_matched_p060_s20260910_d20260914",
+            "tpp10_matched_p060_s20260911_d20260914"
+          ]
+        },
+        {
+          "percent": 65,
+          "bpb": 1.130750052604042,
+          "token_loss_mean": 1.9398396611213684,
+          "run_names": [
+            "tpp10_matched_p065_s20260910_d20260914",
+            "tpp10_matched_p065_s20260911_d20260914"
+          ]
+        },
+        {
+          "percent": 70,
+          "bpb": 1.1307618655931422,
+          "token_loss_mean": 1.939859926700592,
+          "run_names": [
+            "tpp10_matched_p070_s20260910_d20260914",
+            "tpp10_matched_p070_s20260911_d20260914"
+          ]
+        }
+      ],
+      "adjacent_deltas_bpb": {
+        "50_to_55": 0.0019704413260173137,
+        "55_to_60": 0.0020651884474185422,
+        "60_to_65": 0.001164482772606057,
+        "65_to_70": 1.1812989100246085e-05
+      },
+      "p060_above_p055_p065_chord_bpb": 0.00045035283740624266
+    }
+  ],
+  "target_neighborhood": [
+    {
+      "run_name": "tpp10_target_p050_s20260910",
+      "arm": "target",
+      "percent": 50,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128,
+      "tokens": 3012296704,
+      "support_sequences": 92928,
+      "fingerprint": "747891fe",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p050_s20260910/2026.09.09",
+      "step": 11490,
+      "token_loss": 1.3306833505630493,
+      "normalized_bpb": 0.7756673393195197,
+      "reported_bpb": 0.7942407727241516,
+      "reported_schema": null,
+      "raw_source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p050_s20260910_eval_metrics.jsonl",
+      "raw_sha256": "6e170dc08d49d4650b7e5dae0ccd50b424fc8cb1b9657fea550c85d036a49f10",
+      "final_duplicate_count": 2,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p050_s20260910/2026.09.09/checkpoints/step-11490",
+        "metadata": {
+          "step": 11490,
+          "timestamp": "2026-09-11T04:17:14.372598",
+          "is_temporary": false
+        }
+      },
+      "archived_wandb_loss_bpb_step_match": true,
+      "archived_wandb_loss_difference": -2.220446049250313e-16
+    },
+    {
+      "run_name": "tpp10_target_p055_s20260910",
+      "arm": "target",
+      "percent": 55,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128,
+      "tokens": 3012296704,
+      "support_sequences": 92928,
+      "fingerprint": "650ffe00",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09",
+      "step": 11490,
+      "token_loss": 1.3211923837661743,
+      "normalized_bpb": 0.7701349690829891,
+      "reported_bpb": 0.7701349258422852,
+      "reported_schema": 2,
+      "raw_source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p055_s20260910_eval_metrics.jsonl",
+      "raw_sha256": "45b6481869f9d4d84654d481c9972b0193d81756213d85e84e70060637211e54",
+      "final_duplicate_count": 2,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09/checkpoints/step-11490",
+        "metadata_sha256": "d1d8d037b5031c2b1c36d5e60d616660162a40808b79196672b8bde90c5223ea",
+        "metadata": {
+          "step": 11490,
+          "timestamp": "2026-09-12T21:49:27.171875",
+          "is_temporary": false
+        }
+      },
+      "archived_wandb_loss_bpb_step_match": true,
+      "archived_wandb_loss_difference": 0.0
+    },
+    {
+      "run_name": "tpp10_target_p060_s20260910",
+      "arm": "target",
+      "percent": 60,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128,
+      "tokens": 3012296704,
+      "support_sequences": 92928,
+      "fingerprint": "1e801f9f",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09",
+      "step": 11490,
+      "token_loss": 1.319997787475586,
+      "normalized_bpb": 0.7694386281196114,
+      "reported_bpb": 0.7694385051727295,
+      "reported_schema": 2,
+      "raw_source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p060_s20260910_eval_metrics.jsonl",
+      "raw_sha256": "91bd9f852e5dd28cc2960d8479c6548db93839a363bee446ec4eacc5f2db46be",
+      "final_duplicate_count": 2,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09/checkpoints/step-11490",
+        "metadata_sha256": "bdde47e048657f511916f6003aa56b615f42a90ea4b4e61ef11595bed85e82ee",
+        "metadata": {
+          "step": 11490,
+          "timestamp": "2026-09-12T22:36:24.407915",
+          "is_temporary": false
+        }
+      },
+      "archived_wandb_loss_bpb_step_match": true,
+      "archived_wandb_loss_difference": 0.0
+    },
+    {
+      "run_name": "tpp10_target_p065_s20260910",
+      "arm": "target",
+      "percent": 65,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128,
+      "tokens": 3012296704,
+      "support_sequences": 92928,
+      "fingerprint": "97b113a1",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09",
+      "step": 11490,
+      "token_loss": 1.3150529861450195,
+      "normalized_bpb": 0.7665562587791359,
+      "reported_bpb": 0.7665561437606812,
+      "reported_schema": 2,
+      "raw_source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p065_s20260910_eval_metrics.jsonl",
+      "raw_sha256": "1fb2f1d0cb35bf2c6470a36cb08efbe23eea22921110a7add34c3a499e94b7b4",
+      "final_duplicate_count": 2,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09/checkpoints/step-11490",
+        "metadata_sha256": "30924e6415557ecd812b139993700697b082c71bf243ff1a55643f1b38e81e5e",
+        "metadata": {
+          "step": 11490,
+          "timestamp": "2026-09-12T23:33:12.630166",
+          "is_temporary": false
+        }
+      },
+      "archived_wandb_loss_bpb_step_match": true,
+      "archived_wandb_loss_difference": 0.0
+    },
+    {
+      "run_name": "tpp10_target_p070_s20260910",
+      "arm": "target",
+      "percent": 70,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128,
+      "tokens": 3012296704,
+      "support_sequences": 92928,
+      "fingerprint": "66e8dc46",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p070_s20260910/2026.09.09",
+      "step": 11490,
+      "token_loss": 1.3133516311645508,
+      "normalized_bpb": 0.7655645236000794,
+      "reported_bpb": 0.7843883633613586,
+      "reported_schema": null,
+      "raw_source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p070_s20260910_eval_metrics.jsonl",
+      "raw_sha256": "1b3cc6a0cb3e69791e29532014d76dce4fb803b2d0c75a9709e3892d30e1b225",
+      "final_duplicate_count": 2,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p070_s20260910/2026.09.09/checkpoints/step-11490",
+        "metadata": {
+          "step": 11490,
+          "timestamp": "2026-09-11T04:15:09.410345",
+          "is_temporary": false
+        }
+      },
+      "archived_wandb_loss_bpb_step_match": true,
+      "archived_wandb_loss_difference": 0.0
+    }
+  ],
+  "per_seed_neighborhood": [
+    {
+      "arm": "matched",
+      "subset_seed": 20260912,
+      "trainer_seed": 20260910,
+      "p055": 1.1371847614874082,
+      "p060": 1.1320153279689418,
+      "p065": 1.1348031933966147,
+      "p070": 1.134908120535094,
+      "p055_to_p060_bpb": -0.0051694335184664375,
+      "p060_to_p065_bpb": 0.002787865427672953,
+      "p060_above_chord_bpb": -0.003978649473069584
+    },
+    {
+      "arm": "matched",
+      "subset_seed": 20260912,
+      "trainer_seed": 20260911,
+      "p055": 1.1302332343309032,
+      "p060": 1.140752075731188,
+      "p065": 1.1413564143559256,
+      "p070": 1.1372746096927417,
+      "p055_to_p060_bpb": 0.010518841400284806,
+      "p060_to_p065_bpb": 0.0006043386247376326,
+      "p060_above_chord_bpb": 0.004957251387773587
+    },
+    {
+      "arm": "matched",
+      "subset_seed": 20260913,
+      "trainer_seed": 20260910,
+      "p055": 1.13118251223737,
+      "p060": 1.1349760799665063,
+      "p065": 1.1272091091212242,
+      "p070": 1.136481193754228,
+      "p055_to_p060_bpb": 0.0037935677291363046,
+      "p060_to_p065_bpb": -0.007766970845282106,
+      "p060_above_chord_bpb": 0.005780269287209094
+    },
+    {
+      "arm": "matched",
+      "subset_seed": 20260913,
+      "trainer_seed": 20260911,
+      "p055": 1.1272412821444797,
+      "p060": 1.1303937520063252,
+      "p065": 1.1370282741259146,
+      "p070": 1.132736128768574,
+      "p055_to_p060_bpb": 0.003152469861845475,
+      "p060_to_p065_bpb": 0.00663452211958937,
+      "p060_above_chord_bpb": -0.0017410261288719475
+    },
+    {
+      "arm": "matched",
+      "subset_seed": 20260914,
+      "trainer_seed": 20260910,
+      "p055": 1.1324425412453458,
+      "p060": 1.126376571342337,
+      "p065": 1.1261070962145077,
+      "p070": 1.1258959216622968,
+      "p055_to_p060_bpb": -0.006065969903008783,
+      "p060_to_p065_bpb": -0.0002694751278293772,
+      "p060_above_chord_bpb": -0.002898247387589592
+    },
+    {
+      "arm": "matched",
+      "subset_seed": 20260914,
+      "trainer_seed": 20260911,
+      "p055": 1.1225982215226886,
+      "p060": 1.132794568320535,
+      "p065": 1.135393008993576,
+      "p070": 1.1356278095239873,
+      "p055_to_p060_bpb": 0.010196346797846312,
+      "p060_to_p065_bpb": 0.002598440673041047,
+      "p060_above_chord_bpb": 0.0037989530624027434
+    },
+    {
+      "arm": "target",
+      "subset_seed": null,
+      "trainer_seed": 20260910,
+      "p055": 0.7701349690829891,
+      "p060": 0.7694386281196114,
+      "p065": 0.7665562587791359,
+      "p070": 0.7655645236000794,
+      "p055_to_p060_bpb": -0.0006963409633776729,
+      "p060_to_p065_bpb": -0.002882369340475477,
+      "p060_above_chord_bpb": 0.001093014188548902
+    },
+    {
+      "arm": "unmatched",
+      "subset_seed": null,
+      "trainer_seed": 20260910,
+      "p055": 1.0890445377939995,
+      "p060": 1.0851279065137063,
+      "p065": 1.0742751744509098,
+      "p070": 1.065622854816645,
+      "p055_to_p060_bpb": -0.003916631280293181,
+      "p060_to_p065_bpb": -0.010852732062796466,
+      "p060_above_chord_bpb": 0.0034680503912516425
+    },
+    {
+      "arm": "unmatched",
+      "subset_seed": null,
+      "trainer_seed": 20260911,
+      "p055": 1.0815602448290704,
+      "p060": 1.0839864243257604,
+      "p065": 1.069817299805309,
+      "p070": 1.0616335389092997,
+      "p055_to_p060_bpb": 0.0024261794966899952,
+      "p060_to_p065_bpb": -0.014169124520451382,
+      "p060_above_chord_bpb": 0.008297652008570688
+    }
+  ],
+  "target_training_history": [
+    {
+      "step": 2298,
+      "percent_values": {
+        "50": {
+          "step": 2298,
+          "token_loss": 1.6540098190307617,
+          "bpb_from_token_loss": 0.9641372569913754,
+          "reported_schema": null
+        },
+        "55": {
+          "step": 2298,
+          "token_loss": 1.631237506866455,
+          "bpb_from_token_loss": 0.9508630706275292,
+          "reported_schema": null
+        },
+        "60": {
+          "step": 2298,
+          "token_loss": 1.6338096857070923,
+          "bpb_from_token_loss": 0.9523624168970432,
+          "reported_schema": null
+        },
+        "65": {
+          "step": 2298,
+          "token_loss": 1.6138192415237427,
+          "bpb_from_token_loss": 0.9407098064958135,
+          "reported_schema": 2
+        },
+        "70": {
+          "step": 2298,
+          "token_loss": 1.5941250324249268,
+          "bpb_from_token_loss": 0.9292298741999618,
+          "reported_schema": null
+        }
+      },
+      "p060_above_chord_token_loss": 0.011281311511993408,
+      "p060_above_chord_bpb": 0.0065759783353718185
+    },
+    {
+      "step": 4596,
+      "percent_values": {
+        "50": {
+          "step": 4596,
+          "token_loss": 1.628056287765503,
+          "bpb_from_token_loss": 0.9490087092914654,
+          "reported_schema": null
+        },
+        "55": {
+          "step": 4596,
+          "token_loss": 1.6019890308380127,
+          "bpb_from_token_loss": 0.9338138698762513,
+          "reported_schema": null
+        },
+        "60": {
+          "step": 4596,
+          "token_loss": 1.5971461534500122,
+          "bpb_from_token_loss": 0.9309909129221332,
+          "reported_schema": null
+        },
+        "65": {
+          "step": 4596,
+          "token_loss": 1.5877406597137451,
+          "bpb_from_token_loss": 0.9255083657043374,
+          "reported_schema": 2
+        },
+        "70": {
+          "step": 4596,
+          "token_loss": 1.5862778425216675,
+          "bpb_from_token_loss": 0.9246556763558086,
+          "reported_schema": null
+        }
+      },
+      "p060_above_chord_token_loss": 0.0022813081741333008,
+      "p060_above_chord_bpb": 0.0013297951318389223
+    },
+    {
+      "step": 6894,
+      "percent_values": {
+        "50": {
+          "step": 6894,
+          "token_loss": 1.617181658744812,
+          "bpb_from_token_loss": 0.9426697898520683,
+          "reported_schema": null
+        },
+        "55": {
+          "step": 6894,
+          "token_loss": 1.5922588109970093,
+          "bpb_from_token_loss": 0.9281420368801657,
+          "reported_schema": null
+        },
+        "60": {
+          "step": 6894,
+          "token_loss": 1.590240478515625,
+          "bpb_from_token_loss": 0.9269655326539461,
+          "reported_schema": null
+        },
+        "65": {
+          "step": 6894,
+          "token_loss": 1.5715992450714111,
+          "bpb_from_token_loss": 0.9160993893741123,
+          "reported_schema": 2
+        },
+        "70": {
+          "step": 6894,
+          "token_loss": 1.5629048347473145,
+          "bpb_from_token_loss": 0.911031339097395,
+          "reported_schema": null
+        }
+      },
+      "p060_above_chord_token_loss": 0.008311450481414795,
+      "p060_above_chord_bpb": 0.004844819526807097
+    },
+    {
+      "step": 9192,
+      "percent_values": {
+        "50": {
+          "step": 9192,
+          "token_loss": 1.6141303777694702,
+          "bpb_from_token_loss": 0.9408911706225888,
+          "reported_schema": null
+        },
+        "55": {
+          "step": 9192,
+          "token_loss": 1.5804402828216553,
+          "bpb_from_token_loss": 0.9212529101013789,
+          "reported_schema": null
+        },
+        "60": {
+          "step": 9192,
+          "token_loss": 1.5696711540222168,
+          "bpb_from_token_loss": 0.9149754876934746,
+          "reported_schema": 2
+        },
+        "65": {
+          "step": 9192,
+          "token_loss": 1.568395972251892,
+          "bpb_from_token_loss": 0.9142321727263805,
+          "reported_schema": 2
+        },
+        "70": {
+          "step": 9192,
+          "token_loss": 1.552098035812378,
+          "bpb_from_token_loss": 0.9047319584273983,
+          "reported_schema": null
+        }
+      },
+      "p060_above_chord_token_loss": -0.004746973514556885,
+      "p060_above_chord_bpb": -0.0027670537204050687
+    },
+    {
+      "step": 11490,
+      "percent_values": {
+        "50": {
+          "step": 11490,
+          "token_loss": 1.3306833505630493,
+          "bpb_from_token_loss": 0.7756673393195197,
+          "reported_schema": null
+        },
+        "55": {
+          "step": 11490,
+          "token_loss": 1.3211923837661743,
+          "bpb_from_token_loss": 0.7701349690829891,
+          "reported_schema": 2
+        },
+        "60": {
+          "step": 11490,
+          "token_loss": 1.319997787475586,
+          "bpb_from_token_loss": 0.7694386281196114,
+          "reported_schema": 2
+        },
+        "65": {
+          "step": 11490,
+          "token_loss": 1.3150529861450195,
+          "bpb_from_token_loss": 0.7665562587791359,
+          "reported_schema": 2
+        },
+        "70": {
+          "step": 11490,
+          "token_loss": 1.3133516311645508,
+          "bpb_from_token_loss": 0.7655645236000794,
+          "reported_schema": null
+        }
+      },
+      "p060_above_chord_token_loss": 0.0018751025199890137,
+      "p060_above_chord_bpb": 0.0010930141885489015
+    }
+  ],
+  "configuration_comparisons": [
+    {
+      "percent": 55,
+      "matches_archived_comparison": true,
+      "differences_from_p070": [
+        [
+          ".data.train_weights.hq_actual",
+          0.028148117608582077,
+          0.04222217641287311
+        ],
+        [
+          ".data.train_weights.hq_synth",
+          0.07840591508819479,
+          0.11760887263229217
+        ],
+        [
+          ".data.train_weights.low_actual",
+          0.020110393537504306,
+          0.030165590306256453
+        ],
+        [
+          ".data.train_weights.medium",
+          0.10265103878958312,
+          0.15397655818437467
+        ],
+        [
+          ".data.train_weights.medium_high",
+          0.025605314070350407,
+          0.038407971105525594
+        ],
+        [
+          ".data.train_weights.medium_low",
+          0.04507922090578533,
+          0.06761883135867798
+        ],
+        [
+          ".data.train_weights.starcoder",
+          0.7,
+          0.55
+        ],
+        [
+          ".trainer.checkpointer.base_path",
+          "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p070_s20260910/2026.09.09/checkpoints",
+          "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09/checkpoints"
+        ],
+        [
+          ".trainer.checkpointer.temporary_base_path",
+          "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p070_s20260910/2026.09.09/checkpoints",
+          "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09/checkpoints"
+        ],
+        [
+          ".trainer.id",
+          "tpp10_target_p070_s20260910",
+          "tpp10_target_p055_s20260910"
+        ],
+        [
+          ".trainer.tracker.name",
+          "tpp10_target_p070_s20260910",
+          "tpp10_target_p055_s20260910"
+        ],
+        [
+          ".trainer.tracker.replicate_path",
+          "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p070_s20260910/2026.09.09",
+          "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09"
+        ]
+      ]
+    },
+    {
+      "percent": 60,
+      "matches_archived_comparison": true,
+      "differences_from_p070": [
+        [
+          ".data.train_weights.hq_actual",
+          0.028148117608582077,
+          0.03753082347810943
+        ],
+        [
+          ".data.train_weights.hq_synth",
+          0.07840591508819479,
+          0.10454122011759304
+        ],
+        [
+          ".data.train_weights.low_actual",
+          0.020110393537504306,
+          0.02681385805000574
+        ],
+        [
+          ".data.train_weights.medium",
+          0.10265103878958312,
+          0.13686805171944416
+        ],
+        [
+          ".data.train_weights.medium_high",
+          0.025605314070350407,
+          0.0341404187604672
+        ],
+        [
+          ".data.train_weights.medium_low",
+          0.04507922090578533,
+          0.06010562787438044
+        ],
+        [
+          ".data.train_weights.starcoder",
+          0.7,
+          0.6
+        ],
+        [
+          ".trainer.checkpointer.base_path",
+          "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p070_s20260910/2026.09.09/checkpoints",
+          "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09/checkpoints"
+        ],
+        [
+          ".trainer.checkpointer.temporary_base_path",
+          "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p070_s20260910/2026.09.09/checkpoints",
+          "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09/checkpoints"
+        ],
+        [
+          ".trainer.id",
+          "tpp10_target_p070_s20260910",
+          "tpp10_target_p060_s20260910"
+        ],
+        [
+          ".trainer.tracker.name",
+          "tpp10_target_p070_s20260910",
+          "tpp10_target_p060_s20260910"
+        ],
+        [
+          ".trainer.tracker.replicate_path",
+          "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p070_s20260910/2026.09.09",
+          "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09"
+        ]
+      ]
+    },
+    {
+      "percent": 65,
+      "matches_archived_comparison": true,
+      "differences_from_p070": [
+        [
+          ".data.train_weights.hq_actual",
+          0.028148117608582077,
+          0.03283947054334575
+        ],
+        [
+          ".data.train_weights.hq_synth",
+          0.07840591508819479,
+          0.09147356760289391
+        ],
+        [
+          ".data.train_weights.low_actual",
+          0.020110393537504306,
+          0.02346212579375502
+        ],
+        [
+          ".data.train_weights.medium",
+          0.10265103878958312,
+          0.11975954525451364
+        ],
+        [
+          ".data.train_weights.medium_high",
+          0.025605314070350407,
+          0.029872866415408796
+        ],
+        [
+          ".data.train_weights.medium_low",
+          0.04507922090578533,
+          0.052592424390082874
+        ],
+        [
+          ".data.train_weights.starcoder",
+          0.7,
+          0.65
+        ],
+        [
+          ".trainer.checkpointer.base_path",
+          "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p070_s20260910/2026.09.09/checkpoints",
+          "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09/checkpoints"
+        ],
+        [
+          ".trainer.checkpointer.temporary_base_path",
+          "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p070_s20260910/2026.09.09/checkpoints",
+          "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09/checkpoints"
+        ],
+        [
+          ".trainer.id",
+          "tpp10_target_p070_s20260910",
+          "tpp10_target_p065_s20260910"
+        ],
+        [
+          ".trainer.tracker.name",
+          "tpp10_target_p070_s20260910",
+          "tpp10_target_p065_s20260910"
+        ],
+        [
+          ".trainer.tracker.replicate_path",
+          "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p070_s20260910/2026.09.09",
+          "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09"
+        ]
+      ]
+    }
+  ],
+  "shared_plan_runtime_versions": {
+    "jax": "0.11.1",
+    "jaxlib": "0.11.1",
+    "numpy": "2.3.5",
+    "tokenizers": "0.22.2"
+  },
+  "shared_plan_code_sha256": {
+    "experiments/domain_phase_mix/starcoder_tpp10.py": "1c7cc50019f3e99234fb7b3f5668ae2a07b9381ef1fcabfa1aa8011fe98d6473",
+    "experiments/domain_phase_mix/prepare_starcoder_tpp10.py": "3dcd74598da46f09dc978ee0a6b0ddee62a820b6906c4c184bf9148883079105",
+    "experiments/domain_phase_mix/launch_starcoder_tpp10.py": "eb48d4ea35f323265972653568b6924a7999c8be0a1ce2db1441ac6273105f62",
+    "experiments/domain_phase_mix/launch_starcoder_epoch_matching.py": "2dea0230c54d0e8dd0d33d27bacda690177e196c46f135eea4951492fc3f0898",
+    "experiments/domain_phase_mix/starcoder_epoch_matching.py": "29dac8e4085591732c329fe6a238f07cb4e02cdc6198ce344d4ab8b599619085",
+    "lib/levanter/src/levanter/data/text/datasets.py": "c3ea1ea1f03ac5b96f81c208ce81fd50d5ebd9a74c57cb31ec02619fb4188948",
+    "lib/levanter/src/levanter/data/text/formats.py": "cd9371c30025fa0ed2c9cb72215f1503e8d7ffd2e71a336866a2986f7126c529",
+    "lib/levanter/src/levanter/data/text/cache.py": "383e718429f2642f17b20af9972009ca16fbddbdbf217037e15c6618da9d4990",
+    "lib/levanter/src/levanter/store/cache.py": "55d704474f94d9a84b3f306c40f3263db080da7633a39cbb438e64668a4e4881",
+    "lib/levanter/src/levanter/data/mixture.py": "67e97941a79753b2e5865f7f41c7762436a428599ecd1a60d643aa891a817685",
+    "lib/levanter/src/levanter/data/dataset.py": "021f5336885a2b9dbe6a60abb26ff4809c0b3c4733baa81a1ba8830be6f56993",
+    "lib/levanter/src/levanter/tokenizers.py": "c49f9f74dc25e683ee9dba413c4008ecbc78a4bac864cba4647a129d6eb0dcb3",
+    "lib/levanter/src/levanter/models/qwen.py": "241b086569a8aa23b3a006a4be3ebc9142c45cdda8eaef81a19dabc77526b66b",
+    "lib/levanter/src/levanter/models/llama.py": "f4ebbfbff8708d76e300d70e70c1393ff9553e46c251c38de3d71cd5b948de57",
+    "lib/levanter/src/levanter/optim/muonh.py": "db9fde2f87994a5ae45581f23051365b4aa20db6bf3d584d6c00a1ee74c19412",
+    "lib/levanter/src/levanter/main/train_lm.py": "3d1fd8e1238b2acb829649a193f4bc9e3c4eccc10cc2cbc0bef2fbc6428e8f76",
+    "lib/levanter/src/levanter/trainer.py": "c45bd422f0ae23a4efd45610becaa8409d101b4bcaa396fca1e1348847eca03c",
+    "lib/marin/src/marin/experiment/train.py": "138170826fce499a37dcd09354079ac929bbd582ff2cf0dc80bce3b57b6628cf",
+    "lib/marin/src/marin/training/training.py": "4809c96be5a972241a6def1ed097ce195a6d41307bf552422ba97df8455adcb2",
+    "uv.lock": "347c4bb876ef55f60ecd5cf137d22016aaa742387717d20e296ca0ff2cc05dd5",
+    "experiments/domain_phase_mix/starcoder_tpp10_assets/design.json": "bbcbfffb09ff23654abe115ecdc58bfe4bd5f073bff772246469eafcf917d781",
+    "experiments/domain_phase_mix/starcoder_tpp10_assets/pins.json": "e555f7ec9484c5ec813593de3cd2091fa3a0d35907f8a3209c086fd7de3d1068",
+    "experiments/domain_phase_mix/starcoder_tpp10_assets/sources.json": "9f9b80e55ca9d2d9decc3125336000713c81e941b8f4c08b61f898566259e44a",
+    "experiments/domain_phase_mix/starcoder_tpp10_assets/special_tokens_map.json": "6fa06efa2785e450051989a6f8fb4416b10149ded485ddd3f127a40734f5cfd0",
+    "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer.json": "bcd04f0eadf90287bd26e1a183ac487d8a141b09b06aecb7725bbdd343640f2e",
+    "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer.model": "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347",
+    "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer_config.json": "f514e7c3008881b6ba7e6a0cdb44c71ce47dc335920dac143ae7bc788197e53a"
+  },
+  "allocation_neighborhood": [
+    {
+      "percent": 50,
+      "proxy_allocation": {
+        "hq_actual": 3800,
+        "hq_synth": 10559,
+        "medium_high": 3437,
+        "medium": 13843,
+        "medium_low": 6055,
+        "low_actual": 2688,
+        "starcoder": 40642
+      },
+      "target_allocation": {
+        "hq_actual": 68944,
+        "hq_synth": 191757,
+        "medium_high": 62486,
+        "medium": 251363,
+        "medium_low": 109876,
+        "low_actual": 48835,
+        "starcoder": 737587
+      },
+      "matched_epochs": 7.937890625,
+      "target_epochs": 7.937187930440771,
+      "relative_error": 8.853192911484342e-05,
+      "realized_target_fraction": 0.501470580236707,
+      "realized_proxy_fraction": 0.5016044628751974
+    },
+    {
+      "percent": 55,
+      "proxy_allocation": {
+        "hq_actual": 3406,
+        "hq_synth": 9491,
+        "medium_high": 3082,
+        "medium": 12457,
+        "medium_low": 5463,
+        "low_actual": 2410,
+        "starcoder": 44715
+      },
+      "target_allocation": {
+        "hq_actual": 61761,
+        "hq_synth": 172365,
+        "medium_high": 56023,
+        "medium": 226228,
+        "medium_low": 99108,
+        "low_actual": 43806,
+        "starcoder": 811557
+      },
+      "matched_epochs": 8.7333984375,
+      "target_epochs": 8.733180526859504,
+      "relative_error": 2.4952036640657482e-05,
+      "realized_target_fraction": 0.5517612968845184,
+      "realized_proxy_fraction": 0.5518735189573459
+    },
+    {
+      "percent": 60,
+      "proxy_allocation": {
+        "hq_actual": 3011,
+        "hq_synth": 8460,
+        "medium_high": 2729,
+        "medium": 11070,
+        "medium_low": 4868,
+        "low_actual": 2134,
+        "starcoder": 48752
+      },
+      "target_allocation": {
+        "hq_actual": 54579,
+        "hq_synth": 153692,
+        "medium_high": 49556,
+        "medium": 201101,
+        "medium_low": 88330,
+        "low_actual": 38782,
+        "starcoder": 884808
+      },
+      "matched_epochs": 9.521875,
+      "target_epochs": 9.521435950413224,
+      "relative_error": 4.61116988090815e-05,
+      "realized_target_fraction": 0.601563179879906,
+      "realized_proxy_fraction": 0.6016982622432859
+    },
+    {
+      "percent": 65,
+      "proxy_allocation": {
+        "hq_actual": 2655,
+        "hq_synth": 7393,
+        "medium_high": 2412,
+        "medium": 9687,
+        "medium_low": 4233,
+        "low_actual": 1899,
+        "starcoder": 52745
+      },
+      "target_allocation": {
+        "hq_actual": 48114,
+        "hq_synth": 134300,
+        "medium_high": 43813,
+        "medium": 175965,
+        "medium_low": 76840,
+        "low_actual": 34472,
+        "starcoder": 957344
+      },
+      "matched_epochs": 10.3017578125,
+      "target_epochs": 10.301997245179063,
+      "relative_error": 2.3241384497052486e-05,
+      "realized_target_fraction": 0.6508789487424941,
+      "realized_proxy_fraction": 0.6509799565560821
+    },
+    {
+      "percent": 70,
+      "proxy_allocation": {
+        "hq_actual": 2258,
+        "hq_synth": 6320,
+        "medium_high": 2063,
+        "medium": 8304,
+        "medium_low": 3637,
+        "low_actual": 1620,
+        "starcoder": 56822
+      },
+      "target_allocation": {
+        "hq_actual": 40933,
+        "hq_synth": 114910,
+        "medium_high": 37345,
+        "medium": 150826,
+        "medium_low": 66080,
+        "low_actual": 29446,
+        "starcoder": 1031308
+      },
+      "matched_epochs": 11.098046875,
+      "target_epochs": 11.097925275482094,
+      "relative_error": 1.0956959511476683e-05,
+      "realized_target_fraction": 0.7011655861108693,
+      "realized_proxy_fraction": 0.7012983807266983
+    }
+  ],
+  "target_p060_above_chord_using_realized_fractions_bpb": 0.001101789929414898,
+  "previous_checkpoint_checks": [
+    {
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p000_s20260910_previous_checkpoint_audit.json",
+      "sha256": "2e160d9e1c2268a5b471bac4d01695df743a27ec2d3a86b4a235e392c56eada3",
+      "run_name": "tpp10_target_p000_s20260910",
+      "bpb_reconstruction_error": 9.185753424567622e-08
+    },
+    {
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_unmatched_p000_s20260910_previous_checkpoint_audit.json",
+      "sha256": "0e624ffdcfbe11f9d8e3afa2089712a3febc3fd25eba474873f552f5d973df6a",
+      "run_name": "tpp10_unmatched_p000_s20260910",
+      "bpb_reconstruction_error": 1.2247643983442913e-06
+    },
+    {
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_wikipedia_matched_p050_s20260910_previous_checkpoint_audit.json",
+      "sha256": "edd196e65f60ac534d0a627dca007e932b697a22c181a9f89ec8b148a1b53ee1",
+      "run_name": "tpp10_wikipedia_matched_p050_s20260910",
+      "bpb_reconstruction_error": 3.275683306824817e-07
+    }
+  ],
+  "limitations": [
+    "One target training seed; no uncertainty interval or repeated endpoint validation near p060.",
+    "Two proxy trainer seeds and three matched subsets do not resolve mechanism; shared data seed/order and finite support can correlate curves.",
+    "Checkpoint metadata and archived runtime/configuration receipts were checked; multi-gigabyte state payloads and bit-identical resume were not replayed.",
+    "Three archived checkpoint audits support population normalization but do not freshly rescore p055/p060/p065/p070.",
+    "A positive chord residual measures local shape; linearity is a diagnostic baseline and is not a predicted true response.",
+    "Echo prior-work search returned HTTP 403; no Echo publication attempted. Canonical data, paper, and ledger were left untouched."
+  ]
+}

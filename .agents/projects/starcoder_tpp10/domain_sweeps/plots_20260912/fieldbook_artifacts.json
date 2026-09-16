@@ -1,0 +1,102 @@
+[
+  {
+    "file": "completed_sweeps.png",
+    "artifact": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789193165.6083071,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/plots_20260912/completed_sweeps.png",
+        "fieldbook.local_size_at_capture": 294045
+      },
+      "content_hash": "sha256:71fe58849e8577ee793072d0fdd85f936409ae985b2a9ad044754879a919366e",
+      "created_at": "2026-09-12T06:10:00Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a3sc87eag50ssyqxfcc86g",
+      "job_id": null,
+      "run_id": null,
+      "type": "plot",
+      "updated_at": "2026-09-12T06:10:00Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/plots_20260912/completed_sweeps.png"
+    }
+  },
+  {
+    "file": "component_tradeoffs.png",
+    "artifact": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789193165.9117396,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/plots_20260912/component_tradeoffs.png",
+        "fieldbook.local_size_at_capture": 346573
+      },
+      "content_hash": "sha256:2d5fe092ddbd8ab0ebb88e6556b70125db49bffcb9410fede08fd4ba3868d635",
+      "created_at": "2026-09-12T06:10:00Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a3scha0n78b5b48d75srv6",
+      "job_id": null,
+      "run_id": null,
+      "type": "plot",
+      "updated_at": "2026-09-12T06:10:00Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/plots_20260912/component_tradeoffs.png"
+    }
+  },
+  {
+    "file": "corrected_results.json",
+    "artifact": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789192943.0119317,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/plots_20260912/corrected_results.json",
+        "fieldbook.local_size_at_capture": 80448
+      },
+      "content_hash": "sha256:38c1354553328b19101dfe4fa70810dc9749c3b0a409cb9ee814c99b2ab69130",
+      "created_at": "2026-09-12T06:10:01Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a3sct1kqhxy0rsnv29bhxd",
+      "job_id": null,
+      "run_id": null,
+      "type": "metric-table",
+      "updated_at": "2026-09-12T06:10:01Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/plots_20260912/corrected_results.json"
+    }
+  },
+  {
+    "file": "summary.json",
+    "artifact": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789193165.2944398,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/plots_20260912/summary.json",
+        "fieldbook.local_size_at_capture": 2286
+      },
+      "content_hash": "sha256:8bab265fc4e245c53d255d6414898f1687b61fc04e62b6a6beeaa0a600df4ff0",
+      "created_at": "2026-09-12T06:10:01Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a3sd38zehmw8e7zagbesk6",
+      "job_id": null,
+      "run_id": null,
+      "type": "metric-table",
+      "updated_at": "2026-09-12T06:10:01Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/plots_20260912/summary.json"
+    }
+  },
+  {
+    "file": "README.md",
+    "artifact": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789193399.997763,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/plots_20260912/README.md",
+        "fieldbook.local_size_at_capture": 4354
+      },
+      "content_hash": "sha256:449958c0746dd842cdba8e7efe256ff92805330eb0a309025ee4ef05c53f3e5c",
+      "created_at": "2026-09-12T06:10:01Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a3sdcwv04vqawns61tfnbc",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-12T06:10:01Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/plots_20260912/README.md"
+    }
+  }
+]

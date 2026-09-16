@@ -1,0 +1,6 @@
+Job: /calvinxu/mariner-ladder-accuracy-1e21-v5p-20260914/mariner-ladder-accuracy-unimax8_1e21-d685cd-9ba0b1dc80e0 (/calvinxu/mariner-ladder-accuracy-1e21-v5p-20260914/mariner-ladder-accuracy-unimax8_1e21-d685cd-9ba0b1dc80e0)
+State: running  exit=0  failures=0  preemptions=0
+Tasks: 0/1 completed  running=1
+
+  TASK  STATE    EXIT    DURATION       PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  running  -       37.23 seconds  -           -

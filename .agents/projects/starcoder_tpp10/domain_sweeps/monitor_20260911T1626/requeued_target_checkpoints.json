@@ -1,0 +1,54 @@
+{
+  "status": "verified",
+  "checked_at": "2026-09-11T16:27:54.341645+00:00",
+  "rows": [
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590",
+      "run_name": "tpp10_target_p065_s20260910",
+      "latest": {
+        "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09/checkpoints/step-2283/metadata.json",
+        "generation": "1789142836395311",
+        "metadata_sha256": "19669526a1d39fe402e2821a78942418273afe089e62cd9091955d8580b72928",
+        "metadata": {
+          "step": 2283,
+          "timestamp": "2026-09-11T16:07:16.196006",
+          "is_temporary": true
+        }
+      },
+      "metadata_records": 1,
+      "listed_objects": 7
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9",
+      "run_name": "tpp10_target_p060_s20260910",
+      "latest": {
+        "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09/checkpoints/step-6958/metadata.json",
+        "generation": "1789142803516288",
+        "metadata_sha256": "d670cbd223c434d01f4b0bcbeb108d7daf307bafe53e8bb08b27673bfed5217e",
+        "metadata": {
+          "step": 6958,
+          "timestamp": "2026-09-11T16:06:43.388476",
+          "is_temporary": true
+        }
+      },
+      "metadata_records": 1,
+      "listed_objects": 7
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+      "run_name": "tpp10_target_p055_s20260910",
+      "latest": {
+        "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09/checkpoints/step-10759/metadata.json",
+        "generation": "1789142234112601",
+        "metadata_sha256": "03cd84d725638631ed0307ad7933755e12fb59785994f78ccafa71b141b4a741",
+        "metadata": {
+          "step": 10759,
+          "timestamp": "2026-09-11T15:57:13.988422",
+          "is_temporary": true
+        }
+      },
+      "metadata_records": 1,
+      "listed_objects": 7
+    }
+  ]
+}

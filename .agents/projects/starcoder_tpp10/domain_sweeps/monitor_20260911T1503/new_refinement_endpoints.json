@@ -1,0 +1,267 @@
+{
+  "status": "passed",
+  "checked_at": "2026-09-11T15:06:23.546052+00:00",
+  "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+  "rows": [
+    {
+      "run_name": "tpp10_matched_p060_s20260910_d20260912",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p060_s20260910_d20260912/2026.09.09",
+      "fingerprint": "74ed0c74",
+      "step": 2531,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "value": 1.164966106414795,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p060_s20260910_d20260912/2026.09.09/checkpoints/step-2531",
+        "metadata_sha256": "5cdf38e5e188d07e2b4f106f4ef93a7b9464fe2b67e13ca78d73157068824f68",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-11T14:55:51.774740",
+          "is_temporary": false
+        }
+      },
+      "wandb_state": "finished",
+      "runtime_verified": true,
+      "status": "passed"
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260910_d20260913",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p060_s20260910_d20260913/2026.09.09",
+      "fingerprint": "d54de9e1",
+      "step": 2531,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "value": 1.1681418418884277,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p060_s20260910_d20260913/2026.09.09/checkpoints/step-2531",
+        "metadata_sha256": "bc9bf877c7eaf2c1b73734697e71bf0ae1df6e03f354689b4bf22d023aa57d02",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-11T15:02:00.848419",
+          "is_temporary": false
+        }
+      },
+      "wandb_state": "finished",
+      "runtime_verified": true,
+      "status": "passed"
+    },
+    {
+      "run_name": "tpp10_unmatched_p060_s20260911",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p060_s20260911/2026.09.09",
+      "fingerprint": "542a2146",
+      "step": 2531,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "value": 1.1156409978866577,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p060_s20260911/2026.09.09/checkpoints/step-2531",
+        "metadata_sha256": "a0e14d51f36343d685d384cd3a624fd18519058e70e1cfe011ff328ce8108aa2",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-11T14:55:59.279180",
+          "is_temporary": false
+        }
+      },
+      "wandb_state": "finished",
+      "runtime_verified": true,
+      "status": "passed"
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260911_d20260912",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p060_s20260911_d20260912/2026.09.09",
+      "fingerprint": "d936a903",
+      "step": 2531,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "value": 1.1766693592071533,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p060_s20260911_d20260912/2026.09.09/checkpoints/step-2531",
+        "metadata_sha256": "7493b3d79b1acb4e3d314cfdf13a745f7451eae660c18adf7dc380bef5edb24a",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-11T14:55:58.264696",
+          "is_temporary": false
+        }
+      },
+      "wandb_state": "finished",
+      "runtime_verified": true,
+      "status": "passed"
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260911_d20260913",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p060_s20260911_d20260913/2026.09.09",
+      "fingerprint": "ded30803",
+      "step": 2531,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "value": 1.1643712520599365,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p060_s20260911_d20260913/2026.09.09/checkpoints/step-2531",
+        "metadata_sha256": "8758afde28cf015b43992753cd805aab191e82a74710498e30ab19f9bef5f246",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-11T14:56:04.625685",
+          "is_temporary": false
+        }
+      },
+      "wandb_state": "finished",
+      "runtime_verified": true,
+      "status": "passed"
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260911_d20260914",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p060_s20260911_d20260914/2026.09.09",
+      "fingerprint": "325c4198",
+      "step": 2531,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "value": 1.1653070449829102,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p060_s20260911_d20260914/2026.09.09/checkpoints/step-2531",
+        "metadata_sha256": "4f2d07bb702e68c8083dd19a6f537ccd3067f4aabb2c75f3508887fb37ac31b5",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-11T15:02:04.307575",
+          "is_temporary": false
+        }
+      },
+      "wandb_state": "finished",
+      "runtime_verified": true,
+      "status": "passed"
+    },
+    {
+      "run_name": "tpp10_unmatched_p065_s20260910",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p065_s20260910/2026.09.09",
+      "fingerprint": "649b1030",
+      "step": 2531,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "value": 1.1063889265060425,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p065_s20260910/2026.09.09/checkpoints/step-2531",
+        "metadata_sha256": "4ec72066d9293863cbe9aacdc46ea87e6d085b0ea21e5ae1dd35115c01cda66a",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-11T14:56:24.241371",
+          "is_temporary": false
+        }
+      },
+      "wandb_state": "finished",
+      "runtime_verified": true,
+      "status": "passed"
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260910_d20260912",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p065_s20260910_d20260912/2026.09.09",
+      "fingerprint": "8a3eeb04",
+      "step": 2531,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "value": 1.1672840118408203,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p065_s20260910_d20260912/2026.09.09/checkpoints/step-2531",
+        "metadata_sha256": "6f91144ce3a9f633b66a033fd0ae0d03f909f0b75b7ccf1fa6d411a9c378d447",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-11T14:56:37.619939",
+          "is_temporary": false
+        }
+      },
+      "wandb_state": "finished",
+      "runtime_verified": true,
+      "status": "passed"
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260910_d20260913",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p065_s20260910_d20260913/2026.09.09",
+      "fingerprint": "308470ef",
+      "step": 2531,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "value": 1.1608768701553345,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p065_s20260910_d20260913/2026.09.09/checkpoints/step-2531",
+        "metadata_sha256": "d1295d4eef2cb286996bfe5312d21631a9cb9b397c037bbe2670a9856d2ac5ba",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-11T14:56:38.529261",
+          "is_temporary": false
+        }
+      },
+      "wandb_state": "finished",
+      "runtime_verified": true,
+      "status": "passed"
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260910_d20260914",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p065_s20260910_d20260914/2026.09.09",
+      "fingerprint": "7a481604",
+      "step": 2531,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "value": 1.158751130104065,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p065_s20260910_d20260914/2026.09.09/checkpoints/step-2531",
+        "metadata_sha256": "f94b5b43154044c6144d6eecc92748a4361416f724a3a965a593a5a08184cc65",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-11T15:02:12.607052",
+          "is_temporary": false
+        }
+      },
+      "wandb_state": "finished",
+      "runtime_verified": true,
+      "status": "passed"
+    },
+    {
+      "run_name": "tpp10_unmatched_p065_s20260911",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p065_s20260911/2026.09.09",
+      "fingerprint": "03504397",
+      "step": 2531,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "value": 1.1012790203094482,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p065_s20260911/2026.09.09/checkpoints/step-2531",
+        "metadata_sha256": "e4a07749b61a4e896948b72033a8571464ff5f2bb2bf9d76bdd41f10f2847304",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-11T15:02:21.329824",
+          "is_temporary": false
+        }
+      },
+      "wandb_state": "finished",
+      "runtime_verified": true,
+      "status": "passed"
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260911_d20260913",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p065_s20260911_d20260913/2026.09.09",
+      "fingerprint": "a3ea2dfb",
+      "step": 2531,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "value": 1.17033052444458,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p065_s20260911_d20260913/2026.09.09/checkpoints/step-2531",
+        "metadata_sha256": "bdf0ff1d95830758188988aea30a6ea5aa11e0b9f077d11e5526b312a233cf41",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-11T15:02:38.963440",
+          "is_temporary": false
+        }
+      },
+      "wandb_state": "finished",
+      "runtime_verified": true,
+      "status": "passed"
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260911_d20260914",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p065_s20260911_d20260914/2026.09.09",
+      "fingerprint": "a5793a62",
+      "step": 2531,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "value": 1.1697334051132202,
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p065_s20260911_d20260914/2026.09.09/checkpoints/step-2531",
+        "metadata_sha256": "e12a1771b7b4012f5fcf6dbd3562e6c246f4e2551d9e2ed6a26d9acbb64e6b71",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-11T15:02:43.421305",
+          "is_temporary": false
+        }
+      },
+      "wandb_state": "finished",
+      "runtime_verified": true,
+      "status": "passed"
+    }
+  ]
+}

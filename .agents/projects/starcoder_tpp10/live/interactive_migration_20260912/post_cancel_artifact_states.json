@@ -1,0 +1,365 @@
+{
+  "checked_at": "2026-09-12T21:33:37.080028+00:00",
+  "rows": [
+    {
+      "run_name": "tpp10_target_p040_s20260910",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "30253400",
+      "expected_fingerprint": "30253400"
+    },
+    {
+      "run_name": "tpp10_unmatched_p040_s20260910",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "07f928f8",
+      "expected_fingerprint": "07f928f8"
+    },
+    {
+      "run_name": "tpp10_matched_p040_s20260910_d20260912",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "674bb523",
+      "expected_fingerprint": "674bb523"
+    },
+    {
+      "run_name": "tpp10_matched_p040_s20260910_d20260913",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "6af988a4",
+      "expected_fingerprint": "6af988a4"
+    },
+    {
+      "run_name": "tpp10_matched_p040_s20260910_d20260914",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "812e4301",
+      "expected_fingerprint": "812e4301"
+    },
+    {
+      "run_name": "tpp10_unmatched_p040_s20260911",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "fc7794f4",
+      "expected_fingerprint": "fc7794f4"
+    },
+    {
+      "run_name": "tpp10_matched_p040_s20260911_d20260912",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "f05cebfe",
+      "expected_fingerprint": "f05cebfe"
+    },
+    {
+      "run_name": "tpp10_matched_p040_s20260911_d20260913",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "3425d122",
+      "expected_fingerprint": "3425d122"
+    },
+    {
+      "run_name": "tpp10_matched_p040_s20260911_d20260914",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "a4f685c0",
+      "expected_fingerprint": "a4f685c0"
+    },
+    {
+      "run_name": "tpp10_target_p055_s20260910",
+      "old_status": "RUNNING",
+      "status": "RUNNING",
+      "active_lock_holder": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260905-0245-08c4ed91-139814826383040)",
+      "fingerprint": null,
+      "expected_fingerprint": "650ffe00"
+    },
+    {
+      "run_name": "tpp10_unmatched_p055_s20260910",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "48e3072a",
+      "expected_fingerprint": "48e3072a"
+    },
+    {
+      "run_name": "tpp10_matched_p055_s20260910_d20260912",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "9002e2e9",
+      "expected_fingerprint": "9002e2e9"
+    },
+    {
+      "run_name": "tpp10_matched_p055_s20260910_d20260913",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "c4757af5",
+      "expected_fingerprint": "c4757af5"
+    },
+    {
+      "run_name": "tpp10_matched_p055_s20260910_d20260914",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "46613693",
+      "expected_fingerprint": "46613693"
+    },
+    {
+      "run_name": "tpp10_unmatched_p055_s20260911",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "79654c6a",
+      "expected_fingerprint": "79654c6a"
+    },
+    {
+      "run_name": "tpp10_matched_p055_s20260911_d20260912",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "7ca27797",
+      "expected_fingerprint": "7ca27797"
+    },
+    {
+      "run_name": "tpp10_matched_p055_s20260911_d20260913",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "4e530458",
+      "expected_fingerprint": "4e530458"
+    },
+    {
+      "run_name": "tpp10_matched_p055_s20260911_d20260914",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "72120697",
+      "expected_fingerprint": "72120697"
+    },
+    {
+      "run_name": "tpp10_target_p060_s20260910",
+      "old_status": "RUNNING",
+      "status": "RUNNING",
+      "active_lock_holder": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260905-0245-08c4ed91-139814313641664)",
+      "fingerprint": null,
+      "expected_fingerprint": "1e801f9f"
+    },
+    {
+      "run_name": "tpp10_unmatched_p060_s20260910",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "3240cc37",
+      "expected_fingerprint": "3240cc37"
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260910_d20260912",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "74ed0c74",
+      "expected_fingerprint": "74ed0c74"
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260910_d20260913",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "d54de9e1",
+      "expected_fingerprint": "d54de9e1"
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260910_d20260914",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "68892fa3",
+      "expected_fingerprint": "68892fa3"
+    },
+    {
+      "run_name": "tpp10_unmatched_p060_s20260911",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "542a2146",
+      "expected_fingerprint": "542a2146"
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260911_d20260912",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "d936a903",
+      "expected_fingerprint": "d936a903"
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260911_d20260913",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "ded30803",
+      "expected_fingerprint": "ded30803"
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260911_d20260914",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "325c4198",
+      "expected_fingerprint": "325c4198"
+    },
+    {
+      "run_name": "tpp10_target_p065_s20260910",
+      "old_status": "RUNNING",
+      "status": "RUNNING",
+      "active_lock_holder": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260905-0245-08c4ed91-139814162572992)",
+      "fingerprint": null,
+      "expected_fingerprint": "97b113a1"
+    },
+    {
+      "run_name": "tpp10_unmatched_p065_s20260910",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "649b1030",
+      "expected_fingerprint": "649b1030"
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260910_d20260912",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "8a3eeb04",
+      "expected_fingerprint": "8a3eeb04"
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260910_d20260913",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "308470ef",
+      "expected_fingerprint": "308470ef"
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260910_d20260914",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "7a481604",
+      "expected_fingerprint": "7a481604"
+    },
+    {
+      "run_name": "tpp10_unmatched_p065_s20260911",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "03504397",
+      "expected_fingerprint": "03504397"
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260911_d20260912",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "d2427a1d",
+      "expected_fingerprint": "d2427a1d"
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260911_d20260913",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "a3ea2dfb",
+      "expected_fingerprint": "a3ea2dfb"
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260911_d20260914",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "a5793a62",
+      "expected_fingerprint": "a5793a62"
+    },
+    {
+      "run_name": "tpp10_target_p080_s20260910",
+      "old_status": "RUNNING",
+      "status": "RUNNING",
+      "active_lock_holder": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260905-0245-08c4ed91-139814019897024)",
+      "fingerprint": null,
+      "expected_fingerprint": "4ab6f469"
+    },
+    {
+      "run_name": "tpp10_unmatched_p080_s20260910",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "0bb7646c",
+      "expected_fingerprint": "0bb7646c"
+    },
+    {
+      "run_name": "tpp10_matched_p080_s20260910_d20260912",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "84a20fbf",
+      "expected_fingerprint": "84a20fbf"
+    },
+    {
+      "run_name": "tpp10_matched_p080_s20260910_d20260913",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "9fcb1bb0",
+      "expected_fingerprint": "9fcb1bb0"
+    },
+    {
+      "run_name": "tpp10_matched_p080_s20260910_d20260914",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "fcd900d2",
+      "expected_fingerprint": "fcd900d2"
+    },
+    {
+      "run_name": "tpp10_unmatched_p080_s20260911",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "839b3b6c",
+      "expected_fingerprint": "839b3b6c"
+    },
+    {
+      "run_name": "tpp10_matched_p080_s20260911_d20260912",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "e309854f",
+      "expected_fingerprint": "e309854f"
+    },
+    {
+      "run_name": "tpp10_matched_p080_s20260911_d20260913",
+      "old_status": "SUCCESS",
+      "status": "SUCCESS",
+      "active_lock_holder": null,
+      "fingerprint": "492f8031",
+      "expected_fingerprint": "492f8031"
+    },
+    {
+      "run_name": "tpp10_matched_p080_s20260911_d20260914",
+      "old_status": "RUNNING",
+      "status": "RUNNING",
+      "active_lock_holder": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260905-0245-08c4ed91-139813877221056)",
+      "fingerprint": null,
+      "expected_fingerprint": "f310450f"
+    }
+  ]
+}

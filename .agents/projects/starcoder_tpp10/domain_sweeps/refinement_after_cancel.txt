@@ -1,0 +1,49 @@
+I20260911 04:05:25 8553706816 iris.cluster.config Loading config from lib/iris/config/marin.yaml
+Not all requested scopes were granted by the authorization server, missing scopes email.
+JOB ID                                                           STATE      SUBMITTED                         REASON
+/calvinxu/starcoder-tpp10-refinement/verified_training-92c6adac  killed     2026-09-11T07:11:36.116000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-0ce702b7  killed     2026-09-11T07:11:35.598000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-d77be194  killed     2026-09-11T07:11:35.204000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-cf6e1c9a  killed     2026-09-11T07:11:34.782000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-d9002fed  killed     2026-09-11T07:11:34.223000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-957b8f0c  killed     2026-09-11T07:11:33.877000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-32487660  killed     2026-09-11T07:11:33.479000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-55c8c616  killed     2026-09-11T07:11:33.143000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-32fdeb12  killed     2026-09-11T07:11:32.856000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-f895305b  killed     2026-09-11T07:11:32.122000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-52038c22  killed     2026-09-11T07:11:31.628000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-cfef10a7  killed     2026-09-11T07:11:31.125000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-c26afa18  killed     2026-09-11T07:11:30.941000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-43b157c8  killed     2026-09-11T07:11:30.387000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-d64db282  killed     2026-09-11T07:11:30.124000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-05e184e6  killed     2026-09-11T07:11:29.699000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-df862f23  killed     2026-09-11T07:11:29.327000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-2f744dba  killed     2026-09-11T07:11:28.905000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-31e7c5ce  killed     2026-09-11T07:11:28.420000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-dfa30856  killed     2026-09-11T07:11:28.127000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-824ba00f  killed     2026-09-11T07:11:27.577000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-8857c0fd  killed     2026-09-11T07:11:27.234000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-0530f635  killed     2026-09-11T07:11:26.838000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-282d53ae  killed     2026-09-11T07:11:26.445000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-082af850  killed     2026-09-11T07:11:26.037000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-87afbf59  killed     2026-09-11T07:11:25.582000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-3689a32f  killed     2026-09-11T07:11:25.039000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-5ebb6cc3  killed     2026-09-11T07:11:24.748000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-54836e19  killed     2026-09-11T07:11:24.490000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-9ae89296  killed     2026-09-11T07:11:24.336000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-16729990  killed     2026-09-11T07:11:23.497000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-02c57e63  killed     2026-09-11T07:11:22.989000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-3fb644de  killed     2026-09-11T07:11:22.455000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-209bec1e  succeeded  2026-09-11T07:11:22.015000+00:00
+/calvinxu/starcoder-tpp10-refinement/verified_training-82407a60  succeeded  2026-09-11T07:11:21.451000+00:00
+/calvinxu/starcoder-tpp10-refinement/verified_training-a76fbc50  killed     2026-09-11T07:11:21.210000+00:00  Parent job terminated
+/calvinxu/starcoder-tpp10-refinement/verified_training-fd93a3c5  succeeded  2026-09-11T07:11:20.684000+00:00
+/calvinxu/starcoder-tpp10-refinement/verified_training-2cd47e23  succeeded  2026-09-11T07:11:20.675000+00:00
+/calvinxu/starcoder-tpp10-refinement/verified_training-69dfe299  succeeded  2026-09-11T07:11:20.606000+00:00
+/calvinxu/starcoder-tpp10-refinement/verified_training-1ee23458  succeeded  2026-09-11T07:11:20.119000+00:00
+/calvinxu/starcoder-tpp10-refinement/verified_training-a2676db4  succeeded  2026-09-11T07:11:19.655000+00:00
+/calvinxu/starcoder-tpp10-refinement/verified_training-f8bfd776  succeeded  2026-09-11T07:11:18.451000+00:00
+/calvinxu/starcoder-tpp10-refinement/verified_training-3e23af81  succeeded  2026-09-11T07:11:17.680000+00:00
+/calvinxu/starcoder-tpp10-refinement/verified_training-394763fd  succeeded  2026-09-11T07:11:16.946000+00:00
+/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d  succeeded  2026-09-11T07:11:16.635000+00:00
+/calvinxu/starcoder-tpp10-refinement                             killed     2026-09-11T07:08:42.923000+00:00  Terminated by user

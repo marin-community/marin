@@ -63,6 +63,7 @@ HIDDEN_OBSERVATORY_IDS = frozenset(
 FEATURE_TRANSFORMS = (
     "permuted_inventory",
     "weight_coordinate",
+    "common_inventory",
     "shuffled_families",
     "no_families",
     "outcome_permutation",
@@ -389,6 +390,25 @@ PARENTS: tuple[ModelEntry, ...] = (
         note="Affine in weights equals affine in exposures because E_b = c_b w_b, so the coordinate flag is inert here.",
     ),
     ModelEntry(
+        "linear_exposure",
+        "parent",
+        (),
+        "affine_weight",
+        "Linear in materialized epochs",
+        _mechanisms(
+            coordinate="exposure", benefit="affine", sharing="per_bucket", head="signed", estimator="least_squares"
+        ),
+        "phase-1 weight columns duplicate the phase-0 columns at a tied policy; one weight block remains",
+        "none",
+        "centered_minimum_norm_lstsq",
+        "none",
+        _static(models.LinearWeightModel(model_id="linear_exposure", coordinate="exposure")),
+        note=(
+            "The same affine fit on E_b = c_b w_b: the rescaling is absorbed by the coefficients, so its predictions "
+            "equal linear_weight's up to floating point; run as the paper's explicit coordinate check."
+        ),
+    ),
+    ModelEntry(
         "olmix_loglinear_taskwise",
         "parent",
         ("olmix_loglinear",),
@@ -412,6 +432,35 @@ PARENTS: tuple[ModelEntry, ...] = (
             "early stop is the only regularization the positive log-linear law has. An analytic-gradient solver "
             "on the same objective reaches lower training loss with coefficients up to 196 and explodes out of "
             "fold, so it is kept as the estimator ablation rather than the parent."
+        ),
+    ),
+    ModelEntry(
+        "olmix_loglinear_taskwise_exposure",
+        "parent",
+        (),
+        "olmix_positive_loglinear",
+        "OLMix log-linear on materialized epochs",
+        _mechanisms(
+            coordinate="exposure",
+            benefit="exp_linear",
+            link="positive_log",
+            sharing="per_bucket",
+            head="signed",
+            estimator="huber_multistart",
+        ),
+        "the aggregate policy alpha0 w0 + alpha1 w1 equals w; no phase parameters exist",
+        "none",
+        "olmix_loglinear_fit.fit_olmix_loglinear_model (48 starts, Huber delta 0.02, numerical gradient)",
+        "none",
+        _static(
+            models.OlmixTaskwiseModel(
+                model_id="olmix_loglinear_taskwise_exposure", analytic_gradient=False, coordinate="exposure"
+            )
+        ),
+        note=(
+            "The positive log-linear law on E_b = c_b w_b is the same function class as on the weights (the "
+            "coefficients absorb the rescaling); any difference from olmix_loglinear_taskwise is the multistart "
+            "optimizer's, whose initialization and early stop are not scale invariant."
         ),
     ),
     ModelEntry(
@@ -726,7 +775,7 @@ def _ablation(
             mechanisms[key.strip()] = value.strip()
     if transform == "no_families":
         mechanisms["families"] = "none"
-    elif transform in ("permuted_inventory", "weight_coordinate"):
+    elif transform in ("permuted_inventory", "weight_coordinate", "common_inventory"):
         mechanisms["coordinate"] = transform
     elif transform:
         mechanisms["families"] = transform
@@ -1398,6 +1447,14 @@ SUCCESSOR_SHAPES = tuple(
     for power in SUCCESSOR_POWERS
     for threshold in SUCCESSOR_THRESHOLDS
 )
+# Sensitivity grid: the harm threshold extended below one and halved in step (13 values; 364 shapes).
+FINE_THRESHOLDS = tuple(0.5 * step for step in range(13))
+FINE_THRESHOLD_SHAPES = tuple(
+    {"rate": rate, "power": power, "threshold": threshold}
+    for rate in SUCCESSOR_RATES
+    for power in SUCCESSOR_POWERS
+    for threshold in FINE_THRESHOLDS
+)
 SUCCESSOR_EXP_SHAPES = tuple(
     {"rate": rate, "threshold": threshold} for rate in SUCCESSOR_RATES for threshold in SUCCESSOR_THRESHOLDS
 )
@@ -1508,6 +1565,125 @@ def ablation_prior_table(scrambled: bool = False) -> tuple[tuple[str, tuple[tupl
             table[alias] = entries
             chosen_rank[alias] = rank
     return tuple(sorted(table.items()))
+
+
+FLOOR_ANCHORS_FILE = (
+    Path(__file__).resolve().parent / "reference_outputs" / "delphi_floor_anchors_20260907" / "anchors.csv"
+)
+FITTED_FLOOR_KAPPA_SEARCH_BOUNDS = (1.0, 8.0)
+# Group kappas for the pooled variant: the medians of the per-task inner-CV choices on the frozen Delphi panel
+# (`delphi_fitted_floor_selection_20260907/group_kappas.json`, 2026-09-07), one floor position per task family.
+FITTED_FLOOR_GROUP_KAPPAS: dict[str, float] = {
+    "code": 1.49,
+    "math": 1.43,
+    "mmlu": 2.24,
+    "qa/other": 2.94,
+    "science": 3.86,
+}
+
+
+@functools.cache
+def floor_anchors() -> dict[tuple[str, str], tuple[float, float]]:
+    """(panel, component) -> (proportional BPB, repeat SD) for the fitted-floor link's anchors."""
+    table = pd.read_csv(FLOOR_ANCHORS_FILE)
+    return {
+        (str(row.panel), str(row.component)): (float(row.proportional_bpb), float(row.repeat_sd))
+        for row in table.itertuples()
+    }
+
+
+def floor_task_group(component: str) -> str:
+    name = component.split("/")[2] if component.count("/") >= 3 else component
+    if name.startswith("mt_mbpp") or name.startswith("basic_skills_coding") or "github" in name:
+        return "code"
+    if name.startswith("minerva") or "math" in name or "arithmetic" in name:
+        return "math"
+    if name.startswith("mmlu"):
+        return "mmlu"
+    if "arxiv" in name:
+        return "science"
+    return "qa/other"
+
+
+def _fitted_floor(
+    model_id: str,
+    *,
+    group_kappas: dict[str, float] | None = None,
+    candidate_links: tuple[models.LinkKind, ...] | None = None,
+    kappa_rule: str = "argmin",
+    kappa_bounds: tuple[float, float] = FITTED_FLOOR_KAPPA_SEARCH_BOUNDS,
+    flat_profile_kappa: float | None = None,
+    noise_margin_sds: float | None = None,
+    cap_margin: float | None = None,
+    joint_rounds: int = 0,
+    fixed_kappa: float | None = None,
+    per_bucket_shapes: bool = False,
+    per_bucket_keys: tuple[str, ...] = models.PER_BUCKET_SHAPE_KEYS,
+    options: models.FamilyOptions = SUCCESSOR_OPTIONS,
+    shapes: tuple[models.Shape, ...] = SUCCESSOR_SHAPES,
+    head_kind: models.HeadKind = models.HeadKind.NNLS,
+    ridge_grid: tuple[float, ...] = SUCCESSOR_RIDGE_GRID,
+    grid_builder: Builder | None = None,
+) -> Builder:
+    """WSPU with the fitted-floor link: kappa per task by inner CV, or one fixed kappa per task family.
+
+    ``grid_builder`` replaces the WSPU design by another grid model (the conventional comparators), which then
+    receives the same floor anchors, noise margin, cap margin and kappa search.
+
+    ``options``, ``shapes``, ``head_kind`` and ``ridge_grid`` carry the parent's ablations (no harm, scrambled
+    harm, signed head) onto the floored model; the feature transforms are applied by the registry entry.
+    """
+    grid = grid_builder or _successor(
+        model_id,
+        options,
+        shapes,
+        head=models.HeadSpec(kind=head_kind, link=models.LinkKind.KAPPA_FLOOR),
+        ridge_grid=ridge_grid,
+    )
+
+    def build(features: models.Features) -> models.FittedFloorModel:
+        base: models.GridModel | models.PerBucketShapeGridModel = grid(features)
+        if per_bucket_shapes:
+            # The shape-sharing ablation: the shared grid optimum seeds a per-bucket coordinate descent.
+            base = models.PerBucketShapeGridModel(shared=base, head=base.head, free_keys=per_bucket_keys)
+        panel = features.label.split("|", 1)[0]
+        anchors = floor_anchors()
+        if (panel, features.component) in anchors:
+            anchor, noise = anchors[panel, features.component]
+        elif features.component == "":
+            # The registry table probes every entry with a blank component; no fit happens there.
+            anchor, noise = float("nan"), 0.0
+        elif any(key[0] == panel for key in anchors):
+            raise ValueError(f"no floor anchor for {panel} component {features.component!r}")
+        else:
+            # Panels without an anchor table (StarCoder curves, 60M, 300M): training median, no noise margin.
+            anchor, noise = float("nan"), 0.0
+        head = dataclasses.replace(base.head, floor_anchor=anchor, noise_sd=noise)
+        if noise_margin_sds is not None:
+            head = dataclasses.replace(head, noise_margin_sds=noise_margin_sds)
+        if cap_margin is not None:
+            head = dataclasses.replace(head, cap_margin=cap_margin)
+        if fixed_kappa is not None:
+            # The grid is scored at the fixed multiplier, which is also the fitted value.
+            head = dataclasses.replace(head, floor_kappa_prior=fixed_kappa)
+        bounds = kappa_bounds
+        if group_kappas is not None:
+            kappa = group_kappas.get(floor_task_group(features.component), models.FITTED_FLOOR_KAPPA_PRIOR)
+            head = dataclasses.replace(head, floor_kappa_prior=kappa)
+            bounds = (kappa, kappa)
+        model = models.FittedFloorModel(
+            base=dataclasses.replace(base, head=head),
+            kappa_bounds=bounds,
+            kappa_rule=kappa_rule,
+            flat_profile_kappa=flat_profile_kappa,
+            joint_rounds=joint_rounds,
+            fixed_kappa=fixed_kappa,
+        )
+        if candidate_links is not None:
+            model = dataclasses.replace(model, candidate_links=candidate_links)
+        return model
+
+    return build
 
 
 def _successor_prior(model_id: str, *, scrambled: bool) -> Builder:
@@ -1742,6 +1918,17 @@ SUCCESSOR_ABLATIONS: tuple[ModelEntry, ...] = (
         transform="weight_coordinate",
     ),
     _ablation(
+        "weibull_softplus_unscaled@common_inventory",
+        "weibull_softplus_unscaled",
+        "coordinate=common_inventory",
+        _successor("weibull_softplus_unscaled@common_inventory", head=NNLS),
+        transform="common_inventory",
+        note=(
+            "Epoch scale kept, one pool size (the mean) for every bucket (2026-09-07, reviewer point): the weight "
+            "coordinate never reaches the harm threshold, so this is the scale-matched test of the per-bucket sizes."
+        ),
+    ),
+    _ablation(
         "weibull_softplus_unscaled@signed_head",
         "weibull_softplus_unscaled",
         "head=signed",
@@ -1867,6 +2054,408 @@ SUCCESSOR_ABLATIONS: tuple[ModelEntry, ...] = (
             extra_dof=1,
         ),
         note="Bounded log-deficit link with the floor fraction chosen by inner CV per component (2026-09-06).",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@fitted_floor_link",
+        "weibull_softplus_unscaled",
+        "link=fitted_floor,floor=per_task_inner_cv",
+        _fitted_floor("weibull_softplus_unscaled@fitted_floor_link"),
+        note=(
+            "Fitted-floor link (2026-09-07): floor = proportional - kappa x (proportional - swarm minimum), kappa per "
+            "task by continuous inner-CV search with the response-space fit, identity link kept where it wins."
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@fitted_floor_link_permissive",
+        "weibull_softplus_unscaled",
+        "link=fitted_floor,floor=per_task_one_se_upper",
+        _fitted_floor("weibull_softplus_unscaled@fitted_floor_link_permissive", kappa_rule="one_se_upper"),
+        note=(
+            "Fitted-floor link with the permissive kappa rule (2026-09-07, DeepSeek review): the largest kappa within "
+            "one inner-fold SE of the inner-CV minimum, so an unidentified profile errs toward a low floor."
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=100",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 100.0),
+        ),
+        note=(
+            "One head only (2026-09-07): the log-space fit at a per-task kappa floor searched up to 100, so the "
+            "additive form is the large-kappa end of the same head."
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_cap6",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_cap6",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+        ),
+        note=(
+            "One log-space kappa-floor head with kappa bounded at 6, the largest headroom the held-out bank has shown "
+            "(2026-09-07, after the Uncheatable optimum with kappa up to 17 measured 0.9890 against 0.9711 predicted)."
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat15",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.5",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat15",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=1.5,
+        ),
+        note=(
+            "One log-space kappa-floor head, kappa in [1, 6] by inner CV, with tasks whose profile is monotone (argmin "
+            "at the bound) set to kappa 1.5, a floor near the swarm minimum (2026-09-07, after the Uncheatable miss: "
+            "the four unmoved Uncheatable tasks at kappa 1.2-1.5 reproduce the four measured Uncheatable mixtures)."
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat10",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.0",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat10",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=1.0,
+        ),
+        note="Flat-profile default sweep (2026-09-07): as @kappa_floor_link_flat15 with the default kappa 1.0.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat20",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=2.0",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat20",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=2.0,
+        ),
+        note="Flat-profile default sweep (2026-09-07): as @kappa_floor_link_flat15 with the default kappa 2.0.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat25",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=2.5",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat25",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=2.5,
+        ),
+        note="Flat-profile default sweep (2026-09-07): as @kappa_floor_link_flat15 with the default kappa 2.5.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat30",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=3.0",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat30",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=3.0,
+        ),
+        note="Flat-profile default sweep (2026-09-07): as @kappa_floor_link_flat15 with the default kappa 3.0.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat40",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=4.0",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat40",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=4.0,
+        ),
+        note="Flat-profile default sweep (2026-09-07): as @kappa_floor_link_flat15 with the default kappa 4.0.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat15_joint",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.5,shape_and_ridge=rescored_at_fitted_kappa",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat15_joint",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=1.5,
+            joint_rounds=1,
+        ),
+        note="Loose end 1 (2026-09-07): the shape grid is rescored once at the fitted kappa instead of the prior 2.5.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat15_margin2",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.5,noise_margin=2sd",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat15_margin2",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=1.5,
+            noise_margin_sds=2.0,
+        ),
+        note="Loose end 2: noise margin two repeat SDs instead of three.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat15_margin5",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.5,noise_margin=5sd",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat15_margin5",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=1.5,
+            noise_margin_sds=5.0,
+        ),
+        note="Loose end 2: noise margin five repeat SDs instead of three.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat15_cap025",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.5,cap_margin=0.25",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat15_cap025",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=1.5,
+            cap_margin=0.25,
+        ),
+        note="Loose end 2: prediction cap a quarter nat above the largest training log-deficit.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat15_cap100",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.5,cap_margin=1.0",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat15_cap100",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=1.5,
+            cap_margin=1.0,
+        ),
+        note="Loose end 2: prediction cap one nat above the largest training log-deficit.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat15_fixed15",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.5,gamma=fixed_1.5",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat15_fixed15",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=1.5,
+            fixed_kappa=1.5,
+        ),
+        note=(
+            "Simplification test (Codex brief, 2026-09-07): gamma 1.5 for every task, shape and ridge scored at 1.5, "
+            "no search."
+        ),
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat15_fixed25",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.5,gamma=fixed_2.5",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat15_fixed25",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=1.5,
+            fixed_kappa=2.5,
+        ),
+        note="Simplification test: gamma 2.5 for every task (the provisional value), shape and ridge scored at 2.5.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.5,cap_margin=none",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=1.5,
+            cap_margin=float("inf"),
+        ),
+        note="Simplification test: no training-derived prediction cap (the LINK_CLIP overflow guard remains).",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_per_bucket_shape",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.5,cap_margin=none,"
+        "sharing=per_bucket",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_per_bucket_shape",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=1.5,
+            cap_margin=float("inf"),
+            per_bucket_shapes=True,
+        ),
+        note=(
+            "Shape-sharing ablation of the frozen procedure: one (rate, power, threshold) per bucket from the same "
+            "168-shape grid by coordinate descent on the inner-CV error from the shared optimum (at most two sweeps, "
+            "ridge re-selected), then the per-task floor search of the parent."
+        ),
+    ),
+    *(
+        _ablation(
+            f"weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_per_bucket_{key}",
+            "weibull_softplus_unscaled",
+            "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.5,cap_margin=none,"
+            f"sharing=per_bucket_{key}",
+            _fitted_floor(
+                f"weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_per_bucket_{key}",
+                candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+                kappa_bounds=(1.0, 6.0),
+                flat_profile_kappa=1.5,
+                cap_margin=float("inf"),
+                per_bucket_shapes=True,
+                per_bucket_keys=(key,),
+            ),
+            note=(
+                f"Partial shape-sharing ablation: one {key} per bucket from its grid values by the same coordinate "
+                "descent, the other two shape parameters held at the shared optimum."
+            ),
+        )
+        for key in models.PER_BUCKET_SHAPE_KEYS
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_fine_threshold",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.5,cap_margin=none,"
+        "threshold_grid=0..6_step_0.5",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_fine_threshold",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=1.5,
+            cap_margin=float("inf"),
+            shapes=FINE_THRESHOLD_SHAPES,
+        ),
+        note=(
+            "Threshold-grid sensitivity of the frozen procedure: the harm threshold grid extended to 0 and halved in "
+            "step (13 values), everything else unchanged; 12 of the 58 frozen fits sit at the grid's lower edge."
+        ),
+    ),
+    # The additive variant's ablation rows of the paper's Table 8, re-based on the frozen procedure.
+    *(
+        _ablation(
+            f"weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_{suffix}",
+            "weibull_softplus_unscaled",
+            "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.5,cap_margin=none,"
+            + mechanism,
+            _fitted_floor(
+                f"weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_{suffix}",
+                candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+                kappa_bounds=(1.0, 6.0),
+                flat_profile_kappa=1.5,
+                cap_margin=float("inf"),
+                **builder_overrides,
+            ),
+            transform=transform,
+            role=role,
+            note=f"{mechanism_note} of the frozen procedure (Table 8 re-based on MARINER).",
+        )
+        for suffix, mechanism, builder_overrides, transform, role, mechanism_note in (
+            (
+                "no_harm",
+                "harm=none",
+                {
+                    "options": _options(SUCCESSOR_OPTIONS, harm="none"),
+                    "shapes": tuple(
+                        {"rate": s["rate"], "power": s["power"]}
+                        for s in SUCCESSOR_SHAPES
+                        if s["threshold"] == SUCCESSOR_THRESHOLDS[0]
+                    ),
+                },
+                None,
+                "ablation",
+                "Benefit only",
+            ),
+            (
+                "row_scrambled_harm",
+                "harm=row_scrambled_control",
+                {"options": _options(SUCCESSOR_OPTIONS, row_scrambled_harm=True)},
+                None,
+                "control",
+                "Row-scrambled harm control",
+            ),
+            (
+                "permuted_inventory",
+                "coordinate=permuted_inventory",
+                {},
+                "permuted_inventory",
+                "control",
+                "Permuted pool sizes",
+            ),
+            ("weight_coordinate", "coordinate=weight", {}, "weight_coordinate", "ablation", "Weight coordinate"),
+            ("common_inventory", "coordinate=common_inventory", {}, "common_inventory", "ablation", "One pool size"),
+            (
+                "signed_head",
+                "head=signed",
+                {"head_kind": models.HeadKind.RIDGE, "ridge_grid": (1e-8, 1e-3, 1e-2, 0.1, 1.0)},
+                None,
+                "ablation",
+                "Signed amplitudes",
+            ),
+            (
+                "outcome_permutation",
+                "control=outcome_permutation",
+                {},
+                "outcome_permutation",
+                "control",
+                "Outcome permutation",
+            ),
+        )
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@kappa_floor_link_flat15_nomargin",
+        "weibull_softplus_unscaled",
+        "link=kappa_floor_only,floor=per_task_inner_cv,kappa_max=6,flat_profile_kappa=1.5,noise_margin=none",
+        _fitted_floor(
+            "weibull_softplus_unscaled@kappa_floor_link_flat15_nomargin",
+            candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+            kappa_bounds=(1.0, 6.0),
+            flat_profile_kappa=1.5,
+            noise_margin_sds=0.0,
+        ),
+        note="Simplification test: no noise margin in the floor rule.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@response_floor_link",
+        "weibull_softplus_unscaled",
+        "link=fitted_floor_only,floor=per_task_inner_cv,kappa_max=100",
+        _fitted_floor(
+            "weibull_softplus_unscaled@response_floor_link",
+            candidate_links=(models.LinkKind.FITTED_FLOOR,),
+            kappa_bounds=(1.0, 100.0),
+        ),
+        note="One head only (2026-09-07): the response-space fit at a per-task kappa floor searched up to 100.",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@fitted_floor_link_three",
+        "weibull_softplus_unscaled",
+        "link=fitted_floor,floor=per_task_inner_cv,candidates=no_fixed_floor",
+        _fitted_floor(
+            "weibull_softplus_unscaled@fitted_floor_link_three",
+            candidate_links=(models.LinkKind.IDENTITY, models.LinkKind.KAPPA_FLOOR, models.LinkKind.FITTED_FLOOR),
+        ),
+        note="Fitted-floor link without the fixed 0.95 log-space head among the per-task candidates (2026-09-07).",
+    ),
+    _ablation(
+        "weibull_softplus_unscaled@fitted_floor_link_group",
+        "weibull_softplus_unscaled",
+        "link=fitted_floor,floor=group_kappa",
+        _fitted_floor("weibull_softplus_unscaled@fitted_floor_link_group", group_kappas=FITTED_FLOOR_GROUP_KAPPAS),
+        note="Fitted-floor link with one kappa per task family (2026-09-07); identity link kept where it wins.",
     ),
     _ablation(
         "weibull_softplus_unscaled@log_deficit_bounded_link_total_hub",
@@ -2103,8 +2692,379 @@ POOLED_EFFECTIVE_DATA: tuple[ModelEntry, ...] = (
 ROUND4_ENTRIES = ROUND4_ENTRIES + POOLED_EFFECTIVE_DATA
 ROUND4_IDS: tuple[str, ...] = tuple(entry.model_id for entry in ROUND4_ENTRIES)
 
+
+def _design_grid_model(
+    model_id: str, builder: Callable[[models.Features, models.Shape], models.Design], head: models.HeadSpec
+) -> Builder:
+    """A grid model with one fixed design and no shape parameters; ridge from the signed grid."""
+
+    def build(features: models.Features) -> models.GridModel:
+        del features
+        return models.GridModel(model_id, builder, ({},), SIGNED_RIDGE_GRID, head, 0)
+
+    return build
+
+
+def _spline_grid_model(model_id: str, head: models.HeadSpec) -> Builder:
+    """The natural spline with knots bound to the swarm it is built on, so other mixtures use the fitted basis.
+
+    The design cache is keyed by the query features, so the swarm's identity goes into the cache id.
+    """
+
+    def build(features: models.Features) -> models.GridModel:
+        builder = models.natural_spline_design_at(models.spline_knots(features))
+        cache_id = f"{model_id}#knots:{features.cache_key[:16]}"
+        return models.GridModel(cache_id, builder, ({},), SIGNED_RIDGE_GRID, head, 0)
+
+    return build
+
+
+# Conventional nonlinear comparators (reader/PI review, 2026-09-08; prespecified in Fieldbook
+# "Conventional nonlinear comparators for MARINER" and Appendix "Conventional nonlinear comparators").
+QUADRATIC_LINKED_ID = "quadratic_log_epoch@kappa_floor_link_flat15_nocap"
+QUADRATIC_ID = "quadratic_log_epoch"
+SPLINE_LINKED_ID = "spline_log_epoch@kappa_floor_link_flat15_nocap"
+KRR_ID = "hellinger_krr"
+SIGNED_FLOOR_HEAD = models.HeadSpec(kind=models.HeadKind.RIDGE, link=models.LinkKind.KAPPA_FLOOR)
+SIGNED_IDENTITY_HEAD = models.HeadSpec(kind=models.HeadKind.RIDGE, link=models.LinkKind.IDENTITY)
+COMPARATOR_FLOOR = dict(
+    candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+    kappa_bounds=(1.0, 6.0),
+    flat_profile_kappa=1.5,
+    cap_margin=float("inf"),
+)
+COMPARATORS: tuple[ModelEntry, ...] = (
+    ModelEntry(
+        QUADRATIC_LINKED_ID,
+        "parent",
+        (),
+        "additive_quadratic_log_epoch",
+        "Additive quadratic in log-epochs (floor and log link)",
+        _mechanisms(
+            coordinate="exposure",
+            benefit="log_quadratic",
+            harm="log_quadratic",
+            link="kappa_floor",
+            sharing="per_bucket",
+            head="signed",
+            estimator="ridge",
+        ),
+        "none",
+        "none",
+        "ridge_on_log_deficit",
+        "ridge SIGNED_RIDGE_GRID by inner CV; floor multiplier in [1, 6] by inner CV, fallback 1.5, 3-sigma margin",
+        _fitted_floor(
+            QUADRATIC_LINKED_ID,
+            grid_builder=_design_grid_model(QUADRATIC_LINKED_ID, models.log_quadratic_design, SIGNED_FLOOR_HEAD),
+            **COMPARATOR_FLOOR,
+        ),
+        note=(
+            "Primary comparator: eta_t = c + sum_i (a_i u_i + b_i u_i^2), u_i = log(1 + E_i), signed ridge on "
+            "log(y - phi_t) with the frozen procedure's floor search; a turn per bucket without the "
+            "Weibull/softplus prior."
+        ),
+    ),
+    ModelEntry(
+        QUADRATIC_ID,
+        "parent",
+        (),
+        "additive_quadratic_log_epoch",
+        "Additive quadratic in log-epochs (identity link)",
+        _mechanisms(
+            coordinate="exposure",
+            benefit="log_quadratic",
+            harm="log_quadratic",
+            link="identity",
+            sharing="per_bucket",
+            head="signed",
+            estimator="ridge",
+        ),
+        "none",
+        "none",
+        "ridge_on_loss",
+        "ridge SIGNED_RIDGE_GRID by inner CV",
+        _design_grid_model(QUADRATIC_ID, models.log_quadratic_design, SIGNED_IDENTITY_HEAD),
+        note="The primary comparator's identity-link twin, fitted to the loss directly.",
+    ),
+    ModelEntry(
+        SPLINE_LINKED_ID,
+        "parent",
+        (),
+        "additive_spline_log_epoch",
+        "Additive natural cubic spline in log-epochs (floor and log link)",
+        _mechanisms(
+            coordinate="exposure",
+            benefit="natural_spline",
+            harm="natural_spline",
+            link="kappa_floor",
+            sharing="per_bucket",
+            head="signed",
+            estimator="ridge",
+        ),
+        "none",
+        "none",
+        "ridge_on_log_deficit",
+        "ridge SIGNED_RIDGE_GRID by inner CV; floor as the primary comparator; knots at positive-exposure quartiles",
+        _fitted_floor(
+            SPLINE_LINKED_ID,
+            grid_builder=_spline_grid_model(SPLINE_LINKED_ID, SIGNED_FLOOR_HEAD),
+            **COMPARATOR_FLOOR,
+        ),
+        note=(
+            "Natural cubic spline basis per bucket (x plus three curvature columns; interior knots at the quartiles "
+            "of the panel's positive log-epochs, boundary knots at their extremes); buckets with fewer than five "
+            "distinct positive exposures fall back to the quadratic columns."
+        ),
+    ),
+    ModelEntry(
+        KRR_ID,
+        "parent",
+        (),
+        "hellinger_kernel_ridge",
+        "Kernel ridge on the simplex (Hellinger kernel)",
+        _mechanisms(
+            coordinate="weight",
+            benefit="hellinger_kernel",
+            harm="hellinger_kernel",
+            link="identity",
+            sharing="nonparametric",
+            head="signed",
+            estimator="kernel_ridge",
+        ),
+        "none",
+        "none",
+        "kernel_ridge",
+        "gamma in {0.5, 1, 2, 4, 8, 16} and ridge in {1e-4, ..., 1} by inner CV",
+        _static(models.HellingerKernelRidgeModel(model_id=KRR_ID)),
+        note="k(w, w') = exp(-gamma (1 - sum_i sqrt(w_i w'_i))); per-component heads with the identity link.",
+    ),
+)
+
+# Simplification ladder of the frozen procedure (PI request, 2026-09-08): each rung removes one source of
+# flexibility from MARINER so the smallest form that keeps its accuracy can be identified.
+FROZEN_ID = "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap"
+FROZEN_FLOOR = dict(
+    candidate_links=(models.LinkKind.KAPPA_FLOOR,),
+    kappa_bounds=(1.0, 6.0),
+    flat_profile_kappa=1.5,
+    cap_margin=float("inf"),
+)
+EXPONENTIAL_SHAPES = tuple(shape for shape in SUCCESSOR_SHAPES if shape["power"] == 1.0)
+BENEFIT_ONLY_EXPONENTIAL_SHAPES = tuple(shape for shape in EXPONENTIAL_SHAPES if shape["threshold"] == 1.0)
+# The modal shape of the 58 frozen fits (8 tasks): rate 0.25, power 1, threshold 3; the modal ridge (28 tasks) is 0.1.
+MODAL_FROZEN_SHAPE = ({"rate": 0.25, "power": 1.0, "threshold": 3.0},)
+MODAL_FROZEN_RIDGE = (0.1,)
+SIMPLIFICATIONS: tuple[ModelEntry, ...] = (
+    _ablation(
+        f"{FROZEN_ID}_kappa1",
+        "weibull_softplus_unscaled",
+        "benefit=exponential,power=1",
+        _fitted_floor(f"{FROZEN_ID}_kappa1", shapes=EXPONENTIAL_SHAPES, **FROZEN_FLOOR),
+        note="Simplification: the benefit power fixed at one (exponential saturation), 42 shapes.",
+    ),
+    _ablation(
+        f"{FROZEN_ID}_fixed_shape",
+        "weibull_softplus_unscaled",
+        "sharing=all_tasks,shape=modal_frozen",
+        _fitted_floor(f"{FROZEN_ID}_fixed_shape", shapes=MODAL_FROZEN_SHAPE, **FROZEN_FLOOR),
+        note="Simplification: one shape for every task (the modal frozen shape); only ridge and the floor are selected.",
+    ),
+    _ablation(
+        f"{FROZEN_ID}_single_harm",
+        "weibull_softplus_unscaled",
+        "harm=single_amplitude",
+        _fitted_floor(
+            f"{FROZEN_ID}_single_harm", options=_options(SUCCESSOR_OPTIONS, harm="softplus_bucket_sum"), **FROZEN_FLOOR
+        ),
+        note="Simplification: one harm amplitude per task on the summed per-bucket harm (M+2 amplitudes).",
+    ),
+    _ablation(
+        f"{FROZEN_ID}_fixed_ridge",
+        "weibull_softplus_unscaled",
+        "ridge=fixed_0.1",
+        _fitted_floor(f"{FROZEN_ID}_fixed_ridge", ridge_grid=MODAL_FROZEN_RIDGE, **FROZEN_FLOOR),
+        note="Simplification: the amplitude ridge fixed at the modal frozen value instead of selected by inner CV.",
+    ),
+    _ablation(
+        f"{FROZEN_ID}_hinge_harm",
+        "weibull_softplus_unscaled",
+        "harm=softplus_hinge",
+        _fitted_floor(
+            f"{FROZEN_ID}_hinge_harm", options=_options(SUCCESSOR_OPTIONS, harm="softplus_bucket_hinge"), **FROZEN_FLOOR
+        ),
+        note="Simplification: unsquared softplus harm (linear rather than quadratic growth above the threshold).",
+    ),
+    _ablation(
+        f"{FROZEN_ID}_raw_epoch_harm",
+        "weibull_softplus_unscaled",
+        "harm=softplus_raw_epoch",
+        _fitted_floor(
+            f"{FROZEN_ID}_raw_epoch_harm",
+            options=_options(SUCCESSOR_OPTIONS, harm="softplus_bucket_raw"),
+            **FROZEN_FLOOR,
+        ),
+        note="Convexity check: squared softplus of raw epochs past the critical count, convex in epochs everywhere.",
+    ),
+    _ablation(
+        f"{FROZEN_ID}_raw_epoch_hinge",
+        "weibull_softplus_unscaled",
+        "harm=softplus_raw_epoch_hinge",
+        _fitted_floor(
+            f"{FROZEN_ID}_raw_epoch_hinge",
+            options=_options(SUCCESSOR_OPTIONS, harm="softplus_bucket_raw_hinge"),
+            **FROZEN_FLOOR,
+        ),
+        note="Convexity check: unsquared softplus of raw epochs, the slowest-growing convex harm (linear).",
+    ),
+    _ablation(
+        f"{FROZEN_ID}_kappa1_hinge",
+        "weibull_softplus_unscaled",
+        "benefit=exponential,power=1,harm=softplus_hinge",
+        _fitted_floor(
+            f"{FROZEN_ID}_kappa1_hinge",
+            options=_options(SUCCESSOR_OPTIONS, harm="softplus_bucket_hinge"),
+            shapes=EXPONENTIAL_SHAPES,
+            **FROZEN_FLOOR,
+        ),
+        note="Simplification: exponential benefit and unsquared softplus harm together (two shape parameters).",
+    ),
+    _ablation(
+        f"{FROZEN_ID}_benefit_only_kappa1",
+        "weibull_softplus_unscaled",
+        "harm=none,benefit=exponential,power=1",
+        _fitted_floor(
+            f"{FROZEN_ID}_benefit_only_kappa1",
+            options=_options(SUCCESSOR_OPTIONS, harm="none"),
+            shapes=BENEFIT_ONLY_EXPONENTIAL_SHAPES,
+            **FROZEN_FLOOR,
+        ),
+        note="Simplification: exponential saturating benefit only (the data-constrained scaling form), M+1 amplitudes.",
+    ),
+)
+
+# Monotone log-epoch heads (Calvin, 2026-09-08): on the OLMix proxy swarms the largest improvement to OLMix came from
+# log-epoch features, so both monotone forms sit on the ladder below the quadratic comparator.
+LINEAR_LOG_EPOCH_LINKED_ID = "linear_log_epoch@kappa_floor_link_flat15_nocap"
+LOG_EPOCH_HEADS: tuple[ModelEntry, ...] = (
+    ModelEntry(
+        "olmix_loglinear_taskwise_log_epoch",
+        "parent",
+        (),
+        "olmix_positive_loglinear_log_epoch",
+        "OLMix log-linear on log-epochs",
+        _mechanisms(
+            coordinate="log_epoch",
+            benefit="exp_linear",
+            link="positive_log",
+            sharing="per_bucket",
+            head="signed",
+            estimator="huber_multistart",
+        ),
+        "the aggregate policy alpha0 w0 + alpha1 w1 equals w; no phase parameters exist",
+        "none",
+        "olmix_loglinear_fit.fit_olmix_loglinear_model (48 starts, Huber delta 0.02, numerical gradient)",
+        "none",
+        _static(
+            models.OlmixTaskwiseModel(
+                model_id="olmix_loglinear_taskwise_log_epoch", analytic_gradient=False, coordinate="log_epoch"
+            )
+        ),
+        note=(
+            "OLMix's law on u_i = log(1 + E_i): c_t + prod_i (1 + E_i)^{beta_i}, a monotone power-law product; the "
+            "'OLMix + log epochs' transform of the 2026-09-01 proxy-swarm benchmark."
+        ),
+    ),
+    ModelEntry(
+        LINEAR_LOG_EPOCH_LINKED_ID,
+        "parent",
+        (),
+        "linear_log_epoch",
+        "Linear in log-epochs (floor and log link)",
+        _mechanisms(
+            coordinate="exposure",
+            benefit="log1p",
+            harm="none",
+            link="kappa_floor",
+            sharing="per_bucket",
+            head="signed",
+            estimator="ridge",
+        ),
+        "none",
+        "none",
+        "ridge_on_log_deficit",
+        "ridge SIGNED_RIDGE_GRID by inner CV; floor as the frozen procedure",
+        _fitted_floor(
+            LINEAR_LOG_EPOCH_LINKED_ID,
+            grid_builder=_design_grid_model(LINEAR_LOG_EPOCH_LINKED_ID, models.log_epoch_design, SIGNED_FLOOR_HEAD),
+            **COMPARATOR_FLOOR,
+        ),
+        note=(
+            "The quadratic comparator without its squared columns: eta_t = c + sum_i a_i log(1 + E_i) with signed ridge "
+            "under MARINER's floor search; the reference entry linear_epoch_log_link is the same head under the older "
+            "log-floor-margin link."
+        ),
+    ),
+)
+
+NONPARAMETRIC: tuple[ModelEntry, ...] = (
+    ModelEntry(
+        "lightgbm_regmix",
+        "parent",
+        (),
+        "gradient_boosted_trees",
+        "RegMix gradient-boosted trees",
+        _mechanisms(
+            coordinate="weight",
+            benefit="tree_ensemble",
+            harm="tree_ensemble",
+            link="identity",
+            sharing="nonparametric",
+            head="trees",
+            estimator="lightgbm",
+        ),
+        "none",
+        "none",
+        "lightgbm_regression",
+        "trees in {100, 300, 1000} and leaves in {4, 8, 31} by inner CV; learning rate 0.01, seed 42",
+        _static(models.LightGBMModel()),
+        note="RegMix's regressor on the mixture weights; tree count and leaves chosen by the inner folds.",
+    ),
+    ModelEntry(
+        "mlp_weights",
+        "parent",
+        (),
+        "multilayer_perceptron",
+        "MLP on mixture weights",
+        _mechanisms(
+            coordinate="weight",
+            benefit="mlp",
+            harm="mlp",
+            link="identity",
+            sharing="nonparametric",
+            head="mlp",
+            estimator="adam",
+        ),
+        "none",
+        "none",
+        "sklearn_mlp_regression",
+        "two hidden layers of 64 units; weight decay in {1e-4, 1e-3, 1e-2} by inner CV",
+        _static(models.MLPModel()),
+        note="A small MLP on standardized mixture weights.",
+    ),
+)
+
 ALL_ENTRIES: tuple[ModelEntry, ...] = (
-    PARENTS + REFERENCES + ABLATIONS + ROW_SCRAMBLED_CONTROLS + SUCCESSORS + SUCCESSOR_ABLATIONS + ROUND4_ENTRIES
+    PARENTS
+    + REFERENCES
+    + ABLATIONS
+    + ROW_SCRAMBLED_CONTROLS
+    + SUCCESSORS
+    + SUCCESSOR_ABLATIONS
+    + ROUND4_ENTRIES
+    + COMPARATORS
+    + SIMPLIFICATIONS
+    + NONPARAMETRIC
+    + LOG_EPOCH_HEADS
 )
 SUCCESSOR_BY_ID = {entry.model_id: entry for entry in SUCCESSORS}
 ENTRY_BY_ID = {entry.model_id: entry for entry in ALL_ENTRIES}
@@ -2127,6 +3087,8 @@ def apply_transform(features: models.Features, entry: ModelEntry) -> models.Feat
         return features.with_permuted_inventory(TRANSFORM_SEED)
     if transform == "weight_coordinate":
         return features.with_weight_coordinate()
+    if transform == "common_inventory":
+        return features.with_common_inventory()
     if transform == "shuffled_families":
         return features.with_families(models.shuffled_families(features.families, TRANSFORM_SEED), "shuffled_families")
     if transform == "no_families":

@@ -6210,3 +6210,276 @@ range.
 
 Gain magnitude remains unpredicted: RMSE `0.031` to `0.147` against a `0.00178` floor. This is a decision
 rule, not a value estimate, on one metric, between two frozen policies per block.
+
+## 2026-09-07: finalized single-phase aggregate model with bounded phase departures
+
+`LINK2-001/002` do not qualify for promotion. The independently fitted, tied-only single-phase
+log-deficit model predicts tied rows well, but its learned benefit and harm directions do not support
+accurate phase effects through one or two temporal coefficients per task. HPR remains the stronger
+matched phase-prediction control in both phase-containing outer folds.
+
+The preregistered offline comparison used all 520 structured 300M rows, 238 exact asymmetric/tied
+pairs, nested aggregate-grouped folds, and a pinned proportional calibration group. Inputs, the
+authoritative single-phase implementation, and all fits were snapshotted. HPR, separate heads, and
+effective-exposure DSP were refitted on the same rows and folds. No language-model jobs were launched.
+
+| Metric, Uncheatable / Table 9 BPB | Aggregate only | Benefit + harm departure | HPR |
+| --- | ---: | ---: | ---: |
+| Paired difference RMSE | 0.017990 / 0.036104 | 0.016280 / 0.032647 | 0.007837 / 0.018019 |
+| Mean paired decision regret | 0.006599 / 0.013018 | 0.003850 / 0.007873 | 0.000563 / 0.001822 |
+
+The new full model improves over the null but predicts excessive phase benefit: mean predicted-minus-
+observed contrasts are -0.009875/-0.018544 BPB. Its pooled out-of-fold top-one picks beat HPR's, so the
+negative result must not be described as a loss on every selection metric. Endpoint RMSE is 64%/41%
+worse than HPR, and paired regret is worse beyond the conditional correspondence-group bootstrap
+intervals. The middle outer fold has tied rows only; phase evidence comes from two folds and one
+substantial design family. It does not support source-disjoint confirmation.
+
+Structural checks and known-basis synthetic recovery pass. Re-estimating aggregate amplitudes worsens
+Table-9 recovery. The largest synthetic null gain, 0.019839 BPB, arises when an empirical noise draw
+crosses a fixed `mmlu_humanities` floor and triggers the log-deficit clamp. This is conditional floor
+sensitivity, not proof that the temporal equation cannot represent phase effects. Actual component
+repeat vectors were recovered locally; the primary registered anchors were left unchanged.
+
+The StarCoder WSD80 fit improves ordinary Programming Languages RMSE but predicts the wrong sign for
+the previously repeated (0.3, 0.3) versus (0.1, 0.5) comparison. Its nominal counterpart fibers do not
+have exactly equal materialized exposures, so this secondary screen uses unpaired aggregate residuals
+and cannot alone prove non-representability.
+
+Raw optimization offers no deployment candidate. After resolving SLSQP failures with a separate
+softmax-coordinate search, successful full-model minima predict gains of 0.016975/0.061138 BPB at
+nearly disjoint phase mixtures. Their distances outside the observed convex hull are 0.703/0.443 in
+phase-weighted TV. Table-9 minima vary across successful starts and folds; Uncheatable outer searches
+remain numerically unresolved. No KL, epoch cap, or support constraint was added to conceal this.
+
+The next useful evidence would include several opposite contrasts at fixed aggregates, and common
+continuations crossed with multiple prefixes, with paired seeds and recorded subset identities. The
+full design already rejects this transfer; canonical-280 acquisition and 3e18 archive checks were
+not run. Existing 3e18 outcomes remain development data.
+
+Fieldbook: `exp_01m1yr9m9jpq6jw6v7e5fc803y`.
+[Report, equations, diagnostics, and reproduction](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_link_transfer_20260907/REPORT.md).
+Registry entries `LINK2-000/001/002` record the null and rejected candidates.
+
+## 2026-09-07: aggregate replacement helps calibration; direct contrast refit fails
+
+`LINK2-003` replaces HPR's tied level by the independently fitted finalized single-phase response:
+\(F(w)=A(a)+H(w)-H(a,a)\). It adds no coefficient and preserves every within-aggregate HPR contrast.
+On the same 518 scored rows, Table-9 endpoint RMSE improves from 0.016311 to 0.014016 BPB (14.1%).
+The fixed-OOF correspondence-group bootstrap interval for the change is [-0.003322, -0.001284].
+Uncheatable changes from 0.007914 to 0.007806, with its interval including zero. The observed pooled
+Table-9 top-one regret improves from 0.018271 to 0.009912, but aggregate-only remains better at 0.001830.
+
+`LINK2-004` repairs the historical direct-contrast fit by preserving HPR's nonnegative coefficient cone,
+hierarchy ridge, and exact no-intercept feature differences. It uses nested selection over the frozen
+420-config source grid plus an exact zero head. Its synthetic gate passes all three signals per target,
+but actual pair RMSE worsens from HPR's 0.007837/0.018019 to 0.008895/0.018801 BPB. Uncheatable mean
+pair decision regret worsens from 0.000563 to 0.000846 beyond conditional bootstrap uncertainty, and
+endpoint RMSE rises 5.56%, failing the 5% gate. This arm was not optimized.
+
+The aggregate replacement also fails as a continuous proposer. Full-fit raw endpoints predict gains
+of 0.064226/0.065484 at phase TV 1.000/0.819, maximum bucket epochs 122.84/86.05, and hull distances
+0.639/0.584. Full-to-outer-fold policy TV reaches 0.602/0.767. The Uncheatable prediction crosses the
+weighted aggregate floor by 0.02410 BPB. The replacement detaches large HPR conditional gains from
+the aggregate penalties that kept HPR's own raw optimum tied. HPR's raw tied optima are unsupported
+too. All selected search endpoints report solver success; independent source prediction parity holds
+over 400 saved endpoints. No caps, KL, output clamps, or language-model jobs were added.
+
+The earlier request for new opposite contrasts was too broad. A metadata-only audit recovered 192
+existing antithetic pairs across two 3e18 frontier anchors, each spanning all 38 simplex directions,
+with actual tied controls and matched data seeds. July 24 odd/even analyses already use these data.
+Their 1.5765B-token protocol differs from this 6B-token panel; Table-9 evaluation provenance must be
+reconciled before comparison. No new archive outcome values or separately sealed artifacts were read.
+Neither design contains common continuations crossed with different prefixes. The 300M extra archive
+is tied-only; that limitation does not describe the richer 3e18 archive.
+
+Retain `LINK2-003` as a calibration ablation; reject `LINK2-004` as an improvement. No proposer is
+promoted. Canonical-280 sample efficiency and prospective validation remain downstream of a credible
+discovery-stage candidate. Fieldbook: `exp_01m1ytn9pfp9assxm4dd0y8kf7`.
+[Report, frozen protocol, and artifacts](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_hpr_transfer_20260907/REPORT.md).
+
+## 2026-09-07: sixteen creative formulations tested offline
+
+The user explicitly requested a broader empirical search, superseding the earlier narrow stop queue
+for this round. `CRE2-001` through `CRE2-016` cover joint component WSPU, two-index recency,
+prefix attribution, renewal, retention, repair, continuous aging, physical ordering, reduced rank,
+task-response kernels, and parametric semantic responses. The last four are disclosed adaptive
+follow-ups, registered before their own fits. All use the same structured 520-row development panel,
+matching nested spines, pinned calibration, 518 scored OOF rows, and 238 exact counterpart pairs.
+
+Expanded recency WSPU (`CRE2-013`) separates benefit's normalized recency exposure from harm's physical
+cumulative exposure. Endpoint RMSE improves to 0.007419/0.014656 BPB on Uncheatable/Table 9, compared
+with HPR's 0.007914/0.016311. Separate acquisition with shared harm (`CRE2-014`) improves Uncheatable
+endpoint RMSE further to 0.007333. Both worsen paired prediction and decisions. Retain them as
+calibration leads, without interpreting their fitted recency as a physical causal horizon.
+
+The task-response kernel (`CRE2-011`) is a positive representation ablation. Replacing raw mixture
+coordinates by nested single-phase component log-deficits lowers paired RMSE from
+0.012727/0.024140 to 0.008169/0.019192. Conditional group-bootstrap intervals exclude zero for both
+differences. Its parametric semantic order-plus-positive-cost follow-up (`CRE2-016`) approaches that
+accuracy with less phase-gain bias. Neither beats HPR's paired RMSE, 0.007837/0.018019. No new model
+does. The kernel's small Table-9 regret advantage over HPR is unresolved and trails separate heads;
+its good pooled top-one pick is the same tied policy chosen by aggregate-only.
+
+Raw searches cover four representatives, 52 tied/full cells, and 286 starts. Expanded recency finds
+predicted gains 0.004741/0.007500 at maximum bucket epochs 11.40/8.95 without an epoch cap. Its phase
+TV remains 0.953/0.801 and hull distance 0.703/0.549. Semantic corrections cross fitted component
+floors, despite plausible weighted scores. Across all cells, 159 starts reach the 600-iteration limit
+and only four of 26 selected full endpoints report convergence. Fold variation combines changes in
+the fit with unfinished optimization; it is not a clean measure of statistical instability.
+
+An independent review reproduced every paired RMSE and decision regret within 1e-16. A separate
+contextless report review corrected a finiteness overstatement and supplied missing equation and
+baseline definitions. No candidate is promoted. The screen is complete, with numerical traces and
+failed starts preserved. Canonical-280 and prospective runs remain downstream of a credible proposer.
+No LM jobs were launched, no sealed outcomes were inspected, and the previous packages and
+authoritative single-phase source were preserved.
+
+Fieldbook: `exp_01m1yw5scga755dz845q96xb88`.
+[Full formulation screen and reproducible artifacts](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_creative_sweep_20260907/REPORT.md).
+
+## 2026-09-07: six estimator, floor-link and complexity refinements completed
+
+`CRE2-017` through `CRE2-022` were registered and fitted after the sixteen-formulation screen, using
+the same nested development splits and pinned calibration. Direct BPB fitting of recency WSPU lowers
+Uncheatable endpoint RMSE to 0.007173, but its paired RMSE remains 0.009217 against HPR's 0.007837.
+Giving the orthogonal phase channel four times the fitting weight does not close the gap. These tests
+hold the existing shape, recency, ridge and floor fixed; they do not reject every contrast-aware fit.
+
+A floor audit separates undefined observed component log ratios from finite but unattainable exact
+paired gains under a frozen predicted deficit. The final Table-9 fit has 77 of 12,138 component-pair
+differences below the latter bound. Canonical objective aggregation has no such range violations in
+the inspected contexts. Matched direct objective heads therefore compare additive and positive-deficit
+responses without changing floors. The positive link (`CRE2-020`) improves paired RMSE slightly to
+0.008236/0.018724 on Uncheatable/Table 9, but worsens paired choices relative to its additive control.
+The compact separated benefit/harm head (`CRE2-022`) approximately matches the larger Table-9 model's
+paired error with 204 rather than 5,202 phase coefficients. It is a different basis, not a nested
+enlargement of the diagonal net-response model, and its Uncheatable error worsens.
+
+An independent mass-exchange solver refines the old recency and semantic-kernel raw searches. The
+final recency minima improve only 8.48e-6/1.42e-7 BPB, while final-to-outer policy TV remains about
+0.676/0.538. Numerical polishing does not remove the large fold variation, though some boundary
+stationarity checks remain unresolved. Separately, the new positive objective link reduces raw
+predicted gains from its additive control's 0.02034/0.09041 to 0.00288/0.03265 BPB. Its policies remain
+outside the observed hull by TV 0.590/0.429; even the tied restrictions are outside the hull. The full
+positive-link searches have no successful softmax termination, and their boundary minima are not
+certified. No support constraint, KL penalty or epoch cap was added.
+
+None of the six refinements beats HPR on paired RMSE or paired decision regret on either objective.
+Retain the BPB calibration control, compact comparator and positive-link diagnostic; promote no
+proposer. Independent prediction, split, equation, bootstrap and hash checks passed. Existing packages
+and the authoritative single-phase implementation are unchanged. No LM jobs or additional outcome
+inspections were performed; canonical-280 and prospective validation were not run.
+
+Fieldbook: `exp_01m1yywmwp74reht2v7e81zjfd`.
+[Completed refinement report and artifacts](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_refinement_20260907/REPORT.md).
+
+## 2026-09-07: fixed-checkpoint WSPU branch comparison completed
+
+The user requested fitting the new WSPU formulations directly on fixed-checkpoint branch data.
+Archived worktrees contain newer evidence than the previous current-checkout summaries: common
+continuations were already crossed with nine prefix states (50 broad actions, then ten local
+actions, plus controls). Earlier statements that this design was absent were stale. Do not
+commission duplicate crossed runs on that premise. All retrieved outcomes were already inspected
+historically; no sealed referee source was opened.
+
+BRW-000 through BRW-005 were registered before 77 scalar/component fits. Seven cohorts are fitted
+independently with train-only calibration pinned in five inner folds. Scalar cumulative WSPU log
+improves proportional coverage RMSE from 0.003174 to 0.002157 BPB, with conditional paired-action
+interval for the difference [-0.001823, -0.000273]. All models select the same best coverage action.
+On five later checkpoints, cumulative WSPU selects the measured best of ten local actions at all
+five, versus two for Hellinger. All models' top-three shortlists already contain the best at all
+five. The mean top-one regret advantage is 0.000203 BPB, with interval reaching zero. Pairwise
+difference RMSE improves 0.001135 to 0.000239, but selected absolute predictions remain pessimistic
+by mean 0.005650 BPB.
+
+This is a useful branch lead, not a universal successor. On historical cap10local80, cumulative
+WSPU incurs 0.005776 BPB regret while Hellinger and continuation-only WSPU choose the observed best.
+On proportional adaptive40 it also misses the best by 0.000946 BPB. Additive cumulative and component
+heads match the five later local picks; component prediction remains biased and 40 held component
+outcomes are below their fitted floors. Macro positive-link heads have no such violations, and no
+numerical exponential guard or log-deficit clamp is active.
+
+This comparison changes continuation actions at a fixed trained prefix; it does not answer joint
+two-phase optimization or unseen-checkpoint transfer. All results remain adaptive development.
+No boundary outcomes are inputs. Proportional exact prefix URI is unavailable in its archive;
+crossed and relevant cap-10 URIs are verified. Independent audits reproduce all 47 metric cells,
+1,180 predictions, 90 contrasts and 352 conditional intervals to numerical precision. All 77 fits
+replay exactly and a complete rerun hits the cache. Required lint and Pyrefly checks pass.
+
+Retain scalar cumulative WSPU for further branch work. Diagnose the cap-10 wrong pick and evaluate
+a checkpoint-conditioned formulation with action/checkpoint grouping before raw optimum claims or
+prospective training. Existing crossed data can support that next offline question. No LM jobs were
+launched and prior frozen artifacts and the single-phase authority remain unchanged.
+
+Fieldbook: `exp_01m1z1vdwegj3pmjx9ccvfbt6r`.
+[Fixed-checkpoint comparison and reproducible artifacts](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/fixed_checkpoint_branch_wspu_20260907/REPORT.md).
+
+
+## 2026-09-12: MARINER continuation transfer, boundary state, and anchored raw audit
+
+Completed the user-authorized local-only round. No LM training/evaluation, remote data retrieval,
+external publication, or change to standalone single-phase MARINER occurred. Eleven candidates
+MTP-001 through MTP-007 and MTP-101 through MTP-104 were registered before their fits or scoring.
+The archives were already inspected: all results remain adaptive development evidence.
+
+Shared cumulative-increment MARINER with the positive link (MTP-002) predicts the measured best
+local continuation at all six held ordinary prefixes while withholding all local actions from
+training. Each outer fit uses 250 broad actions plus five training-only tied anchors; nested
+prefix/action folds recalibrate within their actual training partitions. All six share the same
+winner. Mean endpoint RMSE is 0.005228 BPB, action-pair RMSE 0.000247, and regret zero, including
+when tied is selectable. Mean pessimism is 0.005223. The selected improvement is predicted
+0.008608 versus measured 0.007352. Continuation-only, aggregate-total, additive-increment and
+historical fixed-feature controls do not improve the choice result; conditional uncertainty
+clearly separates action-pair error only against the additive response.
+
+The raw MTP-002 continuation puts 99.7-100% on dolmino_stack_edu_fim, at nearest observed TV
+0.885-0.887 and maximum cumulative epochs 11.25-13.24. All starts agree and refits are stable;
+this is unsupported extrapolation, not a measured bad run. The adaptive zero-parameter
+composition MTP-006, F=A(a)+W(w0,w1)-W(a,a), reduces endpoint RMSE to 0.003157 and selected
+pessimism to 0.002223. Local action-pair RMSE is 0.000233 and choices remain correct. With tied,
+pair RMSE worsens slightly to 0.000704 from 0.000650. Its raw largest weights are 21.9-33.3%,
+maximum cumulative epochs 5.07-9.41, nearest observed TV 0.343-0.607, and max refit TV
+0.022-0.044. The counterfactual tied-prefix query also leaves support. These are fixed-prefix
+continuation optima, not joint optimization of both phases, and all are unmeasured.
+
+The crossed panel has weak aggregate prefix/action interaction: broad interaction RMS 0.000975
+BPB, 0.34% of within-prefix sum of squares, mean inter-prefix action rho 0.997. The narrow local
+panel has interaction RMS 0.000131. The prefix replica and hardware bridge change the local
+winner, with original-choice regret 0.000424/0.000194; these are sensitivity checks. This design
+lacks a tied control matched to each crossed cell's realized aggregate. Weak interaction does
+not establish absent two-phase gain. A rank-two prespecified state correction, MTP-007, passes
+structural and fully nested recovery checks but changes no pick, worsens endpoint RMSE to
+0.006509 and tied-included pair RMSE to 0.000774. Do not add this complexity.
+
+The separate canonical boundary archive has 280 policies, 279 scored groups, and 238 asymmetric
+policies occupying four of five geometric folds, one acquisition cohort and one trainer seed.
+Full fold-trained MARINER plus a 196-column ridge diagnostic gives gain RMSE 0.008330 and
+matched-choice regret 0.001212. Predicted state gives 0.008225/0.001195; measured boundary state
+gives 0.007915/0.001088. The measured-minus-policy gain-RMSE interval is
+[-0.000700,-0.000169], but the regret interval [-0.000400,+0.000150] includes zero and the
+retrospective frontier regret worsens slightly. Measured state is a feedback procedure; one
+continuation per prefix cannot identify fixed-checkpoint action selection. Do not promote it.
+
+Decision: retain MTP-002 as a simple conditional model and MTP-006 as the stronger absolute
+continuation candidate for further offline development. No unrestricted optimizer is promoted,
+no new 2p advantage or Llama/TPP40 transfer is established, and no validation job is pending.
+Independent replay covers 120 crossed menus, 48 anchored menus, 279 boundary groups, and all 36
+raw anchored mixtures to numerical precision. Peers audit all inner anchors and 54 fully nested
+state-extension bases; source parity, synthetic recovery, cache replay, gradients, lint and
+Pyrefly pass. A fresh contextless report reader's five clarification requests are applied.
+
+Fieldbook: `exp_01m2a8pe9nsayybhctqent1acs`. Local source/output hashes provide the snapshot;
+no existing index, branch, or unrelated working-tree changes were committed.
+[Report](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_mariner_transfer_20260912/REPORT.md),
+[exact commands](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_mariner_transfer_20260912/REPRODUCE.md),
+[manifest](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_mariner_transfer_20260912/MANIFEST.json).
+
+Source snapshot hashes:
+- `benchmark_crossed_mariner_20260912.py`: `bf49ae5bef6c1b03a3402ed48ada11cd73a71c856a1998c95c568beb35d5ab4b`.
+- `benchmark_boundary_state_mariner_20260912.py`: `77b9af2d46cf486292bd3d1aa730ba4e4026c9ffd36c64e5f2ad61fade985d66`.
+- `audit_mariner_transfer_20260912.py`: `7f52429f3d27ee45719f118b8e9bdc161cb05a5e432d160fbed54c2b622138ed`.
+- `audit_mariner_anchored_continuation_20260912.py`: `c756d5bbcd390086c2f8fbc464c83e15e1dab8f255480f1acd697be82934ea89`.
+- `benchmark_crossed_state_extension_20260912.py`: `eaf73b630e12541eecb08ca617187cd261af31a841d11855f54ed2ce7b1365ac`.
+- `validate_mariner_transfer_20260912.py`: `8e7c2e61bb652a3275411b515cb75600f1b74b1449264ef92db848658f92abd8`.
+- `analyze_crossed_identification_20260912.py`: `af4e2bbfd3a698a598adb756f3a725c7c26fdb5b1af086708174757e8b66c0f7`.

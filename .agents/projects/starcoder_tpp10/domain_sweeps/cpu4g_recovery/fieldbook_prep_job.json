@@ -1,0 +1,24 @@
+{
+  "attrs": {
+    "marin.artifact_fingerprint": "6d286890",
+    "marin.cpu_prep_memory_gib": 4
+  },
+  "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+  "code_dirty": true,
+  "command": null,
+  "created_at": "2026-09-11T21:29:22Z",
+  "deleted_at": null,
+  "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+  "external_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/prepare_subset-1a60a898",
+  "external_system": "iris",
+  "failure_reason": null,
+  "finished_at": null,
+  "id": "job_01m29602mp1kcnp0vjenxx4s80",
+  "launcher": "iris",
+  "name": "FineMath matched subset 4 GiB recovery",
+  "retry_of": "job_01m2887yt8rc0c6eh46xrsaw8f",
+  "run_id": null,
+  "started_at": null,
+  "status": "succeeded",
+  "updated_at": "2026-09-11T21:29:22Z"
+}

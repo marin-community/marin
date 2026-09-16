@@ -1,0 +1,1520 @@
+{
+  "starcoder": {
+    "inventory_count": 49,
+    "inventory_sha256": "9e3b663decc309a63835ae9a7857d45616c4144513f469f47616e126f182b9f6",
+    "selected": [
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0000.json.gz",
+        "generation": "1755319694934575",
+        "size_bytes": 4373344319,
+        "crc32c": "nIjJUg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0001.json.gz",
+        "generation": "1755319694955787",
+        "size_bytes": 4246962029,
+        "crc32c": "1J8agA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0002.json.gz",
+        "generation": "1755319694945294",
+        "size_bytes": 4307017435,
+        "crc32c": "U260Fg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0003.json.gz",
+        "generation": "1755319694896461",
+        "size_bytes": 4194821950,
+        "crc32c": "8a9lqg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0004.json.gz",
+        "generation": "1755319695101367",
+        "size_bytes": 4207077563,
+        "crc32c": "OmH31w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0005.json.gz",
+        "generation": "1755319694833039",
+        "size_bytes": 4161158736,
+        "crc32c": "wAuY+w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0006.json.gz",
+        "generation": "1755319695138661",
+        "size_bytes": 4169507375,
+        "crc32c": "HMwpFw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0007.json.gz",
+        "generation": "1755319694953904",
+        "size_bytes": 4223545755,
+        "crc32c": "v0+t3g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0008.json.gz",
+        "generation": "1755319695016733",
+        "size_bytes": 4242327380,
+        "crc32c": "MzrSZw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0009.json.gz",
+        "generation": "1755319694951442",
+        "size_bytes": 4274645184,
+        "crc32c": "thjwjQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0010.json.gz",
+        "generation": "1755319694999364",
+        "size_bytes": 4245624912,
+        "crc32c": "OYMmdQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0011.json.gz",
+        "generation": "1755319695219676",
+        "size_bytes": 4352324562,
+        "crc32c": "VN7Rag=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0012.json.gz",
+        "generation": "1755319695445314",
+        "size_bytes": 4175830914,
+        "crc32c": "uP0lRg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0013.json.gz",
+        "generation": "1755319695241958",
+        "size_bytes": 4175489460,
+        "crc32c": "66NKiw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0014.json.gz",
+        "generation": "1755319695060237",
+        "size_bytes": 4177336069,
+        "crc32c": "JyMJVw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0015.json.gz",
+        "generation": "1755319695225429",
+        "size_bytes": 4161439385,
+        "crc32c": "OwJSSQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0016.json.gz",
+        "generation": "1755319695106498",
+        "size_bytes": 4371515511,
+        "crc32c": "KA1EOw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0017.json.gz",
+        "generation": "1755319695245123",
+        "size_bytes": 4177201571,
+        "crc32c": "cNkvQA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0018.json.gz",
+        "generation": "1755319695232007",
+        "size_bytes": 4344263241,
+        "crc32c": "0GKlKQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0019.json.gz",
+        "generation": "1755319695232043",
+        "size_bytes": 4202699209,
+        "crc32c": "EiXK6Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0020.json.gz",
+        "generation": "1755319695306925",
+        "size_bytes": 4207613369,
+        "crc32c": "wuAAwg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0021.json.gz",
+        "generation": "1755319695186661",
+        "size_bytes": 4202434496,
+        "crc32c": "mFLFMA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0022.json.gz",
+        "generation": "1755319695099913",
+        "size_bytes": 4208522426,
+        "crc32c": "ngynjw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0023.json.gz",
+        "generation": "1755319695232071",
+        "size_bytes": 4251314940,
+        "crc32c": "jjMiBQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0024.json.gz",
+        "generation": "1755319695303923",
+        "size_bytes": 4311347830,
+        "crc32c": "Ll9hzg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0025.json.gz",
+        "generation": "1755319695213474",
+        "size_bytes": 4306859662,
+        "crc32c": "VPZvbQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0026.json.gz",
+        "generation": "1755319695230691",
+        "size_bytes": 4307443422,
+        "crc32c": "TFru/g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0027.json.gz",
+        "generation": "1755319695291427",
+        "size_bytes": 4101267060,
+        "crc32c": "Bjmnmw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0028.json.gz",
+        "generation": "1755319695321086",
+        "size_bytes": 4135795768,
+        "crc32c": "Y8acDw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0029.json.gz",
+        "generation": "1755319695335992",
+        "size_bytes": 4298495890,
+        "crc32c": "Aaityg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0030.json.gz",
+        "generation": "1755319696303234",
+        "size_bytes": 4207906216,
+        "crc32c": "EWKVGg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0031.json.gz",
+        "generation": "1755319695172119",
+        "size_bytes": 4217379088,
+        "crc32c": "oyDwdQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0032.json.gz",
+        "generation": "1755319695187957",
+        "size_bytes": 4220084828,
+        "crc32c": "7D3qag=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0033.json.gz",
+        "generation": "1755319695386978",
+        "size_bytes": 4212277589,
+        "crc32c": "bWRdpQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0034.json.gz",
+        "generation": "1755319695277511",
+        "size_bytes": 4214726061,
+        "crc32c": "owSzHg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0035.json.gz",
+        "generation": "1755319695229345",
+        "size_bytes": 4226315349,
+        "crc32c": "l+NsLg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0036.json.gz",
+        "generation": "1755319695319227",
+        "size_bytes": 4308433431,
+        "crc32c": "01vhpQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0037.json.gz",
+        "generation": "1755319695383404",
+        "size_bytes": 4180857328,
+        "crc32c": "jNuNeA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0038.json.gz",
+        "generation": "1755319695305472",
+        "size_bytes": 4179337669,
+        "crc32c": "WPg5ag=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0039.json.gz",
+        "generation": "1755319695265985",
+        "size_bytes": 4231295407,
+        "crc32c": "FsPeaw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0040.json.gz",
+        "generation": "1755319695245644",
+        "size_bytes": 4139836224,
+        "crc32c": "AohIuA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0041.json.gz",
+        "generation": "1755319695403523",
+        "size_bytes": 4143200448,
+        "crc32c": "ifY+hg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0042.json.gz",
+        "generation": "1755319695393931",
+        "size_bytes": 4129464782,
+        "crc32c": "Lj30Yw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0043.json.gz",
+        "generation": "1755319695552461",
+        "size_bytes": 4315120654,
+        "crc32c": "qL60/Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0044.json.gz",
+        "generation": "1755319695332372",
+        "size_bytes": 4356703163,
+        "crc32c": "pZrXpw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0045.json.gz",
+        "generation": "1755319695380641",
+        "size_bytes": 4275429674,
+        "crc32c": "irykEg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0046.json.gz",
+        "generation": "1755319695515774",
+        "size_bytes": 4349455359,
+        "crc32c": "YCx+tA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0047.json.gz",
+        "generation": "1755319695322650",
+        "size_bytes": 4070085468,
+        "crc32c": "9aCsnA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma/v1.7/starcoder-0048.json.gz",
+        "generation": "1755319695208308",
+        "size_bytes": 737742212,
+        "crc32c": "0p9bfg=="
+      }
+    ]
+  },
+  "hq_actual": {
+    "inventory_count": 2755,
+    "inventory_sha256": "8496839462ebd03a81089e2cd694d7a8f39a6dc302d6f8dac80ab46b25c90d09",
+    "selected": [
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2013-48-part-00018.jsonl.gz",
+        "generation": "1745430190300947",
+        "size_bytes": 385727040,
+        "crc32c": "PKZC9Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2018-05-part-00000.jsonl.gz",
+        "generation": "1745430171232715",
+        "size_bytes": 379583619,
+        "crc32c": "rjm9eA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2018-22-part-00009.jsonl.gz",
+        "generation": "1745430169675020",
+        "size_bytes": 366962062,
+        "crc32c": "O0MhqQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2018-26-part-00000.jsonl.gz",
+        "generation": "1745430188091058",
+        "size_bytes": 375880872,
+        "crc32c": "12OV8A=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2018-51-part-00014.jsonl.gz",
+        "generation": "1745430160871304",
+        "size_bytes": 365398010,
+        "crc32c": "OtZCyA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2019-26-part-00012.jsonl.gz",
+        "generation": "1745430188257003",
+        "size_bytes": 364125517,
+        "crc32c": "l5vOwg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2019-39-part-00003.jsonl.gz",
+        "generation": "1745430166661087",
+        "size_bytes": 370103271,
+        "crc32c": "U9N2PA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2019-43-part-00008.jsonl.gz",
+        "generation": "1745430187045888",
+        "size_bytes": 370082587,
+        "crc32c": "7SAELw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2021-39-part-00005.jsonl.gz",
+        "generation": "1745430171007123",
+        "size_bytes": 365905691,
+        "crc32c": "3DRkkw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2021-39-part-00017.jsonl.gz",
+        "generation": "1745430185715300",
+        "size_bytes": 365521157,
+        "crc32c": "aW6QkQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2021-49-part-00032.jsonl.gz",
+        "generation": "1745430163821192",
+        "size_bytes": 372191713,
+        "crc32c": "i/Pq6w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2023-40-part-00009.jsonl.gz",
+        "generation": "1745430158374494",
+        "size_bytes": 353473626,
+        "crc32c": "bvIPAA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2023-50-part-00072.jsonl.gz",
+        "generation": "1745430156017353",
+        "size_bytes": 351200215,
+        "crc32c": "OCwO0Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2024-18-part-00084.jsonl.gz",
+        "generation": "1745430194647036",
+        "size_bytes": 349028068,
+        "crc32c": "lUbYvA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2024-26-part-00016.jsonl.gz",
+        "generation": "1745430181857299",
+        "size_bytes": 347327692,
+        "crc32c": "AQyjPw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/kind2=actual/CC-MAIN-2024-30-part-00080.jsonl.gz",
+        "generation": "1745430186848029",
+        "size_bytes": 347505370,
+        "crc32c": "5FOqCQ=="
+      }
+    ]
+  },
+  "hq_synth": {
+    "inventory_count": 8353,
+    "inventory_sha256": "5979a9b2e05a4df187cc97e74683f9b256de08aa52bc9640d7f6b93c3113deac",
+    "selected": [
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=distill/CC-MAIN-2024-10-part-00005.jsonl.gz",
+        "generation": "1745430157795992",
+        "size_bytes": 373006228,
+        "crc32c": "TXnyHw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=diverse_qa_pairs/CC-MAIN-2021-39-part-00005.jsonl.gz",
+        "generation": "1745430180400724",
+        "size_bytes": 353130577,
+        "crc32c": "f4Vn8A=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=diverse_qa_pairs/CC-MAIN-2023-40-part-00067.jsonl.gz",
+        "generation": "1745430177150298",
+        "size_bytes": 332804521,
+        "crc32c": "H+s7Xw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=diverse_qa_pairs/CC-MAIN-2024-22-part-00014.jsonl.gz",
+        "generation": "1745430125754042",
+        "size_bytes": 329434095,
+        "crc32c": "I/BqzA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=extract_knowledge/CC-MAIN-2019-13-part-00007.jsonl.gz",
+        "generation": "1745430129425960",
+        "size_bytes": 349710522,
+        "crc32c": "NXHq5Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=extract_knowledge/CC-MAIN-2019-43-part-00003.jsonl.gz",
+        "generation": "1745430126636451",
+        "size_bytes": 366349535,
+        "crc32c": "Im3t+w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=extract_knowledge/CC-MAIN-2021-39-part-00007.jsonl.gz",
+        "generation": "1745430155938988",
+        "size_bytes": 364723210,
+        "crc32c": "uOU0dQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=extract_knowledge/CC-MAIN-2021-43-part-00019.jsonl.gz",
+        "generation": "1745430168104316",
+        "size_bytes": 360945673,
+        "crc32c": "yXmggg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=extract_knowledge/CC-MAIN-2022-49-part-00013.jsonl.gz",
+        "generation": "1745430127894800",
+        "size_bytes": 358441205,
+        "crc32c": "uqfmuA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=extract_knowledge/CC-MAIN-2024-22-part-00050.jsonl.gz",
+        "generation": "1745430119254241",
+        "size_bytes": 352645471,
+        "crc32c": "uGUcsw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=knowledge_list/CC-MAIN-2021-04-part-00000.jsonl.gz",
+        "generation": "1745430125031772",
+        "size_bytes": 354652055,
+        "crc32c": "WG6bjw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=knowledge_list/CC-MAIN-2024-10-part-00020.jsonl.gz",
+        "generation": "1745430124500870",
+        "size_bytes": 364041785,
+        "crc32c": "la+qrg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=wrap_medium/CC-MAIN-2017-26-part-00014.jsonl.gz",
+        "generation": "1745430129912980",
+        "size_bytes": 373913511,
+        "crc32c": "0RhR4Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=wrap_medium/CC-MAIN-2021-04-part-00004.jsonl.gz",
+        "generation": "1745430143019208",
+        "size_bytes": 383001890,
+        "crc32c": "JUyK0Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=wrap_medium/CC-MAIN-2022-33-part-00000.jsonl.gz",
+        "generation": "1745430126034171",
+        "size_bytes": 373737946,
+        "crc32c": "2kKwCA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/kind2=wrap_medium/CC-MAIN-2022-40-part-00031.jsonl.gz",
+        "generation": "1745430127317520",
+        "size_bytes": 369933413,
+        "crc32c": "eUj7dA=="
+      }
+    ]
+  },
+  "medium_high": {
+    "inventory_count": 2454,
+    "inventory_sha256": "90f2c20bbe34e0d45a1c2f0ef8dd0fd63767031ee217aa486324ca682f0e9e53",
+    "selected": [
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2013-20-part-00026.jsonl.gz",
+        "generation": "1745388224181105",
+        "size_bytes": 385212035,
+        "crc32c": "sBodeQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2014-42-part-00003.jsonl.gz",
+        "generation": "1745388225147666",
+        "size_bytes": 374663401,
+        "crc32c": "yYDl/w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2016-44-part-00003.jsonl.gz",
+        "generation": "1745388236754793",
+        "size_bytes": 361248047,
+        "crc32c": "EchGCg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2017-17-part-00008.jsonl.gz",
+        "generation": "1745388240271199",
+        "size_bytes": 368706208,
+        "crc32c": "c4IHLQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2018-17-part-00008.jsonl.gz",
+        "generation": "1745388258391001",
+        "size_bytes": 376254011,
+        "crc32c": "1LjHwg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2018-26-part-00023.jsonl.gz",
+        "generation": "1745388261375604",
+        "size_bytes": 375207903,
+        "crc32c": "RBmdqg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2018-43-part-00017.jsonl.gz",
+        "generation": "1745388266996981",
+        "size_bytes": 373766039,
+        "crc32c": "p8y0VA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2019-51-part-00010.jsonl.gz",
+        "generation": "1745388283307309",
+        "size_bytes": 365251939,
+        "crc32c": "BHgBZg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2021-04-part-00012.jsonl.gz",
+        "generation": "1745388299982346",
+        "size_bytes": 371301725,
+        "crc32c": "rqhxJA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2022-21-part-00024.jsonl.gz",
+        "generation": "1745388320401313",
+        "size_bytes": 366124291,
+        "crc32c": "X6qJhA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2023-23-part-00029.jsonl.gz",
+        "generation": "1745388340355460",
+        "size_bytes": 369132949,
+        "crc32c": "9ht/bg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2023-23-part-00039.jsonl.gz",
+        "generation": "1745388341544595",
+        "size_bytes": 369460119,
+        "crc32c": "ZOsXxg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2023-23-part-00041.jsonl.gz",
+        "generation": "1745388340110905",
+        "size_bytes": 368736340,
+        "crc32c": "If3UaQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2023-40-part-00039.jsonl.gz",
+        "generation": "1745388342690635",
+        "size_bytes": 362943679,
+        "crc32c": "+4m9Fg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2024-10-part-00040.jsonl.gz",
+        "generation": "1745388346283388",
+        "size_bytes": 361713467,
+        "crc32c": "faWZSA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/kind=actual/kind2=actual/CC-MAIN-2024-26-part-00036.jsonl.gz",
+        "generation": "1745388357048637",
+        "size_bytes": 361580679,
+        "crc32c": "07LujQ=="
+      }
+    ]
+  },
+  "medium": {
+    "inventory_count": 9678,
+    "inventory_sha256": "880761fc32f457165844f37ef45e3453d8242e69262df064c9c760f00deef7c8",
+    "selected": [
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2013-20-part-00113.jsonl.gz",
+        "generation": "1745429584421423",
+        "size_bytes": 388021438,
+        "crc32c": "Tavjqg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2015-06-part-00030.jsonl.gz",
+        "generation": "1745429600447980",
+        "size_bytes": 370373882,
+        "crc32c": "ewiiTw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2015-14-part-00018.jsonl.gz",
+        "generation": "1745429571872756",
+        "size_bytes": 374670884,
+        "crc32c": "NTfstA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2016-30-part-00025.jsonl.gz",
+        "generation": "1745429579225350",
+        "size_bytes": 378540969,
+        "crc32c": "L1vyMw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2017-39-part-00063.jsonl.gz",
+        "generation": "1745429613170602",
+        "size_bytes": 387638578,
+        "crc32c": "WXwUnQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2017-51-part-00081.jsonl.gz",
+        "generation": "1745429572145512",
+        "size_bytes": 384493428,
+        "crc32c": "2Et35Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2018-39-part-00029.jsonl.gz",
+        "generation": "1745429585591740",
+        "size_bytes": 391684805,
+        "crc32c": "qXWyYw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2019-04-part-00016.jsonl.gz",
+        "generation": "1745429573504403",
+        "size_bytes": 394638528,
+        "crc32c": "GDMKpg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2019-13-part-00052.jsonl.gz",
+        "generation": "1745429577434394",
+        "size_bytes": 380661517,
+        "crc32c": "Eiedyg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2019-22-part-00053.jsonl.gz",
+        "generation": "1745429572573764",
+        "size_bytes": 380031950,
+        "crc32c": "BkvmtA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2019-43-part-00047.jsonl.gz",
+        "generation": "1745429402432222",
+        "size_bytes": 386300210,
+        "crc32c": "hB/hXw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2020-24-part-00005.jsonl.gz",
+        "generation": "1745429416846728",
+        "size_bytes": 392570023,
+        "crc32c": "gjgIcQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2020-29-part-00002.jsonl.gz",
+        "generation": "1745429412416621",
+        "size_bytes": 394171417,
+        "crc32c": "XQWiQw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2022-49-part-00130.jsonl.gz",
+        "generation": "1745429394288900",
+        "size_bytes": 377739631,
+        "crc32c": "Yv3pNw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2024-22-part-00144.jsonl.gz",
+        "generation": "1745429396540504",
+        "size_bytes": 371316428,
+        "crc32c": "w4lc0A=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/kind=actual/kind2=actual/CC-MAIN-2024-30-part-00153.jsonl.gz",
+        "generation": "1745429393475063",
+        "size_bytes": 369853499,
+        "crc32c": "B5UJbQ=="
+      }
+    ]
+  },
+  "medium_low": {
+    "inventory_count": 4287,
+    "inventory_sha256": "91278686b72aebb3ffcb62ff793982573b1e9badfc1eeb0e9fc589dfab5921d9",
+    "selected": [
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2016-30-part-00006.jsonl.gz",
+        "generation": "1745388388868348",
+        "size_bytes": 387024747,
+        "crc32c": "s4AmOA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2017-43-part-00033.jsonl.gz",
+        "generation": "1745388423949586",
+        "size_bytes": 402191936,
+        "crc32c": "KNrXLQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2018-39-part-00034.jsonl.gz",
+        "generation": "1745388454100839",
+        "size_bytes": 390996002,
+        "crc32c": "/bo/WQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2018-47-part-00047.jsonl.gz",
+        "generation": "1745388462190350",
+        "size_bytes": 393362536,
+        "crc32c": "JUBpoQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2020-10-part-00031.jsonl.gz",
+        "generation": "1745388505188605",
+        "size_bytes": 396914111,
+        "crc32c": "0ai8qg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2020-16-part-00024.jsonl.gz",
+        "generation": "1745388499755895",
+        "size_bytes": 396276794,
+        "crc32c": "/atezA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2020-34-part-00039.jsonl.gz",
+        "generation": "1745388509649178",
+        "size_bytes": 392103786,
+        "crc32c": "DeBRLg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2020-40-part-00012.jsonl.gz",
+        "generation": "1745388508692347",
+        "size_bytes": 399081054,
+        "crc32c": "TZB3Bw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2021-25-part-00023.jsonl.gz",
+        "generation": "1745388532987524",
+        "size_bytes": 394531348,
+        "crc32c": "NHbRFQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2021-25-part-00034.jsonl.gz",
+        "generation": "1745388534361566",
+        "size_bytes": 394018459,
+        "crc32c": "WqySYg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2021-43-part-00066.jsonl.gz",
+        "generation": "1745388547620953",
+        "size_bytes": 391775809,
+        "crc32c": "BzMTKg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2022-27-part-00019.jsonl.gz",
+        "generation": "1745388560587464",
+        "size_bytes": 396988252,
+        "crc32c": "oACpFQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2023-06-part-00038.jsonl.gz",
+        "generation": "1745388579681089",
+        "size_bytes": 393146086,
+        "crc32c": "oxf5Wg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2023-06-part-00063.jsonl.gz",
+        "generation": "1745388580570568",
+        "size_bytes": 391760091,
+        "crc32c": "Si6dGw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2024-22-part-00030.jsonl.gz",
+        "generation": "1745388607811658",
+        "size_bytes": 392281611,
+        "crc32c": "BqyOTw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/kind=actual/kind2=actual/CC-MAIN-2024-22-part-00042.jsonl.gz",
+        "generation": "1745388609949481",
+        "size_bytes": 391545489,
+        "crc32c": "o29z7g=="
+      }
+    ]
+  },
+  "low_actual": {
+    "inventory_count": 1964,
+    "inventory_sha256": "39fc589d6327fd3cfb1729eeab3853eb3f9dffa6127f53ee8e759affad84b0cb",
+    "selected": [
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2013-20-part-00014.jsonl.gz",
+        "generation": "1745387993568720",
+        "size_bytes": 408222798,
+        "crc32c": "+ptwRA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2017-04-part-00001.jsonl.gz",
+        "generation": "1745388003989417",
+        "size_bytes": 388581765,
+        "crc32c": "vSEkwg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2017-13-part-00018.jsonl.gz",
+        "generation": "1745388011890715",
+        "size_bytes": 389810953,
+        "crc32c": "rSWNjQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2018-26-part-00004.jsonl.gz",
+        "generation": "1745388028587887",
+        "size_bytes": 396964020,
+        "crc32c": "+GQJ3w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2018-30-part-00014.jsonl.gz",
+        "generation": "1745388033330269",
+        "size_bytes": 400713084,
+        "crc32c": "N65xqQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2018-34-part-00013.jsonl.gz",
+        "generation": "1745388034228549",
+        "size_bytes": 404379762,
+        "crc32c": "kYXCeA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2019-13-part-00003.jsonl.gz",
+        "generation": "1745388041701744",
+        "size_bytes": 397542383,
+        "crc32c": "Y03kWw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2019-47-part-00008.jsonl.gz",
+        "generation": "1745388051160722",
+        "size_bytes": 396343548,
+        "crc32c": "t5eCBg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2020-24-part-00006.jsonl.gz",
+        "generation": "1745388055763363",
+        "size_bytes": 392747378,
+        "crc32c": "duwlCg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2021-10-part-00008.jsonl.gz",
+        "generation": "1745388066926885",
+        "size_bytes": 396903457,
+        "crc32c": "u0/97Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2021-49-part-00002.jsonl.gz",
+        "generation": "1745388072800324",
+        "size_bytes": 392148430,
+        "crc32c": "VfWVPw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2022-49-part-00020.jsonl.gz",
+        "generation": "1745388088065472",
+        "size_bytes": 383499275,
+        "crc32c": "zvZONA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2022-49-part-00023.jsonl.gz",
+        "generation": "1745388087334071",
+        "size_bytes": 383633270,
+        "crc32c": "McA54Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2023-50-part-00017.jsonl.gz",
+        "generation": "1745388097165285",
+        "size_bytes": 390608078,
+        "crc32c": "q3yGHQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2024-30-part-00017.jsonl.gz",
+        "generation": "1745388104873255",
+        "size_bytes": 378873828,
+        "crc32c": "eq4OIg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/kind2=actual/CC-MAIN-2024-30-part-00027.jsonl.gz",
+        "generation": "1745388105905432",
+        "size_bytes": 378868603,
+        "crc32c": "rOfYgg=="
+      }
+    ]
+  },
+  "evaluation": {
+    "inventory_count": 100,
+    "inventory_sha256": "c6312ff8ba8066e0ebbcc59c4dec52c044d60d4f62577fe26a95e47340b07254",
+    "selected": [
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_00_text.jsonl.gz",
+        "generation": "1765314619999204",
+        "size_bytes": 141007,
+        "crc32c": "GrQeFw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_01_markdown.jsonl.gz",
+        "generation": "1765314619987728",
+        "size_bytes": 95778,
+        "crc32c": "IKiOGA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_02_c.jsonl.gz",
+        "generation": "1765314620082319",
+        "size_bytes": 56574,
+        "crc32c": "yf9xTA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_03_php.jsonl.gz",
+        "generation": "1765314620171154",
+        "size_bytes": 112469,
+        "crc32c": "bVWANQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_04_java.jsonl.gz",
+        "generation": "1765314620277291",
+        "size_bytes": 93107,
+        "crc32c": "VyX4nA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_05_c++.jsonl.gz",
+        "generation": "1765314620258831",
+        "size_bytes": 81004,
+        "crc32c": "arHbcQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_06_python.jsonl.gz",
+        "generation": "1765314620286854",
+        "size_bytes": 107223,
+        "crc32c": "TgHheg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_07_javascript.jsonl.gz",
+        "generation": "1765314620311713",
+        "size_bytes": 139484,
+        "crc32c": "aihhUg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_08_html.jsonl.gz",
+        "generation": "1765314620349262",
+        "size_bytes": 67712,
+        "crc32c": "5pDOOQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_09_c#.jsonl.gz",
+        "generation": "1765314620328377",
+        "size_bytes": 104708,
+        "crc32c": "jdAVuw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_10_yaml.jsonl.gz",
+        "generation": "1765314620344784",
+        "size_bytes": 109714,
+        "crc32c": "9oNVqQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_11_go.jsonl.gz",
+        "generation": "1765314620443453",
+        "size_bytes": 67557,
+        "crc32c": "kpIxDA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_12_typescript.jsonl.gz",
+        "generation": "1765314620426169",
+        "size_bytes": 116204,
+        "crc32c": "gWXMNg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_13_xml.jsonl.gz",
+        "generation": "1765314620414296",
+        "size_bytes": 67352,
+        "crc32c": "Ll/nDA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_14_css.jsonl.gz",
+        "generation": "1765314620510636",
+        "size_bytes": 71670,
+        "crc32c": "l2dJ/w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_15_jupyter-notebook.jsonl.gz",
+        "generation": "1765314620650199",
+        "size_bytes": 40688,
+        "crc32c": "7Rsljw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_16_rust.jsonl.gz",
+        "generation": "1765314620597653",
+        "size_bytes": 82937,
+        "crc32c": "hr6+5w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_17_unity3d-asset.jsonl.gz",
+        "generation": "1765314620659291",
+        "size_bytes": 119327,
+        "crc32c": "bZJ48g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_18_gettext-catalog.jsonl.gz",
+        "generation": "1765314620636020",
+        "size_bytes": 73144,
+        "crc32c": "Md2V4Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_19_ruby.jsonl.gz",
+        "generation": "1765314620792520",
+        "size_bytes": 121893,
+        "crc32c": "Y7LPsg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_20_vue.jsonl.gz",
+        "generation": "1765314621039797",
+        "size_bytes": 98600,
+        "crc32c": "XN9f5Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_21_sql.jsonl.gz",
+        "generation": "1765314620898561",
+        "size_bytes": 86357,
+        "crc32c": "pQimTg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_22_swift.jsonl.gz",
+        "generation": "1765314620909847",
+        "size_bytes": 106764,
+        "crc32c": "CLeXoA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_23_kotlin.jsonl.gz",
+        "generation": "1765314620966473",
+        "size_bytes": 107988,
+        "crc32c": "XLvGPw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_24_scala.jsonl.gz",
+        "generation": "1765314620945073",
+        "size_bytes": 91707,
+        "crc32c": "8Sd8Xg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_25_scss.jsonl.gz",
+        "generation": "1765314621026232",
+        "size_bytes": 98364,
+        "crc32c": "BzaWGQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_26_tex.jsonl.gz",
+        "generation": "1765314621026231",
+        "size_bytes": 88320,
+        "crc32c": "SfHz8Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_27_dart.jsonl.gz",
+        "generation": "1765314621053212",
+        "size_bytes": 91901,
+        "crc32c": "wSmiUA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_28_kicad.jsonl.gz",
+        "generation": "1765314621095347",
+        "size_bytes": 42619,
+        "crc32c": "9IRDyA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_29_shell.jsonl.gz",
+        "generation": "1765314621167091",
+        "size_bytes": 150333,
+        "crc32c": "0bIaDw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_30_smali.jsonl.gz",
+        "generation": "1765314621216388",
+        "size_bytes": 36058,
+        "crc32c": "E5aUfg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_31_lua.jsonl.gz",
+        "generation": "1765314621222791",
+        "size_bytes": 88666,
+        "crc32c": "ZMPTrA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_32_restructuredtext.jsonl.gz",
+        "generation": "1765314621222256",
+        "size_bytes": 141818,
+        "crc32c": "5sZuMw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_33_perl.jsonl.gz",
+        "generation": "1765314621288032",
+        "size_bytes": 93454,
+        "crc32c": "HgyNwQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_34_diff.jsonl.gz",
+        "generation": "1765314621458533",
+        "size_bytes": 73919,
+        "crc32c": "KM2mlA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_35_ini.jsonl.gz",
+        "generation": "1765314621458322",
+        "size_bytes": 117953,
+        "crc32c": "l80Hvg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_36_jsx.jsonl.gz",
+        "generation": "1765314621600714",
+        "size_bytes": 122108,
+        "crc32c": "o24+Wg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_37_haskell.jsonl.gz",
+        "generation": "1765314621612774",
+        "size_bytes": 103829,
+        "crc32c": "pekO+Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_38_gnuplot.jsonl.gz",
+        "generation": "1765314621611511",
+        "size_bytes": 89732,
+        "crc32c": "X52eYA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_39_postscript.jsonl.gz",
+        "generation": "1765314621698954",
+        "size_bytes": 264084,
+        "crc32c": "n9/SDw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_40_groff.jsonl.gz",
+        "generation": "1765314621741599",
+        "size_bytes": 321208,
+        "crc32c": "l4lNFg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_41_turtle.jsonl.gz",
+        "generation": "1765314621675871",
+        "size_bytes": 43609,
+        "crc32c": "8eJDwQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_42_fortran.jsonl.gz",
+        "generation": "1765314621758241",
+        "size_bytes": 82957,
+        "crc32c": "Jx0ekQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_43_makefile.jsonl.gz",
+        "generation": "1765314621701822",
+        "size_bytes": 95465,
+        "crc32c": "3lGSvA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_44_mathematica.jsonl.gz",
+        "generation": "1765314621736987",
+        "size_bytes": 110468,
+        "crc32c": "FD2vbw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_45_pascal.jsonl.gz",
+        "generation": "1765314621773751",
+        "size_bytes": 64847,
+        "crc32c": "vKC5bA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_46_common-lisp.jsonl.gz",
+        "generation": "1765314621735036",
+        "size_bytes": 59831,
+        "crc32c": "QCadzQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_47_gas.jsonl.gz",
+        "generation": "1765314621841702",
+        "size_bytes": 85155,
+        "crc32c": "2/rfDw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_48_vhdl.jsonl.gz",
+        "generation": "1765314621799855",
+        "size_bytes": 64568,
+        "crc32c": "/9IV2w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_49_julia.jsonl.gz",
+        "generation": "1765314622001457",
+        "size_bytes": 85100,
+        "crc32c": "0ytP8A=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_50_edn.jsonl.gz",
+        "generation": "1765314622108253",
+        "size_bytes": 60712,
+        "crc32c": "cHiBZQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_51_visual-basic.jsonl.gz",
+        "generation": "1765314622172157",
+        "size_bytes": 91024,
+        "crc32c": "4bzUxg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_52_powershell.jsonl.gz",
+        "generation": "1765314622129664",
+        "size_bytes": 100785,
+        "crc32c": "d5kawg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_53_g-code.jsonl.gz",
+        "generation": "1765314622175375",
+        "size_bytes": 107668,
+        "crc32c": "Z/FSgw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_54_ocaml.jsonl.gz",
+        "generation": "1765314622337587",
+        "size_bytes": 85948,
+        "crc32c": "AvZKew=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_55_java-server-pages.jsonl.gz",
+        "generation": "1765314622272100",
+        "size_bytes": 95295,
+        "crc32c": "M599HA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_56_solidity.jsonl.gz",
+        "generation": "1765314622258203",
+        "size_bytes": 88155,
+        "crc32c": "kAAOXg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_57_graphviz-dot.jsonl.gz",
+        "generation": "1765314622247874",
+        "size_bytes": 40775,
+        "crc32c": "hKV/vA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_58_less.jsonl.gz",
+        "generation": "1765314622261507",
+        "size_bytes": 90824,
+        "crc32c": "qCulkg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_59_twig.jsonl.gz",
+        "generation": "1765314622318663",
+        "size_bytes": 81106,
+        "crc32c": "DHHzaw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_60_asciidoc.jsonl.gz",
+        "generation": "1765314622324008",
+        "size_bytes": 131803,
+        "crc32c": "ZI2rXw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_61_groovy.jsonl.gz",
+        "generation": "1765314622326715",
+        "size_bytes": 93553,
+        "crc32c": "L0ld/Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_62_llvm.jsonl.gz",
+        "generation": "1765314622341873",
+        "size_bytes": 55156,
+        "crc32c": "ZCtjzw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_63_hcl.jsonl.gz",
+        "generation": "1765314622390936",
+        "size_bytes": 101416,
+        "crc32c": "uHFdqg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_64_html+erb.jsonl.gz",
+        "generation": "1765314622373965",
+        "size_bytes": 131890,
+        "crc32c": "XIYCtg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_65_erlang.jsonl.gz",
+        "generation": "1765314622516919",
+        "size_bytes": 68462,
+        "crc32c": "uY8RuQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_66_elixir.jsonl.gz",
+        "generation": "1765314622634683",
+        "size_bytes": 100697,
+        "crc32c": "eConjQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_67_eagle.jsonl.gz",
+        "generation": "1765314622628446",
+        "size_bytes": 55983,
+        "crc32c": "AVAmxA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_68_arduino.jsonl.gz",
+        "generation": "1765314622710688",
+        "size_bytes": 101479,
+        "crc32c": "81sX9w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_69_coffeescript.jsonl.gz",
+        "generation": "1765314622776625",
+        "size_bytes": 121983,
+        "crc32c": "RuW7VA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_70_toml.jsonl.gz",
+        "generation": "1765314622801297",
+        "size_bytes": 120502,
+        "crc32c": "Gg+DUg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_71_cuda.jsonl.gz",
+        "generation": "1765314622851212",
+        "size_bytes": 74207,
+        "crc32c": "Mar2pg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_72_nix.jsonl.gz",
+        "generation": "1765314622837634",
+        "size_bytes": 100827,
+        "crc32c": "+niw3A=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_73_smalltalk.jsonl.gz",
+        "generation": "1765314622886064",
+        "size_bytes": 174847,
+        "crc32c": "sFbxlA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_74_cmake.jsonl.gz",
+        "generation": "1765314622835598",
+        "size_bytes": 65770,
+        "crc32c": "SBDQHw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_75_actionscript.jsonl.gz",
+        "generation": "1765314622822673",
+        "size_bytes": 87944,
+        "crc32c": "Q4J9zg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_76_glsl.jsonl.gz",
+        "generation": "1765314622871143",
+        "size_bytes": 97244,
+        "crc32c": "BHFr+A=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_77_systemverilog.jsonl.gz",
+        "generation": "1765314622870264",
+        "size_bytes": 76042,
+        "crc32c": "4EMMsg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_78_haxe.jsonl.gz",
+        "generation": "1765314622907180",
+        "size_bytes": 111274,
+        "crc32c": "XYzOqA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_79_f#.jsonl.gz",
+        "generation": "1765314622915527",
+        "size_bytes": 114884,
+        "crc32c": "BITEhg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_80_max.jsonl.gz",
+        "generation": "1765314622954826",
+        "size_bytes": 24621,
+        "crc32c": "br/rSA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_81_objective-c++.jsonl.gz",
+        "generation": "1765314623103684",
+        "size_bytes": 99539,
+        "crc32c": "xZLiUA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_82_standard-ml.jsonl.gz",
+        "generation": "1765314623180044",
+        "size_bytes": 89386,
+        "crc32c": "iuFlWg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_83_dockerfile.jsonl.gz",
+        "generation": "1765314623194192",
+        "size_bytes": 162454,
+        "crc32c": "4fAqSA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_84_emacs-lisp.jsonl.gz",
+        "generation": "1765314623442632",
+        "size_bytes": 103884,
+        "crc32c": "j8EJLw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_85_scheme.jsonl.gz",
+        "generation": "1765314623308400",
+        "size_bytes": 84834,
+        "crc32c": "WmUNkQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_86_clojure.jsonl.gz",
+        "generation": "1765314623336721",
+        "size_bytes": 102887,
+        "crc32c": "3oVNfA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_87_handlebars.jsonl.gz",
+        "generation": "1765314623401596",
+        "size_bytes": 114904,
+        "crc32c": "REdUcw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_88_smarty.jsonl.gz",
+        "generation": "1765314623430121",
+        "size_bytes": 107320,
+        "crc32c": "MilBqA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_89_logos.jsonl.gz",
+        "generation": "1765314623395784",
+        "size_bytes": 92881,
+        "crc32c": "k9bynw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_90_stata.jsonl.gz",
+        "generation": "1765314623442216",
+        "size_bytes": 81414,
+        "crc32c": "coGLfA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_91_yacc.jsonl.gz",
+        "generation": "1765314623398080",
+        "size_bytes": 63239,
+        "crc32c": "p51Nsw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_92_nimrod.jsonl.gz",
+        "generation": "1765314623475135",
+        "size_bytes": 72698,
+        "crc32c": "9n7Ghg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_93_tcl.jsonl.gz",
+        "generation": "1765314623457540",
+        "size_bytes": 75013,
+        "crc32c": "jIY4fg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_94_viml.jsonl.gz",
+        "generation": "1765314623548944",
+        "size_bytes": 101834,
+        "crc32c": "wpy0MQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_95_asp.jsonl.gz",
+        "generation": "1765314623482523",
+        "size_bytes": 93080,
+        "crc32c": "XPsBTQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_96_protocol-buffer.jsonl.gz",
+        "generation": "1765314623606324",
+        "size_bytes": 22648,
+        "crc32c": "lLUNlw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_97_r.jsonl.gz",
+        "generation": "1765314623816918",
+        "size_bytes": 70361,
+        "crc32c": "JeNiZA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_98_cython.jsonl.gz",
+        "generation": "1765314623743002",
+        "size_bytes": 78568,
+        "crc32c": "izvzgw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val_99_mediawiki.jsonl.gz",
+        "generation": "1765314623821755",
+        "size_bytes": 51871,
+        "crc32c": "DRkG/A=="
+      }
+    ]
+  }
+}

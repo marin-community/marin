@@ -1,0 +1,104 @@
+{
+  "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/analysis.json": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789257407.933914,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/analysis.json",
+      "fieldbook.local_size_at_capture": 28096
+    },
+    "content_hash": "sha256:4508adb2af8454342841bca006f23dd22449b424472d167eb6edc7ea291d9e00",
+    "created_at": "2026-09-13T00:10:26Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2c1kprdc59v43qm6tr7gebw",
+    "job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-13T00:10:26Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/analysis.json"
+  },
+  "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/verified_endpoints.json": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789257407.9245584,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/verified_endpoints.json",
+      "fieldbook.local_size_at_capture": 52617
+    },
+    "content_hash": "sha256:d453914f60b164dda8c59f99260c8facb68118faa8c97f027d087216a5db74d1",
+    "created_at": "2026-09-13T00:10:26Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2c1kq16sy96m27vk3crertr",
+    "job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-13T00:10:26Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/verified_endpoints.json"
+  },
+  "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/independent_numeric_validation.json": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789257707.2315655,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/independent_numeric_validation.json",
+      "fieldbook.local_size_at_capture": 1573
+    },
+    "content_hash": "sha256:c821c4b4b5de2f5c2f246d73a674d495822212a7b23e72bcac1fcf2fa7e33fb5",
+    "created_at": "2026-09-13T00:10:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2c1kqa2gd54azer9v1k3gaa",
+    "job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-13T00:10:27Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/independent_numeric_validation.json"
+  },
+  "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_tpp10_complete_grid/README.md": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789257927.2608337,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_tpp10_complete_grid/README.md",
+      "fieldbook.local_size_at_capture": 3975
+    },
+    "content_hash": "sha256:077db8cca4e6e982d77805808c38a975f1d18fe760be241ab55f74f57aca7553",
+    "created_at": "2026-09-13T00:10:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2c1kqj9xv55ees8ycsn6zks",
+    "job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-13T00:10:27Z",
+    "uri": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_tpp10_complete_grid/README.md"
+  },
+  "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_tpp10_complete_grid/validation.json": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789257927.2666764,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_tpp10_complete_grid/validation.json",
+      "fieldbook.local_size_at_capture": 586
+    },
+    "content_hash": "sha256:0ca74e2cd345c1a99de86705088ad84693f38808d48983ccbd956cba24ee1e6c",
+    "created_at": "2026-09-13T00:10:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2c1kqt1meq79wv5a1eajjfb",
+    "job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-13T00:10:27Z",
+    "uri": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_tpp10_complete_grid/validation.json"
+  },
+  "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_tpp10_complete_grid/final_sha256.json": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789257927.268405,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_tpp10_complete_grid/final_sha256.json",
+      "fieldbook.local_size_at_capture": 1579
+    },
+    "content_hash": "sha256:7e09dbdb27f9bd22cecbc60f4b16ecad3c1983a1aa73c9f9bcd9ae539ad5e277",
+    "created_at": "2026-09-13T00:10:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2c1kr36bd0pbdgb01xn5f49",
+    "job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-13T00:10:27Z",
+    "uri": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_tpp10_complete_grid/final_sha256.json"
+  }
+}

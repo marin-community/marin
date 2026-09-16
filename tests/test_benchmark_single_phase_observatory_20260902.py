@@ -210,3 +210,18 @@ def test_shared_shape_unit_keys_group_by_target_panel_and_scale():
     assert harness.shared_unit_key("panel", task)[0] == "300m_39bucket"
     assert harness.shared_unit_key("scale", task) == harness.shared_unit_key("scale", other)
     assert harness.shared_unit_key("scale", curve) != harness.shared_unit_key("scale", task)
+
+
+def test_proportional_calibration_row_is_never_held_out():
+    panel = harness.load_panel("300m_39bucket")
+    pinned = harness.calibration_rows(panel)
+    assert len(pinned) == 1 and "baseline_proportional" in panel.runs[int(pinned[0])]
+    for split in harness._panel_splits("300m_39bucket", 1):
+        assert int(pinned[0]) not in set(split.test.tolist())
+        assert int(pinned[0]) in set(split.train.tolist())
+        for inner_train, inner_validation in split.inner:
+            assert int(pinned[0]) in set(inner_train.tolist())
+            assert int(pinned[0]) not in set(inner_validation.tolist())
+    for inner_train, inner_validation in harness.heldout_inner_folds(panel):
+        assert int(pinned[0]) in set(inner_train.tolist())
+        assert int(pinned[0]) not in set(inner_validation.tolist())

@@ -18,6 +18,7 @@ from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.cache import build_lm_dataset_cache
 from levanter.data.text.datasets import (
+    BlockShuffleConfig,
     ChatDataset,
     DEFAULT_LM_DATA_SHUFFLE,
     DatasetComponent,
@@ -42,6 +43,7 @@ from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.schedule import BatchSchedule
 from levanter.store.cache import LEDGER_FILE_NAME, CacheCatalog, write_levanter_cache
+from levanter.utils.jax_utils import key_iterator
 
 
 def test_dont_blow_up_without_validation_set():
@@ -538,6 +540,89 @@ def test_max_train_batches_fixed_subset_is_independent_of_training_shuffle():
         assert first_order[name] != second_order[name]
         assert set(first_order[name]) != set(different_support[name])
     assert len(first_order["uncapped"]) == 1_024
+
+
+@pytest.mark.parametrize("shuffle", [True, BlockShuffleConfig(io_block_size=8, window_blocks=4)])
+@pytest.mark.parametrize("support_mode", ["full", "cap", "fixed_cap", "simulated", "fixed_simulated"])
+def test_component_shuffle_keys_preserve_data_when_other_components_have_zero_weight(shuffle, support_mode):
+    Pos = hax.Axis("position", 4)
+    source = ListAsyncDataset(
+        [GrugLmExample.causal(jnp.full((Pos.size,), value, dtype=jnp.int32)) for value in range(128)]
+    )
+    components = {
+        name: DirectDatasetComponent(datasets={"train": source, "validation": source}) for name in ("web", "code")
+    }
+    training_key = jax.random.PRNGKey(17)
+    historical_keys = key_iterator(training_key)
+    next(historical_keys)
+    code_key = tuple(int(value) for value in np.asarray(next(historical_keys)))
+    support = {}
+    if support_mode in ("cap", "fixed_cap"):
+        support["max_train_batches"] = {"code": 64}
+        if support_mode == "fixed_cap":
+            support["max_train_batches_subset_seed"] = 5
+    elif support_mode in ("simulated", "fixed_simulated"):
+        support.update(experiment_budget=64, target_budget=128)
+        if support_mode == "fixed_simulated":
+            support["simulated_epoch_subset_seed"] = 5
+
+    def config(web_weight, overrides=None):
+        return LmDataConfig(
+            components=components,
+            train_weights={"web": web_weight, "code": 1.0},
+            tokenizer="passthrough",
+            vocab_size=256,
+            shuffle=shuffle,
+            train_component_shuffle_keys=overrides,
+            **support,
+        )
+
+    def code_order(data_config, key=training_key):
+        dataset = data_config.train_sets(Pos, initial_batch_size=1, key=key)["code"].as_sync_dataset()
+        return [int(np.asarray(dataset[index].tokens)[0]) for index in range(len(dataset))]
+
+    interior = code_order(config(web_weight=1.0))
+    endpoint = config(web_weight=0.0, overrides={"code": code_key})
+    assert code_order(config(web_weight=0.0)) != interior
+    assert code_order(endpoint) == interior
+    assert code_order(endpoint, key=jax.random.PRNGKey(29)) == interior
+
+    original_validation = config(web_weight=1.0).validation_sets(Pos)["code"].as_sync_dataset()
+    endpoint_validation = endpoint.validation_sets(Pos)["code"].as_sync_dataset()
+    assert [int(example.tokens.array[0]) for example in endpoint_validation] == [
+        int(example.tokens.array[0]) for example in original_validation
+    ]
+
+
+def test_component_shuffle_keys_keep_capped_support_nested_and_leave_other_components_unchanged():
+    Pos = hax.Axis("position", 4)
+    source = ListAsyncDataset(
+        [GrugLmExample.causal(jnp.full((Pos.size,), value, dtype=jnp.int32)) for value in range(128)]
+    )
+    components = {name: DirectDatasetComponent(datasets={"train": source}) for name in ("code", "web")}
+
+    def orders(cap, overrides):
+        config = LmDataConfig(
+            components=components,
+            tokenizer="passthrough",
+            vocab_size=256,
+            shuffle=True,
+            max_train_batches={"code": cap},
+            train_component_shuffle_keys=overrides,
+        )
+        result = {}
+        for name, dataset in config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(17)).items():
+            sync_dataset = dataset.as_sync_dataset()
+            result[name] = [int(np.asarray(sync_dataset[index].tokens)[0]) for index in range(len(sync_dataset))]
+        return result
+
+    historical = orders(cap=64, overrides=None)
+    parent = orders(cap=64, overrides={"code": (898005854, 446240491)})
+    proxy = orders(cap=16, overrides={"code": (898005854, 446240491)})
+    assert proxy["code"] == parent["code"][:16]
+    assert set(proxy["code"]) < set(parent["code"])
+    assert parent["code"] != historical["code"]
+    assert parent["web"] == historical["web"]
 
 
 def test_simulated_epoch_pool_fraction_keeps_a_nested_subset_of_the_full_support():

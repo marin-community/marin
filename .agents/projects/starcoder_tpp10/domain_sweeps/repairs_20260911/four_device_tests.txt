@@ -1,0 +1,23 @@
+........                                                                 [100%]
+=============================== warnings summary ===============================
+lib/haliax/src/haliax/partitioning.py:20
+  /Users/calvinxu/Projects/Work/Marin/marin/lib/haliax/src/haliax/partitioning.py:20: DeprecationWarning: jax.interpreters.pxla.thread_resources is deprecated as of JAX v0.8.2. Please switch to using `with jax.set_mesh(mesh)` instead of `with mesh:` and then use `jax.sharding.get_abstract_mesh()` to get the current mesh.
+    from jax.interpreters.pxla import thread_resources
+
+tests/test_eval.py::test_tagged_bpb_is_total_bits_per_byte_across_batch_boundaries[False-1]
+tests/test_eval.py::test_tagged_bpb_is_total_bits_per_byte_across_batch_boundaries[False-2]
+tests/test_eval.py::test_tagged_bpb_is_total_bits_per_byte_across_batch_boundaries[False-4]
+tests/test_eval.py::test_tagged_bpb_is_total_bits_per_byte_across_batch_boundaries[True-1]
+tests/test_eval.py::test_tagged_bpb_is_total_bits_per_byte_across_batch_boundaries[True-2]
+tests/test_eval.py::test_tagged_bpb_is_total_bits_per_byte_across_batch_boundaries[True-4]
+tests/test_eval.py::test_bpb_retains_zero_byte_label_losses[False]
+tests/test_eval.py::test_bpb_retains_zero_byte_label_losses[True]
+  /Users/calvinxu/Projects/Work/Marin/marin/lib/haliax/src/haliax/partitioning.py:220: RuntimeWarning: No resource mapping found. Not sharding.
+    warnings.warn("No resource mapping found. Not sharding.", RuntimeWarning)
+
+tests/test_eval.py: 15 warnings
+  /Users/calvinxu/Projects/Work/Marin/marin/.venv/lib/python3.12/site-packages/tqdm_loggable/tqdm_logging.py:109: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+    if rate and total else datetime.utcfromtimestamp(0))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+8 passed, 9 deselected, 24 warnings in 9.94s

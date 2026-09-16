@@ -1,0 +1,566 @@
+{
+  "observed_at": "2026-09-09T04:16:18.366729+00:00",
+  "source": "IrisClient.list_jobs and list_tasks; exact controller-reported timestamps",
+  "parent_job_id": "/calvinxu/starcoder-epoch-matching-pilot",
+  "jobs": [
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-fc2d1e9f",
+      "state": "succeeded",
+      "submitted_at": "2026-09-09T00:31:02.092000+00:00",
+      "started_at": "2026-09-09T00:41:59.827000+00:00",
+      "finished_at": "2026-09-09T04:05:05.142000+00:00",
+      "exit_code": 0,
+      "error_message": "",
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": "epmatch_target_c124_s20260711",
+      "tasks": [
+        {
+          "task_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-fc2d1e9f/0",
+          "state": "succeeded",
+          "submitted_at": "2026-09-09T00:31:02.092000+00:00",
+          "started_at": "2026-09-09T00:42:09.977000+00:00",
+          "finished_at": "2026-09-09T04:05:14.751000+00:00",
+          "exit_code": 0,
+          "error_message": "",
+          "current_attempt_number": 0,
+          "attempts": [
+            {
+              "attempt_number": 0,
+              "state": "succeeded",
+              "started_at": "2026-09-09T00:42:09.977000+00:00",
+              "finished_at": "2026-09-09T04:05:14.751000+00:00",
+              "exit_code": 0,
+              "error_message": "",
+              "terminal_reason": "",
+              "worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260908-2252-161cd3ef-worker-0"
+            }
+          ]
+        }
+      ],
+      "logical_mapping_evidence": [
+        {
+          "attempt": 0,
+          "run_name": "epmatch_target_c124_s20260711",
+          "log_line": "[00:42:42] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-fc2d1e9f/0 attempt=0 | I20260909 00:42:40 marin.training.training Using run ID: epmatch_target_c124_s20260711"
+        }
+      ],
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_target_c124_s20260711/2026.09.08",
+      "arm": "target",
+      "starcoder_weight": 1.0,
+      "trainer_seed": 20260711
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-063a3da0",
+      "state": "succeeded",
+      "submitted_at": "2026-09-09T00:31:01.446000+00:00",
+      "started_at": "2026-09-09T00:41:59.827000+00:00",
+      "finished_at": "2026-09-09T00:52:42.613000+00:00",
+      "exit_code": 0,
+      "error_message": "",
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": "epmatch_matched_c124_s20260711",
+      "tasks": [
+        {
+          "task_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-063a3da0/0",
+          "state": "succeeded",
+          "submitted_at": "2026-09-09T00:31:01.446000+00:00",
+          "started_at": "2026-09-09T00:42:11.498000+00:00",
+          "finished_at": "2026-09-09T00:52:53.707000+00:00",
+          "exit_code": 0,
+          "error_message": "",
+          "current_attempt_number": 0,
+          "attempts": [
+            {
+              "attempt_number": 0,
+              "state": "succeeded",
+              "started_at": "2026-09-09T00:42:11.498000+00:00",
+              "finished_at": "2026-09-09T00:52:53.707000+00:00",
+              "exit_code": 0,
+              "error_message": "",
+              "terminal_reason": "",
+              "worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260908-2228-c7a8e9c2-worker-0"
+            }
+          ]
+        }
+      ],
+      "logical_mapping_evidence": [
+        {
+          "attempt": 0,
+          "run_name": "epmatch_matched_c124_s20260711",
+          "log_line": "[00:42:45] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-063a3da0/0 attempt=0 | I20260909 00:42:43 marin.training.training Using run ID: epmatch_matched_c124_s20260711"
+        }
+      ],
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c124_s20260711/2026.09.08",
+      "arm": "matched",
+      "starcoder_weight": 1.0,
+      "trainer_seed": 20260711
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-18d20eab",
+      "state": "succeeded",
+      "submitted_at": "2026-09-09T00:31:00.940000+00:00",
+      "started_at": "2026-09-09T00:41:59.827000+00:00",
+      "finished_at": "2026-09-09T00:52:41.605000+00:00",
+      "exit_code": 0,
+      "error_message": "",
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": "epmatch_unmatched_c124_s20260711",
+      "tasks": [
+        {
+          "task_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-18d20eab/0",
+          "state": "succeeded",
+          "submitted_at": "2026-09-09T00:31:00.940000+00:00",
+          "started_at": "2026-09-09T00:42:13.271000+00:00",
+          "finished_at": "2026-09-09T00:52:53.707000+00:00",
+          "exit_code": 0,
+          "error_message": "",
+          "current_attempt_number": 0,
+          "attempts": [
+            {
+              "attempt_number": 0,
+              "state": "succeeded",
+              "started_at": "2026-09-09T00:42:13.271000+00:00",
+              "finished_at": "2026-09-09T00:52:53.707000+00:00",
+              "exit_code": 0,
+              "error_message": "",
+              "terminal_reason": "",
+              "worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260908-2158-ce322c6c-worker-0"
+            }
+          ]
+        }
+      ],
+      "logical_mapping_evidence": [
+        {
+          "attempt": 0,
+          "run_name": "epmatch_unmatched_c124_s20260711",
+          "log_line": "[00:42:47] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-18d20eab/0 attempt=0 | I20260909 00:42:43 marin.training.training Using run ID: epmatch_unmatched_c124_s20260711"
+        }
+      ],
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c124_s20260711/2026.09.08",
+      "arm": "unmatched",
+      "starcoder_weight": 1.0,
+      "trainer_seed": 20260711
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-8d5a4157",
+      "state": "succeeded",
+      "submitted_at": "2026-09-09T00:31:00.713000+00:00",
+      "started_at": "2026-09-09T00:41:59.827000+00:00",
+      "finished_at": "2026-09-09T02:35:23.025000+00:00",
+      "exit_code": 0,
+      "error_message": "",
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 1,
+      "logical_run_name": "epmatch_matched_c109_s20260711",
+      "tasks": [
+        {
+          "task_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-8d5a4157/0",
+          "state": "succeeded",
+          "submitted_at": "2026-09-09T00:31:00.713000+00:00",
+          "started_at": "2026-09-09T02:24:10.064000+00:00",
+          "finished_at": "2026-09-09T02:35:31.716000+00:00",
+          "exit_code": 0,
+          "error_message": "Worker marin-tpu-v5p-preemptible-8-us-central1-20260908-2146-1e813601-worker-0 failed: worker reconcile failure threshold exceeded",
+          "current_attempt_number": 1,
+          "attempts": [
+            {
+              "attempt_number": 0,
+              "state": "worker_failed",
+              "started_at": "2026-09-09T00:42:11.498000+00:00",
+              "finished_at": "2026-09-09T00:46:55.597000+00:00",
+              "exit_code": 0,
+              "error_message": "Worker marin-tpu-v5p-preemptible-8-us-central1-20260908-2146-1e813601-worker-0 failed: worker reconcile failure threshold exceeded",
+              "terminal_reason": "",
+              "worker_id": ""
+            },
+            {
+              "attempt_number": 1,
+              "state": "succeeded",
+              "started_at": "2026-09-09T02:24:10.064000+00:00",
+              "finished_at": "2026-09-09T02:35:31.716000+00:00",
+              "exit_code": 0,
+              "error_message": "",
+              "terminal_reason": "",
+              "worker_id": ""
+            }
+          ]
+        }
+      ],
+      "logical_mapping_evidence": [
+        {
+          "attempt": 0,
+          "run_name": "epmatch_matched_c109_s20260711",
+          "log_line": "[00:42:44] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-8d5a4157/0 attempt=0 | I20260909 00:42:41 marin.training.training Using run ID: epmatch_matched_c109_s20260711"
+        },
+        {
+          "attempt": 1,
+          "run_name": "epmatch_matched_c109_s20260711",
+          "log_line": "[02:25:29] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-8d5a4157/0 attempt=1 | I20260909 02:25:27 marin.training.training Using run ID: epmatch_matched_c109_s20260711"
+        }
+      ],
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c109_s20260711/2026.09.08",
+      "arm": "matched",
+      "starcoder_weight": 0.7,
+      "trainer_seed": 20260711
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-645023e5",
+      "state": "succeeded",
+      "submitted_at": "2026-09-09T00:31:00.449000+00:00",
+      "started_at": "2026-09-09T00:41:59.827000+00:00",
+      "finished_at": "2026-09-09T00:53:10.671000+00:00",
+      "exit_code": 0,
+      "error_message": "",
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": "epmatch_unmatched_c109_s20260711",
+      "tasks": [
+        {
+          "task_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-645023e5/0",
+          "state": "succeeded",
+          "submitted_at": "2026-09-09T00:31:00.449000+00:00",
+          "started_at": "2026-09-09T00:42:09.977000+00:00",
+          "finished_at": "2026-09-09T00:53:19.836000+00:00",
+          "exit_code": 0,
+          "error_message": "",
+          "current_attempt_number": 0,
+          "attempts": [
+            {
+              "attempt_number": 0,
+              "state": "succeeded",
+              "started_at": "2026-09-09T00:42:09.977000+00:00",
+              "finished_at": "2026-09-09T00:53:19.836000+00:00",
+              "exit_code": 0,
+              "error_message": "",
+              "terminal_reason": "",
+              "worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260908-2026-080cc86e-worker-0"
+            }
+          ]
+        }
+      ],
+      "logical_mapping_evidence": [
+        {
+          "attempt": 0,
+          "run_name": "epmatch_unmatched_c109_s20260711",
+          "log_line": "[00:43:01] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-645023e5/0 attempt=0 | I20260909 00:42:59 marin.training.training Using run ID: epmatch_unmatched_c109_s20260711"
+        }
+      ],
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c109_s20260711/2026.09.08",
+      "arm": "unmatched",
+      "starcoder_weight": 0.7,
+      "trainer_seed": 20260711
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-57e920fb",
+      "state": "succeeded",
+      "submitted_at": "2026-09-09T00:30:59.785000+00:00",
+      "started_at": "2026-09-09T00:41:59.827000+00:00",
+      "finished_at": "2026-09-09T00:52:44.615000+00:00",
+      "exit_code": 0,
+      "error_message": "",
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": "epmatch_matched_c057_s20260711",
+      "tasks": [
+        {
+          "task_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-57e920fb/0",
+          "state": "succeeded",
+          "submitted_at": "2026-09-09T00:30:59.785000+00:00",
+          "started_at": "2026-09-09T00:42:09.977000+00:00",
+          "finished_at": "2026-09-09T00:52:53.707000+00:00",
+          "exit_code": 0,
+          "error_message": "",
+          "current_attempt_number": 0,
+          "attempts": [
+            {
+              "attempt_number": 0,
+              "state": "succeeded",
+              "started_at": "2026-09-09T00:42:09.977000+00:00",
+              "finished_at": "2026-09-09T00:52:53.707000+00:00",
+              "exit_code": 0,
+              "error_message": "",
+              "terminal_reason": "",
+              "worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260908-1857-1575c1d4-worker-0"
+            }
+          ]
+        }
+      ],
+      "logical_mapping_evidence": [
+        {
+          "attempt": 0,
+          "run_name": "epmatch_matched_c057_s20260711",
+          "log_line": "[00:42:42] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-57e920fb/0 attempt=0 | I20260909 00:42:39 marin.training.training Using run ID: epmatch_matched_c057_s20260711"
+        }
+      ],
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c057_s20260711/2026.09.08",
+      "arm": "matched",
+      "starcoder_weight": 0.3,
+      "trainer_seed": 20260711
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-afaa78b8",
+      "state": "succeeded",
+      "submitted_at": "2026-09-09T00:30:59.743000+00:00",
+      "started_at": "2026-09-09T00:41:59.827000+00:00",
+      "finished_at": "2026-09-09T00:52:50.622000+00:00",
+      "exit_code": 0,
+      "error_message": "",
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": "epmatch_unmatched_c057_s20260711",
+      "tasks": [
+        {
+          "task_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-afaa78b8/0",
+          "state": "succeeded",
+          "submitted_at": "2026-09-09T00:30:59.743000+00:00",
+          "started_at": "2026-09-09T00:42:11.498000+00:00",
+          "finished_at": "2026-09-09T00:52:58.226000+00:00",
+          "exit_code": 0,
+          "error_message": "",
+          "current_attempt_number": 0,
+          "attempts": [
+            {
+              "attempt_number": 0,
+              "state": "succeeded",
+              "started_at": "2026-09-09T00:42:11.498000+00:00",
+              "finished_at": "2026-09-09T00:52:58.226000+00:00",
+              "exit_code": 0,
+              "error_message": "",
+              "terminal_reason": "",
+              "worker_id": ""
+            }
+          ]
+        }
+      ],
+      "logical_mapping_evidence": [
+        {
+          "attempt": 0,
+          "run_name": "epmatch_unmatched_c057_s20260711",
+          "log_line": "[00:42:45] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-afaa78b8/0 attempt=0 | I20260909 00:42:43 marin.training.training Using run ID: epmatch_unmatched_c057_s20260711"
+        }
+      ],
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c057_s20260711/2026.09.08",
+      "arm": "unmatched",
+      "starcoder_weight": 0.3,
+      "trainer_seed": 20260711
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-a940dbf3",
+      "state": "succeeded",
+      "submitted_at": "2026-09-09T00:30:59.158000+00:00",
+      "started_at": "2026-09-09T00:41:59.827000+00:00",
+      "finished_at": "2026-09-09T00:52:44.623000+00:00",
+      "exit_code": 0,
+      "error_message": "",
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": "epmatch_matched_c032_s20260711",
+      "tasks": [
+        {
+          "task_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-a940dbf3/0",
+          "state": "succeeded",
+          "submitted_at": "2026-09-09T00:30:59.158000+00:00",
+          "started_at": "2026-09-09T00:42:09.977000+00:00",
+          "finished_at": "2026-09-09T00:52:53.707000+00:00",
+          "exit_code": 0,
+          "error_message": "",
+          "current_attempt_number": 0,
+          "attempts": [
+            {
+              "attempt_number": 0,
+              "state": "succeeded",
+              "started_at": "2026-09-09T00:42:09.977000+00:00",
+              "finished_at": "2026-09-09T00:52:53.707000+00:00",
+              "exit_code": 0,
+              "error_message": "",
+              "terminal_reason": "",
+              "worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260908-1744-a3fb2a6b-worker-0"
+            }
+          ]
+        }
+      ],
+      "logical_mapping_evidence": [
+        {
+          "attempt": 0,
+          "run_name": "epmatch_matched_c032_s20260711",
+          "log_line": "[00:42:42] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-a940dbf3/0 attempt=0 | I20260909 00:42:40 marin.training.training Using run ID: epmatch_matched_c032_s20260711"
+        }
+      ],
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c032_s20260711/2026.09.08",
+      "arm": "matched",
+      "starcoder_weight": 0.1,
+      "trainer_seed": 20260711
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-67eaa5b1",
+      "state": "succeeded",
+      "submitted_at": "2026-09-09T00:30:58.895000+00:00",
+      "started_at": "2026-09-09T00:41:59.827000+00:00",
+      "finished_at": "2026-09-09T00:52:53.647000+00:00",
+      "exit_code": 0,
+      "error_message": "",
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": "epmatch_unmatched_c032_s20260711",
+      "tasks": [
+        {
+          "task_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-67eaa5b1/0",
+          "state": "succeeded",
+          "submitted_at": "2026-09-09T00:30:58.895000+00:00",
+          "started_at": "2026-09-09T00:42:11.498000+00:00",
+          "finished_at": "2026-09-09T00:53:05.599000+00:00",
+          "exit_code": 0,
+          "error_message": "",
+          "current_attempt_number": 0,
+          "attempts": [
+            {
+              "attempt_number": 0,
+              "state": "succeeded",
+              "started_at": "2026-09-09T00:42:11.498000+00:00",
+              "finished_at": "2026-09-09T00:53:05.599000+00:00",
+              "exit_code": 0,
+              "error_message": "",
+              "terminal_reason": "",
+              "worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260908-1742-9f93a6f1-worker-0"
+            }
+          ]
+        }
+      ],
+      "logical_mapping_evidence": [
+        {
+          "attempt": 0,
+          "run_name": "epmatch_unmatched_c032_s20260711",
+          "log_line": "[00:42:44] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-67eaa5b1/0 attempt=0 | I20260909 00:42:42 marin.training.training Using run ID: epmatch_unmatched_c032_s20260711"
+        }
+      ],
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c032_s20260711/2026.09.08",
+      "arm": "unmatched",
+      "starcoder_weight": 0.1,
+      "trainer_seed": 20260711
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-481a716a",
+      "state": "succeeded",
+      "submitted_at": "2026-09-09T00:30:58.334000+00:00",
+      "started_at": "2026-09-09T00:30:59.196000+00:00",
+      "finished_at": "2026-09-09T00:41:59.195000+00:00",
+      "exit_code": 0,
+      "error_message": "",
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": "epmatch_unmatched_c000_s20260711",
+      "tasks": [
+        {
+          "task_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-481a716a/0",
+          "state": "succeeded",
+          "submitted_at": "2026-09-09T00:30:58.334000+00:00",
+          "started_at": "2026-09-09T00:31:09.260000+00:00",
+          "finished_at": "2026-09-09T00:42:08.169000+00:00",
+          "exit_code": 0,
+          "error_message": "",
+          "current_attempt_number": 0,
+          "attempts": [
+            {
+              "attempt_number": 0,
+              "state": "succeeded",
+              "started_at": "2026-09-09T00:31:09.260000+00:00",
+              "finished_at": "2026-09-09T00:42:08.169000+00:00",
+              "exit_code": 0,
+              "error_message": "",
+              "terminal_reason": "",
+              "worker_id": ""
+            }
+          ]
+        }
+      ],
+      "logical_mapping_evidence": [
+        {
+          "attempt": 0,
+          "run_name": "epmatch_unmatched_c000_s20260711",
+          "log_line": "[00:31:41] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-481a716a/0 attempt=0 | I20260909 00:31:39 marin.training.training Using run ID: epmatch_unmatched_c000_s20260711"
+        }
+      ],
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c000_s20260711/2026.09.08",
+      "arm": "unmatched",
+      "starcoder_weight": 0.0,
+      "trainer_seed": 20260711
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot",
+      "state": "succeeded",
+      "submitted_at": "2026-09-09T00:29:55.782000+00:00",
+      "started_at": "2026-09-09T00:30:02.069000+00:00",
+      "finished_at": "2026-09-09T04:05:30.248000+00:00",
+      "exit_code": 0,
+      "error_message": "",
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": null,
+      "tasks": [
+        {
+          "task_id": "/calvinxu/starcoder-epoch-matching-pilot/0",
+          "state": "succeeded",
+          "submitted_at": "2026-09-09T00:29:55.782000+00:00",
+          "started_at": "2026-09-09T00:30:02.460000+00:00",
+          "finished_at": "2026-09-09T04:05:30.248000+00:00",
+          "exit_code": 0,
+          "error_message": "",
+          "current_attempt_number": 0,
+          "attempts": [
+            {
+              "attempt_number": 0,
+              "state": "succeeded",
+              "started_at": "2026-09-09T00:30:02.460000+00:00",
+              "finished_at": "2026-09-09T04:05:30.248000+00:00",
+              "exit_code": 0,
+              "error_message": "",
+              "terminal_reason": "",
+              "worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260908-1857-1575c1d4-worker-0"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "logical_mapping_source": {
+    "path": ".agents/projects/starcoder_epoch_matching/pilot_run_id_logs.txt",
+    "sha256": "cc9a9f8ae2624dc73af993907e562f20ddc259919ed09916c381a539b13413c2",
+    "query": "iris job logs /calvinxu/starcoder-epoch-matching-pilot --since-ms 1788913795782 --no-tail --max-lines 40 --substring Using run ID:"
+  },
+  "summary": {
+    "parent_succeeded": true,
+    "children": 10,
+    "children_succeeded": 10,
+    "child_failure_count": 0,
+    "child_preemption_count": 1,
+    "retried_child_note": "The matched p=0.7 child first attempt was worker_failed (worker reconcile failure threshold exceeded), counted by Iris as one preemption; attempt 1 succeeded."
+  },
+  "representative_child_runtime": {
+    "wandb_run": "marin-community/marin/epmatch_unmatched_c000_s20260711",
+    "file": "requirements.txt",
+    "local_path": ".agents/projects/starcoder_epoch_matching/pilot_runtime_metadata/requirements.txt",
+    "bytes": 5354,
+    "sha256": "389ac7accad56fb3b644a7e4fbaab94a2ea0b3900d041efeae005d0ae35f09d1",
+    "versions": [
+      "libtpu==0.0.46",
+      "numpy==2.3.5",
+      "jaxlib==0.11.1",
+      "jax==0.11.1"
+    ],
+    "scope": "Verified from the actual unmatched p=0 child requirements artifact; other child runtime artifacts were not sampled."
+  }
+}

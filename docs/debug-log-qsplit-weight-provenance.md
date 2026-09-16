@@ -134,3 +134,15 @@ greedy D-optimal selection using the static nextgen design path. D-optimal was
 definitely involved. The plain Dirichlet sampler was only the source of
 experiment constraints and normalization helpers, not the direct qsplit point
 generator.
+
+## 2026-09-08 follow-up: launch commit recovered and replay characterized
+
+The W&B `wandb-metadata.json` of the `ngd3dm2_qsplit240` training runs (created 2026-03-18 08:00 UTC, two minutes after
+`design/planned_runs.json`) records git commit `48b171b3827b461a94186dd9b52b7c64e7f0747a`, whose design-path files are
+byte-identical to the `14ead23c17` snapshot above. Replaying the static selector at that commit with the archived
+planning state (the two baselines of `state/loop_state.json`, seed 42, pool 2048, ridge 1e-3) regenerates a Sobol pool
+that contains all 238 archived rows, matches the greedy order for the first 168 picks, and matches 233/238 as a set.
+At the first departure the two leading candidates differ by 6e-4 in relative gain while the recursive and direct
+inverses of the information matrix (condition number 4e12) disagree by 2e-4 on that candidate, so the residual is
+floating-point sensitivity of the greedy log-determinant updates rather than changed baseline metrics. Scripts and
+results: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/qsplit240_design_replay_20260908/`.

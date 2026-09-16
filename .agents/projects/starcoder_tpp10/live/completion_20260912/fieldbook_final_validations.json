@@ -1,0 +1,53 @@
+[
+  {
+    "attrs": {},
+    "check_name": "complete_refinement_grid_verified_20260912",
+    "created_at": "2026-09-13T00:10:56Z",
+    "deleted_at": null,
+    "details": {},
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "expected_value": "45 verified refinements; 102 distinct training artifacts; twelve coordinates with original seed/subset coverage",
+    "id": "val_01m2c1mmgs65m10q9dm3ks8r9c",
+    "measured_value": "45/45 complete; 102 artifacts; no missing or verified-but-unplotted points",
+    "session_id": "ses_01m2c0ns6jpcc937d2at085dpe",
+    "source_artifact_id": "art_01m2c1kq16sy96m27vk3crertr",
+    "source_job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "status": "pass",
+    "updated_at": "2026-09-13T00:10:56Z"
+  },
+  {
+    "attrs": {},
+    "check_name": "complete_grid_independent_arithmetic_20260912",
+    "created_at": "2026-09-13T00:10:57Z",
+    "deleted_at": null,
+    "details": {},
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "expected_value": "Independent raw-CSV calculation reproduces complete-grid selections, target regrets and plotted percentages",
+    "id": "val_01m2c1mmspyy7mg99zj20sxyrf",
+    "measured_value": "Target65; unmatched100; all three matched subset means50; regret reduction48.9113983642%",
+    "session_id": "ses_01m2c0ns6jpcc937d2at085dpe",
+    "source_artifact_id": "art_01m2c1kqa2gd54azer9v1k3gaa",
+    "source_job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "status": "pass",
+    "updated_at": "2026-09-13T00:10:57Z"
+  },
+  {
+    "attrs": {},
+    "check_name": "complete_grid_paper_build_and_visual_20260912",
+    "created_at": "2026-09-13T00:10:57Z",
+    "deleted_at": null,
+    "details": {},
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "expected_value": "Clean compiled PDF and readable standalone/embedded plot with revised caption and appendix",
+    "id": "val_01m2c1mn2f2m4k1b8vkgjc7k7q",
+    "measured_value": "43 pages; references page10; zero warnings/undefined references/overfull boxes; visual checks pass pages5,16,17; five behavioral tests pass",
+    "session_id": "ses_01m2c0ns6jpcc937d2at085dpe",
+    "source_artifact_id": "art_01m2c1kqt1meq79wv5a1eajjfb",
+    "source_job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "status": "pass",
+    "updated_at": "2026-09-13T00:10:57Z"
+  }
+]

@@ -1,0 +1,293 @@
+{
+  "artifacts": {
+    "spec.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789198637.021299,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/spec.json",
+        "fieldbook.local_size_at_capture": 411256
+      },
+      "content_hash": "sha256:02a0fe753d9594574e32d17fb098734ae58ae2617bfc5a4d775a976a223ad2fc",
+      "created_at": "2026-09-12T07:49:44Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9g0571j09g47f6w13y78h",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "manifest",
+      "updated_at": "2026-09-12T07:49:44Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/spec.json"
+    },
+    "bundle_preflight.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789198700.4646363,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/bundle_preflight.json",
+        "fieldbook.local_size_at_capture": 456
+      },
+      "content_hash": "sha256:0308c14833d8fa1f1b6b32fcd2cc452e0cb050a53e782e439069b2221500a54e",
+      "created_at": "2026-09-12T07:49:45Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9g0eqyr9gjz8zm3r3ma73",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "validation-report",
+      "updated_at": "2026-09-12T07:49:45Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/bundle_preflight.json"
+    },
+    "region_check.txt": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789198698.81726,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/region_check.txt",
+        "fieldbook.local_size_at_capture": 40
+      },
+      "content_hash": "sha256:52f666ce91f3ff042889d7ad8b01fad5e0cd34b15a95b2abe0f5ba0987516170",
+      "created_at": "2026-09-12T07:49:45Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9g0qveva9cfhewjat4kfr",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "validation-report",
+      "updated_at": "2026-09-12T07:49:45Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/region_check.txt"
+    },
+    "independent_result_review.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789199309.6446764,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/independent_result_review.json",
+        "fieldbook.local_size_at_capture": 496
+      },
+      "content_hash": "sha256:79b094f4e772470270fe3ea374f3b319602b95991970fcaf9cf35cd2061fc4ef",
+      "created_at": "2026-09-12T07:49:45Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9g113bzpw6kwzq5mjkea3",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "validation-report",
+      "updated_at": "2026-09-12T07:49:45Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/independent_result_review.json"
+    },
+    "iris_completion.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789199334.4876232,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/iris_completion.json",
+        "fieldbook.local_size_at_capture": 567
+      },
+      "content_hash": "sha256:20a1e050a90d190c47eb15678279fb7cdb9953ec382ff2e463427c557460d617",
+      "created_at": "2026-09-12T07:49:45Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9g1b21w3b4bjzfdg89aky",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "validation-report",
+      "updated_at": "2026-09-12T07:49:45Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/iris_completion.json"
+    },
+    "RESULTS.md": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789199453.04725,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/RESULTS.md",
+        "fieldbook.local_size_at_capture": 5306
+      },
+      "content_hash": "sha256:d0333aaf9bbc022eb0a66b36800843f15da2e636b799ad88d1f8c3d6b0dcad96",
+      "created_at": "2026-09-12T07:49:46Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9g1kxbt2j8m9113dfy42b",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-12T07:51:49Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/RESULTS.md"
+    },
+    "final_artifact_hashes.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789199473.1101618,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/final_artifact_hashes.json",
+        "fieldbook.local_size_at_capture": 3513
+      },
+      "content_hash": "sha256:43b126eec58ef7ec280d20e2dc9b0560a38d8b8428943ae2ec01f8eac4ffc0f7",
+      "created_at": "2026-09-12T07:51:49Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9kt4t1hp4swyccn14e16s",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "manifest",
+      "updated_at": "2026-09-12T07:51:49Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/final_artifact_hashes.json"
+    },
+    "results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_comparison.pdf": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789199456.4839816,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_comparison.pdf",
+        "fieldbook.local_size_at_capture": 305042
+      },
+      "content_hash": "sha256:c43ead0bc4469021c65e485644ee2f586c18caae8725a1e15a5afc933fdfb053",
+      "created_at": "2026-09-12T07:51:49Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9ktdnwfy36h5jjktb8xa1",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "plot",
+      "updated_at": "2026-09-12T07:51:49Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_comparison.pdf"
+    },
+    "results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_comparison.png": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789199456.2590997,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_comparison.png",
+        "fieldbook.local_size_at_capture": 91052
+      },
+      "content_hash": "sha256:b19574bb815cc555e74d34b86f64b05fd4aeaf4e788b49575b39afb5a10e6e11",
+      "created_at": "2026-09-12T07:51:50Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9ktq32k831x4nkggym0g5",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "plot",
+      "updated_at": "2026-09-12T07:51:50Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_comparison.png"
+    },
+    "results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_log_scale.pdf": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789199457.0432267,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_log_scale.pdf",
+        "fieldbook.local_size_at_capture": 303732
+      },
+      "content_hash": "sha256:24d9f181985e482a21ae572e98130e6db2f31babeba009504a876320e3e17565",
+      "created_at": "2026-09-12T07:51:50Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9ktzz6prpwp0ngwr72xxv",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "plot",
+      "updated_at": "2026-09-12T07:51:50Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_log_scale.pdf"
+    },
+    "results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_log_scale.png": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789199456.8824673,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_log_scale.png",
+        "fieldbook.local_size_at_capture": 110752
+      },
+      "content_hash": "sha256:c82da6d754d8b9c353c5da2d2da2c10e1f5a2740fb0704b542aa1b573ec6b953",
+      "created_at": "2026-09-12T07:51:50Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9kv9d5vzqy7y70t8a021d",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "plot",
+      "updated_at": "2026-09-12T07:51:50Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_log_scale.png"
+    },
+    "results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_valley_detail.pdf": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789199456.7630954,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_valley_detail.pdf",
+        "fieldbook.local_size_at_capture": 303823
+      },
+      "content_hash": "sha256:aa5e296df728d1d98a20c12e8cf46753d02ada04db521fe48cc90f744fce7be0",
+      "created_at": "2026-09-12T07:51:51Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9kvj0hxsfv24pvew3vyfm",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "plot",
+      "updated_at": "2026-09-12T07:51:51Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_valley_detail.pdf"
+    },
+    "results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_valley_detail.png": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789199456.608124,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_valley_detail.png",
+        "fieldbook.local_size_at_capture": 119426
+      },
+      "content_hash": "sha256:9da9bbb1d850affcc145bc3a0ed11e2c5cc0418ce98e5b7771a80d3e9a1132bc",
+      "created_at": "2026-09-12T07:51:51Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9kvtxgapc945y9kyredb5",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "plot",
+      "updated_at": "2026-09-12T07:51:51Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_valley_detail.png"
+    },
+    "results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/points.csv": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789199455.8615503,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/points.csv",
+        "fieldbook.local_size_at_capture": 61440
+      },
+      "content_hash": "sha256:a99b7ccd8c5b7de826bfbdfaec7518c8cba7e827d030c9f5754540efdbc7a020",
+      "created_at": "2026-09-12T07:51:51Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9kw6xcz2e3pq7ymbdsmcb",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "metric-table",
+      "updated_at": "2026-09-12T07:51:51Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/points.csv"
+    },
+    "results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/receipt.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789199457.049505,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/receipt.json",
+        "fieldbook.local_size_at_capture": 296800
+      },
+      "content_hash": "sha256:63fd3294d13801a20c693c34b096fbe652464e562da86ee6ca91183279790da7",
+      "created_at": "2026-09-12T07:51:52Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9kwge70f24jm3xtjw814d",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "eval-result",
+      "updated_at": "2026-09-12T07:51:52Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/receipt.json"
+    },
+    "results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/summary.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789199457.0499003,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/summary.json",
+        "fieldbook.local_size_at_capture": 9517
+      },
+      "content_hash": "sha256:36ae5c1c8889489b6a7159b7187c0a6f83eaac8e17b4c847a496b20ac5985d04",
+      "created_at": "2026-09-12T07:51:52Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2a9kwwdmm3t21cqg72py9rv",
+      "job_id": "job_01m2a8wr132mc6rk4azc38v87p",
+      "run_id": null,
+      "type": "eval-result",
+      "updated_at": "2026-09-12T07:51:52Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/summary.json"
+    }
+  },
+  "validation": {
+    "attrs": {},
+    "check_name": "Wikipedia math checkpoint and common population audit",
+    "created_at": "2026-09-12T07:49:46Z",
+    "deleted_at": null,
+    "details": {},
+    "entity_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+    "entity_type": "job",
+    "expected_value": "7 new checkpoints; identical scoring populations; PALOMA delta <= 0.00005",
+    "id": "val_01m2a9g1wy1pcjv70zh23ya65y",
+    "measured_value": "7 checkpoint hashes verified; 16 curve receipts match; max PALOMA delta 0.000003814697265625",
+    "session_id": "ses_01m2a8s5m7nfdd38a7w22b96ce",
+    "source_artifact_id": "art_01m2a9g113bzpw6kwzq5mjkea3",
+    "source_job_id": "job_01m2a9a87sv079x7ym1vr3pjw9",
+    "status": "pass",
+    "updated_at": "2026-09-12T07:49:46Z"
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "experiment": {
+    "attrs": {},
+    "created_at": "2026-09-09T15:43:40Z",
+    "deleted_at": null,
+    "description": "Build and review a new matched-total-TPP three-curve experiment with finite StarCoder pools and independently replicated matched subsets. Training is not submitted.",
+    "id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "idempotency_key": "starcoder-tpp10-20260909",
+    "name": "StarCoder TPP 10 epoch-matching experiment",
+    "status": "active",
+    "tags": [
+      "epoch-matching",
+      "starcoder",
+      "tpp10"
+    ],
+    "updated_at": "2026-09-09T15:43:40Z"
+  },
+  "freshness": {
+    "checkpoint_status": "current",
+    "drifted_artifact_count": 0,
+    "drifted_artifacts": [],
+    "handoff_status": "current",
+    "last_checkpoint_at": "2026-09-10T09:11:55Z",
+    "last_handoff_at": "2026-09-10T09:11:55Z",
+    "since_last_checkpoint_hours": 11.542424921666667,
+    "since_last_handoff_hours": 11.542424921666667,
+    "stale_validation_count": 0,
+    "stale_validations": []
+  },
+  "note": {
+    "attrs": {
+      "session_id": "ses_01m26gnynwbrj9yed3bb2ek6xk"
+    },
+    "author": null,
+    "body": "# TPP10 canary review \u2014 10 September 2026\n\nAll three frozen p=1 canaries pass the endpoint and optimizer checks. The recovered matched proxy finished at 05:25:40 PDT; its on-demand parent finished 17 seconds later. Calibration remains complete at eight of eight runs, with proxy batch 32 retained.\n\n| Arm | Final evaluation BPB | Final step | Config fingerprint |\n| --- | ---: | ---: | --- |\n| Target | 0.8207455873 | 11490 | `0cbcd192` |\n| Unmatched proxy | 1.0613559484 | 2531 | `78cb251e` |\n| Epoch-matched proxy | 1.3144932985 | 2531 | `347b7fbc` |\n\nThe archived-plan collector independently reverified successful artifact states, frozen fingerprints, code/runtime receipts and finite, consistent final-step metrics. The complete rows are in [canary_metrics.csv](canary_metrics.csv). Fieldbook's earlier endpoint audit also verified all three final checkpoint metadata files. No completed run was retrained during recovery.\n\nThe [trace summary](canary_trace_summary.json) covers 16,537 training-loss/LR records and 1,655 paired gradient/parameter-norm records. All scanned values are finite. The matched proxy's training loss decreases from 10.350 to 1.440; its final logged gradient norm is 0.162. Transient spikes recover, and both learning rates follow the frozen warmup, plateau and decay schedule. The target and unmatched traces remain healthy. The [combined plot](canary_optimizer_traces.png) was visually inspected, with no overlapping or cropped labels.\n\nW&B exported 11 identical duplicate rows in each target history group and two in each proxy group. The reader retains the raw histories, removes exact duplicates for analysis and rejects conflicting records at the same step. The raw history hashes and per-metric summaries are archived alongside the plot.\n\nThe canary checks establish training and data-path feasibility at p=1. These endpoints do not establish the curve shapes or selection benefit of epoch matching; the matched proxy has higher evaluation loss at this coordinate. Retain the frozen design and analyze the common-grid sweep as prespecified. The seven-coordinate pilot and dense stage remain unreleased. This review submitted no jobs and changed no training settings, code pins, manuscript or outline.\n\n## Freshness\n\n- Handoff status: `current`\n- Drifted artifacts: 0\n- Stale validations: 0\n",
+    "body_format": "markdown",
+    "created_at": "2026-09-10T20:44:27Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m26h13pswbxqdjwaejf4f0m5",
+    "note_type": "checkpoint",
+    "resolved_at": null,
+    "status": "open",
+    "title": "Experiment handoff",
+    "updated_at": "2026-09-10T20:44:27Z"
+  }
+}

@@ -1,0 +1,15 @@
+## Review: `resume_starcoder_tpp10_refinement_batch.py`
+
+**Constructor bypass is safe.** `FrayIrisClient` has exactly one instance attribute: `__init__` sets only `self._iris` (`iris_backend.py:655`), `from_iris_client` sets only `_iris` via `object.__new__` (`:664-666`), and `submit` reads only `self._iris` (`:682`). So `BatchTrainingClient.__init__` setting `self._iris = client` without `super().__init__` leaves no unset state, and `super().submit()` works. Two latent fragilities worth knowing, neither blocking: the subclass silently replaces the parent's three-argument signature, so any future field added to `FrayIrisClient.__init__` breaks this quietly; and `from_iris_client` hardcodes `object.__new__(FrayIrisClient)`, so it cannot produce the subclass — unused here, correctly.
+
+**Priority propagation is correct.** `JobRequest.priority` is forwarded as `priority_band=request.priority` (`iris_backend.py:695`). `priority` is a real dataclass field, so `replace(request, priority=...)` is valid, and `job_pb2.PRIORITY_BAND_BATCH` is an int-valued enum, matching the declared type. Interactive coordinator with batch TPU children is achieved exactly as intended, and `adopt_existing` is passed through unchanged (`:25`).
+
+**Captured-client propagation works.** `StepRunner` reads `_current_client_var.get()` on the calling thread (`step_runner.py:222`) — which is inside the `with set_current_client(...)` block, since `run(...)` is invoked from within `refinement.main()` — then re-enters it per worker thread via `set_current_client(captured_client)` (`:387-394`) and additionally copies the full context (`:400`). The override reaches every step dispatch.
+
+**Frozen identity is intact.** Priority is injected in `submit()`, downstream of config materialization, so it cannot enter `step.fingerprint()` or `expected_fingerprint`; `pod.resources`, optimizer, seeds, subsets, output paths and checkpoint paths are untouched. The new file is absent from `launch_starcoder_tpp10.code_pins()`'s fixed path tuple (`:45-66`) and from `experiment.ASSETS`, so the child-side `verified_training` check, `plan_sha256`, and the 45-point plan hash `99ca724b…` are unaffected.
+
+**Resumability is sound.** With the failed parent having dispatched no children and the tree terminal, there is nothing to adopt; `pending_training_steps` skips the 11 successes and re-dispatches the 34 unfinished points under identical names and outputs.
+
+**One concrete thing to confirm before running.** The TPU guard (`:23-24`) turns *any* non-TPU dispatch through this client into a hard `ValueError`, failing that step rather than skipping it. That is correct if `refinement.main()`'s submit path dispatches only training steps — as `launch_starcoder_tpp10.main()` does, running cache verification, allocator audit and gate collection in-process. Read that `main()` once to confirm no CPU step can reach `run()` (for example a data step re-entering because a receipt check trips). No code change implied.
+
+No blocking issues. Clear to run as written.

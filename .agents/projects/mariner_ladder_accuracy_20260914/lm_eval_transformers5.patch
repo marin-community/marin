@@ -1,0 +1,66 @@
+diff --git a/lm_eval/models/hf_vlms.py b/lm_eval/models/hf_vlms.py
+index eda8c904..902f7a44 100644
+--- a/lm_eval/models/hf_vlms.py
++++ b/lm_eval/models/hf_vlms.py
+@@ -39,7 +39,7 @@ class HFMultimodalLM(HFLM):
+     An abstracted Hugging Face model class for multimodal LMs like Llava and Idefics.
+     """
+ 
+-    AUTO_MODEL_CLASS = transformers.AutoModelForVision2Seq
++    AUTO_MODEL_CLASS = transformers.AutoModelForImageTextToText
+     MULTIMODAL = True  # flag to indicate, for now, that this model type can run multimodal requests
+ 
+     def __init__(
+@@ -83,7 +83,7 @@ class HFMultimodalLM(HFLM):
+         self.chat_applied: bool = False
+         # TODO: phi-3.5 "image placeholders" are <image_1>, <image_2>, ... in order. how to handle this case
+ 
+-        # HF AutoModelForVision2Seq models have an `image_token_id` value in their configs
++        # HF AutoModelForImageTextToText models have an `image_token_id` value in their configs
+         # denoting the token which indicates a location where an image will be substituted in.
+         # This can take different string values across models, e.g. <image> for Idefics2 and <|image_pad|> for Qwen2-VL
+         self.interleave = interleave
+@@ -100,7 +100,7 @@ class HFMultimodalLM(HFLM):
+                 )
+             )
+             assert self.image_token_id is not None, (
+-                "Must have a non-None image_token_id to evaluate a Hugging Face AutoModelForVision2Seq model. Please pass `image_token_id` in `--model_args` if model's config does not already specify one."
++                "Must have a non-None image_token_id to evaluate a Hugging Face AutoModelForImageTextToText model. Please pass `image_token_id` in `--model_args` if model's config does not already specify one."
+             )
+             # get the string this token ID corresponds to
+             self.image_token = self.tok_decode(
+diff --git a/lm_eval/models/huggingface.py b/lm_eval/models/huggingface.py
+index 5f2a5e78..7a902bc5 100644
+--- a/lm_eval/models/huggingface.py
++++ b/lm_eval/models/huggingface.py
+@@ -980,7 +980,7 @@ class HFLM(TemplateLM):
+ 
+             assert self.AUTO_MODEL_CLASS in (
+                 transformers.AutoModelForCausalLM,
+-                transformers.AutoModelForVision2Seq,
++                transformers.AutoModelForImageTextToText,
+             )
+             return self.model(inps).logits
+ 
+diff --git a/pyproject.toml b/pyproject.toml
+index c2eb0e2d..32919446 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -32,7 +32,7 @@ dependencies = [
+     "scikit-learn>=0.24.1",
+     "sqlitedict",
+     "tqdm-multiprocess",
+-    "transformers>=4.1",
++    "transformers>=5.5.3,<6.0",
+     "zstandard",
+     "dill",
+     "word2number",
+@@ -61,7 +61,7 @@ audiolm_qwen = ["librosa", "soundfile"]
+ dev = ["pytest", "pytest-cov", "pytest-xdist", "pre-commit", "requests", "aiohttp", "tenacity", "tqdm", "tiktoken", "sentencepiece"]
+ gptq = ["auto-gptq[triton]>=0.6.0"]
+ gptqmodel = ["gptqmodel>=1.0.9"]
+-hf = ["transformers>=4.1", "torch>=1.8", "accelerate>=0.26.0", "peft>=0.2.0"] #<<< Stripped from main dependencies
++hf = ["transformers>=5.5.3,<6.0", "torch>=1.8", "accelerate>=0.26.0", "peft>=0.2.0"] #<<< Stripped from main dependencies
+ hf_transfer = ["hf_transfer"]
+ ibm_watsonx_ai = ["ibm_watsonx_ai>=1.1.22", "python-dotenv"]
+ ifeval = ["langdetect", "immutabledict", "nltk>=3.9.1"]

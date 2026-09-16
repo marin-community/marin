@@ -1,0 +1,11 @@
+[00:31:41] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-481a716a/0 attempt=0 | I20260909 00:31:39 marin.training.training Using run ID: epmatch_unmatched_c000_s20260711
+[00:42:42] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-fc2d1e9f/0 attempt=0 | I20260909 00:42:40 marin.training.training Using run ID: epmatch_target_c124_s20260711
+[00:42:42] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-a940dbf3/0 attempt=0 | I20260909 00:42:40 marin.training.training Using run ID: epmatch_matched_c032_s20260711
+[00:42:42] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-57e920fb/0 attempt=0 | I20260909 00:42:39 marin.training.training Using run ID: epmatch_matched_c057_s20260711
+[00:42:44] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-8d5a4157/0 attempt=0 | I20260909 00:42:41 marin.training.training Using run ID: epmatch_matched_c109_s20260711
+[00:42:44] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-67eaa5b1/0 attempt=0 | I20260909 00:42:42 marin.training.training Using run ID: epmatch_unmatched_c032_s20260711
+[00:42:45] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-063a3da0/0 attempt=0 | I20260909 00:42:43 marin.training.training Using run ID: epmatch_matched_c124_s20260711
+[00:42:45] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-afaa78b8/0 attempt=0 | I20260909 00:42:43 marin.training.training Using run ID: epmatch_unmatched_c057_s20260711
+[00:42:47] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-18d20eab/0 attempt=0 | I20260909 00:42:43 marin.training.training Using run ID: epmatch_unmatched_c124_s20260711
+[00:43:01] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-645023e5/0 attempt=0 | I20260909 00:42:59 marin.training.training Using run ID: epmatch_unmatched_c109_s20260711
+[02:25:29] task=/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-8d5a4157/0 attempt=1 | I20260909 02:25:27 marin.training.training Using run ID: epmatch_matched_c109_s20260711

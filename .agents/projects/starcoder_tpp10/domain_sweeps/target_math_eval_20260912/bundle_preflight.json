@@ -1,0 +1,12 @@
+{
+  "spec_sha256": "66f74c1e8f6f2f360270726605acdead4e1afbd211590e2fa24dbf094b8adc6e",
+  "bundle_sha256": "667943d1a85f43fe937db0e2bb5bc8d43f31ad6b549e702292f69001fde457b2",
+  "bytes": 24246664,
+  "files": 4526,
+  "new_target_checkpoints": 11,
+  "unreleased_targets": 4,
+  "scoring_tests": "8 passed",
+  "lint_and_focused_pyrefly": "pass",
+  "base_scoring_pins_unchanged": true,
+  "region_check": "region-local launch safety check passed"
+}

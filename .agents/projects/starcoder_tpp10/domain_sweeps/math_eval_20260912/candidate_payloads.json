@@ -1,0 +1,69 @@
+{
+  "raw/finemath-7090a5/finemath-4plus": {
+    "objects": 64,
+    "listed_bytes": 18365184633,
+    "first_files": [
+      {
+        "name": "marin-us-central1/raw/finemath-7090a5/finemath-4plus/train-00000-of-00064.parquet",
+        "size": 286267316,
+        "generation": "1757963108771973",
+        "crc32c": "Xxpa3A=="
+      },
+      {
+        "name": "marin-us-central1/raw/finemath-7090a5/finemath-4plus/train-00001-of-00064.parquet",
+        "size": 288474354,
+        "generation": "1757963110616517",
+        "crc32c": "ydqE3g=="
+      }
+    ],
+    "directories": []
+  },
+  "raw/stack_edu-ad3cf0/Python": {
+    "objects": 5,
+    "listed_bytes": 2500795086,
+    "first_files": [
+      {
+        "name": "marin-us-central1/raw/stack_edu-ad3cf0/Python/train-00000-of-00005.parquet",
+        "size": 500150393,
+        "generation": "1769250551490366",
+        "crc32c": "F1AtrQ=="
+      },
+      {
+        "name": "marin-us-central1/raw/stack_edu-ad3cf0/Python/train-00001-of-00005.parquet",
+        "size": 500201312,
+        "generation": "1769250567569491",
+        "crc32c": "9GeJ6Q=="
+      }
+    ],
+    "directories": []
+  },
+  "raw/nemotron_pretraining_specialized_v1-a31fae/Nemotron-Pretraining-Math-Textbooks": {
+    "objects": 13,
+    "listed_bytes": 30841263255,
+    "first_files": [
+      {
+        "name": "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae/Nemotron-Pretraining-Math-Textbooks/part_000000.parquet",
+        "size": 2391061448,
+        "generation": "1774591407244032",
+        "crc32c": "ekgeZQ=="
+      },
+      {
+        "name": "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae/Nemotron-Pretraining-Math-Textbooks/part_000001.parquet",
+        "size": 2389829020,
+        "generation": "1774591431713842",
+        "crc32c": "dCYirQ=="
+      }
+    ],
+    "directories": []
+  },
+  "raw/proof-pile-2-f1b1d8/open-web-math": {
+    "objects": 0,
+    "listed_bytes": 0,
+    "first_files": [],
+    "directories": [
+      "marin-us-central1/raw/proof-pile-2-f1b1d8/open-web-math/test",
+      "marin-us-central1/raw/proof-pile-2-f1b1d8/open-web-math/train",
+      "marin-us-central1/raw/proof-pile-2-f1b1d8/open-web-math/validation"
+    ]
+  }
+}

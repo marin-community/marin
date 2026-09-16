@@ -1,0 +1,152 @@
+{
+  "metric": "eval/uncheatable_eval/wikipedia_english/bpb",
+  "evaluation_path": "gs://marin-us-central1/tokenized/uncheatable_eval/wikipedia_english-tpp10/2026.09.11/56aadad78362c1b7d2faca56f13594e0fe5584fe7f5326333775071d49d1cf0c",
+  "evaluation_sequences": 335,
+  "snapshot_directory": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/plots_20260912",
+  "source": {
+    "checked_at": "2026-09-12T06:02:23.013409+00:00",
+    "repair_sha256": "6c7f6700b8cbf69e363a07ba5e3d3ecfb98c55aa1dd429dce936007b91b5983b",
+    "results_sha256": "55d581607435941fcfb9864ba92d4835332b07934a1fe0bbb4d663312952c905",
+    "source": "gs://marin-us-central1/experiments/tpp10_bpb_repair/6c7f6700b8cbf69e363a07ba5e3d3ecfb98c55aa1dd429dce936007b91b5983b/corrected_results.json",
+    "all_three_checkpoint_audits_passed": true
+  },
+  "preflight_sha256": "17d8728a5705b407698f9621842e678a38a69e5a8f4d31ba6a99295638231d6f",
+  "plot_source_sha256": "c4be4b835990f8203d86099e8f0dabb7298c039da3c14483609ca8145870f460",
+  "minima": [
+    {
+      "arm": "matched",
+      "percent": 50,
+      "epochs": 7.937890625,
+      "bpb": 1.3571733955934437,
+      "second_percent": 30,
+      "second_epochs": 4.768359375,
+      "second_gap_bpb": 0.008795757519156178,
+      "boundary_minimum": false
+    },
+    {
+      "arm": "target",
+      "percent": 70,
+      "epochs": 11.097925275482094,
+      "bpb": 0.9908457892947602,
+      "second_percent": 50,
+      "second_epochs": 7.937187930440771,
+      "second_gap_bpb": 0.0033598357240812726,
+      "boundary_minimum": false
+    }
+  ],
+  "points": [
+    {
+      "arm": "matched",
+      "percent": 0,
+      "epochs": 0.0,
+      "wikipedia_english_bpb": 1.4550154209136963,
+      "run_name": "shared p0"
+    },
+    {
+      "arm": "matched",
+      "percent": 5,
+      "epochs": 0.787890625,
+      "wikipedia_english_bpb": 1.4183162548261654,
+      "run_name": "tpp10_wikipedia_matched_p005_s20260910"
+    },
+    {
+      "arm": "matched",
+      "percent": 10,
+      "epochs": 1.5763671875,
+      "wikipedia_english_bpb": 1.4042746870446676,
+      "run_name": "tpp10_wikipedia_matched_p010_s20260910"
+    },
+    {
+      "arm": "matched",
+      "percent": 20,
+      "epochs": 3.1619140625,
+      "wikipedia_english_bpb": 1.3818943296840667,
+      "run_name": "tpp10_wikipedia_matched_p020_s20260910"
+    },
+    {
+      "arm": "matched",
+      "percent": 30,
+      "epochs": 4.768359375,
+      "wikipedia_english_bpb": 1.3659691531126,
+      "run_name": "tpp10_wikipedia_matched_p030_s20260910"
+    },
+    {
+      "arm": "matched",
+      "percent": 50,
+      "epochs": 7.937890625,
+      "wikipedia_english_bpb": 1.3571733955934437,
+      "run_name": "tpp10_wikipedia_matched_p050_s20260910"
+    },
+    {
+      "arm": "matched",
+      "percent": 70,
+      "epochs": 11.098046875,
+      "wikipedia_english_bpb": 1.3700287771814095,
+      "run_name": "tpp10_wikipedia_matched_p070_s20260910"
+    },
+    {
+      "arm": "matched",
+      "percent": 100,
+      "epochs": 15.825,
+      "wikipedia_english_bpb": 1.4960933527083866,
+      "run_name": "tpp10_wikipedia_matched_p100_s20260910"
+    },
+    {
+      "arm": "target",
+      "percent": 0,
+      "epochs": 0.0,
+      "wikipedia_english_bpb": 1.0829108953475952,
+      "run_name": "shared p0"
+    },
+    {
+      "arm": "target",
+      "percent": 5,
+      "epochs": 0.7882877066115702,
+      "wikipedia_english_bpb": 1.04715722273594,
+      "run_name": "tpp10_wikipedia_target_p005_s20260910"
+    },
+    {
+      "arm": "target",
+      "percent": 10,
+      "epochs": 1.5767045454545454,
+      "wikipedia_english_bpb": 1.033644920162294,
+      "run_name": "tpp10_wikipedia_target_p010_s20260910"
+    },
+    {
+      "arm": "target",
+      "percent": 20,
+      "epochs": 3.1609740874655645,
+      "wikipedia_english_bpb": 1.019143640172724,
+      "run_name": "tpp10_wikipedia_target_p020_s20260910"
+    },
+    {
+      "arm": "target",
+      "percent": 30,
+      "epochs": 4.7684551480716255,
+      "wikipedia_english_bpb": 1.0072310565940252,
+      "run_name": "tpp10_wikipedia_target_p030_s20260910"
+    },
+    {
+      "arm": "target",
+      "percent": 50,
+      "epochs": 7.937187930440771,
+      "wikipedia_english_bpb": 0.9942056250188415,
+      "run_name": "tpp10_wikipedia_target_p050_s20260910"
+    },
+    {
+      "arm": "target",
+      "percent": 70,
+      "epochs": 11.097925275482094,
+      "wikipedia_english_bpb": 0.9908457892947602,
+      "run_name": "tpp10_wikipedia_target_p070_s20260910"
+    },
+    {
+      "arm": "target",
+      "percent": 100,
+      "epochs": 15.827823691460056,
+      "wikipedia_english_bpb": 1.036790135201339,
+      "run_name": "tpp10_wikipedia_target_p100_s20260910"
+    }
+  ],
+  "scope": "Existing completed evaluations only; no new training or evaluation jobs."
+}

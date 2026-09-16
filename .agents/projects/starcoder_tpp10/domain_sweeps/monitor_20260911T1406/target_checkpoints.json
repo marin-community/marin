@@ -1,0 +1,32 @@
+{
+  "status": "passed",
+  "checked_at": "2026-09-11T14:09:01.772794+00:00",
+  "rows": [
+    {
+      "run_name": "tpp10_target_p055_s20260910",
+      "latest": {
+        "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09/checkpoints/step-4482/metadata.json",
+        "generation": "1789134953001355",
+        "metadata": {
+          "step": 4482,
+          "timestamp": "2026-09-11T13:55:52.884246",
+          "is_temporary": true
+        }
+      },
+      "metadata_objects": 1
+    },
+    {
+      "run_name": "tpp10_target_p060_s20260910",
+      "latest": {
+        "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09/checkpoints/step-716/metadata.json",
+        "generation": "1789134605505108",
+        "metadata": {
+          "step": 716,
+          "timestamp": "2026-09-11T13:50:05.415924",
+          "is_temporary": true
+        }
+      },
+      "metadata_objects": 1
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+[
+  {
+    "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_wsd80_dense_support_surfaces_20260808/dss_r3d28260_m100_c109_s0711/2026.07.11/.artifact.json#1786382221812759",
+    "generation": "1786382221812759",
+    "local_file": "target_artifact.json",
+    "size": 51121,
+    "sha256": "b9e047c49742fa6d73672d62f9890d70fc95eb5f855a47c6f23f94654ced013e"
+  },
+  {
+    "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_wsd80_dense_support_surfaces_20260808/dss_r3d28260_m100_c109_s0711/2026.07.11/.executor_info#1786200989872035",
+    "generation": "1786200989872035",
+    "local_file": "target_executor_info.json",
+    "size": 4444,
+    "sha256": "8b443a338526f0eb53e58a976ba6163fd919cedc7205e9d2492061ab574b4461"
+  },
+  {
+    "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_wsd80_dense_support_surfaces_20260808/dss_r3d28260_m100_c109_s0711/2026.07.11/checkpoints/eval_metrics.jsonl#1786382159488476",
+    "generation": "1786382159488476",
+    "local_file": "target_eval_metrics.jsonl",
+    "size": 105973,
+    "sha256": "f02e5b25e7ffbf0cbadd0d86b07ef75f2a0daeb8f9b14a63e89a7ecfde35094c"
+  },
+  {
+    "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_wsd80_dense_support_surfaces_20260808/dss_r3d28260_m100_c109_s0711/2026.07.11/tracker_metrics.jsonl#1786382172669779",
+    "generation": "1786382172669779",
+    "local_file": "target_tracker_metrics.jsonl",
+    "size": 39651,
+    "sha256": "52c046c42cb8db5c20125d9932116758bda33b4ecf9938a9203ae11981a7d387"
+  },
+  {
+    "uri": "wandb://marin-community/marin/dss_r3d28260_m100_c109_s0711/wandb-metadata.json",
+    "local_file": "wandb/wandb-metadata.json",
+    "size": 712,
+    "sha256": "28f00bcb22c5769ef52239b811ef1b26276cdc005173f12c27c9781afaeaa29e"
+  },
+  {
+    "uri": "wandb://marin-community/marin/dss_r3d28260_m100_c109_s0711/requirements.txt",
+    "local_file": "wandb/requirements.txt",
+    "size": 4195,
+    "sha256": "3391beb4545a665f3f8f8d8f6927ba02840a0a2c4be8348b0cf6548256395808"
+  },
+  {
+    "uri": "wandb://marin-community/marin/dss_r3d28260_m100_c109_s0711/config.yaml",
+    "local_file": "wandb/config.yaml",
+    "size": 28666,
+    "sha256": "b5cd23d8b4937fa2c624ddebc704dfb1912dfa0d189e9d04978758e9a74e52fb"
+  }
+]

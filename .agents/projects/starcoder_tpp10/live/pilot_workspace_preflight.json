@@ -1,0 +1,17 @@
+{
+  "sha256": "4567a8171518c174da02918c41161850cd63bb465dc8510ea80a6138483395b5",
+  "size": 26207690,
+  "files": 5275,
+  "verified_pins": 27,
+  "pilot_release_included": true,
+  "bundle_includes": [
+    ".agents/projects/starcoder_tpp10/releases/pilot.json"
+  ],
+  "excludes": [
+    "^(checkpoints|logs|wandb)/",
+    "^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$",
+    "^\\.agents/(?!projects/starcoder_tpp10/releases/).*",
+    "^(docs|tests)/.*(?<!\\.py)$",
+    "^lib/[^/]+/tests/.*(?<!\\.py)$"
+  ]
+}

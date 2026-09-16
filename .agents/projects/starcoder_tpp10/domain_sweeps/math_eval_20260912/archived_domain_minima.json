@@ -1,0 +1,396 @@
+{
+  "uncheatable_bpb": [
+    {
+      "focal_domain": "dolma3_arxiv",
+      "target_simulated_epochs": 7.24282037547181,
+      "uncheatable_bpb": 1.085582256317139
+    },
+    {
+      "focal_domain": "dolma3_cc/art_and_design_high",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.0924994945526123
+    },
+    {
+      "focal_domain": "dolma3_cc/art_and_design_low",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.0923082828521729
+    },
+    {
+      "focal_domain": "dolma3_cc/crime_and_law_high",
+      "target_simulated_epochs": 0.226338136733494,
+      "uncheatable_bpb": 1.0920517444610596
+    },
+    {
+      "focal_domain": "dolma3_cc/crime_and_law_low",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.0929769277572632
+    },
+    {
+      "focal_domain": "dolma3_cc/education_and_jobs_high",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.091350793838501
+    },
+    {
+      "focal_domain": "dolma3_cc/education_and_jobs_low",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.0917376279830933
+    },
+    {
+      "focal_domain": "dolma3_cc/electronics_and_hardware_high",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.0934215784072876
+    },
+    {
+      "focal_domain": "dolma3_cc/electronics_and_hardware_low",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.0926463603973389
+    },
+    {
+      "focal_domain": "dolma3_cc/entertainment_high",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.090407133102417
+    },
+    {
+      "focal_domain": "dolma3_cc/entertainment_low",
+      "target_simulated_epochs": 0.4526762734669881,
+      "uncheatable_bpb": 1.0918406248092651
+    },
+    {
+      "focal_domain": "dolma3_cc/finance_and_business_high",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.0881781578063965
+    },
+    {
+      "focal_domain": "dolma3_cc/finance_and_business_low",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.0908105373382568
+    },
+    {
+      "focal_domain": "dolma3_cc/food_and_dining_high",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.0908019542694092
+    },
+    {
+      "focal_domain": "dolma3_cc/food_and_dining_low",
+      "target_simulated_epochs": 0.4526762734669881,
+      "uncheatable_bpb": 1.0933581590652466
+    },
+    {
+      "focal_domain": "dolma3_cc/games_high",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.0913196802139282
+    },
+    {
+      "focal_domain": "dolma3_cc/games_low",
+      "target_simulated_epochs": 0.4526762734669881,
+      "uncheatable_bpb": 1.093294978141785
+    },
+    {
+      "focal_domain": "dolma3_cc/health_high",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.0901663303375244
+    },
+    {
+      "focal_domain": "dolma3_cc/health_low",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.091066837310791
+    },
+    {
+      "focal_domain": "dolma3_cc/history_and_geography_high",
+      "target_simulated_epochs": 0.0,
+      "uncheatable_bpb": 1.0927948951721191
+    },
+    {
+      "focal_domain": "dolma3_cc/history_and_geography_low",
+      "target_simulated_epochs": 0.226338136733494,
+      "uncheatable_bpb": 1.0925564765930176
+    },
+    {
+      "focal_domain": "dolma3_cc/industrial_high",
+      "target_simulated_epochs": 0.226338136733494,
+      "uncheatable_bpb": 1.092929720878601
+    },
+    {
+      "focal_domain": "dolma3_cc/industrial_low",
+      "target_simulated_epochs": 0.226338136733494,
+      "uncheatable_bpb": 1.0921159982681274
+    },
+    {
+      "focal_domain": "dolma3_cc/literature_high",
+      "target_simulated_epochs": 0.4526762734669881,
+      "uncheatable_bpb": 1.0929194688796997
+    },
+    {
+      "focal_domain": "dolma3_cc/literature_low",
+      "target_simulated_epochs": 0.226338136733494,
+      "uncheatable_bpb": 1.0933483839035034
+    },
+    {
+      "focal_domain": "dolma3_cc/science_math_and_technology_high",
+      "target_simulated_epochs": 3.621410187735905,
+      "uncheatable_bpb": 1.0904064178466797
+    },
+    {
+      "focal_domain": "dolma3_cc/science_math_and_technology_low",
+      "target_simulated_epochs": 3.621410187735905,
+      "uncheatable_bpb": 1.0929173231124878
+    },
+    {
+      "focal_domain": "dolma3_finemath_3plus",
+      "target_simulated_epochs": 7.24282037547181,
+      "uncheatable_bpb": 1.0935977697372437
+    },
+    {
+      "focal_domain": "dolma3_stack_edu",
+      "target_simulated_epochs": 7.24282037547181,
+      "uncheatable_bpb": 1.0630046129226685
+    },
+    {
+      "focal_domain": "dolma3_wikipedia",
+      "target_simulated_epochs": 3.621410187735905,
+      "uncheatable_bpb": 1.093092918395996
+    },
+    {
+      "focal_domain": "dolmino_common_crawl_hq",
+      "target_simulated_epochs": 0.226338136733494,
+      "uncheatable_bpb": 1.0885498523712158
+    },
+    {
+      "focal_domain": "dolmino_olmocr_pdfs_hq",
+      "target_simulated_epochs": 3.621410187735905,
+      "uncheatable_bpb": 1.0889285802841189
+    },
+    {
+      "focal_domain": "dolmino_stack_edu_fim",
+      "target_simulated_epochs": 7.24282037547181,
+      "uncheatable_bpb": 1.0628174543380735
+    },
+    {
+      "focal_domain": "dolmino_stem_heavy_crawl",
+      "target_simulated_epochs": 7.24282037547181,
+      "uncheatable_bpb": 1.092260479927063
+    },
+    {
+      "focal_domain": "dolmino_synth_code",
+      "target_simulated_epochs": 7.24282037547181,
+      "uncheatable_bpb": 1.0787899494171145
+    },
+    {
+      "focal_domain": "dolmino_synth_instruction",
+      "target_simulated_epochs": 7.24282037547181,
+      "uncheatable_bpb": 1.0935986042022705
+    },
+    {
+      "focal_domain": "dolmino_synth_math",
+      "target_simulated_epochs": 7.24282037547181,
+      "uncheatable_bpb": 1.0920603275299072
+    },
+    {
+      "focal_domain": "dolmino_synth_qa",
+      "target_simulated_epochs": 0.226338136733494,
+      "uncheatable_bpb": 1.092626690864563
+    },
+    {
+      "focal_domain": "dolmino_synth_thinking",
+      "target_simulated_epochs": 1.8107050938679523,
+      "uncheatable_bpb": 1.0930503606796265
+    }
+  ],
+  "table9_macro_bpb": [
+    {
+      "focal_domain": "dolma3_arxiv",
+      "target_simulated_epochs": 7.24282037547181,
+      "table9_macro_bpb": 1.2504775566129398
+    },
+    {
+      "focal_domain": "dolma3_cc/art_and_design_high",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2565791755454363
+    },
+    {
+      "focal_domain": "dolma3_cc/art_and_design_low",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.255046562199443
+    },
+    {
+      "focal_domain": "dolma3_cc/crime_and_law_high",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2516337532777266
+    },
+    {
+      "focal_domain": "dolma3_cc/crime_and_law_low",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2490391594518764
+    },
+    {
+      "focal_domain": "dolma3_cc/education_and_jobs_high",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2432949429718867
+    },
+    {
+      "focal_domain": "dolma3_cc/education_and_jobs_low",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2481586060693786
+    },
+    {
+      "focal_domain": "dolma3_cc/electronics_and_hardware_high",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2564975340284612
+    },
+    {
+      "focal_domain": "dolma3_cc/electronics_and_hardware_low",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2560207031052284
+    },
+    {
+      "focal_domain": "dolma3_cc/entertainment_high",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2523562063360378
+    },
+    {
+      "focal_domain": "dolma3_cc/entertainment_low",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2552299074288624
+    },
+    {
+      "focal_domain": "dolma3_cc/finance_and_business_high",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.247224533767706
+    },
+    {
+      "focal_domain": "dolma3_cc/finance_and_business_low",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2511031267686352
+    },
+    {
+      "focal_domain": "dolma3_cc/food_and_dining_high",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2541241616990608
+    },
+    {
+      "focal_domain": "dolma3_cc/food_and_dining_low",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2577998150021064
+    },
+    {
+      "focal_domain": "dolma3_cc/games_high",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2557385854396987
+    },
+    {
+      "focal_domain": "dolma3_cc/games_low",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2565659777953908
+    },
+    {
+      "focal_domain": "dolma3_cc/health_high",
+      "target_simulated_epochs": 0.226338136733494,
+      "table9_macro_bpb": 1.2501970618034284
+    },
+    {
+      "focal_domain": "dolma3_cc/health_low",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.258996805720615
+    },
+    {
+      "focal_domain": "dolma3_cc/history_and_geography_high",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2548827151002624
+    },
+    {
+      "focal_domain": "dolma3_cc/history_and_geography_low",
+      "target_simulated_epochs": 1.8107050938679523,
+      "table9_macro_bpb": 1.2547895192068768
+    },
+    {
+      "focal_domain": "dolma3_cc/industrial_high",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.2614388119679552
+    },
+    {
+      "focal_domain": "dolma3_cc/industrial_low",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.253917045320004
+    },
+    {
+      "focal_domain": "dolma3_cc/literature_high",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.247798322129007
+    },
+    {
+      "focal_domain": "dolma3_cc/literature_low",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.258682063759885
+    },
+    {
+      "focal_domain": "dolma3_cc/science_math_and_technology_high",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.258670981331398
+    },
+    {
+      "focal_domain": "dolma3_cc/science_math_and_technology_low",
+      "target_simulated_epochs": 0.0,
+      "table9_macro_bpb": 1.25563844087481
+    },
+    {
+      "focal_domain": "dolma3_finemath_3plus",
+      "target_simulated_epochs": 7.24282037547181,
+      "table9_macro_bpb": 1.2458218807342605
+    },
+    {
+      "focal_domain": "dolma3_stack_edu",
+      "target_simulated_epochs": 7.24282037547181,
+      "table9_macro_bpb": 1.188426508546357
+    },
+    {
+      "focal_domain": "dolma3_wikipedia",
+      "target_simulated_epochs": 3.621410187735905,
+      "table9_macro_bpb": 1.2607347444555037
+    },
+    {
+      "focal_domain": "dolmino_common_crawl_hq",
+      "target_simulated_epochs": 0.4526762734669881,
+      "table9_macro_bpb": 1.2421573827535626
+    },
+    {
+      "focal_domain": "dolmino_olmocr_pdfs_hq",
+      "target_simulated_epochs": 1.8107050938679523,
+      "table9_macro_bpb": 1.2623383314540526
+    },
+    {
+      "focal_domain": "dolmino_stack_edu_fim",
+      "target_simulated_epochs": 7.24282037547181,
+      "table9_macro_bpb": 1.1888506531149825
+    },
+    {
+      "focal_domain": "dolmino_stem_heavy_crawl",
+      "target_simulated_epochs": 7.24282037547181,
+      "table9_macro_bpb": 1.2532159494387598
+    },
+    {
+      "focal_domain": "dolmino_synth_code",
+      "target_simulated_epochs": 14.48564075094362,
+      "table9_macro_bpb": 1.2377224221795906
+    },
+    {
+      "focal_domain": "dolmino_synth_instruction",
+      "target_simulated_epochs": 7.24282037547181,
+      "table9_macro_bpb": 1.2581741318496755
+    },
+    {
+      "focal_domain": "dolmino_synth_math",
+      "target_simulated_epochs": 14.48564075094362,
+      "table9_macro_bpb": 1.2313362771009162
+    },
+    {
+      "focal_domain": "dolmino_synth_qa",
+      "target_simulated_epochs": 1.8107050938679523,
+      "table9_macro_bpb": 1.2623198213561049
+    },
+    {
+      "focal_domain": "dolmino_synth_thinking",
+      "target_simulated_epochs": 14.48564075094362,
+      "table9_macro_bpb": 1.222327663732803
+    }
+  ]
+}

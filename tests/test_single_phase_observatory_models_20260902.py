@@ -423,3 +423,262 @@ def test_features_from_panel_scales_exposures_by_pool_fraction():
             label="t",
             pool_fractions=np.array([[1.0, 1.5], [1.0, 1.0]]),
         )
+
+
+def test_fitted_floor_link_places_the_floor_below_the_training_minimum_and_caps_extrapolation():
+    features = _features()
+    response = _response(features)
+    design = models.family_design(
+        features,
+        {"rate": 0.5, "power": 0.5, "threshold": 2.0},
+        models.FamilyOptions(family_signal="none", harm="softplus_bucket", benefit="weibull"),
+    )
+    anchor = float(np.median(response))
+    spec = models.HeadSpec(
+        kind=models.HeadKind.NNLS, link=models.LinkKind.FITTED_FLOOR, floor_anchor=anchor, noise_sd=0.002
+    )
+    head = models.fit_head(design, response, 0.01, spec)
+    fitted = models.predict_head(head, design.values, spec)
+    extreme = models.predict_head(head, design.values * 50.0, spec)
+
+    low, high = spec.floor_kappa_bounds
+    assert low <= head.kappa <= high
+    assert head.floor < response.min()
+    assert np.isclose(head.floor, anchor - max(head.kappa * (anchor - response.min()), 3 * 0.002))
+    assert np.all(fitted > head.floor)
+    assert np.all(extreme <= head.floor + np.exp(head.cap) + 1e-9)
+    # The response-space fit is at least as close in-sample as the log-space fit at the 0.95 floor.
+    bounded = models.HeadSpec(kind=models.HeadKind.NNLS, link=models.LinkKind.LOG_DEFICIT_BOUNDED)
+    reference = models.predict_head(models.fit_head(design, response, 0.01, bounded), design.values, bounded)
+    assert np.sqrt(np.mean((fitted - response) ** 2)) <= 1.02 * np.sqrt(np.mean((reference - response) ** 2))
+
+
+def test_fitted_floor_model_chooses_kappa_by_inner_cv_and_keeps_the_identity_link_when_it_wins():
+    features = _features()
+    train, inner = _folds(features.rows)
+    options = models.FamilyOptions(family_signal="none", harm="softplus_bucket", benefit="weibull")
+    shapes = ({"rate": 0.5, "power": 0.5, "threshold": 2.0},)
+    base = models.GridModel(
+        "floor",
+        lambda feats, shape: models.family_design(feats, shape, options),
+        shapes,
+        (0.01,),
+        models.HeadSpec(kind=models.HeadKind.NNLS, link=models.LinkKind.KAPPA_FLOOR),
+        3,
+    )
+    model = models.FittedFloorModel(base=base, kappa_bounds=(1.0, 8.0))
+
+    # A response that is exactly additive in the design prefers the identity link.
+    additive = _response(features)
+    fit = model.fit(features, additive, train, inner, 0)
+    assert fit.diagnostics["link"] == "identity"
+    assert np.isnan(fit.diagnostics["kappa"])
+    assert np.isfinite(model.predict(fit, features, train)).all()
+
+    # A response that is a floor plus an exponential of the same design prefers the fitted floor.
+    design = base.design(features, shapes[0])
+    rng = np.random.default_rng(3)
+    linear = -0.6 * design.values[:, : features.buckets].sum(axis=1) / features.buckets
+    curved = 0.7 + np.exp(-1.0 + 2.0 * linear) + 0.002 * rng.normal(size=features.rows)
+    fit = model.fit(features, curved, train, inner, 0)
+    assert fit.diagnostics["link"] == "fitted_floor"
+    assert 1.0 <= fit.diagnostics["kappa"] <= 8.0
+    assert fit.diagnostics["floor"] < curved.min()
+    assert fit.diagnostics["fitted_floor_inner_cv_rmse"] < fit.diagnostics["identity_inner_cv_rmse"]
+    assert fit.diagnostics["fitted_floor_inner_cv_rmse"] <= fit.diagnostics["log_deficit_bounded_inner_cv_rmse"]
+
+
+def test_per_bucket_design_with_uniform_shapes_equals_the_shared_successor_design():
+    features = _features()
+    shape = {"rate": 0.5, "power": 0.7, "threshold": 2.0}
+    shared = models.family_design(features, shape, registry.SUCCESSOR_OPTIONS)
+    per_bucket = models.per_bucket_weibull_softplus_design(features, models.per_bucket_shape(shape, features.buckets))
+
+    assert per_bucket.names == shared.names
+    np.testing.assert_array_equal(per_bucket.values, shared.values)
+    np.testing.assert_array_equal(per_bucket.ridge, shared.ridge)
+
+
+def test_per_bucket_shape_search_starts_at_the_shared_optimum_and_never_scores_worse():
+    features = _features(rows=90)
+    response = _response(features)
+    train, inner = _folds(features.rows)
+    shapes = (
+        {"rate": 0.25, "power": 0.5, "threshold": 2.0},
+        {"rate": 1.0, "power": 0.7, "threshold": 3.0},
+        {"rate": 2.0, "power": 1.0, "threshold": 1.0},
+    )
+    shared = models.GridModel(
+        "grid",
+        lambda feats, shape: models.family_design(feats, shape, registry.SUCCESSOR_OPTIONS),
+        shapes,
+        (0.0, 0.1),
+        models.HeadSpec(),
+        3,
+    )
+    shared_fit = shared.fit(features, response, train, inner, 0)
+    model = models.PerBucketShapeGridModel(shared=shared, head=shared.head)
+    fitted = model.fit(features, response, train, inner, 0)
+
+    assert set(fitted.shape) == {
+        f"{key}:{index}" for key in models.PER_BUCKET_SHAPE_KEYS for index in range(features.buckets)
+    }
+    assert fitted.diagnostics["shared_inner_cv_rmse"] == shared_fit.diagnostics["inner_cv_rmse"]
+    assert fitted.diagnostics["inner_cv_rmse"] <= shared_fit.diagnostics["inner_cv_rmse"] + 1e-12
+    assert fitted.diagnostics["nonlinear_dof"] == 3 * features.buckets
+    assert all(
+        (fitted.shape[f"rate:{index}"], fitted.shape[f"power:{index}"], fitted.shape[f"threshold:{index}"])
+        in {(s["rate"], s["power"], s["threshold"]) for s in shapes}
+        for index in range(features.buckets)
+    )
+    predictions = model.predict(fitted, features, train)
+    assert predictions.shape == (features.rows,) and np.isfinite(predictions).all()
+
+
+def test_per_bucket_shape_entry_wraps_the_frozen_procedure_in_the_registry():
+    entry = registry.ENTRY_BY_ID["weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_per_bucket_shape"]
+    parent = registry.ENTRY_BY_ID["weibull_softplus_unscaled@kappa_floor_link_flat15_nocap"]
+    assert entry.mechanisms["sharing"] == "per_bucket"
+    assert {k: v for k, v in entry.mechanisms.items() if k != "sharing"} == {
+        k: v for k, v in parent.mechanisms.items() if k != "sharing"
+    }
+    model = entry.build(_features())
+    assert isinstance(model, models.FittedFloorModel)
+    assert isinstance(model.base, models.PerBucketShapeGridModel)
+    assert model.flat_profile_kappa == 1.5 and model.kappa_bounds == (1.0, 6.0)
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    (
+        "no_harm",
+        "row_scrambled_harm",
+        "permuted_inventory",
+        "weight_coordinate",
+        "common_inventory",
+        "signed_head",
+        "outcome_permutation",
+    ),
+)
+def test_frozen_procedure_ablation_entries_build_and_fit(suffix):
+    entry = registry.ENTRY_BY_ID[f"weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_{suffix}"]
+    features = registry.apply_transform(_features(rows=60), entry)
+    response = _response(features)
+    train, inner = _folds(features.rows)
+    model = entry.build(features)
+    assert isinstance(model, models.FittedFloorModel)
+    fitted = model.fit(features, response, train, inner, 0)
+    predictions = model.predict(fitted, features, train)
+    assert np.isfinite(predictions).all()
+    if suffix == "no_harm":
+        assert "threshold" not in fitted.shape
+    if suffix == "signed_head":
+        assert model.base.head.kind is models.HeadKind.RIDGE
+
+
+def test_log_quadratic_design_recovers_an_additive_quadratic_in_log_epochs():
+    features = _features(rows=200)
+    u = np.log1p(features.exposures)
+    response = 1.0 - 0.3 * u[:, 0] + 0.2 * u[:, 1] ** 2 + 0.1 * u[:, 2] - 0.05 * u[:, 3] ** 2
+    design = models.log_quadratic_design(features, {})
+    assert design.values.shape == (200, 2 * features.buckets)
+    head = models.fit_head(design, response, 1e-10, models.HeadSpec(kind=models.HeadKind.RIDGE))
+    prediction = models.predict_head(head, design.values, models.HeadSpec(kind=models.HeadKind.RIDGE))
+    assert np.max(np.abs(prediction - response)) < 1e-6
+
+
+def test_spline_knots_bound_at_build_time_carry_the_fitted_basis_to_a_single_query_row():
+    features = dataclasses.replace(_features(rows=200), component="task")
+    rows = np.arange(features.rows)
+    response = np.log1p(features.exposures[:, 0]) - 0.1 * np.log1p(features.exposures[:, 1]) ** 2 + 1.0
+    inner = tuple((rows[rows % 3 != k], rows[rows % 3 == k]) for k in range(3))
+    model = registry.ENTRY_BY_ID[registry.SPLINE_LINKED_ID].build(features)
+    fitted = model.fit(features, response, rows, inner, 0)
+    whole = model.predict(fitted, features, rows)
+    single = dataclasses.replace(
+        features,
+        exposures=features.exposures[7:8],
+        weights=features.weights[7:8],
+        label="query",
+    )
+    # A one-row query has no quartiles of its own; the prediction must still use the swarm's knots.
+    assert model.predict(fitted, single, np.array([0]))[0] == pytest.approx(whole[7], abs=1e-9)
+    assert models.spline_knots(single) == (None,) * features.buckets
+
+
+def test_natural_spline_design_has_four_columns_per_bucket_and_is_linear_beyond_the_boundary_knots():
+    features = _features(rows=200)
+    design = models.natural_spline_design(features, {})
+    assert design.values.shape == (200, 4 * features.buckets)
+    knots = np.array([0.1, 0.3, 0.6, 0.9, 1.4])
+    far = np.array([1.4, 2.4, 3.4, 4.4])
+    basis = models.natural_cubic_basis(far, knots)
+    differences = np.diff(basis, axis=0)
+    # Natural constraint: every column is affine beyond the last knot, so consecutive differences are constant.
+    assert np.allclose(differences[1:], differences[:-1], atol=1e-8)
+
+
+def test_hellinger_kernel_ridge_predicts_a_smooth_function_out_of_fold():
+    features = _features(seed=1, rows=160)
+    response = np.sin(6.0 * features.weights[:, 0]) + 4.0 * features.weights[:, 1] ** 2
+    train = np.arange(120)
+    inner = tuple((train[np.arange(120) % 3 != k], train[np.arange(120) % 3 == k]) for k in range(3))
+    model = models.HellingerKernelRidgeModel()
+    fitted = model.fit(features, response, train, inner, seed=0)
+    prediction = model.predict(fitted, features, np.arange(120, 160))
+    residual = response[120:] - prediction
+    assert np.sqrt(np.mean(residual**2)) < 0.5 * np.std(response[120:])
+    assert (
+        fitted.head.train_weights.shape == (120, features.buckets)
+        and fitted.shape["gamma"] in models.HELLINGER_GAMMA_GRID
+    )
+    # Predictions must not depend on the row layout of the feature set they are asked about.
+    shuffled = np.random.default_rng(3).permutation(160)
+    other = dataclasses.replace(features, weights=features.weights[shuffled], exposures=features.exposures[shuffled])
+    assert np.allclose(model.predict(fitted, other, np.arange(160)), model.predict(fitted, features, shuffled))
+
+
+def test_single_amplitude_and_hinge_harm_designs_have_the_expected_columns():
+    features = _features(rows=80)
+    shape = {"rate": 0.25, "power": 1.0, "threshold": 2.0}
+    single = models.family_design(
+        features, shape, models.FamilyOptions(family_signal="none", harm="softplus_bucket_sum", benefit="weibull")
+    )
+    hinge = models.family_design(
+        features, shape, models.FamilyOptions(family_signal="none", harm="softplus_bucket_hinge", benefit="weibull")
+    )
+    full = models.family_design(
+        features, shape, models.FamilyOptions(family_signal="none", harm="softplus_bucket", benefit="weibull")
+    )
+    assert single.values.shape[1] == features.buckets + 1
+    assert hinge.values.shape[1] == full.values.shape[1] == 2 * features.buckets
+    # The summed column equals the sum of the per-bucket squared-softplus harms; the hinge is their square root.
+    assert np.allclose(single.values[:, -1], full.values[:, features.buckets :].sum(axis=1))
+    assert np.allclose(hinge.values[:, features.buckets :] ** 2, full.values[:, features.buckets :])
+
+
+def test_nonparametric_comparators_fit_and_predict_out_of_fold():
+    pytest.importorskip("lightgbm")
+    features = _features(seed=2, rows=160)
+    response = (
+        1.0
+        + 2.0 * features.weights[:, 0]
+        - features.weights[:, 1] ** 2
+        + 0.5 * features.weights[:, 2] * features.weights[:, 3]
+    )
+    train = np.arange(120)
+    inner = tuple((train[np.arange(120) % 3 != k], train[np.arange(120) % 3 == k]) for k in range(3))
+    for model in (models.LightGBMModel(), models.MLPModel()):
+        fitted = model.fit(features, response, train, inner, seed=0)
+        prediction = model.predict(fitted, features, np.arange(120, 160))
+        assert prediction.shape == (40,) and np.isfinite(prediction).all()
+        assert np.corrcoef(prediction, response[120:])[0, 1] > 0.5, model.model_id
+        assert fitted.head.active == 120
+
+
+def test_olmix_taskwise_log_epoch_coordinate_is_log1p_of_exposures():
+    features = _features(rows=40)
+    model = models.OlmixTaskwiseModel(model_id="x", coordinate="log_epoch")
+    assert np.allclose(model._matrix(features), np.log1p(features.exposures))
+    with pytest.raises(ValueError):
+        models.OlmixTaskwiseModel(model_id="x", coordinate="epochs")._matrix(features)

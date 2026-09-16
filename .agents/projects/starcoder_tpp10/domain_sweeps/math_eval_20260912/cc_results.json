@@ -1,0 +1,68 @@
+{
+  "is_error": false,
+  "duration_api_ms": 29800,
+  "num_turns": 2,
+  "stop_reason": "end_turn",
+  "session_id": "2873c9ba-f3ef-4e78-8332-944ca2bf5eaf",
+  "total_cost_usd": 0.310403,
+  "usage": {
+    "input_tokens": 4,
+    "cache_creation_input_tokens": 4232,
+    "cache_read_input_tokens": 430026,
+    "output_tokens": 2122,
+    "output_tokens_details": {
+      "thinking_tokens": 1561
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 4232,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 2011,
+        "cache_read_input_tokens": 216408,
+        "cache_creation_input_tokens": 1442,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 1442
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard"
+  },
+  "modelUsage": {
+    "claude-opus-5[1m]": {
+      "inputTokens": 4,
+      "outputTokens": 2122,
+      "cacheReadInputTokens": 430026,
+      "cacheCreationInputTokens": 4232,
+      "webSearchRequests": 0,
+      "costUSD": 0.310403,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "canonicalModel": "claude-opus-5",
+      "provider": "firstParty"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "`collection_final.json` confirms it: 8/8 verified, complete grid, `at_prespecified_grid_boundary: false`, both datasets minimizing at p70 with both neighbours worse. That is an interior turnover above 10 epochs from checkpoints you already own \u2014 the thing I said the archive couldn't support. The >10 rationale for new training is gone.\n\nSo yes, run Wikipedia on the same math metrics first; it strictly dominates a new sweep. Same evaluator, zero training, and it is the only test separating the two readings: if Wikipedia's math PPL also minimizes near p70, the preference belongs to the *metric*, not to FineMath; if it minimizes low, you have a domain \u00d7 diagnostic interaction for free.\n\nThat reverses my last ranking. Nemotron Math Textbooks is now the weakest candidate, not the strongest \u2014 another math corpus would likely replicate FineMath's high optimum, which is confirmation, not separation. If Wikipedia shows the effect is metric-driven and contrast is still needed, Stack-Edu Python is the pick, paired with a code-specific diagnostic so each domain has its own.\n\nOne caveat to price: the p70\u2013p50 gaps are 0.046/0.052 loss with no seed uncertainty. Two proxy runs at p50/p70 on a second trainer seed would secure the number the story rests on.",
+  "ttft_ms": 2089,
+  "ttft_stream_ms": 1336,
+  "time_to_request_ms": 67,
+  "type": "result",
+  "duration_ms": 30003,
+  "uuid": "f5f88fa6-3b61-4f99-9530-934f228fe83b"
+}

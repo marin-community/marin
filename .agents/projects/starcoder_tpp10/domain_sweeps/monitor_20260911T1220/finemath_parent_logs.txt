@@ -1,0 +1,18 @@
+I20260911 05:24:46 8553706816 iris.cluster.config Loading config from lib/iris/config/marin.yaml
+I20260911 05:24:46 8553706816 finelog.client.log_client LogClient resolved /system/log-server -> https://iris.oa.dev/proxy/system.log-server (log)
+Not all requested scopes were granted by the authorization server, missing scopes email.
+[12:19:10] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 |  + xxhash==3.6.0
+[12:19:10] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 |  + yarl==1.22.0
+[12:19:10] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 |  + zipp==3.23.0
+[12:19:10] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 |  + zstandard==0.25.0
+[12:19:10] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 | Resolved 14 packages in 12ms
+[12:19:10] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 | Installed 5 packages in 10ms
+[12:19:10] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 |  + linkify-it-py==2.2.0
+[12:19:10] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 |  + mdit-py-plugins==0.6.1
+[12:19:10] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 |  + memray==1.20.0
+[12:19:10] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 |  + py-spy==0.4.2
+[12:19:10] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 |  + textual==8.2.8
+[12:19:18] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 | I20260911 12:19:15 datasets JAX version 0.11.1 available.
+[12:19:44] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 | I20260911 12:19:40 levanter.store.cache Loading cache from gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train
+[12:19:44] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 | I20260911 12:19:40 levanter.store.cache Attempting to load cache ledger from gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/shard_ledger.json
+[12:19:44] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674/0 attempt=0 | I0911 12:19:40.570208      25 google_auth_provider.cc:181] Running on GCE, using service account iris-worker@hai-gcp-models.iam.gserviceaccount.com

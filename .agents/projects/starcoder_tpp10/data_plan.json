@@ -1,0 +1,53 @@
+{
+  "design_sha256": "72d14a845033b901d73397c74c724a668cbdec5fd72cec41178626b993f889a2",
+  "caches": {
+    "hq_actual": {
+      "path": "gs://marin-us-central1/starcoder_tpp10/hq_actual/2026.09.09",
+      "fingerprint": "6724be3d"
+    },
+    "hq_synth": {
+      "path": "gs://marin-us-central1/starcoder_tpp10/hq_synth/2026.09.09",
+      "fingerprint": "1aff8317"
+    },
+    "medium_high": {
+      "path": "gs://marin-us-central1/starcoder_tpp10/medium_high/2026.09.09",
+      "fingerprint": "e46a2568"
+    },
+    "medium": {
+      "path": "gs://marin-us-central1/starcoder_tpp10/medium/2026.09.09",
+      "fingerprint": "12062edd"
+    },
+    "medium_low": {
+      "path": "gs://marin-us-central1/starcoder_tpp10/medium_low/2026.09.09",
+      "fingerprint": "351e53d8"
+    },
+    "low_actual": {
+      "path": "gs://marin-us-central1/starcoder_tpp10/low_actual/2026.09.09",
+      "fingerprint": "76ed50a5"
+    },
+    "evaluation": {
+      "path": "gs://marin-us-central1/paloma/dolma_100_programing_languages-tpp10/2026.09.09",
+      "fingerprint": "3a557be8"
+    },
+    "starcoder_raw": {
+      "path": "gs://marin-us-central1/starcoder_tpp10/starcoder/2026.09.09",
+      "fingerprint": "c87645e3"
+    },
+    "starcoder": {
+      "path": "gs://marin-us-central1/starcoder_tpp10/parent/2026.09.09",
+      "fingerprint": "7277121a"
+    },
+    "subset_20260912": {
+      "path": "gs://marin-us-central1/starcoder_tpp10/subset_20260912/2026.09.09",
+      "fingerprint": "87312d28"
+    },
+    "subset_20260913": {
+      "path": "gs://marin-us-central1/starcoder_tpp10/subset_20260913/2026.09.09",
+      "fingerprint": "3e166c0e"
+    },
+    "subset_20260914": {
+      "path": "gs://marin-us-central1/starcoder_tpp10/subset_20260914/2026.09.09",
+      "fingerprint": "cac63c83"
+    }
+  }
+}

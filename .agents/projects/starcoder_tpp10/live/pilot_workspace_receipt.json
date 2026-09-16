@@ -1,0 +1,12 @@
+{
+  "uri": "gs://marin-us-central2/iris/marin/state/bundles/4567a8171518c174da02918c41161850cd63bb465dc8510ea80a6138483395b5",
+  "bundle_sha256": "4567a8171518c174da02918c41161850cd63bb465dc8510ea80a6138483395b5",
+  "size": 26207690,
+  "generation": "1789080784932491",
+  "crc32c": "VGrZng==",
+  "checked_at": "2026-09-10T22:58:01.106416Z",
+  "verified_pins": 27,
+  "pilot_release_included": true,
+  "identical_to_local_preflight_zip": true,
+  "scope": "Full submitted pilot workspace retained; parent and all TPU data placement remain central1."
+}

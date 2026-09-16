@@ -1,0 +1,13 @@
+{
+  "approved": true,
+  "reviewer": "User explicitly authorized 40%, 55%, 60%, 65%, 80% on 10 September 2026; recorded before submission.",
+  "stage": "refinement",
+  "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+  "cache_audit_sha256": "c9d4f9e7f7d8c15ddfd4db14ae83b05c191cd3c157bfa8c375d9b132464793e6",
+  "approved_at": "2026-09-11T07:03:28.666384+00:00",
+  "optimizer_review_sha256": "dd50826caf8a6e2139fb78bc942c8516ae77224d53b369ebe7feede7543eac4b",
+  "canary_plan_sha256": "4362a8b1b2e37d7ae73096f7658c5b3a79774288bf268f240fa4e49edd826b60",
+  "scope": "Only the 45 frozen dense-grid recipes at 40%, 55%, 60%, 65%, 80%: five targets, ten unmatched proxies, thirty matched proxies. Remaining dense coordinates are unreleased.",
+  "dense_plan_sha256": "3a20c5e45ae73f31d066216adbd5dbd63af427338aecc0c3999a5215135c2ba5",
+  "pilot_plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0"
+}

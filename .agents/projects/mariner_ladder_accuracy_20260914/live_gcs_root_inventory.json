@@ -1,0 +1,126 @@
+[
+  {
+    "run_dir": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_t9_snc_cap08_1e21_seed662005-e8e9d7",
+    "status": "RUNNING",
+    "children": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_t9_snc_cap08_1e21_seed662005-e8e9d7/.executor_info",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_t9_snc_cap08_1e21_seed662005-e8e9d7/.executor_status",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_t9_snc_cap08_1e21_seed662005-e8e9d7/.executor_status.lock",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_t9_snc_cap08_1e21_seed662005-e8e9d7/checkpoints"
+    ],
+    "checkpoints": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_t9_snc_cap08_1e21_seed662005-e8e9d7/checkpoints/eval_metrics.jsonl",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_t9_snc_cap08_1e21_seed662005-e8e9d7/checkpoints/step-5000"
+    ]
+  },
+  {
+    "run_dir": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_u_snc_cap06_1e21_seed666206-4da478",
+    "status": "RUNNING",
+    "children": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_u_snc_cap06_1e21_seed666206-4da478/.executor_info",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_u_snc_cap06_1e21_seed666206-4da478/.executor_status",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_u_snc_cap06_1e21_seed666206-4da478/.executor_status.lock",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_u_snc_cap06_1e21_seed666206-4da478/checkpoints",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_u_snc_cap06_1e21_seed666206-4da478/hf"
+    ],
+    "checkpoints": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_u_snc_cap06_1e21_seed666206-4da478/checkpoints/eval_metrics.jsonl",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_u_snc_cap06_1e21_seed666206-4da478/checkpoints/step-10000",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_u_snc_cap06_1e21_seed666206-4da478/checkpoints/step-15000",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_u_snc_cap06_1e21_seed666206-4da478/checkpoints/step-5000"
+    ],
+    "hf": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_u_snc_cap06_1e21_seed666206-4da478/hf/step-10000"
+    ]
+  },
+  {
+    "run_dir": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_t9_kl0p005_cap04_1e21_seed662005-3f95f2",
+    "status": "RUNNING",
+    "children": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_t9_kl0p005_cap04_1e21_seed662005-3f95f2/.executor_info",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_t9_kl0p005_cap04_1e21_seed662005-3f95f2/.executor_status",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_t9_kl0p005_cap04_1e21_seed662005-3f95f2/.executor_status.lock",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_t9_kl0p005_cap04_1e21_seed662005-3f95f2/checkpoints"
+    ],
+    "checkpoints": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_t9_kl0p005_cap04_1e21_seed662005-3f95f2/checkpoints/eval_metrics.jsonl"
+    ]
+  },
+  {
+    "run_dir": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_u_kl0p05_cap04_1e21_seed666206-54791f",
+    "status": "RUNNING",
+    "children": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_u_kl0p05_cap04_1e21_seed666206-54791f/.executor_info",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_u_kl0p05_cap04_1e21_seed666206-54791f/.executor_status",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_u_kl0p05_cap04_1e21_seed666206-54791f/.executor_status.lock",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_u_kl0p05_cap04_1e21_seed666206-54791f/checkpoints"
+    ],
+    "checkpoints": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_u_kl0p05_cap04_1e21_seed666206-54791f/checkpoints/eval_metrics.jsonl"
+    ]
+  },
+  {
+    "run_dir": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48",
+    "status": "SUCCESS",
+    "children": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/.artifact.json",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/.executor_info",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/.executor_status",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/checkpoints",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/hf"
+    ],
+    "checkpoints": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/checkpoints/eval_metrics.jsonl",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/checkpoints/step-10000",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/checkpoints/step-15000",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/checkpoints/step-20000",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/checkpoints/step-22056",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/checkpoints/step-5000"
+    ],
+    "hf": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/hf/step-10000",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/hf/step-20000",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/hf/step-22056"
+    ]
+  },
+  {
+    "run_dir": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-9e5175",
+    "status": "FAILED",
+    "children": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-9e5175/.executor_info",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-9e5175/.executor_status"
+    ]
+  },
+  {
+    "run_dir": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-8b8105",
+    "status": "FAILED",
+    "children": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-8b8105/.executor_info",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-8b8105/.executor_status"
+    ]
+  },
+  {
+    "run_dir": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd",
+    "status": "SUCCESS",
+    "children": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/.artifact.json",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/.executor_info",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/.executor_status",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/checkpoints",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/hf"
+    ],
+    "checkpoints": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/checkpoints/eval_metrics.jsonl",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/checkpoints/step-10000",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/checkpoints/step-15000",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/checkpoints/step-20000",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/checkpoints/step-22056",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/checkpoints/step-5000"
+    ],
+    "hf": [
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/hf/step-10000",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/hf/step-20000",
+      "marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/hf/step-22056"
+    ]
+  }
+]

@@ -1,0 +1,23 @@
+[
+  {
+    "id": "/calvinxu/starcoder-tpp10-uncheatable-cpu2/tpp10-uncheatable-proxy",
+    "state": "pending",
+    "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 208.8GB) - 4 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+    "error": "",
+    "has_children": false
+  },
+  {
+    "id": "/calvinxu/starcoder-tpp10-uncheatable-cpu2/tpp10-uncheatable-target",
+    "state": "pending",
+    "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 208.8GB) - 4 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+    "error": "",
+    "has_children": false
+  },
+  {
+    "id": "/calvinxu/starcoder-tpp10-uncheatable-cpu2",
+    "state": "running",
+    "pending_reason": "",
+    "error": "",
+    "has_children": true
+  }
+]

@@ -1,0 +1,69 @@
+[
+  {
+    "attrs": {},
+    "author": null,
+    "body": "A read-only audit found a batch-dependent BPB aggregation bug in the native Levanter evaluator. In lib/levanter/src/levanter/eval.py:583-590, each batch's loss is divided by its byte count, but RunningMean weights the resulting BPB by token count. Dataset BPB should be total loss in bits divided by total bytes; the existing average of batch ratios changes with batch boundaries.\n\nA local reproduction through the actual TaggedEvaluator used identical one-bit losses for two examples with byte counts 1 and 4. PALOMA alone reported 0.40000000596 BPB. Prepending one unrelated example, with batch size two, changed PALOMA to 0.625 BPB. Token loss stayed exactly 0.69314718246. Correct global BPB is 2/5 = 0.4. This establishes the aggregation bug independently of model precision or checkpoint restoration.\n\nIn the real expanded evaluation, seven Uncheatable caches contain 3,810 examples before PALOMA's 5,673 examples. The PALOMA offset is 2 modulo the proxy batch size 32 and 98 modulo the target batch size 128, leaving 30 PALOMA examples in the first batch in either case. Original evaluation used PALOMA alone. Thus the expanded evaluation changes the batch boundaries of unchanged PALOMA examples.\n\nThis is a strong explanation for the observed control errors (0.005950927734375 target and 0.0002589225769042969 proxy), not yet an exact attribution: no actual checkpoint has been re-evaluated in this audit. The original token losses are 2.06310725212 and 3.03879451752; restored logs agree only to their displayed three decimal places. Next verify original versus expanded evaluation on the same saved checkpoint and accumulate loss bits and bytes explicitly. Do not widen the 5e-5 gate or mix corrected and legacy scores. The native aggregation bug predates these jobs; no source, tolerance, frozen recipe, checkpoint, or live job was changed.\n\nEvidence: evaluation_bpb_audit_20260911/{native_evaluator_reproduction,original_control_metrics,evaluation_batch_boundaries}.json. Checkpoint integrity, stale executor completion records, and the Wikipedia p50 W&B discrepancy remain separate checks. This finding has not resolved those issues. Echo publication was denied with HTTP 403 earlier in this investigation; the incident draft remains at /tmp/tpp10_control_evaluation_incident_20260911.md.\n",
+    "body_format": "markdown",
+    "created_at": "2026-09-11T23:50:09Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m29e1vcbk3g42smk35gsxpyp",
+    "note_type": "checkpoint",
+    "resolved_at": null,
+    "status": "open",
+    "title": "PALOMA control discrepancy: native BPB aggregation reproduction",
+    "updated_at": "2026-09-11T23:50:09Z"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789170593.7464828,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/evaluation_bpb_audit_20260911/native_evaluator_reproduction.json",
+      "fieldbook.local_size_at_capture": 295
+    },
+    "content_hash": "sha256:bae0d546d8c4f4c9fcba0d0447a59b84c7865ea1ce38d94cc6154a77b4768e00",
+    "created_at": "2026-09-11T23:50:09Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29e1vn7rzfvegxgn3rfby7a",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T23:50:09Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/evaluation_bpb_audit_20260911/native_evaluator_reproduction.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789170593.7468567,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/evaluation_bpb_audit_20260911/original_control_metrics.json",
+      "fieldbook.local_size_at_capture": 1083
+    },
+    "content_hash": "sha256:b467b849e148461fafc393c7ecf227187c880cf660d27a04e33a2f86498162e7",
+    "created_at": "2026-09-11T23:50:10Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29e1w1h3cdr4tb6pd1mftry",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T23:50:10Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/evaluation_bpb_audit_20260911/original_control_metrics.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789170593.7471914,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/evaluation_bpb_audit_20260911/evaluation_batch_boundaries.json",
+      "fieldbook.local_size_at_capture": 1324
+    },
+    "content_hash": "sha256:f8b771ea2638190e89f5a3d965b28cb00bdb0e5cbdcdccc1b156dd985b680c36",
+    "created_at": "2026-09-11T23:50:10Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29e1wa973gef0qrzt810yr6",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T23:50:10Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/evaluation_bpb_audit_20260911/evaluation_batch_boundaries.json"
+  }
+]

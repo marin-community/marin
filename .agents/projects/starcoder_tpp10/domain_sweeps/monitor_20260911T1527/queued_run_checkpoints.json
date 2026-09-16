@@ -1,0 +1,82 @@
+{
+  "status": "checked",
+  "checked_at": "2026-09-11T15:32:06.359264+00:00",
+  "rows": [
+    {
+      "run_name": "tpp10_matched_p080_s20260911_d20260914",
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-cffa480f",
+      "checkpoint": null,
+      "metadata_records": 0,
+      "listed_objects": 0,
+      "status": "no temporary checkpoint present; unfinished short proxy resumes from initialization under the same recipe"
+    },
+    {
+      "run_name": "tpp10_target_p080_s20260910",
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9",
+      "checkpoint": {
+        "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910/2026.09.09/checkpoints/step-728/metadata.json",
+        "generation": "1789139686438436",
+        "metadata_sha256": "f7d812037820d72dad265da65a1b4d121e28188efe522de710bd97eb09a9f65d",
+        "metadata": {
+          "step": 728,
+          "timestamp": "2026-09-11T15:14:46.307102",
+          "is_temporary": true
+        }
+      },
+      "metadata_records": 1,
+      "listed_objects": 7,
+      "status": "saved temporary checkpoint"
+    },
+    {
+      "run_name": "tpp10_target_p065_s20260910",
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590",
+      "checkpoint": {
+        "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09/checkpoints/step-728/metadata.json",
+        "generation": "1789139675235730",
+        "metadata_sha256": "7141cbf42b3748301e127e52c32700bf235e6539713de51710a27bc32c36e099",
+        "metadata": {
+          "step": 728,
+          "timestamp": "2026-09-11T15:14:35.126310",
+          "is_temporary": true
+        }
+      },
+      "metadata_records": 1,
+      "listed_objects": 7,
+      "status": "saved temporary checkpoint"
+    },
+    {
+      "run_name": "tpp10_target_p060_s20260910",
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9",
+      "checkpoint": {
+        "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09/checkpoints/step-5406/metadata.json",
+        "generation": "1789139336275521",
+        "metadata_sha256": "7ddc28d34618a5f368d3bfa1b29dbfb42897f214f90574e4aae41d7be07022d1",
+        "metadata": {
+          "step": 5406,
+          "timestamp": "2026-09-11T15:08:56.170747",
+          "is_temporary": true
+        }
+      },
+      "metadata_records": 1,
+      "listed_objects": 7,
+      "status": "saved temporary checkpoint"
+    },
+    {
+      "run_name": "tpp10_target_p055_s20260910",
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+      "checkpoint": {
+        "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09/checkpoints/step-9216/metadata.json",
+        "generation": "1789139295070091",
+        "metadata_sha256": "10381684fd4ad80dd7f88ec8aec67965881178acc433315394f8b71ca26bd6d3",
+        "metadata": {
+          "step": 9216,
+          "timestamp": "2026-09-11T15:08:14.914350",
+          "is_temporary": true
+        }
+      },
+      "metadata_records": 1,
+      "listed_objects": 7,
+      "status": "saved temporary checkpoint"
+    }
+  ]
+}

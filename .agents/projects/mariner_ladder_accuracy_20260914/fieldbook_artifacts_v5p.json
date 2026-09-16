@@ -1,0 +1,53 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789365376.0735726,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/plan_v5p.json",
+      "fieldbook.local_size_at_capture": 6604
+    },
+    "content_hash": "sha256:48f280f0cb6df2c0d4962b218ee1932c3bcded051ad3669d03c8c71f871b32ad",
+    "created_at": "2026-09-14T05:57:47Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+    "id": "art_01m2f7weevra7b4524wk5wb08w",
+    "job_id": "job_01m2f7tar6rbg0bbc9nexdr1k8",
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-14T05:57:47Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/plan_v5p.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789365383.305066,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/bundle_receipt_v5p.json",
+      "fieldbook.local_size_at_capture": 2282
+    },
+    "content_hash": "sha256:538de4f392fbd5d3cf4387becc1aec7a396c1fc1f3716135b944391be0bb86df",
+    "created_at": "2026-09-14T05:57:47Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+    "id": "art_01m2f7wett22ccz61ymxqvfy96",
+    "job_id": "job_01m2f7tar6rbg0bbc9nexdr1k8",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-14T05:57:47Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/bundle_receipt_v5p.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789365381.6491768,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/region_validation_v5p.txt",
+      "fieldbook.local_size_at_capture": 40
+    },
+    "content_hash": "sha256:52f666ce91f3ff042889d7ad8b01fad5e0cd34b15a95b2abe0f5ba0987516170",
+    "created_at": "2026-09-14T05:57:48Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+    "id": "art_01m2f7wf4cb1dt74pqx23yk28v",
+    "job_id": "job_01m2f7tar6rbg0bbc9nexdr1k8",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-14T05:57:48Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/region_validation_v5p.txt"
+  }
+]

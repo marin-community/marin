@@ -10,8 +10,12 @@ from types import SimpleNamespace
 
 import equinox as eqx
 import jax
+import numpy as np
+import pytest
+from safetensors.numpy import load_file
 from transformers import AutoModelForCausalLM
 from transformers import GPT2Config as HfGpt2Config
+from transformers import Qwen3Config as HfQwen3Config
 
 import haliax
 
@@ -20,6 +24,8 @@ from levanter.testing import tiny_corpus
 from levanter.checkpoint import save_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, SAFE_TENSORS_INDEX_NAME
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
+from levanter.models.qwen import Qwen3Config
+from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import is_inexact_arrayish
 from levanter.testing.helpers import has_torch
 
@@ -33,6 +39,49 @@ class TokenizerlessGpt2Config(Gpt2Config):
             tokenizer=None,
             ignore_prefix="transformer",
         )
+
+
+class TokenizerlessQwen3Config(Qwen3Config):
+    def hf_checkpoint_converter(self, ref_checkpoint: str | None = None):
+        return HFCheckpointConverter(
+            self.__class__, reference_checkpoint=None, HfConfigClass=HfQwen3Config, tokenizer=None
+        )
+
+
+@pytest.mark.parametrize("use_cpu", [False, True])
+def test_qwen3_export_preserves_checkpoint_weights_without_an_outer_mesh(tmp_path, use_cpu):
+    model_config = TokenizerlessQwen3Config(
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=2,
+        max_seq_len=16,
+        hidden_dim=16,
+        intermediate_dim=32,
+    )
+    model = model_config.build(haliax.Axis("vocab", 64), key=jax.random.PRNGKey(7))
+    trainable, _ = eqx.partition(model, is_inexact_arrayish)
+    save_checkpoint({"model": trainable}, 0, str(tmp_path / "checkpoint"))
+
+    # The CLI must establish its own mesh after evaluation has left its context.
+    export_lm_to_hf.main(
+        export_lm_to_hf.ConvertLmConfig(
+            trainer=TrainerConfig(train_batch_size=8),
+            checkpoint_path=str(tmp_path / "checkpoint"),
+            output_dir=str(tmp_path / "hf"),
+            model=model_config,
+            override_vocab_size=64,
+            save_tokenizer=False,
+            use_cpu=use_cpu,
+        )
+    )
+
+    exported = {}
+    for path in (tmp_path / "hf").glob("*.safetensors"):
+        exported.update(load_file(str(path)))
+    expected = haliax.state_dict.to_torch_compatible_state_dict(model)
+    assert exported.keys() == expected.keys()
+    for key, value in expected.items():
+        np.testing.assert_array_equal(exported[key], np.asarray(value))
 
 
 def test_export_lm_to_hf():

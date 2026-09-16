@@ -55,6 +55,10 @@ class RemoteCallable(Generic[P, R]):
     pip_dependency_groups: list[str] | None = None
     pip_packages: list[str] | None = None
     name: str | None = None
+    # Fray retry policy for the submitted job. The defaults fail the job on its first task failure, which also
+    # ends a multi-host training whose sibling was preempted; raise both to resume such runs from checkpoint.
+    max_retries_failure: int = 0
+    max_task_failures: int = 0
 
     def named(self, name: str) -> "RemoteCallable":
         """Noop if already has a name. Otherwise use provided name."""
@@ -83,6 +87,8 @@ class RemoteCallable(Generic[P, R]):
                     pip_packages=self.pip_packages,
                     env_vars=self.env_vars,
                 ),
+                max_retries_failure=self.max_retries_failure,
+                max_task_failures=self.max_task_failures,
             )
         )
         handle.wait(raise_on_failure=True)
@@ -97,6 +103,8 @@ def remote(
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
     pip_packages: list[str] | None = None,
+    max_retries_failure: int = 0,
+    max_task_failures: int = 0,
 ) -> RemoteCallable[P, R]: ...
 
 
@@ -108,6 +116,8 @@ def remote(
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
     pip_packages: list[str] | None = None,
+    max_retries_failure: int = 0,
+    max_task_failures: int = 0,
 ) -> Callable[[Callable[P, R]], RemoteCallable[P, R]]: ...
 
 
@@ -119,6 +129,8 @@ def remote(
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
     pip_packages: list[str] | None = None,
+    max_retries_failure: int = 0,
+    max_task_failures: int = 0,
 ) -> RemoteCallable[P, R] | Callable[[Callable[P, R]], RemoteCallable[P, R]]:
     """Mark a step function for remote execution via Fray.
 
@@ -137,6 +149,8 @@ def remote(
             pip_dependency_groups=pip_dependency_groups,
             pip_packages=pip_packages,
             name=name,
+            max_retries_failure=max_retries_failure,
+            max_task_failures=max_task_failures,
         )
 
     if fn is not None:

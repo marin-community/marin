@@ -1,0 +1,35 @@
+The 4350 changed files include shared test-environment configuration that cannot be narrowed (base origin/HEAD at 61e59be45566).
+  uv run pytest -x
+Dedicated CI suites not run locally: iris-e2e-smoke, levanter-torch, levanter-tpu
+
+==> pytest (shared test environment changed)
+============================= test session starts ==============================
+platform darwin -- Python 3.12.8, pytest-9.0.3, pluggy-1.6.0
+rootdir: /Users/calvinxu/Projects/Work/Marin/marin
+configfile: pyproject.toml
+testpaths: tests, experiments
+plugins: anyio-4.12.1, jaxtyping-0.3.5, playwright-0.7.2, xdist-3.8.0, timeout-2.4.0, flakefinder-1.1.0, asyncio-1.4.0, base-url-2.1.0, profiling-1.8.1, forked-1.6.0
+timeout: 60.0s
+timeout method: signal
+timeout func_only: False
+session timeout: 600.0s
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+created: 16/16 workers
+
+==================================== ERRORS ====================================
+_________ ERROR collecting tests/test_domain_phase_mix_determinism.py __________
+ImportError while importing test module '/Users/calvinxu/Projects/Work/Marin/marin/tests/test_domain_phase_mix_determinism.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+tests/test_domain_phase_mix_determinism.py:415: in <module>
+    from experiments.domain_phase_mix.two_phase_starcoder_determinism_wsd import (
+experiments/domain_phase_mix/two_phase_starcoder_determinism_wsd.py:26: in <module>
+    from experiments.domain_phase_mix.domains import NEMOTRON_FULL_DOMAIN, STARCODER_DOMAIN
+experiments/domain_phase_mix/domains.py:34: in <module>
+    from experiments.defaults import default_tokenize
+E   ImportError: cannot import name 'default_tokenize' from 'experiments.defaults' (/Users/calvinxu/Projects/Work/Marin/marin/experiments/defaults.py)
+=========================== short test summary info ============================
+ERROR tests/test_domain_phase_mix_determinism.py - ImportError while importin...
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!! xdist.dsession.Interrupted: stopping after 1 failures !!!!!!!!!!!!!
+============================== 1 error in 21.09s ===============================

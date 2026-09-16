@@ -1,0 +1,8 @@
+I20260911 05:43:33 8553706816 iris.cluster.config Loading config from lib/iris/config/marin.yaml
+Not all requested scopes were granted by the authorization server, missing scopes email.
+Job: /calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674 (/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674)
+State: succeeded  exit=0  failures=0  preemptions=0
+Tasks: 1/1 completed  succeeded=1
+
+  TASK  STATE        EXIT  DURATION                     PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  succeeded       0  19 minutes and 21.2 seconds  -           -

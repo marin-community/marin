@@ -1,0 +1,20 @@
+{
+  "spec_sha256": "22791292a73b3ebcc4490c2f5ae3d355ed8f921bd145a3e26335dc5f015e42cf",
+  "checkpoints": 57,
+  "components": [
+    "wikipedia_english",
+    "github_python",
+    "github_cpp",
+    "bbc_news",
+    "arxiv_physics",
+    "arxiv_computer_science",
+    "ao3_english"
+  ],
+  "compressed_eval_bytes": 9940528,
+  "lint": "passed",
+  "pyrefly": "0 errors",
+  "tests": "14 passed in tests/test_starcoder_tpp10.py",
+  "region": "us-central1-a",
+  "training_modified": false,
+  "paper_modified": false
+}

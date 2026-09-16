@@ -20,6 +20,7 @@ import argparse
 import dataclasses
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -144,15 +145,23 @@ def reconstruct(model_id: str, target: str, selection: Path = SELECTION) -> Link
         if len(train) != data["weights"].shape[0]:
             raise ValueError("The final fit must use every canonical row")
         model = entry.build(dataclasses.replace(feature, component=str(name)))
-        if not isinstance(model, models.GridModel):
-            raise ValueError("Expected a grid model")
         shape = json.loads(str(shard["shape_json"]))
-        design = model.design(feature, shape)
+        if isinstance(model, models.FittedFloorModel):
+            # The fitted-floor model records its chosen link and kappa per component in the diagnostics.
+            diagnostics = json.loads(str(shard["diagnostics_json"]))
+            link = models.LinkKind(str(diagnostics["link"]))
+            grid_model = model.base
+            spec = model._spec(shape, link, float(diagnostics["kappa"]))
+        elif isinstance(model, models.GridModel):
+            grid_model = model
+            spec = model.head_for(shape)
+        else:
+            raise ValueError("Expected a grid model or a fitted-floor model")
+        design = grid_model.design(feature, shape)
         if names is None:
             names = tuple(design.names)
         elif tuple(design.names) != names:
             raise ValueError("Components of one model must share their design columns")
-        spec = model.head_for(shape)
         head = models.fit_head(
             models.Design(design.values[train], design.ridge, design.names),
             outcomes[train, index],
@@ -195,7 +204,7 @@ def reconstruct(model_id: str, target: str, selection: Path = SELECTION) -> Link
     return surrogate
 
 
-def optimize(surrogate: LinkSurrogate, cap: int, data: dict) -> tuple[np.ndarray, list[dict]]:
+def optimize(surrogate: LinkSurrogate, cap: int, data: dict, kl: float = 0.0) -> tuple[np.ndarray, list[dict]]:
     natural = 1 / data["inventory"]
     natural = natural / natural.sum()
     indices = np.random.default_rng(policy.START_SEED).choice(len(data["weights"]), policy.PANEL_STARTS, replace=False)
@@ -203,7 +212,7 @@ def optimize(surrogate: LinkSurrogate, cap: int, data: dict) -> tuple[np.ndarray
     starts = [policy.project_start(row, upper, natural) for row in (natural, *data["weights"][indices])]
     records, solutions = [], []
     for index, start in enumerate(starts):
-        weights, diagnostics = policy.optimize_start(surrogate.predict, start, natural, upper, 0.0)
+        weights, diagnostics = policy.optimize_start(surrogate.predict, start, natural, upper, kl)
         records.append({"start": index, **diagnostics})
         solutions.append(weights)
     # Every endpoint is projected to the feasible set by optimize_start, so the proposal is the lowest objective
@@ -213,7 +222,7 @@ def optimize(surrogate: LinkSurrogate, cap: int, data: dict) -> tuple[np.ndarray
     policy.OPTIMIZER_OPTIONS = {"maxiter": 2000, "ftol": 1e-10, "eps": 1e-6}
     try:
         for index, start in enumerate(list(solutions)):
-            weights, diagnostics = policy.optimize_start(surrogate.predict, start, natural, upper, 0.0)
+            weights, diagnostics = policy.optimize_start(surrogate.predict, start, natural, upper, kl)
             polished = diagnostics["objective"] <= records[index]["objective"]
             if polished:
                 solutions[index] = weights
@@ -236,9 +245,27 @@ def optimize(surrogate: LinkSurrogate, cap: int, data: dict) -> tuple[np.ndarray
     return solutions[best], records
 
 
-def runtime(surrogate: LinkSurrogate, weights: np.ndarray, inventory: np.ndarray, cap: int) -> tuple[np.ndarray, dict]:
+def penalized_objective(
+    surrogate: LinkSurrogate, inventory: np.ndarray, kl: float
+) -> Callable[[np.ndarray], np.ndarray]:
+    """The predicted aggregate plus kl x KL(weights || natural), vectorized over query rows."""
+    natural = 1 / inventory
+    natural = natural / natural.sum()
+
+    def objective(weights: np.ndarray) -> np.ndarray:
+        rows = np.atleast_2d(weights)
+        safe = np.maximum(rows, 1e-300)
+        divergence = np.sum(np.where(rows > 0, rows * np.log(safe / natural[None, :]), 0.0), axis=1)
+        return surrogate.predict(rows) + kl * divergence
+
+    return objective
+
+
+def runtime(
+    surrogate: LinkSurrogate, weights: np.ndarray, inventory: np.ndarray, cap: int, kl: float = 0.0
+) -> tuple[np.ndarray, dict]:
     maximum = np.floor(np.minimum(1.0, cap / inventory) * BLOCK_SIZE + 1e-12).astype(np.int64)
-    predict = surrogate.predict
+    predict = surrogate.predict if kl == 0.0 else penalized_objective(surrogate, inventory, kl)
     initial = grid.prefix_materializer.constrained_counts(weights, maximum)
     counts, steps = grid.refine_runtime_counts(predict, initial, maximum)
     runtime_weights = counts / BLOCK_SIZE
@@ -282,6 +309,12 @@ def main() -> None:
     parser.add_argument("--selection-dir", type=Path, default=SELECTION)
     parser.add_argument("--cases", default="uncheatable:6,table9:6,table9:8", help="target:cap pairs")
     parser.add_argument("--tag", default="bl", help="candidate id tag, lwspu_<target>_<tag>_cap<cap>")
+    parser.add_argument(
+        "--kl",
+        type=float,
+        default=0.0,
+        help="Olmix-style penalty: kl x KL(weights || natural) added to the predicted aggregate (0 = none)",
+    )
     args = parser.parse_args()
     cases = tuple((item.split(":")[0], int(item.split(":")[1])) for item in args.cases.split(","))
     if args.model not in registry.ENTRY_BY_ID:
@@ -302,10 +335,10 @@ def main() -> None:
     policies, restarts, weight_rows, candidate_rows, mapping = [], [], [], [], []
     for target, cap in cases:
         link, wspu = links[target], wspus[target]
-        weights, records = optimize(link, cap, data)
+        weights, records = optimize(link, cap, data, args.kl)
         for row in records:
             restarts.append({"target": target, "cap": cap, **row})
-        counts, diagnostics = runtime(link, weights, inventory, cap)
+        counts, diagnostics = runtime(link, weights, inventory, cap, args.kl)
         runtime_weights = counts / BLOCK_SIZE
         control = controls[target, cap]
         old_rows = old[(old.target == target) & (old.epoch_cap == cap)].set_index("domain")
@@ -316,7 +349,7 @@ def main() -> None:
             "target": target,
             "epoch_cap": cap,
             "surrogate": args.model,
-            "kl_coefficient": 0.0,
+            "kl_coefficient": args.kl,
             "target_flops": 3e18,
             "measurement_status": "unknown_not_run",
             **diagnostics,

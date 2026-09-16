@@ -1,0 +1,4800 @@
+{
+  "run_name": "tpp10_target_p040_s20260910",
+  "percent": 40,
+  "state": "finished",
+  "created_at": "2026-09-11T07:13:14Z",
+  "summary": {
+    "eval/bpb": 0.8066982626914978,
+    "eval/loading_time": 2.724420190002093,
+    "eval/loss": 1.3520867824554443,
+    "eval/paloma/bpb": 0.8066982626914978,
+    "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 0.8066982626914978,
+    "eval/paloma/dolma_100_programing_languages-tpp10/loss": 1.3520867824554443,
+    "eval/paloma/micro_loss": 1.3520867824554443,
+    "eval/total_time": 10.239191481000034,
+    "global_step": 11490,
+    "train/loss": 2.0932161808013916
+  },
+  "config_keys": [
+    "data",
+    "data_seed",
+    "eval_harness",
+    "eval_harness_steps",
+    "hf_generation_eos_token_ids",
+    "hf_save_dtype",
+    "hf_save_path",
+    "hf_save_steps",
+    "hf_upload",
+    "initial_state_evidence_path",
+    "initialize_from_checkpoint_path",
+    "initialize_from_hf",
+    "initialize_model_from_checkpoint_path",
+    "labeled_eval",
+    "log_entropy",
+    "merged_hf_save_path",
+    "merged_hf_upload",
+    "minimum_initial_step",
+    "model",
+    "optimizer",
+    "optimizer_schedule_num_train_steps",
+    "pad_tokenizer_to_match_model",
+    "peft_hf_upload",
+    "peft_save_path",
+    "train_seq_len",
+    "trainer",
+    "use_hf_model_config",
+    "z_loss_weight"
+  ],
+  "config": {
+    "model": {
+      "activation_function": "silu",
+      "attn_backend": null,
+      "flash_attention_block_size": null,
+      "gradient_checkpointing": true,
+      "head_dim": null,
+      "hidden_dim": 1024,
+      "hybrid_norm": false,
+      "initializer_range": 0.02,
+      "input_embedding_norm": false,
+      "intermediate_dim": 4096,
+      "layer_norm_epsilon": 1e-05,
+      "max_seq_len": 2048,
+      "num_heads": 8,
+      "num_kv_heads": 8,
+      "num_layers": 16,
+      "reference_checkpoint": "Qwen/Qwen3-0.6B",
+      "rope": {
+        "factor": 1,
+        "theta": 10000
+      },
+      "scan_layers": true,
+      "sliding_window": 4096,
+      "tie_word_embeddings": true,
+      "tokenizer": "experiments/domain_phase_mix/starcoder_tpp10_assets",
+      "upcast_attn": false,
+      "use_bias": false,
+      "use_layer_norm_weight": true,
+      "use_qk_norm": false,
+      "use_sliding_window": false
+    },
+    "optimizer": {
+      "adam_lr": 0.008,
+      "backend_steps": 5,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "coefficient_type": "quintic",
+      "cooldown": null,
+      "cycle_length": null,
+      "cycles": null,
+      "decay": 2299,
+      "default_weight_decay_mask": null,
+      "epsilon": 1e-15,
+      "haps": null,
+      "learning_rate": 0.02,
+      "lr_schedule": "cosine",
+      "max_grad_norm": 1,
+      "min_lr_ratio": 0,
+      "momentum": 0.95,
+      "muon_epsilon": 1e-05,
+      "nesterov": true,
+      "rewarmup": 0,
+      "warmup": 114,
+      "weight_decay": 0.1,
+      "weight_decay_modules": null
+    },
+    "trainer": {
+      "allow_nondivisible_batch_size": true,
+      "allow_partial_checkpoint": false,
+      "checkpointer": {
+        "append_run_id_to_base_path": false,
+        "base_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p040_s20260910/2026.09.09/checkpoints",
+        "debug": {
+          "dump_stacks_after": null,
+          "enabled": false,
+          "flush_logs": true,
+          "force_gc_before_serialize": true,
+          "log_interval": 60,
+          "top_allocations": 8,
+          "tracemalloc_frames": 25
+        },
+        "delete_old_temp_checkpoints": true,
+        "keep": null,
+        "keep_last_temporary_checkpoints": 1,
+        "save_interval": "0:10:00",
+        "temporary_base_path": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p040_s20260910/2026.09.09/checkpoints",
+        "write": {
+          "cache_pool_bytes": 1073741824,
+          "data_copy_concurrency": 16,
+          "max_chunk_bytes": 536870912,
+          "max_staged_host_bytes": 17179869184,
+          "max_write_replicas": 1024,
+          "min_replica_slice_bytes": 16777216
+        }
+      },
+      "crash_on_inf": true,
+      "crash_on_nan": true,
+      "distributed": {
+        "coordinator_address": null,
+        "initialize_jax_distributed": true,
+        "local_device_ids": null,
+        "num_processes": null,
+        "process_id": null
+      },
+      "id": "tpp10_target_p040_s20260910",
+      "initialize_from": null,
+      "jax_compilation_cache_dir": null,
+      "jax_config": {
+        "jax_softmax_custom_jvp": true,
+        "jax_threefry_partitionable": true
+      },
+      "load_checkpoint": null,
+      "load_checkpoint_path": null,
+      "log_dir": "logs",
+      "log_jaxprs": true,
+      "log_xla_hlo": true,
+      "max_eval_batches": null,
+      "mesh": {
+        "axes": {
+          "data": -1,
+          "model": 1,
+          "replica": 1
+        },
+        "batch_axis_name": "batch",
+        "compute_mapping": {
+          "token": [
+            "replica_dcn",
+            "replica",
+            "data"
+          ],
+          "token_repeat": [
+            "replica_dcn",
+            "replica",
+            "data"
+          ]
+        },
+        "dcn_axes": {
+          "replica_dcn": -1
+        },
+        "param_mapping": {
+          "embed": "data"
+        }
+      },
+      "model_averaging": null,
+      "mp": {
+        "compute_dtype": "jax.numpy.bfloat16",
+        "output_dtype": "jax.numpy.bfloat16",
+        "param_dtype": "jax.numpy.float32"
+      },
+      "num_train_steps": 11491,
+      "per_device_eval_parallelism": 32,
+      "per_device_parallelism": 32,
+      "profiler": {
+        "create_perfetto_trace": false,
+        "enabled": false,
+        "num_steps": 25,
+        "perfetto_link": false,
+        "process_index": null,
+        "profile_options": {
+          "device_tracer_level": null,
+          "enable_hlo_proto": false,
+          "host_tracer_level": null,
+          "include_dataset_ops": null,
+          "python_tracer_level": null
+        },
+        "start_step": 5,
+        "upload": {
+          "enabled": true,
+          "service_url": "https://iris.oa.dev/proxy/xprof",
+          "ttl_days": 30
+        }
+      },
+      "progress_watchdog": {
+        "diagnostic_timeout": null,
+        "process_timeout": null,
+        "startup_grace_period": "1:00:00",
+        "startup_timeout": null,
+        "step_timeout": null
+      },
+      "quantization": null,
+      "require_accelerator": true,
+      "seed": 20260910,
+      "shutdown_at_exit": false,
+      "steps_per_eval": 2298,
+      "tracker": {
+        "background": true,
+        "background_finish_timeout": 120,
+        "background_max_queue_size": 10000,
+        "entity": null,
+        "group": "starcoder_tpp10_20260909",
+        "id": null,
+        "mode": null,
+        "name": "tpp10_target_p040_s20260910",
+        "project": "marin",
+        "replicate_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p040_s20260910/2026.09.09",
+        "resume": "allow",
+        "save_code": true,
+        "save_xla_dumps": false,
+        "service_teardown_timeout": 60,
+        "tags": [
+          "starcoder_tpp10",
+          "TARGET"
+        ]
+      },
+      "train_batch_size": 128,
+      "use_explicit_mesh_axes": false,
+      "wandb": null,
+      "watch": {
+        "include_histograms": false,
+        "include_norms": true,
+        "include_per_parameter_norms": true,
+        "interval": 10,
+        "split_scan_layers": true,
+        "watch_targets": [
+          "grads",
+          "params"
+        ]
+      }
+    },
+    "data": {
+      "auto_build_caches": false,
+      "block_cross_document_attention": true,
+      "cache_catalog": null,
+      "cache_dir": null,
+      "cache_options": {
+        "batch_size": 128
+      },
+      "chat_template": null,
+      "components": {
+        "hq_actual": {
+          "cache_dir": "gs://marin-us-central1/starcoder_tpp10/hq_actual/2026.09.09",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "gs://marin-us-central1/starcoder_tpp10/hq_actual/2026.09.09",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "hq_synth": {
+          "cache_dir": "gs://marin-us-central1/starcoder_tpp10/hq_synth/2026.09.09",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "gs://marin-us-central1/starcoder_tpp10/hq_synth/2026.09.09",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "low_actual": {
+          "cache_dir": "gs://marin-us-central1/starcoder_tpp10/low_actual/2026.09.09",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "gs://marin-us-central1/starcoder_tpp10/low_actual/2026.09.09",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "medium": {
+          "cache_dir": "gs://marin-us-central1/starcoder_tpp10/medium/2026.09.09",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "gs://marin-us-central1/starcoder_tpp10/medium/2026.09.09",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "medium_high": {
+          "cache_dir": "gs://marin-us-central1/starcoder_tpp10/medium_high/2026.09.09",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "gs://marin-us-central1/starcoder_tpp10/medium_high/2026.09.09",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "medium_low": {
+          "cache_dir": "gs://marin-us-central1/starcoder_tpp10/medium_low/2026.09.09",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "gs://marin-us-central1/starcoder_tpp10/medium_low/2026.09.09",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/dolma_100_programing_languages-tpp10": {
+          "cache_dir": "gs://marin-us-central1/paloma/dolma_100_programing_languages-tpp10/2026.09.09",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "gs://marin-us-central1/paloma/dolma_100_programing_languages-tpp10/2026.09.09",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "starcoder": {
+          "cache_dir": "gs://marin-us-central1/starcoder_tpp10/parent/2026.09.09",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "gs://marin-us-central1/starcoder_tpp10/parent/2026.09.09",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        }
+      },
+      "enforce_eos": true,
+      "experiment_budget": null,
+      "max_train_batches": null,
+      "max_train_batches_start": null,
+      "max_train_batches_subset_seed": null,
+      "mixture_block_size": 2048,
+      "num_validation_sequences": null,
+      "permutation_type": "feistel",
+      "shuffle": {
+        "io_block_size": 256,
+        "perm_type": "feistel",
+        "window_blocks": 512
+      },
+      "shuffle_before_trainval_split": true,
+      "simulated_epoch_pool_fractions": null,
+      "simulated_epoch_subset_seed": null,
+      "stop_strategy": "restart",
+      "target_budget": null,
+      "tokenizer": "experiments/domain_phase_mix/starcoder_tpp10_assets",
+      "train_component_shuffle_keys": {
+        "hq_actual": [
+          1774721337,
+          20260910
+        ],
+        "hq_synth": [
+          638206619,
+          20260910
+        ],
+        "low_actual": [
+          1404703350,
+          20260910
+        ],
+        "medium": [
+          2060313965,
+          20260910
+        ],
+        "medium_high": [
+          1363669204,
+          20260910
+        ],
+        "medium_low": [
+          704453981,
+          20260910
+        ],
+        "starcoder": [
+          2476089780,
+          20260910
+        ]
+      },
+      "train_holdout_partition": null,
+      "train_holdout_seed": null,
+      "train_holdout_sequences": null,
+      "train_weights": {
+        "hq_actual": 0.05629623521716414,
+        "hq_synth": 0.15681183017638956,
+        "low_actual": 0.04022078707500861,
+        "medium": 0.20530207757916624,
+        "medium_high": 0.0512106281407008,
+        "medium_low": 0.09015844181157064,
+        "paloma/dolma_100_programing_languages-tpp10": 0,
+        "starcoder": 0.4
+      },
+      "vocab_size": null
+    }
+  },
+  "history_keys": {
+    "keys": {
+      "_runtime": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11491
+          }
+        ],
+        "monotonic": true,
+        "previousValue": 10968.032026663
+      },
+      "_step": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11491
+          }
+        ],
+        "monotonic": true,
+        "previousValue": 11490
+      },
+      "_timestamp": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11491
+          }
+        ],
+        "monotonic": true,
+        "previousValue": 1789123695.3944774
+      },
+      "eval/bpb": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 5
+          }
+        ],
+        "previousValue": 0.8066982626914978
+      },
+      "eval/loading_time": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 5
+          }
+        ],
+        "previousValue": 2.724420190002093
+      },
+      "eval/loss": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 5
+          }
+        ],
+        "previousValue": 1.3520867824554443
+      },
+      "eval/paloma/bpb": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 5
+          }
+        ],
+        "previousValue": 0.8066982626914978
+      },
+      "eval/paloma/dolma_100_programing_languages-tpp10/bpb": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 5
+          }
+        ],
+        "previousValue": 0.8066982626914978
+      },
+      "eval/paloma/dolma_100_programing_languages-tpp10/loss": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 5
+          }
+        ],
+        "previousValue": 1.3520867824554443
+      },
+      "eval/paloma/micro_loss": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 5
+          }
+        ],
+        "previousValue": 1.3520867824554443
+      },
+      "eval/total_time": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 5
+          }
+        ],
+        "previousValue": 10.239191481000034
+      },
+      "global_step": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11489
+          }
+        ],
+        "monotonic": true,
+        "previousValue": 11490
+      },
+      "grad/norm/embeddings.token_embeddings.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006045697256922722
+      },
+      "grad/norm/total": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.12107791006565094
+      },
+      "grad/norm/transformer.layers.0.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00111575482878834
+      },
+      "grad/norm/transformer.layers.0.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00742662139236927
+      },
+      "grad/norm/transformer.layers.0.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0021902527660131454
+      },
+      "grad/norm/transformer.layers.0.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0025988505221903324
+      },
+      "grad/norm/transformer.layers.0.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0006227446720004082
+      },
+      "grad/norm/transformer.layers.0.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00037269838503561914
+      },
+      "grad/norm/transformer.layers.0.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006988018285483122
+      },
+      "grad/norm/transformer.layers.0.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.027443207800388336
+      },
+      "grad/norm/transformer.layers.0.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0004736832052003592
+      },
+      "grad/norm/transformer.layers.0.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006706609390676022
+      },
+      "grad/norm/transformer.layers.0.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.030848072841763496
+      },
+      "grad/norm/transformer.layers.1.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0015387933235615492
+      },
+      "grad/norm/transformer.layers.1.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.009916181676089764
+      },
+      "grad/norm/transformer.layers.1.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.004056015983223915
+      },
+      "grad/norm/transformer.layers.1.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.004952245857566595
+      },
+      "grad/norm/transformer.layers.1.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0006280713132582605
+      },
+      "grad/norm/transformer.layers.1.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00017234840197488666
+      },
+      "grad/norm/transformer.layers.1.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0018608988029882312
+      },
+      "grad/norm/transformer.layers.1.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00771727878600359
+      },
+      "grad/norm/transformer.layers.1.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00023957803205121309
+      },
+      "grad/norm/transformer.layers.1.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.002255429280921817
+      },
+      "grad/norm/transformer.layers.1.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00885359663516283
+      },
+      "grad/norm/transformer.layers.10.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0006093292613513768
+      },
+      "grad/norm/transformer.layers.10.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.01655857264995575
+      },
+      "grad/norm/transformer.layers.10.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0081158597022295
+      },
+      "grad/norm/transformer.layers.10.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00739540159702301
+      },
+      "grad/norm/transformer.layers.10.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0003231835435144603
+      },
+      "grad/norm/transformer.layers.10.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00026502995751798153
+      },
+      "grad/norm/transformer.layers.10.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0052543687634170055
+      },
+      "grad/norm/transformer.layers.10.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.008936518803238869
+      },
+      "grad/norm/transformer.layers.10.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00026306271320208907
+      },
+      "grad/norm/transformer.layers.10.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.005788051523268223
+      },
+      "grad/norm/transformer.layers.10.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.011497569270431995
+      },
+      "grad/norm/transformer.layers.11.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0003981739282608032
+      },
+      "grad/norm/transformer.layers.11.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.016700217500329018
+      },
+      "grad/norm/transformer.layers.11.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.008577404543757439
+      },
+      "grad/norm/transformer.layers.11.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.007739859167486429
+      },
+      "grad/norm/transformer.layers.11.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0003195142198819667
+      },
+      "grad/norm/transformer.layers.11.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00024490556097589433
+      },
+      "grad/norm/transformer.layers.11.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.005561052821576595
+      },
+      "grad/norm/transformer.layers.11.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.008534320630133152
+      },
+      "grad/norm/transformer.layers.11.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0002351624279981479
+      },
+      "grad/norm/transformer.layers.11.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0062780072912573814
+      },
+      "grad/norm/transformer.layers.11.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.010848320089280604
+      },
+      "grad/norm/transformer.layers.12.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0006844076560810208
+      },
+      "grad/norm/transformer.layers.12.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.01793135143816471
+      },
+      "grad/norm/transformer.layers.12.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00901979859918356
+      },
+      "grad/norm/transformer.layers.12.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.008125090040266514
+      },
+      "grad/norm/transformer.layers.12.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0002985468599945307
+      },
+      "grad/norm/transformer.layers.12.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0002201644965680316
+      },
+      "grad/norm/transformer.layers.12.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.004832341335713863
+      },
+      "grad/norm/transformer.layers.12.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00738194165751338
+      },
+      "grad/norm/transformer.layers.12.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00021502270828932524
+      },
+      "grad/norm/transformer.layers.12.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.005308517254889011
+      },
+      "grad/norm/transformer.layers.12.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.008429509587585926
+      },
+      "grad/norm/transformer.layers.13.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0005698457825928926
+      },
+      "grad/norm/transformer.layers.13.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.018986359238624573
+      },
+      "grad/norm/transformer.layers.13.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.009251370094716547
+      },
+      "grad/norm/transformer.layers.13.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.008318491280078888
+      },
+      "grad/norm/transformer.layers.13.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00028564457898028195
+      },
+      "grad/norm/transformer.layers.13.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00024012512585613877
+      },
+      "grad/norm/transformer.layers.13.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.003771671094000339
+      },
+      "grad/norm/transformer.layers.13.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006686939392238855
+      },
+      "grad/norm/transformer.layers.13.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0002330409042770043
+      },
+      "grad/norm/transformer.layers.13.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.004100464284420013
+      },
+      "grad/norm/transformer.layers.13.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006778205279260874
+      },
+      "grad/norm/transformer.layers.14.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00022334839741233736
+      },
+      "grad/norm/transformer.layers.14.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.020855288952589035
+      },
+      "grad/norm/transformer.layers.14.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.01006228942424059
+      },
+      "grad/norm/transformer.layers.14.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.008975321426987648
+      },
+      "grad/norm/transformer.layers.14.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00032254590769298375
+      },
+      "grad/norm/transformer.layers.14.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00019708128820639104
+      },
+      "grad/norm/transformer.layers.14.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.004180428571999073
+      },
+      "grad/norm/transformer.layers.14.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0061126151122152805
+      },
+      "grad/norm/transformer.layers.14.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00019264408911112696
+      },
+      "grad/norm/transformer.layers.14.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.004350513219833374
+      },
+      "grad/norm/transformer.layers.14.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00594735611230135
+      },
+      "grad/norm/transformer.layers.15.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00026784418150782585
+      },
+      "grad/norm/transformer.layers.15.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.029189301654696465
+      },
+      "grad/norm/transformer.layers.15.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.011567899957299232
+      },
+      "grad/norm/transformer.layers.15.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.011154163628816605
+      },
+      "grad/norm/transformer.layers.15.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0006077428697608411
+      },
+      "grad/norm/transformer.layers.15.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0001565304701216519
+      },
+      "grad/norm/transformer.layers.15.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.003054629312828183
+      },
+      "grad/norm/transformer.layers.15.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.007802802138030529
+      },
+      "grad/norm/transformer.layers.15.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.000191142491530627
+      },
+      "grad/norm/transformer.layers.15.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.003544434905052185
+      },
+      "grad/norm/transformer.layers.15.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.005335548426955938
+      },
+      "grad/norm/transformer.layers.2.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.001266367849893868
+      },
+      "grad/norm/transformer.layers.2.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.03678905963897705
+      },
+      "grad/norm/transformer.layers.2.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.005103532690554857
+      },
+      "grad/norm/transformer.layers.2.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.005593771114945412
+      },
+      "grad/norm/transformer.layers.2.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0005779599887318909
+      },
+      "grad/norm/transformer.layers.2.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00020848531858064232
+      },
+      "grad/norm/transformer.layers.2.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0027532982639968395
+      },
+      "grad/norm/transformer.layers.2.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.007197660859674215
+      },
+      "grad/norm/transformer.layers.2.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0002207496581831947
+      },
+      "grad/norm/transformer.layers.2.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0031916399020701647
+      },
+      "grad/norm/transformer.layers.2.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.009260112419724464
+      },
+      "grad/norm/transformer.layers.3.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0011430869344621897
+      },
+      "grad/norm/transformer.layers.3.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.04177836328744888
+      },
+      "grad/norm/transformer.layers.3.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.004116108175367117
+      },
+      "grad/norm/transformer.layers.3.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.004393076058477163
+      },
+      "grad/norm/transformer.layers.3.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0005946697783656418
+      },
+      "grad/norm/transformer.layers.3.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00028030850808136165
+      },
+      "grad/norm/transformer.layers.3.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0039031493943184614
+      },
+      "grad/norm/transformer.layers.3.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006771062966436148
+      },
+      "grad/norm/transformer.layers.3.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00020013343601021916
+      },
+      "grad/norm/transformer.layers.3.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.004105338826775551
+      },
+      "grad/norm/transformer.layers.3.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.009569624438881874
+      },
+      "grad/norm/transformer.layers.4.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0008841654635034502
+      },
+      "grad/norm/transformer.layers.4.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.015722865238785744
+      },
+      "grad/norm/transformer.layers.4.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.005787842441350222
+      },
+      "grad/norm/transformer.layers.4.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006010106299072504
+      },
+      "grad/norm/transformer.layers.4.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0005725169903598726
+      },
+      "grad/norm/transformer.layers.4.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0002738874463830143
+      },
+      "grad/norm/transformer.layers.4.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0050228070467710495
+      },
+      "grad/norm/transformer.layers.4.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006351168267428875
+      },
+      "grad/norm/transformer.layers.4.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0002520511916372925
+      },
+      "grad/norm/transformer.layers.4.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.005418340675532818
+      },
+      "grad/norm/transformer.layers.4.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.008740588091313839
+      },
+      "grad/norm/transformer.layers.5.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0012848536716774106
+      },
+      "grad/norm/transformer.layers.5.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.016994167119264603
+      },
+      "grad/norm/transformer.layers.5.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0067856633104383945
+      },
+      "grad/norm/transformer.layers.5.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006803689990192652
+      },
+      "grad/norm/transformer.layers.5.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0005854640621691942
+      },
+      "grad/norm/transformer.layers.5.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0002416165661998093
+      },
+      "grad/norm/transformer.layers.5.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0048914821818470955
+      },
+      "grad/norm/transformer.layers.5.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.008154836483299732
+      },
+      "grad/norm/transformer.layers.5.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0002621206222102046
+      },
+      "grad/norm/transformer.layers.5.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.005216775927692652
+      },
+      "grad/norm/transformer.layers.5.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.011269602924585342
+      },
+      "grad/norm/transformer.layers.6.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0009958836017176509
+      },
+      "grad/norm/transformer.layers.6.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.014691915363073347
+      },
+      "grad/norm/transformer.layers.6.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006683807820081711
+      },
+      "grad/norm/transformer.layers.6.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006684990134090185
+      },
+      "grad/norm/transformer.layers.6.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0005372053710743785
+      },
+      "grad/norm/transformer.layers.6.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0003215322212781757
+      },
+      "grad/norm/transformer.layers.6.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.005942314397543669
+      },
+      "grad/norm/transformer.layers.6.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.007683960720896721
+      },
+      "grad/norm/transformer.layers.6.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00030122193857096136
+      },
+      "grad/norm/transformer.layers.6.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006330475676804781
+      },
+      "grad/norm/transformer.layers.6.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.012011765502393246
+      },
+      "grad/norm/transformer.layers.7.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0007775283884257078
+      },
+      "grad/norm/transformer.layers.7.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.01378474198281765
+      },
+      "grad/norm/transformer.layers.7.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006798110902309418
+      },
+      "grad/norm/transformer.layers.7.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006556742358952761
+      },
+      "grad/norm/transformer.layers.7.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0004743976460304111
+      },
+      "grad/norm/transformer.layers.7.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00033112484379671514
+      },
+      "grad/norm/transformer.layers.7.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0056310053914785385
+      },
+      "grad/norm/transformer.layers.7.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.010229365900158882
+      },
+      "grad/norm/transformer.layers.7.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00031812136876396835
+      },
+      "grad/norm/transformer.layers.7.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006095006596297026
+      },
+      "grad/norm/transformer.layers.7.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.014301191084086897
+      },
+      "grad/norm/transformer.layers.8.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0006526407087221742
+      },
+      "grad/norm/transformer.layers.8.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.015114872716367245
+      },
+      "grad/norm/transformer.layers.8.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.007438183296471834
+      },
+      "grad/norm/transformer.layers.8.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0069005051627755165
+      },
+      "grad/norm/transformer.layers.8.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0004122363461647182
+      },
+      "grad/norm/transformer.layers.8.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0002849693992175162
+      },
+      "grad/norm/transformer.layers.8.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006191257853060961
+      },
+      "grad/norm/transformer.layers.8.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.008442794904112816
+      },
+      "grad/norm/transformer.layers.8.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0003132352139800787
+      },
+      "grad/norm/transformer.layers.8.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006450431887060404
+      },
+      "grad/norm/transformer.layers.8.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.013927723281085491
+      },
+      "grad/norm/transformer.layers.9.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0004150316526647657
+      },
+      "grad/norm/transformer.layers.9.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.017115188762545586
+      },
+      "grad/norm/transformer.layers.9.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.007872115820646286
+      },
+      "grad/norm/transformer.layers.9.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.007388553116470575
+      },
+      "grad/norm/transformer.layers.9.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0003941249451600015
+      },
+      "grad/norm/transformer.layers.9.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0003142934001516551
+      },
+      "grad/norm/transformer.layers.9.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006319558247923851
+      },
+      "grad/norm/transformer.layers.9.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.007637431845068932
+      },
+      "grad/norm/transformer.layers.9.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.00031408670474775136
+      },
+      "grad/norm/transformer.layers.9.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.006921327672898769
+      },
+      "grad/norm/transformer.layers.9.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.01067180372774601
+      },
+      "grad/norm/transformer.layers.stacked.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0035489213187247515
+      },
+      "grad/norm/transformer.layers.stacked.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.08507455140352249
+      },
+      "grad/norm/transformer.layers.stacked.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.02989005111157894
+      },
+      "grad/norm/transformer.layers.stacked.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.028442062437534332
+      },
+      "grad/norm/transformer.layers.stacked.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0019570544827729464
+      },
+      "grad/norm/transformer.layers.stacked.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.0010567635763436556
+      },
+      "grad/norm/transformer.layers.stacked.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.019810864701867104
+      },
+      "grad/norm/transformer.layers.stacked.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.040750738233327866
+      },
+      "grad/norm/transformer.layers.stacked.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.001090958365239203
+      },
+      "grad/norm/transformer.layers.stacked.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.021208828315138817
+      },
+      "grad/norm/transformer.layers.stacked.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.04998110607266426
+      },
+      "grad/norm/transformer.norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 0.025758761912584305
+      },
+      "optim/adam_lr": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 2913
+          }
+        ],
+        "previousValue": 3.8146974468133984e-09
+      },
+      "optim/learning_rate": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 2913
+          }
+        ],
+        "previousValue": 9.536742950899681e-09
+      },
+      "params/norm/embeddings.token_embeddings.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1147
+          }
+        ],
+        "previousValue": 4117.19921875
+      },
+      "params/norm/total": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1147
+          }
+        ],
+        "previousValue": 4147.9130859375
+      },
+      "params/norm/transformer.layers.0.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 30.377519607543945
+      },
+      "params/norm/transformer.layers.0.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.57404899597168
+      },
+      "params/norm/transformer.layers.0.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.176734924316406
+      },
+      "params/norm/transformer.layers.0.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.11527633666992
+      },
+      "params/norm/transformer.layers.0.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 13.452592849731444
+      },
+      "params/norm/transformer.layers.0.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 14.484972953796388
+      },
+      "params/norm/transformer.layers.0.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.581430435180664
+      },
+      "params/norm/transformer.layers.0.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.573345184326172
+      },
+      "params/norm/transformer.layers.0.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 13.624513626098633
+      },
+      "params/norm/transformer.layers.0.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.57091522216797
+      },
+      "params/norm/transformer.layers.0.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.532514572143555
+      },
+      "params/norm/transformer.layers.1.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 8.986309051513672
+      },
+      "params/norm/transformer.layers.1.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.55944061279297
+      },
+      "params/norm/transformer.layers.1.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1140
+          }
+        ],
+        "previousValue": 63.1582145690918
+      },
+      "params/norm/transformer.layers.1.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 63.16181564331055
+      },
+      "params/norm/transformer.layers.1.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 21.469541549682617
+      },
+      "params/norm/transformer.layers.1.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 14.073904991149902
+      },
+      "params/norm/transformer.layers.1.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.567787170410156
+      },
+      "params/norm/transformer.layers.1.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.574491500854492
+      },
+      "params/norm/transformer.layers.1.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 13.021421432495115
+      },
+      "params/norm/transformer.layers.1.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.547805786132812
+      },
+      "params/norm/transformer.layers.1.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.52696418762207
+      },
+      "params/norm/transformer.layers.10.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 47.030364990234375
+      },
+      "params/norm/transformer.layers.10.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.566959381103516
+      },
+      "params/norm/transformer.layers.10.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 63.15302276611328
+      },
+      "params/norm/transformer.layers.10.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 63.14098358154297
+      },
+      "params/norm/transformer.layers.10.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 37.07814025878906
+      },
+      "params/norm/transformer.layers.10.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 14.55585479736328
+      },
+      "params/norm/transformer.layers.10.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.556854248046875
+      },
+      "params/norm/transformer.layers.10.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.604372024536133
+      },
+      "params/norm/transformer.layers.10.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 15.262494087219238
+      },
+      "params/norm/transformer.layers.10.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.574085235595703
+      },
+      "params/norm/transformer.layers.10.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.593563079833984
+      },
+      "params/norm/transformer.layers.11.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 54.14426040649414
+      },
+      "params/norm/transformer.layers.11.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.56471824645996
+      },
+      "params/norm/transformer.layers.11.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 63.14241027832031
+      },
+      "params/norm/transformer.layers.11.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.11606979370117
+      },
+      "params/norm/transformer.layers.11.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 40.91119384765625
+      },
+      "params/norm/transformer.layers.11.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 14.383146286010742
+      },
+      "params/norm/transformer.layers.11.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.5908145904541
+      },
+      "params/norm/transformer.layers.11.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.582904815673828
+      },
+      "params/norm/transformer.layers.11.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 15.537803649902344
+      },
+      "params/norm/transformer.layers.11.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.56752586364746
+      },
+      "params/norm/transformer.layers.11.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.585840225219727
+      },
+      "params/norm/transformer.layers.12.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 52.10386276245117
+      },
+      "params/norm/transformer.layers.12.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.557859420776367
+      },
+      "params/norm/transformer.layers.12.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.10752868652344
+      },
+      "params/norm/transformer.layers.12.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.150089263916016
+      },
+      "params/norm/transformer.layers.12.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 44.10054397583008
+      },
+      "params/norm/transformer.layers.12.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 13.527069091796877
+      },
+      "params/norm/transformer.layers.12.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.630126953125
+      },
+      "params/norm/transformer.layers.12.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.55514144897461
+      },
+      "params/norm/transformer.layers.12.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 14.42208480834961
+      },
+      "params/norm/transformer.layers.12.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1146
+          }
+        ],
+        "previousValue": 31.54509925842285
+      },
+      "params/norm/transformer.layers.12.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.584875106811523
+      },
+      "params/norm/transformer.layers.13.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 46.06039047241211
+      },
+      "params/norm/transformer.layers.13.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1146
+          }
+        ],
+        "previousValue": 31.58524513244629
+      },
+      "params/norm/transformer.layers.13.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.163429260253906
+      },
+      "params/norm/transformer.layers.13.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.17221450805664
+      },
+      "params/norm/transformer.layers.13.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 46.86225509643555
+      },
+      "params/norm/transformer.layers.13.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 13.132408142089844
+      },
+      "params/norm/transformer.layers.13.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1146
+          }
+        ],
+        "previousValue": 31.58558654785156
+      },
+      "params/norm/transformer.layers.13.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.58128547668457
+      },
+      "params/norm/transformer.layers.13.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1147
+          }
+        ],
+        "previousValue": 13.912603378295898
+      },
+      "params/norm/transformer.layers.13.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.555328369140625
+      },
+      "params/norm/transformer.layers.13.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.557540893554688
+      },
+      "params/norm/transformer.layers.14.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 49.69823455810547
+      },
+      "params/norm/transformer.layers.14.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.57701873779297
+      },
+      "params/norm/transformer.layers.14.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1147
+          }
+        ],
+        "previousValue": 63.12271881103515
+      },
+      "params/norm/transformer.layers.14.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.149620056152344
+      },
+      "params/norm/transformer.layers.14.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 48.67436981201172
+      },
+      "params/norm/transformer.layers.14.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 12.912025451660156
+      },
+      "params/norm/transformer.layers.14.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.5643367767334
+      },
+      "params/norm/transformer.layers.14.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.567537307739254
+      },
+      "params/norm/transformer.layers.14.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 13.38370132446289
+      },
+      "params/norm/transformer.layers.14.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.592117309570312
+      },
+      "params/norm/transformer.layers.14.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.548568725585938
+      },
+      "params/norm/transformer.layers.15.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 41.013397216796875
+      },
+      "params/norm/transformer.layers.15.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1147
+          }
+        ],
+        "previousValue": 31.559907913208008
+      },
+      "params/norm/transformer.layers.15.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.09471893310547
+      },
+      "params/norm/transformer.layers.15.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 63.150264739990234
+      },
+      "params/norm/transformer.layers.15.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 47.94742965698242
+      },
+      "params/norm/transformer.layers.15.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 12.912803649902344
+      },
+      "params/norm/transformer.layers.15.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1147
+          }
+        ],
+        "previousValue": 31.547775268554688
+      },
+      "params/norm/transformer.layers.15.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.571508407592773
+      },
+      "params/norm/transformer.layers.15.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 13.21645450592041
+      },
+      "params/norm/transformer.layers.15.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.550397872924805
+      },
+      "params/norm/transformer.layers.15.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.581390380859375
+      },
+      "params/norm/transformer.layers.2.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 11.491925239562988
+      },
+      "params/norm/transformer.layers.2.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.582942962646484
+      },
+      "params/norm/transformer.layers.2.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1146
+          }
+        ],
+        "previousValue": 63.141151428222656
+      },
+      "params/norm/transformer.layers.2.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 63.15129089355469
+      },
+      "params/norm/transformer.layers.2.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 24.229175567626953
+      },
+      "params/norm/transformer.layers.2.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1147
+          }
+        ],
+        "previousValue": 13.863945960998535
+      },
+      "params/norm/transformer.layers.2.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.58892822265625
+      },
+      "params/norm/transformer.layers.2.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.566001892089844
+      },
+      "params/norm/transformer.layers.2.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 13.705890655517578
+      },
+      "params/norm/transformer.layers.2.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.57841682434082
+      },
+      "params/norm/transformer.layers.2.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.548072814941406
+      },
+      "params/norm/transformer.layers.3.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 13.411285400390623
+      },
+      "params/norm/transformer.layers.3.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1145
+          }
+        ],
+        "previousValue": 31.58172607421875
+      },
+      "params/norm/transformer.layers.3.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.108673095703125
+      },
+      "params/norm/transformer.layers.3.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 63.1359748840332
+      },
+      "params/norm/transformer.layers.3.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 20.00267791748047
+      },
+      "params/norm/transformer.layers.3.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 14.06955623626709
+      },
+      "params/norm/transformer.layers.3.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.610370635986328
+      },
+      "params/norm/transformer.layers.3.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.548032760620117
+      },
+      "params/norm/transformer.layers.3.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 13.754624366760254
+      },
+      "params/norm/transformer.layers.3.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1147
+          }
+        ],
+        "previousValue": 31.611095428466797
+      },
+      "params/norm/transformer.layers.3.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.552942276000977
+      },
+      "params/norm/transformer.layers.4.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 15.710537910461426
+      },
+      "params/norm/transformer.layers.4.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.57111358642578
+      },
+      "params/norm/transformer.layers.4.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.17742919921875
+      },
+      "params/norm/transformer.layers.4.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 63.149383544921875
+      },
+      "params/norm/transformer.layers.4.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 25.139324188232425
+      },
+      "params/norm/transformer.layers.4.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 15.489445686340332
+      },
+      "params/norm/transformer.layers.4.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.600557327270508
+      },
+      "params/norm/transformer.layers.4.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.554040908813477
+      },
+      "params/norm/transformer.layers.4.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 16.05034828186035
+      },
+      "params/norm/transformer.layers.4.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.553239822387695
+      },
+      "params/norm/transformer.layers.4.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1146
+          }
+        ],
+        "previousValue": 31.570152282714844
+      },
+      "params/norm/transformer.layers.5.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 17.36765480041504
+      },
+      "params/norm/transformer.layers.5.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.567506790161133
+      },
+      "params/norm/transformer.layers.5.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1147
+          }
+        ],
+        "previousValue": 63.135746002197266
+      },
+      "params/norm/transformer.layers.5.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 63.15528869628906
+      },
+      "params/norm/transformer.layers.5.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 26.38232421875
+      },
+      "params/norm/transformer.layers.5.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 14.572104454040527
+      },
+      "params/norm/transformer.layers.5.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.585384368896484
+      },
+      "params/norm/transformer.layers.5.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.58839988708496
+      },
+      "params/norm/transformer.layers.5.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 15.0231351852417
+      },
+      "params/norm/transformer.layers.5.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.547691345214844
+      },
+      "params/norm/transformer.layers.5.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.59672737121582
+      },
+      "params/norm/transformer.layers.6.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 24.987897872924805
+      },
+      "params/norm/transformer.layers.6.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1145
+          }
+        ],
+        "previousValue": 31.568187713623047
+      },
+      "params/norm/transformer.layers.6.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.12887954711914
+      },
+      "params/norm/transformer.layers.6.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.14725112915039
+      },
+      "params/norm/transformer.layers.6.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 26.600343704223633
+      },
+      "params/norm/transformer.layers.6.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 14.555692672729492
+      },
+      "params/norm/transformer.layers.6.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.59768867492676
+      },
+      "params/norm/transformer.layers.6.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.547767639160156
+      },
+      "params/norm/transformer.layers.6.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 15.217187881469728
+      },
+      "params/norm/transformer.layers.6.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1144
+          }
+        ],
+        "previousValue": 31.52688217163086
+      },
+      "params/norm/transformer.layers.6.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.553770065307617
+      },
+      "params/norm/transformer.layers.7.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1147
+          }
+        ],
+        "previousValue": 28.10650062561035
+      },
+      "params/norm/transformer.layers.7.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.557598114013672
+      },
+      "params/norm/transformer.layers.7.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.11003875732422
+      },
+      "params/norm/transformer.layers.7.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.149864196777344
+      },
+      "params/norm/transformer.layers.7.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 27.87129592895508
+      },
+      "params/norm/transformer.layers.7.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 13.95366382598877
+      },
+      "params/norm/transformer.layers.7.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.576631546020508
+      },
+      "params/norm/transformer.layers.7.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.593761444091797
+      },
+      "params/norm/transformer.layers.7.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 14.613558769226074
+      },
+      "params/norm/transformer.layers.7.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.57281494140625
+      },
+      "params/norm/transformer.layers.7.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.61264991760254
+      },
+      "params/norm/transformer.layers.8.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 48.64985275268555
+      },
+      "params/norm/transformer.layers.8.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.58043098449707
+      },
+      "params/norm/transformer.layers.8.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.13563537597656
+      },
+      "params/norm/transformer.layers.8.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.15678787231445
+      },
+      "params/norm/transformer.layers.8.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.92558479309082
+      },
+      "params/norm/transformer.layers.8.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 14.678251266479492
+      },
+      "params/norm/transformer.layers.8.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.598134994506836
+      },
+      "params/norm/transformer.layers.8.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.613910675048828
+      },
+      "params/norm/transformer.layers.8.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 15.463253021240234
+      },
+      "params/norm/transformer.layers.8.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.56531524658203
+      },
+      "params/norm/transformer.layers.8.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.536516189575195
+      },
+      "params/norm/transformer.layers.9.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 40.90691757202149
+      },
+      "params/norm/transformer.layers.9.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.555274963378903
+      },
+      "params/norm/transformer.layers.9.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 63.13703918457031
+      },
+      "params/norm/transformer.layers.9.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 63.107540130615234
+      },
+      "params/norm/transformer.layers.9.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 34.719207763671875
+      },
+      "params/norm/transformer.layers.9.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 14.47823715209961
+      },
+      "params/norm/transformer.layers.9.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 31.57131004333496
+      },
+      "params/norm/transformer.layers.9.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.58936309814453
+      },
+      "params/norm/transformer.layers.9.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 15.253288269042969
+      },
+      "params/norm/transformer.layers.9.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1146
+          }
+        ],
+        "previousValue": 31.548904418945312
+      },
+      "params/norm/transformer.layers.9.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 31.577651977539062
+      },
+      "params/norm/transformer.layers.stacked.input_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 146.4593048095703
+      },
+      "params/norm/transformer.layers.stacked.mlp.down_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 126.27750396728516
+      },
+      "params/norm/transformer.layers.stacked.mlp.gate_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 252.54837036132812
+      },
+      "params/norm/transformer.layers.stacked.mlp.up_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 252.57745361328125
+      },
+      "params/norm/transformer.layers.stacked.post_attention_layernorm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 136.1019287109375
+      },
+      "params/norm/transformer.layers.stacked.self_attn.k_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 56.476661682128906
+      },
+      "params/norm/transformer.layers.stacked.self_attn.k_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 126.33844757080078
+      },
+      "params/norm/transformer.layers.stacked.self_attn.o_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 126.30298614501952
+      },
+      "params/norm/transformer.layers.stacked.self_attn.q_norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 57.98405838012695
+      },
+      "params/norm/transformer.layers.stacked.self_attn.q_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 126.2519302368164
+      },
+      "params/norm/transformer.layers.stacked.self_attn.v_proj.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1148
+          }
+        ],
+        "previousValue": 126.26497650146484
+      },
+      "params/norm/transformer.norm.weight": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1149
+          }
+        ],
+        "previousValue": 3.409266710281372
+      },
+      "run_progress": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11489
+          }
+        ],
+        "monotonic": true,
+        "previousValue": 1
+      },
+      "system/cpu": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/disk./.usageGB": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/disk./.usagePercent": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/disk.nvme0n1.in": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/disk.nvme0n1.out": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/disk.nvme0n1p1.in": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/disk.nvme0n1p1.out": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/disk.nvme0n1p14.in": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/disk.nvme0n1p14.out": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/disk.nvme0n1p15.in": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/disk.nvme0n1p15.out": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/memory_percent": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/network.recv": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/network.sent": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/proc.cpu.threads": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/proc.memory.availableMB": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/proc.memory.percent": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/proc.memory.rssMB": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.0.dutyCycle": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.0.hbmCapacityTotal": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.0.hbmCapacityUsage": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.0.hbmMemoryUsage": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.1.dutyCycle": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.1.hbmCapacityTotal": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.1.hbmCapacityUsage": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.1.hbmMemoryUsage": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.2.dutyCycle": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.2.hbmCapacityTotal": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.2.hbmCapacityUsage": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.2.hbmMemoryUsage": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.3.dutyCycle": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.3.hbmCapacityTotal": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.3.hbmCapacityUsage": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.3.hbmMemoryUsage": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_0.meanUs": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_0.p50Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_0.p90Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_0.p95Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_0.p999Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_1.meanUs": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_1.p50Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_1.p90Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_1.p95Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_1.p999Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_2.meanUs": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_2.p50Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_2.p90Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_2.p95Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_2.p999Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_3.meanUs": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_3.p50Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_3.p90Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_3.p95Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_3.p999Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_4.meanUs": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_4.p50Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_4.p90Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_4.p95Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_4.p999Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_5.meanUs": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_5.p50Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_5.p90Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_5.p95Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_5.p999Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_6.meanUs": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_6.p50Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_6.p90Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_6.p95Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_6.p999Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_7.meanUs": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_7.p50Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_7.p90Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_7.p95Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloExecTiming.tensor_core_7.p999Us": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloQueueSize.tensor_core_0": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloQueueSize.tensor_core_1": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloQueueSize.tensor_core_2": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloQueueSize.tensor_core_3": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloQueueSize.tensor_core_4": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloQueueSize.tensor_core_5": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloQueueSize.tensor_core_6": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "system/tpu.hloQueueSize.tensor_core_7": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 1150
+          }
+        ]
+      },
+      "throughput/duration": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11489
+          }
+        ],
+        "previousValue": 0.6971259729998565
+      },
+      "throughput/examples_per_second": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11489
+          }
+        ],
+        "previousValue": 183.6110042625343
+      },
+      "throughput/gflops_per_second": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11489
+          }
+        ],
+        "previousValue": 831877.8623031212
+      },
+      "throughput/hook_time": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11491
+          }
+        ],
+        "previousValue": 9.100299033000285
+      },
+      "throughput/loading_time": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11491
+          }
+        ],
+        "previousValue": 0.00068409999994401
+      },
+      "throughput/mfu": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11489
+          }
+        ],
+        "previousValue": 45.309251759429266
+      },
+      "throughput/tokens_per_second": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11489
+          }
+        ],
+        "previousValue": 376035.3367296702
+      },
+      "throughput/total_gflops": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11489
+          }
+        ],
+        "monotonic": true,
+        "previousValue": 6663902825.03612
+      },
+      "throughput/total_tokens": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11489
+          }
+        ],
+        "monotonic": true,
+        "previousValue": 3012296704
+      },
+      "train/loss": {
+        "typeCounts": [
+          {
+            "type": "number",
+            "count": 11489
+          }
+        ],
+        "previousValue": 2.0932161808013916
+      }
+    },
+    "lastStep": 11490,
+    "sets": []
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "status": "scientific_specification_not_training_release",
+  "date": "2026-09-11",
+  "new_domains": [
+    "wikipedia",
+    "finemath_3plus"
+  ],
+  "new_arms": [
+    "matched_proxy",
+    "target"
+  ],
+  "grid_per_new_domain_and_arm": [
+    0,
+    0.05,
+    0.1,
+    0.2,
+    0.3,
+    0.5,
+    0.7,
+    1
+  ],
+  "trainer_seeds": [
+    20260910
+  ],
+  "matched_subset_seeds": [
+    20260912
+  ],
+  "parent_order_seed": 20260915,
+  "source_selection_seed": 20260916,
+  "new_proxy_runs": 14,
+  "new_target_runs": 14,
+  "new_starcoder_runs": 0,
+  "reuse_zero_weight_web_control": true,
+  "unmatched_runs": 0,
+  "automatic_refinement": false,
+  "models": {
+    "matched_proxy": {
+      "parameters": 16587008,
+      "steps": 2532,
+      "tokens": 165937152,
+      "tpp": 10.00404364669023,
+      "batch_size": 32,
+      "training_flops": 2.4908860401647616e+16
+    },
+    "target": {
+      "parameters": 301241344,
+      "steps": 11491,
+      "tokens": 3012296704,
+      "tpp": 9.99961248347106,
+      "batch_size": 128,
+      "training_flops": 6.66390282503612e+18
+    }
+  },
+  "parent_tokens": 190316544,
+  "matched_tokens": 10485760,
+  "required_endpoint_evaluation": {
+    "common_primary": "equal_mean_uncheatable_component_bpb",
+    "components": [
+      "wikipedia_english",
+      "github_python",
+      "github_cpp",
+      "bbc_news",
+      "arxiv_physics",
+      "arxiv_computer_science",
+      "ao3_english"
+    ],
+    "retain_existing_paloma_validation": true,
+    "secondary_mean_components": [
+      "bbc_news",
+      "arxiv_physics",
+      "arxiv_computer_science",
+      "ao3_english"
+    ],
+    "evaluation_spec": ".agents/projects/starcoder_tpp10/live/uncheatable_spec_ram32.json"
+  },
+  "training_flops": 9.364336359612875e+19,
+  "training_flops_vs_figure5_pilot": 1.9552716972354256,
+  "training_flops_vs_figure5_including_refinement": 1.1390940595122,
+  "estimate_excludes": [
+    "preparation",
+    "evaluation",
+    "compilation",
+    "hardware_overhead"
+  ],
+  "source_evidence_sha256": "8b7e42f4a594292315398dee7da21b6f7cabf3480e926197ba993d74ed0cfd25",
+  "spec_sha256": "8f8f2c12b34d9f9ac3ee91d31928ede85ac6fccbaec7b5cf6469e4d49efe0d71",
+  "review_verdict": "No scientific-setting blockers; implementation gates remain.",
+  "review_result": "cc_target_scope.md"
+}

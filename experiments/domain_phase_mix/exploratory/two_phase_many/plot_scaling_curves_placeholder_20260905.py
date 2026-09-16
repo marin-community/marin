@@ -1,11 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["matplotlib", "pandas"]
+# ///
 
-"""Placeholder scaling-curve figure: completed Delphi compute ladders plus the WSPU optima at 3e18 only.
+"""Plot completed fixed-mixture compute ladders with matched-Qwen Olmix policies.
 
-Uses the 2026-07-11 W&B snapshot in ``delphi_scaling_progress_20260625`` for the ladders (3e18 to 1e21 FLOPs)
-and the measured WSPU epoch-cap optima at 3e18. The WSPU points at the larger scales are not trained yet; the
-figure says so.
+Proportional and UniMax-8 use the archived ladder. MARINER and Olmix use their frozen
+Qwen-fitted policies at every rung. At 3e18, proportional pools eleven runs and each
+fitted policy has three trainer seeds; error bars show one run SD. Later rungs are
+single runs. Missing final objective measurements are omitted.
 """
 
 from __future__ import annotations
@@ -22,19 +27,26 @@ import matplotlib.pyplot as plt
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SNAPSHOT = SCRIPT_DIR / "reference_outputs" / "delphi_scaling_progress_20260625" / "delphi_scaling_completed_wandb.csv"
-WSPU_MEASURED = (
-    SCRIPT_DIR
-    / "reference_outputs"
-    / "delphi_one_phase_weibull_softplus_epoch_cap_sweep_20260902"
-    / "measured_results.csv"
+FAIRNESS_SUMMARY = SCRIPT_DIR / "reference_outputs" / "delphi_fairness_repeats_3e18_20260908" / "fairness_summary.csv"
+MATCHED_FIRST_RUNG = SCRIPT_DIR / "reference_outputs" / "delphi_matched_olmix_3e18_20260908" / "measured_results.csv"
+MATCHED_OLMIX_RESULTS = (
+    SCRIPT_DIR / "reference_outputs" / "delphi_matched_olmix_scaling_v6e_20260910" / "measured_results.csv"
 )
+LADDER_RESULTS = (
+    SCRIPT_DIR / "reference_outputs" / "delphi_frozen_procedure_scaling_v6e_20260908" / "measured_results.csv"
+)
+RELIABILITY_DIR = SCRIPT_DIR / "reference_outputs" / "table9_reliability_20260905"
+PROPORTIONAL_REPEATS = 10
+NOISE_SUMMARIES = {
+    "uncheatable": RELIABILITY_DIR / "snr_fit_uncheatable_delphi.csv",
+    "table9": RELIABILITY_DIR / "snr_fit_tasks_delphi.csv",
+}
 OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "scaling_curves_placeholder_20260905"
 INK = "#111111"
 GRID = "#b8b8b8"
 PAPER = "white"
-WSPU_COLOR = "#178A72"
+MARINER_COLOR = "#469C76"
 OLMIX_COLOR = "#CC79A7"
-DSP_COLOR = "#E24731"
 PROPORTIONAL_COLOR = "#6C6F7D"
 UNIMAX_COLOR = "#4C78A8"
 SCALES = (3e18, 2e19, 3e20, 1e21)
@@ -46,11 +58,15 @@ PANELS = (
         (
             ("proportional", "Proportional", PROPORTIONAL_COLOR, "-"),
             ("unimax8", "UniMax-8", UNIMAX_COLOR, "-"),
-            ("olmix_onephase_uncheatable_d001_kl005_cap4", "Olmix optimum (cap 4, KL 0.05)", OLMIX_COLOR, "-"),
-            ("dsp_onephase_effexp_uncheatable_kl0p1", "DSP optimum (KL 0.1)", DSP_COLOR, "-"),
+            (
+                "olmixq_u_kl0p05_cap04",
+                "Olmix",
+                OLMIX_COLOR,
+                "-",
+            ),
         ),
-        "wspu_uncheatable_cap06",
-        "uncheatable_bpb",
+        "lwspu_u_snc_cap06",
+        "mean",
     ),
     (
         "table9",
@@ -59,10 +75,15 @@ PANELS = (
         (
             ("proportional", "Proportional", PROPORTIONAL_COLOR, "-"),
             ("unimax8", "UniMax-8", UNIMAX_COLOR, "-"),
-            ("olmix_onephase_table9_d001_kl0p005_cap4", "Olmix optimum (cap 4, KL 0.005)", OLMIX_COLOR, "-"),
+            (
+                "olmixq_t9_kl0p005_cap04",
+                "Olmix",
+                OLMIX_COLOR,
+                "-",
+            ),
         ),
-        "wspu_table9_cap06",
-        "table9_macro_bpb",
+        "lwspu_t9_snc_cap08",
+        "mean",
     ),
 )
 PLOT_STYLE = {
@@ -80,15 +101,139 @@ PLOT_STYLE = {
 DPI = 300
 
 
-def build_figure(snapshot: pd.DataFrame, wspu: pd.DataFrame) -> plt.Figure:
-    figure, axes = plt.subplots(1, 2, figsize=(7.0, 2.8))
-    for axis, (target, column, y_label, series, wspu_id, wspu_column), letter in zip(axes, PANELS, "AB", strict=True):
-        for mixture, label, color, style in series:
-            frame = snapshot[snapshot["mixture"].eq(mixture) & snapshot["is_completed"]].sort_values("flops")
-            frame = frame[frame[column].notna()]
+def first_rung_statistics(
+    snapshot: pd.DataFrame, fairness: pd.DataFrame, noise: pd.DataFrame, matched: pd.DataFrame
+) -> pd.DataFrame:
+    """Pool proportional repeats and use only the specified objective's fitted policies."""
+    rows = []
+    for target, column, _y_label, series, mariner_id, _mean_column in PANELS:
+        metric = "uncheatable_bpb" if target == "uncheatable" else "table9_macro_bpb"
+        anchor = snapshot[snapshot["mixture"].eq("proportional") & snapshot["flops"].eq(SCALES[0])]
+        assert len(anchor) == 1
+        anchor_value = float(anchor[column].iloc[0])
+        repeat = noise[noise["target"].eq(target)].iloc[0]
+        repeat_mean, repeat_sd = float(repeat["proportional_mean"]), float(repeat["repeat_sd"])
+        n = PROPORTIONAL_REPEATS
+        pooled_mean = (n * repeat_mean + anchor_value) / (n + 1)
+        pooled_sd = (((n - 1) * repeat_sd**2 + n / (n + 1) * (anchor_value - repeat_mean) ** 2) / n) ** 0.5
+        rows.append(
+            {
+                "target": target,
+                "mixture": "proportional",
+                "mean": pooled_mean,
+                "sd": pooled_sd,
+                "n": n + 1,
+                "source_csv": f"{SNAPSHOT};{NOISE_SUMMARIES[target]}",
+                "source_rows": f"{anchor['run_base'].iloc[0]};proportional repeats",
+                "source_metric": f"{column};proportional_mean",
+            }
+        )
+        mariner = fairness[fairness["kind"].eq("policy") & fairness["candidate_id"].eq(mariner_id)]
+        assert len(mariner) == 1, mariner_id
+        row = mariner.iloc[0]
+        assert row["metric"] == metric and int(row["n"]) == 3
+        rows.append(
+            {
+                "target": target,
+                "mixture": mariner_id,
+                "mean": float(row["mean"]),
+                "sd": float(row["sd"]),
+                "n": int(row["n"]),
+                "source_csv": str(FAIRNESS_SUMMARY),
+                "source_rows": mariner_id,
+                "source_metric": metric,
+            }
+        )
+        olmix_id = series[-1][0]
+        olmix = matched[
+            matched["candidate_id"].eq(olmix_id) & matched["target"].eq(target) & matched["status"].eq("measured")
+        ]
+        assert len(olmix) == 3 and set(olmix["trainer_seed"]) == {0, 1, 2}, olmix_id
+        assert olmix[metric].notna().all(), olmix_id
+        rows.append(
+            {
+                "target": target,
+                "mixture": olmix_id,
+                "mean": float(olmix[metric].mean()),
+                "sd": float(olmix[metric].std(ddof=1)),
+                "n": len(olmix),
+                "source_csv": str(MATCHED_FIRST_RUNG),
+                "source_rows": ";".join(olmix["group"]),
+                "source_metric": metric,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def plotted_points(snapshot: pd.DataFrame, repeats: pd.DataFrame, ladder_path: Path, matched_path: Path) -> pd.DataFrame:
+    """Collect every visible point with its run count and source before rendering."""
+    ladders = {"MARINER": pd.read_csv(ladder_path), "Olmix": pd.read_csv(matched_path)}
+    rows = []
+    for target, column, _y_label, series, mariner_id, _mean_column in PANELS:
+        for mixture, label, _color, _style in series[:2]:
+            frame = snapshot[snapshot["mixture"].eq(mixture) & snapshot["is_completed"] & snapshot[column].notna()]
+            for _, row in frame.iterrows():
+                if mixture == "proportional" and float(row["flops"]) == SCALES[0]:
+                    continue
+                rows.append(
+                    {
+                        "target": target,
+                        "mixture": mixture,
+                        "label": label,
+                        "flops": float(row["flops"]),
+                        "mean": float(row[column]),
+                        "sd": float("nan"),
+                        "n": 1,
+                        "source_csv": str(SNAPSHOT),
+                        "source_rows": row["run_base"],
+                        "source_metric": column,
+                    }
+                )
+        labels = {"proportional": "Proportional", mariner_id: "MARINER", series[-1][0]: "Olmix"}
+        for _, row in repeats[repeats["target"].eq(target)].iterrows():
+            rows.append({**row.to_dict(), "label": labels[row["mixture"]], "flops": SCALES[0]})
+        metric = "uncheatable_bpb" if target == "uncheatable" else "table9_macro_bpb"
+        for label, policy, source in (("MARINER", mariner_id, ladder_path), ("Olmix", series[-1][0], matched_path)):
+            ladder = ladders[label]
+            complete = ladder[
+                ladder["policy"].eq(policy)
+                & ladder["target"].eq(target)
+                & ladder["status"].eq("measured")
+                & ladder[metric].notna()
+                & ladder["target_flops"].gt(SCALES[0])
+            ]
+            for _, row in complete.iterrows():
+                rows.append(
+                    {
+                        "target": target,
+                        "mixture": policy,
+                        "label": label,
+                        "flops": float(row["target_flops"]),
+                        "mean": float(row[metric]),
+                        "sd": float("nan"),
+                        "n": 1,
+                        "source_csv": str(source),
+                        "source_rows": row["run_name"],
+                        "source_metric": metric,
+                    }
+                )
+    frame = pd.DataFrame(rows).sort_values(["target", "label", "flops"])
+    assert not frame.duplicated(["target", "mixture", "flops"]).any()
+    assert frame["mean"].notna().all() and frame["flops"].isin(SCALES).all()
+    return frame
+
+
+def build_figure(points: pd.DataFrame) -> plt.Figure:
+    figure, axes = plt.subplots(1, 2, figsize=(5.5, 2.35))
+    for axis, (target, _column, y_label, series, mariner_id, _mean_column), letter in zip(
+        axes, PANELS, "AB", strict=True
+    ):
+        tracks = (*series, (mariner_id, "MARINER optimum", MARINER_COLOR, "-"))
+        for mixture, label, color, style in tracks:
+            frame = points[points["target"].eq(target) & points["mixture"].eq(mixture)].sort_values("flops")
             axis.plot(
                 frame["flops"],
-                frame[column],
+                frame["mean"],
                 color=color,
                 linestyle=style,
                 linewidth=1.3,
@@ -96,52 +241,39 @@ def build_figure(snapshot: pd.DataFrame, wspu: pd.DataFrame) -> plt.Figure:
                 markersize=3.2,
                 markerfacecolor=color,
                 markeredgecolor=PAPER,
-                zorder=3,
+                zorder=4 if mixture == mariner_id else 3,
                 label=label,
             )
-        measured = float(wspu[wspu["candidate_id"].eq(wspu_id)][wspu_column].iloc[0])
-        axis.plot(
-            [3e18],
-            [measured],
-            marker="*",
-            markersize=11,
-            color=WSPU_COLOR,
-            markeredgecolor=INK,
-            markeredgewidth=0.5,
-            linestyle="none",
-            zorder=5,
-            label="WSPU optimum (cap 6), measured",
-        )
-        axis.plot(
-            [],
-            [],
-            marker="*",
-            markersize=11,
-            markerfacecolor=PAPER,
-            markeredgecolor=WSPU_COLOR,
-            linestyle="none",
-            label="WSPU optimum, to be trained",
-        )
-        # Slots for the untrained scales, drawn clearly below every measured curve so they cannot read as data.
-        completed = snapshot[snapshot["mixture"].isin([m for m, *_ in series]) & snapshot["is_completed"]]
-        for scale in SCALES[1:]:
-            floor = float(completed[completed["flops"].eq(scale)][column].min()) - 0.04
-            axis.plot(
-                [scale],
-                [floor],
-                marker="*",
-                markersize=11,
-                markerfacecolor=PAPER,
-                markeredgecolor=WSPU_COLOR,
-                markeredgewidth=1.0,
-                linestyle="none",
-                zorder=5,
+            repeated = frame[frame["n"].gt(1)]
+            axis.errorbar(
+                repeated["flops"],
+                repeated["mean"],
+                yerr=repeated["sd"],
+                fmt="none",
+                ecolor=color,
+                elinewidth=0.9,
+                capsize=2.2,
+                capthick=0.9,
+                zorder=4,
             )
+            if mixture == mariner_id:
+                axis.plot(
+                    repeated["flops"],
+                    repeated["mean"],
+                    marker="o",
+                    markersize=3.8,
+                    color=color,
+                    markerfacecolor=color,
+                    markeredgecolor=INK,
+                    markeredgewidth=0.5,
+                    linestyle="none",
+                    zorder=5,
+                )
         axis.set_xscale("log")
         axis.set_xticks(SCALES)
         axis.set_xticklabels(["3e18", "2e19", "3e20", "1e21"])
         axis.minorticks_off()
-        axis.set_xlabel("Training compute (FLOPs)", color=INK, fontsize=7.5)
+        axis.set_xlabel("Training compute (FLOPs; log scale)", color=INK, fontsize=7.5)
         axis.set_ylabel(y_label, color=INK, fontsize=7.5)
         axis.set_title(
             f"{letter}. {'Uncheatable' if target == 'uncheatable' else 'OlmoBaseEval Easy'}",
@@ -156,19 +288,20 @@ def build_figure(snapshot: pd.DataFrame, wspu: pd.DataFrame) -> plt.Figure:
             axis.spines[side].set_visible(False)
         for side in ("left", "bottom"):
             axis.spines[side].set_color(INK)
-        axis.legend(frameon=False, fontsize=6.3, loc="lower left", handlelength=1.6)
-    figure.text(
-        0.5,
-        -0.04,
-        "PLACEHOLDER: WSPU optima are measured at 3e18 only; their 2e19, 3e20 and 1e21 runs remain to be trained. "
-        "Ladders from the 2026-07-11 snapshot.",
-        ha="center",
-        va="top",
-        fontsize=6.8,
-        color="#B00020",
-        fontweight="bold",
+    handles, labels = axes[0].get_legend_handles_labels()
+    labels = ["Olmix (cap 4)\nKL 0.05 (A), 0.005 (B)" if label == "Olmix" else label for label in labels]
+    figure.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.01),
+        ncol=4,
+        frameon=False,
+        fontsize=6.3,
+        handlelength=1.6,
+        columnspacing=1.2,
     )
-    figure.tight_layout(w_pad=1.5)
+    figure.tight_layout(w_pad=1.5, rect=(0, 0.09, 1, 1))
     return figure
 
 
@@ -176,12 +309,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument("--drive-dir", type=Path, default=None)
+    parser.add_argument("--ladder-results", type=Path, default=LADDER_RESULTS)
+    parser.add_argument("--matched-olmix-results", type=Path, default=MATCHED_OLMIX_RESULTS)
     args = parser.parse_args()
     snapshot = pd.read_csv(SNAPSHOT)
-    wspu = pd.read_csv(WSPU_MEASURED)
+    fairness = pd.read_csv(FAIRNESS_SUMMARY)
+    noise = pd.concat([pd.read_csv(path).iloc[[0]].assign(target=target) for target, path in NOISE_SUMMARIES.items()])
+    matched = pd.read_csv(MATCHED_FIRST_RUNG)
+    repeats = first_rung_statistics(snapshot, fairness, noise, matched)
+    points = plotted_points(snapshot, repeats, args.ladder_results, args.matched_olmix_results)
     plt.rcParams.update(PLOT_STYLE)
-    figure = build_figure(snapshot, wspu)
+    figure = build_figure(points)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    repeats.to_csv(args.output_dir / "first_rung_statistics.csv", index=False)
+    points.to_csv(args.output_dir / "plotted_points.csv", index=False)
     for extension in ("png", "pdf"):
         figure.savefig(args.output_dir / f"scaling_curves_placeholder.{extension}", dpi=DPI, bbox_inches="tight")
         if args.drive_dir is not None:

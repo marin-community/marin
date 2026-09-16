@@ -1,0 +1,33 @@
+[
+  {
+    "run_name": "tpp10_target_p000_s20260910",
+    "metrics": [
+      {
+        "eval/paloma/bpb": 1.2149097919464111,
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.2149097919464111,
+        "eval/paloma/dolma_100_programing_languages-tpp10/loss": 2.0631072521209717,
+        "eval/paloma/micro_loss": 2.0631072521209717,
+        "step": 11490
+      },
+      {
+        "eval/paloma/bpb": 1.2149097919464111,
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.2149097919464111,
+        "eval/paloma/dolma_100_programing_languages-tpp10/loss": 2.0631072521209717,
+        "eval/paloma/micro_loss": 2.0631072521209717,
+        "step": 11490
+      }
+    ]
+  },
+  {
+    "run_name": "tpp10_unmatched_p000_s20260910",
+    "metrics": [
+      {
+        "eval/paloma/bpb": 1.7948455810546875,
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.794845700263977,
+        "eval/paloma/dolma_100_programing_languages-tpp10/loss": 3.03879451751709,
+        "eval/paloma/micro_loss": 3.03879451751709,
+        "step": 2531
+      }
+    ]
+  }
+]

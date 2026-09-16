@@ -1,0 +1,2429 @@
+[
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/EleutherAI___lambada_openai/default/0.0.0/900124bf3b8235c6daf21033af9948b3f07346c4/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "default",
+    "splits": {
+      "test": 5153
+    },
+    "features": {
+      "text": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/Rowan___hellaswag/default/0.0.0/218ec52e09a7e7462a5400043bb9a69a41d06b76/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "default",
+    "splits": {
+      "train": 39905,
+      "test": 10003,
+      "validation": 10042
+    },
+    "features": {
+      "ind": {
+        "dtype": "int32",
+        "_type": "Value"
+      },
+      "activity_label": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "ctx_a": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "ctx_b": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "ctx": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "endings": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "source_id": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "split": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "split_type": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "label": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/allenai___ai2_arc/ARC-Challenge/0.0.0/210d026faf9955653af8916fad021475a3f00453/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "ARC-Challenge",
+    "splits": {
+      "train": 1119,
+      "test": 1172,
+      "validation": 299
+    },
+    "features": {
+      "id": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "text": {
+            "dtype": "string",
+            "_type": "Value"
+          },
+          "label": {
+            "dtype": "string",
+            "_type": "Value"
+          }
+        },
+        "_type": "Sequence"
+      },
+      "answerKey": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/allenai___ai2_arc/ARC-Easy/0.0.0/210d026faf9955653af8916fad021475a3f00453/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "ARC-Easy",
+    "splits": {
+      "train": 2251,
+      "test": 2376,
+      "validation": 570
+    },
+    "features": {
+      "id": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "text": {
+            "dtype": "string",
+            "_type": "Value"
+          },
+          "label": {
+            "dtype": "string",
+            "_type": "Value"
+          }
+        },
+        "_type": "Sequence"
+      },
+      "answerKey": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/baber___piqa/default/0.0.0/142f6d7367fd9877f0fb3b5734ea6a545f54cdd1/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "default",
+    "splits": {
+      "train": 16113,
+      "validation": 1838,
+      "test": 3084
+    },
+    "features": {
+      "goal": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "sol1": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "sol2": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "label": {
+        "names": [
+          "0",
+          "1"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/abstract_algebra/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "abstract_algebra",
+    "splits": {
+      "test": 100,
+      "validation": 11,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/anatomy/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "anatomy",
+    "splits": {
+      "test": 135,
+      "validation": 14,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/astronomy/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "astronomy",
+    "splits": {
+      "test": 152,
+      "validation": 16,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/business_ethics/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "business_ethics",
+    "splits": {
+      "test": 100,
+      "validation": 11,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/clinical_knowledge/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "clinical_knowledge",
+    "splits": {
+      "test": 265,
+      "validation": 29,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/college_biology/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "college_biology",
+    "splits": {
+      "test": 144,
+      "validation": 16,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/college_chemistry/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "college_chemistry",
+    "splits": {
+      "test": 100,
+      "validation": 8,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/college_computer_science/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "college_computer_science",
+    "splits": {
+      "test": 100,
+      "validation": 11,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/college_mathematics/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "college_mathematics",
+    "splits": {
+      "test": 100,
+      "validation": 11,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/college_medicine/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "college_medicine",
+    "splits": {
+      "test": 173,
+      "validation": 22,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/college_physics/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "college_physics",
+    "splits": {
+      "test": 102,
+      "validation": 11,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/computer_security/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "computer_security",
+    "splits": {
+      "test": 100,
+      "validation": 11,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/conceptual_physics/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "conceptual_physics",
+    "splits": {
+      "test": 235,
+      "validation": 26,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/econometrics/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "econometrics",
+    "splits": {
+      "test": 114,
+      "validation": 12,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/electrical_engineering/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "electrical_engineering",
+    "splits": {
+      "test": 145,
+      "validation": 16,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/elementary_mathematics/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "elementary_mathematics",
+    "splits": {
+      "test": 378,
+      "validation": 41,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/formal_logic/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "formal_logic",
+    "splits": {
+      "test": 126,
+      "validation": 14,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/global_facts/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "global_facts",
+    "splits": {
+      "test": 100,
+      "validation": 10,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/high_school_biology/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "high_school_biology",
+    "splits": {
+      "test": 310,
+      "validation": 32,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/high_school_chemistry/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "high_school_chemistry",
+    "splits": {
+      "test": 203,
+      "validation": 22,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/high_school_computer_science/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "high_school_computer_science",
+    "splits": {
+      "test": 100,
+      "validation": 9,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/high_school_european_history/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "high_school_european_history",
+    "splits": {
+      "test": 165,
+      "validation": 18,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/high_school_geography/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "high_school_geography",
+    "splits": {
+      "test": 198,
+      "validation": 22,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/high_school_government_and_politics/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "high_school_government_and_politics",
+    "splits": {
+      "test": 193,
+      "validation": 21,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/high_school_macroeconomics/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "high_school_macroeconomics",
+    "splits": {
+      "test": 390,
+      "validation": 43,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/high_school_mathematics/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "high_school_mathematics",
+    "splits": {
+      "test": 270,
+      "validation": 29,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/high_school_microeconomics/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "high_school_microeconomics",
+    "splits": {
+      "test": 238,
+      "validation": 26,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/high_school_physics/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "high_school_physics",
+    "splits": {
+      "test": 151,
+      "validation": 17,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/high_school_psychology/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "high_school_psychology",
+    "splits": {
+      "test": 545,
+      "validation": 60,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/high_school_statistics/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "high_school_statistics",
+    "splits": {
+      "test": 216,
+      "validation": 23,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/high_school_us_history/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "high_school_us_history",
+    "splits": {
+      "test": 204,
+      "validation": 22,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/high_school_world_history/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "high_school_world_history",
+    "splits": {
+      "test": 237,
+      "validation": 26,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/human_aging/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "human_aging",
+    "splits": {
+      "test": 223,
+      "validation": 23,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/human_sexuality/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "human_sexuality",
+    "splits": {
+      "test": 131,
+      "validation": 12,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/international_law/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "international_law",
+    "splits": {
+      "test": 121,
+      "validation": 13,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/jurisprudence/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "jurisprudence",
+    "splits": {
+      "test": 108,
+      "validation": 11,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/logical_fallacies/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "logical_fallacies",
+    "splits": {
+      "test": 163,
+      "validation": 18,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/machine_learning/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "machine_learning",
+    "splits": {
+      "test": 112,
+      "validation": 11,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/management/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "management",
+    "splits": {
+      "test": 103,
+      "validation": 11,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/marketing/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "marketing",
+    "splits": {
+      "test": 234,
+      "validation": 25,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/medical_genetics/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "medical_genetics",
+    "splits": {
+      "test": 100,
+      "validation": 11,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/miscellaneous/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "miscellaneous",
+    "splits": {
+      "test": 783,
+      "validation": 86,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/moral_disputes/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "moral_disputes",
+    "splits": {
+      "test": 346,
+      "validation": 38,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/moral_scenarios/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "moral_scenarios",
+    "splits": {
+      "test": 895,
+      "validation": 100,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/nutrition/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "nutrition",
+    "splits": {
+      "test": 306,
+      "validation": 33,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/philosophy/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "philosophy",
+    "splits": {
+      "test": 311,
+      "validation": 34,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/prehistory/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "prehistory",
+    "splits": {
+      "test": 324,
+      "validation": 35,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/professional_accounting/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "professional_accounting",
+    "splits": {
+      "test": 282,
+      "validation": 31,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/professional_law/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "professional_law",
+    "splits": {
+      "test": 1534,
+      "validation": 170,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/professional_medicine/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "professional_medicine",
+    "splits": {
+      "test": 272,
+      "validation": 31,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/professional_psychology/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "professional_psychology",
+    "splits": {
+      "test": 612,
+      "validation": 69,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/public_relations/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "public_relations",
+    "splits": {
+      "test": 110,
+      "validation": 12,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/security_studies/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "security_studies",
+    "splits": {
+      "test": 245,
+      "validation": 27,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/sociology/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "sociology",
+    "splits": {
+      "test": 201,
+      "validation": 22,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/us_foreign_policy/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "us_foreign_policy",
+    "splits": {
+      "test": 100,
+      "validation": 11,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/virology/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "virology",
+    "splits": {
+      "test": 166,
+      "validation": 18,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/cais___mmlu/world_religions/0.0.0/c30699e8356da336a370243923dbaf21066bb9fe/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "world_religions",
+    "splits": {
+      "test": 171,
+      "validation": 19,
+      "dev": 5
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "_type": "Sequence"
+      },
+      "answer": {
+        "names": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "_type": "ClassLabel"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/medmcqa/default/0.0.0/91c6572c454088bf71b679ad90aa8dffcd0d5868/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "default",
+    "splits": {
+      "train": 182822,
+      "test": 6150,
+      "validation": 4183
+    },
+    "features": {
+      "id": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "opa": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "opb": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "opc": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "opd": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "cop": {
+        "names": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "_type": "ClassLabel"
+      },
+      "choice_type": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "exp": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "subject_name": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "topic_name": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/sciq/default/0.0.0/2c94ad3e1aafab77146f384e23536f97a4849815/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "default",
+    "splits": {
+      "train": 11679,
+      "validation": 1000,
+      "test": 1000
+    },
+    "features": {
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "distractor3": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "distractor1": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "distractor2": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "correct_answer": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "support": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/social_i_qa/default/0.1.0/674d85e42ac7430d3dcd4de7007feaffcb1527c535121e09bab2803fbcc925f8/dataset_info.json",
+    "builder_name": "social_i_qa",
+    "config_name": "default",
+    "splits": {
+      "train": 33410,
+      "validation": 1954
+    },
+    "features": {
+      "context": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "answerA": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "answerB": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "answerC": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "label": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/tau___commonsense_qa/default/0.0.0/94630fe30dad47192a8546eb75f094926d47e155/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "default",
+    "splits": {
+      "train": 9741,
+      "validation": 1221,
+      "test": 1140
+    },
+    "features": {
+      "id": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "question": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "question_concept": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "choices": {
+        "feature": {
+          "label": {
+            "dtype": "string",
+            "_type": "Value"
+          },
+          "text": {
+            "dtype": "string",
+            "_type": "Value"
+          }
+        },
+        "_type": "Sequence"
+      },
+      "answerKey": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    }
+  },
+  {
+    "path": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1/datasets/winogrande/winogrande_xl/0.0.0/01e74176c63542e6b0bcb004dcdea22d94fb67b5/dataset_info.json",
+    "builder_name": "parquet",
+    "config_name": "winogrande_xl",
+    "splits": {
+      "train": 40398,
+      "test": 1767,
+      "validation": 1267
+    },
+    "features": {
+      "sentence": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "option1": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "option2": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "answer": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    }
+  }
+]

@@ -1,0 +1,7 @@
+The seven-coordinate TPP10 pilot was accepted at 15:53:05 PDT on 10 September 2026 as /calvinxu/starcoder-tpp10-pilot. It covers p = 0, 0.1, 0.3, 0.5, 0.7, 0.9 and 1.0 with 57 cumulative artifacts: seven verified successes reused and 50 newly submitted jobs (six target, 11 unmatched proxy, 33 matched proxy).
+
+At the 15:56 PDT startup check, the parent was running on the intended on-demand central1 CPU worker and all 50 v5p-8 children were queued in central1-a, with no errors. The parent disables automatic failure/preemption retries. The actual 26,207,690-byte workspace bundle is retained and matches the locally checked zip, all 27 source pins, and the pilot release. Runtime checks on each child execute before training; no new pilot training result is claimed from this queued snapshot.
+
+The exact command, release, archived plan, preflight, child IDs and bundle receipt are in .agents/projects/starcoder_tpp10/live/ and releases/pilot.json. Fieldbook records all 57 datapoints, links the 50 new runs to the parent, and records each child job. The README and CC_CHANGES.md are updated. No scientific code, manuscript or outline changes were made.
+
+Next: monitor the recorded tree, verify all final endpoints against the archived plan, and run the prespecified per-subset common-grid selection analysis. Do not release the dense stage. A capacity queue is not a training failure; preserve successful artifacts and frozen identities on any authorized recovery.

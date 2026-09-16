@@ -1,0 +1,479 @@
+{
+  "checked_at": "2026-09-11T20:19:41.467881+00:00",
+  "scale_group": "cpu_vm_e2_highmem_2_ondemand-us-central1-a",
+  "workers": [
+    {
+      "worker_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260810-2115-ef0510dd-worker-0",
+      "capacity_cpu": 8.0,
+      "capacity_gib": 14.064872360788286,
+      "reserved_cpu": 4.6,
+      "reserved_gib": 8.0,
+      "free_cpu": 3.4,
+      "free_gib": 6.064872360788286,
+      "tasks": [
+        {
+          "task_id": "/michaelryan/10k-natural-olmixexact-retry10/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 1,
+          "resources": {
+            "cpu_millicores": 4000,
+            "memory_bytes": "2147483648",
+            "device": {},
+            "disk_bytes": "5368709120"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-2fd1d728-coordinator-9e23eca7/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "68719476736"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-92041c61-coordinator-bed0a6ac/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "68719476736"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-27b45bd5-coordinator-55d6c487/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "17179869184"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-2f38d5d6-coordinator-9deeaac3/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "17179869184"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-ae513555-coordinator-8751f821/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "17179869184"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-b80ccf88-coordinator-df17e709/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "17179869184"
+          }
+        }
+      ]
+    },
+    {
+      "worker_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260812-2304-e9c97b24-worker-0",
+      "capacity_cpu": 8.0,
+      "capacity_gib": 14.064868927001953,
+      "reserved_cpu": 6.9,
+      "reserved_gib": 13.0,
+      "free_cpu": 1.1,
+      "free_gib": 1.0648689270019531,
+      "tasks": [
+        {
+          "task_id": "/michaelryan/lpv11-resolve-coord/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 8,
+          "resources": {
+            "cpu_millicores": 2000,
+            "memory_bytes": "2147483648",
+            "device": {},
+            "disk_bytes": "5368709120"
+          }
+        },
+        {
+          "task_id": "/michaelryan/10k-natural-olmixexact-retry5/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 1,
+          "resources": {
+            "cpu_millicores": 4000,
+            "memory_bytes": "2147483648",
+            "device": {},
+            "disk_bytes": "5368709120"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-566fed4a-coordinator-9f1b0610/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 1,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "68719476736"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-413c5b57-coordinator-0d2a908c/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "68719476736"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-46e12aa4-coordinator-603dc0f7/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "68719476736"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-8c868312-coordinator-c27bf624/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "68719476736"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-d9e9f076-coordinator-5ff75b33/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "68719476736"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-2a9e41c2-coordinator-c19d579d/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 3,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "17179869184"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-7fb59564-coordinator-ec337586/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 3,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "17179869184"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-a37354c6-coordinator-c17d6f79/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 4,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "17179869184"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-ec87944a-coordinator-17d01691/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 3,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "17179869184"
+          }
+        }
+      ]
+    },
+    {
+      "worker_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260823-0805-961f1fc6-worker-0",
+      "capacity_cpu": 8.0,
+      "capacity_gib": 14.064868927001953,
+      "reserved_cpu": 6.9,
+      "reserved_gib": 13.0,
+      "free_cpu": 1.1,
+      "free_gib": 1.0648689270019531,
+      "tasks": [
+        {
+          "task_id": "/michaelryan/10k-ext-basenat/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 1,
+          "resources": {
+            "cpu_millicores": 4000,
+            "memory_bytes": "2147483648",
+            "device": {},
+            "disk_bytes": "5368709120"
+          }
+        },
+        {
+          "task_id": "/michaelryan/lpv11-inventory-coord/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 7,
+          "resources": {
+            "cpu_millicores": 2000,
+            "memory_bytes": "2147483648",
+            "device": {},
+            "disk_bytes": "5368709120"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-a8663191-coordinator-75573eaa/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 1,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "68719476736"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-4b3cf4fa-coordinator-b0ea8989/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "68719476736"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-64a1263d-coordinator-a88a3af4/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "68719476736"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-9250cff7-coordinator-b160b14c/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "68719476736"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-edab66bc-coordinator-dd2e3c42/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "68719476736"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-114f3fd4-coordinator-d5c80fa8/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 3,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "17179869184"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-13119d7d-coordinator-43e34125/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 3,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "17179869184"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-4c26a763-coordinator-bf8ae309/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 3,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "17179869184"
+          }
+        },
+        {
+          "task_id": "/runner/zephyr-transform-conversation-74f179d3-coordinator-95ec578f/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 3,
+          "resources": {
+            "cpu_millicores": 100,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "17179869184"
+          }
+        }
+      ]
+    },
+    {
+      "worker_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260825-0034-536a4e25-worker-0",
+      "capacity_cpu": 8.0,
+      "capacity_gib": 14.064868927001953,
+      "reserved_cpu": 8.0,
+      "reserved_gib": 3.0,
+      "free_cpu": 0.0,
+      "free_gib": 11.064868927001953,
+      "tasks": [
+        {
+          "task_id": "/michaelryan/10k-natural-olmixexact-retry11/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 1,
+          "resources": {
+            "cpu_millicores": 4000,
+            "memory_bytes": "2147483648",
+            "device": {},
+            "disk_bytes": "5368709120"
+          }
+        },
+        {
+          "task_id": "/michaelryan/olmix-coord-fineweb_edu_10k-us-central1-r3/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 0,
+          "resources": {
+            "cpu_millicores": 4000,
+            "memory_bytes": "1073741824",
+            "device": {},
+            "disk_bytes": "5368709120"
+          }
+        }
+      ]
+    },
+    {
+      "worker_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260905-0245-08c4ed91-worker-0",
+      "capacity_cpu": 8.0,
+      "capacity_gib": 14.064868927001953,
+      "reserved_cpu": 6.0,
+      "reserved_gib": 10.0,
+      "free_cpu": 2.0,
+      "free_gib": 4.064868927001953,
+      "tasks": [
+        {
+          "task_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 0,
+          "resources": {
+            "cpu_millicores": 2000,
+            "memory_bytes": "8589934592",
+            "device": {},
+            "disk_bytes": "34359738368"
+          }
+        },
+        {
+          "task_id": "/michaelryan/10k-natural-olmixexact-boost-main2/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 1,
+          "resources": {
+            "cpu_millicores": 4000,
+            "memory_bytes": "2147483648",
+            "device": {},
+            "disk_bytes": "5368709120"
+          }
+        }
+      ]
+    },
+    {
+      "worker_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-worker-0",
+      "capacity_cpu": 8.0,
+      "capacity_gib": 14.064868927001953,
+      "reserved_cpu": 8.0,
+      "reserved_gib": 14.0,
+      "free_cpu": 0.0,
+      "free_gib": 0.06486892700195312,
+      "tasks": [
+        {
+          "task_id": "/kaiyuew/moe-lgr-9110-d768-rmsgated/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 0,
+          "resources": {
+            "cpu_millicores": 1000,
+            "memory_bytes": "2147483648",
+            "device": {},
+            "disk_bytes": "5368709120"
+          }
+        },
+        {
+          "task_id": "/kaiyuew/moe-lgr-9110-d512-rmsgated/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 0,
+          "resources": {
+            "cpu_millicores": 1000,
+            "memory_bytes": "2147483648",
+            "device": {},
+            "disk_bytes": "5368709120"
+          }
+        },
+        {
+          "task_id": "/calvinxu/tpp10-domain-sweeps/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 0,
+          "resources": {
+            "cpu_millicores": 2000,
+            "memory_bytes": "8589934592",
+            "device": {},
+            "disk_bytes": "34359738368"
+          }
+        },
+        {
+          "task_id": "/michaelryan/10k-natural-olmixexact/0",
+          "state": "TASK_STATE_RUNNING",
+          "attempt_id": 2,
+          "resources": {
+            "cpu_millicores": 4000,
+            "memory_bytes": "2147483648",
+            "device": {},
+            "disk_bytes": "5368709120"
+          }
+        }
+      ]
+    }
+  ]
+}

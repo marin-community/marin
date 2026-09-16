@@ -1,0 +1,12 @@
+[15:04:30] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:04:27 139823315006272 levanter.kernels.pallas.fused_cross_entropy_loss.api Fused cross-entropy selected implementation: xla
+[15:04:30] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:04:28 139823315006272 levanter.trainer Traced train_step in 2.5s
+[15:04:30] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:04:30 139823315006272 levanter.trainer Lowering train_step to HLO...
+[15:04:38] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:04:31 139823315006272 levanter.trainer Lowered train_step in 1.4s
+[15:05:04] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:04:58 139823315006272 levanter.trainer First train step completed in 32.4s (step 0)
+[15:05:04] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:04:58 139823315006272 levanter.trainer Tracing train_step_hooks for jaxpr...
+[15:05:04] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:04:59 139823315006272 levanter.trainer Traced train_step_hooks in 1.2s
+[15:05:04] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:04:59 139823315006272 levanter.trainer Lowering train_step_hooks to HLO...
+[15:05:04] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:05:00 139823315006272 levanter.trainer Lowered train_step_hooks in 0.6s
+[15:05:25] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | W20260911 15:05:22 139495738017472 levanter.tracker.wandb Step 1 is less than the current step 427. Cowardly refusing to log metrics.
+[15:05:25] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:05:23 139823315006272 tqdm_loggable.tqdm_logging Progress on:train 3.00it/11.5kit rate:23.9s/it remaining:76:12:33 elapsed:01:11 postfix:-
+[15:05:31] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:05:30 139486705129152 finelog.client.log_client LogClient resolved /system/log-server -> http://10.128.0.128:10001 (stats)

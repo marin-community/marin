@@ -1,0 +1,17 @@
+{
+  "attrs": {
+    "fieldbook.local_mtime_at_capture": 1788913893.1470613,
+    "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/pilot_submission_plan.json",
+    "fieldbook.local_size_at_capture": 18147
+  },
+  "content_hash": "sha256:aad095a8ca27562cbf23cc84a811bfff952529f316886ed0989e02d68bc68913",
+  "created_at": "2026-09-09T00:32:38Z",
+  "deleted_at": null,
+  "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+  "id": "art_01m21s9f4gr5em481hdedxaqmz",
+  "job_id": "job_01m21s421dw5vb3p9c2d67q9ts",
+  "run_id": null,
+  "type": "manifest",
+  "updated_at": "2026-09-09T00:32:38Z",
+  "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/pilot_submission_plan.json"
+}

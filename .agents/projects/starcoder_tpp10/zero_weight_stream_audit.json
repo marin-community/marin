@@ -1,0 +1,54 @@
+{
+  "status": "passed",
+  "design_sha256": "72d14a845033b901d73397c74c724a668cbdec5fd72cec41178626b993f889a2",
+  "scope": "Real native train_sets on local synthetic finite caches, first 64 source sequence identities. Per-component streams agree across p=0/.05 and all matched subset handles; unmatched StarCoder agrees at p=.05/1. Mixture interleaving necessarily changes with p. This is an offline implementation check, not a fingerprint of prepared GCS tokens.",
+  "stream_sha256": {
+    "tpp10_unmatched_p000_s20260910": {
+      "hq_actual": "ef77077e8b44b35fea6a23ca0552249198014e28ff8a8c151d26048104470171",
+      "hq_synth": "6a8c9dab18cca99a15917a936896f944b578eee1934cd87971e76a343c4c7716",
+      "medium_high": "0089f6b809cee2b3dd82e8bfebb80ac875744e41eb673f3fa68bd6c7917b7218",
+      "medium": "9c2539b6e8fb36ab7abbdcd9804e3a765891ef717b6a6fe433f6ccab3e339d99",
+      "medium_low": "1006a4b928cc1707b25a37bbb3d1d67ba1cc9b8a0ae456390a39df60610b4d8b",
+      "low_actual": "651eb6918d62fcf06de049115f8bfcb3b8778724d4e0e4e8b231ef0c0de041c9"
+    },
+    "tpp10_unmatched_p005_s20260910": {
+      "hq_actual": "ef77077e8b44b35fea6a23ca0552249198014e28ff8a8c151d26048104470171",
+      "hq_synth": "6a8c9dab18cca99a15917a936896f944b578eee1934cd87971e76a343c4c7716",
+      "medium_high": "0089f6b809cee2b3dd82e8bfebb80ac875744e41eb673f3fa68bd6c7917b7218",
+      "medium": "9c2539b6e8fb36ab7abbdcd9804e3a765891ef717b6a6fe433f6ccab3e339d99",
+      "medium_low": "1006a4b928cc1707b25a37bbb3d1d67ba1cc9b8a0ae456390a39df60610b4d8b",
+      "low_actual": "651eb6918d62fcf06de049115f8bfcb3b8778724d4e0e4e8b231ef0c0de041c9",
+      "starcoder": "c9c096cd224fac2ea530c932114da5911eaa1e7012b0ae6a9ee1d6ffc4e3e64e"
+    },
+    "tpp10_matched_p005_s20260910_d20260912": {
+      "hq_actual": "ef77077e8b44b35fea6a23ca0552249198014e28ff8a8c151d26048104470171",
+      "hq_synth": "6a8c9dab18cca99a15917a936896f944b578eee1934cd87971e76a343c4c7716",
+      "medium_high": "0089f6b809cee2b3dd82e8bfebb80ac875744e41eb673f3fa68bd6c7917b7218",
+      "medium": "9c2539b6e8fb36ab7abbdcd9804e3a765891ef717b6a6fe433f6ccab3e339d99",
+      "medium_low": "1006a4b928cc1707b25a37bbb3d1d67ba1cc9b8a0ae456390a39df60610b4d8b",
+      "low_actual": "651eb6918d62fcf06de049115f8bfcb3b8778724d4e0e4e8b231ef0c0de041c9",
+      "starcoder": "b43d5f585c60570b98f2a99e40e47f5dcedf28ac7c8ae17542ab28ab1d6483b1"
+    },
+    "tpp10_matched_p005_s20260910_d20260913": {
+      "hq_actual": "ef77077e8b44b35fea6a23ca0552249198014e28ff8a8c151d26048104470171",
+      "hq_synth": "6a8c9dab18cca99a15917a936896f944b578eee1934cd87971e76a343c4c7716",
+      "medium_high": "0089f6b809cee2b3dd82e8bfebb80ac875744e41eb673f3fa68bd6c7917b7218",
+      "medium": "9c2539b6e8fb36ab7abbdcd9804e3a765891ef717b6a6fe433f6ccab3e339d99",
+      "medium_low": "1006a4b928cc1707b25a37bbb3d1d67ba1cc9b8a0ae456390a39df60610b4d8b",
+      "low_actual": "651eb6918d62fcf06de049115f8bfcb3b8778724d4e0e4e8b231ef0c0de041c9",
+      "starcoder": "e975dc9c4c96840112d7ccbf5f4de0c25e05ea2633faf714be80b116661897da"
+    },
+    "tpp10_matched_p005_s20260910_d20260914": {
+      "hq_actual": "ef77077e8b44b35fea6a23ca0552249198014e28ff8a8c151d26048104470171",
+      "hq_synth": "6a8c9dab18cca99a15917a936896f944b578eee1934cd87971e76a343c4c7716",
+      "medium_high": "0089f6b809cee2b3dd82e8bfebb80ac875744e41eb673f3fa68bd6c7917b7218",
+      "medium": "9c2539b6e8fb36ab7abbdcd9804e3a765891ef717b6a6fe433f6ccab3e339d99",
+      "medium_low": "1006a4b928cc1707b25a37bbb3d1d67ba1cc9b8a0ae456390a39df60610b4d8b",
+      "low_actual": "651eb6918d62fcf06de049115f8bfcb3b8778724d4e0e4e8b231ef0c0de041c9",
+      "starcoder": "fd0c48ee07c70183c1ff7f83deb502bf891f61dd343ef48648d4274013b75c14"
+    },
+    "tpp10_unmatched_p100_s20260910": {
+      "starcoder": "c9c096cd224fac2ea530c932114da5911eaa1e7012b0ae6a9ee1d6ffc4e3e64e"
+    }
+  }
+}

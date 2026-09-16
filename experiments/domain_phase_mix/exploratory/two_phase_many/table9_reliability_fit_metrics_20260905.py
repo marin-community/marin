@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Table 9 reliability table with per-task surrogate fit quality: SNR next to WSPU and OLMix out-of-fold metrics.
+"""Evaluation reliability and frozen MARINER/Olmix out-of-fold fit quality.
 
 Extends ``table9_snr_table_20260905`` with, per Olmix Table 9 task (and per component in the full table),
 the out-of-fold Spearman rank correlation, RMSE in repeat-SD units and regret at 1 of both surrogates at the
-full 280-run panel, averaged over the ten fold-seed repeats of ``learning_curve_fits_20260905`` (k = 280).
+279 scored mixtures, averaged over ten fold assignments of ``learning_curve_mariner_fits_20260908``.
+The proportional anchor is included in every fit but excluded from scoring and the swarm variance.
 Collapsed tasks average their subtasks' observed and predicted BPB per run before scoring, the same
 collapse the SNR table uses for its noise estimate.
 """
@@ -28,18 +29,20 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
     benchmark_single_phase_observatory_20260902 as benchmark,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
-    learning_curve_fits_20260905 as fits,
+    learning_curve_mariner_fits_20260908 as fits,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     learning_curve_metrics_20260905 as metrics_module,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import table9_snr_table_20260905 as snr  # noqa: E402
 
-OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "table9_reliability_20260905"
+OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "table9_reliability_mariner_20260908"
 TARGET = "table9"
 UNCHEATABLE = "uncheatable"
 UNCHEATABLE_PREFIX = "eval/uncheatable_eval/"
-UNCHEATABLE_NOISE = OUTPUT_DIR / "proportional_uncheatable_components.csv"
+UNCHEATABLE_NOISE = (
+    SCRIPT_DIR / "reference_outputs" / "table9_reliability_20260905" / "proportional_uncheatable_components.csv"
+)
 UNCHEATABLE_NOISE_RUN_PREFIX = "proportional_noise_3e18_"
 UNCHEATABLE_LABEL = "Uncheatable aggregate (bytes-weighted mean of 7 components)"
 UNCHEATABLE_GROUP = "Uncheatable components"
@@ -53,7 +56,7 @@ UNCHEATABLE_NAMES = {
     "wikipedia_english": "Wikipedia (English)",
 }
 BOLD_ROWS = (UNCHEATABLE_LABEL, snr.MACRO_LABEL)
-FULL_K = 280
+FULL_K = 279
 DRAWS = 10
 FIT_METRICS = ("spearman", "rmse_over_repeat_sd", "regret_at_1")
 
@@ -66,24 +69,37 @@ def component_key(name: str) -> str:
     return name.removesuffix("/bpb")
 
 
-def load_predictions(panel: benchmark.BenchPanel, target: str = TARGET) -> dict[str, list[pd.DataFrame]]:
-    """Per model, the ten out-of-fold prediction matrices at k = 280 (runs x components, keyed by component)."""
+def load_predictions(
+    panel: benchmark.BenchPanel, target: str = TARGET, regmix_dir: Path | None = None, allow_stale: bool = False
+) -> dict[str, list[pd.DataFrame]]:
+    """Load ten complete frozen-protocol prediction matrices, indexed by scored panel rows.
+
+    With ``regmix_dir`` (``regmix_official_oof_20260913.py`` output) the official RegMix regression's out-of-fold
+    predictions on the same folds join as model ``regmix``.
+    """
     group = panel.group(target)
     keys = [component_key(name) for name in group.components]
     result: dict[str, list[pd.DataFrame]] = {}
-    for model in fits.MODEL_KEYS:
+    expected_rows = np.delete(np.arange(panel.rows), fits.calibration_row(panel))
+    if regmix_dir is not None:
         frames = []
         for draw in range(DRAWS):
-            # Only the out-of-fold predictions are used here, so a record written under an earlier
-            # held-out registry (stale protocol hash) is still valid for this table.
+            payload = np.load(regmix_dir / f"{target}_draw{draw}.npz")
+            if not np.array_equal(payload["rows"], expected_rows):
+                raise ValueError("the RegMix record must score every non-anchor mixture exactly once")
+            frames.append(pd.DataFrame(payload["oof"], columns=keys, index=payload["rows"]))
+        result["regmix"] = frames
+    for model in ("mariner", "olmix"):
+        frames = []
+        for draw in range(DRAWS):
             record, status = metrics_module.load_record_set(
-                target, model, FULL_K, draw, len(group.components), fits.RECORD_DIR, strict=False
+                target, model, FULL_K, draw, len(group.components), fits.RECORD_DIR, strict=not allow_stale
             )
             if record is None:
                 raise FileNotFoundError(f"{model} k={FULL_K} draw {draw}: {status}")
-            if not np.array_equal(record.rows, np.arange(panel.rows)):
-                raise ValueError("the k = 280 record does not cover the whole panel")
-            frames.append(pd.DataFrame(record.oof, columns=keys))
+            if not np.array_equal(record.rows, expected_rows):
+                raise ValueError("the full-swarm record must score every non-anchor mixture exactly once")
+            frames.append(pd.DataFrame(record.oof, columns=keys, index=record.rows))
         result[model] = frames
     return result
 
@@ -120,21 +136,26 @@ def fit_columns(
         for metric in ("spearman", "pearson", "rmse", "rmse_over_repeat_sd", "regret_at_1"):
             result[f"{model}_{metric}"] = float(scored[metric].mean())
             result[f"{model}_{metric}_sd"] = float(scored[metric].std(ddof=1))
+        # Average squared errors before computing R^2 and the share attributable to noise.
+        result[f"{model}_mse"] = float(np.square(scored["rmse"]).mean())
     return result
 
 
-def uncheatable_rows(panel: benchmark.BenchPanel) -> pd.DataFrame:
+def uncheatable_rows(
+    panel: benchmark.BenchPanel, regmix_dir: Path | None = None, allow_stale: bool = False
+) -> pd.DataFrame:
     """The Uncheatable aggregate and its seven components in the schema of the Table 9 rows."""
     group = panel.group(UNCHEATABLE)
     keys = [component_key(name) for name in group.components]
-    values = pd.DataFrame(group.outcomes, columns=keys)
+    scored_rows = np.delete(np.arange(panel.rows), fits.calibration_row(panel))
+    values = pd.DataFrame(group.outcomes, columns=keys).iloc[scored_rows]
     noise_frame = pd.read_csv(UNCHEATABLE_NOISE)
     noise_frame = noise_frame[noise_frame["run"].str.startswith(UNCHEATABLE_NOISE_RUN_PREFIX)]
     noise = pd.DataFrame({key: noise_frame[f"{UNCHEATABLE_PREFIX}{key}/bpb"].to_numpy(float) for key in keys})
     weights = np.asarray(group.aggregation_weights, dtype=float)
-    predictions = load_predictions(panel, UNCHEATABLE)
+    predictions = load_predictions(panel, UNCHEATABLE, regmix_dir, allow_stale)
     aggregate_noise = pd.Series(noise.to_numpy(float) @ weights)
-    aggregate_values = pd.Series(np.asarray(group.aggregate, dtype=float))
+    aggregate_values = pd.Series(np.asarray(group.aggregate, dtype=float)).iloc[scored_rows]
     aggregate = {
         "group": "",
         "task": UNCHEATABLE_LABEL,
@@ -198,7 +219,7 @@ def build_tables(
 def markdown(frame: pd.DataFrame, full: bool, proportional_runs: int) -> str:
     header = (
         f"| Task | Swarm mean | Swarm SD | Proportional mean ({proportional_runs} runs) | Proportional SD | SNR | "
-        "WSPU rho | OLMix rho |"
+        "MARINER rho | Olmix rho |"
     )
     lines = [header, "|---|---|---|---|---|---|---|---|"]
     current_group = None
@@ -208,7 +229,7 @@ def markdown(frame: pd.DataFrame, full: bool, proportional_runs: int) -> str:
         snr_text = f"**{row['snr']:.1f}**" if bold else f"{row['snr']:.1f}"
         return (
             f"{row['panel_mean']:.3f} | {row['panel_sd']:.4f} | {row['proportional_mean']:.3f} | "
-            f"{row['repeat_sd']:.4f} | {snr_text} | {row['wspu_spearman']:.2f} | {row['olmix_spearman']:.2f} |"
+            f"{row['repeat_sd']:.4f} | {snr_text} | {row['mariner_spearman']:.2f} | {row['olmix_spearman']:.2f} |"
         )
 
     for _, row in frame.iterrows():
@@ -234,12 +255,25 @@ def markdown(frame: pd.DataFrame, full: bool, proportional_runs: int) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
+    parser.add_argument(
+        "--regmix-oof-dir",
+        type=Path,
+        default=None,
+        help="add the official RegMix regression (regmix_official_oof_20260913.py records) as a third model",
+    )
+    parser.add_argument(
+        "--allow-stale",
+        action="store_true",
+        help="accept records written under an earlier protocol hash (their out-of-fold predictions are unchanged)",
+    )
     args = parser.parse_args()
+    metrics_module.select_study("mariner")
     panel = benchmark.load_panel(snr.PANEL)
     values, noise = snr.load_matrices()
-    predictions = load_predictions(panel)
+    values = values.iloc[np.delete(np.arange(panel.rows), fits.calibration_row(panel))]
+    predictions = load_predictions(panel, regmix_dir=args.regmix_oof_dir, allow_stale=args.allow_stale)
     short, full = build_tables(values, noise, predictions, panel)
-    uncheatable = uncheatable_rows(panel)
+    uncheatable = uncheatable_rows(panel, args.regmix_oof_dir, args.allow_stale)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     short.to_csv(args.output_dir / "snr_fit_tasks_delphi.csv", index=False)
     full.to_csv(args.output_dir / "snr_fit_components_delphi.csv", index=False)

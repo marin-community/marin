@@ -1,0 +1,18 @@
+{
+  "attrs": {
+    "session_id": "ses_01m24dp3a66c6med6kz310bcdm"
+  },
+  "author": null,
+  "body": "Completed optimizer-trace review of all eight calibration runs; retain proxy batch 32. Three frozen p=1 canaries were accepted at 18:17:38 PDT on 9 September 2026. Parent /calvinxu/starcoder-tpp10-canary is running; all three child jobs have been created and are queued for TPU capacity, with no training observed yet. The release, exact command, 27-pin check, cache audit, full workspace bundle receipt, diagnostic plot and report are recorded in .agents/projects/starcoder_tpp10/live/ and Fieldbook. CC_CHANGES.md is current. No scientific settings or manuscript were changed. Next: The three p=1 canaries are submitted under /calvinxu/starcoder-tpp10-canary. All three TPU children are queued for central1 capacity. After all succeed, collect against .agents/projects/starcoder_tpp10/live/canary_plan.json, verify native final metrics, fingerprints and runtime receipts, review target and proxy optimizer traces, and reconcile child-to-run identities using direct evidence. Pilot and dense-grid stages remain unreleased; do not submit either without a separate release.",
+  "body_format": "markdown",
+  "created_at": "2026-09-10T01:20:19Z",
+  "deleted_at": null,
+  "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+  "entity_type": "experiment",
+  "id": "note_01m24edgfcpbjygvfd6jrkgnx3",
+  "note_type": "handoff",
+  "resolved_at": null,
+  "status": "open",
+  "title": "Calibration reviewed; three canaries queued",
+  "updated_at": "2026-09-10T01:20:19Z"
+}

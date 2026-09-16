@@ -1203,3 +1203,90 @@ Pairwise sign accuracy on pairs differing by more than one run SD, inside the k 
 - **Reading**: the surrogate finds the basin; measured neighbours must order its floor. The factorial is the designed version of exactly that, its analysis now proposes the next runs automatically, and a ten-run replication of the five best single-run floor coordinates is prepared for the morning's decision.
 
 </div>
+
+---
+layout: section
+---
+
+# The fitted floor (2026-09-07): from a 0.95 rule to one κ-floor head
+
+---
+
+# Why the floor had to move, and where it went
+
+<div class="text-sm leading-snug">
+
+- **The 0.95 × swarm-minimum floor was refuted by measurement**: the link's Table-9 optimum sits below the swarm minimum on 28 of 51 tasks and below the floor on 11 (all code, 7–9% below), GitHub C++ under the Uncheatable optimum lands on its floor to four decimals; against the bank's per-task minima the 0.95 rule is too high on 21 of 51 tasks (worst excess 0.096 BPB). A held-out run can only refute a floor, never certify it.
+- **New parametrization**: φ_t = prop_t − κ_t (prop_t − swarm min_t), anchored to the proportional mixture's reliability mean and the swarm's own gap; κ_t per task by a bounded scalar search on the inner-CV error, up to 100, so the additive form is the large-κ end of the same head.
+- **Swarm identifies κ where it moved a task**: code and math have an interior out-of-fold minimum at κ ≈ 1.5–3 (GitHub C++ 0.0162 vs 0.0189 additive vs 0.0230 for the 0.95 link); tasks the swarm never moved push κ large. Fitted κ medians: code 1.5–1.8, math 1.4–1.5, MMLU 2.5, QA 3; the bank's empirical headroom is 1.4 / 1.2 / 1.3 / 1.3.
+- **One head suffices**: the log-space κ-floor head alone equals the multi-head model (identity, log-space κ, response-space κ, fixed 0.95) on selection and beats it on calibration; the response-space (nonlinear) head fails the noisy QA tasks and is retired; the permissive one-SE κ rule (DeepSeek) returns WSPU's optimism with no selection gain.
+
+</div>
+
+---
+
+# Kappa-floor link on the frozen bank and on 14 unseen runs
+
+<div class="text-xs">
+
+| model | T9 rank (regret) | optimism at pick U / T9 | archive RMSE U / T9 | floor-region RMSE T9 | floors above bank min U / T9 | fresh-run bias U / T9 | fresh-run RMSE U / T9 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| WSPU | 14 (0.0157) | +0.036 / +0.070 | 0.029 / 0.038 | 0.080 | – | +0.030 / +0.046 | 0.030 / 0.051 |
+| bounded link (0.95) | 10 (0.0143) | −0.005 / −0.015 | 0.015 / 0.021 | 0.048 | 2 / 21 | −0.005 / −0.018 | 0.005 / 0.018 |
+| fitted floor, three heads | 12 (0.0151) | +0.004 / −0.000 | 0.014 / 0.021 | 0.041 | 1 / 7 | −0.001 / −0.007 | 0.003 / 0.008 |
+| **κ-floor, one head** | 12 (0.0151) | +0.009 / +0.009 | 0.016 / 0.021 | **0.039** | **1 / 2** | +0.007 / **+0.001** | 0.007 / **0.006** |
+
+</div>
+
+<div class="text-sm mt-3 leading-snug">
+
+- Within-block Table-9 regret vs WSPU: bounded link +0.0036 [+0.0008, +0.0069]; κ-floor +0.0008 [−0.0004, +0.0026]. Band ordering unchanged (no model orders the floor).
+- Fresh runs = the 14 validation runs of 2026-09-06, seen by no model; the κ-floor link's Spearman across them is 0.996 on Uncheatable.
+- **Submitted** (six runs): the κ-floor optima at KL 0 (predicted 0.9711 / 1.0631 / 1.0623) and under an Olmix-style KL 0.05 penalty (0.9953 / 1.0876 / 1.0875, preregistered to be worse). DeepSeek's review (saved) drove the convergence check, the anchor bug fix on the four MMLU tasks, and the permissive-rule ablation.
+
+</div>
+
+---
+
+# Decision 2026-09-07: finalize the single-phase procedure
+
+<div class="text-xs">
+
+| model (Table 9 / Uncheatable) | T9 rank (regret) | U rank (regret) | optimism at pick U / T9 | Spearman U / T9 | fresh-run bias U / T9 (18 runs) | measured optima U / T9 |
+|---|---:|---:|---:|---:|---:|---:|
+| WSPU (additive) | 14 (0.0157) | 5 (0.0023) | +0.036 / +0.070 | 0.93 / 0.90 | +0.030 / +0.046 | 0.9834 / 1.0722 (controls) |
+| κ-floor, κ ≤ 100 | 12 (0.0151) | 6 (0.0027) | +0.009 / +0.009 | 0.928 / — | +0.007 / +0.001 | **0.9890 (miss)** / **1.0613** |
+| **κ-floor, κ ∈ [1, 6], flat default 1.5** | 12 (0.0151) | **4 (0.0016)** | **−0.0001** / +0.008 | **0.953** / 0.930 | +0.0045 / +0.0031 | submitted: 0.9807 / 1.0635, 1.0626 predicted |
+
+</div>
+
+<div class="text-sm mt-3 leading-snug">
+
+- The κ ≤ 100 Uncheatable miss came from never-moved tasks (arxiv_physics κ 17, bbc 9, wiki 7.7) going additive; bounding κ alone was not enough, the flat-profile default is what fixed the calibration (the failed mixture now predicted at 0.9842, measured 0.9890).
+- Calvin: 1.0613 on Table 9 is acceptable, no more grinding; address Uncheatable under the same procedure; those become the paper's numbers.
+- **Submitted 03:41 UTC** `dm-delphi-3e18-lwspu-kappafloor-flat-v6e8-20260907` (three runs; the Table-9 rows are within TV 0.012 of the measured optima and double as replicates). **KL 0.05 batch landed:** worse on all three, as preregistered (Uncheatable 0.9916 vs 0.9890; Table 9 1.0799 / 1.0860 vs 1.0613 / 1.0672); Olmix's own July sweep says the opposite for Olmix (KL 0 worse by 0.008 / 0.012), so the penalty regularizes Olmix and only shrinks ours toward proportional.
+- Paper: Methods §4.3–4.4 now describe the floored WSPU (floor φ_t = prop − γ_t·gap, γ_t ∈ [1, 6] by inner CV, log-deficit NNLS, half-nat cap, SLSQP multistart, no KL penalty); 22 "Final procedure" markers wait for the runs.
+
+</div>
+
+---
+
+# The final procedure's optima, measured (2026-09-07)
+
+<div class="text-sm">
+
+| target, cap 6 | proportional | Olmix best | WSPU (additive) | bounded link | κ-floor, κ ≤ 100 | **κ-floor, flat 1.5 (final)** | predicted |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Uncheatable | 1.038 | 1.002 | 0.983 | 0.982 | 0.989 (miss) | **0.983** | 0.981 |
+| OlmoBaseEval Easy mean (cap 6 / 8) | 1.199 | 1.077 | 1.072 / 1.074 | 1.065 / 1.064 | **1.061** / 1.067 | **1.068** / 1.069 | 1.064 / 1.063 |
+
+</div>
+
+<div class="text-sm mt-3 leading-snug">
+
+- **Uncheatable:** the optimum does not depend on the surrogate. Three different models land at 0.982–0.983 (run SD ≈ 0.001); what differs is the prediction: WSPU said 0.947 for its 0.983, the final model says 0.981 for its 0.983 (bias +0.001 on its own optima over 23 fresh runs).
+- **Suite mean:** the final model's optimum and the κ ≤ 100 optimum are TV 0.011 apart and measured 1.068 / 1.061 (1.7 run SDs apart in aggregate, far more per component: basic-skills tasks move by 0.04–0.12). The cap-8 pair measured 1.069 / 1.067. All four lie in 1.061–1.069 (mean 1.066), below WSPU (1.072 / 1.074) and Olmix (1.077); the cap does not matter for the final model.
+- **KL 0.05** hurt every κ-floor optimum (U +0.003, suite +0.019); Olmix's own sweep says the opposite for Olmix.
+- Open: which suite-mean number the paper reports (1.068, or the pair's mean 1.065); the single Uncheatable KL run of the final model (launcher ready).
+
+</div>

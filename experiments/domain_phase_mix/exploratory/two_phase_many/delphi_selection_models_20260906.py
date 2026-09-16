@@ -391,12 +391,23 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=benchmark.DEFAULT_OUTPUT)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--repeats", type=int, choices=(1, 5), default=1)
+    parser.add_argument(
+        "--skip-specs",
+        default="",
+        help="comma-separated specification names to leave unfitted (recorded in alternative_protocol.json)",
+    )
     args = parser.parse_args()
+    skipped = tuple(name for name in args.skip_specs.split(",") if name)
+    unknown = set(skipped) - {spec.name for spec in SPECS}
+    if unknown:
+        raise ValueError(f"unknown specifications to skip: {sorted(unknown)}")
+    specs = tuple(spec for spec in SPECS if spec.name not in skipped)
     fingerprint = benchmark.source_fingerprint(args.output_dir, (Path(__file__),))
     benchmark.write_json(
         args.output_dir / "alternative_protocol.json",
         {
-            "specifications": [dataclasses.asdict(spec) for spec in SPECS],
+            "specifications": [dataclasses.asdict(spec) for spec in specs],
+            "skipped_specifications": list(skipped),
             "ridge_grid": RIDGES,
             "kernel_length_scales": LENGTH_SCALES,
             "kernel_dof_limit": MAX_KERNEL_DOF,
@@ -407,7 +418,7 @@ def main() -> None:
     )
     tasks = [
         (spec, target, fold, repeat)
-        for spec in SPECS
+        for spec in specs
         for target in benchmark.TARGETS
         for repeat in range(args.repeats)
         for fold in ((-1, 0, 1, 2, 3, 4) if repeat == 0 else (0, 1, 2, 3, 4))

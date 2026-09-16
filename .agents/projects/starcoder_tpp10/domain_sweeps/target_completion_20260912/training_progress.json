@@ -1,0 +1,46 @@
+[
+  {
+    "run": "tpp10_finemath_3plus_target_p030_s20260910",
+    "exit_code": 0,
+    "lines": [
+      "[08:19:41] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p030_s20260910/0 attempt=0 | I20260912 08:19:40 139772636238656 tqdm_loggable.tqdm_logging Progress on:train 8.06kit/11.5kit rate:1.4it/s remaining:41:01 elapsed:03:02 postfix:loss=2.85",
+      "[08:20:46] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p030_s20260910/0 attempt=0 | I20260912 08:20:41 139772636238656 tqdm_loggable.tqdm_logging Progress on:train 8.14kit/11.5kit rate:1.4it/s remaining:40:10 elapsed:04:02 postfix:loss=2.99",
+      "[08:21:45] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p030_s20260910/0 attempt=0 | I20260912 08:21:41 139772636238656 tqdm_loggable.tqdm_logging Progress on:train 8.22kit/11.5kit rate:1.4it/s remaining:39:54 elapsed:05:03 postfix:loss=2.85",
+      "[08:22:45] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p030_s20260910/0 attempt=0 | I20260912 08:22:41 139772636238656 tqdm_loggable.tqdm_logging Progress on:train 8.30kit/11.5kit rate:1.4it/s remaining:38:37 elapsed:06:03 postfix:loss=2.89",
+      "[08:23:46] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p030_s20260910/0 attempt=0 | I20260912 08:23:42 139772636238656 tqdm_loggable.tqdm_logging Progress on:train 8.39kit/11.5kit rate:1.4it/s remaining:37:36 elapsed:07:03 postfix:loss=2.91"
+    ]
+  },
+  {
+    "run": "tpp10_finemath_3plus_target_p050_s20260910",
+    "exit_code": 0,
+    "lines": [
+      "[08:19:22] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p050_s20260910/0 attempt=0 | I20260912 08:19:16 140181560636224 tqdm_loggable.tqdm_logging Progress on:train 6.51kit/11.5kit rate:1.4it/s remaining:58:51 elapsed:03:02 postfix:loss=2.82",
+      "[08:20:21] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p050_s20260910/0 attempt=0 | I20260912 08:20:18 140181560636224 tqdm_loggable.tqdm_logging Progress on:train 6.59kit/11.5kit rate:1.0it/s remaining:1:20:04 elapsed:04:03 postfix:loss=2.89",
+      "[08:21:22] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p050_s20260910/0 attempt=0 | I20260912 08:21:18 140181560636224 tqdm_loggable.tqdm_logging Progress on:train 6.68kit/11.5kit rate:1.4it/s remaining:56:59 elapsed:05:04 postfix:loss=2.79",
+      "[08:22:22] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p050_s20260910/0 attempt=0 | I20260912 08:22:19 140181560636224 tqdm_loggable.tqdm_logging Progress on:train 6.76kit/11.5kit rate:1.4it/s remaining:55:57 elapsed:06:04 postfix:loss=2.76",
+      "[08:23:21] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p050_s20260910/0 attempt=0 | I20260912 08:23:20 140181560636224 tqdm_loggable.tqdm_logging Progress on:train 6.84kit/11.5kit rate:1.1it/s remaining:1:10:58 elapsed:07:05 postfix:loss=2.73"
+    ]
+  },
+  {
+    "run": "tpp10_finemath_3plus_target_p070_s20260910",
+    "exit_code": 0,
+    "lines": [
+      "[08:19:32] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p070_s20260910/0 attempt=0 | I20260912 08:19:28 140501150577472 tqdm_loggable.tqdm_logging Progress on:train 7.32kit/11.5kit rate:1.3it/s remaining:53:28 elapsed:03:04 postfix:loss=2.61",
+      "[08:20:31] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p070_s20260910/0 attempt=0 | I20260912 08:20:28 140501150577472 tqdm_loggable.tqdm_logging Progress on:train 7.40kit/11.5kit rate:1.4it/s remaining:47:56 elapsed:04:05 postfix:loss=2.55",
+      "[08:21:31] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p070_s20260910/0 attempt=0 | I20260912 08:21:28 140501150577472 tqdm_loggable.tqdm_logging Progress on:train 7.48kit/11.5kit rate:1.4it/s remaining:49:08 elapsed:05:05 postfix:loss=2.49",
+      "[08:22:31] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p070_s20260910/0 attempt=0 | I20260912 08:22:29 140501150577472 tqdm_loggable.tqdm_logging Progress on:train 7.57kit/11.5kit rate:1.4it/s remaining:46:19 elapsed:06:05 postfix:loss=2.48",
+      "[08:23:30] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p070_s20260910/0 attempt=0 | I20260912 08:23:29 140501150577472 tqdm_loggable.tqdm_logging Progress on:train 7.65kit/11.5kit rate:1.4it/s remaining:45:09 elapsed:07:06 postfix:loss=2.53"
+    ]
+  },
+  {
+    "run": "tpp10_finemath_3plus_target_p100_s20260910",
+    "exit_code": 0,
+    "lines": [
+      "[08:19:16] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p100_s20260910/0 attempt=0 | I20260912 08:19:10 140101558768448 tqdm_loggable.tqdm_logging Progress on:train 6.53kit/11.5kit rate:1.2it/s remaining:1:10:54 elapsed:03:02 postfix:loss=2.16",
+      "[08:20:15] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p100_s20260910/0 attempt=0 | I20260912 08:20:10 140101558768448 tqdm_loggable.tqdm_logging Progress on:train 6.62kit/11.5kit rate:1.4it/s remaining:57:51 elapsed:04:02 postfix:loss=2",
+      "[08:21:16] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p100_s20260910/0 attempt=0 | I20260912 08:21:11 140101558768448 tqdm_loggable.tqdm_logging Progress on:train 6.70kit/11.5kit rate:1.4it/s remaining:59:02 elapsed:05:02 postfix:loss=1.95",
+      "[08:22:16] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p100_s20260910/0 attempt=0 | I20260912 08:22:11 140101558768448 tqdm_loggable.tqdm_logging Progress on:train 6.78kit/11.5kit rate:1.4it/s remaining:56:38 elapsed:06:03 postfix:loss=1.95",
+      "[08:23:15] task=/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p100_s20260910/0 attempt=0 | I20260912 08:23:12 140101558768448 tqdm_loggable.tqdm_logging Progress on:train 6.87kit/11.5kit rate:1.4it/s remaining:54:51 elapsed:07:04 postfix:loss=2.08"
+    ]
+  }
+]

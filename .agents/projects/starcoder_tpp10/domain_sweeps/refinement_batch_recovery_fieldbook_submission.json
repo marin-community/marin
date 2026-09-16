@@ -1,0 +1,26 @@
+{
+  "attrs": {
+    "marin.child_priority": "batch",
+    "marin.parent_priority": "interactive",
+    "marin.plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+    "marin.wrapper_sha256": "b99a6277374bb0da97a1df91b0fd7dad5a7f8f1004e33e224c5cf4bf571b1e84"
+  },
+  "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+  "code_dirty": true,
+  "command": "uv run iris --config lib/iris/config/marin.yaml job run --no-wait \\\n  --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 172800 \\\n  --max-retries 0 --max-preemption-retries 0 \\\n  --extra cpu --no-preemptible --region us-central1 --zone us-central1-a \\\n  --priority interactive --job-name starcoder-tpp10-refinement-batch-recovery \\\n  --bundle-include .agents/projects/starcoder_tpp10/releases/refinement.json \\\n  --exclude '^(checkpoints|logs|wandb)/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' \\\n  --exclude '^\\.agents/(?!projects/starcoder_tpp10/releases/).*' \\\n  --exclude '^(docs|tests)/' \\\n  --exclude '^lib/[^/]+/tests/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/' \\\n  -e MARIN_PREFIX gs://marin-us-central1 \\\n  -e WANDB_API_KEY \"$WANDB_API_KEY\" \\\n  -- python -m experiments.domain_phase_mix.resume_starcoder_tpp10_refinement_batch --release .agents/projects/starcoder_tpp10/releases/refinement.json \\\n  --plan-path .agents/projects/starcoder_tpp10/live/refinement_plan.json --max-concurrent 45 --submit\n",
+  "created_at": "2026-09-11T11:18:20Z",
+  "deleted_at": null,
+  "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+  "external_id": null,
+  "external_system": null,
+  "failure_reason": null,
+  "finished_at": null,
+  "id": "job_01m28317ycr6k3vmhzm5xksec6",
+  "launcher": "iris",
+  "name": "starcoder-tpp10-refinement-batch-recovery",
+  "retry_of": "job_01m282e9ktr05xrmj8d9p3tsxp",
+  "run_id": null,
+  "started_at": null,
+  "status": "submitting",
+  "updated_at": "2026-09-11T11:18:20Z"
+}

@@ -1,0 +1,17 @@
+{
+  "authorized_by": "User: Check on our jobs and fix anything necessary",
+  "recorded_at": "2026-09-10T09:00:23.228713Z",
+  "retry_of": "/calvinxu/starcoder-tpp10-canary",
+  "stage": "canary",
+  "plan_sha256": "4362a8b1b2e37d7ae73096f7658c5b3a79774288bf268f240fa4e49edd826b60",
+  "released_run": "tpp10_matched_p100_s20260910_d20260912",
+  "reused_runs": [
+    "tpp10_target_p100_s20260910",
+    "tpp10_unmatched_p100_s20260910"
+  ],
+  "configuration_changed": false,
+  "max_concurrent": 1,
+  "all_original_jobs_terminal": true,
+  "stale_lock_has_active_holder": false,
+  "pilot_and_dense_released": false
+}

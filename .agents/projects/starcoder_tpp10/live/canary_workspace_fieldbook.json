@@ -1,0 +1,13 @@
+{
+  "attrs": {},
+  "content_hash": "sha256:a5c501ada6fb0cae6d1d2c978d7005a6fffeb8e60eb130884da6bcc2d5bbbd61",
+  "created_at": "2026-09-10T01:18:43Z",
+  "deleted_at": null,
+  "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+  "id": "art_01m24eak5jhkrv65t150ax9qj4",
+  "job_id": "job_01m24e81eab4ds2k7pcb4cwg1a",
+  "run_id": null,
+  "type": "other",
+  "updated_at": "2026-09-10T01:18:43Z",
+  "uri": "gs://marin-us-central2/iris/marin/state/bundles/a5c501ada6fb0cae6d1d2c978d7005a6fffeb8e60eb130884da6bcc2d5bbbd61"
+}

@@ -477,14 +477,37 @@ def panel_splits(panel: BenchPanel, repeats: int) -> tuple[Split, ...]:
     return _panel_splits(panel.name, repeats)
 
 
+# The proportional mixture is calibration data: its repeats anchor the floored surrogate's floors, so its panel row
+# stays in the training side of every outer and inner fold and is never scored as held out (2026-09-07 protocol).
+CALIBRATION_RUN_MARKER = "baseline_proportional"
+CALIBRATION_LABEL = -1
+
+
+def calibration_rows(panel: BenchPanel) -> np.ndarray:
+    """Row indices of the panel's calibration mixtures (the proportional run), empty for curve panels."""
+    if panel.kind != "tabular":
+        return np.zeros(0, dtype=int)
+    return np.asarray([index for index, run in enumerate(panel.runs) if CALIBRATION_RUN_MARKER in str(run)], dtype=int)
+
+
+def pin_calibration(labels: np.ndarray, positions: np.ndarray) -> np.ndarray:
+    """Give the calibration rows a label no fold index matches, so they train in every fold and validate in none."""
+    pinned = np.array(labels, copy=True)
+    pinned[positions] = CALIBRATION_LABEL
+    return pinned
+
+
 @functools.cache
 def _panel_splits(panel_name: str, repeats: int) -> tuple[Split, ...]:
     panel = load_panel(panel_name)
     rows = np.arange(panel.rows)
+    calibration = calibration_rows(panel)
     result: list[Split] = []
     for repeat in range(repeats):
         if panel.kind == "tabular":
-            labels = olmix_benchmark.block_labels(panel.features.weights, OUTER_FOLDS, FOLD_SEED + 100 * repeat)
+            labels = pin_calibration(
+                olmix_benchmark.block_labels(panel.features.weights, OUTER_FOLDS, FOLD_SEED + 100 * repeat), calibration
+            )
         else:
             if repeat > 0:
                 raise ValueError("StarCoder curves have one deterministic interleaved partition")
@@ -493,8 +516,11 @@ def _panel_splits(panel_name: str, repeats: int) -> tuple[Split, ...]:
             train = rows[labels != fold]
             test = rows[labels == fold]
             if panel.kind == "tabular":
-                inner_labels = olmix_benchmark.block_labels(
-                    panel.features.weights[train], INNER_FOLDS, FOLD_SEED + 10_000 * repeat + 100 * fold
+                inner_labels = pin_calibration(
+                    olmix_benchmark.block_labels(
+                        panel.features.weights[train], INNER_FOLDS, FOLD_SEED + 10_000 * repeat + 100 * fold
+                    ),
+                    np.flatnonzero(np.isin(train, calibration)),
                 )
             else:
                 inner_labels = _interleaved(len(train), INNER_FOLDS)
@@ -505,7 +531,9 @@ def _panel_splits(panel_name: str, repeats: int) -> tuple[Split, ...]:
 
 def heldout_inner_folds(panel: BenchPanel) -> tuple[tuple[np.ndarray, np.ndarray], ...]:
     rows = np.arange(panel.rows)
-    labels = olmix_benchmark.block_labels(panel.features.weights, INNER_FOLDS, HELDOUT_INNER_SEED)
+    labels = pin_calibration(
+        olmix_benchmark.block_labels(panel.features.weights, INNER_FOLDS, HELDOUT_INNER_SEED), calibration_rows(panel)
+    )
     return tuple((rows[labels != index], rows[labels == index]) for index in range(INNER_FOLDS))
 
 
@@ -1273,11 +1301,12 @@ def aggregate_predictions(predictions: pd.DataFrame) -> pd.DataFrame:
         panel = load_panel(panel_name)
         target_group = panel.group(target)
         pivot = group.pivot_table(index="row_index", columns="component_index", values="prediction", aggfunc="first")
-        if pivot.shape != (panel.rows, len(target_group.components)):
+        # The scored rows: every run except the pinned calibration run, which never receives an out-of-fold
+        # prediction; an aggregate needs every component of each scored row.
+        pivot = pivot.reindex(columns=np.arange(len(target_group.components)))
+        if pivot.shape[0] == 0 or pivot.shape[0] > panel.rows or pivot.isna().any().any():
             continue
-        pivot = pivot.reindex(index=np.arange(panel.rows), columns=np.arange(len(target_group.components)))
-        if pivot.isna().any().any():
-            continue
+        row_indices = pivot.index.to_numpy(int)
         values = pivot.to_numpy(float) @ target_group.aggregation_weights
         fold_lookup = group[["row_index", "fold"]].drop_duplicates().set_index("row_index")["fold"]
         basin = np.zeros(panel.rows, dtype=bool)
@@ -1285,7 +1314,7 @@ def aggregate_predictions(predictions: pd.DataFrame) -> pd.DataFrame:
         entry = registry.ENTRY_BY_ID.get(model)
         role = entry.role if entry else ""
         parent = (entry.parent or "") if entry else ""
-        for row_index in range(panel.rows):
+        for position, row_index in enumerate(row_indices):
             rows.append(
                 {
                     "model": model,
@@ -1297,10 +1326,10 @@ def aggregate_predictions(predictions: pd.DataFrame) -> pd.DataFrame:
                     "target": target,
                     "repeat": int(repeat),
                     "fold": int(fold_lookup.loc[row_index]),
-                    "row_index": row_index,
+                    "row_index": int(row_index),
                     "run": panel.runs[row_index],
                     "observed": float(target_group.aggregate[row_index]),
-                    "prediction": float(values[row_index]),
+                    "prediction": float(values[position]),
                     "basin": bool(basin[row_index]),
                 }
             )
@@ -1754,10 +1783,13 @@ def grid_summary(entry: registry.ModelEntry, panel: BenchPanel) -> str:
     return entry.hyperparameter_grid
 
 
-def registry_table(panels: tuple[BenchPanel, ...]) -> pd.DataFrame:
+def registry_table(panels: tuple[BenchPanel, ...], only: tuple[str, ...] | None = None) -> pd.DataFrame:
+    """The registry's documentation table; ``only`` restricts the probe to the entries a run fits."""
     rows = []
     reference_panels = [panel for panel in panels if panel.kind == "tabular"]
     for entry in registry.ALL_ENTRIES:
+        if only is not None and entry.model_id not in only:
+            continue
         row: dict[str, Any] = {
             "single_phase_model_id": entry.model_id,
             "role": entry.role,
@@ -2490,6 +2522,8 @@ def write_report(
             ]
         )
         pooled_rows = heldout[heldout["stratum"].eq("pooled") & heldout["status"].eq("ok")]
+        if "regret_at_1" not in pooled_rows.columns:
+            pooled_rows = pd.DataFrame(columns=[*pooled_rows.columns, "regret_at_1"])
         lines.extend(
             [
                 _markdown(
@@ -2694,12 +2728,26 @@ def main() -> None:
     parser.add_argument(
         "--report-subdir", default=None, help="Write metric tables and the report under this sub-directory"
     )
+    parser.add_argument(
+        "--panels", default=None, help="Comma-separated tabular panels to fit (default: every tabular panel)"
+    )
+    parser.add_argument(
+        "--curves", choices=("all", "none"), default="all", help="Whether the tier's StarCoder curves are fitted"
+    )
     args = parser.parse_args()
     if args.workers < 1:
         raise ValueError("workers must be positive")
     model_ids = parse_models(args.models)
     report_ids = parse_models(args.report_models) if args.report_models else model_ids
-    plan = tier_plan(args.tier)
+    panel_names = TABULAR_PANELS
+    if args.panels:
+        panel_names = tuple(part.strip() for part in args.panels.split(",") if part.strip())
+        unknown = [name for name in panel_names if name not in TABULAR_PANELS]
+        if unknown:
+            raise ValueError(f"unknown panels {unknown}")
+    plan = tier_plan(args.tier, panels=panel_names)
+    if args.curves == "none":
+        plan = dataclasses.replace(plan, curves=())
     panels = tuple(load_panel(name) for name in plan.components) + tuple(
         load_panel(f"{STARCODER_PANEL_PREFIX}{curve}") for curve in plan.curves
     )
@@ -2713,7 +2761,7 @@ def main() -> None:
     manifest.to_csv(args.output_dir / "split_manifest.csv", index=False)
     protocol = protocol_payload(args.tier, plan, panels, split_hash, model_ids, args.workers)
     (args.output_dir / "protocol.json").write_text(json.dumps(protocol, indent=2, sort_keys=True) + "\n")
-    registry_table(tuple(panel for panel in panels if panel.kind == "tabular")).to_csv(
+    registry_table(tuple(panel for panel in panels if panel.kind == "tabular"), only=model_ids).to_csv(
         args.output_dir / "model_registry.csv", index=False
     )
     (args.output_dir / "equivalence_classes.md").write_text(equivalence_markdown())
@@ -2809,6 +2857,9 @@ def main() -> None:
             (report_dir / "ablation_promotions.csv").write_bytes(screen_promotions.read_bytes())
             tables["ablation_promotions"] = pd.read_csv(screen_promotions)
             tables["pooled_screen_contrasts"] = pd.read_csv(args.output_dir / "screen" / "pooled_screen_contrasts.csv")
+        # A run without a Screen decision table (a scoped fit of a few models) reports its own contrasts.
+        tables.setdefault("ablation_promotions", promotions)
+        tables.setdefault("pooled_screen_contrasts", pooled)
         write_report(report_dir, args.tier, tables, counts, panels)
         print(f"wrote {report_dir}", flush=True)
 
