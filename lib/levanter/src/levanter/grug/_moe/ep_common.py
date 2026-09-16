@@ -85,21 +85,17 @@ def _token_sources(
     )
 
 
-def _prefix_cap_counts(counts: Int[Array, "E"], *, capacity: int) -> Int[Array, "E"]:
-    accepted = []
-    remaining = jnp.array(capacity, dtype=jnp.int32)
-    for expert in range(int(counts.shape[0])):
-        take = jnp.minimum(counts[expert], remaining)
-        accepted.append(take)
-        remaining = jnp.maximum(remaining - take, 0)
-    return jnp.stack(accepted, axis=0)
+def _prefix_cap_counts(counts: Int[Array, "*batch E"], *, capacity: int | Int[Array, ""]) -> Int[Array, "*batch E"]:
+    """Allocate capacity in order along the last axis, independently for each batch."""
+    starts = jnp.cumsum(counts, axis=-1, dtype=jnp.int32) - counts
+    return jnp.minimum(counts, jnp.maximum(jnp.asarray(capacity, dtype=jnp.int32) - starts, 0))
 
 
 def _clip_receiver_group_sizes(
     global_group_sizes: Int[Array, "S E"],
     *,
     local_expert_size: int,
-    receiver_capacity: int,
+    receiver_capacity: int | Int[Array, ""],
 ) -> Int[Array, "S E"]:
     """Clip sender->expert group sizes so each receiver shard stays within capacity."""
     num_senders = int(global_group_sizes.shape[0])
@@ -110,23 +106,16 @@ def _clip_receiver_group_sizes(
     if num_receivers != num_senders:
         raise ValueError(f"sender/receiver shard mismatch: num_senders={num_senders}, num_receivers={num_receivers}")
 
-    clipped_by_receiver: list[jax.Array] = []
-    for receiver_index in range(num_receivers):
-        start = receiver_index * local_expert_size
-        stop = start + local_expert_size
-        receiver_counts = global_group_sizes[:, start:stop]
-        receiver_totals = jnp.sum(receiver_counts, axis=0, dtype=jnp.int32)
-        accepted_totals = _prefix_cap_counts(receiver_totals, capacity=receiver_capacity)
-        remaining = accepted_totals
-        accepted_rows: list[jax.Array] = []
-        for sender_index in range(num_senders):
-            # Greedy first-sender-wins: earlier shards get priority when capacity is scarce.
-            accepted = jnp.minimum(receiver_counts[sender_index], remaining)
-            accepted_rows.append(accepted)
-            remaining = remaining - accepted
-        clipped_by_receiver.append(jnp.stack(accepted_rows, axis=0))
-
-    return jnp.concatenate(clipped_by_receiver, axis=1)
+    # Each receiver prioritizes earlier experts, then earlier senders within each expert.
+    # Batch receivers so traced capacities do not produce a separate kernel chain for each one.
+    receiver_counts = global_group_sizes.reshape(num_senders, num_receivers, local_expert_size)
+    receiver_counts = receiver_counts.transpose(1, 2, 0).reshape(num_receivers, -1)
+    accepted = _prefix_cap_counts(receiver_counts, capacity=receiver_capacity)
+    return (
+        accepted.reshape(num_receivers, local_expert_size, num_senders)
+        .transpose(2, 0, 1)
+        .reshape(global_group_sizes.shape)
+    )
 
 
 class ExpertA2aParams(NamedTuple):

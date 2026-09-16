@@ -1652,7 +1652,19 @@ def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
     assert int(dispatch_counts.dropped) > 0
 
 
-def test_ragged_a2a_receiver_clipping_respects_capacity():
+@pytest.mark.parametrize("traced_capacity", [False, True])
+@pytest.mark.parametrize(
+    "capacity, expected",
+    [
+        (0, [[0, 0, 0, 0], [0, 0, 0, 0]]),
+        (3, [[3, 0, 0, 0], [0, 0, 3, 0]]),
+        (4, [[3, 0, 0, 0], [1, 0, 4, 0]]),
+        (5, [[3, 0, 0, 0], [2, 0, 4, 1]]),
+        (6, [[3, 1, 0, 0], [2, 0, 4, 1]]),
+        (20, [[3, 1, 0, 0], [2, 0, 4, 1]]),
+    ],
+)
+def test_ragged_a2a_receiver_clipping_respects_capacity(capacity, expected, traced_capacity):
     group_sizes = jnp.array(
         [
             [3, 1, 0, 0],
@@ -1661,23 +1673,14 @@ def test_ragged_a2a_receiver_clipping_respects_capacity():
         dtype=jnp.int32,
     )
 
-    clipped = grug_moe._clip_receiver_group_sizes(
-        group_sizes,
-        local_expert_size=2,
-        receiver_capacity=3,
-    )
+    def clip(counts, limit):
+        return grug_moe._clip_receiver_group_sizes(counts, local_expert_size=2, receiver_capacity=limit)
 
-    np.testing.assert_array_equal(
-        np.asarray(clipped),
-        np.asarray(
-            [
-                [3, 0, 0, 0],
-                [0, 0, 3, 0],
-            ],
-            dtype=np.int32,
-        ),
-    )
-    assert int(jnp.sum(clipped)) < int(jnp.sum(group_sizes))
+    if traced_capacity:
+        clipped = jax.jit(clip)(group_sizes, jnp.asarray(capacity, dtype=jnp.int32))
+    else:
+        clipped = jax.jit(clip, static_argnums=1)(group_sizes, capacity)
+    np.testing.assert_array_equal(clipped, np.asarray(expected, dtype=np.int32))
 
 
 @pytest.mark.parametrize("site", list(_LoopLocalZeroSite))
