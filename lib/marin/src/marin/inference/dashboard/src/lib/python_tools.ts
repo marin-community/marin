@@ -60,6 +60,5 @@ function pythonToolCallXml(call: ToolCall): string {
 }
 
 function pythonToolResultXml(message: ToolMessage): string {
-  const result: unknown = JSON.parse(message.content)
-  return `<${TOOL_RESULT_TAG}><![CDATA[${escapeCdataContent(JSON.stringify({ name: message.name, result }))}]]></${TOOL_RESULT_TAG}>`
+  return `<${TOOL_RESULT_TAG}><![CDATA[${escapeCdataContent(JSON.stringify({ name: message.name, result: message.result }))}]]></${TOOL_RESULT_TAG}>`
 }

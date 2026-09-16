@@ -31,16 +31,15 @@ export async function invokeTool(
   source: string,
   arguments_: Record<string, unknown>,
   signal: AbortSignal,
-): Promise<string> {
+): Promise<unknown> {
   const response = await fetch(api(`tools/${encodeURIComponent(name)}`), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ source, arguments: arguments_ }),
     signal,
   })
-  const body = await response.text()
-  if (response.ok) return body
-  throw new Error(`tool returned ${response.status}: ${body}`)
+  if (response.ok) return response.json()
+  throw new Error(`tool returned ${response.status}: ${await response.text()}`)
 }
 
 /** POST an OpenAI request and invoke onData for either buffered JSON or SSE events. */

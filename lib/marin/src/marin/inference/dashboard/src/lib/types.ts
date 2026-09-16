@@ -35,7 +35,7 @@ export interface AssistantMessage {
 
 export interface ToolMessage {
   role: 'tool'
-  content: string
+  result: unknown
   name: string
   toolCallId: string
 }

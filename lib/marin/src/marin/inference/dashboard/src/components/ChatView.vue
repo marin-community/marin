@@ -63,7 +63,10 @@ function onKeydown(event: KeyboardEvent) {
 watch(
   () =>
     props.conversation.messages
-      .map((message) => message.content.length + (message.role === 'assistant' ? message.thinking.length : 0))
+      .map((message) => {
+        if (message.role === 'tool') return JSON.stringify(message.result).length
+        return message.content.length + (message.role === 'assistant' ? message.thinking.length : 0)
+      })
       .join(','),
   async () => {
     const el = scroller.value
@@ -153,16 +156,16 @@ function appendCancelledToolResults(conversation: Conversation, reply: Assistant
   )
   for (const call of reply?.toolCalls ?? []) {
     if (completed.has(call.id)) continue
-    conversation.messages.push(toolResultMessage(call, JSON.stringify({ error: 'tool call cancelled' })))
+    conversation.messages.push(toolResultMessage(call, { error: 'tool call cancelled' }))
   }
 }
 
-function toolResultMessage(call: ToolCall, content: string): ToolMessage {
+function toolResultMessage(call: ToolCall, result: unknown): ToolMessage {
   return {
     role: 'tool',
     name: call.name,
     toolCallId: call.id,
-    content,
+    result,
   }
 }
 

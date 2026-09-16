@@ -10,7 +10,9 @@ const props = defineProps<{
   streaming: boolean
 }>()
 
-const rendered = computed(() => renderMarkdown(props.message.content))
+const rendered = computed(() =>
+  props.message.role === 'assistant' ? renderMarkdown(props.message.content) : '',
+)
 const thinkingActive = computed(
   () => props.message.role === 'assistant' && props.streaming && !props.message.content,
 )
@@ -27,6 +29,7 @@ const empty = computed(
 const copied = ref(false)
 
 async function copy() {
+  if (props.message.role !== 'assistant') return
   await navigator.clipboard.writeText(props.message.content)
   copied.value = true
   setTimeout(() => (copied.value = false), 1200)
@@ -49,7 +52,7 @@ async function copy() {
         {{ message.name }} result
       </summary>
       <pre class="mt-2 overflow-x-auto whitespace-pre-wrap break-words text-text-muted">{{
-        JSON.stringify(JSON.parse(message.content), null, 2)
+        JSON.stringify(message.result, null, 2)
       }}</pre>
     </details>
   </div>
