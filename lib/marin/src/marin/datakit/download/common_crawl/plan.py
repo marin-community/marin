@@ -119,7 +119,6 @@ class CommonCrawlRecordSelector(Protocol):
 class CommonCrawlFilter:
     """Standard status, truncation, MIME, and URL-suffix record selector."""
 
-    successful_responses: bool = True
     exclude_truncated: bool = True
     declared_mime_types: frozenset[str] = frozenset()
     detected_mime_types: frozenset[str] = frozenset()
@@ -134,7 +133,6 @@ class CommonCrawlFilter:
     @property
     def identity(self) -> Mapping[str, object]:
         return {
-            "successful_responses": self.successful_responses,
             "exclude_truncated": self.exclude_truncated,
             "declared_mime_types": sorted(self.declared_mime_types),
             "detected_mime_types": sorted(self.detected_mime_types),
@@ -143,9 +141,7 @@ class CommonCrawlFilter:
 
     def select(self, row: Mapping[str, object]) -> CommonCrawlSelection | None:
         status = row.get("fetch_status")
-        if self.successful_responses and (
-            isinstance(status, bool) or not isinstance(status, int) or not 200 <= status < 300
-        ):
+        if isinstance(status, bool) or not isinstance(status, int) or not 200 <= status < 300:
             return None
         if self.exclude_truncated and row.get("content_truncated") is not None:
             return None

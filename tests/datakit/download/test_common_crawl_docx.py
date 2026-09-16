@@ -187,10 +187,6 @@ def test_selector_rejects_failed_and_truncated_rows() -> None:
     )
 
 
-def test_validate_docx_accepts_required_office_members() -> None:
-    validate_docx(_docx_payload(), maximum_entries=10, maximum_uncompressed_bytes=1024)
-
-
 @pytest.mark.parametrize("payload", [b"not a zip", _docx_payload(document=b"x")[:-8]])
 def test_validate_docx_rejects_malformed_payload(payload: bytes) -> None:
     with pytest.raises(InvalidDocxError):

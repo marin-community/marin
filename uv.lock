@@ -6255,6 +6255,8 @@ vllm = [
 dev = [
     { name = "black" },
     { name = "click" },
+    { name = "docling" },
+    { name = "lingua-language-detector" },
     { name = "mkdocs" },
     { name = "mkdocs-git-authors-plugin" },
     { name = "mkdocs-git-revision-date-localized-plugin" },
@@ -6264,7 +6266,6 @@ dev = [
     { name = "mkdocstrings" },
     { name = "mkdocstrings-python" },
     { name = "plotly" },
-    { name = "python-docx" },
     { name = "pylatexenc" },
     { name = "pymdown-extensions" },
     { name = "pyrefly" },
@@ -6272,11 +6273,13 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "python-docx" },
     { name = "pyyaml" },
     { name = "ruff" },
     { name = "sympy" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
+    { name = "warcio" },
 ]
 docs = [
     { name = "mkdocs" },
@@ -6303,11 +6306,15 @@ math = [
     { name = "sympy" },
 ]
 test = [
+    { name = "docling" },
+    { name = "lingua-language-detector" },
     { name = "plotly" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "python-docx" },
+    { name = "warcio" },
 ]
 
 [package.metadata]
@@ -6400,6 +6407,8 @@ provides-extras = ["gpu", "tpu", "cpu", "rl", "vizier", "vllm", "dedup", "dataki
 dev = [
     { name = "black", specifier = ">=26.3.1" },
     { name = "click", specifier = ">=8.0" },
+    { name = "docling", specifier = "==2.99.0" },
+    { name = "lingua-language-detector", specifier = "==2.2.0" },
     { name = "mkdocs", specifier = ">=1.5.0" },
     { name = "mkdocs-git-authors-plugin", specifier = ">=0.9.0" },
     { name = "mkdocs-git-revision-date-localized-plugin", specifier = ">=1.2.0" },
@@ -6422,6 +6431,7 @@ dev = [
     { name = "sympy", specifier = ">=1.12.1,<1.14" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
+    { name = "warcio", specifier = ">=1.7.5,<2" },
 ]
 docs = [
     { name = "mkdocs", specifier = ">=1.5.0" },
@@ -6448,12 +6458,15 @@ math = [
     { name = "sympy", specifier = ">=1.12.1,<1.14" },
 ]
 test = [
+    { name = "docling", specifier = "==2.99.0" },
+    { name = "lingua-language-detector", specifier = "==2.2.0" },
     { name = "plotly" },
-    { name = "python-docx", specifier = "==1.2.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "python-docx", specifier = "==1.2.0" },
+    { name = "warcio", specifier = ">=1.7.5,<2" },
 ]
 
 [[package]]

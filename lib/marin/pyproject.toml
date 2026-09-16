@@ -60,6 +60,9 @@ test = [
     "pytest-xdist",
     "pytest-timeout",
     "python-docx==1.2.0",
+    "docling==2.99.0",
+    "lingua-language-detector==2.2.0",
+    "warcio>=1.7.5,<2",
     # for scaling law plotting tests
     "plotly",
 ]

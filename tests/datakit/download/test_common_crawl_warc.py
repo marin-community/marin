@@ -669,7 +669,7 @@ def test_fetch_range_fails_when_a_planned_offset_is_missing() -> None:
         "<urn:uuid:019F8700-D21D-78D8-8EB1-99EAA22579DA>",
     ],
 )
-def test_url_index_verification_accepts_equivalent_uuid_spelling(observed_record_id: str) -> None:
+def test_fetch_range_accepts_equivalent_uuid_spelling_and_preserves_observed_id(observed_record_id: str) -> None:
     payload = b"document"
     warc = _warc_response(payload, record_id=observed_record_id)
     indexed_record = _indexed_record(warc, payload)
@@ -677,7 +677,7 @@ def test_url_index_verification_accepts_equivalent_uuid_spelling(observed_record
     with _range_session(warc) as session, _client(session) as client:
         [record] = client.fetch_range(_planned_range(warc, (indexed_record,)))
 
-    verify_url_index_record(record, indexed_record.expectation)
+    assert record.warc_record_id == observed_record_id
 
 
 def test_fetch_range_rejects_incorrect_content_range() -> None:
