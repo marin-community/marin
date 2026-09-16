@@ -28,7 +28,7 @@ function parseToolCall(payload: string): ToolCall | null {
   }
 }
 
-/** Parse raw chat-template tool tags used when a backend has no structured parser. */
+/** Parse XML tool calls and the compatible bare-JSON form emitted by some chat templates. */
 export function inlineToolCalls(content: string): { visible: string; calls: ToolCall[] } {
   const calls: ToolCall[] = []
   const visible = content.replace(INLINE_TOOL_CALL, (_match, payload: string) => {
@@ -45,19 +45,4 @@ export function inlineToolCalls(content: string): { visible: string; calls: Tool
     if (call) return { visible: '', calls: [call] }
   }
   return { visible: visible.trim(), calls }
-}
-
-/** Fill optional IDs and discard calls without a function name. */
-export function executableToolCalls(calls: ToolCall[]): ToolCall[] {
-  return calls
-    .filter((call) => call.function.name)
-    .map((call) => ({
-      ...call,
-      id: call.id || callId(),
-      type: 'function',
-      function: {
-        name: call.function.name,
-        arguments: call.function.arguments || '{}',
-      },
-    }))
 }

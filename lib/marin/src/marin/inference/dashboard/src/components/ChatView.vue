@@ -6,7 +6,7 @@ import type { ChatExample } from '../lib/examples'
 import { modelMessages } from '../lib/python_tools'
 import type { ModelMessage } from '../lib/python_tools'
 import { splitThinking } from '../lib/thinking'
-import { executableToolCalls, inlineToolCalls } from '../lib/tool_calls'
+import { inlineToolCalls } from '../lib/tool_calls'
 import type { ChatMessage, Conversation, SamplingParams, ToolCall } from '../lib/types'
 import MessageBubble from './MessageBubble.vue'
 
@@ -172,7 +172,7 @@ function appendCancelledToolResults(conversation: Conversation, reply: ChatMessa
 async function complete(reply: ChatMessage, messages: ModelMessage[], pythonTools: string, signal: AbortSignal) {
   let rawContent = ''
   let reasoningStream = ''
-  let fallbackCalls: ToolCall[] = []
+  let toolCalls: ToolCall[] = []
   let thinkingStartedAt: number | null = null
 
   const body: Record<string, unknown> = {
@@ -194,9 +194,9 @@ async function complete(reply: ChatMessage, messages: ModelMessage[], pythonTool
     reply.thinking = reasoningStream + split.thinking
     if (pythonTools) {
       const inline = inlineToolCalls(split.visible)
-      fallbackCalls = inline.calls
+      toolCalls = inline.calls
       reply.content = inline.visible
-      reply.toolCalls = executableToolCalls(fallbackCalls)
+      reply.toolCalls = toolCalls
     } else {
       reply.content = split.visible
       reply.toolCalls = []
@@ -207,7 +207,7 @@ async function complete(reply: ChatMessage, messages: ModelMessage[], pythonTool
     }
   })
 
-  if (pythonTools) reply.toolCalls = executableToolCalls(fallbackCalls)
+  if (pythonTools) reply.toolCalls = toolCalls
   if (thinkingStartedAt !== null && reply.thinkingSeconds === null) {
     reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
   }

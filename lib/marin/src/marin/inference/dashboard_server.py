@@ -38,7 +38,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Route
 
 from marin.inference.http_proxy import forwardable_request_headers, forwardable_response_headers
-from marin.inference.python_tools import MAX_PYTHON_TOOL_SOURCE_BYTES
+from marin.inference.python_tools import MAX_PYTHON_TOOL_SOURCE_BYTES, PythonToolRequest
 
 logger = logging.getLogger(__name__)
 PYTHON_TOOL_TIMEOUT_SECONDS = 10
@@ -85,7 +85,11 @@ async def _invoke_tool_request(request: Request) -> Response:
     if len(source.encode()) > MAX_PYTHON_TOOL_SOURCE_BYTES:
         return JSONResponse({"error": "Python tool source is too large"}, status_code=413)
 
-    child_payload = json.dumps({"source": source, "name": request.path_params["name"], "arguments": arguments}).encode()
+    child_payload = PythonToolRequest(
+        source=source,
+        name=request.path_params["name"],
+        arguments=arguments,
+    ).to_json_bytes()
     try:
         result = await asyncio.to_thread(_run_python_tool, child_payload)
     except subprocess.TimeoutExpired:
