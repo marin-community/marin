@@ -158,7 +158,7 @@ class MarinaConfig:
 
 
 def parse_host_mapping(spec: str, env_name: str) -> dict[str, str]:
-    """Parse comma-separated host assignments; blank means no aliases."""
+    """Parse comma-separated host assignments; blank means no assignments."""
     pairs = [item.strip() for item in spec.split(",") if item.strip()]
     result: dict[str, str] = {}
     for pair in pairs:
@@ -578,14 +578,19 @@ def install_agent_panel_config_route(
         )
 
 
-def create_app(config: MarinaConfig) -> ASGIApp:
-    validate_agent_panel(config.agent_panel, config.iap_audience)
+def validate_applet_hosts(config: MarinaConfig) -> None:
+    """Reject named applet hosts that overlap other Marina origins."""
     reserved_hosts = set(config.host_apps)
     reserved_hosts.update(
         urlparse(origin).hostname for origin in (config.canonical_origin, config.applet_origin) if origin
     )
     if reserved_hosts.intersection(config.applet_hosts):
         raise ValueError(f"{APPLET_HOSTS_ENV} must not reuse a Marina or legacy app host")
+
+
+def create_app(config: MarinaConfig) -> ASGIApp:
+    validate_agent_panel(config.agent_panel, config.iap_audience)
+    validate_applet_hosts(config)
     apps = discover_apps(config.apps_dir)
     shadowed = sorted(app.name for app in apps if app.name in KERNEL_PREFIXES)
     if shadowed:
