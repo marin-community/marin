@@ -206,7 +206,7 @@ def sample(request: SampleRequest, store_root: str) -> None:
                 logprobs=logprobs,
                 decode=decode,
             )
-        logger.info("Start completion generation")
+        logger.info("Start completion generation: %d samples per prompt", request.spec.completions_per_prompt)
         with log_time("Completion generation and decoding"):
             completions = generate(
                 request.spec,
@@ -221,7 +221,7 @@ def sample(request: SampleRequest, store_root: str) -> None:
         )
         if jax.process_index() == 0:
             logger.info(
-                "Validate and save %d completions to %s (sample=%s)", len(completions), store_root, request.sample_id
+                "Validate and save %d prompt sets to %s (sample=%s)", len(completions), store_root, request.sample_id
             )
             with log_time("Result validation and upload"):
                 SampleStore(store_root).save_result(
@@ -233,11 +233,13 @@ def sample(request: SampleRequest, store_root: str) -> None:
                     )
                 )
             logger.info(
-                "Sample completed: checkpoint step=%d, prompts=%d, generated tokens=%d, total=%.1f seconds. "
+                "Sample completed: checkpoint step=%d, prompts=%d, completions=%d, "
+                "generated tokens=%d, total=%.1f seconds. "
                 "The report will include this result after its next publication.",
                 request.checkpoint.step,
                 len(completions),
-                sum(len(completion.token_ids) for completion in completions),
+                sum(len(row.samples) for row in completions),
+                sum(len(sample.token_ids) for row in completions for sample in row.samples),
                 total.elapsed_seconds(),
             )
 

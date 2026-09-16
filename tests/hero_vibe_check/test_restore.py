@@ -47,6 +47,7 @@ def spec():
     return SamplingSpec(
         release="test-v1",
         batch_size=1,
+        completions_per_prompt=3,
         prompts=(Prompt(id="p", text="p", seed=0, source_url="https://example.org"),),
         tokenizer="test",
         tokenizer_revision="a" * 40,

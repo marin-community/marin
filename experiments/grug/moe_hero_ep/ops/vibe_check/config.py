@@ -51,7 +51,8 @@ def sampling_spec() -> SamplingSpec:
         hero_recipe.HERO_MODEL_CONFIG, moe_implementation=DEFAULT_DROPLESS_MOE_IMPLEMENTATION, expert_chunks=1
     )
     return SamplingSpec(
-        release="hero-native-v2-logprobs",
+        release="hero-native-v3-three-completions",
+        completions_per_prompt=3,
         batch_size=hero_recipe.HERO_EP_EXPERT_AXIS_SIZE,
         prompts=tuple(Prompt.model_validate(row) for row in json.loads((CONFIG_DIRECTORY / "prompts.json").read_text())),
         tokenizer="marin-community/marin-tokenizer",
