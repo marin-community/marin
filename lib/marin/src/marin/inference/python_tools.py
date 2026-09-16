@@ -18,6 +18,7 @@ from typing import Any, get_type_hints
 from pydantic import BaseModel, ConfigDict, TypeAdapter, create_model
 
 MAX_PYTHON_TOOL_SOURCE_BYTES = 64 * 1024
+_PYTHON_TOOL_FILENAME = "<chat-python-tools>"
 _MAX_TOOL_NAME_LENGTH = 64
 _TOOL_NAME_PATTERN = re.compile(rf"^[A-Za-z0-9_-]{{1,{_MAX_TOOL_NAME_LENGTH}}}$")
 _SUPPORTED_PARAMETER_KINDS = frozenset(
@@ -76,7 +77,7 @@ class PythonToolSourceTooLarge(ValueError):
 
 def python_tools_from_source(source: str) -> tuple[PythonTool, ...]:
     """Compile top-level typed function definitions from dashboard-authored source."""
-    module = ast.parse(source, filename="<chat-python-tools>")
+    module = ast.parse(source, filename=_PYTHON_TOOL_FILENAME)
     definitions: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
     for statement in module.body:
         if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -88,7 +89,7 @@ def python_tools_from_source(source: str) -> tuple[PythonTool, ...]:
         raise ValueError("Python tool source must define at least one function")
 
     namespace: dict[str, object] = {"__name__": "__chat_python_tools__"}
-    exec(compile(module, "<chat-python-tools>", "exec"), namespace)
+    exec(compile(module, _PYTHON_TOOL_FILENAME, "exec"), namespace)
     functions = tuple(namespace[definition.name] for definition in definitions)
     tools = tuple(_python_tool(function) for function in functions)
     names = [tool.name for tool in tools]
@@ -154,16 +155,11 @@ async def _invoke_tool(request: PythonToolRequest) -> bytes:
         return tool.serialize_result(result)
 
 
-def _main() -> int:
-    try:
-        request = PythonToolRequest.from_json(json.load(sys.stdin))
-        result = asyncio.run(_invoke_tool(request))
-    except Exception as exc:
-        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
-        return 1
+def _main() -> None:
+    request = PythonToolRequest.from_json(json.load(sys.stdin))
+    result = asyncio.run(_invoke_tool(request))
     sys.stdout.buffer.write(result)
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(_main())
+    _main()

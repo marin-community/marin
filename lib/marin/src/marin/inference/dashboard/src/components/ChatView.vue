@@ -115,15 +115,7 @@ async function send(text?: string) {
 
       for (const call of calls) {
         const result = await callTool(call, pythonTools, abort.signal)
-        conversation.messages.push({
-          role: 'tool',
-          name: call.name,
-          toolCallId: call.id,
-          content: result,
-          thinking: '',
-          thinkingSeconds: null,
-          error: null,
-        })
+        conversation.messages.push(toolResultMessage(call, result))
         conversation.updatedAt = Date.now()
         emit('persist')
       }
@@ -156,15 +148,19 @@ function appendCancelledToolResults(conversation: Conversation, reply: ChatMessa
   )
   for (const call of reply?.toolCalls ?? []) {
     if (completed.has(call.id)) continue
-    conversation.messages.push({
-      role: 'tool',
-      name: call.name,
-      toolCallId: call.id,
-      content: JSON.stringify({ error: 'tool call cancelled' }),
-      thinking: '',
-      thinkingSeconds: null,
-      error: null,
-    })
+    conversation.messages.push(toolResultMessage(call, JSON.stringify({ error: 'tool call cancelled' })))
+  }
+}
+
+function toolResultMessage(call: ToolCall, content: string): ChatMessage {
+  return {
+    role: 'tool',
+    name: call.name,
+    toolCallId: call.id,
+    content,
+    thinking: '',
+    thinkingSeconds: null,
+    error: null,
   }
 }
 
