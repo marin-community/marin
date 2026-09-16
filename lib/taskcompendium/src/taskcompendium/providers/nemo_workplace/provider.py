@@ -56,8 +56,9 @@ class NemoWorkplaceEnvironment(BaseEnvironment):
         return EnvironmentCapabilities(disable_internet=True)
 
     def _validate_definition(self) -> None:
-        if not self.environment_dir.is_dir():
-            raise ValueError("Missing provider environment directory")
+        # Workplace state is provided by the pinned package, so its lowering
+        # has no filesystem payload and may omit an empty environment directory.
+        pass
 
     async def start(self, force_build: bool) -> None:
         pass

@@ -254,6 +254,7 @@ async def test_native_harbor_provider_trial_uses_scripted_http_and_preserves_cal
             model_name="fixture",
             agent_kwargs={"api_base": f"http://127.0.0.1:{server.server_port}/v1", "max_turns": 3},
         )
+        (task / "environment").rmdir()
         execution = json.loads((task / "reference-execution.json").read_text())
         result = await run_trial(task, execution, tmp_path / "trials", "provider")
     finally:
