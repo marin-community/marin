@@ -1117,7 +1117,15 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
 
 
 @pytest.mark.parametrize("implementation", ["ring", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"])
-def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(implementation: MoeImplementation):
+@pytest.mark.parametrize(
+    "token_valid",
+    [[True, True, True, True], [True, False, True, True]],
+    ids=["all_valid", "padded"],
+)
+def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
+    implementation: MoeImplementation,
+    token_valid: list[bool],
+):
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
@@ -1141,7 +1149,7 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(implem
             dtype=jnp.int32,
         )
         combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(1), (4, 2)), axis=-1)
-        token_valid = jnp.asarray([True, False, True, True])
+        token_valid = jnp.asarray(__TOKEN_VALID__)
         w_up_gate = jax.random.normal(jax.random.key(2), (8, 4, 6))
         w_down = jax.random.normal(jax.random.key(3), (8, 3, 4))
         cotangent = jax.random.normal(jax.random.key(4), (4, 4))
@@ -1211,10 +1219,11 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(implem
                 atol=1e-5,
             )
         assert int(overflow.dropped) == 0
-        assert int(overflow.padding_skipped) == 2
+        assert int(overflow.padding_skipped) == int(jnp.sum(~token_valid)) * 2
     """
+    script = script.replace("__IMPLEMENTATION__", implementation).replace("__TOKEN_VALID__", repr(token_valid))
     result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script.replace("__IMPLEMENTATION__", implementation))],
+        [sys.executable, "-c", textwrap.dedent(script)],
         env=env,
         text=True,
         capture_output=True,
@@ -1357,8 +1366,10 @@ def test_expert_granular_a2a_params_chunked_masking_composes():
 
 
 @pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
+@pytest.mark.parametrize("padded", [False, True], ids=["all_valid", "padded"])
 def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
     implementation: MoeImplementation,
+    padded: bool,
     monkeypatch: pytest.MonkeyPatch,
 ):
     mesh = _make_ep_mesh_or_none()
@@ -1390,7 +1401,7 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
     relative_tolerance = _BF16_MOE_RELATIVE_TOLERANCE if dtype == jnp.bfloat16 else _FP32_MOE_RELATIVE_TOLERANCE
     x = x.astype(dtype)
     combine_weights = combine_weights.astype(dtype)
-    token_valid = jnp.arange(tokens) % 4 != 1
+    token_valid = (jnp.arange(tokens) % 4 != 1) if padded else jnp.ones((tokens,), dtype=jnp.bool_)
     w_up_gate = w_up_gate.astype(dtype)
     w_down = w_down.astype(dtype)
     cotangent = jax.random.normal(jax.random.key(24), x.shape, dtype=dtype)
