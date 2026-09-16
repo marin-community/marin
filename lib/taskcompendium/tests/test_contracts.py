@@ -165,19 +165,18 @@ def test_format_is_semantic_and_cannot_be_replaced_by_wrapper(math_task):
 def test_lowering_result_tags_add_output_encoding(math_task):
     specification = msgspec.structs.replace(
         math_task,
-        coverage_tags=("competency:math", "difficulty:easy", "shape:answer"),
+        coverage_tags=("competency:quantitative_reasoning", "shape:answer"),
+        difficulty=2,
     )
     json_rendering = Rendering("json", AssistantFinal(JsonPath()))
     assert tuple(sorted((*specification.coverage_tags, *result_tags((json_rendering,))))) == (
-        "competency:math",
-        "difficulty:easy",
+        "competency:quantitative_reasoning",
         "result:json",
         "shape:answer",
     )
     file_rendering = Rendering("file", FileSubmission("/app/answer.json", JsonPath()))
     assert tuple(sorted((*specification.coverage_tags, *result_tags((file_rendering,))))) == (
-        "competency:math",
-        "difficulty:easy",
+        "competency:quantitative_reasoning",
         "result:file",
         "result:json",
         "shape:answer",
@@ -193,8 +192,7 @@ def test_coverage_tags_use_subject_namespace(math_task):
     specification = msgspec.structs.replace(
         math_task,
         coverage_tags=(
-            "competency:math",
-            "difficulty:easy",
+            "competency:quantitative_reasoning",
             "shape:answer",
             "subject:calculus.integration",
         ),
@@ -209,15 +207,28 @@ def test_coverage_tags_accept_mime_types_for_artifact_and_context(math_task):
         math_task,
         coverage_tags=(
             "artifact:application/vnd.example+json",
-            "competency:math",
+            "competency:quantitative_reasoning",
             "context:application/json",
-            "difficulty:easy",
             "shape:answer",
         ),
     )
     assert specification.coverage_tags[0] == "artifact:application/vnd.example+json"
     with pytest.raises(ValueError, match="Unsupported coverage tag"):
         msgspec.structs.replace(math_task, coverage_tags=("subject:application/json",))
+
+
+def test_difficulty_is_a_numeric_specification_field(math_task, tmp_path):
+    specification = msgspec.structs.replace(math_task, difficulty=7)
+    path = str(tmp_path / "difficulty.parquet")
+    write_parquet([specification], path)
+    restored = next(read_parquet(path))
+    assert restored.difficulty == 7
+    assert from_json(to_json(restored)) == specification
+    for value in (0, 11, True, 3.5):
+        with pytest.raises(ValueError, match="Difficulty must be an integer"):
+            msgspec.structs.replace(math_task, difficulty=value)
+    with pytest.raises(ValueError, match="Unsupported coverage tag"):
+        msgspec.structs.replace(math_task, coverage_tags=("difficulty:hard",))
 
 
 def test_export_materializes_only_agent_projection(math_task, tmp_path):

@@ -11,10 +11,10 @@ from typing import Any, Literal
 import msgspec
 from tasktrove_verify.spec import Mode
 
-SCHEMA_VERSION = "0.8"
+SCHEMA_VERSION = "0.9"
 
 _SEMANTIC_COVERAGE_TAG_PREFIXES = frozenset(
-    {"competency", "shape", "subject", "artifact", "interaction", "state", "context", "difficulty"}
+    {"competency", "shape", "subject", "artifact", "interaction", "state", "context"}
 )
 _COVERAGE_TAG_VALUE = re.compile(r"[a-z0-9]+(?:[._][a-z0-9]+)*")
 _MIME_TYPE = re.compile(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+")
@@ -454,6 +454,7 @@ class TaskSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True, kw_only=
     resources: tuple[Resource, ...]
     metadata: TaskMetadata
     coverage_tags: tuple[str, ...] = ()
+    difficulty: int | None = None
     success_policy: TaskSuccessPolicy = TaskSuccessPolicy.ALL_REQUIRED_STEPS
     schema_version: str = SCHEMA_VERSION
 
@@ -462,6 +463,8 @@ class TaskSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True, kw_only=
             raise ValueError(f"Unsupported task schema: {self.schema_version}")
         if not self.id or not self.steps:
             raise ValueError("Task id and at least one step are required")
+        if self.difficulty is not None and (type(self.difficulty) is not int or not 1 <= self.difficulty <= 10):
+            raise ValueError("Difficulty must be an integer from 1 to 10")
         _validate_coverage_tags(self.coverage_tags, _SEMANTIC_COVERAGE_TAG_PREFIXES)
         for step in self.steps:
             occupied: set[tuple[ResourceRole, str]] = set()

@@ -49,14 +49,16 @@ A semantic instance has these top-level fields.
 | `resources` | Resources shared across steps, each with explicit visibility. |
 | `success_policy` | How valid step rewards combine. `mean` averages numeric step rewards. `final` uses the final numeric step reward. `all_required_steps` means every step is required for task completion; the current Harbor adapter rejects this policy for multi-step exports because its pinned runtime cannot preserve that contract. |
 | `coverage_tags` | Reviewed labels for analysis and sampling. They do not determine execution. |
+| `difficulty` | Optional 1–10 estimate of the capability needed for reliable success under declared tools and a normal budget. |
 
 ### Provenance and metadata
 
 `metadata.source` has `dataset`, `revision`, `row`, and `importer_revision`. All four are required. A source revision identifies the upstream data state; an importer revision identifies the conversion logic that produced the semantic record.
 
-`metadata.competencies` and `metadata.task_shape` describe the source task. `coverage_tags` provide a controlled, sortable taxonomy with `competency`, `shape`, `subject`, `artifact`, `interaction`, `state`, `context`, and exactly one Snowball-calibrated `difficulty` tag where a difficulty judgment is available. [The tagging guide](TAGGING.md) defines the current vocabulary and review process.
+`metadata.competencies` and `metadata.task_shape` retain source descriptions. `coverage_tags` provide sortable `competency`, `shape`, `subject`, `artifact`, `interaction`, `state`, and `context` labels. Competency is optional. `difficulty` is a numeric estimate, separate from measured model success. [The tagging guide](TAGGING.md) defines the current vocabulary and calibration.
 
 A rendering may add a tag to describe the output format being tested: `result:json`, `result:xml`, or `result:file`, etc. These are output encodings, not semantic TaskSpec tags.
+The lowering manifest copies `difficulty` from its TaskSpec without changing its estimate.
 
 ### Steps
 

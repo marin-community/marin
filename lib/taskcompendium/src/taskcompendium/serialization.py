@@ -79,6 +79,7 @@ ARROW_SCHEMA = pa.schema(
         ("resources", pa.list_(_RESOURCE)),
         ("metadata", pa.struct([("source", _SOURCE), ("competencies", _STRINGS), ("task_shape", _TEXT)])),
         ("coverage_tags", _STRINGS),
+        ("difficulty", pa.int8()),
     ],
     metadata={b"taskcompendium.schema_version": SCHEMA_VERSION.encode()},
 )

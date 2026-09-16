@@ -76,7 +76,8 @@ TaskSpecs declare the following fields (see the specification for their full def
   - context_requirement: whether the step depends on prior conversation or only its instruction and workspace.
 - requirements: capabilities, initial state, and action interfaces required by the task.
 - resources: a list of files (with paths and content or pointers to content) that are required for the task, such as input data or reference materials.
-- coverage_tags: a list of tags that describe the coverage of the task in terms of subject area, difficulty, and other relevant dimensions. These tags can be used to evaluate the coverage of the task compendium as a whole.
+- coverage_tags: sparse labels for subject area, task shape, and other semantic distinctions that help analyze corpus coverage.
+- difficulty: a 1–10 estimate of the model capability needed for reliable success under the declared tools and a normal budget.
 - success_policy: how step scores combine into the task's result. The current Harbor adapter supports `mean` and `final` for multi-step tasks.
 
 `success_policy` is part of the private correctness contract: it specifies how the per-step verifiers' scores become one task result.
@@ -127,15 +128,17 @@ Verifier infrastructure failure is recorded separately from an incorrect answer 
 
 More information in [TAGGING.md](../../../lib/taskcompendium/TAGGING.md).
 
-The basic idea is that we want to be able to describe the coverage of a task compendium in terms of subject area, difficulty, and other relevant dimensions. We can do this by defining a set of tags that can be applied to each task specification. These tags can then be used to evaluate the coverage of the task compendium as a whole. We leave the full (but not exhaustive) list of tags and their definitions to the TAGGING.md document, but here are some examples:
+The basic idea is to describe coverage in terms of subject, task shape, difficulty, and other useful distinctions. Semantic tags and a numeric difficulty estimate let us inspect those distributions across source datasets. The [tagging guide](../../../lib/taskcompendium/TAGGING.md) defines the working vocabulary.
 
 The vocabulary is a starting point for labeling tasks and expressing desired RL mixtures, and we expect to revise it. The mechanics matter more than fixing the detailed taxonomy now. Subjects describe topics such as medicine or physics; competencies describe recurring operations across those topics. Tags that add little information or blur that distinction should be revised or removed.
 
-- `competency:`, the main reasoning or execution skill, including:
+- `competency:`, an optional cross-subject skill, such as:
+  - `recall`
   - `causal_reasoning`
   - `information_extraction`
-  - `function_calling`
-  - `program_synthesis`
+  - `rule_application`
+  - `planning`
+  - `debugging`
 - `subject:`:
   - `math`
   - `science`
@@ -153,14 +156,7 @@ The vocabulary is a starting point for labeling tasks and expressing desired RL 
 - `context:`: important inputs or the setting
   - `context:filesystem`
   - `context:workplace_assistant`
-- `difficulty:`: a rough measure of how hard the task is, namely:
-  - `difficulty:easy`
-  - `difficulty:medium`
-  - `difficulty:hard`
-
-Difficulty is relative to Snowball: easy tasks should be comfortably solvable by a roughly 2B active model; medium tasks should stretch it; hard tasks require capabilities beyond what we expect it to handle reliably. Tags should be sparse, with recurring subjects and subsubjects. Lowerings add output-format tags such as `result:json`, `result:xml`, and `result:file`, separately from the semantic work described by the TaskSpec.
-
-These difficulty labels are initial estimates for a specified model scale and available capabilities. Measured success rates should later record the model, lowering, and execution conditions; they need not fit into these three labels.
+`TaskSpec.difficulty` is an integer from 1 to 10: 1–2 is routine for Snowball's roughly 2B active scale, 3–4 stretches it, 5–6 likely requires a larger model, 7–8 is frontier-level, and 9–10 requires a production frontier model or agent for reliable success. These are initial estimates, not measured pass rates. Tags remain sparse, with recurring subjects and subsubjects. Lowerings add output-format tags such as `result:json`, `result:xml`, and `result:file`, separately from semantic work. Measured success should record model, lowering, tools, and budget.
 
 
 We can use a medium-sized model to assign tags to a task specification, and then use those tags to evaluate the coverage of the task compendium as a whole. For instance, we can look at the distribution of subject areas, difficulty levels, and other dimensions across the entire compendium. This will allow us to identify gaps in coverage and ensure that we are providing a diverse set of tasks for model evaluation and training.

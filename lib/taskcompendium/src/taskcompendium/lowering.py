@@ -49,7 +49,7 @@ from taskcompendium.rendering import render_instruction, result_tags
 from taskcompendium.resources import materialize_resources
 from taskcompendium.serialization import specification_hash, to_json
 
-LOWERING_VERSION = "0.8"
+LOWERING_VERSION = "0.9"
 
 
 def validate_lowering(
@@ -330,6 +330,7 @@ def lower_to_harbor(
         "verifier_runtimes": [msgspec.to_builtins(verifier_runtime(step.verifier)) for step in specification.steps],
         "binding": msgspec.to_builtins(binding),
         "coverage_tags": tuple(sorted((*specification.coverage_tags, *result_tags(renderings)))),
+        "difficulty": specification.difficulty,
         "source": msgspec.to_builtins(specification.metadata.source),
     }
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

@@ -33,16 +33,17 @@ for source templates that leak evaluation details. Keep source archives unchange
 
 ## Ordered steps
 
-Schema 0.8 stores all requests in `TaskSpec.steps`. Keep step-specific
+Schema 0.9 stores all requests in `TaskSpec.steps`. Keep step-specific
 answer requirements, private resources, verifier dependencies, and context needs
 on each step. A `TaskSpec` is a pinned semantic instance; `TaskFamily` is the
 source/family instantiation interface. Instantiate once before rendering variants.
 `TaskSpec.coverage_tags` records semantic competency, task shape, subject,
-artifact, interaction, state, context, and Snowball-calibrated difficulty.
+artifact, interaction, state, and context. `TaskSpec.difficulty` is a separate
+1–10 estimate of model capability required for reliable success.
 Lowerings carry those tags forward and may add only result encoding tags:
 `result:json`, `result:xml`, and `result:file`. Do not use those
 tags to claim substantive JSON/XML production or consumption work; use semantic
-competency and artifact tags for that.
+context and artifact tags for that.
 `Rendering` controls submission conventions; `HarborTaskBinding`
 in `execution.py` controls the required environment shape and public tools; Harbor selects the agent at launch.
 Pass one rendering per step to `lower_to_harbor`.

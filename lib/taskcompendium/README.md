@@ -175,7 +175,7 @@ The selector includes answer-only and rendered-answer tasks; ShellSim file tasks
 
 ## Contracts
 
-Schema 0.8 stores ordered `StepSpecification` entries in a pinned semantic
+Schema 0.9 stores ordered `StepSpecification` entries in a pinned semantic
 `TaskSpec`. `taskcompendium.rendering.TaskFamily` defines the source/family
 interface `instantiate(key) -> TaskSpec | Rejected`. Instantiating one source row
 fixes its identity before rendering. Each step records
@@ -184,13 +184,15 @@ requirements. Shared requirements, resources, source provenance, and the success
 policy belong to the concrete specification.
 
 `TaskSpec.coverage_tags` records reviewed semantic coverage labels:
-competency, shape, subject, artifact, interaction, state, context, and one
-Snowball-calibrated `difficulty:easy`, `difficulty:medium`, or `difficulty:hard`.
+optional competency, shape, subject, artifact, interaction, state, and context.
+`TaskSpec.difficulty` separately estimates the capability needed for reliable
+success on a 1–10 scale, from routine for Snowball to production frontier.
 [The tagging guide](TAGGING.md) defines their semantics and the Luna labeling prompt.
 Each lowering carries those labels forward and adds result-encoding labels from its
 rendering: `result:json`, `result:xml`, or `result:file`. Result tags
 describe only how the answer is submitted. A task that substantively produces or
-consumes structured data uses semantic competency or artifact tags as well.
+consumes structured data uses semantic context or artifact tags as well.
+The lowering manifest also carries the numeric difficulty for sampling.
 
 `TaskRequirements` declares `Capability.FILESYSTEM`, `SHELL`, and/or `PROCESS`, plus
 `WorkspaceState`: workdir, setup commands, additional directories, and an optional

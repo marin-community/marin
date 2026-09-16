@@ -34,13 +34,24 @@
           },
           "default": []
         },
+        "difficulty": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "success_policy": {
           "$ref": "#/$defs/TaskSuccessPolicy",
           "default": "all_required_steps"
         },
         "schema_version": {
           "type": "string",
-          "default": "0.8"
+          "default": "0.9"
         }
       },
       "required": [
