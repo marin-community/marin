@@ -36,6 +36,9 @@
       "url": "/d/marin-runs"
     },
     {
+      "linkRef": "async_rl"
+    },
+    {
       "asDropdown": false,
       "icon": "dashboard",
       "includeVars": true,
