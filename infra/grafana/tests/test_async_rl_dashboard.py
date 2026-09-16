@@ -4,20 +4,33 @@
 """Execute the shipped async dashboard SQL against adversarial telemetry rows."""
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import duckdb
 import pytest
+from conftest import finelog_dialect_macros
 
 DASHBOARD = json.loads((Path(__file__).parents[1] / "dashboards/async_rl.json").read_text())
 PANELS = {panel["title"]: panel for panel in DASHBOARD["panels"] if "targets" in panel}
 
+# The selected window, and the instant seeded rows land on. Panels bound their scans by
+# {{from}}/{{to}}, so rows must fall inside it for any panel to return them; tests that
+# exercise clipping place their rows relative to these bounds rather than on a literal.
+WINDOW_START_MS = 1788566400000
+WINDOW_MS = 300000
+BASE_EPOCH_MS = WINDOW_START_MS + 60000
+
+
+def _window_literal(epoch_ms):
+    return f"TIMESTAMP '{datetime.fromtimestamp(epoch_ms / 1000, UTC).strftime('%Y-%m-%d %H:%M:%S')}'"
+
 
 def resolve(sql):
     for macro, value in {
-        "{{from}}": "TIMESTAMP '2026-09-05 00:00:00'",
-        "{{to}}": "TIMESTAMP '2026-09-05 00:05:00'",
-        "${__interval_ms}": "300000",
+        "{{from}}": _window_literal(WINDOW_START_MS),
+        "{{to}}": _window_literal(WINDOW_START_MS + WINDOW_MS),
+        "${__interval_ms}": str(WINDOW_MS),
         "${cluster:sqlstring}": "'cw-us-east-02a'",
         "${run:sqlstring}": "'run'",
         "${job:sqlstring}": "'job'",
@@ -36,6 +49,35 @@ def query(database, title):
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
 
+def telemetry_row(
+    name,
+    value=0,
+    *,
+    job="job",
+    execution="driver",
+    timestamp=BASE_EPOCH_MS,
+    seq=0,
+    attributes=None,
+    resource=None,
+    body=None,
+):
+    """One row in the finelog schema, so column order is written once."""
+    return (
+        "cw-us-east-02a",
+        "marinskyrl",
+        "run",
+        job,
+        execution,
+        timestamp,
+        seq,
+        name,
+        value,
+        json.dumps(attributes or {}),
+        json.dumps(resource or {}),
+        json.dumps(body or {}),
+    )
+
+
 @pytest.fixture
 def store():
     with duckdb.connect() as database:
@@ -44,27 +86,20 @@ def store():
             "job_id VARCHAR,execution_uid VARCHAR,timestamp_ms BIGINT,seq BIGINT,name VARCHAR,value DOUBLE,"
             "attributes_json VARCHAR,resource_attributes_json VARCHAR,body_json VARCHAR)"
         )
-        database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)::TIMESTAMP")
-        database.execute("CREATE MACRO date_bin(width, moment) AS time_bucket(width, moment)")
-        database.execute("CREATE MACRO json_get(document, key) AS json_extract_string(document, '$.' || key)")
-        database.execute("CREATE MACRO approx_percentile_cont(value, q) AS quantile_cont(value, q)")
+        finelog_dialect_macros(database)
         rows = []
 
         def add(name, value=0, *, attributes=None, body=None, process="trainer", execution="driver", timestamp=None):
             rows.append(
-                (
-                    "cw-us-east-02a",
-                    "marinskyrl",
-                    "run",
-                    "job",
-                    execution,
-                    1788566460000 + len(rows) if timestamp is None else timestamp,
-                    len(rows),
+                telemetry_row(
                     name,
                     value,
-                    json.dumps({"role": "trainer", "step": "1", **(attributes or {})}),
-                    json.dumps({"role": "trainer", "host": process}),
-                    json.dumps(body or {}),
+                    execution=execution,
+                    timestamp=BASE_EPOCH_MS + len(rows) if timestamp is None else timestamp,
+                    seq=len(rows),
+                    attributes={"role": "trainer", "step": "1", **(attributes or {})},
+                    resource={"role": "trainer", "host": process},
+                    body=body,
                 )
             )
 
@@ -181,7 +216,7 @@ def store():
                 "device_total_bytes": 8 * 2**30,
             },
         )
-        phase_start = 1788566460000
+        phase_start = BASE_EPOCH_MS
         for phase, start, finish in [("training", 0, 10000), ("publication", 10000, 14000)]:
             add(
                 "async_phase_window",
@@ -237,7 +272,7 @@ def store():
         # Two optimizer steps, both within one display bucket: do not pool their ages.
         for step, age, tokens in [(2, 0, 10), (2, 1, 30), (2, 1, 50), (3, 0, 20), (3, 1, 70)]:
             add("rollout_staleness_steps", age, attributes={"step": str(step)})
-            # consumed_age is the declared K12 schema; historical emitters lack this event.
+            # consumed_age carries body.age and body.response_tokens; older emitters lack the event.
             add("consumed_age", attributes={"step": str(step)}, body={"age": age, "response_tokens": tokens})
         for step, scale in [(2, 1), (3, 2)]:
             for metric, value in [
@@ -360,10 +395,11 @@ def test_overlap_joins_only_the_identical_process_clock_and_distinguishes_unknow
 
 def test_window_clipped_policy_interval_reports_unknown_overlap(store):
     store.execute(
-        "UPDATE \"telemetry_v1.marinskyrl\" SET timestamp_ms=1788566405000 WHERE name='policy_training_interval'"
+        f'UPDATE "telemetry_v1.marinskyrl" SET timestamp_ms={WINDOW_START_MS + 5000} '
+        "WHERE name='policy_training_interval'"
     )
     store.execute(
-        "UPDATE \"telemetry_v1.marinskyrl\" SET timestamp_ms=1788566399000 WHERE name='rollout_call' "
+        f"UPDATE \"telemetry_v1.marinskyrl\" SET timestamp_ms={WINDOW_START_MS - 1000} WHERE name='rollout_call' "
         "AND CAST(json_get(body_json,'finished') AS DOUBLE)<20"
     )
     row = query(store, "Rollouts completing during policy training")[0]
@@ -382,20 +418,13 @@ def test_health_sums_nonfinite_deltas_and_keeps_exporter_processes_separate(stor
     ]:
         store.execute(
             'INSERT INTO "telemetry_v1.marinskyrl" VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-            [
-                "cw-us-east-02a",
-                "marinskyrl",
-                "run",
-                "job",
-                "driver",
-                1788566461000,
-                1000,
+            telemetry_row(
                 name,
                 value,
-                "{}",
-                json.dumps({"role": "trainer", "host": process}),
-                "{}",
-            ],
+                timestamp=BASE_EPOCH_MS + 1000,
+                seq=1000,
+                resource={"role": "trainer", "host": process},
+            ),
         )
     rows = query(store, "Exporter and nonfinite observations")
     values = {(row["process"], row["name"]): row["observed_value"] for row in rows}
@@ -501,8 +530,8 @@ AGE_METRICS = {
 }
 
 
-def add_age_batch(d, step, *, omit=None, job="job", execution="driver", phase="train", **changes):
-    vals = dict(
+def add_age_batch(database, step, *, omit=None, job="job", execution="driver", phase="train", **changes):
+    values = dict(
         age_min=1,
         age_max=1,
         loss=100,
@@ -515,30 +544,27 @@ def add_age_batch(d, step, *, omit=None, job="job", execution="driver", phase="t
         missing=0,
         policy_loss=-0.01,
     )
-    vals.update(changes)
+    values.update(changes)
     rows = [
-        (
-            "cw-us-east-02a",
-            "marinskyrl",
-            "run",
-            job,
-            execution,
-            1788566460000,
-            step,
+        telemetry_row(
             "training_metric_value",
-            v,
-            json.dumps({"step": str(step), "metric": AGE_METRICS[k], "phase": phase}),
-            "{}",
-            "{}",
+            value,
+            job=job,
+            execution=execution,
+            seq=step,
+            attributes={"step": str(step), "metric": AGE_METRICS[key], "phase": phase},
         )
-        for k, v in vals.items()
-        if k != omit
+        for key, value in values.items()
+        if key != omit
     ]
-    d.executemany('INSERT INTO "telemetry_v1.marinskyrl" VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', rows)
+    database.executemany('INSERT INTO "telemetry_v1.marinskyrl" VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', rows)
 
 
-def query_age_panels(d):
-    return query(d, "Uniform-age batch diagnostics"), query(d, "Uniform-age diagnostic token coverage")[0]
+def query_age_panels(database):
+    return (
+        query(database, "Uniform-age batch diagnostics"),
+        query(database, "Uniform-age diagnostic token coverage")[0],
+    )
 
 
 def test_weighting_mixed_duplicates_and_filters(age_store):

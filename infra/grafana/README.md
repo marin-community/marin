@@ -834,11 +834,10 @@ The timeline uses explicit interval ends; its sync completion markers have a
 alongside an M2 observation and is not a validated quality boundary.
 
 Availability follows the run's instrumentation. `consumed_age` is a per-group
-token event (`body.age`, `body.response_tokens`, role/step attributes) that the
-async trainer emits once its instrumentation lands in MarinSkyRL; runs without it
-have no token-age series. New ratio, gradient, and correction series likewise
-remain absent until their emitters are qualified. Legacy drift panels remain
-available and describe the consume-time learner/vLLM ratio.
+token event (`body.age`, `body.response_tokens`, role/step attributes); a run that
+does not emit it has no token-age series, and the same holds for the ratio,
+gradient and correction series. The drift panels read the consume-time
+learner/vLLM ratio and fill from a wider set of runs.
 
 ## Adding a dashboard
 

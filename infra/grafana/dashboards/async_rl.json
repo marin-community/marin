@@ -2722,7 +2722,7 @@
       "id": 46,
       "type": "timeseries",
       "title": "TIS correction skips",
-      "description": "Driver TIS skip observations: batch_skipped_no_logprobs is a 0/1 batch indicator and skipped_fraction is a fraction. Zero is required for the controlled correction studies. Missing records can mean TIS is disabled or this source predates TIS telemetry; absence is not zero.",
+      "description": "Driver TIS skip observations: batch_skipped_no_logprobs is a 0/1 batch indicator and skipped_fraction is a fraction. A skip means the correction did not apply to that batch. Missing records can mean TIS is disabled or this source predates TIS telemetry; absence is not zero.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3114,7 +3114,7 @@
       "id": 38,
       "type": "timeseries",
       "title": "Useful tokens per configured role GPU-second",
-      "description": "Loss tokens / policy GPUs / cycle seconds and consumed response tokens / inference GPUs / cycle seconds. Configured role counts do not prove actual allocation, engine utilization or billed savings. Qwen P8/I8 occupies two exclusive nodes. Physical engine/GPU mapping is not yet available.",
+      "description": "Loss tokens / policy GPUs / cycle seconds and consumed response tokens / inference GPUs / cycle seconds. Configured role counts do not prove actual allocation, engine utilization or billed savings. They count the GPUs a run asked for per role, so a run whose roles share nodes is not separable here. These records carry no physical engine/GPU mapping.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

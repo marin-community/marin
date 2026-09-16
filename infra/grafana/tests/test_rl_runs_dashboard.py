@@ -8,7 +8,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from conftest import queried_namespace
+from conftest import finelog_dialect_macros, queried_namespace
 from dashboard_stitch import stitch_all
 from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
 
@@ -341,12 +341,7 @@ def store() -> duckdb.DuckDBPyConnection:
     # One table per semantic stream, seeded by routing each row on its service as the server does.
     for stream in sorted(set(_SEMANTIC_STREAM.values())):
         database.execute(f'CREATE TABLE "{stream}"{_SCHEMA}')
-    # finelog's SQL dialect, in the two spellings the dashboards use.
-    database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)::TIMESTAMP")
-    database.execute("CREATE MACRO date_bin(width, moment) AS time_bucket(width, moment)")
-    database.execute("CREATE MACRO json_get(document, key) AS json_extract_string(document, '$.' || key)")
-    # finelog runs DataFusion, which has approx_percentile_cont; duckdb spells it quantile_cont.
-    database.execute("CREATE MACRO approx_percentile_cont(value, q) AS quantile_cont(value, q)")
+    finelog_dialect_macros(database)
     placeholders = ", ".join("?" for _ in _COLUMNS)
     service_index = _COLUMNS.index("service")
     routed: dict[str, list] = {}
