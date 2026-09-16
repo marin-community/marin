@@ -8,7 +8,9 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from conftest import absent_namespace_error, queried_namespace
 from dashboard_stitch import stitch_all
+from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
 
 ROOT = Path(__file__).resolve().parent.parent
 DASHBOARDS = ROOT / "dashboards"
@@ -17,6 +19,8 @@ NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
 WINDOW_START = NOW - timedelta(hours=1)
 CLUSTER = "cw-rno2a"
 RUN_ID = "snowball-e6-muonh-0"
+_NOW_MS = round(NOW.timestamp() * 1000)
+_WINDOW_START_MS = round(WINDOW_START.timestamp() * 1000)
 JOB_ID = "/atqamar/snowball-e6-muonh-0-attempt-0"
 NODES = ("gb200-node-0", "gb200-node-1")
 
@@ -355,14 +359,19 @@ def store() -> duckdb.DuckDBPyConnection:
     return database
 
 
+def _in_window(sql: str) -> str:
+    """Resolve Grafana's window macros to this suite's window."""
+    sql = sql.replace("{{from}}", f"TIMESTAMP '{WINDOW_START.replace(tzinfo=None)}'")
+    return sql.replace("{{to}}", f"TIMESTAMP '{NOW.replace(tzinfo=None)}'")
+
+
 def _panel_sql(title: str) -> str:
     """One panel's shipped SQL, with Grafana's macros resolved to this window."""
     dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
     panels = {panel["title"]: panel for panel in dashboard["panels"]}
     (parameter,) = [param for param in panels[title]["targets"][0]["url_options"]["params"] if param["key"] == "sql"]
     sql = parameter["value"]
-    sql = sql.replace("{{from}}", f"TIMESTAMP '{WINDOW_START.replace(tzinfo=None)}'")
-    sql = sql.replace("{{to}}", f"TIMESTAMP '{NOW.replace(tzinfo=None)}'")
+    sql = _in_window(sql)
     sql = sql.replace("${__interval_ms} milliseconds", "5 minutes")
     # A rate panel divides by the bucket width, so the macro also appears on its own.
     sql = sql.replace("${__interval_ms}", str(5 * 60 * 1000))
@@ -379,8 +388,7 @@ def test_the_run_variable_offers_a_run_the_trainer_reported(store) -> None:
         param for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
     ]
     sql = parameter["value"]
-    sql = sql.replace("{{from}}", f"TIMESTAMP '{WINDOW_START.replace(tzinfo=None)}'")
-    sql = sql.replace("{{to}}", f"TIMESTAMP '{NOW.replace(tzinfo=None)}'")
+    sql = _in_window(sql)
     sql = sql.replace("${cluster:sqlstring}", f"'{CLUSTER}'")
 
     assert store.execute(sql).fetchall() == [(RUN_ID,)]
@@ -398,12 +406,12 @@ def test_the_trainer_panels_render_for_that_run(store) -> None:
     work = store.execute(_panel_sql("Rollouts, samples and tokens completed")).fetchall()
     assert [row[1] for row in work] == [64.0] * 6
 
-    buffer = store.execute(_panel_sql("Rollout buffer occupancy (groups)")).fetchall()
+    buffer = store.execute(_panel_sql("Rollout buffer occupancy (groups) · async runs only")).fetchall()
     assert [(row[1], row[2]) for row in buffer] == [(12.0, 32.0)] * 6
 
     # Occupancy is a ratio, so two nodes reporting 3 GB used of 4 GB still reads 0.75 rather
     # than doubling. 6e9 used over 8e9 total.
-    occupancy = store.execute(_panel_sql("Ray object store occupancy")).fetchall()
+    occupancy = store.execute(_panel_sql("Ray object store occupancy · needs the Ray collector")).fetchall()
     assert [row[1] for row in occupancy] == [pytest.approx(0.75)] * 6
 
 
@@ -447,12 +455,52 @@ def test_a_trainer_that_stops_stamping_node_name_blanks_the_accelerator_panel(st
     assert store.execute(_panel_sql("GPU utilization on this run's nodes")).fetchall() == []
 
 
-def test_the_producer_census_separates_the_engine_series_from_the_trainer(store) -> None:
-    # Each engine actor publishes its own registry under `service='vllm'`, so the census unions
-    # the two streams.
-    rows = store.execute(_panel_sql("Producers reporting this run")).fetchall()
+def _census(database, present: frozenset[str]) -> list[dict[str, object]]:
+    """Run the census the way the route does: one query per namespace, absent ones dropped."""
 
-    assert {(row[0], row[1]) for row in rows} >= {("marinskyrl", "trainer"), ("vllm", "inference")}
+    def query(sql: str) -> list[dict[str, object]]:
+        if queried_namespace(sql) not in present:
+            raise absent_namespace_error(sql)
+        columns = [description[0] for description in database.execute(sql).description]
+        return [dict(zip(columns, row, strict=True)) for row in database.execute(sql).fetchall()]
+
+    return collect_producers(query, RUN_ID, (CLUSTER,), _WINDOW_START_MS, _NOW_MS)
+
+
+def test_the_producer_census_separates_the_engine_series_from_the_trainer(store) -> None:
+    # Each engine actor publishes its own registry under `service='vllm'`, so the census spans
+    # both streams.
+    rows = _census(store, frozenset(RL_PRODUCER_NAMESPACES))
+
+    assert {(row["producer"], row["role"]) for row in rows} >= {("marinskyrl", "trainer"), ("vllm", "inference")}
+
+
+def test_the_census_still_answers_on_a_deployment_that_has_no_harbor_namespace(store) -> None:
+    """A deployment without every RL namespace is the normal case, so the census drops the absent ones."""
+    rows = _census(store, frozenset({"telemetry_v1.marinskyrl", "telemetry_v1.vllm"}))
+
+    assert {row["producer"] for row in rows} == {"marinskyrl", "vllm"}
+
+
+def test_the_census_is_empty_rather_than_broken_on_a_deployment_holding_none_of_them() -> None:
+    assert _census(duckdb.connect(), frozenset()) == []
+
+
+def test_the_census_quotes_a_run_id_carrying_an_apostrophe() -> None:
+    database = duckdb.connect()
+    database.execute(f'CREATE TABLE "telemetry_v1.marinskyrl"{_SCHEMA}')
+    database.execute("CREATE MACRO json_get(document, key) AS json_extract_string(document, '$.' || key)")
+    run_index, service_index = _COLUMNS.index("run_id"), _COLUMNS.index("service")
+    row = next(row for row in _run_rows() if row[service_index] == "marinskyrl")
+    placeholders = ", ".join("?" for _ in _COLUMNS)
+    database.execute(
+        f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({placeholders})',
+        (*row[:run_index], "run's-id", *row[run_index + 1 :]),
+    )
+
+    sql = producers_query("telemetry_v1.marinskyrl", "run's-id", (CLUSTER,), _WINDOW_START_MS, _NOW_MS)
+
+    assert len(database.execute(sql).fetchall()) == 1
 
 
 def _projected_columns(sql: str) -> set[str]:
@@ -511,7 +559,7 @@ def test_ray_panels_exclude_cumulative_snapshots_and_never_mix_states(store) -> 
     # A forwarded snapshot's `kind` column is always "gauge"; source_temporality carries the real
     # semantics. The Ray allowlist includes cumulative counters, and averaging one in is silently
     # wrong. The spill states are distinct quantities and stay distinct series.
-    rows = store.execute(_panel_sql("Ray spill manager bytes by state")).fetchall()
+    rows = store.execute(_panel_sql("Ray spill manager bytes by state · needs the Ray collector")).fetchall()
 
     by_state = {row[1]: row[2] for row in rows}
     assert by_state == {"Spilled": pytest.approx(2.0e9), "Restored": pytest.approx(5.0e8)}
@@ -573,3 +621,83 @@ def test_engine_panels_read_the_embedded_stream_as_well_as_the_standalone_one(st
 
     assert rates == [round(3 * 1024.0 / 300.0, 4)] * len(rates)
     assert len(rates) == 5
+
+
+def _dashboard() -> dict:
+    return stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
+
+
+def test_every_labelled_series_panel_names_the_series_without_its_column() -> None:
+    for panel in _dashboard()["panels"]:
+        if panel.get("type") != "timeseries":
+            continue
+        sql = "".join(
+            param["value"]
+            for target in panel.get("targets", [])
+            for param in target.get("url_options", {}).get("params", [])
+            if param["key"] == "sql"
+        )
+        if "AS series" not in sql:
+            continue
+        assert panel["fieldConfig"]["defaults"].get("displayName") == "${__field.labels.series}", panel["title"]
+
+
+def _recent_runs_sql() -> str:
+    (sql,) = [
+        param["value"] for param in _recent_runs_panel()["targets"][0]["url_options"]["params"] if param["key"] == "sql"
+    ]
+    return _in_window(sql)
+
+
+def _recent_runs_panel() -> dict:
+    home = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["home.json"]
+    (panel,) = [p for p in home["panels"] if p.get("title") == "Recent RL runs"]
+    return panel
+
+
+def test_a_listed_run_opens_the_view_framed_on_that_run() -> None:
+    (links,) = [
+        prop["value"]
+        for override in _recent_runs_panel()["fieldConfig"]["overrides"]
+        if override["matcher"]["options"] == "run"
+        for prop in override["properties"]
+        if prop["id"] == "links"
+    ]
+    (url,) = [link["url"] for link in links]
+
+    assert url.startswith("/d/marin-rl-runs?")
+    # Without all four the link lands on an empty dashboard: no run selected, or a window that
+    # predates the run.
+    for parameter in ("var-run=", "var-cluster=", "from=", "to="):
+        assert parameter in url, parameter
+
+
+def test_the_recent_runs_query_returns_a_row_per_run_and_cluster(store) -> None:
+    sql = _recent_runs_sql()
+
+    rows = store.execute(sql).fetchall()
+
+    assert [row[0] for row in rows] == [RUN_ID]
+    run, cluster, step, attempts = rows[0][0], rows[0][1], rows[0][2], rows[0][3]
+    assert (run, cluster) == (RUN_ID, CLUSTER)
+    assert step > 0 and attempts >= 1
+
+
+def test_a_listed_run_opens_a_window_that_contains_its_last_sample(store) -> None:
+    """The panels bound time half-open (`timestamp_ms < to`), so a link ending exactly on the last
+    sample drops it, and a one-step run opens an empty view."""
+    sql = _recent_runs_sql()
+    result = store.execute(sql)
+    columns = [description[0] for description in result.description]
+    row = dict(zip(columns, result.fetchall()[0], strict=True))
+    samples = [
+        timestamp
+        for (timestamp,) in store.execute(
+            "SELECT timestamp_ms FROM \"telemetry_v1.marinskyrl\" WHERE run_id = ? AND name = 'policy_step' "
+            "AND timestamp_ms >= ? AND timestamp_ms < ?",
+            [RUN_ID, _WINDOW_START_MS, _NOW_MS],
+        ).fetchall()
+    ]
+
+    assert samples
+    assert all(row["window_from_ms"] <= timestamp < row["window_to_ms"] for timestamp in samples)

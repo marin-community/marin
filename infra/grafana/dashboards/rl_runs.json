@@ -1,6 +1,6 @@
 {
   "uid": "marin-rl-runs",
-  "title": "RL runs",
+  "title": "RL Post-training",
   "description": "One reinforcement-learning run, across every process that reports it. Runs are identified by run_id, which the MarinSkyRL driver, trainer and Ray controller all stamp. Accelerator and engine series carry no run_id of their own and are joined to the run through the nodes and the Iris job its own rows name. Everything here is read from telemetry_v1, so it answers after the run's pods are gone; W&B keeps the full-fidelity experiment record.",
   "tags": [
     "marin",
@@ -11,7 +11,7 @@
   "schemaVersion": 39,
   "refresh": "1m",
   "time": {
-    "from": "now-3h",
+    "from": "now-24h",
     "to": "now"
   },
   "links": [
@@ -97,7 +97,7 @@
         "multi": false,
         "includeAll": false,
         "refresh": 2,
-        "sort": 1,
+        "sort": 0,
         "current": {},
         "options": [],
         "query": {
@@ -115,7 +115,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "SELECT DISTINCT run_id AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND run_id IS NOT NULL ORDER BY 1"
+                  "value": "SELECT run_id AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND run_id IS NOT NULL GROUP BY 1 ORDER BY MAX(timestamp_ms) DESC"
                 },
                 {
                   "key": "from",
@@ -180,7 +180,8 @@
           },
           "min": 0,
           "noValue": "No policy_step rows in this window. The run picker only offers runs that emitted one, so this means the trainer stopped — check the producers table to the right.",
-          "unit": "none"
+          "unit": "none",
+          "displayName": "${__field.labels.series}"
         },
         "overrides": []
       },
@@ -270,7 +271,20 @@
           "min": 0,
           "unit": "short"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "generated tokens"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -386,13 +400,17 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/producers",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT service AS producer, COALESCE(json_get(resource_attributes_json, 'role'), '') AS role, COALESCE(execution_uid, '') AS attempt, COALESCE(json_get(attributes_json, 'metric_source'), '') AS metric_source, COUNT(DISTINCT name) AS signals, COUNT(*) AS records, MAX(timestamp_ms) AS last_record_ms FROM \"telemetry_v1.marinskyrl\" WHERE 1=1 AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 UNION ALL SELECT service AS producer, COALESCE(json_get(resource_attributes_json, 'role'), '') AS role, COALESCE(execution_uid, '') AS attempt, COALESCE(json_get(attributes_json, 'metric_source'), '') AS metric_source, COUNT(DISTINCT name) AS signals, COUNT(*) AS records, MAX(timestamp_ms) AS last_record_ms FROM \"telemetry_v1.vllm\" WHERE 1=1 AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 UNION ALL SELECT service AS producer, COALESCE(json_get(resource_attributes_json, 'role'), '') AS role, COALESCE(execution_uid, '') AS attempt, COALESCE(json_get(attributes_json, 'metric_source'), '') AS metric_source, COUNT(DISTINCT name) AS signals, COUNT(*) AS records, MAX(timestamp_ms) AS last_record_ms FROM \"telemetry_v1.harbor\" WHERE 1=1 AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4"
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -483,7 +501,8 @@
             "axisLabel": "mean seconds per optimizer step"
           },
           "min": 0,
-          "unit": "s"
+          "unit": "s",
+          "displayName": "${__field.labels.series}"
         },
         "overrides": []
       },
@@ -548,7 +567,7 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Rollout buffer occupancy (groups)",
+      "title": "Rollout buffer occupancy (groups) · async runs only",
       "description": "Completed rollout groups waiting in the async buffer, against the buffer's capacity.\n\nPinned at capacity means generation is ahead and the trainer is the bottleneck. Near zero while the trainer waits means the opposite.\n\nOne group is one prompt's n samples, so this counts groups. Only the async trainer fills this buffer, so a sync run is blank. Data from telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -662,7 +681,8 @@
           "min": 0,
           "unit": "percent",
           "max": 100,
-          "noValue": "No node join. Trainer rows carry no node_name, or the node agent is not reporting this cluster. This is never “GPUs idle”."
+          "noValue": "No node join. Trainer rows carry no node_name, or the node agent is not reporting this cluster. This is never “GPUs idle”.",
+          "displayName": "${__field.labels.series}"
         },
         "overrides": []
       },
@@ -972,7 +992,8 @@
           },
           "min": 0,
           "unit": "s",
-          "noValue": "No vLLM rows for this run. If the whole rank is blank, the engine exporter is down rather than six separate faults."
+          "noValue": "No vLLM rows for this run. If the whole rank is blank, the engine exporter is down rather than six separate faults.",
+          "displayName": "${__field.labels.series}"
         },
         "overrides": []
       },
@@ -1060,7 +1081,8 @@
           },
           "min": 0,
           "noValue": "No vLLM rows for this run. If the whole rank is blank, the engine exporter is down rather than six separate faults.",
-          "unit": "percentunit"
+          "unit": "percentunit",
+          "displayName": "${__field.labels.series}"
         },
         "overrides": []
       },
@@ -1149,7 +1171,8 @@
           },
           "min": 0,
           "noValue": "No vLLM rows for this run. If the whole rank is blank, the engine exporter is down rather than six separate faults.",
-          "unit": "short"
+          "unit": "short",
+          "displayName": "${__field.labels.series}"
         },
         "overrides": []
       },
@@ -1237,7 +1260,8 @@
             "axisLabel": "p99 ÷ p50"
           },
           "min": 0,
-          "unit": "none"
+          "unit": "none",
+          "displayName": "${__field.labels.series}"
         },
         "overrides": []
       },
@@ -1315,7 +1339,7 @@
     {
       "id": 14,
       "type": "timeseries",
-      "title": "Off-policy staleness (optimizer steps behind)",
+      "title": "Off-policy staleness (optimizer steps behind) · async runs only",
       "description": "How many optimizer steps old each admitted group's policy was when the trainer consumed it.\n\nWatch p99. The trainer asserts staleness stays under the configured maximum, so a p99 climbing toward it is the last thing visible before the run aborts.\n\nMeasured at admission, one observation per group. The producer cannot compute it, because a group can wait in the buffer across step boundaries. Only the async trainer records it, so a sync run is blank. Data from telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -1339,7 +1363,8 @@
           },
           "min": 0,
           "noValue": "No staleness rows. Async trainer only; a sync run is on-policy by construction.",
-          "unit": "none"
+          "unit": "none",
+          "displayName": "${__field.labels.series}"
         },
         "overrides": []
       },
@@ -1431,7 +1456,8 @@
             "axisLabel": "finished requests per time bucket"
           },
           "min": 0,
-          "unit": "short"
+          "unit": "short",
+          "displayName": "${__field.labels.series}"
         },
         "overrides": []
       },
@@ -1509,7 +1535,7 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "Ray object store occupancy",
+      "title": "Ray object store occupancy · needs the Ray collector",
       "description": "Share of the Ray object store in use across the run's nodes.\n\nClimbing toward 1 means the store is about to spill. Spill shows up as rollout latency before it shows up as a failure.\n\nThe ratio is used divided by used plus free, so it does not move when the node count does. This is Ray plumbing and is unrelated to the engines' KV-cache. Ray produces these counters; MarinSkyRL scrapes them into telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -1593,7 +1619,7 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "Ray spill manager bytes by state",
+      "title": "Ray spill manager bytes by state · needs the Ray collector",
       "description": "Bytes the Ray spill manager holds, averaged across the run's nodes and split by state.\n\nA pending-spill line that stops draining means the spill path has stalled. A spilled line that steepens means trajectories are bigger than budgeted.\n\nThe states are separate quantities. Pinned, pending spill and pending restore are current occupancy. Spilled and restored are lifetime totals and only climb. Ray produces these counters; MarinSkyRL scrapes them into telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -1616,7 +1642,8 @@
           },
           "min": 0,
           "unit": "bytes",
-          "noValue": "No Ray rows for this run. Non-Ray deployment, or the Ray metric bridge is off."
+          "noValue": "No Ray rows for this run. Non-Ray deployment, or the Ray metric bridge is off.",
+          "displayName": "${__field.labels.series}"
         },
         "overrides": []
       },
