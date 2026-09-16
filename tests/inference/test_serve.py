@@ -27,6 +27,7 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.backend import ModelSpec
 from marin.inference.config import (
@@ -40,9 +41,11 @@ from marin.inference.config import (
 )
 from marin.inference.dashboard_server import (
     DASHBOARD_HTML,
+    ChatTemplateProtocol,
     ServingInfo,
     bind_serving_socket,
     build_dashboard_app,
+    protocol_for_chat_template,
     serve_app_background,
 )
 from marin.inference.iris import IrisServiceConfig, _resolved_model, run_iris_service
@@ -77,6 +80,8 @@ from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route
+
+from experiments.sft.delphi_chat_template import DELPHI_V0_CHAT_TEMPLATE
 
 MULTIPLY_TOOL_SOURCE = '''
 def multiply(value: int, factor: int = 2) -> int:
@@ -158,6 +163,7 @@ def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
 
     monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
     monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda config: object())
+    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: "{{ messages }}")
     spec = ModelSpec(
         weights="org/model",
         revision="abc123",
@@ -482,6 +488,7 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
             model=RunningModel(OpenAIEndpoint("http://127.0.0.1:1/v1", model_id)),
             backend_name="vllm",
             tensor_parallel_size=1,
+            chat_template_content="{{ messages }}",
             check_alive=lambda: None,
         )
 
@@ -768,6 +775,34 @@ def test_python_tool_source_requires_typed_functions_and_validates_arguments():
 
     with pytest.raises(ValueError):
         python_tools_from_source("CONSTANT = 1\n")
+
+
+@pytest.mark.parametrize(
+    ("template", "expected"),
+    [
+        (
+            MARIN_CHAT_TEMPLATE,
+            ChatTemplateProtocol(
+                thinking_start="<|start_think|>",
+                thinking_end="<|end_think|>",
+                tool_call_start="<tool_call>",
+                tool_call_end="</tool_call>",
+            ),
+        ),
+        (
+            DELPHI_V0_CHAT_TEMPLATE,
+            ChatTemplateProtocol(
+                thinking_start="<|start_think|>",
+                thinking_end="<|end_think|>",
+                tool_call_start="<|tool_call|>",
+                tool_call_end="<|tool_call_end|>",
+            ),
+        ),
+    ],
+    ids=["datakit", "delphi"],
+)
+def test_chat_template_protocol_matches_generated_delimiters(template, expected):
+    assert protocol_for_chat_template(template) == expected
 
 
 def test_dashboard_executes_typed_python_tools():

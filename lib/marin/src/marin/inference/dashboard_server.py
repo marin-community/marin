@@ -55,6 +55,46 @@ _PYTHON_TOOL_OPERATION_LABELS = {
     PythonToolOperation.DEFINITIONS: "Python tool definition",
     PythonToolOperation.INVOKE: "Python tool",
 }
+_THINKING_DELIMITERS = (
+    ("<|start_think|>", "<|end_think|>"),
+    ("<think>", "</think>"),
+    ("<THINK>", "</THINK>"),
+)
+_TOOL_CALL_DELIMITERS = (
+    ("<|tool_call|>", "<|tool_call_end|>"),
+    ("<tool_call>", "</tool_call>"),
+)
+
+
+@dataclass(frozen=True)
+class ChatTemplateProtocol:
+    """Generated-output delimiters found in the model's active chat template."""
+
+    thinking_start: str | None = None
+    thinking_end: str | None = None
+    tool_call_start: str | None = None
+    tool_call_end: str | None = None
+
+
+def _template_delimiters(template: str | None, candidates: tuple[tuple[str, str], ...]) -> tuple[str | None, str | None]:
+    if template is None:
+        return None, None
+    for start, end in candidates:
+        if start in template and end in template:
+            return start, end
+    return None, None
+
+
+def protocol_for_chat_template(template: str | None) -> ChatTemplateProtocol:
+    """Describe the reasoning and tool-call syntax emitted by a chat template."""
+    thinking_start, thinking_end = _template_delimiters(template, _THINKING_DELIMITERS)
+    tool_call_start, tool_call_end = _template_delimiters(template, _TOOL_CALL_DELIMITERS)
+    return ChatTemplateProtocol(
+        thinking_start=thinking_start,
+        thinking_end=thinking_end,
+        tool_call_start=tool_call_start,
+        tool_call_end=tool_call_end,
+    )
 
 
 @dataclass(frozen=True)
@@ -69,6 +109,7 @@ class ServingInfo:
     has_chat_template: bool
     endpoint: str
     streaming: bool = True
+    chat_template_protocol: ChatTemplateProtocol = ChatTemplateProtocol()
 
 
 class _SerializedPythonToolRequest(Protocol):

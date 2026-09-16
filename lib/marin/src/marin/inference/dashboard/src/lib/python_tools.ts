@@ -1,7 +1,5 @@
 import type { Conversation, ToolCall, ToolMessage } from './types'
 
-export const TOOL_CALL_TAG = 'tool_call'
-
 export interface ToolDefinition {
   type: 'function'
   function: {
@@ -25,7 +23,7 @@ export type ModelMessage =
   | { role: 'assistant'; content: string; tool_calls?: ModelToolCall[] }
   | { role: 'tool'; name: string; tool_call_id: string; content: string }
 
-/** Build the structured history that the Marin SFT chat template renders as tool XML. */
+/** Build structured history for the served model's active chat template. */
 export function modelMessages(conversation: Conversation): ModelMessage[] {
   const request: ModelMessage[] = []
   const system = conversation.system.trim()

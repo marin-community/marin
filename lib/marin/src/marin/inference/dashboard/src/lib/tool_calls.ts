@@ -1,31 +1,103 @@
-import type { ToolCall } from './types'
-import { TOOL_CALL_TAG } from './python_tools'
-import { newId } from './storage'
+import type { ChatTemplateProtocol, ToolCall } from './types'
 
-const INLINE_TOOL_CALL = new RegExp(`<${TOOL_CALL_TAG}>\\s*([\\s\\S]*?)\\s*</${TOOL_CALL_TAG}>`, 'g')
-
-function parseToolCall(payload: string): ToolCall {
-  const parsed: unknown = JSON.parse(payload)
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('Tool call must contain a JSON object')
-  }
-  const fields = parsed as Record<string, unknown>
-  const name = fields.name
-  if (typeof name !== 'string' || !name) throw new Error('Tool call must contain a function name')
-  const arguments_ = fields.arguments ?? {}
-  if (!arguments_ || typeof arguments_ !== 'object' || Array.isArray(arguments_)) {
-    throw new Error('Tool call arguments must be a JSON object')
-  }
-  return { id: `call_${newId()}`, name, arguments: arguments_ as Record<string, unknown> }
+interface PendingToolCall {
+  id: string | null
+  name: string
+  argumentsText: string
+  argumentsObject: Record<string, unknown> | null
 }
 
-/** Parse XML tool calls, raising when a tagged payload does not match the protocol. */
-export function inlineToolCalls(content: string): { visible: string; calls: ToolCall[] } {
+export interface ToolCallAccumulator {
+  calls: Map<number, PendingToolCall>
+}
+
+function objectValue(value: unknown, message: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(message)
+  return value as Record<string, unknown>
+}
+
+function toolArguments(value: unknown): Record<string, unknown> {
+  const parsed = typeof value === 'string' ? JSON.parse(value) : value
+  return objectValue(parsed, 'Tool call arguments must be a JSON object')
+}
+
+function parseToolCall(payload: string, newId: () => string): ToolCall {
+  const fields = objectValue(JSON.parse(payload), 'Tool call must contain a JSON object')
+  const functionFields = fields.function === undefined ? fields : objectValue(fields.function, 'Invalid function call')
+  const name = functionFields.name
+  if (typeof name !== 'string' || !name) throw new Error('Tool call must contain a function name')
+  const arguments_ = functionFields.arguments ?? functionFields.args
+  if (arguments_ === undefined) throw new Error('Tool call must contain function arguments')
+  return {
+    id: typeof fields.id === 'string' ? fields.id : `call_${newId()}`,
+    name,
+    arguments: toolArguments(arguments_),
+  }
+}
+
+/** Parse template-delimited calls, raising when a tagged payload is malformed. */
+export function inlineToolCalls(
+  content: string,
+  protocol: ChatTemplateProtocol | null,
+  newId: () => string,
+): { visible: string; calls: ToolCall[] } {
+  const start = protocol?.tool_call_start
+  const end = protocol?.tool_call_end
+  if (!start || !end) return { visible: content, calls: [] }
+
+  const escapedStart = start.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const escapedEnd = end.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const pattern = new RegExp(`${escapedStart}\\s*([\\s\\S]*?)\\s*${escapedEnd}`, 'g')
   const calls: ToolCall[] = []
-  const visible = content.replace(INLINE_TOOL_CALL, (_match, payload: string) => {
-    const call = parseToolCall(payload)
+  const visible = content.replace(pattern, (_match, payload: string) => {
+    const call = parseToolCall(payload, newId)
     calls.push(call)
     return ''
   })
   return { visible: visible.trim(), calls }
+}
+
+export function createToolCallAccumulator(): ToolCallAccumulator {
+  return { calls: new Map() }
+}
+
+/** Accumulate OpenAI tool-call deltas, whose JSON arguments may span SSE events. */
+export function appendToolCallDelta(accumulator: ToolCallAccumulator, value: unknown): void {
+  if (!Array.isArray(value)) throw new Error('Model tool_calls must be an array')
+  for (const [position, item] of value.entries()) {
+    const fields = objectValue(item, 'Model tool call must be an object')
+    const index = typeof fields.index === 'number' ? fields.index : position
+    const pending = accumulator.calls.get(index) ?? {
+      id: null,
+      name: '',
+      argumentsText: '',
+      argumentsObject: null,
+    }
+    if (typeof fields.id === 'string') pending.id = fields.id
+    if (fields.function !== undefined) {
+      const functionFields = objectValue(fields.function, 'Model tool call function must be an object')
+      if (typeof functionFields.name === 'string') pending.name += functionFields.name
+      if (typeof functionFields.arguments === 'string') {
+        pending.argumentsText += functionFields.arguments
+      } else if (functionFields.arguments !== undefined) {
+        pending.argumentsObject = toolArguments(functionFields.arguments)
+      }
+    }
+    accumulator.calls.set(index, pending)
+  }
+}
+
+/** Validate accumulated OpenAI calls once the response stream has finished. */
+export function finalizeToolCalls(accumulator: ToolCallAccumulator, newId: () => string): ToolCall[] {
+  return [...accumulator.calls.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, pending]) => {
+      if (!pending.name) throw new Error('Tool call must contain a function name')
+      const arguments_ = pending.argumentsObject ?? toolArguments(pending.argumentsText)
+      return {
+        id: pending.id ?? `call_${newId()}`,
+        name: pending.name,
+        arguments: arguments_,
+      }
+    })
 }

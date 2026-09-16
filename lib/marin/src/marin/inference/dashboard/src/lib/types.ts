@@ -1,4 +1,11 @@
 /** Static serving metadata returned by the dashboard server's /info route. */
+export interface ChatTemplateProtocol {
+  thinking_start: string | null
+  thinking_end: string | null
+  tool_call_start: string | null
+  tool_call_end: string | null
+}
+
 export interface ServingInfo {
   model: string
   backend: string
@@ -8,6 +15,7 @@ export interface ServingInfo {
   has_chat_template: boolean
   endpoint: string
   streaming: boolean
+  chat_template_protocol: ChatTemplateProtocol
 }
 
 export type ServerStatus = 'connecting' | 'ok' | 'loading' | 'bad'

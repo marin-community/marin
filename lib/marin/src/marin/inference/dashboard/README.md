@@ -37,23 +37,25 @@ def lookup_weather(city: str, units: str = "celsius") -> dict[str, object]:
 
 Before each user turn's first model request, the dashboard converts each
 function signature and docstring to an OpenAI-compatible JSON tool definition.
-It sends those definitions in the request's `tools` field. The model's chat
-template renders them using the same `<tools>` prompt used for Datakit SFT, and
-the model calls a function with the trained form:
+It sends those definitions in the request's `tools` field, so the tokenizer's
+active tool-aware chat template controls the model prompt. The serving process
+also reports that template's reasoning and tool-call delimiters to the browser.
+For example, the Datakit template emits:
 
 ```xml
 <tool_call>{"name":"lookup_weather","arguments":{"city":"Paris"}}</tool_call>
 ```
 
-The UI parses each tagged call, runs it in the Iris service, and adds the call
-and result to the next request as structured `tool_calls` and `role: "tool"`
-messages. The chat template renders those messages as `<tool_call>` and named
-`<tool_response>` XML exactly as Datakit SFT does. Argument and return
-annotations are validated with Pydantic. Schema generation and each call run in
-a fresh subprocess with a 10-second timeout, and source is limited to 64 KiB.
-One model response counts as one round, including a response with multiple
-calls. The UI executes calls from the eighth round, stops before another model
-request, and displays a limit error.
+The Delphi template instead uses `<|tool_call|>` and
+`<|tool_call_end|>`. The UI parses the delimiters selected from the served
+model's template, runs each call in the Iris service, and adds the call and
+result to the next request as structured `tool_calls` and `role: "tool"`
+messages. The same template then renders the result in its trained format.
+Argument and return annotations are validated with Pydantic. Schema generation
+and each call run in a fresh subprocess with a 10-second timeout, and source is
+limited to 64 KiB. One model response counts as one round, including a response
+with multiple calls. The UI executes calls from the eighth round, stops before
+another model request, and displays a limit error.
 
 After the endpoint becomes ready, `marin-serve iris` prints a capability URL.
 Possession of that URL authorizes both inference and arbitrary Python execution

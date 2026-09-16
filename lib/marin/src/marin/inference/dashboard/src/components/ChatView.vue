@@ -6,8 +6,21 @@ import type { ChatExample } from '../lib/examples'
 import { modelMessages } from '../lib/python_tools'
 import type { ModelMessage, ToolDefinition } from '../lib/python_tools'
 import { splitThinking } from '../lib/thinking'
-import { inlineToolCalls } from '../lib/tool_calls'
-import type { AssistantMessage, Conversation, SamplingParams, ToolCall, ToolMessage } from '../lib/types'
+import {
+  appendToolCallDelta,
+  createToolCallAccumulator,
+  finalizeToolCalls,
+  inlineToolCalls,
+} from '../lib/tool_calls'
+import { newId } from '../lib/storage'
+import type {
+  AssistantMessage,
+  ChatTemplateProtocol,
+  Conversation,
+  SamplingParams,
+  ToolCall,
+  ToolMessage,
+} from '../lib/types'
 import MessageBubble from './MessageBubble.vue'
 
 const MAX_TOOL_ROUNDS = 8
@@ -17,6 +30,7 @@ const props = defineProps<{
   params: SamplingParams
   model: string
   hasChatTemplate: boolean
+  chatTemplateProtocol: ChatTemplateProtocol | null
   streaming: boolean
 }>()
 
@@ -202,6 +216,7 @@ async function complete(
   let rawContent = ''
   let reasoningStream = ''
   let thinkingStartedAt: number | null = null
+  const structuredCalls = createToolCallAccumulator()
 
   const body: Record<string, unknown> = {
     model: props.model,
@@ -213,8 +228,8 @@ async function complete(
   }
   if (tools.length) {
     body.tools = tools
-    // Keep calls in model content for the dashboard's Datakit XML parser. An omitted
-    // choice makes vLLM default to native auto-tool parsing, which requires server flags.
+    // Permit model-native call generation without requiring vLLM auto-tool parsing.
+    // The response handling below also accepts structured calls when a server emits them.
     body.tool_choice = null
   }
   await requestCompletion('v1/chat/completions', body, props.streaming, signal, (data) => {
@@ -223,13 +238,16 @@ async function complete(
     const reasoning = delta.reasoning_content ?? delta.reasoning
     if (reasoning) reasoningStream += reasoning
     if (delta.content) rawContent += delta.content
+    if (tools.length && delta.tool_calls !== undefined) appendToolCallDelta(structuredCalls, delta.tool_calls)
 
-    const split = splitThinking(rawContent)
-    reply.thinking = reasoningStream + split.thinking
+    const split = splitThinking(rawContent, props.chatTemplateProtocol)
+    const reasoningSplit = splitThinking(reasoningStream, props.chatTemplateProtocol)
+    const streamedThinking = [reasoningSplit.thinking, reasoningSplit.visible].filter(Boolean).join('\n')
+    reply.thinking = [streamedThinking, split.thinking].filter(Boolean).join('\n')
     if (tools.length) {
-      const inline = inlineToolCalls(split.visible)
+      const inline = inlineToolCalls(split.visible, props.chatTemplateProtocol, newId)
       reply.content = inline.visible
-      reply.toolCalls = inline.calls
+      reply.toolCalls = structuredCalls.calls.size ? [] : inline.calls
     } else {
       reply.content = split.visible
       reply.toolCalls = []
@@ -242,6 +260,12 @@ async function complete(
 
   if (thinkingStartedAt !== null && reply.thinkingSeconds === null) {
     reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
+  }
+  if (tools.length) {
+    const split = splitThinking(rawContent, props.chatTemplateProtocol)
+    const inline = inlineToolCalls(split.visible, props.chatTemplateProtocol, newId)
+    reply.content = inline.visible
+    reply.toolCalls = structuredCalls.calls.size ? finalizeToolCalls(structuredCalls, newId) : inline.calls
   }
 }
 
