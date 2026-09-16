@@ -22,6 +22,7 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     SampleStore,
     SamplingSpec,
     StopReason,
+    digest,
 )
 from experiments.grug.moe_hero_ep.ops.vibe_check.generation import generate
 from experiments.grug.moe_hero_ep.ops.vibe_check.jobs import sample_job_names, submit_pending
@@ -29,6 +30,7 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.publishing import (
     COMMENT_MARKER,
     publish_reports,
     render_report,
+    report_entry,
     report_manifest,
     update_issue_comment,
 )
@@ -343,23 +345,19 @@ def report_data(path):
     return json.loads(embedded)
 
 
-def test_empty_report_updates_after_results_arrive_without_freezing_an_empty_day(tmp_path, monkeypatch, sample_request):
+def test_report_retains_history_and_only_advances_with_usable_results(tmp_path, monkeypatch, sample_request):
     public = tmp_path / "public"
     monkeypatch.setattr(sites, "PUBLIC_ROOT", str(public))
     store = SampleStore(str(tmp_path / "private"))
     comments = []
-    # Historical requests can use an incompatible schema. Their results must stay unread.
-    legacy = sample_request.model_dump(mode="json")
-    del legacy["spec"]["completions_per_prompt"]
-    legacy_path = tmp_path / "private/requests/legacy.json"
-    legacy_path.parent.mkdir(parents=True)
-    legacy_path.write_text(json.dumps(legacy))
+    # One corrupt historical result must not block publication of usable results.
     legacy_result = tmp_path / "private/results/legacy.json"
-    legacy_result.parent.mkdir()
+    legacy_result.parent.mkdir(parents=True)
     legacy_result.write_text("invalid historical result")
     url = publish_reports(store, date(2026, 9, 12), comments.append, spec=sample_request.spec)
     latest = public / "rav/hero-completions/latest/index.html"
-    assert report_data(latest)["entries"] == []
+    assert not latest.exists()
+    assert not comments
     assert not list((tmp_path / "private/reports").glob("*"))
     assert not (public / "rav/hero-completions/2026.09.12/index.html").exists()
 
@@ -369,11 +367,34 @@ def test_empty_report_updates_after_results_arrive_without_freezing_an_empty_day
     assert [entry["id"] for entry in report_data(latest)["entries"]] == [sample_request.sample_id]
     daily = public / "rav/hero-completions/2026.09.12/index.html"
     assert report_data(daily)["entries"] == report_data(latest)["entries"]
+    original = latest.read_bytes()
+    newer_spec = sample_request.spec.model_copy(update={"release": "test-v2"})
+    publish_reports(store, date(2026, 9, 13), comments.append, spec=newer_spec)
+    assert latest.read_bytes() == original
+    assert len(comments) == 1
+
+    legacy = completed(sample_request).model_dump(mode="json")
+    del legacy["request"]["spec"]["completions_per_prompt"]
+    del legacy["request"]["spec"]["release"]
+    del legacy["completed_at"]
+    del legacy["eos_token_id"]
+    row = legacy["completions"][0]
+    sample = row.pop("samples")[0]
+    del sample["sample_index"]
+    del sample["token_scores"]
+    row.update(sample)
+    legacy_id = digest({key: legacy["request"][key] for key in ("checkpoint", "spec")})
+    (tmp_path / f"private/results/{legacy_id}.json").write_text(json.dumps(legacy))
+    newer = sample_request.model_copy(update={"spec": newer_spec})
+    store.save_result(completed(newer))
     corrupt = completed(sample_request).model_dump(mode="json")
     corrupt["request"]["checkpoint"]["metadata_digest"] = "changed"
-    (tmp_path / f"private/results/{sample_request.sample_id}.json").write_text(json.dumps(corrupt))
-    with pytest.raises(ValueError, match="provenance"):
-        publish_reports(store, date(2026, 9, 12), comments.append, spec=sample_request.spec)
+    (tmp_path / "private/results/wrong-provenance.json").write_text(json.dumps(corrupt))
+    publish_reports(store, date(2026, 9, 13), comments.append, spec=newer_spec)
+    entries = report_data(latest)["entries"]
+    assert [entry["id"] for entry in entries] == [newer.sample_id, sample_request.sample_id, legacy_id]
+    assert json.loads((public / f"rav/hero-completions/results/{legacy_id}.json").read_text()) == legacy
+    assert [entry["id"] for entry in report_data(daily)["entries"]] == [sample_request.sample_id]
 
 
 @pytest.mark.parametrize("failure", ["upload", "comment"])
@@ -423,11 +444,23 @@ def test_current_report_advances_while_daily_history_survives_retries(tmp_path, 
     publish_reports(store, date(2026, 9, 12), comments.append, spec=sample_request.spec)
     assert page.read_bytes() == first_page
     assert [entry["step"] for entry in report_data(latest)["entries"]] == [24000, 6000]
-    assert len(comments) == 2
+    assert len(comments) == 1
+    unchanged = latest.read_bytes()
+    publish_reports(store, date(2026, 9, 13), comments.append, spec=sample_request.spec)
+    assert latest.read_bytes() == unchanged
+    newest = sample_request.model_copy(
+        update={"checkpoint": sample_request.checkpoint.model_copy(update={"step": 30000})}
+    )
+    store.save_result(completed(newest))
+    with monkeypatch.context() as patch:
+        patch.setattr(sites, "publish_site", lose_upload_response)
+        with pytest.raises(ConnectionError):
+            publish_reports(store, date(2026, 9, 13), comments.append, spec=sample_request.spec)
+    assert latest.read_bytes() == unchanged
     publish_reports(store, date(2026, 9, 13), comments.append, spec=sample_request.spec)
     assert page.read_bytes() == first_page
     next_page = public / "rav/hero-completions/2026.09.13/index.html"
-    assert [entry["step"] for entry in report_data(next_page)["entries"]] == [24000, 6000]
+    assert [entry["step"] for entry in report_data(next_page)["entries"]] == [30000, 24000, 6000]
     assert report_data(next_page)["previous_url"].endswith("/2026.09.12/index.html")
 
 
@@ -460,7 +493,8 @@ def test_report_data_cannot_close_its_script_element(sample_request):
     poisoned = request.model_copy(
         update={"checkpoint": request.checkpoint.model_copy(update={"run_id": "</script><script>alert(1)</script>"})}
     )
-    manifest = report_manifest([completed(poisoned)], "2026-09-12", "")
+    entry = report_entry(poisoned.sample_id, completed(poisoned).model_dump(mode="json"))
+    manifest = report_manifest([entry], "2026-09-12", "")
     html = render_report(manifest)
     embedded = html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0]
     assert json.loads(embedded)["entries"][0]["run_id"] == poisoned.checkpoint.run_id
