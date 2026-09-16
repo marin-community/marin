@@ -46,19 +46,18 @@ def _moe_mlp_local_scatter(
     x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
 
     with jax.named_scope("moe_up_down"):
-        w13_out = _zero_inactive_grouped_rows(ragged_dot(x_dispatch, moe_w13, group_sizes), cumulative_group_sizes)
-        w13_out = tree_checkpoint_name(w13_out, _CHECKPOINT_EXPERT_HIDDEN)
+        # Rows past the last group are unspecified kernel output. Every consumer between the
+        # two projections is row-local or group-bounded, so only the combine boundary below
+        # needs zeroing (a zero weight times an unspecified row is not zero).
+        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
         moe_dim = moe_w2.shape[1]
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
-        out_dispatch = _zero_inactive_grouped_rows(
-            ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
-            cumulative_group_sizes,
-        )
         out_dispatch = tree_checkpoint_name(
-            out_dispatch,
+            ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
     with jax.named_scope("scatter"):
-        out = jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
+        weighted = _zero_inactive_grouped_rows(out_dispatch * w_dispatch[:, None], cumulative_group_sizes)
+        out = jnp.zeros_like(x).at[token_dispatch].add(weighted, mode="drop")
     return out, _zero_dropped_assignments()

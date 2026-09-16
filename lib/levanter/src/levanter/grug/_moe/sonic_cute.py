@@ -88,7 +88,8 @@ def _expert_mlp_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
 
 def _expert_mlp_bwd(res, dy):
     x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu = res
-    dy = _zero_inactive_grouped_rows(dy, cu)
+    # `dy` needs no tail mask: both consumers are bounded by `cu` (varlen-m GEMM, ragged_dot
+    # weight-grad), and the combine transpose already zeroes rows past cu[-1] via w_dispatch == 0.
     # down backward: dh via QuACK (transposed contraction), dw2 via XLA weight-grad
     dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k")
     (dw2,) = jax.vjp(lambda w: ragged_dot(h, w, group_sizes), moe_w2)[1](dy)
