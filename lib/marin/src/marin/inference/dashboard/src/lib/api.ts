@@ -36,7 +36,7 @@ export async function invokeTool(
   })
   const body = await response.text()
   if (response.ok) return body
-  return JSON.stringify({ error: `tool returned ${response.status}`, details: body })
+  throw new Error(`tool returned ${response.status}: ${body}`)
 }
 
 /** POST an OpenAI request and invoke onData for either buffered JSON or SSE events. */

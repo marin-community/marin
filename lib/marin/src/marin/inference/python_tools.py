@@ -57,22 +57,25 @@ class PythonToolRequest:
         return json.dumps(dataclasses.asdict(self)).encode()
 
     @classmethod
-    def from_json(cls, payload: object) -> "PythonToolRequest":
+    def from_json(cls, payload: object, *, name: str | None = None) -> "PythonToolRequest":
         if not isinstance(payload, dict):
             raise ValueError("Tool request must be an object")
         source = payload.get("source")
-        name = payload.get("name")
+        resolved_name = payload.get("name") if name is None else name
         arguments = payload.get("arguments")
-        if not isinstance(source, str) or not isinstance(name, str) or not isinstance(arguments, dict):
+        if not isinstance(source, str) or not isinstance(resolved_name, str) or not isinstance(arguments, dict):
             raise ValueError("Tool request requires string source and name, and object arguments")
-        return cls(source=source, name=name, arguments=arguments)
+        if len(source.encode()) > MAX_PYTHON_TOOL_SOURCE_BYTES:
+            raise PythonToolSourceTooLarge(f"Python tool source exceeds {MAX_PYTHON_TOOL_SOURCE_BYTES} bytes")
+        return cls(source=source, name=resolved_name, arguments=arguments)
+
+
+class PythonToolSourceTooLarge(ValueError):
+    """The submitted source exceeds the dashboard execution limit."""
 
 
 def python_tools_from_source(source: str) -> tuple[PythonTool, ...]:
     """Compile top-level typed function definitions from dashboard-authored source."""
-    if len(source.encode()) > MAX_PYTHON_TOOL_SOURCE_BYTES:
-        raise ValueError(f"Python tool source exceeds {MAX_PYTHON_TOOL_SOURCE_BYTES} bytes")
-
     module = ast.parse(source, filename="<chat-python-tools>")
     definitions: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
     for statement in module.body:

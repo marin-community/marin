@@ -207,7 +207,6 @@ async function complete(reply: ChatMessage, messages: ModelMessage[], pythonTool
     }
   })
 
-  if (pythonTools) reply.toolCalls = toolCalls
   if (thinkingStartedAt !== null && reply.thinkingSeconds === null) {
     reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
   }

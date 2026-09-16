@@ -2,6 +2,7 @@ import type { ChatMessage, Conversation, ToolCall } from './types'
 
 const CDATA_END = ']]>'
 const CDATA_CONTINUATION = ']]]]><![CDATA[>'
+export const TOOL_CALL_TAG = 'tool_call'
 
 export interface ModelMessage {
   role: 'system' | 'user' | 'assistant'
@@ -46,7 +47,7 @@ function pythonToolInstructions(source: string): string {
 ${cdata(source)}
 ]]></python_tools>
 Call a function only by emitting this exact XML form with JSON arguments:
-<tool_call>{"name":"function_name","arguments":{"parameter":"value"}}</tool_call>
+<${TOOL_CALL_TAG}>{"name":"function_name","arguments":{"parameter":"value"}}</${TOOL_CALL_TAG}>
 The application will execute the function and return a <tool_result> XML element in the next user message. Use that
 result to answer the user or make another call. Do not invent functions outside the block.`
 }
@@ -59,7 +60,7 @@ function pythonToolCallMessage(call: ToolCall): string {
   } catch {
     // The matching tool result tells the model that its arguments were invalid.
   }
-  return `<tool_call>${JSON.stringify({ name: call.function.name, arguments: arguments_ })}</tool_call>`
+  return `<${TOOL_CALL_TAG}>${JSON.stringify({ name: call.function.name, arguments: arguments_ })}</${TOOL_CALL_TAG}>`
 }
 
 function pythonToolResultMessage(message: ChatMessage): string {

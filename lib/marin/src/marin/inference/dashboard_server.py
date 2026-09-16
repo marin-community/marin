@@ -38,7 +38,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Route
 
 from marin.inference.http_proxy import forwardable_request_headers, forwardable_response_headers
-from marin.inference.python_tools import MAX_PYTHON_TOOL_SOURCE_BYTES, PythonToolRequest
+from marin.inference.python_tools import PythonToolRequest, PythonToolSourceTooLarge
 
 logger = logging.getLogger(__name__)
 PYTHON_TOOL_TIMEOUT_SECONDS = 10
@@ -76,20 +76,14 @@ async def _invoke_tool_request(request: Request) -> Response:
         payload = await request.json()
     except json.JSONDecodeError:
         return JSONResponse({"error": "tool request must be JSON"}, status_code=400)
-    if not isinstance(payload, dict):
-        return JSONResponse({"error": "tool request must be an object"}, status_code=400)
-    source = payload.get("source")
-    arguments = payload.get("arguments")
-    if not isinstance(source, str) or not isinstance(arguments, dict):
-        return JSONResponse({"error": "tool request requires string source and object arguments"}, status_code=400)
-    if len(source.encode()) > MAX_PYTHON_TOOL_SOURCE_BYTES:
+    try:
+        tool_request = PythonToolRequest.from_json(payload, name=request.path_params["name"])
+    except PythonToolSourceTooLarge:
         return JSONResponse({"error": "Python tool source is too large"}, status_code=413)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
-    child_payload = PythonToolRequest(
-        source=source,
-        name=request.path_params["name"],
-        arguments=arguments,
-    ).to_json_bytes()
+    child_payload = tool_request.to_json_bytes()
     try:
         result = await asyncio.to_thread(_run_python_tool, child_payload)
     except subprocess.TimeoutExpired:
