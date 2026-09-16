@@ -6,9 +6,7 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import threading
-import time
 import uuid
 from dataclasses import dataclass, field
 
@@ -35,9 +33,6 @@ _MAX_COMMIT_ATTEMPTS = 32
 _COMMIT_BACKOFF_INITIAL = 1.0
 _COMMIT_BACKOFF_MAXIMUM = 10 * 60.0
 _ROOT_COMMIT_ID = "root"
-_LIFECYCLE_REFRESH_INTERVAL = 24 * 60 * 60.0
-
-logger = logging.getLogger(__name__)
 
 
 class CommitConflict(RuntimeError):
@@ -101,27 +96,10 @@ def initialize_archive(layout: FineStoreLayout) -> ArchiveMetadata:
         except ConditionalWriteError:
             existing = marker.read()
             assert existing is not None
-    return _validate_marker(layout, existing.data)
-
-
-def refresh_archive_marker(layout: FineStoreLayout) -> None:
-    """Rewrite the marker with its own bytes, or create it when it is absent."""
-    marker = conditional_object(layout.archive_path)
-    existing = marker.read()
-    if existing is None:
-        initialize_archive(layout)
-        return
-    _validate_marker(layout, existing.data)
-    try:
-        marker.write(existing.data, expected_version=existing.version)
-    except ConditionalWriteError:
-        # Another writer refreshed the marker, a migration replaced it, or the lifecycle
-        # rule deleted it after the read. Only the last case leaves nothing to validate.
-        replaced = marker.read()
-        if replaced is None:
-            initialize_archive(layout)
-            return
-        _validate_marker(layout, replaced.data)
+    found = ArchiveMetadata.model_validate_json(existing.data)
+    if found.format_version != FORMAT_VERSION:
+        raise FormatVersionError(layout.root, found=found.format_version)
+    return found
 
 
 def validate_archive(layout: FineStoreLayout) -> ArchiveMetadata | None:
@@ -130,10 +108,6 @@ def validate_archive(layout: FineStoreLayout) -> ArchiveMetadata | None:
         data = StoragePath(layout.archive_path).read_bytes()
     except FileNotFoundError:
         return None
-    return _validate_marker(layout, data)
-
-
-def _validate_marker(layout: FineStoreLayout, data: bytes) -> ArchiveMetadata:
     found = ArchiveMetadata.model_validate_json(data)
     if found.format_version != FORMAT_VERSION:
         raise FormatVersionError(layout.root, found=found.format_version)
@@ -251,13 +225,6 @@ class CommitCoordinator:
         self._layout = layout
         self._head = conditional_object(layout.head_path)
         self._lock = threading.Lock()
-        # Bucket lifecycle rules expire each object on its own clock. Every commit rewrites
-        # HEAD, so the write-once marker and schema objects it depends on are rewritten with
-        # their own bytes on a bounded interval to keep them at least as young as HEAD. Local
-        # filesystems have no lifecycle rules, and an in-place rewrite would race unlocked
-        # local readers, so only remote roots refresh.
-        self._refresh_lifecycle = StoragePath(layout.root).is_remote
-        self._lifecycle_refreshed_at: float | None = None
 
     def snapshot(self) -> ArchiveSnapshot:
         return read_snapshot(self._layout)
@@ -266,11 +233,6 @@ class CommitCoordinator:
         """Publish ``delta`` and return the new durable commit token."""
         with self._lock:
             current = base or read_snapshot(self._layout)
-            # Refresh before HEAD moves so a refresh failure cannot fail an already durable
-            # commit. HEAD then lands a moment younger than the objects it depends on.
-            if self._lifecycle_refresh_due():
-                self._refresh_lifecycle_objects(current.manifest, delta)
-                self._lifecycle_refreshed_at = time.monotonic()
             refresh = False
 
             def publish() -> CommitToken:
@@ -316,24 +278,3 @@ class CommitCoordinator:
                 raise CommitConflict(
                     f"HEAD at {self._layout.root} changed {_MAX_COMMIT_ATTEMPTS} consecutive times"
                 ) from exc
-
-    def _lifecycle_refresh_due(self) -> bool:
-        if not self._refresh_lifecycle:
-            return False
-        if self._lifecycle_refreshed_at is None:
-            return True
-        return time.monotonic() - self._lifecycle_refreshed_at >= _LIFECYCLE_REFRESH_INTERVAL
-
-    def _refresh_lifecycle_objects(self, base: Manifest, delta: CommitDelta) -> None:
-        refresh_archive_marker(self._layout)
-        schema_paths = {state.metadata_path for state in base.tables.values()}
-        schema_paths.update(addition.metadata_path for addition in delta.additions.values())
-        schema_paths.update(delta.metadata_updates.values())
-        for path in sorted(schema_paths):
-            schema = StoragePath(path)
-            try:
-                schema.write_bytes(schema.read_bytes())
-            except FileNotFoundError:
-                # Already expired. The writer that registered the table re-creates it on
-                # its next open; until then readers of that table miss with an OSError.
-                logger.warning("FineStore schema object at %s is missing", path)

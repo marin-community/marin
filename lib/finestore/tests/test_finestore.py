@@ -7,24 +7,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import threading
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from botocore.exceptions import ClientError
-from finestore import commit as commit_module
 from finestore import shard_writer
 from finestore import store as store_module
-from finestore.commit import (
-    CommitConflict,
-    CommitCoordinator,
-    CommitDelta,
-    initialize_archive,
-    refresh_archive_marker,
-    validate_archive,
-)
+from finestore.commit import CommitConflict, CommitCoordinator, CommitDelta
 from finestore.compaction import CompactionResult, compact_table
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
@@ -41,10 +32,8 @@ from finestore.migrations import LegacyReadView, migrate
 from finestore.reader import BlobCorruptionError, ReadView
 from finestore.store import OBJECT_PART_BYTES, DataStore, DataTable, PrimaryKeyConflict, TransactionTooLarge
 from rigging import timing
-from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
+from rigging.filesystem.conditional_object import ConditionalWriteError
 from rigging.filesystem.storage_path import StoragePath
-
-_STALE_MTIME = 1_000_000_000
 
 
 def _rows(reader: ReadView, table: str, **kwargs) -> list[dict]:
@@ -747,93 +736,21 @@ def test_commit_preserves_unknown_optional_manifest_fields(tmp_path):
     assert committed["tables"]["samples"]["shards"][0]["future_shard"] == 17
 
 
-def _stamp_stale(*paths: str) -> None:
-    for path in paths:
-        os.utime(path, (_STALE_MTIME, _STALE_MTIME))
-
-
-def _refreshed(path: str) -> bool:
-    return os.stat(path).st_mtime > _STALE_MTIME
-
-
-def test_remote_commit_refreshes_marker_and_schema_objects_on_a_bounded_interval(tmp_path, monkeypatch):
-    # Bucket lifecycle rules expire every object on its own clock and each commit rewrites HEAD,
-    # so the write-once marker and schema objects would expire first and leave a HEAD that readers
-    # refuse. The first commit after open rewrites them; later commits inside the interval do not.
-    monkeypatch.setattr(StoragePath, "is_remote", property(lambda _self: True))
+def test_read_view_reads_a_populated_archive_without_its_format_marker(tmp_path):
+    # Bucket lifecycle rules expire each object on its own clock. The write-once marker expires
+    # while HEAD, rewritten by every commit, remains. HEAD carries the format version, so the
+    # archive stays readable and the next writer open recreates the marker.
     root = str(tmp_path / "run")
-    layout = FineStoreLayout(root)
     with DataStore.open(root, writer_id="w1") as store:
-        samples = store.table("samples", primary_key=("doc_id",))
-        (schema_path,) = (str(path) for path in (tmp_path / "run" / "schemas").iterdir())
-        _stamp_stale(schema_path)
-        os.remove(layout.archive_path)
-
-        samples.append({"doc_id": "1"})
+        store.table("samples", primary_key=("doc_id",)).append({"doc_id": "1"})
         store.flush()
-        assert _refreshed(schema_path)
-        marker = ArchiveMetadata.model_validate_json(StoragePath(layout.archive_path).read_bytes())
-        assert marker.format_version == FORMAT_VERSION
+    StoragePath(FineStoreLayout(root).archive_path).rm()
 
-        _stamp_stale(layout.archive_path, schema_path)
-        samples.append({"doc_id": "2"})
-        store.flush()
-        assert not _refreshed(layout.archive_path)
-        assert not _refreshed(schema_path)
+    assert [row["doc_id"] for row in _rows(ReadView(root), "samples")] == ["1"]
 
-        monkeypatch.setattr(commit_module, "_LIFECYCLE_REFRESH_INTERVAL", 0.0)
-        samples.append({"doc_id": "3"})
-        store.flush()
-        assert _refreshed(layout.archive_path)
-        assert _refreshed(schema_path)
-
-
-def test_marker_refresh_recreates_a_marker_deleted_during_the_conditional_write(tmp_path, monkeypatch):
-    # The lifecycle rule can delete the marker between the refresh's read and its conditional
-    # write. That conflict must recreate the marker instead of leaving HEAD without one.
-    root = str(tmp_path / "run")
-    layout = FineStoreLayout(root)
-    initialize_archive(layout)
-    real_marker = conditional_object(layout.archive_path)
-
-    class ExpiringMarker:
-        path = real_marker.path
-
-        def version(self):
-            return real_marker.version()
-
-        def read(self):
-            return real_marker.read()
-
-        def write(self, data, *, expected_version):
-            if expected_version is not None:
-                os.remove(layout.archive_path)
-                raise ConditionalWriteError("object expired")
-            return real_marker.write(data, expected_version=expected_version)
-
-    monkeypatch.setattr(
-        commit_module,
-        "conditional_object",
-        lambda path: ExpiringMarker() if path == layout.archive_path else conditional_object(path),
-    )
-    refresh_archive_marker(layout)
-    assert validate_archive(layout) is not None
-
-
-def test_local_commit_leaves_marker_and_schema_objects_untouched(tmp_path):
-    root = str(tmp_path / "run")
-    layout = FineStoreLayout(root)
-    with DataStore.open(root, writer_id="w1") as store:
-        samples = store.table("samples", primary_key=("doc_id",))
-        samples.append({"doc_id": "1"})
-        store.flush()
-        schema_path = ReadView(root).table_metadata_path("samples")
-        assert schema_path is not None
-        _stamp_stale(layout.archive_path, schema_path)
-        samples.append({"doc_id": "2"})
-        store.flush()
-    assert not _refreshed(layout.archive_path)
-    assert not _refreshed(schema_path)
+    with DataStore.open(root, writer_id="w2"):
+        pass
+    assert StoragePath(FineStoreLayout(root).archive_path).exists()
 
 
 def test_read_view_refuses_an_older_format_with_migration_instructions(tmp_path):

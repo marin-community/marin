@@ -72,8 +72,8 @@ class PersistentKvCache:
                 return self._memory[key]
         if self._resolve_root is None:
             return None
-        # ValueError covers an inconsistent archive, such as a HEAD whose format marker
-        # expired under a TTL prefix. The next writer open repairs it.
+        # ValueError covers an inconsistent archive, such as a HEAD that names a manifest
+        # with a different commit. The cache is best-effort, so that is a miss.
         try:
             value = ReadView(self._storage_root()).read_blob(key)
         except (OSError, ValueError) as exc:

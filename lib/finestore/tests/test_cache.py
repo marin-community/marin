@@ -74,9 +74,9 @@ def test_persistent_cache_keeps_a_loaded_value_in_memory(tmp_path):
     assert reader.load("kernel") == b"object-code"
 
 
-def test_cache_treats_archive_without_format_marker_as_a_miss_and_repairs_it(tmp_path):
-    # A TTL prefix can expire the write-once marker while HEAD survives. The reader refuses that
-    # archive; the cache must miss instead of failing the caller, and the next store repairs it.
+def test_cache_reads_an_archive_without_its_format_marker_and_the_next_store_recreates_it(tmp_path):
+    # A TTL prefix expires the write-once marker while HEAD survives. Reads keep hitting, and
+    # the writer open behind the next store puts the marker back.
     root = tmp_path / "cache"
     writer = PersistentKvCache.at(str(root))
     writer.store("kernel", b"object-code")
@@ -84,12 +84,12 @@ def test_cache_treats_archive_without_format_marker_as_a_miss_and_repairs_it(tmp
     (root / "_archive.json").unlink()
 
     cache = PersistentKvCache.at(str(root))
-    assert cache.load("kernel") is None
-    cache.store("kernel", b"object-code")
+    assert cache.load("kernel") == b"object-code"
+    cache.store("other", b"more-code")
     cache.close()
 
     assert (root / "_archive.json").exists()
-    assert PersistentKvCache.at(str(root)).load("kernel") == b"object-code"
+    assert PersistentKvCache.at(str(root)).load("other") == b"more-code"
 
 
 def test_in_memory_cache_never_resolves_storage():
