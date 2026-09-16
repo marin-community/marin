@@ -158,8 +158,8 @@ def sample(request: SampleRequest, store_root: str) -> None:
         if not prompt.expected:
             raise ValueError(f"Prompt has no expected completion: {prompt.id}")
         expected = tokenizer.encode(prompt.expected, add_special_tokens=False)
-        if not expected or len(ids) + len(expected) > request.spec.context_length:
-            raise ValueError(f"Expected completion does not fit the context: {prompt.id}")
+        if not expected or len(ids) + len(expected) + 1 > request.spec.context_length:
+            raise ValueError(f"Expected completion with EOS does not fit the context: {prompt.id}")
         expected_ids.append(expected)
     logger.info(
         "Tokenization completed: prompt tokens=%d, expected tokens=%d, context=%d, max new tokens=%d",
