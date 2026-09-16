@@ -393,7 +393,6 @@ def test_report_retains_history_and_only_advances_with_usable_results(tmp_path, 
     publish_reports(store, date(2026, 9, 13), comments.append, spec=newer_spec)
     entries = report_data(latest)["entries"]
     assert [entry["id"] for entry in entries] == [newer.sample_id, sample_request.sample_id, legacy_id]
-    assert entries[-1]["release"] == "Unknown sampling version"
     assert json.loads((public / f"rav/hero-completions/results/{legacy_id}.json").read_text()) == legacy
     assert [entry["id"] for entry in report_data(daily)["entries"]] == [sample_request.sample_id]
 

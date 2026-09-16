@@ -30,14 +30,16 @@ ISSUES_API = "https://api.github.com/repos/marin-community/marin/issues"
 ISSUE_API = f"{ISSUES_API}/8827"
 COMMENT_PAGE_SIZE = 100
 CATALOG_KEY = "reports/catalog.json"
+UNKNOWN_RUN = "Unknown run"
+UNKNOWN_RELEASE = "Unknown sampling version"
 
 
 class ReportEntry(BaseModel):
     id: str
     url: str
     step: int | None = Field(default=None, ge=0)
-    run_id: str = "Unknown run"
-    release: str = "Unknown sampling version"
+    run_id: str = UNKNOWN_RUN
+    release: str = UNKNOWN_RELEASE
     spec_id: str = ""
     completed_at: str = ""
 
@@ -75,8 +77,8 @@ def report_entry(sample_id: str, data: dict) -> ReportEntry:
         id=sample_id,
         url=prefix_join(sites.PUBLIC_URL_BASE, public_result_key(sample_id)),
         step=checkpoint.get("step"),
-        run_id=checkpoint.get("run_id") or "Unknown run",
-        release=spec.get("release") or "Unknown sampling version",
+        run_id=checkpoint.get("run_id") or UNKNOWN_RUN,
+        release=spec.get("release") or UNKNOWN_RELEASE,
         spec_id=digest(spec) if spec else "",
         completed_at=data.get("completed_at") or "",
     )

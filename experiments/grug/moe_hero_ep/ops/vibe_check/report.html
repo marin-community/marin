@@ -66,6 +66,7 @@
     const right = document.getElementById('right');
     const prompt = document.getElementById('prompt');
     const cache = new Map();
+    const missingPromptText = 'Prompt text was not recorded.';
     let draw = 0;
     function element(tag, text) { const node = document.createElement(tag); node.textContent = text; return node; }
     function label(entry) { return `${entry.step?.toLocaleString() ?? 'Unknown step'} · ${entry.run_id} · ${entry.release ?? 'Unknown sampling version'} · ${entry.id.slice(0, 8)}`; }
@@ -84,13 +85,13 @@
       const request = data.request ?? {};
       const spec = request.spec ?? {};
       const sources = records(spec.prompts).map(row => ({...row,
-        text: typeof row.text === 'string' ? row.text : 'Prompt text was not recorded.'}));
+        text: typeof row.text === 'string' ? row.text : missingPromptText}));
       const prompts = new Map(sources.filter(row => typeof row.id === 'string').map(row => [row.id, row]));
       const completions = records(data.completions).map((row, index) => {
         const id = row.prompt_id ?? sources[index]?.id ?? `unknown-${index}`;
         const source = prompts.get(id) ?? {id};
         const expected = normalizeScores(row.expected_scores);
-        prompts.set(id, {...source, text: typeof source.text === 'string' ? source.text : 'Prompt text was not recorded.',
+        prompts.set(id, {...source, text: typeof source.text === 'string' ? source.text : missingPromptText,
           expected: source.expected ?? (expected ? expected.map(token => token.text).join('') : null)});
         const samples = Array.isArray(row.samples) ? records(row.samples) : [row];
         return {...row, prompt_id: id, expected_scores: expected, samples: samples.map((sample, sampleIndex) => {
