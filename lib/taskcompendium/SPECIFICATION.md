@@ -28,6 +28,7 @@ flowchart TD
 ```
 
 `TaskSpec` represents a semantic task without a specific rendering or environment. Instead, it declares some instructions, answer requirements, and verifier contracts, and environment requirements.
+You can see a sample on the [Hugging Face Hub](https://huggingface.co/datasets/open-athena/taskcompendium-spike/viewer/specifications).
 
 Importers implement this interface for datasets such as TaskTrove, GSM8K, R2E-Gym, and NeMo Gym. Where possible, these importers are deterministic. However, they are often heavily LLM-assisted and thus non-deterministic. They may reject a source row if it cannot be faithfully represented in TaskCompendium, or if the task is broken, underspecified, or otherwise unsuitable.
 
@@ -81,7 +82,7 @@ An ordered static task can therefore express a workflow whose later request depe
 | --- | --- |
 | `capabilities` | Semantic requirements currently drawn from `filesystem`, `shell`, and `process`. A capability states what features must be available in the host environment. It does not choose ShellSim, Docker, or an agent. |
 | `state` | `WorkspaceState`: optional image digest, working directory, setup commands, and additional non-overlapping workspace roots. |
-| `action_interfaces` | Named, versioned stateful action surfaces with a seed digest. The current provider implementation uses this for Workplace. It is separate from shell and filesystem capabilities. |
+| `action_interfaces` | Named, versioned stateful action surfaces with a seed digest. The current provider implementation uses this for Nemotron's Workplace. It is separate from shell and filesystem capabilities. |
 
 A Docker image in `state` is an initial-state requirement when task behavior depends on it. A task requiring an answer in `/app/answer.txt` requires a filesystem submission convention; a task requiring command execution declares the shell or process capability separately.
 
@@ -146,6 +147,25 @@ A rendering may add a short output instruction, such as “Write your submission
 ## Lowering
 
 A lowering maps a semantic `TaskSpec` instance and its selected renderings to a runtime package. It selects a compatible environment implementation and tool exposure, then validates that both meet the semantic requirements. It does not select the model or a particular agent strategy.
+
+You can see a sample on the [Hugging Face Hub](https://huggingface.co/datasets/open-athena/taskcompendium-spike/viewer/lowerings).
+
+The current Harbor export stores a lowering as a package rather than one serialized record. Its logical fields are:
+
+| Field | Meaning | Harbor materialization |
+| --- | --- | --- |
+| `specification` | The canonical `TaskSpec`, including private verifier contracts and source provenance. | `specification.json` |
+| `renderings` | One selected rendering per semantic step. It fixes each public submission convention. | `renderings.json` and the manifest |
+| `binding` | The selected target environment and model-visible tool bindings. | `binding.json` and the manifest |
+| `instructions` | The model-visible instruction rendered for each step. This includes only the task request and any public submission location. | `instruction.md`, or `steps/step-N/instruction.md` |
+| `agent_resources` | The `agent`-role files made available in the selected environment. Private verifier and oracle resources are excluded. | `environment/inputs` and step workdirs |
+| `target_config` | Target-owned workspace, image, and ordered-step layout. | `task.toml` |
+| `identity` | The specification hash, lowering version, target revision, source provenance, and step names needed to reproduce and validate the export. | `manifest.json` |
+| `coverage_tags` | The semantic tags from the specification plus output-encoding tags contributed by the selected renderings. | `manifest.json` |
+| `verifier_runtimes` | Private runtime identities required to execute each step's verifier. | `manifest.json` |
+| `reference_execution` | An optional concrete launch used for a local reference run. It may select an agent, endpoint, or target options, but is not part of lowering compatibility. | `reference-execution.json` |
+
+The first five fields describe the task projection; the remaining fields make that projection reproducible for one target. A lowering never includes a model choice, agent policy, sampler settings, or a model-visible description of how evaluation works.
 
 ### Target bindings
 

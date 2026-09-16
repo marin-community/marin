@@ -15,21 +15,24 @@ Separately, TaskCompendium comes with a loose facet-based ontology for tasks, wh
 ## Problems being solved
 
 - Right now, we don't have an obvious way of jointly training an agentic + nonagentic model. Our current recipes choose one or the other.
+- Our training and evaluation recipes also have to select the right grader for each source. Tasks should carry enough versioned verification information that different consumers evaluate the same task consistently. (We should probably still use official harnesses for final evaluation, but we can use a common verifier during training.)
 - Our current agentic dataset TaskTrove standardizes specifically on a single lowering of tasks into a docker environment + file submission acceptance formula. Given what we know about Snowball's preference to overfit to training distribution formatting, this is likely to be a problem for generalization: we know that AA-II requires supporting multiple harnesses including chat-only harnesses.
 - While TaskTrove is split into multiple datasets based on their source, some of those sources, including the voluminous `laion__nemotron-gym-knowledge-mcqa-v2` dataset contain many, many subject areas. We don't have a holistic sense of how well our datasets cover the space of tasks, subject areas, difficulty, and other dimensions. TaskCompendium will allow us to evaluate coverage of these dimensions in a source-agnostic way.
 - TaskCompendium also supports multi-step tasks, which are not currently supported in TaskTrove. Not a big extension.
 
+Keeping TaskTrove's existing packaging would preserve its narrow interaction conventions. Generating directly for individual benchmarks would be faster, but would give us less reusable machinery for future capability gaps. Benchmarks inform our priorities; the representation should support tasks beyond those benchmarks.
+
 ## Design
 
-More information in [DESIGN.md](/lib/taskcompendium/DESIGN.md).
+More information in [SPECIFICATION.md](../../../lib/taskcompendium/SPECIFICATION.md).
 
 
 TaskCompendium has two layers:
 
 - `TaskSpec`: a source-agnostic representation of the task, including its initial state, instructions, and verification criteria.
-- `TaskLowering`: a target-specific/framework-specific adaptation of the task specification, which may include additional context or constraints required by the target environment. For instance, lowerings may specialize to Harbor.
+- `Lowering`: a target-specific/framework-specific adaptation of the task specification, which selects a submission convention and a compatible environment and tool interface. For instance, lowerings may specialize to Harbor.
 
-TaskLowerings choose specific backends as well as making last mile prompt and submission formatting decisions.
+A rendering chooses the requested submission format and extraction rule. A target binding says how one target runs a `TaskSpec`: the environment it uses and the tools it exposes. A lowering combines the specification, rendering, and target binding. The launch selects a compatible harness, model, and rollout settings. Tasks declare requirements; environments provide them; harnesses orchestrate them; traces record what happened.
 
 Honestly it is probably best to just look at the data. Here are links to the HF dataset spike for each layer:
 
@@ -49,28 +52,34 @@ flowchart TD
     R --> V
 ```
 
-For instance, consider a simple GSM8K math problem. The `TaskSpec` would include the initial state (the question), the instructions (solve the problem), and the verification criteria (the correct answer). A `TaskLowering` for a chat-based model might format the question as a chat message, while a lowering for a docker execution environment might package the question in a specific file format in a specific place (as is done in TaskTrove). Multiple task lowerings can be created for the same `TaskSpec`, allowing us to ensure that the model encounters a variety of packagings and formats for the same kinds of problems. (Likely we'd typically only want one rendering per epoch, but we could vary the rendering across epochs.)
+For instance, consider a simple GSM8K math problem. The `TaskSpec` would include the question, the instructions (solve the problem), and the verification criteria (the correct answer). One lowering might request a plain chat answer, while another might ask for JSON in `/app/answer.json` and provide filesystem access (as is done in TaskTrove). Both retain the same correctness check. Multiple task lowerings can be created for the same `TaskSpec`, allowing us to ensure that the model encounters a variety of packagings and formats for the same kinds of problems. (Likely we'd typically only want one rendering per epoch, but we could vary the rendering across epochs.)
 
 As an extension, we can also imagine combining multiple TaskSpecs into a single multi-step task to better simulate real-world use.
 
+Harbor is the first and currently the only implemented execution target. We start by lowering everything through Harbor; a future MarinSkyRL Generator can also use direct chat lowerings for compatible tasks while still using Harbor for agentic tasks. The current spike establishes the representation and Harbor integration. Coverage-directed generation, Snowball rollouts, and training admission are later stages. Ordered steps retain the preceding visible conversation; reactive user simulators are deferred. MCP and browser support are planned extensions.
+
 ## TaskSpecs
 
-TaskSpecs declare the following fields:
+TaskSpecs declare the following fields (see the specification for their full definitions):
 
 - id: a unique identifier for the task specification.
-- metadata: a dictionary of metadata about the task, including its source, subject area, difficulty, and other relevant information.
+- metadata: source provenance and descriptive labels.
 - steps: a list of steps that make up the task, each of which includes:
   - instructions: the instructions for the step.
-  - verification_criteria: the criteria for determining whether the step was completed successfully.
-- requirements: a list of requirements for the task, such as initial state, specific libraries or tools that must be available in the execution environment.
+  - answer_requirements: intrinsic constraints on what the step produces.
+  - verifier: private criteria for determining whether the step was completed successfully.
+  - resources: resources introduced at this step, with explicit visibility.
+  - context_requirement: whether the step depends on prior conversation or only its instruction and workspace.
+- requirements: capabilities, initial state, and action interfaces required by the task.
 - resources: a list of files (with paths and content or pointers to content) that are required for the task, such as input data or reference materials.
 - coverage_tags: a list of tags that describe the coverage of the task in terms of subject area, difficulty, and other relevant dimensions. These tags can be used to evaluate the coverage of the task compendium as a whole.
+- success_policy: how step scores combine into the task's result. The current Harbor adapter supports `mean` and `final` for multi-step tasks.
 
 ### Requirements
 
 Requirements are split into three categories:
 
-- Capabilities: Semantic requirements like `filesystem`, `network`, etc.
+- Capabilities: Semantic requirements like `filesystem`, `shell`, and `process`.
 - State: image, working directory, etc.
 - Action Interfaces: stateful action surfaces meant to encapsulate things like tool bundles, MCP, etc.
 
@@ -89,19 +98,25 @@ Action Interfaces are not fully baked. They're meant to cover non-shell, non-fil
 
 Every resource has a normalized relative path, content, roles, and an executable bit. Content is embedded bytes or a URI with a SHA256 digest. Roles describe what scopes have access to the resource (`agent`, `verifier`, `oracle`)
 
+Only agent-visible resources and instructions reach the model. Verifier resources, reference answers, and oracle material stay private. Instructions state the requested work and submission location, without mentioning judges, verifiers, rewards, or hidden tests.
+
 
 ### Verifiers
 
-Verifiers come from either an ontology of known verifiers or backed by a script. They are used to determine whether a task has been completed successfully.
+Verifiers can come from an ontology of known verifiers or be backed by a script. They are used to determine whether a task has been completed successfully.
 
-ATM, the plan is for the ontology to encapsulate answer parsing for MCQA, math extraction, and a few others. We will likely extend it to cover IFEval and things from NemoGym.
+Submission extraction belongs to the rendering: it recovers an answer from plain text, boxed LaTeX, a JSON/XML field, or a file. The verifier checks that recovered answer against the same semantic correctness criteria. Intrinsic formatting requirements remain part of the task and cannot be relaxed by a rendering.
+
+Common math and MCQA checks can run directly; executable checks declare their own isolated runtime and dependencies. A common representation should not require booting Docker to grade a math answer. Use the cheapest verifier that adequately checks the task; where deterministic checks are incomplete, supplement them with a judge.
 
 We haven't fully specced LLM-as-judge yet but it fits here.
+
+Verifier infrastructure failure is recorded separately from an incorrect answer with score zero. During import, reject tasks with incomplete verifiers, underspecified instructions, leaking answers, or null submissions that pass. Training usefulness is a separate assessment, relative to Snowball's roughly 2B active scale and observed success rates; frontier-model solvability alone is insufficient.
 
 
 ## Coverage Ontology
 
-More information in [TAGGING.md](/lib/taskcompendium/TAGGING.md).
+More information in [TAGGING.md](../../../lib/taskcompendium/TAGGING.md).
 
 The basic idea is that we want to be able to describe the coverage of a task compendium in terms of subject area, difficulty, and other relevant dimensions. We can do this by defining a set of tags that can be applied to each task specification. These tags can then be used to evaluate the coverage of the task compendium as a whole. We leave the full (but not exhaustive) list of tags and their definitions to the TAGGING.md document, but here are some examples:
 
@@ -124,7 +139,7 @@ The basic idea is that we want to be able to describe the coverage of a task com
   - `prose`
   - `python_package`
   - `artifact:application/xml`
-- `context`: important inputs or the stting
+- `context:`: important inputs or the setting
   - `context:filesystem`
   - `context:workplace_assistant`
 - `difficulty:`: a rough measure of how hard the task is, namely:
@@ -132,5 +147,8 @@ The basic idea is that we want to be able to describe the coverage of a task com
   - `difficulty:medium`
   - `difficulty:hard`
 
+Difficulty is relative to Snowball: easy tasks should be comfortably solvable by a roughly 2B active model; medium tasks should stretch it; hard tasks require capabilities beyond what we expect it to handle reliably. Tags should be sparse, with recurring subjects and subsubjects. Lowerings add output-format tags such as `result:json`, `result:xml`, and `result:file`, separately from the semantic work described by the TaskSpec.
+
 
 We can use a medium-sized model to assign tags to a task specification, and then use those tags to evaluate the coverage of the task compendium as a whole. For instance, we can look at the distribution of subject areas, difficulty levels, and other dimensions across the entire compendium. This will allow us to identify gaps in coverage and ensure that we are providing a diverse set of tasks for model evaluation and training.
+Those gaps can then guide further imports or task generation, with each accepted example represented as a reproducible TaskSpec.
