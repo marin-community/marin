@@ -73,6 +73,10 @@ _METADATA_MODEL = "model"
 _METADATA_KIND = "kind"
 _METADATA_BACKEND = "backend"
 _METADATA_TENSOR_PARALLEL_SIZE = "tensor_parallel_size"
+_METADATA_DATA_PARALLEL_SIZE = "data_parallel_size"
+_METADATA_PIPELINE_PARALLEL_SIZE = "pipeline_parallel_size"
+_METADATA_TASK_COUNT = "task_count"
+_METADATA_MAX_MODEL_LEN = "max_model_len"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
 _CAPABILITY_TTL = Duration.from_hours(24 * 7)
@@ -265,10 +269,14 @@ def _endpoint_metadata(
     }
     if effective_serving is not None:
         metadata.update(
-            pipeline_parallel_size=str(effective_serving.pipeline_parallel_size),
-            data_parallel_size=str(effective_serving.data_parallel_size or 1),
-            task_count=str(effective_serving.task_count),
-            max_model_len=str(effective_serving.max_model_len) if effective_serving.max_model_len is not None else "",
+            {
+                _METADATA_PIPELINE_PARALLEL_SIZE: str(effective_serving.pipeline_parallel_size),
+                _METADATA_DATA_PARALLEL_SIZE: str(effective_serving.data_parallel_size or 1),
+                _METADATA_TASK_COUNT: str(effective_serving.task_count),
+                _METADATA_MAX_MODEL_LEN: (
+                    str(effective_serving.max_model_len) if effective_serving.max_model_len is not None else ""
+                ),
+            }
         )
         metadata[_METADATA_TENSOR_PARALLEL_SIZE] = str(effective_serving.tensor_parallel_size)
     return metadata
@@ -587,10 +595,10 @@ def _start_direct_inference(
             backend_name = metadata[_METADATA_BACKEND]
             effective_serving = EffectiveServing(
                 tensor_parallel_size=tensor_parallel_size,
-                data_parallel_size=int(metadata["data_parallel_size"]),
-                pipeline_parallel_size=int(metadata["pipeline_parallel_size"]),
-                task_count=int(metadata["task_count"]),
-                max_model_len=int(metadata["max_model_len"]) if metadata["max_model_len"] else None,
+                data_parallel_size=int(metadata[_METADATA_DATA_PARALLEL_SIZE]),
+                pipeline_parallel_size=int(metadata[_METADATA_PIPELINE_PARALLEL_SIZE]),
+                task_count=int(metadata[_METADATA_TASK_COUNT]),
+                max_model_len=int(metadata[_METADATA_MAX_MODEL_LEN]) if metadata[_METADATA_MAX_MODEL_LEN] else None,
             )
         except Exception as exc:
             raise RemoteInferenceStartupError(
