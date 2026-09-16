@@ -67,6 +67,7 @@ def _moe_mlp_ep_ring_local(
             capacity_factor=capacity_factor,
             divisor=ep_size,
             minimum=local_experts,
+            maximum=physical_capacity,
         )
 
         expert_axis = jax.lax.axis_index("expert")

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+import math
 import os
 import subprocess
 import sys
@@ -23,6 +24,7 @@ from levanter.grug._moe.common import (
     _interleave_halves,
     _prepare_moe_dispatch,
     _prepare_moe_dispatch_indices_with_assignment_ids,
+    _scaled_capacity,
     _swiglu_gate_up_backward,
     MoeDispatchCounts,
 )
@@ -413,6 +415,16 @@ def test_moe_mlp_all_padding_has_no_expert_output_or_gradients():
         np.testing.assert_array_equal(gradient, jnp.zeros_like(gradient))
     assert int(overflow.dropped) == 0
     assert int(overflow.padding_skipped) == x.shape[0] * selected_experts.shape[1]
+
+
+def test_scaled_capacity_stays_within_the_physical_buffer():
+    # float32 rounds 7680 * 4.05 / 8 up to 3889 while the buffer was sized with math.ceil (3888);
+    # an unclamped logical capacity would admit one row past the static buffer.
+    physical = max(math.ceil(4.05 * 7680 / 8), 1)
+    logical = _scaled_capacity(jnp.array(7680, dtype=jnp.int32), capacity_factor=4.05, divisor=8, maximum=physical)
+
+    assert physical == 3888
+    assert int(logical) == physical
 
 
 def test_deepep_local_assignment_packing_uses_local_expert_ids():

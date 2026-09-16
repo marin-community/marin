@@ -260,10 +260,17 @@ def _scaled_capacity(
     capacity_factor: float,
     divisor: int = 1,
     minimum: int = 1,
+    maximum: int,
 ) -> Int[Array, ""]:
-    """Return a JIT-safe logical capacity derived from dynamic assignment demand."""
+    """Return a JIT-safe logical capacity derived from dynamic assignment demand.
+
+    ``maximum`` is the static physical capacity the caller sized its buffers with. The
+    float32 product can round one row above the Python-double ceiling that produced
+    ``maximum`` (e.g. 7680 assignments at factor 4.05 over 8 experts gives 3889 vs 3888),
+    so the clamp keeps the logical limit inside the buffer.
+    """
     scaled = jnp.ceil(assignments.astype(jnp.float32) * capacity_factor / divisor).astype(jnp.int32)
-    return jnp.maximum(scaled, minimum)
+    return jnp.clip(scaled, minimum, maximum)
 
 
 def _zero_dropped_assignments() -> Int[Array, ""]:

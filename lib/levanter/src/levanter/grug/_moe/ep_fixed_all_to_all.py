@@ -117,6 +117,7 @@ def _moe_mlp_ep_fixed_a2a_local(
         valid_assignments,
         capacity_factor=capacity_factor,
         divisor=num_experts,
+        maximum=capacity,
     )
     sortable_experts = jnp.where(assignment_valid, flat_experts, num_experts)
     safe_experts = jnp.where(assignment_valid, flat_experts, 0)

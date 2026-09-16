@@ -353,6 +353,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             capacity_factor=capacity_factor,
             divisor=ep_size,
             minimum=local_experts,
+            maximum=physical_capacity,
         )
         logical_chunk_capacity = jnp.maximum(
             (logical_capacity + chunks - 1) // chunks,

@@ -555,15 +555,19 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
         valid_assignments,
         capacity_factor=transport_capacity_factor,
         divisor=expert_shards * num_waves,
+        maximum=physical_pool_capacity,
     )
+    # One scalar psum sizes the receiver limit from the EP group's valid demand; it is
+    # consumed only after each wave's all-to-all, so it does not gate the first transport.
     global_valid_assignments = jax.lax.psum(valid_assignments, "expert")
     logical_receiver_capacity = _scaled_capacity(
         global_valid_assignments,
         capacity_factor=capacity_factor,
         divisor=num_experts * num_waves,
+        maximum=physical_receiver_capacity,
     )
     # The quotient keeps one logical capacity pool per destination. The remainder
-    # stripes that pool over equal static waves without a metadata collective.
+    # stripes that pool over equal static waves.
     destination_ranks = _ranks_within_groups(
         destination_shards,
         num_groups=expert_shards,
