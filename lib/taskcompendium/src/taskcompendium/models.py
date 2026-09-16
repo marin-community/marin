@@ -16,6 +16,27 @@ SCHEMA_VERSION = "0.9"
 _SEMANTIC_COVERAGE_TAG_PREFIXES = frozenset(
     {"competency", "shape", "subject", "artifact", "interaction", "state", "context"}
 )
+SUBJECT_ROOTS = frozenset(
+    {
+        "math",
+        "physics",
+        "chemistry",
+        "biology",
+        "medicine",
+        "computing",
+        "engineering",
+        "law",
+        "finance",
+        "business",
+        "government",
+        "social_science",
+        "humanities",
+        "education",
+        "arts",
+        "design",
+        "media",
+    }
+)
 _COVERAGE_TAG_VALUE = re.compile(r"[a-z0-9]+(?:[._][a-z0-9]+)*")
 _MIME_TYPE = re.compile(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+")
 
@@ -30,6 +51,8 @@ def _validate_coverage_tags(tags: tuple[str, ...], allowed_prefixes: frozenset[s
         )
         if not separator or prefix not in allowed_prefixes or not valid_value:
             raise ValueError(f"Unsupported coverage tag: {tag}")
+        if prefix == "subject" and value.split(".", 1)[0] not in SUBJECT_ROOTS:
+            raise ValueError(f"Unsupported subject root: {tag}")
 
 
 VERIFIER_REVISION = "b76d03131cd88bd9fc711dba206659027edba3a8"

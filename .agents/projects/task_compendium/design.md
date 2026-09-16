@@ -130,7 +130,7 @@ More information in [TAGGING.md](../../../lib/taskcompendium/TAGGING.md).
 
 The basic idea is to describe coverage in terms of subject, task shape, difficulty, and other useful distinctions. Semantic tags and a numeric difficulty estimate let us inspect those distributions across source datasets. The [tagging guide](../../../lib/taskcompendium/TAGGING.md) defines the working vocabulary.
 
-The vocabulary is a starting point for labeling tasks and expressing desired RL mixtures, and we expect to revise it. The mechanics matter more than fixing the detailed taxonomy now. Subjects describe topics such as medicine or physics; competencies describe recurring operations across those topics. Tags that add little information or blur that distinction should be revised or removed.
+The vocabulary is a starting point for labeling tasks and expressing desired RL mixtures, and we expect to revise it. The mechanics matter more than fixing the detailed taxonomy now. Subjects describe topics such as medicine or physics; competencies describe recurring operations across those topics. Subject roots come from a reviewed list; a task may omit subject when none fits. Tags that add little information or blur that distinction should be revised or removed.
 
 - `competency:`, an optional cross-subject skill, such as:
   - `recall`
@@ -141,10 +141,9 @@ The vocabulary is a starting point for labeling tasks and expressing desired RL 
   - `debugging`
 - `subject:`:
   - `math`
-  - `science`
-  - `history`
-  - `literature`
-  - `javascript.react` (note: sub-subject areas are allowed)
+  - `physics`
+  - `humanities.history`
+  - `computing.javascript.react` (dotted specialties are allowed)
 - `shape:`: the shape of the task, including:
   - `multiple_choice`
   - `explanation`

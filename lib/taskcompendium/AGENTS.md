@@ -40,6 +40,8 @@ source/family instantiation interface. Instantiate once before rendering variant
 `TaskSpec.coverage_tags` records semantic competency, task shape, subject,
 artifact, interaction, state, and context. `TaskSpec.difficulty` is a separate
 1–10 estimate of model capability required for reliable success.
+Subject tags use the reviewed roots in `TAGGING.md`; do not add a new root as
+part of a labeling batch.
 Lowerings carry those tags forward and may add only result encoding tags:
 `result:json`, `result:xml`, and `result:file`. Do not use those
 tags to claim substantive JSON/XML production or consumption work; use semantic

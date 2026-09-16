@@ -3,7 +3,7 @@
     "coverage_tags": [
       "competency:quantitative_reasoning",
       "shape:answer",
-      "subject:arithmetic"
+      "subject:math.arithmetic"
     ],
     "difficulty": 1
   },
@@ -11,7 +11,7 @@
     "coverage_tags": [
       "competency:quantitative_reasoning",
       "shape:answer",
-      "subject:personal_finance"
+      "subject:finance.personal"
     ],
     "difficulty": 2
   },
@@ -19,7 +19,7 @@
     "coverage_tags": [
       "competency:quantitative_reasoning",
       "shape:answer",
-      "subject:personal_finance"
+      "subject:finance.personal"
     ],
     "difficulty": 2
   },
@@ -29,7 +29,7 @@
       "context:customer_service",
       "interaction:single_tool_call",
       "shape:predicted_action",
-      "subject:event_ticketing"
+      "subject:business"
     ],
     "difficulty": 6
   },
@@ -38,7 +38,7 @@
       "artifact:source_code",
       "competency:algorithm_design",
       "shape:code_generation",
-      "subject:algorithms"
+      "subject:computing.algorithms"
     ],
     "difficulty": 8
   },
@@ -83,7 +83,7 @@
       "artifact:numeric_answer",
       "competency:quantitative_reasoning",
       "shape:calculation",
-      "subject:number_theory"
+      "subject:math.number_theory"
     ],
     "difficulty": 4
   },
@@ -92,7 +92,7 @@
       "artifact:formula",
       "competency:quantitative_reasoning",
       "shape:calculation",
-      "subject:algebra"
+      "subject:math.algebra"
     ],
     "difficulty": 8
   },
@@ -144,7 +144,7 @@
       "artifact:formula",
       "competency:quantitative_reasoning",
       "shape:calculation",
-      "subject:geometry"
+      "subject:math.geometry"
     ],
     "difficulty": 5
   },
@@ -153,7 +153,7 @@
       "artifact:numeric_answer",
       "competency:quantitative_reasoning",
       "shape:calculation",
-      "subject:algebra"
+      "subject:math.algebra"
     ],
     "difficulty": 4
   },
@@ -162,8 +162,7 @@
       "context:workplace_assistant",
       "interaction:single_tool_call",
       "shape:stateful_domain",
-      "state:provider",
-      "subject:email"
+      "state:provider"
     ],
     "difficulty": 4
   },
@@ -173,8 +172,7 @@
       "context:workplace_assistant",
       "interaction:multi_action_workflow",
       "shape:sequential_requirements",
-      "state:provider",
-      "subject:email"
+      "state:provider"
     ],
     "difficulty": 8
   },
@@ -184,8 +182,7 @@
       "context:workplace_assistant",
       "interaction:single_tool_call",
       "shape:stateful_domain",
-      "state:provider",
-      "subject:email"
+      "state:provider"
     ],
     "difficulty": 6
   },
@@ -193,8 +190,7 @@
     "coverage_tags": [
       "context:workplace_assistant",
       "interaction:single_tool_call",
-      "shape:stateful_domain",
-      "subject:customer_relationship_management"
+      "shape:stateful_domain"
     ],
     "difficulty": 2
   },
@@ -205,7 +201,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 5
   },
@@ -216,7 +212,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 6
   },
@@ -227,7 +223,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 5
   },
@@ -238,7 +234,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 6
   },
@@ -249,7 +245,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 4
   },
@@ -260,7 +256,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 4
   },
@@ -271,7 +267,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 5
   },
@@ -282,7 +278,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 6
   },
@@ -293,7 +289,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 4
   },
@@ -304,7 +300,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:machine_learning"
+      "subject:computing.machine_learning"
     ],
     "difficulty": 5
   },
@@ -315,7 +311,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 6
   },
@@ -326,7 +322,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 5
   },
@@ -337,7 +333,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 5
   },
@@ -348,7 +344,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 6
   },
@@ -359,7 +355,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 5
   },
@@ -370,7 +366,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 4
   },
@@ -381,7 +377,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 6
   },
@@ -392,7 +388,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 6
   },
@@ -403,7 +399,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 4
   },
@@ -414,7 +410,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 4
   },
@@ -425,7 +421,7 @@
       "context:repository",
       "shape:environment_modification",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 5
   },
@@ -444,7 +440,7 @@
       "competency:state_tracking",
       "shape:code_implementation",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 3
   },
@@ -454,7 +450,7 @@
       "competency:algorithm_design",
       "shape:algorithmic_programming",
       "state:workspace",
-      "subject:geometry"
+      "subject:math.geometry"
     ],
     "difficulty": 4
   },
@@ -464,7 +460,7 @@
       "competency:algorithm_design",
       "shape:algorithmic_programming",
       "state:workspace",
-      "subject:algorithms"
+      "subject:computing.algorithms"
     ],
     "difficulty": 8
   },
@@ -473,7 +469,7 @@
       "artifact:numeric_answer",
       "competency:quantitative_reasoning",
       "shape:calculation",
-      "subject:geometry"
+      "subject:math.geometry"
     ],
     "difficulty": 4
   },
@@ -481,7 +477,7 @@
     "coverage_tags": [
       "competency:quantitative_reasoning",
       "shape:calculation",
-      "subject:number_theory"
+      "subject:math.number_theory"
     ],
     "difficulty": 3
   },
@@ -507,7 +503,7 @@
       "artifact:formula",
       "competency:quantitative_reasoning",
       "shape:calculation",
-      "subject:optics"
+      "subject:physics.optics"
     ],
     "difficulty": 5
   },
@@ -515,8 +511,7 @@
     "coverage_tags": [
       "competency:causal_reasoning",
       "context:experimental_observations",
-      "shape:answer",
-      "subject:causal_inference"
+      "shape:answer"
     ],
     "difficulty": 3
   },
@@ -525,7 +520,7 @@
       "artifact:python_package",
       "shape:code_implementation",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 5
   },
@@ -534,7 +529,7 @@
       "artifact:python_module",
       "shape:code_implementation",
       "state:workspace",
-      "subject:python"
+      "subject:computing.python"
     ],
     "difficulty": 3
   },
@@ -543,7 +538,7 @@
       "artifact:python_module",
       "shape:code_implementation",
       "state:workspace",
-      "subject:machine_learning"
+      "subject:computing.machine_learning"
     ],
     "difficulty": 6
   },
@@ -552,8 +547,7 @@
       "artifact:shell_output",
       "interaction:terminal",
       "shape:shell_workflow",
-      "state:workspace",
-      "subject:filesystem"
+      "state:workspace"
     ],
     "difficulty": null
   },
@@ -563,8 +557,7 @@
       "competency:planning",
       "interaction:terminal",
       "shape:shell_workflow",
-      "state:workspace",
-      "subject:filesystem"
+      "state:workspace"
     ],
     "difficulty": 5
   },
@@ -574,8 +567,7 @@
       "competency:planning",
       "interaction:terminal",
       "shape:shell_workflow",
-      "state:workspace",
-      "subject:filesystem"
+      "state:workspace"
     ],
     "difficulty": 4
   },
@@ -583,15 +575,14 @@
     "coverage_tags": [
       "artifact:application/xml",
       "shape:structured_extraction",
-      "subject:aviation_history"
+      "subject:humanities.history"
     ],
     "difficulty": null
   },
   "tasktrove-16636": {
     "coverage_tags": [
       "artifact:application/json",
-      "shape:structured_extraction",
-      "subject:real_estate"
+      "shape:structured_extraction"
     ],
     "difficulty": null
   },
@@ -599,7 +590,7 @@
     "coverage_tags": [
       "competency:recall",
       "shape:multiple_choice",
-      "subject:ergonomics"
+      "subject:design.ergonomics"
     ],
     "difficulty": 3
   },
@@ -623,7 +614,7 @@
     "coverage_tags": [
       "competency:rule_application",
       "shape:explanation",
-      "subject:calculus"
+      "subject:math.calculus"
     ],
     "difficulty": 5
   },

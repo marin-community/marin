@@ -56,6 +56,7 @@ A semantic instance has these top-level fields.
 `metadata.source` has `dataset`, `revision`, `row`, and `importer_revision`. All four are required. A source revision identifies the upstream data state; an importer revision identifies the conversion logic that produced the semantic record.
 
 `metadata.competencies` and `metadata.task_shape` retain source descriptions. `coverage_tags` provide sortable `competency`, `shape`, `subject`, `artifact`, `interaction`, `state`, and `context` labels. Competency is optional. `difficulty` is a numeric estimate, separate from measured model success. [The tagging guide](TAGGING.md) defines the current vocabulary and calibration.
+Subject tags use a reviewed set of broad roots and may add dotted specialties. A specification can omit subject when none fits.
 
 A rendering may add a tag to describe the output format being tested: `result:json`, `result:xml`, or `result:file`, etc. These are output encodings, not semantic TaskSpec tags.
 The lowering manifest copies `difficulty` from its TaskSpec without changing its estimate.

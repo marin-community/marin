@@ -194,12 +194,14 @@ def test_coverage_tags_use_subject_namespace(math_task):
         coverage_tags=(
             "competency:quantitative_reasoning",
             "shape:answer",
-            "subject:calculus.integration",
+            "subject:math.calculus.integration",
         ),
     )
-    assert specification.coverage_tags[-1] == "subject:calculus.integration"
+    assert specification.coverage_tags[-1] == "subject:math.calculus.integration"
     with pytest.raises(ValueError, match="Unsupported coverage tag"):
         msgspec.structs.replace(math_task, coverage_tags=("domain:calculus.integration",))
+    with pytest.raises(ValueError, match="Unsupported subject root"):
+        msgspec.structs.replace(math_task, coverage_tags=("subject:email",))
 
 
 def test_coverage_tags_accept_mime_types_for_artifact_and_context(math_task):

@@ -59,15 +59,18 @@ belongs in requirements and the lowering, not in a generic `tool_use` tag.
 `algorithmic_programming`, `environment_modification`, `shell_workflow`,
 `predicted_action`, `stateful_domain`, or `sequential_requirements` when it fits.
 
-`subject` is optional. Use a recognizable topic, product, or operational area,
-such as `medicine`, `law`, `calculus`, `python`, `email`, or `event_ticketing`.
-Use `parent.specialty` for a recognizable specialization: `law.real_estate`,
-`physics.particle`, `medicine.oncology`, `javascript.react`, and
-`calculus.integration` are examples. Choose a broad recurring subject such as
-`ergonomics` when the narrower topic is unlikely to be useful for sampling.
-Store the most specific useful value, without its parent. Add multiple subjects
-sparingly. Avoid incidental technologies and one-off details such as
-`name_handling` or `lighting_design`.
+`subject` is optional. Choose a root from this reviewed list: `math`,
+`physics`, `chemistry`, `biology`, `medicine`, `computing`, `engineering`,
+`law`, `finance`, `business`, `government`, `social_science`, `humanities`,
+`education`, `arts`, `design`, `media`. Add a dotted child only for a
+recognizable specialty likely to recur, such as `law.real_estate`,
+`physics.particle`, `medicine.oncology`, `computing.javascript.react`, or
+`math.calculus.integration`. Store only the most specific useful value; its
+root is implied. Add multiple subjects sparingly. If no root fits, omit the
+subject and flag the candidate for later review; do not create a new root
+during a labeling batch. Tool surfaces such as email and filesystem belong
+in context or requirements, not subjects. Avoid incidental technologies and
+one-off details such as `name_handling` or `lighting_design`.
 
 `artifact` describes a substantive deliverable: `prose`, `numeric_answer`,
 `formula`, `source_code`, `program`, `python_module`, `python_package`,
@@ -112,14 +115,16 @@ constrained_generation, structured_extraction, code_generation,
 code_implementation, algorithmic_programming, environment_modification,
 shell_workflow, predicted_action, stateful_domain, sequential_requirements.
 
-Subject is optional. Use a recognizable recurring area such as arithmetic,
-algebra, calculus, physics, chemistry, biology, medicine, law, finance,
-business, algorithms, python, javascript, machine_learning, filesystem,
-email, event_ticketing, ergonomics, or technical_operations. Use
-parent.specialty for a recognizable specialization, such as law.real_estate,
-physics.particle, or medicine.oncology. Keep only the most specific useful
-value; add multiple subjects sparingly. Never create a one-off subject from a
-prompt detail.
+Subject is optional. Use only these reviewed roots: math, physics, chemistry,
+biology, medicine, computing, engineering, law, finance, business, government,
+social_science, humanities, education, arts, design, media. Add dotted
+children for recognizable specialties likely to recur, such as
+math.calculus.integration, computing.javascript.react, law.real_estate,
+physics.particle, and medicine.oncology. Keep only the most specific useful
+value; add multiple subjects sparingly. If no root fits, omit subject. Review
+unmatched subjects separately before changing the root list. Never invent a new root
+during a batch or create a one-off child from a prompt detail. Email and
+filesystem access are tool or context properties, not subjects.
 
 Artifact: a substantive deliverable such as prose, numeric_answer, formula,
 source_code, program, python_module, python_package, workspace_state, or

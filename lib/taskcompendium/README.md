@@ -188,6 +188,8 @@ optional competency, shape, subject, artifact, interaction, state, and context.
 `TaskSpec.difficulty` separately estimates the capability needed for reliable
 success on a 1–10 scale, from routine for Snowball to production frontier.
 [The tagging guide](TAGGING.md) defines their semantics and the Luna labeling prompt.
+Subjects use a reviewed set of broad roots with optional dotted specialties;
+tasks without a fitting subject can omit that tag.
 Each lowering carries those labels forward and adds result-encoding labels from its
 rendering: `result:json`, `result:xml`, or `result:file`. Result tags
 describe only how the answer is submitted. A task that substantively produces or
