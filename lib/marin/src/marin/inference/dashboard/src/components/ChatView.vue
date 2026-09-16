@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onUnmounted, ref, watch } from 'vue'
-import { invokeTool, requestCompletion } from '../lib/api'
+import { invokeTool, isAbortError, requestCompletion } from '../lib/api'
 import { CHAT_EXAMPLES } from '../lib/examples'
 import type { ChatExample } from '../lib/examples'
 import { modelMessages } from '../lib/python_tools'
@@ -11,7 +11,6 @@ import type { ChatMessage, Conversation, SamplingParams, ToolCall } from '../lib
 import MessageBubble from './MessageBubble.vue'
 
 const MAX_TOOL_ROUNDS = 8
-const ABORT_ERROR_NAME = 'AbortError'
 
 const props = defineProps<{
   conversation: Conversation
@@ -118,7 +117,7 @@ async function send(text?: string) {
         const result = await callTool(call, pythonTools, abort.signal)
         conversation.messages.push({
           role: 'tool',
-          name: call.function.name,
+          name: call.name,
           toolCallId: call.id,
           content: result,
           thinking: '',
@@ -134,7 +133,7 @@ async function send(text?: string) {
       }
     }
   } catch (error) {
-    if (error instanceof DOMException && error.name === ABORT_ERROR_NAME) {
+    if (isAbortError(error)) {
       appendCancelledToolResults(conversation, reply)
     } else {
       if (!reply) {
@@ -159,7 +158,7 @@ function appendCancelledToolResults(conversation: Conversation, reply: ChatMessa
     if (completed.has(call.id)) continue
     conversation.messages.push({
       role: 'tool',
-      name: call.function.name,
+      name: call.name,
       toolCallId: call.id,
       content: JSON.stringify({ error: 'tool call cancelled' }),
       thinking: '',
@@ -213,19 +212,10 @@ async function complete(reply: ChatMessage, messages: ModelMessage[], pythonTool
 }
 
 async function callTool(call: ToolCall, source: string, signal: AbortSignal): Promise<string> {
-  let arguments_: unknown
   try {
-    arguments_ = JSON.parse(call.function.arguments || '{}')
+    return await invokeTool(call.name, source, call.arguments, signal)
   } catch (error) {
-    return JSON.stringify({ error: 'model returned invalid JSON tool arguments', details: String(error) })
-  }
-  if (!arguments_ || typeof arguments_ !== 'object' || Array.isArray(arguments_)) {
-    return JSON.stringify({ error: 'model returned non-object tool arguments' })
-  }
-  try {
-    return await invokeTool(call.function.name, source, arguments_ as Record<string, unknown>, signal)
-  } catch (error) {
-    if (error instanceof DOMException && error.name === ABORT_ERROR_NAME) throw error
+    if (isAbortError(error)) throw error
     return JSON.stringify({ error: 'tool request failed', details: String(error) })
   }
 }

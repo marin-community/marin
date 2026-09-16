@@ -73,9 +73,9 @@ function prettyJson(value: string): string {
           :key="call.id"
           class="rounded-lg border border-surface-border bg-surface-sunken px-3 py-2 text-xs"
         >
-          <summary class="cursor-pointer font-mono text-text-secondary">{{ call.function.name }}</summary>
+          <summary class="cursor-pointer font-mono text-text-secondary">{{ call.name }}</summary>
           <pre class="mt-2 overflow-x-auto whitespace-pre-wrap break-words text-text-muted">{{
-            prettyJson(call.function.arguments)
+            JSON.stringify(call.arguments, null, 2)
           }}</pre>
         </details>
       </div>

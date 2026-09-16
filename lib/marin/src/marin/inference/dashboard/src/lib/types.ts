@@ -14,11 +14,8 @@ export type ServerStatus = 'connecting' | 'ok' | 'loading' | 'bad'
 
 export interface ToolCall {
   id: string
-  type: 'function'
-  function: {
-    name: string
-    arguments: string
-  }
+  name: string
+  arguments: Record<string, unknown>
 }
 
 export interface ChatMessage {

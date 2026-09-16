@@ -8,32 +8,26 @@ function callId(): string {
   return `call_${newId()}`
 }
 
-function parseToolCall(payload: string): ToolCall | null {
-  try {
-    const parsed = JSON.parse(payload)
-    const name = parsed.name
-    if (typeof name !== 'string' || !name) return null
-    const rawArguments = parsed.arguments ?? {}
-    return {
-      id: callId(),
-      type: 'function',
-      function: {
-        name,
-        arguments: typeof rawArguments === 'string' ? rawArguments : JSON.stringify(rawArguments),
-      },
-    }
-  } catch (error) {
-    console.warn('failed to parse inline tool call', error)
-    return null
+function parseToolCall(payload: string): ToolCall {
+  const parsed: unknown = JSON.parse(payload)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Tool call must contain a JSON object')
   }
+  const fields = parsed as Record<string, unknown>
+  const name = fields.name
+  if (typeof name !== 'string' || !name) throw new Error('Tool call must contain a function name')
+  const arguments_ = fields.arguments ?? {}
+  if (!arguments_ || typeof arguments_ !== 'object' || Array.isArray(arguments_)) {
+    throw new Error('Tool call arguments must be a JSON object')
+  }
+  return { id: callId(), name, arguments: arguments_ as Record<string, unknown> }
 }
 
-/** Parse XML tool calls and the compatible bare-JSON form emitted by some chat templates. */
+/** Parse XML tool calls, raising when a tagged payload does not match the protocol. */
 export function inlineToolCalls(content: string): { visible: string; calls: ToolCall[] } {
   const calls: ToolCall[] = []
   const visible = content.replace(INLINE_TOOL_CALL, (_match, payload: string) => {
     const call = parseToolCall(payload)
-    if (!call) return _match
     calls.push(call)
     return ''
   })

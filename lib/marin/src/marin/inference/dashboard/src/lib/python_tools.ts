@@ -3,6 +3,7 @@ import type { ChatMessage, Conversation, ToolCall } from './types'
 const CDATA_END = ']]>'
 const CDATA_CONTINUATION = ']]]]><![CDATA[>'
 export const TOOL_CALL_TAG = 'tool_call'
+export const TOOL_RESULT_TAG = 'tool_result'
 
 export interface ModelMessage {
   role: 'system' | 'user' | 'assistant'
@@ -48,19 +49,12 @@ ${cdata(source)}
 ]]></python_tools>
 Call a function only by emitting this exact XML form with JSON arguments:
 <${TOOL_CALL_TAG}>{"name":"function_name","arguments":{"parameter":"value"}}</${TOOL_CALL_TAG}>
-The application will execute the function and return a <tool_result> XML element in the next user message. Use that
+The application will execute the function and return a <${TOOL_RESULT_TAG}> XML element in the next user message. Use that
 result to answer the user or make another call. Do not invent functions outside the block.`
 }
 
 function pythonToolCallMessage(call: ToolCall): string {
-  let arguments_: unknown = {}
-  try {
-    const parsed = JSON.parse(call.function.arguments)
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) arguments_ = parsed
-  } catch {
-    // The matching tool result tells the model that its arguments were invalid.
-  }
-  return `<${TOOL_CALL_TAG}>${JSON.stringify({ name: call.function.name, arguments: arguments_ })}</${TOOL_CALL_TAG}>`
+  return `<${TOOL_CALL_TAG}>${JSON.stringify({ name: call.name, arguments: call.arguments })}</${TOOL_CALL_TAG}>`
 }
 
 function pythonToolResultMessage(message: ChatMessage): string {
@@ -70,5 +64,5 @@ function pythonToolResultMessage(message: ChatMessage): string {
   } catch {
     // Tool endpoints normally return JSON; preserve unexpected output as a string.
   }
-  return `<tool_result><![CDATA[${cdata(JSON.stringify({ name: message.name, result }))}]]></tool_result>`
+  return `<${TOOL_RESULT_TAG}><![CDATA[${cdata(JSON.stringify({ name: message.name, result }))}]]></${TOOL_RESULT_TAG}>`
 }

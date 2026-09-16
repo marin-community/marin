@@ -16,6 +16,10 @@ export interface HealthResult {
   model: string | null
 }
 
+export function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
 export async function fetchHealth(): Promise<HealthResult> {
   const response = await fetch(api('health'))
   const body = await response.json().catch(() => ({}))
