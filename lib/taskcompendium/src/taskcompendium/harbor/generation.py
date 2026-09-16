@@ -83,9 +83,10 @@ async def _generate_attempt(request: GenerationRequest, trials_dir: Path) -> Gen
                 messages = tuple(json.loads(transcript_path.read_text()))
                 tools = tuple(json.loads((root / "agent/tools.json").read_text()))
         contexts = [step.agent_result for step in result.step_results] if result.step_results else [result.agent_result]
-        if not messages and contexts[-1] is not None:
-            messages = tuple(contexts[-1].metadata.get("all_messages", []))
-            tools = tuple(contexts[-1].metadata.get("tools", []))
+        metadata = contexts[-1].metadata if contexts[-1] is not None else None
+        if not messages and metadata is not None:
+            messages = tuple(metadata.get("all_messages", []))
+            tools = tuple(metadata.get("tools", []))
         for index, root in enumerate(roots):
             grading_path = root / "verifier/taskcompendium-result.json"
             if grading_path.exists():

@@ -1,18 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""HTTP failures retain the model endpoint's diagnostic response."""
+"""Retain model endpoint failures through Harbor trial archiving."""
 
+import json
 from io import BytesIO
-from types import SimpleNamespace
+from pathlib import Path
 from urllib.error import HTTPError
 
-import pytest
+from taskcompendium.execution import HarborExecutionConfig, HarborLaunchConfig
+from taskcompendium.harbor.generation import GenerationRequest, generate_attempts
+from taskcompendium.importers.nemo_workplace import build_sample
+from taskcompendium.lowering import lower_to_harbor
+from taskcompendium.models import Outcome
 
-from taskcompendium.harbor.agents import DirectChatAgent
 
-
-def test_chat_endpoint_error_includes_response_detail(monkeypatch):
+async def test_provider_http_failure_retains_response_detail(tmp_path, monkeypatch):
     def fail(*_args, **_kwargs):
         raise HTTPError(
             "http://localhost/v1/chat/completions",
@@ -23,14 +26,23 @@ def test_chat_endpoint_error_includes_response_detail(monkeypatch):
         )
 
     monkeypatch.setattr("taskcompendium.harbor.agents.urllib.request.urlopen", fail)
-    agent = SimpleNamespace(
-        model_name="policy",
-        max_tokens=32,
-        temperature=1.0,
-        chat_template_kwargs=None,
-        api_key="",
-        api_base="http://localhost/v1",
-        request_timeout=1,
+    sample = build_sample(Path(__file__).parent / "fixtures/nemo")
+    task = lower_to_harbor(
+        sample.specification,
+        (sample.rendering,),
+        sample.binding,
+        tmp_path / "task",
+        reference_execution=HarborExecutionConfig(sample.binding, HarborLaunchConfig("provider_chat")),
+        model_name="fixture",
+        agent_kwargs={"api_base": "http://localhost/v1", "max_turns": 3},
     )
-    with pytest.raises(RuntimeError, match=r"Chat completion HTTP 400:.*model name mismatch"):
-        DirectChatAgent._completion(agent, [{"role": "user", "content": "Hello"}])
+    execution = json.loads((task / "reference-execution.json").read_text())
+    attempt = (
+        await generate_attempts([GenerationRequest(task, execution, "provider", 0)], tmp_path / "trials", concurrency=1)
+    )[0]
+
+    assert attempt.status == Outcome.INFRA_ERROR
+    assert attempt.reward is None
+    assert attempt.exception is not None
+    assert attempt.exception["exception_type"] == "RuntimeError"
+    assert "model name mismatch" in attempt.exception["exception_message"]
