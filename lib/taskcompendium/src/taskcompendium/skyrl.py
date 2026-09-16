@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import posixpath
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -33,12 +35,19 @@ class UngradedBatchError(RuntimeError):
     """A verifier or task failure prevented construction of a numeric batch."""
 
 
-def _trainer_reward(attempt: GeneratedAttempt) -> tuple[float, str | None, str | None]:
+@dataclass(frozen=True)
+class TrainingAdmission:
+    reward: float
+    exception_type: str | None = None
+    error_treatment: str | None = None
+
+
+def _training_admission(attempt: GeneratedAttempt) -> TrainingAdmission:
     """Apply the explicit training-admission policy without changing semantic results."""
     if attempt.status is Outcome.GRADED and attempt.reward is not None:
-        return attempt.reward, None, None
+        return TrainingAdmission(attempt.reward)
     if attempt.status is Outcome.EXTRACTION_ERROR and attempt.messages:
-        return 0.0, Outcome.EXTRACTION_ERROR.value, "zero"
+        return TrainingAdmission(0.0, Outcome.EXTRACTION_ERROR.value, "zero")
     raise UngradedBatchError(
         f"{attempt.instance_id}/{attempt.repetition_id} has semantic status {attempt.status.value}; "
         "the retained attempt cannot enter a numeric training batch"
@@ -59,7 +68,7 @@ class TaskCompendiumTrajectoryRunner(TrajectoryRunner):
         self.tokenizer = tokenizer
         self.output_dir = output_dir
         self.concurrency = concurrency
-        self.archive_uri = archive_uri.rstrip("/") if archive_uri else None
+        self.archive_uri = archive_uri
         self.last_attempts: list[GeneratedAttempt] = []
 
     async def _run(self, input_batch: TrajectoryRequestBatch, disable_tqdm: bool = False) -> TrajectoryBatch:
@@ -92,9 +101,9 @@ class TaskCompendiumTrajectoryRunner(TrajectoryRunner):
         archive = self.output_dir / f"attempts-{uuid4().hex}.jsonl"
         write_attempts(attempts, archive)
         if self.archive_uri is not None:
-            write_attempts_uri(attempts, f"{self.archive_uri}/{archive.name}")
+            write_attempts_uri(attempts, posixpath.join(self.archive_uri, archive.name))
         try:
-            admission = [_trainer_reward(attempt) for attempt in attempts]
+            admission = [_training_admission(attempt) for attempt in attempts]
         except UngradedBatchError as error:
             raise UngradedBatchError(f"{error}; all attempts remain archived at {archive}") from error
 
@@ -127,16 +136,16 @@ class TaskCompendiumTrajectoryRunner(TrajectoryRunner):
             responses.append(ids)
             masks.append(loss_mask)
 
-        rewards, exception_types, error_treatments = zip(*admission, strict=True)
+        rewards = [item.reward for item in admission]
         return {
             "prompt_token_ids": prompt_ids,
             "response_ids": responses,
-            "rewards": list(rewards),
-            "unshaped_rewards": list(rewards),
+            "rewards": rewards,
+            "unshaped_rewards": rewards,
             "loss_masks": masks,
             "stop_reasons": None,
-            "exception_types": list(exception_types),
-            "error_treatments": list(error_treatments),
+            "exception_types": [item.exception_type for item in admission],
+            "error_treatments": [item.error_treatment for item in admission],
             "trajectory_ids": list(identities),
             "rollout_metrics": {
                 "taskcompendium/reconstructed_trajectories": float(size),

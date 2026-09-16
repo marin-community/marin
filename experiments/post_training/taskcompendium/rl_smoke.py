@@ -147,7 +147,11 @@ def build_lowerings(config: BuildLoweringsConfig) -> None:
                 chat_binding,
                 lowerings / f"chat-{index:02d}",
                 reference_execution=HarborExecutionConfig(chat_binding, HarborLaunchConfig("chat")),
-                agent_kwargs={"api_base": "http://127.0.0.1:1/v1", "max_tokens": 512, "temperature": 1.0},
+                agent_kwargs={
+                    "api_base": "http://127.0.0.1:1/v1",
+                    "max_tokens": MAX_NEW_TOKENS_PER_TURN,
+                    "temperature": 1.0,
+                },
                 model_name="policy-placeholder",
             )
 
@@ -189,7 +193,7 @@ def build_lowerings(config: BuildLoweringsConfig) -> None:
                 reference_execution=HarborExecutionConfig(provider, HarborLaunchConfig("provider_chat")),
                 agent_kwargs={
                     "api_base": "http://127.0.0.1:1/v1",
-                    "max_tokens": 512,
+                    "max_tokens": MAX_NEW_TOKENS_PER_TURN,
                     "max_turns": MAX_TURNS,
                     "temperature": 1.0,
                 },
@@ -261,12 +265,12 @@ trainer:
       cpu_offload: false
       reshard_after_forward: true
   placement:
-    colocate_all: false
+    colocate_all: {str(plan.colocate_all).lower()}
     colocate_policy_ref: true
-    policy_num_nodes: 4
-    policy_num_gpus_per_node: {GPUS_PER_NODE}
-    ref_num_nodes: 4
-    ref_num_gpus_per_node: {GPUS_PER_NODE}
+    policy_num_nodes: {plan.policy_num_nodes}
+    policy_num_gpus_per_node: {plan.policy_num_gpus_per_node}
+    ref_num_nodes: {plan.policy_num_nodes}
+    ref_num_gpus_per_node: {plan.policy_num_gpus_per_node}
 
 generator:
   backend: vllm
