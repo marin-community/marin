@@ -708,6 +708,39 @@ def build_fixtures(dest: str) -> list[str]:
             [_mcq_sample("arc-challenge", str(i), model_choice=i % 4, target_choice=(i + 2) % 4) for i in range(5)],
         )
 
+    # --- aime across three models: the score order (llama, snowball, qwen) is not the lower-bound order
+    # (qwen, llama, snowball). qwen graded all 100 of its trials, so its interval is narrow; the other
+    # two graded 9 of 10, so theirs widen for the lost trial. The panel sorts on the score and Compare
+    # ranks on the interval, and this column is where the two rules visibly disagree. ---
+    grp = "qwen3-8b-2026.07.21"
+    r = f"{grp}-aime"
+    emit(
+        _record(
+            run_id=r,
+            group_id=grp,
+            model="qwen3-8b",
+            version="2026.07.21",
+            created_at="2026-07-21T09:30:00+00:00",
+            evaluation=_harbor_ref("aime"),
+            status=RunStatus.SUCCEEDED,
+            results_path=results_of(r),
+            metrics={"aime": {"accuracy": 0.3, "mean_reward": 0.3, "solved": 30.0, "total": 100.0}},
+            coverage={"aime": TaskCoverage(n_attempted=100, n_scored=100, n_correct=30)},
+            description="Qwen3 8B reference",
+            runtime_minutes=95.0,
+        )
+    )
+    _write_samples(
+        fs,
+        results_of(r),
+        "aime",
+        [
+            _agentic_sample(fs, results_of(r), "aime", "1", reward=1.0),
+            _agentic_sample(fs, results_of(r), "aime", "2", reward=0.0),
+            _agentic_sample(fs, results_of(r), "aime", "3", reward=0.0),
+        ],
+    )
+
     # --- llama3-8b: an unlabelled launch (version None), partial coverage ---
     grp = "llama3-8b-run"
     r = f"{grp}-mmlu"
@@ -733,6 +766,35 @@ def build_fixtures(dest: str) -> list[str]:
         [
             _mcq_sample("mmlu", str(i), model_choice=i % 4, target_choice=i % 4 if i % 2 else (i + 1) % 4)
             for i in range(5)
+        ],
+    )
+
+    r = f"{grp}-aime"
+    emit(
+        _record(
+            run_id=r,
+            group_id=grp,
+            model="llama3-8b",
+            version=None,
+            created_at="2026-07-18T12:40:00+00:00",
+            evaluation=_harbor_ref("aime"),
+            status=RunStatus.SUCCEEDED,
+            results_path=results_of(r),
+            metrics={"aime": {"accuracy": 4 / 9, "mean_reward": 4 / 9, "solved": 4.0, "total": 9.0}},
+            coverage={"aime": TaskCoverage(n_attempted=10, n_scored=9, errors={"AgentTimeoutError": 1})},
+            description=None,
+            runtime_minutes=40.0,
+            serving=None,
+        )
+    )
+    _write_samples(
+        fs,
+        results_of(r),
+        "aime",
+        [
+            _agentic_sample(fs, results_of(r), "aime", "1", reward=1.0),
+            _agentic_sample(fs, results_of(r), "aime", "2", reward=1.0),
+            _agentic_sample(fs, results_of(r), "aime", "3", reward=0.0, error="sandbox timed out"),
         ],
     )
 
