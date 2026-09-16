@@ -122,7 +122,7 @@
         return block;
       }
       for (const token of scores) {
-        const text = token.token_id === eos ? '⟨EOS⟩' : token.text;
+        const text = token.token_id === eos ? tokenLabel(token, eos) : token.text;
         const span = element('span', text); span.className = text ? 'token' : 'token empty';
         span.style.backgroundColor = probabilityColor(token.logprob);
         span.tabIndex = 0;
