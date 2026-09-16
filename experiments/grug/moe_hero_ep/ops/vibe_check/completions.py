@@ -34,6 +34,7 @@ class SamplingSpec(Record):
     release: str
     prompts: tuple[Prompt, ...] = Field(min_length=1)
     batch_size: int = Field(gt=0)
+    completions_per_prompt: int = Field(gt=0)
     tokenizer: str
     tokenizer_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     model: dict
@@ -92,18 +93,24 @@ class TokenScore(Record):
 
 
 class Completion(Record):
-    prompt_id: str
-    prompt_token_ids: tuple[int, ...] = Field(min_length=1)
+    sample_index: int = Field(ge=0)
+    seed: int = Field(ge=0)
     token_ids: tuple[int, ...]
     text: str
     stop_reason: StopReason
     token_scores: tuple[TokenScore, ...] | None = None
+
+
+class PromptCompletions(Record):
+    prompt_id: str
+    prompt_token_ids: tuple[int, ...] = Field(min_length=1)
+    samples: tuple[Completion, ...]
     expected_scores: tuple[TokenScore, ...] | None = None
 
 
 class SampleResult(Record):
     request: SampleRequest
-    completions: tuple[Completion, ...]
+    completions: tuple[PromptCompletions, ...]
     completed_at: str
     eos_token_id: int = Field(ge=0)
 
@@ -113,23 +120,30 @@ class SampleResult(Record):
         if [row.prompt_id for row in self.completions] != [prompt.id for prompt in spec.prompts]:
             raise ValueError("Results must contain each requested prompt exactly once, in order")
         for prompt, row in zip(spec.prompts, self.completions, strict=True):
-            total = len(row.prompt_token_ids) + len(row.token_ids)
-            if any(token < 0 for token in (*row.prompt_token_ids, *row.token_ids)):
-                raise ValueError("Token IDs must be non-negative")
-            ended_with_eos = bool(row.token_ids) and row.token_ids[-1] == self.eos_token_id
-            if (row.stop_reason == StopReason.EOS) != ended_with_eos or self.eos_token_id in row.token_ids[:-1]:
-                raise ValueError("EOS tokens and stop reason disagree")
-            if total > spec.context_length or len(row.token_ids) > spec.max_new_tokens:
-                raise ValueError(f"Generation exceeds the request limits: {row.prompt_id}")
-            if row.stop_reason == StopReason.CONTEXT_LIMIT and total != spec.context_length:
-                raise ValueError("Context-limit result does not fill the context")
-            if row.stop_reason == StopReason.MAX_NEW_TOKENS and len(row.token_ids) != spec.max_new_tokens:
-                raise ValueError("Token-limit result does not reach the limit")
-            if row.token_scores is not None:
-                if tuple(token.token_id for token in row.token_scores) != row.token_ids:
-                    raise ValueError("Token scores do not match the generated token IDs")
-                if "".join(token.text for token in row.token_scores) != row.text:
-                    raise ValueError("Token text does not match the completion")
+            if [sample.sample_index for sample in row.samples] != list(range(spec.completions_per_prompt)):
+                raise ValueError("Results must contain every sample index exactly once, in order")
+            for sample in row.samples:
+                if sample.seed != prompt.seed + sample.sample_index:
+                    raise ValueError("Completion seed does not match the prompt and sample index")
+                total = len(row.prompt_token_ids) + len(sample.token_ids)
+                if any(token < 0 for token in (*row.prompt_token_ids, *sample.token_ids)):
+                    raise ValueError("Token IDs must be non-negative")
+                ended_with_eos = bool(sample.token_ids) and sample.token_ids[-1] == self.eos_token_id
+                if (sample.stop_reason == StopReason.EOS) != ended_with_eos or self.eos_token_id in sample.token_ids[
+                    :-1
+                ]:
+                    raise ValueError("EOS tokens and stop reason disagree")
+                if total > spec.context_length or len(sample.token_ids) > spec.max_new_tokens:
+                    raise ValueError(f"Generation exceeds the request limits: {row.prompt_id}")
+                if sample.stop_reason == StopReason.CONTEXT_LIMIT and total != spec.context_length:
+                    raise ValueError("Context-limit result does not fill the context")
+                if sample.stop_reason == StopReason.MAX_NEW_TOKENS and len(sample.token_ids) != spec.max_new_tokens:
+                    raise ValueError("Token-limit result does not reach the limit")
+                if sample.token_scores is not None:
+                    if tuple(token.token_id for token in sample.token_scores) != sample.token_ids:
+                        raise ValueError("Token scores do not match the generated token IDs")
+                    if "".join(token.text for token in sample.token_scores) != sample.text:
+                        raise ValueError("Token text does not match the completion")
             if row.expected_scores is not None:
                 if prompt.expected is None:
                     raise ValueError("Expected token scores have no reference completion")
@@ -151,11 +165,23 @@ class SampleStore:
         if target.version() is None:
             target.write(request.model_dump_json().encode(), expected_version=None)
 
-    def requests(self) -> list[SampleRequest]:
-        return [SampleRequest.model_validate_json(path.read_bytes()) for path in (self.root / "requests/*.json").glob()]
+    def requests(self, spec: SamplingSpec) -> list[SampleRequest]:
+        """Read only requests with the current specification, before schema validation."""
+        current = spec.model_dump(mode="json")
+        requests = []
+        for path in (self.root / "requests/*.json").glob():
+            data = json.loads(path.read_bytes())
+            if data["spec"] != current:
+                continue
+            request = SampleRequest.model_validate(data)
+            if request.sample_id != path.name.removesuffix(".json"):
+                raise ValueError(f"Request provenance does not match filename {path.name}")
+            requests.append(request)
+        return requests
 
-    def results(self) -> list[SampleResult]:
-        return [self.result(sample_id) for sample_id in self.completed_ids()]
+    def results(self, spec: SamplingSpec) -> list[SampleResult]:
+        completed = self.completed_ids()
+        return [self.result(request.sample_id) for request in self.requests(spec) if request.sample_id in completed]
 
     def completed_ids(self) -> set[str]:
         return {path.name.removesuffix(".json") for path in (self.root / "results/*.json").glob()}

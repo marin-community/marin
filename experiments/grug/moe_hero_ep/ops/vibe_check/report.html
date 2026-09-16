@@ -173,28 +173,32 @@
       if (!id) { target.append(element('p', 'No completed sample sets.')); return; }
       const entry = byId[id]; target.append(element('h2', label(entry)));
       const source = data.request.spec.prompts.find(item => item.id === promptId);
-      const completion = data.completions.find(item => item.prompt_id === promptId);
-      if (!source || !completion) { target.append(element('p', 'This prompt is not in this sample set.')); return; }
+      const promptResult = data.completions.find(item => item.prompt_id === promptId);
+      if (!source || !promptResult) { target.append(element('p', 'This prompt is not in this sample set.')); return; }
       const input = element('pre', source.text); input.className = 'prompt'; target.append(input);
-      target.append(element('h2', 'Generated completion'));
-      const generated = tokenSequence(completion.token_scores, completion.text, data.eos_token_id);
-      if (promptId === 'svg-cat-unicycle') {
-        target.append(svgPreview(completion.text));
-        const sourceCode = document.createElement('details');
-        sourceCode.append(element('summary', 'SVG source'), generated);
-        target.append(sourceCode);
-      } else {
-        target.append(generated);
+      for (const completion of promptResult.samples) {
+        const section = document.createElement('section');
+        section.append(element('h2', `Completion ${completion.sample_index + 1}`));
+        const generated = tokenSequence(completion.token_scores, completion.text, data.eos_token_id);
+        if (promptId === 'svg-cat-unicycle') {
+          section.append(svgPreview(completion.text));
+          const sourceCode = document.createElement('details');
+          sourceCode.append(element('summary', 'SVG source'), generated);
+          section.append(sourceCode);
+        } else {
+          section.append(generated);
+        }
+        section.append(element('p', `${completion.token_ids.length} new tokens · stop: ${completion.stop_reason} · seed: ${completion.seed} · temperature: ${data.request.spec.temperature}`));
+        target.append(section);
       }
       if (source.expected) {
         const want = document.createElement('details');
         want.open = true;
         want.append(element('summary', 'Expected completion'));
         want.append(element('p', 'Each probability uses the prompt and the preceding expected tokens. Open-ended references are examples of valid answers.'));
-        want.append(tokenSequence(completion.expected_scores, source.expected, data.eos_token_id));
+        want.append(tokenSequence(promptResult.expected_scores, source.expected, data.eos_token_id));
         target.append(want);
       }
-      target.append(element('p', `${completion.token_ids.length} new tokens · stop: ${completion.stop_reason} · seed: ${source.seed} · temperature: ${data.request.spec.temperature}`));
       const raw = element('a', 'Download result and full provenance'); raw.href = entry.url; target.append(raw);
       const details = document.createElement('details'); details.append(element('summary', 'Generation settings'));
       details.append(element('pre', JSON.stringify({checkpoint: data.request.checkpoint, source_revision: data.request.source_revision, ...data.request.spec, prompts: undefined}, null, 2)));

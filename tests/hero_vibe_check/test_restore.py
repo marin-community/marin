@@ -47,6 +47,7 @@ def spec():
     return SamplingSpec(
         release="test-v1",
         batch_size=1,
+        completions_per_prompt=3,
         prompts=(Prompt(id="p", text="p", seed=0, source_url="https://example.org"),),
         tokenizer="test",
         tokenizer_revision="a" * 40,
@@ -135,6 +136,12 @@ def test_logits_select_each_rows_last_input_position(spec):
     with jax.set_mesh(mesh):
         model = COMPUTE_POLICY.cast_to_compute(
             Transformer.init(draccus.decode(GrugModelConfig, spec.model), key=jax.random.PRNGKey(7))
+        )
+        # Isolate position selection from rounding in differently shaped matrix products.
+        model = eqx.tree_at(
+            lambda value: value.output_proj,
+            model,
+            jnp.eye(*model.output_proj.shape, dtype=model.output_proj.dtype),
         )
         tokens = jnp.array([[1, 2, 3, 0], [4, 5, 0, 0]])
         positions = jnp.array([2, 1])

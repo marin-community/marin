@@ -16,7 +16,7 @@ from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleResult, SampleStore
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleResult, SampleStore, SamplingSpec
 
 logger = logging.getLogger(__name__)
 
@@ -138,9 +138,9 @@ def publish_daily(store: SampleStore, day: date, results: list[SampleResult]) ->
     return site.url
 
 
-def publish_reports(store: SampleStore, day: date, comment: Callable[[str], None]) -> str:
+def publish_reports(store: SampleStore, day: date, comment: Callable[[str], None], *, spec: SamplingSpec) -> str:
     """Update the current report and retain one nonempty snapshot per report day."""
-    results = store.results()
+    results = store.results(spec)
     for result in results:
         key = result.request.sample_id
         target = conditional_object(prefix_join(sites.PUBLIC_ROOT, public_result_key(key)))
