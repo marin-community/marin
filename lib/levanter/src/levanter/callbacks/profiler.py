@@ -100,9 +100,6 @@ class XlaDumpUploadConfig:
 
         process_index = jax.process_index()
         upload_uri = self.destination_for_run(run_id, process_index)
-        if not _is_ttl_root(StoragePath(upload_uri), _XLA_DUMP_TTL_PREFIX):
-            logger.info("MARIN_PREFIX has no remote XLA dump TTL store; keeping dumps at %s", dump_path)
-            return None
 
         uploaded_files: dict[Path, tuple[int, int]] = {}
         upload_xla_dumps(dump_path, upload_uri, uploaded_files)

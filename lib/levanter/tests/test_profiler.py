@@ -123,11 +123,7 @@ def test_xla_dump_uploads_at_start_and_after_hooks(monkeypatch, tmp_path):
     uploads = []
     monkeypatch.setenv("XLA_FLAGS", f"--xla_dump_to={tmp_path / 'dumps'}")
     monkeypatch.setattr(profiler_module.jax, "process_index", lambda: 2)
-    monkeypatch.setattr(
-        profiler_module,
-        "marin_temp_bucket",
-        lambda ttl_days, prefix: f"gs://marin-us-east5/tmp/ttl={ttl_days}d/{prefix}",
-    )
+    monkeypatch.setattr(profiler_module, "marin_temp_bucket", lambda _ttl_days, prefix: f"file://{tmp_path}/{prefix}")
     monkeypatch.setattr(profiler_module, "upload_xla_dumps", lambda *args: uploads.append(args))
 
     callback = XlaDumpUploadConfig(enabled=True).build("run-123")
@@ -135,8 +131,8 @@ def test_xla_dump_uploads_at_start_and_after_hooks(monkeypatch, tmp_path):
     assert callback is not None
     callback(SimpleNamespace())
     assert [upload[1] for upload in uploads] == [
-        "gs://marin-us-east5/tmp/ttl=30d/xla-dumps/run-123/process-2",
-        "gs://marin-us-east5/tmp/ttl=30d/xla-dumps/run-123/process-2",
+        f"file://{tmp_path}/xla-dumps/run-123/process-2",
+        f"file://{tmp_path}/xla-dumps/run-123/process-2",
     ]
 
 
