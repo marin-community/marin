@@ -255,20 +255,6 @@ def store():
                 process="other",
                 attributes={"engine": "engine-A", "metric_source": "vllm", "source_temporality": "cumulative_snapshot"},
             )
-        add(
-            "weight_change_probe",
-            body={
-                "target_update": 2,
-                "status": "valid",
-                "coverage_complete": 1,
-                "dense_wire_bytes": 1000,
-                "estimated_changed_element_fraction": 0.025,
-                "estimated_index32_value_bytes": 75,
-                "capture_enqueue_seconds": 0.01,
-                "sample_cuda_milliseconds": 2,
-                "compare_commit_seconds": 0.03,
-            },
-        )
         # Two optimizer steps, both within one display bucket: do not pool their ages.
         for step, age, tokens in [(2, 0, 10), (2, 1, 30), (2, 1, 50), (3, 0, 20), (3, 1, 70)]:
             add("rollout_staleness_steps", age, attributes={"step": str(step)})
