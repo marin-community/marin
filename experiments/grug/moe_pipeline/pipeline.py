@@ -25,7 +25,11 @@ from jax.tree_util import register_dataclass
 from jaxtyping import Array, Float, Int
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
-from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES
+from levanter.grug.grug_moe import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_REMAT_SAVE_NAMES,
+    MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+)
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.pipeline import evenly_partition_layers
 
@@ -406,6 +410,7 @@ def _stack_router_metrics(block_metrics: list[dict[str, jax.Array]]) -> dict[str
         "router_z_loss",
         "qb_beta",
         "capacity_overflow",
+        "skipped_assignments",
     )
     return {f"{key}_per_layer": jnp.stack([metrics[key] for metrics in block_metrics]) for key in keys}
 
@@ -511,6 +516,8 @@ def make_automatic_pipeline_step(
             hidden = None
             router_loss = jnp.array(0.0, dtype=jnp.float32)
             next_qb_betas = []
+            dropped_by_stage = []
+            skipped_by_stage = []
             last_stage = None
             for stage_index, (trainable_stage, static_stage) in enumerate(
                 zip(trainable_stages, static_stages, strict=True)
@@ -523,6 +530,8 @@ def make_automatic_pipeline_step(
                 hidden, router_metrics = stage.run_blocks(hidden, batch.attn_mask)
                 router_loss = router_loss + stage.local_router_loss(router_metrics) / config.microbatches
                 next_qb_betas.append(router_metrics[_QB_BETA_PER_LAYER_KEY])
+                dropped_by_stage.append(jnp.sum(router_metrics["capacity_overflow_per_layer"]))
+                skipped_by_stage.append(jnp.sum(router_metrics["skipped_assignments_per_layer"]))
                 if stage_index < config.stages - 1:
                     hidden = pp.mark_stage_end(hidden)
                 last_stage = stage
@@ -538,13 +547,14 @@ def make_automatic_pipeline_step(
             )
             loss = cross_entropy_sum / loss_denominator + router_loss
             loss = pp.mark_stage_end(loss)
-            return loss, tuple(next_qb_betas)
+            return loss, (tuple(next_qb_betas), tuple(dropped_by_stage), tuple(skipped_by_stage))
 
-        (loss, next_qb_betas), grads = pp.treduce(
+        per_stage_add = tuple(pp.Add for _ in range(config.stages))
+        (loss, (next_qb_betas, dropped_by_stage, skipped_by_stage)), grads = pp.treduce(
             lambda batch: jax.value_and_grad(loss_fn, has_aux=True)(state.trainable_params, batch),
             batches,
             schedule=schedule,
-            operation=((pp.Add, tuple(pp.Add for _ in range(config.stages))), pp.Add),
+            operation=((pp.Add, (per_stage_add, per_stage_add, per_stage_add)), pp.Add),
         )
         next_params = []
         next_opt_state = []
@@ -563,13 +573,26 @@ def make_automatic_pipeline_step(
             opt_state=tuple(next_opt_state),
             pending_qb_betas=tuple(beta / config.microbatches for beta in next_qb_betas),
         )
-        return next_state, {TRAIN_LOSS_KEY: loss}
+        # Drop and padding-skip counts are summed over microbatches and layers, one scalar per stage.
+        return next_state, {
+            TRAIN_LOSS_KEY: loss,
+            MOE_DROPPED_ASSIGNMENTS_METRIC: dropped_by_stage,
+            MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: skipped_by_stage,
+        }
 
+    per_stage_specs = tuple(P() for _ in range(config.stages))
     return pp.mpmd_jit_with_loop(
         pipeline_step,
         mpmd_mesh=mpmd_mesh,
         in_specs=(_partition_spec_tree(sample_state), _partition_spec_tree(sample_batches), P()),
-        out_specs=(_partition_spec_tree(sample_state), {TRAIN_LOSS_KEY: P()}),
+        out_specs=(
+            _partition_spec_tree(sample_state),
+            {
+                TRAIN_LOSS_KEY: P(),
+                MOE_DROPPED_ASSIGNMENTS_METRIC: per_stage_specs,
+                MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: per_stage_specs,
+            },
+        ),
     )
 
 
