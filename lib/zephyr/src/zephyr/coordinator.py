@@ -1687,6 +1687,8 @@ class ZephyrExecutionResult:
         counters: Aggregated counter values from the run, including built-in
             zephyr counters (e.g. ``zephyr/records_in``) and any user counters
             recorded via ``zephyr.counters.pipeline``.
+        execution_id: Identifier for the coordinator run, or empty when no
+            coordinator execution was needed.
     """
 
     results: list

@@ -12,6 +12,7 @@ from datetime import datetime
 
 REDUCER_PAGE_SIZE = 20
 EXECUTION_LIMIT = 100
+EXECUTION_NAMESPACE = "zephyr.execution"
 STAGE_LOOKBACK_SECONDS = 60
 
 
@@ -28,7 +29,7 @@ def executions_sql(*, since: datetime, root_job: str | None, limit: int) -> str:
     if root_job:
         where.append(f"root_job_id = {sql_string(root_job)}")
     return f"""SELECT execution_id, root_job_id, coordinator_job_id, ts, input_shards, stages_json
-FROM "zephyr.execution"
+FROM "{EXECUTION_NAMESPACE}"
 WHERE {" AND ".join(where)}
 QUALIFY ROW_NUMBER() OVER (PARTITION BY execution_id ORDER BY ts DESC, seq DESC) = 1
 ORDER BY ts DESC LIMIT {int(limit)}"""
@@ -36,7 +37,7 @@ ORDER BY ts DESC LIMIT {int(limit)}"""
 
 def execution_sql(execution_id: str) -> str:
     return f"""SELECT execution_id, root_job_id, coordinator_job_id, ts, input_shards, stages_json
-FROM "zephyr.execution"
+FROM "{EXECUTION_NAMESPACE}"
 WHERE execution_id = {sql_string(execution_id)}
 QUALIFY ROW_NUMBER() OVER (PARTITION BY execution_id ORDER BY ts DESC, seq DESC) = 1"""
 
