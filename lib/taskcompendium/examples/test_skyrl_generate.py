@@ -329,7 +329,13 @@ async def test_extraction_error_is_zeroed_for_training_but_retained_as_null_sema
         (Rendering("json", AssistantFinal(JsonPath())),),
         agent_kwargs={"response": "not JSON"},
     )
-    runner = TaskCompendiumTrajectoryRunner(tokenizer, tmp_path / "output", concurrency=1)
+    durable = tmp_path / "durable"
+    runner = TaskCompendiumTrajectoryRunner(
+        tokenizer,
+        tmp_path / "output",
+        concurrency=1,
+        archive_uri=durable.as_uri(),
+    )
     batch = await runner.run(request_batch([row], repetitions=2))
     attempts = _archive(tmp_path / "output")
 
@@ -338,6 +344,9 @@ async def test_extraction_error_is_zeroed_for_training_but_retained_as_null_sema
     assert batch["error_treatments"] == ["zero", "zero"]
     assert [attempt["status"] for attempt in attempts] == [Outcome.EXTRACTION_ERROR, Outcome.EXTRACTION_ERROR]
     assert [attempt["reward"] for attempt in attempts] == [None, None]
+    durable_archives = list(durable.glob("attempts-*.jsonl"))
+    assert len(durable_archives) == 1
+    assert [json.loads(line)["reward"] for line in durable_archives[0].read_text().splitlines()] == [None, None]
 
 
 @pytest.mark.parametrize("failure", ["verifier_crash", "malformed_artifact"])

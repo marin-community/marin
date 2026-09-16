@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import fsspec
 import msgspec
 
 from taskcompendium.harbor.runner import run_trial
@@ -159,5 +160,12 @@ def write_attempts(attempts: list[GeneratedAttempt], destination: Path) -> None:
     """Write semantic JSONL separately from numeric trainer batches."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("xb") as output:
+        for attempt in attempts:
+            output.write(msgspec.json.encode(attempt) + b"\n")
+
+
+def write_attempts_uri(attempts: list[GeneratedAttempt], destination: str) -> None:
+    """Write a uniquely named semantic archive to a durable fsspec URI."""
+    with fsspec.open(destination, "wb") as output:
         for attempt in attempts:
             output.write(msgspec.json.encode(attempt) + b"\n")

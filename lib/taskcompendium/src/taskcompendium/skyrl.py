@@ -17,7 +17,13 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 from skyrl_train.trajectory_runners.types import TrajectoryBatch, TrajectoryRequestBatch
 from transformers import PreTrainedTokenizerBase
 
-from taskcompendium.harbor.generation import GeneratedAttempt, GenerationRequest, generate_attempts, write_attempts
+from taskcompendium.harbor.generation import (
+    GeneratedAttempt,
+    GenerationRequest,
+    generate_attempts,
+    write_attempts,
+    write_attempts_uri,
+)
 from taskcompendium.models import Outcome
 
 ENV_CLASS = "taskcompendium_harbor"
@@ -42,10 +48,18 @@ def _trainer_reward(attempt: GeneratedAttempt) -> tuple[float, str | None, str |
 class TaskCompendiumTrajectoryRunner(TrajectoryRunner):
     """Run each lowering with its own Harbor launch and reconstruct trainable tokens."""
 
-    def __init__(self, tokenizer: PreTrainedTokenizerBase, output_dir: Path, *, concurrency: int):
+    def __init__(
+        self,
+        tokenizer: PreTrainedTokenizerBase,
+        output_dir: Path,
+        *,
+        concurrency: int,
+        archive_uri: str | None = None,
+    ):
         self.tokenizer = tokenizer
         self.output_dir = output_dir
         self.concurrency = concurrency
+        self.archive_uri = archive_uri.rstrip("/") if archive_uri else None
         self.last_attempts: list[GeneratedAttempt] = []
 
     async def _run(self, input_batch: TrajectoryRequestBatch, disable_tqdm: bool = False) -> TrajectoryBatch:
@@ -77,6 +91,8 @@ class TaskCompendiumTrajectoryRunner(TrajectoryRunner):
         self.last_attempts = attempts
         archive = self.output_dir / f"attempts-{uuid4().hex}.jsonl"
         write_attempts(attempts, archive)
+        if self.archive_uri is not None:
+            write_attempts_uri(attempts, f"{self.archive_uri}/{archive.name}")
         try:
             admission = [_trainer_reward(attempt) for attempt in attempts]
         except UngradedBatchError as error:
