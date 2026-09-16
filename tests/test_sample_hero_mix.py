@@ -3,7 +3,17 @@
 
 import json
 
-from experiments.datakit.sample_hero_mix import cell_name, expected_sampled_tokens, keep_probabilities
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+
+from experiments.datakit.sample_hero_mix import (
+    align_source_shards,
+    cell_name,
+    expected_sampled_tokens,
+    keep_probabilities,
+    sample_shard,
+)
 
 
 def _write_mix(tmp_path):
@@ -52,3 +62,49 @@ def test_zero_weight_cell_kept_never(tmp_path):
     path = _write_mix(tmp_path)
     p = keep_probabilities(path, 1_000, phase="initial")  # c00q1 has weight 0 in initial
     assert p["c00q1"] == 0.0
+
+
+def _write_shard(tmp_path, rows, dups=(), exact=()):
+
+    dirs = {k: tmp_path / k for k in ("normalized", "decontam", "cluster", "quality", "exact_dedup", "dedup")}
+    for d in dirs.values():
+        d.mkdir(parents=True, exist_ok=True)
+    ids = [r["id"] for r in rows]
+    pq.write_table(pa.table({"id": ids, "text": [r["text"] for r in rows]}), dirs["normalized"] / "s.parquet")
+    pq.write_table(
+        pa.table({"id": ids, "contaminated": [r["contaminated"] for r in rows]}), dirs["decontam"] / "s.parquet"
+    )
+    pq.write_table(pa.table({"id": ids, "cluster40": [r["cluster"] for r in rows]}), dirs["cluster"] / "s.parquet")
+    pq.write_table(pa.table({"id": ids, "quality_bucket": [r["quality"] for r in rows]}), dirs["quality"] / "s.parquet")
+    pq.write_table(pa.table({"id": list(exact)}), dirs["exact_dedup"] / "s.parquet")
+    pq.write_table(pa.table({"id": list(dups), "dup_doc": [True] * len(dups)}), dirs["dedup"] / "s.parquet")
+    return {k: str(v) for k, v in dirs.items()}
+
+
+def test_sample_shard_survival_and_keep(tmp_path):
+
+    rows = [
+        {"id": "a", "text": "keep me", "contaminated": False, "cluster": 0, "quality": 0},  # cell c00q0 p=1
+        {"id": "b", "text": "contam", "contaminated": True, "cluster": 0, "quality": 0},  # dropped: contaminated
+        {"id": "c", "text": "dupd", "contaminated": False, "cluster": 0, "quality": 0},  # dropped: verified dup
+        {"id": "d", "text": "exactdup", "contaminated": False, "cluster": 0, "quality": 0},  # dropped: exact dup
+        {"id": "e", "text": "never", "contaminated": False, "cluster": 1, "quality": 0},  # cell c01q0 p=0
+    ]
+    dirs = _write_shard(tmp_path, rows, dups=["c"], exact=["d"])
+    specs = align_source_shards("src", dirs)
+    assert len(specs) == 1
+    keep = {"c00q0": 1.0, "c01q0": 0.0}
+    got = list(sample_shard(specs[0], "cluster40", keep, seed=7))
+    assert got == [("a", "keep me")]  # b/c/d filtered, e has p=0
+
+
+def test_sample_shard_id_mismatch_raises(tmp_path):
+
+    rows = [{"id": "a", "text": "x", "contaminated": False, "cluster": 0, "quality": 0}]
+    dirs = _write_shard(tmp_path, rows)
+    # corrupt the normalized shard's id so it no longer aligns with the attrs
+
+    pq.write_table(pa.table({"id": ["WRONG"], "text": ["x"]}), tmp_path / "normalized" / "s.parquet")
+    specs = align_source_shards("src", dirs)
+    with pytest.raises(RuntimeError, match="id mismatch"):
+        list(sample_shard(specs[0], "cluster40", {"c00q0": 1.0}, seed=1))
