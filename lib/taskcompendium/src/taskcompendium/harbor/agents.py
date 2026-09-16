@@ -126,6 +126,7 @@ class DirectChatAgent(BaseAgent):
         api_base: str,
         api_key: str = "",
         max_tokens: int = 4096,
+        temperature: float = 0.0,
         request_timeout: float = 120,
         chat_template_kwargs: dict[str, Any] | None = None,
         **kwargs,
@@ -135,10 +136,11 @@ class DirectChatAgent(BaseAgent):
         self.history: list[dict[str, Any]] = []
         self.api_key = api_key
         self.max_tokens = max_tokens
+        self.temperature = temperature
         self.request_timeout = request_timeout
         self.chat_template_kwargs = chat_template_kwargs
-        if max_tokens <= 0 or request_timeout <= 0:
-            raise ValueError("Token and request budgets must be positive")
+        if max_tokens <= 0 or temperature < 0 or request_timeout <= 0:
+            raise ValueError("Token and request budgets must be positive and temperature must be nonnegative")
         if self.model_name is None:
             raise ValueError("Chat agent requires an explicit model")
 
@@ -157,7 +159,7 @@ class DirectChatAgent(BaseAgent):
             "model": self.model_name,
             "messages": messages,
             "max_tokens": self.max_tokens,
-            "temperature": 0,
+            "temperature": self.temperature,
         }
         if tools is not None:
             body["tools"] = tools

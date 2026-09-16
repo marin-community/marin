@@ -195,7 +195,11 @@ async def test_harbor_direct_chat_sends_only_agent_projection(tmp_path):
             {
                 "import_path": "taskcompendium.harbor.agents:DirectChatAgent",
                 "model_name": "fixture",
-                "kwargs": {"api_base": endpoint, "chat_template_kwargs": {"enable_thinking": False}},
+                "kwargs": {
+                    "api_base": endpoint,
+                    "chat_template_kwargs": {"enable_thinking": False},
+                    "temperature": 0.7,
+                },
             },
         )
         result = await run_trial(task, execution, tmp_path / "trials", "chat")
@@ -203,6 +207,7 @@ async def test_harbor_direct_chat_sends_only_agent_projection(tmp_path):
     assert result.verifier_result.rewards == {"reward": 1.0}
     assert requests[0]["messages"] == [{"role": "user", "content": (task / "instruction.md").read_text()}]
     assert "tools" not in requests[0]
+    assert requests[0]["temperature"] == 0.7
     assert requests[0]["chat_template_kwargs"] == {"enable_thinking": False}
 
 
