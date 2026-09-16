@@ -54,4 +54,3 @@ const graph = computed(() => {
     </div>
   </div>
 </template>
-
