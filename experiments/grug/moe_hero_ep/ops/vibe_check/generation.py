@@ -82,17 +82,18 @@ def score_expected(
     logprobs: Callable[[np.ndarray, np.ndarray, np.ndarray], BatchLogprobs[np.ndarray]],
     decode: Callable[[list[int]], str],
 ) -> tuple[tuple[TokenScore, ...], ...]:
-    """Score references with their own prefixes, including the first expected token.
+    """Score references and a final EOS token with their own prefixes.
 
     The backend receives full causal input rows, prediction positions, and target IDs.
     It returns target log probabilities, top token IDs, and top log probabilities.
-    Expected text has no added EOS and must fit in the context without truncation.
+    The prompt, expected text, and added EOS must fit in the context without truncation.
     """
     if len(prompt_ids) != len(spec.prompts) or len(expected_ids) != len(prompt_ids):
         raise ValueError("Expected completion count differs from the prompt bank")
     for prompt, expected in zip(prompt_ids, expected_ids, strict=True):
-        if not prompt or not expected or len(prompt) + len(expected) > spec.context_length:
-            raise ValueError("Each prompt and expected completion must be nonempty and fit in the context")
+        if not prompt or not expected or len(prompt) + len(expected) + 1 > spec.context_length:
+            raise ValueError("Each prompt and expected completion must be nonempty and fit in the context with EOS")
+    expected_ids = [(*ids, eos_token_id) for ids in expected_ids]
     results = []
     for start in range(0, len(prompt_ids), spec.batch_size):
         prompts = prompt_ids[start : start + spec.batch_size]

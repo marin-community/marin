@@ -22,7 +22,13 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     digest,
 )
 from experiments.grug.moe_hero_ep.ops.vibe_check.config import CheckpointRun, discover_requests
-from experiments.grug.moe_hero_ep.ops.vibe_check.sample import COMPUTE_POLICY, next_logits, restore_model
+from experiments.grug.moe_hero_ep.ops.vibe_check.generation import score_expected
+from experiments.grug.moe_hero_ep.ops.vibe_check.sample import (
+    COMPUTE_POLICY,
+    expected_logprobs,
+    next_logits,
+    restore_model,
+)
 
 
 @pytest.fixture
@@ -148,3 +154,26 @@ def test_logits_select_each_rows_last_input_position(spec):
         full_logits = full_sequence_logits(model, tokens)
         expected = np.stack([np.asarray(full_logits)[0, 2], np.asarray(full_logits)[1, 1]])
         np.testing.assert_array_equal(np.asarray(next_logits(model, tokens, positions)), expected)
+
+        reference_spec = spec.model_copy(update={"context_length": 5})
+
+        def logprobs(tokens, positions, targets):
+            return expected_logprobs(model, jnp.asarray(tokens), jnp.asarray(positions), jnp.asarray(targets))
+
+        def decode(ids):
+            return "".join(chr(96 + token) for token in ids if token != 0)
+
+        scores = score_expected(reference_spec, [[1, 2]], [[3, 4]], eos_token_id=0, logprobs=logprobs, decode=decode)[0]
+        assert [score.token_id for score in scores] == [3, 4, 0]
+        assert "".join(score.text for score in scores) == "cd"
+        assert scores[-1].text == ""
+        reference_logits = full_sequence_logits(model, jnp.array([[1, 2, 3, 4, 0]]))
+        reference_logprobs = jax.nn.log_softmax(reference_logits, axis=-1)[0]
+        np.testing.assert_allclose(
+            [score.logprob for score in scores], np.asarray(reference_logprobs)[[1, 2, 3], [3, 4, 0]], rtol=1e-6
+        )
+        top_values, top_ids = jax.lax.top_k(reference_logprobs[3], 5)
+        assert [token.token_id for token in scores[-1].top_tokens] == top_ids.tolist()
+        np.testing.assert_allclose([token.logprob for token in scores[-1].top_tokens], top_values, rtol=1e-6)
+        with pytest.raises(ValueError, match="fit in the context with EOS"):
+            score_expected(reference_spec, [[1, 2]], [[3, 4, 5]], eos_token_id=0, logprobs=logprobs, decode=decode)

@@ -49,7 +49,7 @@
   </div>
   <label id="prompt-control">Prompt<select id="prompt"></select></label>
   <div class="legend" id="probability-legend">Token probability:</div>
-  <p class="muted">Colors show model probabilities before temperature scaling. Hover, focus, or tap a token to see its probability and the five most likely tokens.</p>
+  <p class="muted">Colors show model probabilities before temperature scaling. ↵ marks a newline. Hover, focus, or tap a token to see its probability and the five most likely tokens.</p>
   <p id="error" role="alert"></p>
   <div class="comparison"><article id="a"></article><article id="b"></article></div>
   <details><summary>All completed sample sets</summary>
@@ -122,7 +122,8 @@
         return block;
       }
       for (const token of scores) {
-        const span = element('span', token.text); span.className = token.text ? 'token' : 'token empty';
+        const text = token.token_id === eos ? tokenLabel(token, eos) : token.text.replace(/\r\n|\r|\n/g, '↵\n');
+        const span = element('span', text); span.className = text ? 'token' : 'token empty';
         span.style.backgroundColor = probabilityColor(token.logprob);
         span.tabIndex = 0;
         span.setAttribute('aria-label', `${tokenLabel(token, eos)}: ${probabilityText(token.logprob)}`);
@@ -196,6 +197,9 @@
         want.open = true;
         want.append(element('summary', 'Expected completion'));
         want.append(element('p', 'Each probability uses the prompt and the preceding expected tokens. Open-ended references are examples of valid answers.'));
+        if (promptResult.expected_scores?.at(-1)?.token_id === data.eos_token_id) {
+          want.append(element('p', 'The final EOS token measures the probability of stopping after this reference. The probability totals include EOS.'));
+        }
         want.append(tokenSequence(promptResult.expected_scores, source.expected, data.eos_token_id));
         target.append(want);
       }
@@ -223,8 +227,8 @@
       } catch (error) { if (ticket === draw) document.getElementById('error').textContent = String(error); }
     }
     const selection = new URLSearchParams(location.hash.slice(1));
-    left.value = byId[selection.get('a')] ? selection.get('a') : (report.entries[0]?.id || '');
-    right.value = byId[selection.get('b')] ? selection.get('b') : (report.entries[1]?.id || left.value);
+    left.value = byId[selection.get('a')] ? selection.get('a') : (report.entries[1]?.id || report.entries[0]?.id || '');
+    right.value = byId[selection.get('b')] ? selection.get('b') : (report.entries[0]?.id || '');
     for (const select of [left, right, prompt]) select.addEventListener('change', render);
     render();
   </script>
