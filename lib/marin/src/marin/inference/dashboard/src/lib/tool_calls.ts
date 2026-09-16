@@ -26,7 +26,7 @@ function parseToolCall(payload: string, newId: () => string): ToolCall {
   const functionFields = fields.function === undefined ? fields : objectValue(fields.function, 'Invalid function call')
   const name = functionFields.name
   if (typeof name !== 'string' || !name) throw new Error('Tool call must contain a function name')
-  const arguments_ = functionFields.arguments ?? functionFields.args
+  const arguments_ = functionFields.arguments ?? functionFields.parameters ?? functionFields.args
   if (arguments_ === undefined) throw new Error('Tool call must contain function arguments')
   return {
     id: typeof fields.id === 'string' ? fields.id : `call_${newId()}`,
@@ -41,6 +41,16 @@ export function inlineToolCalls(
   protocol: ChatTemplateProtocol | null,
   newId: () => string,
 ): { visible: string; calls: ToolCall[] } {
+  if (protocol?.tool_call_format === 'json') {
+    const payload = content.trim()
+    if (!payload.startsWith('{') || !payload.endsWith('}')) return { visible: content, calls: [] }
+    try {
+      return { visible: '', calls: [parseToolCall(payload, newId)] }
+    } catch {
+      return { visible: content, calls: [] }
+    }
+  }
+
   const start = protocol?.tool_call_start
   const end = protocol?.tool_call_end
   if (!start || !end) return { visible: content, calls: [] }

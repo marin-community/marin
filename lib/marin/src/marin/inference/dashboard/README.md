@@ -47,7 +47,8 @@ For example, the Datakit template emits:
 ```
 
 The Delphi template instead uses `<|tool_call|>` and
-`<|tool_call_end|>`. The UI parses the delimiters selected from the served
+`<|tool_call_end|>`, while Llama-style templates emit a bare JSON object with
+`name` and `parameters`. The UI parses the format selected from the served
 model's template, runs each call in the Iris service, and adds the call and
 result to the next request as structured `tool_calls` and `role: "tool"`
 messages. The same template then renders the result in its trained format.

@@ -43,6 +43,7 @@ from marin.inference.dashboard_server import (
     DASHBOARD_HTML,
     ChatTemplateProtocol,
     ServingInfo,
+    ToolCallFormat,
     bind_serving_socket,
     build_dashboard_app,
     protocol_for_chat_template,
@@ -81,6 +82,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route
 
+from experiments.llama import llama3_instruct_trainable_chat_template
 from experiments.sft.delphi_chat_template import DELPHI_V0_CHAT_TEMPLATE
 
 MULTIPLY_TOOL_SOURCE = '''
@@ -787,6 +789,7 @@ def test_python_tool_source_requires_typed_functions_and_validates_arguments():
                 thinking_end="<|end_think|>",
                 tool_call_start="<tool_call>",
                 tool_call_end="</tool_call>",
+                tool_call_format=ToolCallFormat.DELIMITED,
             ),
         ),
         (
@@ -796,10 +799,12 @@ def test_python_tool_source_requires_typed_functions_and_validates_arguments():
                 thinking_end="<|end_think|>",
                 tool_call_start="<|tool_call|>",
                 tool_call_end="<|tool_call_end|>",
+                tool_call_format=ToolCallFormat.DELIMITED,
             ),
         ),
+        (llama3_instruct_trainable_chat_template, ChatTemplateProtocol(tool_call_format=ToolCallFormat.JSON)),
     ],
-    ids=["datakit", "delphi"],
+    ids=["datakit", "delphi", "llama-json"],
 )
 def test_chat_template_protocol_matches_generated_delimiters(template, expected):
     assert protocol_for_chat_template(template) == expected

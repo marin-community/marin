@@ -4,6 +4,7 @@ export interface ChatTemplateProtocol {
   thinking_end: string | null
   tool_call_start: string | null
   tool_call_end: string | null
+  tool_call_format: 'delimited' | 'json' | null
 }
 
 export interface ServingInfo {
