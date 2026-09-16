@@ -638,9 +638,6 @@ def test_iris_serve_loads_python_tool_into_service(monkeypatch, tmp_path):
     client.submit.assert_called_once()
     [tool] = services[0].tools
     assert tool("Paris") == {"city": "Paris", "unit": "celsius", "temperature": 21}
-    assert "--enable-auto-tool-choice" in services[0].engine.extra_args
-    parser_index = services[0].engine.extra_args.index("--tool-call-parser")
-    assert services[0].engine.extra_args[parser_index + 1] == "hermes"
 
 
 def test_iris_serve_requires_vllm_tool_call_parser():

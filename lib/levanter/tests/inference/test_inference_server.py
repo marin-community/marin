@@ -17,6 +17,7 @@ from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
 
 try:
+    from fastapi import HTTPException
     from fastapi.testclient import TestClient
     from openai.types import Completion
 
@@ -272,6 +273,27 @@ def test_chat_completion_renders_openai_tool_call_arguments_as_mapping(local_gpt
     tokens = _compute_tokens(messages, tokenizer)
 
     assert "Paris" in tokenizer.decode(tokens)
+
+
+def test_chat_completion_rejects_invalid_tool_call_arguments(local_gpt2_tokenizer):
+    tokenizer = local_gpt2_tokenizer.with_chat_template("{{ messages | length }}")
+    messages = [
+        ChatMessage(
+            role="assistant",
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup_weather", "arguments": "not json"},
+                }
+            ],
+        )
+    ]
+
+    with pytest.raises(HTTPException) as excinfo:
+        _compute_tokens(messages, tokenizer)
+
+    assert excinfo.value.status_code == 400
 
 
 class _OpenAITestTokenizer:

@@ -171,7 +171,7 @@ function modelMessages(conversation: Conversation): ModelMessage[] {
       request.push({
         role: 'assistant',
         content: message.content || null,
-        ...(message.toolCalls?.length ? { tool_calls: message.toolCalls } : {}),
+        ...(message.toolCalls?.length ? { tool_calls: normalizedToolCalls(message.toolCalls) } : {}),
       })
     } else if (message.role === 'tool') {
       request.push({
@@ -185,6 +185,19 @@ function modelMessages(conversation: Conversation): ModelMessage[] {
     }
   }
   return request
+}
+
+function normalizedToolCalls(calls: ToolCall[]): ToolCall[] {
+  return calls.map((call) => {
+    let arguments_ = '{}'
+    try {
+      const parsed = JSON.parse(call.function.arguments)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) arguments_ = JSON.stringify(parsed)
+    } catch {
+      // The matching tool result tells the model that its arguments were invalid.
+    }
+    return { ...call, function: { ...call.function, arguments: arguments_ } }
+  })
 }
 
 async function complete(reply: ChatMessage, messages: ModelMessage[], signal: AbortSignal) {

@@ -691,11 +691,11 @@ def _compute_tokens(
                 continue
             try:
                 parsed_arguments = json.loads(arguments)
-            except json.JSONDecodeError:
-                # A preceding tool result carries the parse error; use an empty mapping so
-                # mapping-oriented templates can still render the conversation history.
-                parsed_arguments = {}
-            function["arguments"] = parsed_arguments if isinstance(parsed_arguments, dict) else {}
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=400, detail="Tool call arguments must be valid JSON objects.") from exc
+            if not isinstance(parsed_arguments, dict):
+                raise HTTPException(status_code=400, detail="Tool call arguments must be valid JSON objects.")
+            function["arguments"] = parsed_arguments
     # return_dict=False pins the token ids to a flat list; tokenizers otherwise hand back a
     # BatchEncoding here, which is the shape the rest of this module cannot use.
     result = tokenizer.apply_chat_template(
