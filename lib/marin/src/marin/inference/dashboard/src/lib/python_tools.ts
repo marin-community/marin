@@ -14,7 +14,7 @@ function escapeCdataContent(value: string): string {
   return value.split(CDATA_END).join(CDATA_CONTINUATION)
 }
 
-/** Build model history using the XML protocol understood by user-authored Python tools. */
+/** Build model history using the dashboard's XML protocol for user-authored Python tools. */
 export function modelMessages(conversation: Conversation, pythonTools: string): ModelMessage[] {
   const request: ModelMessage[] = []
   const system = [conversation.system.trim(), pythonTools ? pythonToolInstructions(pythonTools) : '']

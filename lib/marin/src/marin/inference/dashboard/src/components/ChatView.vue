@@ -119,7 +119,7 @@ async function send(text?: string) {
       if (!calls.length) break
 
       for (const call of calls) {
-        const result = await callTool(call, pythonTools, abort.signal)
+        const result = await invokeTool(call.name, pythonTools, call.arguments, abort.signal)
         conversation.messages.push(toolResultMessage(call, result))
         conversation.updatedAt = Date.now()
         emit('persist')
@@ -207,9 +207,6 @@ async function complete(reply: AssistantMessage, messages: ModelMessage[], pytho
   }
 }
 
-function callTool(call: ToolCall, source: string, signal: AbortSignal): Promise<string> {
-  return invokeTool(call.name, source, call.arguments, signal)
-}
 </script>
 
 <template>

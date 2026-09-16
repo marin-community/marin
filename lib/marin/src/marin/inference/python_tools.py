@@ -9,7 +9,6 @@ import contextlib
 import dataclasses
 import inspect
 import json
-import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -19,8 +18,6 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, create_model
 
 MAX_PYTHON_TOOL_SOURCE_BYTES = 64 * 1024
 _PYTHON_TOOL_FILENAME = "<chat-python-tools>"
-_MAX_TOOL_NAME_LENGTH = 64
-_TOOL_NAME_PATTERN = re.compile(rf"^[A-Za-z0-9_-]{{1,{_MAX_TOOL_NAME_LENGTH}}}$")
 _SUPPORTED_PARAMETER_KINDS = frozenset(
     {
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
@@ -103,11 +100,6 @@ def _python_tool(function: object) -> PythonTool:
     if not inspect.isfunction(function):
         raise ValueError("Python tools must be functions")
     name = function.__name__
-    if not _TOOL_NAME_PATTERN.fullmatch(name):
-        raise ValueError(
-            f"Python tool {name!r} must have a 1-{_MAX_TOOL_NAME_LENGTH} character name containing only "
-            "letters, numbers, '_' or '-'"
-        )
 
     signature = inspect.signature(function)
     parameters = tuple(signature.parameters.values())
