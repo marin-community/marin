@@ -82,7 +82,7 @@ MAX_STATUS_TEXT_LENGTH = 1000
 MAX_CONCURRENT_PIPELINES = 16
 MAX_CONCURRENT_RESULT_READS = 16
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
-ZEPHYR_EXECUTIONS_APPLET_URL = "https://applets.marina.oa.dev/a/6c2b0dc9-9a31-4777-82d4-e759c0292aa3/"
+ZEPHYR_APPLET_URL = "https://applets.marina.oa.dev/a/6c2b0dc9-9a31-4777-82d4-e759c0292aa3/"
 
 # Seconds between worker-job liveness probes. Each probe is a GetJobState RPC to
 # the Iris controller, and the coordinator loop ticks every 0.5s, so probing once
@@ -627,10 +627,14 @@ class ZephyrCoordinator:
                 if not run.done
             ]
 
-        detail_lines: list[str] = []
-        summary_lines: list[str] = []
+        applet_link = f"[Zephyr]({ZEPHYR_APPLET_URL})"
+        detail_lines = [applet_link]
+        summary_lines = [applet_link]
+        if not snapshot:
+            detail_lines.append("idle")
+            summary_lines.append("idle")
         for execution_id, plan_stages, stage_index, completed, total, in_flight, queued in snapshot:
-            execution_url = f"{ZEPHYR_EXECUTIONS_APPLET_URL}#/execution/{quote(execution_id, safe='')}"
+            execution_url = f"{ZEPHYR_APPLET_URL}#/execution/{quote(execution_id, safe='')}"
             detail_lines.append(f"**[{execution_id}]({execution_url})**")
             for idx, stage in enumerate(plan_stages):
                 stage_desc = _get_stage_description(stage)
@@ -644,8 +648,8 @@ class ZephyrCoordinator:
                 f"**{current_desc}** ({stage_index + 1}/{len(plan_stages)}) - {completed}/{total} shards ({pct}%)"
             )
 
-        detail_md = "\n".join(detail_lines)[:MAX_STATUS_TEXT_LENGTH] or "idle"
-        summary_md = "  \n".join(summary_lines)[:MAX_STATUS_TEXT_LENGTH] or "idle"
+        detail_md = "\n".join(detail_lines)[:MAX_STATUS_TEXT_LENGTH]
+        summary_md = "  \n".join(summary_lines)[:MAX_STATUS_TEXT_LENGTH]
         return detail_md, summary_md
 
     def _report_task_stats(self) -> None:
