@@ -37,6 +37,8 @@ class MetricSource(Protocol):
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table: ...
 
+    def namespaces(self) -> frozenset[str]: ...
+
     def health(self) -> FinelogHealth: ...
 
     def relay_status(self) -> tuple[RelaySenderStatus, ...]: ...
@@ -73,6 +75,10 @@ class FinelogSource:
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
         """Run sql against this cluster's finelog. Raises QueryResultTooLargeError past max_rows."""
         return self._client.query(sql, max_rows=max_rows)
+
+    def namespaces(self) -> frozenset[str]:
+        """Return the namespaces this deployment holds."""
+        return frozenset(info.namespace for info in self._client.list_namespaces())
 
     def health(self) -> FinelogHealth:
         """Probe the query path and return a dashboard-safe health row."""

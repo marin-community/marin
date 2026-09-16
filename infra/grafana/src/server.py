@@ -501,6 +501,7 @@ def create_app(
                 logger.info("rl producers %s: run=%s [%d, %d)", target.name, run, start_ms, end_ms)
                 return collect_producers(
                     lambda sql: rows_to_json(source.query(sql, max_rows=config.max_rows)),
+                    source.namespaces(),
                     run,
                     clusters,
                     start_ms,
