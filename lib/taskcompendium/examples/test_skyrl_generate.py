@@ -12,7 +12,6 @@ from threading import Thread
 import pytest
 from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
-from skyrl_generate import TaskCompendiumTrajectoryRunner, UngradedBatchError, request_batch
 from tasktrove_verify.spec import Mode
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
@@ -36,6 +35,7 @@ from taskcompendium.models import (
     TaskTroveVerifier,
     XmlPath,
 )
+from taskcompendium.skyrl import TaskCompendiumTrajectoryRunner, UngradedBatchError, request_batch
 
 FIXTURES = Path(__file__).resolve().parents[1] / "tests/fixtures/nemo"
 
@@ -322,13 +322,31 @@ async def test_workplace_provider_retains_state_history_and_masks_observations(t
     assert batch["rollout_logprobs"] is None
 
 
-@pytest.mark.parametrize("failure", ["malformed", "verifier_crash", "malformed_artifact"])
-async def test_ungraded_attempts_retain_null_semantic_rewards_without_numeric_batch(tmp_path, tokenizer, failure):
+async def test_extraction_error_is_zeroed_for_training_but_retained_as_null_semantic_reward(tmp_path, tokenizer):
+    row = _row(
+        tmp_path / "malformed",
+        _math_specification(),
+        (Rendering("json", AssistantFinal(JsonPath())),),
+        agent_kwargs={"response": "not JSON"},
+    )
+    runner = TaskCompendiumTrajectoryRunner(tokenizer, tmp_path / "output", concurrency=1)
+    batch = await runner.run(request_batch([row], repetitions=2))
+    attempts = _archive(tmp_path / "output")
+
+    assert batch["rewards"] == [0.0, 0.0]
+    assert batch["exception_types"] == [Outcome.EXTRACTION_ERROR, Outcome.EXTRACTION_ERROR]
+    assert batch["error_treatments"] == ["zero", "zero"]
+    assert [attempt["status"] for attempt in attempts] == [Outcome.EXTRACTION_ERROR, Outcome.EXTRACTION_ERROR]
+    assert [attempt["reward"] for attempt in attempts] == [None, None]
+
+
+@pytest.mark.parametrize("failure", ["verifier_crash", "malformed_artifact"])
+async def test_infrastructure_failures_retain_null_rewards_without_numeric_batch(tmp_path, tokenizer, failure):
     row = _row(
         tmp_path / failure,
         _math_specification(),
         (Rendering("json", AssistantFinal(JsonPath())),),
-        agent_kwargs={"response": "not JSON" if failure == "malformed" else '{"answer":"3/4"}'},
+        agent_kwargs={"response": '{"answer":"3/4"}'},
     )
     if failure == "verifier_crash":
         row["execution"]["verifier"]["import_path"] = "test_skyrl_generate:CrashingVerifier"
@@ -345,8 +363,12 @@ async def test_ungraded_attempts_retain_null_semantic_rewards_without_numeric_ba
         await runner.run(request_batch([graded, row], repetitions=2))
     attempts = _archive(tmp_path / "output")
 
-    expected = Outcome.EXTRACTION_ERROR if failure == "malformed" else Outcome.INFRA_ERROR
-    assert [attempt["status"] for attempt in attempts] == [Outcome.GRADED, Outcome.GRADED, expected, expected]
+    assert [attempt["status"] for attempt in attempts] == [
+        Outcome.GRADED,
+        Outcome.GRADED,
+        Outcome.INFRA_ERROR,
+        Outcome.INFRA_ERROR,
+    ]
     assert [attempt["reward"] for attempt in attempts] == [1.0, 1.0, None, None]
     assert all(attempt["exception"] is not None for attempt in attempts[2:])
     assert all(attempt["messages"][-1]["role"] == "assistant" for attempt in attempts)
