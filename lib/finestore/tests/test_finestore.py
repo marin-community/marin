@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 
 import pyarrow as pa
@@ -734,6 +735,30 @@ def test_commit_preserves_unknown_optional_manifest_fields(tmp_path):
     assert committed["future_manifest"] == {"retention": "keep"}
     assert committed["tables"]["samples"]["future_table"] == "keep"
     assert committed["tables"]["samples"]["shards"][0]["future_shard"] == 17
+
+
+def test_write_open_refreshes_write_once_objects(tmp_path):
+    # Bucket lifecycle rules expire every object on its own clock. HEAD is rewritten by each
+    # commit, so the marker and schema objects must be rewritten too or they expire first and
+    # leave a HEAD that readers refuse.
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        store.table("samples", primary_key=("doc_id",)).append({"doc_id": "1"})
+        store.flush()
+    layout = FineStoreLayout(root)
+    schema_path = ReadView(root).table_metadata_path("samples")
+    assert schema_path is not None
+    stale = 1_000_000_000
+    for path in (layout.archive_path, schema_path):
+        os.utime(path, (stale, stale))
+
+    with DataStore.open(root, writer_id="w2") as store:
+        store.table("samples", primary_key=("doc_id",))
+
+    assert os.stat(layout.archive_path).st_mtime > stale
+    assert os.stat(schema_path).st_mtime > stale
+    marker = ArchiveMetadata.model_validate_json(StoragePath(layout.archive_path).read_bytes())
+    assert marker.format_version == FORMAT_VERSION
 
 
 def test_read_view_refuses_an_older_format_with_migration_instructions(tmp_path):

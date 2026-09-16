@@ -141,6 +141,11 @@ row and sequence bounds, byte size, SHA-256 digest, each table's metadata object
 optional seal state. Writers compute shard integrity metadata while streaming Parquet,
 so it does not require another object-store read.
 
+Opening an archive for writing rewrites `_archive.json` and each registered schema
+object with their existing bytes. Bucket lifecycle rules under a `tmp/ttl=Nd/` prefix
+expire each object on its own clock, so these write-once objects must stay at least
+as young as the `HEAD` that every commit rewrites.
+
 Manifest models preserve unknown optional JSON fields when an older writer rebases a
 commit. A manifest can also name `required_features`; readers reject features they do
 not implement before exposing a view. This lets future optional metadata remain

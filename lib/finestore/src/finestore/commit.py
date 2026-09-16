@@ -85,18 +85,36 @@ def _empty_manifest() -> Manifest:
 
 
 def initialize_archive(layout: FineStoreLayout) -> ArchiveMetadata:
-    """Create the archive marker, or validate the marker already present."""
+    """Create the archive marker, or validate and refresh the marker already present.
+
+    Rewriting a present marker with its own bytes advances its last-modified time.
+    Bucket lifecycle rules expire each object on its own clock and every commit
+    rewrites HEAD, so under a TTL prefix a write-once marker would expire while HEAD
+    remained and readers would refuse the archive.
+    """
     marker = conditional_object(layout.archive_path)
     existing = marker.read()
-    expected = ArchiveMetadata()
     if existing is None:
+        expected = ArchiveMetadata()
         try:
             marker.write(expected.model_dump_json(indent=2).encode(), expected_version=None)
             return expected
         except ConditionalWriteError:
             existing = marker.read()
             assert existing is not None
-    found = ArchiveMetadata.model_validate_json(existing.data)
+    found = _validate_marker(layout, existing.data)
+    try:
+        marker.write(existing.data, expected_version=existing.version)
+    except ConditionalWriteError:
+        # A concurrent open refreshed the marker, or a migration replaced it.
+        replaced = marker.read()
+        assert replaced is not None
+        return _validate_marker(layout, replaced.data)
+    return found
+
+
+def _validate_marker(layout: FineStoreLayout, data: bytes) -> ArchiveMetadata:
+    found = ArchiveMetadata.model_validate_json(data)
     if found.format_version != FORMAT_VERSION:
         raise FormatVersionError(layout.root, found=found.format_version)
     return found
@@ -108,14 +126,15 @@ def validate_archive(layout: FineStoreLayout) -> ArchiveMetadata | None:
         data = StoragePath(layout.archive_path).read_bytes()
     except FileNotFoundError:
         return None
-    found = ArchiveMetadata.model_validate_json(data)
-    if found.format_version != FORMAT_VERSION:
-        raise FormatVersionError(layout.root, found=found.format_version)
-    return found
+    return _validate_marker(layout, data)
 
 
 def write_schema(layout: FineStoreLayout, metadata: TableMetadata) -> str:
-    """Publish immutable logical table metadata and return its content-addressed path."""
+    """Publish immutable logical table metadata and return its content-addressed path.
+
+    A present schema object is rewritten with its own bytes so that, like the archive
+    marker, its last-modified time is never older than the commits referring to it.
+    """
     data = metadata.model_dump_json(indent=2).encode()
     schema_id = hashlib.blake2b(data, digest_size=16).hexdigest()
     path = layout.schema_path(schema_id)
@@ -130,6 +149,7 @@ def write_schema(layout: FineStoreLayout, metadata: TableMetadata) -> str:
             assert existing is not None
     if existing.data != data:
         raise ValueError(f"schema digest collision at {path}")
+    StoragePath(path).write_bytes(data)
     return path
 
 

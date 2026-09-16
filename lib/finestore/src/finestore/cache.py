@@ -72,9 +72,11 @@ class PersistentKvCache:
                 return self._memory[key]
         if self._resolve_root is None:
             return None
+        # ValueError covers an inconsistent archive, such as a HEAD whose format marker
+        # expired under a TTL prefix. The next writer open repairs it.
         try:
             value = ReadView(self._storage_root()).read_blob(key)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             logger.warning("FineStore cache is unreadable, treating %s as a miss: %s", key, exc)
             return None
         if value is not None:
@@ -97,7 +99,7 @@ class PersistentKvCache:
                 return
             try:
                 self._write(key, value)
-            except OSError as exc:
+            except (OSError, ValueError) as exc:
                 logger.warning("FineStore cache is unwritable, not storing %s: %s", key, exc)
 
     def close(self) -> None:
