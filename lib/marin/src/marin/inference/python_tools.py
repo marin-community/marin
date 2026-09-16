@@ -7,7 +7,7 @@ import inspect
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, get_type_hints
+from typing import Any, Literal, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, create_model
 
@@ -21,6 +21,32 @@ _SUPPORTED_PARAMETER_KINDS = frozenset(
 
 
 @dataclass(frozen=True)
+class OpenAIFunctionDefinition:
+    """Function fields in an OpenAI tool definition."""
+
+    name: str
+    parameters: dict[str, object]
+    description: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {"name": self.name, "parameters": self.parameters}
+        if self.description is not None:
+            result["description"] = self.description
+        return result
+
+
+@dataclass(frozen=True)
+class OpenAIToolDefinition:
+    """OpenAI tool definition serialized into model requests."""
+
+    function: OpenAIFunctionDefinition
+    type: Literal["function"] = "function"
+
+    def to_dict(self) -> dict[str, object]:
+        return {"type": self.type, "function": self.function.to_dict()}
+
+
+@dataclass(frozen=True)
 class PythonTool:
     """A validated Python callable and its model-facing function definition."""
 
@@ -28,7 +54,7 @@ class PythonTool:
     function: Callable[..., object]
     arguments_model: type[BaseModel]
     result_adapter: TypeAdapter[Any]
-    definition: dict[str, object]
+    definition: OpenAIToolDefinition
 
     def validate_arguments(self, arguments: object) -> dict[str, object]:
         """Validate JSON arguments and retain the annotated Python value types."""
@@ -86,17 +112,13 @@ def _python_tool(function: Callable[..., object]) -> PythonTool:
     parameters = arguments_model.model_json_schema()
     parameters.pop("title", None)
 
-    function_definition: dict[str, object] = {
-        "name": name,
-        "parameters": parameters,
-    }
     description = inspect.getdoc(function)
-    if description:
-        function_definition["description"] = description
     return PythonTool(
         name=name,
         function=function,
         arguments_model=arguments_model,
         result_adapter=TypeAdapter(annotations.get("return", Any)),
-        definition={"type": "function", "function": function_definition},
+        definition=OpenAIToolDefinition(
+            function=OpenAIFunctionDefinition(name=name, parameters=parameters, description=description)
+        ),
     )

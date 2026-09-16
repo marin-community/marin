@@ -1,4 +1,5 @@
 import type { ToolCall } from './types'
+import { newId } from './storage'
 
 const INLINE_TOOL_CALL = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g
 
@@ -13,7 +14,7 @@ interface ToolCallDelta {
 }
 
 function callId(): string {
-  return crypto.randomUUID ? `call_${crypto.randomUUID()}` : `call_${Date.now()}_${Math.random().toString(36).slice(2)}`
+  return `call_${newId()}`
 }
 
 /** Merge OpenAI streaming tool-call deltas by their stable choice index. */

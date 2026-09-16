@@ -96,7 +96,7 @@ def build_dashboard_app(
         return JSONResponse(
             {
                 **dataclasses.asdict(info),
-                "tools": [tool.definition for tool in registered_tools.values()],
+                "tools": [tool.definition.to_dict() for tool in registered_tools.values()],
             }
         )
 

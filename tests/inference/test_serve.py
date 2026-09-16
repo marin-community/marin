@@ -778,12 +778,10 @@ def test_dashboard_html_is_self_contained():
 def test_python_tool_schema_and_argument_validation():
     [tool] = python_tools((multiply_tool,))
 
-    function = tool.definition["function"]
-    assert isinstance(function, dict)
-    assert function["name"] == "multiply_tool"
-    assert function["description"] == "Multiply a value by an optional factor."
-    parameters = function["parameters"]
-    assert isinstance(parameters, dict)
+    function = tool.definition.function
+    assert function.name == "multiply_tool"
+    assert function.description == "Multiply a value by an optional factor."
+    parameters = function.parameters
     assert parameters["required"] == ["value"]
     assert parameters["additionalProperties"] is False
     properties = parameters["properties"]

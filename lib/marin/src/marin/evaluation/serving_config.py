@@ -18,7 +18,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
 from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
+from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, serve_config_vllm_args
 from marin.inference.config import (
     BrokerConfig,
     IrisConfig,
@@ -28,6 +28,7 @@ from marin.inference.config import (
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
+    has_vllm_option,
 )
 
 logger = logging.getLogger(__name__)

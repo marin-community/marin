@@ -13,7 +13,7 @@ from pathlib import Path
 import draccus
 from rigging.filesystem.storage_path import StoragePath
 
-from marin.inference.config import vllm_tool_call_args
+from marin.inference.config import has_vllm_option, vllm_tool_call_args
 
 
 class ServeBackend(StrEnum):
@@ -138,11 +138,6 @@ class ModelConfig:
     def __post_init__(self) -> None:
         if "/" in self.name:
             raise ValueError("model name cannot contain '/'")
-
-
-def has_vllm_option(args: tuple[str, ...], option: str) -> bool:
-    """Whether ``args`` already specifies a vLLM option in either CLI spelling."""
-    return any(arg == option or arg.startswith(f"{option}=") for arg in args)
 
 
 def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:

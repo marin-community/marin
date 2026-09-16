@@ -73,6 +73,11 @@ def load_vllm_metric_family_additions(path: Path | None) -> frozenset[str]:
     return _parse_vllm_metric_families(StoragePath(str(path)).read_bytes(), source=str(path))
 
 
+def has_vllm_option(args: tuple[str, ...], option: str) -> bool:
+    """Whether ``args`` already specifies a vLLM option in either CLI spelling."""
+    return any(arg == option or arg.startswith(f"{option}=") for arg in args)
+
+
 def vllm_tool_call_args(extra_args: tuple[str, ...], tool_call_parser: str | None) -> tuple[str, ...]:
     """Enable automatic tool choice when a parser is configured.
 
@@ -87,7 +92,7 @@ def vllm_tool_call_args(extra_args: tuple[str, ...], tool_call_parser: str | Non
         ("--enable-auto-tool-choice", ()),
         ("--tool-call-parser", (tool_call_parser,)),
     ):
-        if not any(arg == option or arg.startswith(f"{option}=") for arg in extra_args):
+        if not has_vllm_option(extra_args, option):
             derived.extend((option, *values))
     return (*derived, *extra_args)
 
