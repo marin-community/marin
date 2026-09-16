@@ -55,7 +55,7 @@ from experiments.post_training.curriculum_rl.launch import (
 )
 
 TASKCOMPENDIUM_REQUIREMENT = (
-    "taskcompendium[harbor] @ git+https://github.com/marin-community/marin.git@"
+    "taskcompendium[harbor,s3] @ git+https://github.com/marin-community/marin.git@"
     "dae4f5b961a8e3431d77d09a282867009418d5c8#subdirectory=lib/taskcompendium"
 )
 DATA_ARTIFACT_NAME = "documents/taskcompendium-snowball-mixed-smoke"
