@@ -48,9 +48,10 @@ For models in `experiments/evaluation/serve/models/`, use the YAML file's
 template must render the `tools` argument and tool messages.
 
 The Chat UI sends the generated OpenAI tool definitions with each model
-request. It accepts structured OpenAI tool calls and raw `<tool_call>` tags,
-runs each function in the Iris service, appends its JSON result as a tool
-message, and asks the model to continue. The inline form is
+request. It accepts structured OpenAI tool calls, raw `<tool_call>` tags, and
+the bare `{"name": ..., "parameters": ...}` JSON emitted by Llama 3 templates.
+It runs each function in the Iris service, appends its JSON result as a tool
+message, and asks the model to continue. The tagged inline form is
 `<tool_call>{"name":"lookup_weather","arguments":{"city":"Paris"}}</tool_call>`.
 One model response counts as one round, including a response with multiple tool
 calls. The UI executes calls from the eighth round, stops before another model

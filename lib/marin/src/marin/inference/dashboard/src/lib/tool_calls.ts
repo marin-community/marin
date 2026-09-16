@@ -17,6 +17,27 @@ function callId(): string {
   return `call_${newId()}`
 }
 
+function parseToolCall(payload: string): ToolCall | null {
+  try {
+    const parsed = JSON.parse(payload)
+    const functionPayload = parsed.function ?? parsed
+    const name = functionPayload.name
+    if (typeof name !== 'string' || !name) return null
+    const rawArguments = functionPayload.arguments ?? functionPayload.parameters ?? {}
+    return {
+      id: callId(),
+      type: 'function',
+      function: {
+        name,
+        arguments: typeof rawArguments === 'string' ? rawArguments : JSON.stringify(rawArguments),
+      },
+    }
+  } catch (error) {
+    console.warn('failed to parse inline tool call', error)
+    return null
+  }
+}
+
 /** Merge OpenAI streaming tool-call deltas by their stable choice index. */
 export function mergeToolCallDeltas(current: ToolCall[], deltas: ToolCallDelta[]): ToolCall[] {
   const merged = current.map((call) => ({ ...call, function: { ...call.function } }))
@@ -44,26 +65,18 @@ export function mergeToolCallDeltas(current: ToolCall[], deltas: ToolCallDelta[]
 export function inlineToolCalls(content: string): { visible: string; calls: ToolCall[] } {
   const calls: ToolCall[] = []
   const visible = content.replace(INLINE_TOOL_CALL, (_match, payload: string) => {
-    try {
-      const parsed = JSON.parse(payload)
-      const functionPayload = parsed.function ?? parsed
-      const name = functionPayload.name
-      if (typeof name !== 'string' || !name) return _match
-      const rawArguments = functionPayload.arguments ?? functionPayload.parameters ?? {}
-      calls.push({
-        id: callId(),
-        type: 'function',
-        function: {
-          name,
-          arguments: typeof rawArguments === 'string' ? rawArguments : JSON.stringify(rawArguments),
-        },
-      })
-      return ''
-    } catch (error) {
-      console.warn('failed to parse inline tool call', error)
-      return _match
-    }
+    const call = parseToolCall(payload)
+    if (!call) return _match
+    calls.push(call)
+    return ''
   })
+  if (calls.length) return { visible: visible.trim(), calls }
+
+  const barePayload = visible.trim()
+  if (barePayload.startsWith('{') && barePayload.endsWith('}')) {
+    const call = parseToolCall(barePayload)
+    if (call) return { visible: '', calls: [call] }
+  }
   return { visible: visible.trim(), calls }
 }
 

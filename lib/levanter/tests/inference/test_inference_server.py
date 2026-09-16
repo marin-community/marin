@@ -252,6 +252,28 @@ def test_chat_completion_renders_tool_definitions(local_gpt2_tokenizer):
     assert "lookup_weather" in tokenizer.decode(tokens)
 
 
+def test_chat_completion_renders_openai_tool_call_arguments_as_mapping(local_gpt2_tokenizer):
+    tokenizer = local_gpt2_tokenizer.with_chat_template(
+        "{{ messages[0]['tool_calls'][0]['function']['arguments']['city'] }}"
+    )
+    messages = [
+        ChatMessage(
+            role="assistant",
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup_weather", "arguments": '{"city":"Paris"}'},
+                }
+            ],
+        )
+    ]
+
+    tokens = _compute_tokens(messages, tokenizer)
+
+    assert "Paris" in tokenizer.decode(tokens)
+
+
 class _OpenAITestTokenizer:
     _id_to_piece = {0: "A", 1: " B", 2: " C", 3: " X"}
 

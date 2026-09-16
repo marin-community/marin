@@ -120,7 +120,9 @@ async function send(text?: string) {
       }
     }
   } catch (error) {
-    if (!(error instanceof DOMException && error.name === 'AbortError')) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      appendCancelledToolResults(conversation, reply)
+    } else {
       if (!reply) {
         reply = { role: 'assistant', content: '', thinking: '', thinkingSeconds: null, error: null }
         conversation.messages.push(reply)
@@ -132,6 +134,24 @@ async function send(text?: string) {
     abort = null
     conversation.updatedAt = Date.now()
     emit('persist')
+  }
+}
+
+function appendCancelledToolResults(conversation: Conversation, reply: ChatMessage | null) {
+  const completed = new Set(
+    conversation.messages.filter((message) => message.role === 'tool').map((message) => message.toolCallId),
+  )
+  for (const call of reply?.toolCalls ?? []) {
+    if (completed.has(call.id)) continue
+    conversation.messages.push({
+      role: 'tool',
+      name: call.function.name,
+      toolCallId: call.id,
+      content: JSON.stringify({ error: 'tool call cancelled' }),
+      thinking: '',
+      thinkingSeconds: null,
+      error: null,
+    })
   }
 }
 

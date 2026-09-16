@@ -12,6 +12,7 @@ drop-in replacements for OpenAI models.
 import asyncio
 import collections
 import collections.abc
+import json
 import logging
 import queue
 import threading
@@ -675,6 +676,26 @@ def _compute_tokens(
             detail="This model has no chat template; use /v1/completions, or serve it with a chat template.",
         )
     dict_messages = [msg.model_dump(exclude_none=True) for msg in messages]
+    for message in dict_messages:
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get("function")
+            if not isinstance(function, dict):
+                continue
+            arguments = function.get("arguments")
+            if not isinstance(arguments, str):
+                continue
+            try:
+                parsed_arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                # A preceding tool result carries the parse error; use an empty mapping so
+                # mapping-oriented templates can still render the conversation history.
+                parsed_arguments = {}
+            function["arguments"] = parsed_arguments if isinstance(parsed_arguments, dict) else {}
     # return_dict=False pins the token ids to a flat list; tokenizers otherwise hand back a
     # BatchEncoding here, which is the shape the rest of this module cannot use.
     result = tokenizer.apply_chat_template(
