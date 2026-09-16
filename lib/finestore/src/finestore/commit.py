@@ -85,13 +85,7 @@ def _empty_manifest() -> Manifest:
 
 
 def initialize_archive(layout: FineStoreLayout) -> ArchiveMetadata:
-    """Create the archive marker, or validate and refresh the marker already present.
-
-    Rewriting a present marker with its own bytes advances its last-modified time.
-    Bucket lifecycle rules expire each object on its own clock and every commit
-    rewrites HEAD, so under a TTL prefix a write-once marker would expire while HEAD
-    remained and readers would refuse the archive.
-    """
+    """Create the archive marker, or validate and refresh the marker already present."""
     marker = conditional_object(layout.archive_path)
     existing = marker.read()
     if existing is None:
@@ -103,6 +97,9 @@ def initialize_archive(layout: FineStoreLayout) -> ArchiveMetadata:
             existing = marker.read()
             assert existing is not None
     found = _validate_marker(layout, existing.data)
+    # Rewriting the marker with its own bytes advances its last-modified time. Bucket
+    # lifecycle rules expire each object on its own clock and every commit rewrites
+    # HEAD, so under a TTL prefix a write-once marker would expire while HEAD remained.
     try:
         marker.write(existing.data, expected_version=existing.version)
     except ConditionalWriteError:
@@ -130,11 +127,7 @@ def validate_archive(layout: FineStoreLayout) -> ArchiveMetadata | None:
 
 
 def write_schema(layout: FineStoreLayout, metadata: TableMetadata) -> str:
-    """Publish immutable logical table metadata and return its content-addressed path.
-
-    A present schema object is rewritten with its own bytes so that, like the archive
-    marker, its last-modified time is never older than the commits referring to it.
-    """
+    """Publish immutable logical table metadata and return its content-addressed path."""
     data = metadata.model_dump_json(indent=2).encode()
     schema_id = hashlib.blake2b(data, digest_size=16).hexdigest()
     path = layout.schema_path(schema_id)
@@ -149,6 +142,8 @@ def write_schema(layout: FineStoreLayout, metadata: TableMetadata) -> str:
             assert existing is not None
     if existing.data != data:
         raise ValueError(f"schema digest collision at {path}")
+    # Same-bytes rewrite: keeps the object's last-modified time under lifecycle expiry
+    # no older than the commits that refer to it.
     StoragePath(path).write_bytes(data)
     return path
 
