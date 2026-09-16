@@ -26,7 +26,7 @@ from levanter.grug._moe.common import (
     _prepare_moe_dispatch_indices_with_assignment_ids,
     _scaled_capacity,
     _swiglu_gate_up_backward,
-    MoeDispatchCounts,
+    CapacityDrops,
 )
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
@@ -861,7 +861,7 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
         fixed_a2a,
         mesh=mesh,
         in_specs=(P(), P(), P(), P(), P()),
-        out_specs=(P(), MoeDispatchCounts(sender_dropped=P(), receiver_dropped=P(), padding_skipped=P())),
+        out_specs=(P(), CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
         check_vma=False,
     )
     with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
@@ -897,7 +897,6 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
         )
     assert int(overflow.sender_dropped) == 4
     assert int(overflow.receiver_dropped) == 0
-    assert int(overflow.padding_skipped) == 0
 
 
 def test_fixed_all_to_all_padding_does_not_change_capacity_acceptance():
@@ -932,7 +931,7 @@ def test_fixed_all_to_all_padding_does_not_change_capacity_acceptance():
         fixed_a2a,
         mesh=mesh,
         in_specs=(P(), P(), P(), P(), P(), P()),
-        out_specs=(P(), MoeDispatchCounts(sender_dropped=P(), receiver_dropped=P(), padding_skipped=P())),
+        out_specs=(P(), CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
         check_vma=False,
     )
 
@@ -980,8 +979,6 @@ def test_fixed_all_to_all_padding_does_not_change_capacity_acceptance():
     for actual_gradient, expected_gradient in zip(actual_gradients[1:], expected_gradients[1:], strict=True):
         np.testing.assert_allclose(actual_gradient, expected_gradient, rtol=1e-5, atol=1e-5)
     assert padded_overflow.dropped == compact_overflow.dropped == 4
-    assert int(padded_overflow.padding_skipped) == 4
-    assert int(compact_overflow.padding_skipped) == 0
 
 
 @pytest.mark.timeout(180)
@@ -1105,7 +1102,7 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
         pooled_output,
         mesh=mesh,
         in_specs=(P(), P(), P(), P()),
-        out_specs=(P(), MoeDispatchCounts(sender_dropped=P(), receiver_dropped=P(), padding_skipped=P())),
+        out_specs=(P(), CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
         check_vma=False,
     )
     with jax.set_mesh(mesh):
@@ -1117,7 +1114,6 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
     assert int(overflow.sender_dropped) == 3
     assert int(overflow.receiver_dropped) == 3
-    assert int(overflow.padding_skipped) == 0
 
 
 @pytest.mark.parametrize("implementation", ["ring", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"])

@@ -31,7 +31,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
-from levanter.grug._moe.common import _assignment_validity, _interleave_gate_up, _scaled_capacity, MoeDispatchCounts
+from levanter.grug._moe.common import _assignment_validity, _interleave_gate_up, _scaled_capacity, CapacityDrops
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
@@ -315,7 +315,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-) -> tuple[Float[Array, "Tlocal H"], MoeDispatchCounts]:
+) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(
@@ -432,13 +432,5 @@ def _moe_mlp_ep_ragged_a2a_local(
             topk=topk,
         ).astype(x_local.dtype)
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - accepted_local
-        skipped_local = assignments_per_shard - jnp.sum(assignment_valid, dtype=jnp.int32)
-        counts = jax.lax.psum(
-            jnp.stack((dropped_local, skipped_local)),
-            _batch_axes(jax.sharding.get_abstract_mesh()),
-        )
-    return out_local, MoeDispatchCounts(
-        sender_dropped=counts[0],
-        receiver_dropped=jnp.zeros_like(counts[0]),
-        padding_skipped=counts[1],
-    )
+        dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+    return out_local, CapacityDrops(sender_dropped=dropped_total, receiver_dropped=jnp.zeros_like(dropped_total))

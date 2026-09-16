@@ -19,11 +19,11 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
+    _zero_dropped_assignments,
     _zero_inactive_grouped_rows,
-    MoeDispatchCounts,
+    CapacityDrops,
     split_moe_w13_output,
 )
-from levanter.grug.sharding import _batch_axes
 from levanter.kernels.deepep import deepep_combine_intranode, deepep_dispatch_intranode, deepep_get_dispatch_layout
 
 
@@ -111,7 +111,7 @@ def _moe_mlp_ep_deepep_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-) -> tuple[Float[Array, "Tlocal H"], MoeDispatchCounts]:
+) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """DeepEP dispatch/combine path for an intranode expert mesh."""
     del capacity_factor
     local_experts = moe_w13_local.shape[0]
@@ -204,10 +204,8 @@ def _moe_mlp_ep_deepep_local(
                 num_recv_tokens,
                 is_token_in_rank,
             )
-        skipped_local = jnp.sum(~token_valid_local, dtype=jnp.int32) * selected_experts_local.shape[1]
-        skipped = jax.lax.psum(skipped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
-    return jnp.where(token_valid_local[:, None], out_local, 0).astype(x_local.dtype), MoeDispatchCounts(
-        sender_dropped=jnp.zeros_like(skipped),
-        receiver_dropped=jnp.zeros_like(skipped),
-        padding_skipped=skipped,
+    no_drops = _zero_dropped_assignments()
+    return jnp.where(token_valid_local[:, None], out_local, 0).astype(x_local.dtype), CapacityDrops(
+        sender_dropped=no_drops,
+        receiver_dropped=no_drops,
     )

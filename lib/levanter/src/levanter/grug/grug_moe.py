@@ -31,8 +31,10 @@ from levanter.grug._moe.common import (
     _EP_MOE_IMPLEMENTATIONS,
     _init_weight,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
+    CapacityDrops,
     MoeDispatchCounts,
     MoEExpertMlpPspecs,
+    padding_skipped_assignments,
     MoeActivation,
     MoeImplementation,
     PspecAxis,
@@ -310,6 +312,15 @@ def moe_mlp(
         raise ValueError(f"token_valid must have shape [{x.shape[0]}], got shape={token_valid.shape}")
     elif token_valid.dtype != jnp.bool_:
         raise ValueError(f"token_valid must have boolean dtype, got dtype={token_valid.dtype}")
+    # Padding is an input property, so count it once here; backends report only capacity drops.
+    padding_skipped = padding_skipped_assignments(token_valid, topk=selected_experts.shape[1])
+
+    def dispatch_counts(drops: CapacityDrops) -> MoeDispatchCounts:
+        return MoeDispatchCounts(
+            sender_dropped=drops.sender_dropped,
+            receiver_dropped=drops.receiver_dropped,
+            padding_skipped=padding_skipped,
+        )
 
     num_experts = int(w_up_gate.shape[0])
     if w_down.shape[0] != num_experts:
@@ -334,11 +345,8 @@ def moe_mlp(
             expert_chunks=expert_chunks,
         )
         if report_capacity_overflow:
-            skipped = jnp.sum(~token_valid, dtype=jnp.int32) * selected_experts.shape[1]
-            return out, MoeDispatchCounts(
-                sender_dropped=dropped,
-                receiver_dropped=jnp.zeros_like(dropped),
-                padding_skipped=skipped,
+            return out, dispatch_counts(
+                CapacityDrops(sender_dropped=dropped, receiver_dropped=jnp.zeros_like(dropped))
             )
         return out
 
@@ -401,15 +409,12 @@ def moe_mlp(
                 w_up_gate_spec,
                 w_down_spec,
             ),
-            out_specs=(
-                batch_spec,
-                MoeDispatchCounts(sender_dropped=P(), receiver_dropped=P(), padding_skipped=P()),
-            ),
+            out_specs=(batch_spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
             check_vma=False,
         )
-        out, overflow = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
+        out, drops = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
         if report_capacity_overflow:
-            return out, overflow
+            return out, dispatch_counts(drops)
         return out
 
     # Fallback path for no expert axis (or expert axis size 1) keeps routing
@@ -457,15 +462,10 @@ def moe_mlp(
             implementation=resolved_implementation,
             expert_chunks=expert_chunks,
         )
-        skipped = jnp.sum(~token_valid, dtype=jnp.int32) * selected_experts.shape[1]
         batch_axis_names = x_spec[0]
         if report_capacity_overflow and batch_axis_names is not None:
-            dropped, skipped = jax.lax.psum((dropped, skipped), axis_name=batch_axis_names)
-        return out, MoeDispatchCounts(
-            sender_dropped=dropped,
-            receiver_dropped=jnp.zeros_like(dropped),
-            padding_skipped=skipped,
-        )
+            dropped = jax.lax.psum(dropped, axis_name=batch_axis_names)
+        return out, dropped
 
     shard_fn = shard_map(
         local_moe,
@@ -478,12 +478,12 @@ def moe_mlp(
             w_up_gate_spec,
             w_down_spec,
         ),
-        out_specs=(x_spec, MoeDispatchCounts(sender_dropped=P(), receiver_dropped=P(), padding_skipped=P())),
+        out_specs=(x_spec, P()),
         check_vma=False,
     )
-    out, overflow = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
+    out, dropped = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
     if report_capacity_overflow:
-        return out, overflow
+        return out, dispatch_counts(CapacityDrops(sender_dropped=dropped, receiver_dropped=jnp.zeros_like(dropped)))
     return out
 
 

@@ -28,7 +28,7 @@ except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.grug._moe.common import _CHECKPOINT_DISPATCH_OUTPUT, _zero_dropped_assignments
+from levanter.grug._moe.common import _CHECKPOINT_DISPATCH_OUTPUT, _zero_dropped_assignments, padding_skipped_assignments
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -819,7 +819,7 @@ class MoEMLP(eqx.Module):
         else:
             routed_flat = moe_out
             dropped_assignments = _zero_dropped_assignments()
-            skipped_assignments = jnp.sum(~token_valid_flat, dtype=jnp.int32) * self.cfg.num_experts_per_token
+            skipped_assignments = padding_skipped_assignments(token_valid_flat, topk=self.cfg.num_experts_per_token)
         router_stats["capacity_overflow"] = dropped_assignments
         router_stats["skipped_assignments"] = skipped_assignments
 

@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
-from levanter.grug._moe.common import _assignment_validity, _scaled_capacity, MoeDispatchCounts
+from levanter.grug._moe.common import _assignment_validity, _scaled_capacity, CapacityDrops
 from levanter.grug._moe.ep_common import (
     _assignment_sources,
     _ranks_within_groups,
@@ -515,7 +515,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     capacity_factor: float,
     transport_capacity_factor: float,
     num_expert_waves: int,
-) -> tuple[Float[Array, "Tlocal H"], MoeDispatchCounts]:
+) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Stripe each destination pool over fixed waves and report drops at each transport stage."""
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -619,12 +619,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
         receiver_dropped = receiver_dropped + pooled_dispatch.receiver_dropped
 
     sender_dropped = valid_assignments - jnp.sum(sender_keep, dtype=jnp.int32)
-    skipped = assignments_per_shard - valid_assignments
-    dropped_by_stage_local = jnp.stack((sender_dropped, receiver_dropped, skipped))
+    dropped_by_stage_local = jnp.stack((sender_dropped, receiver_dropped))
     dropped_by_stage = jax.lax.psum(dropped_by_stage_local, _batch_axes(jax.sharding.get_abstract_mesh()))
-    dispatch_counts = MoeDispatchCounts(
-        sender_dropped=dropped_by_stage[0],
-        receiver_dropped=dropped_by_stage[1],
-        padding_skipped=dropped_by_stage[2],
-    )
-    return out_local.astype(x_local.dtype), dispatch_counts
+    drops = CapacityDrops(sender_dropped=dropped_by_stage[0], receiver_dropped=dropped_by_stage[1])
+    return out_local.astype(x_local.dtype), drops

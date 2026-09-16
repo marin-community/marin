@@ -127,6 +127,17 @@ MOE_REMAT_SAVE_NAMES = (
 )
 
 
+class CapacityDrops(NamedTuple):
+    """Valid assignments a backend dropped before and after transport."""
+
+    sender_dropped: Int[Array, ""]
+    receiver_dropped: Int[Array, ""]
+
+    @property
+    def dropped(self) -> Int[Array, ""]:
+        return self.sender_dropped + self.receiver_dropped
+
+
 class MoeDispatchCounts(NamedTuple):
     """Assignment counts omitted from expert dispatch."""
 
@@ -137,6 +148,11 @@ class MoeDispatchCounts(NamedTuple):
     @property
     def dropped(self) -> Int[Array, ""]:
         return self.sender_dropped + self.receiver_dropped
+
+
+def padding_skipped_assignments(token_valid: Bool[Array, "T"], *, topk: int) -> Int[Array, ""]:
+    """Count the expert assignments that padded tokens would otherwise have made."""
+    return jnp.sum(~token_valid, dtype=jnp.int32) * topk
 
 
 @dataclass(frozen=True)
