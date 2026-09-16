@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -171,8 +172,12 @@ class DirectChatAgent(BaseAgent):
         request = urllib.request.Request(
             f"{self.api_base}/chat/completions", data=json.dumps(body).encode(), headers=headers, method="POST"
         )
-        with urllib.request.urlopen(request, timeout=self.request_timeout) as result:
-            payload = json.load(result)
+        try:
+            with urllib.request.urlopen(request, timeout=self.request_timeout) as result:
+                payload = json.load(result)
+        except urllib.error.HTTPError as error:
+            detail = error.read(4096).decode("utf-8", errors="replace")
+            raise RuntimeError(f"Chat completion HTTP {error.code}: {detail}") from error
         return payload["choices"][0]["message"]
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
