@@ -8,6 +8,7 @@ import type { ChatMessage, Conversation, SamplingParams, ToolCall, ToolDefinitio
 import MessageBubble from './MessageBubble.vue'
 
 const MAX_TOOL_ROUNDS = 8
+const ABORT_ERROR_NAME = 'AbortError'
 
 const props = defineProps<{
   conversation: Conversation
@@ -120,7 +121,7 @@ async function send(text?: string) {
       }
     }
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
+    if (error instanceof DOMException && error.name === ABORT_ERROR_NAME) {
       appendCancelledToolResults(conversation, reply)
     } else {
       if (!reply) {
@@ -256,7 +257,7 @@ async function callTool(call: ToolCall, signal: AbortSignal): Promise<string> {
   try {
     return await invokeTool(call.function.name, arguments_ as Record<string, unknown>, signal)
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    if (error instanceof DOMException && error.name === ABORT_ERROR_NAME) throw error
     return JSON.stringify({ error: 'tool request failed', details: String(error) })
   }
 }
