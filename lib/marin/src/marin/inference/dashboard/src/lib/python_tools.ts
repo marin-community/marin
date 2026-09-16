@@ -26,13 +26,13 @@ export function modelMessages(conversation: Conversation, pythonTools: string): 
     if (message.role === 'assistant') {
       request.push({
         role: 'assistant',
-        content: [message.content, ...(message.toolCalls ?? []).map(pythonToolCallMessage)].filter(Boolean).join('\n'),
+        content: [message.content, ...(message.toolCalls ?? []).map(pythonToolCallXml)].filter(Boolean).join('\n'),
       })
     } else if (message.role === 'tool') {
-      const results = [pythonToolResultMessage(message)]
+      const results = [pythonToolResultXml(message)]
       while (conversation.messages[index + 1]?.role === 'tool') {
         index += 1
-        results.push(pythonToolResultMessage(conversation.messages[index]))
+        results.push(pythonToolResultXml(conversation.messages[index]))
       }
       request.push({ role: 'user', content: results.join('\n') })
     } else {
@@ -53,11 +53,11 @@ The application will execute the function and return a <${TOOL_RESULT_TAG}> XML 
 result to answer the user or make another call. Do not invent functions outside the block.`
 }
 
-function pythonToolCallMessage(call: ToolCall): string {
+function pythonToolCallXml(call: ToolCall): string {
   return `<${TOOL_CALL_TAG}>${JSON.stringify({ name: call.name, arguments: call.arguments })}</${TOOL_CALL_TAG}>`
 }
 
-function pythonToolResultMessage(message: ChatMessage): string {
+function pythonToolResultXml(message: ChatMessage): string {
   let result: unknown = message.content
   try {
     result = JSON.parse(message.content)
