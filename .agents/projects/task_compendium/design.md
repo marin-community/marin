@@ -32,12 +32,16 @@ TaskCompendium has two layers:
 - `TaskSpec`: a source-agnostic representation of the task, including its initial state, instructions, and verification criteria.
 - `Lowering`: a target-specific/framework-specific adaptation of the task specification, which selects a submission convention and a compatible environment and tool interface. For instance, lowerings may specialize to Harbor.
 
+Most specs come from importers that convert a pinned dataset row or task archive into instructions, resources, and a correctness contract, much like the TaskTrove conversion. An importer should reject a row when it cannot recover enough information to specify or verify the task. Generated tasks would need to meet the same requirements.
+
 A rendering chooses the requested submission format and extraction rule. A target binding says how one target runs a `TaskSpec`: the environment it uses and the tools it exposes. A lowering combines the specification, rendering, and target binding. The launch selects a compatible harness, model, and rollout settings. Tasks declare requirements; environments provide them; harnesses orchestrate them; traces record what happened.
 
 Honestly it is probably best to just look at the data. Here are links to the HF dataset spike for each layer:
 
 - [Specs](https://huggingface.co/datasets/open-athena/taskcompendium-spike/viewer/specifications)
 - [Lowerings](https://huggingface.co/datasets/open-athena/taskcompendium-spike/viewer/lowerings)
+
+The Rendering Bank in the diagram is the collection of available presentation and submission conventions.
 
 ```mermaid
 flowchart TD
@@ -75,6 +79,9 @@ TaskSpecs declare the following fields (see the specification for their full def
 - coverage_tags: a list of tags that describe the coverage of the task in terms of subject area, difficulty, and other relevant dimensions. These tags can be used to evaluate the coverage of the task compendium as a whole.
 - success_policy: how step scores combine into the task's result. The current Harbor adapter supports `mean` and `final` for multi-step tasks.
 
+`success_policy` is part of the private correctness contract: it specifies how the per-step verifiers' scores become one task result.
+`context_requirement` declares what a step depends on; the current lowering always retains the preceding visible conversation.
+
 ### Requirements
 
 Requirements are split into three categories:
@@ -98,7 +105,7 @@ Action Interfaces are not fully baked. They're meant to cover non-shell, non-fil
 
 Every resource has a normalized relative path, content, roles, and an executable bit. Content is embedded bytes or a URI with a SHA256 digest. Roles describe what scopes have access to the resource (`agent`, `verifier`, `oracle`)
 
-Only agent-visible resources and instructions reach the model. Verifier resources, reference answers, and oracle material stay private. Instructions state the requested work and submission location, without mentioning judges, verifiers, rewards, or hidden tests.
+Only agent-visible resources and instructions reach the model. Verifier resources, reference answers, and oracle material stay private. Oracle material holds reference solutions or source evidence for auditing and reference runs. Instructions state the requested work and submission location, without mentioning judges, verifiers, rewards, or hidden tests.
 
 
 ### Verifiers
@@ -108,6 +115,8 @@ Verifiers can come from an ontology of known verifiers or be backed by a script.
 Submission extraction belongs to the rendering: it recovers an answer from plain text, boxed LaTeX, a JSON/XML field, or a file. The verifier checks that recovered answer against the same semantic correctness criteria. Intrinsic formatting requirements remain part of the task and cannot be relaxed by a rendering.
 
 Common math and MCQA checks can run directly; executable checks declare their own isolated runtime and dependencies. A common representation should not require booting Docker to grade a math answer. Use the cheapest verifier that adequately checks the task; where deterministic checks are incomplete, supplement them with a judge.
+
+The spike runs on a pinned Marin fork of Harbor, with TaskCompendium environment, agent, and verifier plugins. The private verifier is stored in `specification.json`; the launch selects `SemanticVerifier`, which reads it and evaluates the submission. The exported `tests/test.sh` deliberately fails if someone runs the package without that adapter. The separate specification, rendering, binding, and manifest JSON files make the spike inspectable; this duplication is an export implementation choice, not a requirement of the representation.
 
 We haven't fully specced LLM-as-judge yet but it fits here.
 
@@ -119,6 +128,8 @@ Verifier infrastructure failure is recorded separately from an incorrect answer 
 More information in [TAGGING.md](../../../lib/taskcompendium/TAGGING.md).
 
 The basic idea is that we want to be able to describe the coverage of a task compendium in terms of subject area, difficulty, and other relevant dimensions. We can do this by defining a set of tags that can be applied to each task specification. These tags can then be used to evaluate the coverage of the task compendium as a whole. We leave the full (but not exhaustive) list of tags and their definitions to the TAGGING.md document, but here are some examples:
+
+The vocabulary is a starting point for labeling tasks and expressing desired RL mixtures, and we expect to revise it. The mechanics matter more than fixing the detailed taxonomy now. Subjects describe topics such as medicine or physics; competencies describe recurring operations across those topics. Tags that add little information or blur that distinction should be revised or removed.
 
 - `competency:`, the main reasoning or execution skill, including:
   - `causal_reasoning`
@@ -148,6 +159,8 @@ The basic idea is that we want to be able to describe the coverage of a task com
   - `difficulty:hard`
 
 Difficulty is relative to Snowball: easy tasks should be comfortably solvable by a roughly 2B active model; medium tasks should stretch it; hard tasks require capabilities beyond what we expect it to handle reliably. Tags should be sparse, with recurring subjects and subsubjects. Lowerings add output-format tags such as `result:json`, `result:xml`, and `result:file`, separately from the semantic work described by the TaskSpec.
+
+These difficulty labels are initial estimates for a specified model scale and available capabilities. Measured success rates should later record the model, lowering, and execution conditions; they need not fit into these three labels.
 
 
 We can use a medium-sized model to assign tags to a task specification, and then use those tags to evaluate the coverage of the task compendium as a whole. For instance, we can look at the distribution of subject areas, difficulty levels, and other dimensions across the entire compendium. This will allow us to identify gaps in coverage and ensure that we are providing a diverse set of tasks for model evaluation and training.
