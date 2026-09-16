@@ -9,3 +9,7 @@ batch_size: 1
 seed: 42
 max_tokens: 4096
 runtime_extras: [financebench]
+judge:
+  base_url: https://api.together.xyz/v1
+  model: openai/gpt-oss-120b
+  api_key: [env:TOGETHER_API_KEY]
