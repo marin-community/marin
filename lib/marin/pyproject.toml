@@ -37,6 +37,7 @@ dependencies = [
     "openai",
     "pandas>=2.0",
     "plotly",
+    "pydantic<3",
     "pyarrow>=23.0.0",
     "regex",
     "requests>=2.33.0",

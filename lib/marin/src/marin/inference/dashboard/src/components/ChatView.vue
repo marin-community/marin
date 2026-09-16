@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { nextTick, onUnmounted, ref, watch } from 'vue'
-import { requestCompletion } from '../lib/api'
+import { invokeTool, requestCompletion } from '../lib/api'
 import { CHAT_EXAMPLES } from '../lib/examples'
 import { splitThinking } from '../lib/thinking'
-import type { Conversation, SamplingParams } from '../lib/types'
+import { executableToolCalls, inlineToolCalls, mergeToolCallDeltas } from '../lib/tool_calls'
+import type { ChatMessage, Conversation, SamplingParams, ToolCall, ToolDefinition } from '../lib/types'
 import MessageBubble from './MessageBubble.vue'
+
+const MAX_TOOL_ROUNDS = 8
 
 const props = defineProps<{
   conversation: Conversation
@@ -12,6 +15,7 @@ const props = defineProps<{
   model: string
   hasChatTemplate: boolean
   streaming: boolean
+  tools: ToolDefinition[]
 }>()
 
 const emit = defineEmits<{ persist: [] }>()
@@ -75,62 +79,146 @@ async function send(text?: string) {
   if (!conversation.title) conversation.title = content.slice(0, 80)
   conversation.messages.push({ role: 'user', content, thinking: '', thinkingSeconds: null, error: null })
 
-  const request: { role: string; content: string }[] = []
-  if (conversation.system.trim()) request.push({ role: 'system', content: conversation.system.trim() })
-  // Send visible content only: feeding thinking segments back confuses models.
-  for (const message of conversation.messages) request.push({ role: message.role, content: message.content })
-
-  conversation.messages.push({ role: 'assistant', content: '', thinking: '', thinkingSeconds: null, error: null })
-  // Mutate through the reactive proxy (not the pushed object) so streaming deltas re-render.
-  const reply = conversation.messages[conversation.messages.length - 1]
   conversation.updatedAt = Date.now()
   emit('persist')
 
   busy.value = true
   abort = new AbortController()
-  let rawContent = ''
-  let reasoningStream = ''
-  let thinkingStartedAt: number | null = null
+  let reply: ChatMessage | null = null
   try {
-    await requestCompletion(
-      'v1/chat/completions',
-      {
-        model: props.model,
-        messages: request,
-        stream: props.streaming,
-        temperature: props.params.temperature,
-        max_tokens: props.params.maxTokens,
-        top_p: props.params.topP,
-      },
-      props.streaming,
-      abort.signal,
-      (data) => {
-        const delta = data.choices?.[0]?.delta ?? data.choices?.[0]?.message
-        if (!delta) return
-        // Reasoning arrives either as a dedicated delta field (vLLM reasoning
-        // parsers) or as raw <think> tags inside content (untouched templates).
-        const reasoning = delta.reasoning_content ?? delta.reasoning
-        if (reasoning) reasoningStream += reasoning
-        if (delta.content) rawContent += delta.content
-        const split = splitThinking(rawContent)
-        reply.thinking = reasoningStream + split.thinking
-        reply.content = split.visible
-        if (reply.thinking && thinkingStartedAt === null) thinkingStartedAt = performance.now()
-        if (thinkingStartedAt !== null && reply.thinkingSeconds === null && reply.content) {
-          reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
-        }
-      },
-    )
-  } catch (error) {
-    if (!(error instanceof DOMException && error.name === 'AbortError')) reply.error = String(error)
-  } finally {
-    if (thinkingStartedAt !== null && reply.thinkingSeconds === null) {
-      reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+      const request = modelMessages(conversation)
+      reply = { role: 'assistant', content: '', thinking: '', thinkingSeconds: null, error: null, toolCalls: [] }
+      conversation.messages.push(reply)
+      // Mutate through the reactive proxy so streaming deltas re-render.
+      reply = conversation.messages[conversation.messages.length - 1]
+      emit('persist')
+
+      await complete(reply, request, abort.signal)
+      const calls = reply.toolCalls ?? []
+      conversation.updatedAt = Date.now()
+      emit('persist')
+      if (!calls.length) break
+
+      for (const call of calls) {
+        const result = await callTool(call, abort.signal)
+        conversation.messages.push({
+          role: 'tool',
+          name: call.function.name,
+          toolCallId: call.id,
+          content: result,
+          thinking: '',
+          thinkingSeconds: null,
+          error: null,
+        })
+        conversation.updatedAt = Date.now()
+        emit('persist')
+      }
+
+      if (round === MAX_TOOL_ROUNDS - 1) {
+        reply.error = `Stopped after ${MAX_TOOL_ROUNDS} consecutive tool rounds.`
+      }
     }
+  } catch (error) {
+    if (reply && !(error instanceof DOMException && error.name === 'AbortError')) reply.error = String(error)
+  } finally {
     busy.value = false
     abort = null
     conversation.updatedAt = Date.now()
     emit('persist')
+  }
+}
+
+type ModelMessage = {
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content: string | null
+  name?: string
+  tool_call_id?: string
+  tool_calls?: ToolCall[]
+}
+
+function modelMessages(conversation: Conversation): ModelMessage[] {
+  const request: ModelMessage[] = []
+  if (conversation.system.trim()) request.push({ role: 'system', content: conversation.system.trim() })
+  for (const message of conversation.messages) {
+    if (message.role === 'assistant') {
+      request.push({
+        role: 'assistant',
+        content: message.content || null,
+        ...(message.toolCalls?.length ? { tool_calls: message.toolCalls } : {}),
+      })
+    } else if (message.role === 'tool') {
+      request.push({
+        role: 'tool',
+        content: message.content,
+        name: message.name,
+        tool_call_id: message.toolCallId,
+      })
+    } else {
+      request.push({ role: 'user', content: message.content })
+    }
+  }
+  return request
+}
+
+async function complete(reply: ChatMessage, messages: ModelMessage[], signal: AbortSignal) {
+  let rawContent = ''
+  let reasoningStream = ''
+  let structuredCalls: ToolCall[] = []
+  let fallbackCalls: ToolCall[] = []
+  let thinkingStartedAt: number | null = null
+
+  const body: Record<string, unknown> = {
+    model: props.model,
+    messages,
+    stream: props.streaming,
+    temperature: props.params.temperature,
+    max_tokens: props.params.maxTokens,
+    top_p: props.params.topP,
+  }
+  if (props.tools.length) body.tools = props.tools
+
+  await requestCompletion('v1/chat/completions', body, props.streaming, signal, (data) => {
+    const delta = data.choices?.[0]?.delta ?? data.choices?.[0]?.message
+    if (!delta) return
+    const reasoning = delta.reasoning_content ?? delta.reasoning
+    if (reasoning) reasoningStream += reasoning
+    if (delta.content) rawContent += delta.content
+    if (Array.isArray(delta.tool_calls)) structuredCalls = mergeToolCallDeltas(structuredCalls, delta.tool_calls)
+
+    const split = splitThinking(rawContent)
+    const inline = inlineToolCalls(split.visible)
+    fallbackCalls = inline.calls
+    reply.thinking = reasoningStream + split.thinking
+    reply.content = inline.visible
+    reply.toolCalls = executableToolCalls(structuredCalls.length ? structuredCalls : fallbackCalls)
+    if (reply.thinking && thinkingStartedAt === null) thinkingStartedAt = performance.now()
+    if (thinkingStartedAt !== null && reply.thinkingSeconds === null && (reply.content || reply.toolCalls.length)) {
+      reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
+    }
+  })
+
+  reply.toolCalls = executableToolCalls(structuredCalls.length ? structuredCalls : fallbackCalls)
+  if (thinkingStartedAt !== null && reply.thinkingSeconds === null) {
+    reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
+  }
+}
+
+async function callTool(call: ToolCall, signal: AbortSignal): Promise<string> {
+  let arguments_: unknown
+  try {
+    arguments_ = JSON.parse(call.function.arguments || '{}')
+  } catch (error) {
+    return JSON.stringify({ error: 'model returned invalid JSON tool arguments', details: String(error) })
+  }
+  if (!arguments_ || typeof arguments_ !== 'object' || Array.isArray(arguments_)) {
+    return JSON.stringify({ error: 'model returned non-object tool arguments' })
+  }
+  try {
+    return await invokeTool(call.function.name, arguments_ as Record<string, unknown>, signal)
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    return JSON.stringify({ error: 'tool request failed', details: String(error) })
   }
 }
 </script>

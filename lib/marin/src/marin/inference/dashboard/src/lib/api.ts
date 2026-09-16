@@ -22,6 +22,18 @@ export async function fetchHealth(): Promise<HealthResult> {
   return { ok: response.ok, model: body.model ?? null }
 }
 
+export async function invokeTool(name: string, arguments_: Record<string, unknown>, signal: AbortSignal): Promise<string> {
+  const response = await fetch(api(`tools/${encodeURIComponent(name)}`), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(arguments_),
+    signal,
+  })
+  const body = await response.text()
+  if (response.ok) return body
+  return JSON.stringify({ error: `tool returned ${response.status}`, details: body })
+}
+
 /** POST an OpenAI request and invoke onData for either buffered JSON or SSE events. */
 export async function requestCompletion(
   path: string,

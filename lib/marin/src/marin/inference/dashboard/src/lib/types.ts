@@ -8,17 +8,39 @@ export interface ServingInfo {
   has_chat_template: boolean
   endpoint: string
   streaming: boolean
+  tools: ToolDefinition[]
 }
 
 export type ServerStatus = 'connecting' | 'ok' | 'loading' | 'bad'
 
+export interface ToolDefinition {
+  type: 'function'
+  function: {
+    name: string
+    description?: string
+    parameters: Record<string, unknown>
+  }
+}
+
+export interface ToolCall {
+  id: string
+  type: 'function'
+  function: {
+    name: string
+    arguments: string
+  }
+}
+
 export interface ChatMessage {
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'tool'
   /** Visible text with any thinking segment stripped. */
   content: string
   thinking: string
   thinkingSeconds: number | null
   error: string | null
+  name?: string
+  toolCallId?: string
+  toolCalls?: ToolCall[]
 }
 
 export interface Conversation {
