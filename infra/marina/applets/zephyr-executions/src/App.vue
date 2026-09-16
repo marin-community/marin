@@ -55,7 +55,10 @@ watch(selectedExecution, (value) => {
 let filterTimer = null;
 watch(rootJobFilter, () => {
   clearTimeout(filterTimer);
-  filterTimer = setTimeout(() => void executions.refresh(), 400);
+  filterTimer = setTimeout(async () => {
+    await executions.refresh();
+    if (!execution.value) selectedExecution.value = list.value[0]?.execution_id ?? "";
+  }, 400);
 });
 
 let timer = null;
