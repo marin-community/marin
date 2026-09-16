@@ -1002,9 +1002,6 @@ class DockerRuntime:
         self._handles.append(handle)
         return handle
 
-    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
-        """No-op: workdirs live on cache_dir (/dev/shm/iris) which is already tmpfs."""
-
     def stage_bundle(
         self,
         *,

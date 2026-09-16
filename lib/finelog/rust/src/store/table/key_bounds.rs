@@ -87,37 +87,31 @@ pub async fn maintain(runtime: &TableRuntime) -> Result<bool, StatsError> {
 
     let lease = runtime.controller.begin_compaction_for(&lifecycle)?;
     let paths: HashSet<_> = recovered.iter().map(|(path, _, _)| path.clone()).collect();
-    let committed = runtime
-        .controller
-        .commit_maintenance(&lease, || {
-            let current: HashMap<_, _> = runtime
-                .catalog
-                .object_segments(runtime.name())?
-                .into_iter()
-                .map(|record| (record.path.clone(), record.table_spec_version))
-                .collect();
-            if let Some(path) = paths
-                .iter()
-                .find(|path| current.get(*path).copied() != Some(active_version))
-            {
-                return Err(StatsError::SchemaConflict(format!(
-                    "key-bounds repair input {path:?} is no longer live"
-                )));
-            }
-            let revision = runtime
-                .catalog
-                .update_object_segment_key_bounds(runtime.name(), &recovered)?;
-            Ok((revision, ()))
-        })
-        .await;
+    let committed = runtime.controller.commit_maintenance(&lease, || {
+        let current: HashMap<_, _> = runtime
+            .catalog
+            .object_segments(runtime.name())?
+            .into_iter()
+            .map(|record| (record.path.clone(), record.table_spec_version))
+            .collect();
+        if let Some(path) = paths
+            .iter()
+            .find(|path| current.get(*path).copied() != Some(active_version))
+        {
+            return Err(StatsError::SchemaConflict(format!(
+                "key-bounds repair input {path:?} is no longer live"
+            )));
+        }
+        let revision = runtime
+            .catalog
+            .update_object_segment_key_bounds(runtime.name(), &recovered)?;
+        Ok((revision, ()))
+    });
     match committed {
         Ok(_) => {}
         Err(CommitError::NotCommitted(StatsError::SchemaConflict(error))) => {
             tracing::info!(table = runtime.name(), %error, "key-bounds repair will replan");
             return Ok(true);
-        }
-        Err(error) if error.is_committed() => {
-            tracing::warn!(table = runtime.name(), %error, "key-bounds repair awaits publication");
         }
         Err(error) => return Err(error.into()),
     }

@@ -33,6 +33,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use clap::ValueEnum;
 use tokio::sync::RwLock;
 
 use crate::errors::StatsError;
@@ -50,9 +51,19 @@ use crate::store::store::{ServeMode, LOG_NAMESPACE_NAME};
 use crate::store::table_state::{TableSnapshot, WriterFence};
 
 pub use controller::{MaintenanceLease, ObjectPersistence, TableController, WrittenObject};
-pub use maintenance::{TableWork, WorkOutcome};
+pub use maintenance::{MaintenanceClass, MaintenanceProfile, TableWork, WorkOutcome};
 pub use runtime::TableRuntime;
 pub use segment_view::SegmentSnapshot;
+
+/// The off-process durability boundary an ingest acknowledgement waits for.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum AckDurability {
+    /// A persistent local filesystem survives process and pod replacement.
+    #[default]
+    LocalDisk,
+    /// Published object state is the recovery authority; local files are cache.
+    ObjectStore,
+}
 
 /// The current wall clock in milliseconds, as segment metadata records it.
 pub(crate) fn now_ms() -> i64 {
@@ -125,6 +136,8 @@ pub struct TableManager {
     /// Compaction tuning copied into each runtime as it opens. Tests shrink
     /// these budgets before registering tables to force multi-batch backfills.
     compaction: Mutex<CompactionConfig>,
+    maintenance_profile: Mutex<MaintenanceProfile>,
+    ack_durability: Mutex<AckDurability>,
     /// The maintenance scheduler's wake signal. Held here because runtimes are
     /// built before the scheduler starts and must already carry it.
     maintenance_wake: Arc<tokio::sync::Notify>,
@@ -160,6 +173,8 @@ impl TableManager {
             )))),
             limits: MaintenanceLimits::new(),
             compaction: Mutex::new(CompactionConfig::default()),
+            maintenance_profile: Mutex::new(MaintenanceProfile::default()),
+            ack_durability: Mutex::new(AckDurability::default()),
             maintenance_wake: Arc::new(tokio::sync::Notify::new()),
         })
     }
@@ -168,6 +183,22 @@ impl TableManager {
     /// call; already-open runtimes keep their configuration.
     pub fn set_compaction_config(&self, config: CompactionConfig) {
         *self.compaction.lock().unwrap() = config;
+    }
+
+    /// Apply one host maintenance role to current and future tables.
+    pub fn set_maintenance_profile(&self, profile: MaintenanceProfile) {
+        *self.maintenance_profile.lock().unwrap() = profile.clone();
+        for runtime in self.runtimes() {
+            runtime.update_maintenance_profile(profile.clone());
+        }
+    }
+
+    /// Apply one acknowledgement boundary to current and future tables.
+    pub fn set_ack_durability(&self, durability: AckDurability) {
+        *self.ack_durability.lock().unwrap() = durability;
+        for runtime in self.runtimes() {
+            runtime.update_ack_durability(durability);
+        }
     }
 
     pub fn query_visibility(&self) -> &Arc<RwLock<()>> {
@@ -248,8 +279,12 @@ impl TableManager {
     }
 
     /// Seed `name`'s controller with the state a bootstrap claim selected.
-    pub fn adopt_claimed_state(&self, name: &str, claimed: StoredTableState) {
-        self.controller(name).adopt_claimed(claimed);
+    pub fn adopt_claimed_state(
+        &self,
+        name: &str,
+        claimed: StoredTableState,
+    ) -> Result<(), StatsError> {
+        self.controller(name).adopt_claimed(claimed)
     }
 
     /// Stop accepting writes for `name` until a restart recovers it.
@@ -331,6 +366,8 @@ impl TableManager {
             policy,
             self.compaction.lock().unwrap().clone(),
         )?;
+        runtime.update_maintenance_profile(self.maintenance_profile.lock().unwrap().clone());
+        runtime.update_ack_durability(*self.ack_durability.lock().unwrap());
         self.runtimes
             .lock()
             .unwrap()
@@ -516,6 +553,134 @@ mod tests {
         catalog
             .register_table_spec(TABLE, &spec, &hash, false)
             .unwrap();
+    }
+
+    struct ObjectAckFixture {
+        manager: Arc<TableManager>,
+        runtime: Arc<TableRuntime>,
+        upload: Arc<FaultGate>,
+        root: PathBuf,
+    }
+
+    async fn object_ack_fixture(tag: &str, durability: AckDurability) -> ObjectAckFixture {
+        let root = crate::test_support::unique_dir(tag);
+        let remote_dir = root.join("remote");
+        let data_dir = root.join("data");
+        std::fs::create_dir_all(&remote_dir).unwrap();
+        std::fs::create_dir_all(data_dir.join(TABLE)).unwrap();
+        let provider = build_remote_object_store(remote_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let cached = Arc::new(
+            CachedObjectStore::new(
+                Arc::new(provider.clone()),
+                data_dir.clone(),
+                Arc::new(RwLock::new(())),
+                None,
+            )
+            .unwrap(),
+        ) as Arc<dyn ObjectStore>;
+        let faults = FaultInjectingObjectStore::new(cached);
+        let state_store = Arc::new(ObjectTableStateStore::new(
+            Arc::clone(&faults) as Arc<dyn ObjectStore>
+        ));
+        let catalog = Arc::new(Catalog::open(Some(&data_dir)).unwrap());
+        register_versioned_spec(&catalog);
+        let manager = TableManager::new(
+            Some(data_dir),
+            ServeMode::Shadow,
+            catalog,
+            Some(Arc::clone(&faults) as Arc<dyn ObjectStore>),
+            Some(Arc::new(LegacyObjectStore::new(&provider))),
+            Some(state_store),
+            WriterFence::new(12),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            Arc::new(RwLock::new(())),
+        );
+        manager.set_ack_durability(durability);
+        let runtime = manager
+            .register(TABLE, worker_schema(), StoragePolicy::default())
+            .unwrap();
+        manager.publish(TABLE).await.unwrap();
+
+        let upload = FaultGate::new();
+        faults.arm(ObjectFault::new(
+            ObjectOp::Write,
+            ObjectPattern::Contains("/objects/".to_string()),
+            FaultAction::Park(Arc::clone(&upload)),
+        ));
+        ObjectAckFixture {
+            manager,
+            runtime,
+            upload,
+            root,
+        }
+    }
+
+    #[tokio::test]
+    async fn object_store_ack_waits_for_remote_publication() {
+        let fixture = object_ack_fixture("object_ack_remote", AckDurability::ObjectStore).await;
+        let target = fixture.manager.append(TABLE, &aligned(1)).unwrap();
+        fixture.runtime.flush().await.unwrap();
+        fixture.upload.entered().await;
+
+        let waiting = fixture
+            .runtime
+            .await_persisted(target, Duration::from_millis(20))
+            .await;
+        assert!(matches!(waiting, Err(StatsError::DeadlineExceeded(_))));
+
+        fixture.upload.release();
+        fixture
+            .runtime
+            .await_persisted(target, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(fixture.runtime.persisted_seq(), target);
+        fixture.manager.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(fixture.root).ok();
+    }
+
+    #[tokio::test]
+    async fn local_disk_ack_does_not_wait_for_remote_publication() {
+        let fixture = object_ack_fixture("object_ack_local", AckDurability::LocalDisk).await;
+        let target = fixture.manager.append(TABLE, &aligned(1)).unwrap();
+        fixture.runtime.flush().await.unwrap();
+
+        fixture
+            .runtime
+            .await_persisted(target, Duration::from_millis(20))
+            .await
+            .unwrap();
+        assert_eq!(fixture.runtime.persisted_seq(), target);
+
+        let publishing = {
+            let manager = Arc::clone(&fixture.manager);
+            tokio::spawn(async move { manager.publish(TABLE).await })
+        };
+        fixture.upload.entered().await;
+        assert_eq!(fixture.runtime.persisted_seq(), target);
+
+        let newer = fixture.manager.append(TABLE, &aligned(1)).unwrap();
+        fixture.runtime.flush().await.unwrap();
+        assert_eq!(fixture.runtime.persisted_seq(), newer);
+        fixture.upload.release();
+        publishing.await.unwrap().unwrap();
+        let visible_max = fixture
+            .runtime
+            .query_snapshot()
+            .unwrap()
+            .seq_bounds
+            .values()
+            .map(|(_, maximum)| *maximum)
+            .max();
+        assert_eq!(
+            visible_max,
+            Some(newer),
+            "an older remote publication must not replace the newer local snapshot"
+        );
+        fixture.manager.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(fixture.root).ok();
     }
 
     /// Ingest never queues behind a durable state transition: appends keep

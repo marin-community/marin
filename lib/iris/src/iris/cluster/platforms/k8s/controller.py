@@ -685,7 +685,6 @@ class K8sControllerProvider:
         self,
         config: IrisClusterConfig,
         dry_run: bool = False,
-        label_prefix: str | None = None,
     ) -> list[str]:
         target_names = ["controller"]
         if dry_run:

@@ -103,6 +103,88 @@ def _write_catalog(
     return catalog_path
 
 
+def _upgrade_to_catalog_tree(root: Path, catalog_path: Path, *, replace_segment: bool = False) -> None:
+    namespace = "iris.worker"
+    catalog = json.loads(catalog_path.read_text())
+    catalog["formatVersion"] = "2"
+    checkpoint_id = f"_finelog/tables/{namespace}/catalogs/00000000000000000007-checkpoint.json"
+    checkpoint = {
+        "formatVersion": "2",
+        "namespace": namespace,
+        "catalogGeneration": "7",
+        "checkpoint": catalog,
+    }
+    checkpoint_path = root / checkpoint_id
+    checkpoint_bytes = json.dumps(checkpoint).encode()
+    checkpoint_path.write_bytes(checkpoint_bytes)
+
+    metadata = dict(catalog)
+    metadata["catalogGeneration"] = "8"
+    metadata["versionSegments"] = [{"tableSpecVersion": "1"}]
+    metadata["directQuerySegments"] = []
+    delta: dict[str, object] = {"metadata": metadata}
+    if replace_segment:
+        old_segment = catalog["versionSegments"][0]["liveSegments"][0]
+        old_segment_id = old_segment["segmentId"]
+        object_id = f"_finelog/tables/{namespace}/objects/v1/l1/content/" "seg_L1_0000000000000000003.parquet"
+        object_path = root / object_id
+        pq.write_table(
+            pa.table(
+                {
+                    "seq": [3],
+                    "worker_id": ["w-3"],
+                    "mem_bytes": [30],
+                    "cluster": [None],
+                }
+            ),
+            object_path,
+        )
+        replacement = {
+            "segmentId": object_path.name,
+            "source": {"objectId": object_id},
+            "level": 1,
+            "minSeq": "3",
+            "maxSeq": "3",
+            "rowCount": "1",
+        }
+        delta.update(
+            {
+                "segmentRemovals": [{"tableSpecVersion": "1", "segmentId": old_segment_id}],
+                "segmentAdditions": [
+                    {
+                        "key": {
+                            "tableSpecVersion": "1",
+                            "segmentId": replacement["segmentId"],
+                        },
+                        "segment": replacement,
+                    }
+                ],
+                "directQueryRemovals": [old_segment_id],
+                "directQueryAdditions": [replacement],
+            }
+        )
+    tip_id = f"_finelog/tables/{namespace}/catalogs/00000000000000000008-delta.json"
+    tip = {
+        "formatVersion": "2",
+        "namespace": namespace,
+        "catalogGeneration": "8",
+        "parent": {"objectId": checkpoint_id, "byteSize": str(len(checkpoint_bytes))},
+        "deltaDepth": 1,
+        "deltaBytesSinceCheckpoint": "100",
+        "delta": delta,
+    }
+    tip_bytes = json.dumps(tip).encode()
+    (root / tip_id).write_bytes(tip_bytes)
+    head = {
+        "formatVersion": "2",
+        "namespace": namespace,
+        "catalogGeneration": "8",
+        "activeTableSpecVersion": "1",
+        "catalog": {"objectId": tip_id, "byteSize": str(len(tip_bytes))},
+    }
+    (root / "_finelog" / "tables" / namespace / "HEAD.json").write_text(json.dumps(head))
+
+
 def test_object_query_reads_the_stable_catalog_projection(tmp_path: Path) -> None:
     _write_catalog(tmp_path)
     client = ObjectQueryClient(str(tmp_path))
@@ -118,6 +200,36 @@ def test_object_query_reads_the_stable_catalog_projection(tmp_path: Path) -> Non
         "mem_bytes": [10, 20],
     }
     assert pin.high_water == 2
+
+
+def test_object_query_folds_catalog_tree_from_checkpoint_and_delta(tmp_path: Path) -> None:
+    catalog_path = _write_catalog(tmp_path)
+    _upgrade_to_catalog_tree(tmp_path, catalog_path)
+
+    client = ObjectQueryClient(str(tmp_path))
+    pin = client.pin_catalog("iris.worker")
+    result = client.query(
+        'SELECT worker_id FROM "iris.worker" ORDER BY seq',
+        namespaces=["iris.worker"],
+    )
+
+    assert pin.catalog_generation == 8
+    assert result.to_pydict() == {"worker_id": ["w-1", "w-2"]}
+
+
+def test_object_query_folds_segment_replacement_from_catalog_delta(tmp_path: Path) -> None:
+    catalog_path = _write_catalog(tmp_path)
+    _upgrade_to_catalog_tree(tmp_path, catalog_path, replace_segment=True)
+
+    client = ObjectQueryClient(str(tmp_path))
+    pin = client.pin_catalog("iris.worker")
+    result = client.query(
+        'SELECT worker_id FROM "iris.worker" ORDER BY seq',
+        namespaces=["iris.worker"],
+    )
+
+    assert len(pin.object_uris) == 1
+    assert result.to_pydict() == {"worker_id": ["w-3"]}
 
 
 def test_object_query_reads_catalog_written_before_sha_field_removal(tmp_path: Path) -> None:

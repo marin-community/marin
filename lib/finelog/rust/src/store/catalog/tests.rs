@@ -11,8 +11,8 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::partition_policy::SegmentPartition;
 use crate::proto::finelog::stats::{
-    ColumnType, MigrationPhase, NamespaceCatalog, ObjectRef, OperatingPolicy, SourceLayout,
-    TableSpec as ProtoTableSpec,
+    ColumnType, ForwardCursor, MigrationPhase, NamespaceCatalog, ObjectRef, OperatingPolicy,
+    SourceLayout, TableSpec as ProtoTableSpec,
 };
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_proto_owned, with_implicit_seq, Column, Schema};
@@ -101,6 +101,55 @@ fn source_layout_change_queues_activation_and_supports_abort() {
     assert_eq!(aborted.active_version(), 1);
     assert!(aborted.migration.is_none());
     assert!(aborted.catalog_generation > activated.catalog_generation);
+}
+
+#[test]
+fn migration_progress_change_advances_the_published_revision() {
+    let catalog = Catalog::open(None).unwrap();
+    catalog
+        .register_or_evolve(
+            "a",
+            worker_stored(),
+            StoragePolicy::default(),
+            |_| unreachable!(),
+        )
+        .unwrap();
+    catalog
+        .upsert_segment(&SegmentRow {
+            namespace: "a".to_string(),
+            path: "/cache/a/legacy.parquet".to_string(),
+            level: 1,
+            min_seq: 1,
+            max_seq: 3,
+            row_count: 3,
+            byte_size: 64,
+            created_at_ms: 1,
+            min_key_value: None,
+            max_key_value: None,
+            partition: None,
+            location: SegmentLocation::Local,
+        })
+        .unwrap();
+    let v1 = table_spec(1, 128);
+    let pending = catalog
+        .register_table_spec("a", &v1, &spec_hash(&v1), true)
+        .unwrap();
+    assert_eq!(pending.migration.as_ref().unwrap().rows_total, Some(3));
+
+    catalog
+        .remove_segment("a", "/cache/a/legacy.parquet")
+        .unwrap();
+    let revision = catalog.refresh_migration_rows_total("a").unwrap();
+    let refreshed = catalog.spec_lifecycle("a").unwrap();
+
+    assert_eq!(revision.get(), pending.catalog_generation + 1);
+    assert_eq!(refreshed.catalog_generation, revision.get());
+    assert_eq!(refreshed.migration.unwrap().rows_total, Some(0));
+    assert_eq!(
+        catalog.refresh_migration_rows_total("a").unwrap(),
+        revision,
+        "an unchanged progress total must not churn HEAD"
+    );
 }
 
 #[test]
@@ -503,4 +552,48 @@ fn published_snapshot_rebuild_preserves_segment_artifacts() {
     let records = catalog.object_segments("a").unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].artifacts, artifacts);
+}
+
+#[test]
+fn published_snapshot_replaces_a_divergent_projection_at_the_same_revision() {
+    let catalog = Catalog::open(None).unwrap();
+    let local = NamespaceCatalog {
+        catalog_generation: Some(5),
+        active_table_spec_version: Some(1),
+        forward_cursors: vec![ForwardCursor {
+            target: Some("hub".to_string()),
+            cursor: Some(99),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    catalog
+        .replace_with_published_snapshot(
+            "a",
+            worker_stored(),
+            StoragePolicy::default(),
+            &local,
+            &[],
+        )
+        .unwrap();
+
+    let remote = NamespaceCatalog {
+        forward_cursors: vec![ForwardCursor {
+            target: Some("hub".to_string()),
+            cursor: Some(7),
+            ..Default::default()
+        }],
+        ..local
+    };
+    catalog
+        .replace_with_published_snapshot(
+            "a",
+            worker_stored(),
+            StoragePolicy::default(),
+            &remote,
+            &[],
+        )
+        .unwrap();
+
+    assert_eq!(catalog.forward_cursor("hub", "a").unwrap(), Some(7));
 }

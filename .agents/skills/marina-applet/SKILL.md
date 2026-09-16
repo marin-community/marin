@@ -74,7 +74,8 @@ revisions.
 
 Use `get_verified_identity()` from `rigging.server_auth` when a backend needs
 the authenticated caller. Import only packages already declared in
-`infra/marina/pyproject.toml`.
+`infra/marina/pyproject.toml`. Shared Marin helpers must come from installed
+packages under `lib/*`; do not import checked-in apps under `infra/marina/apps`.
 
 Treat Python applets as trusted plugins. They run inside Marina with its
 filesystem, network, credentials, and process identity. Do not publish code
@@ -89,11 +90,24 @@ dependencies. `marina publish` runs a declared `build_command` before packaging
 by default, and the command may create `dist/index.html`. Pass `--no-build` to
 reuse an existing validated `dist/`.
 
-Validate the exact package without changing server state:
+Validate the package and import a declared backend from the current Marina
+environment without changing server state:
+
+```bash
+uv run marina validate my-applet
+```
+
+The report names its completed checks and omissions. It does not execute the
+backend factory, run its migration, connect to Postgres, or start a browser.
+Use package-only validation when only the upload archive matters:
 
 ```bash
 uv run marina publish my-applet --dry-run
 ```
+
+Dry-run reports backend imports as unchecked. Both commands reject executable
+inline scripts under Marina's `script-src 'self'` policy. Load JavaScript from
+relative packaged files.
 
 Respect the current package limits: 25 MiB total, 8 MiB per file, and 2,000
 regular files. Keep large data out of the package until Marina gains an object
@@ -113,6 +127,15 @@ IAP authentication. It stays in the foreground. After validation, send Ctrl-C
 and verify that both Marina and the container stop. If `uv` cannot write its
 cache in a restricted checkout, use the current checkout's `.venv/bin/marina`
 executable instead of installing or synchronizing dependencies.
+
+To preserve the disposable Postgres stack across edits, leave the first
+`publish --local --json` process running. From a second terminal, publish the
+edit with this command, using each returned revision as the next base version:
+
+```bash
+uv run marina publish my-applet --url <printed-origin> \
+  --update <printed-id> --base-version <current-version>
+```
 
 Open the printed immutable revision URL. Exercise the frontend, every backend
 route, caller identity when used, and at least one schema read/write path. For

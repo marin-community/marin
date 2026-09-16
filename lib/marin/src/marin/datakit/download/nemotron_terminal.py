@@ -9,12 +9,21 @@ CLI tasks, with thinking traces.
 """
 
 from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import load_parquet_batched, render_role_message, text_document
+from marin.datakit.download.opencode import INLINE_TOOL_CALL, opencode_protocol_messages, prompt_tool_definitions
+from marin.datakit.download.rollout_transforms import (
+    checked_openai_chat_document,
+    load_parquet_batched,
+    render_role_message,
+    text_document,
+)
+from marin.datakit.download.terminus import TASK_DESCRIPTION_MARKER, terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -34,6 +43,28 @@ def row_to_doc(row: dict) -> list[dict]:
     return [text_document(text, "nvidia/Nemotron-Terminal-Corpus")]
 
 
+def row_to_chat_doc(row: dict) -> list[dict]:
+    conversations = row.get("conversations")
+    if not conversations:
+        return []
+    if any(INLINE_TOOL_CALL.search(message.get("content") or "") for message in conversations):
+        tools = prompt_tool_definitions("\n".join(message.get("content") or "" for message in conversations[:2]))
+        if tools is None:
+            counters.pipeline.update_counter("nemotron_terminal/chat/missing_tool_definitions_filtered", 1)
+            return []
+        converted = opencode_protocol_messages(conversations, tools)
+    else:
+        first = conversations[0]
+        content = first.get("content")
+        if first.get("role") == "user" and isinstance(content, str) and TASK_DESCRIPTION_MARKER in content:
+            conversations = [{**first, "content": content[content.index(TASK_DESCRIPTION_MARKER) :]}, *conversations[1:]]
+        converted = terminus_protocol_messages(conversations)
+    if converted is None:
+        return []
+    messages, metadata = converted
+    return checked_openai_chat_document(messages, HF_DATASET_ID, counter_prefix="nemotron_terminal/chat", **metadata)
+
+
 def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/**/*.parquet")
@@ -44,6 +75,18 @@ def transform(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="nemotron-terminal-transform", resources=ResourceConfig(cpu=1, ram="32g"))
     ctx.execute(pipeline)
+
+
+def transform_chat(input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet_batched)
+        .flat_map(row_to_chat_doc)
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), schema=CHAT_SCHEMA, skip_existing=True
+        )
+    )
+    ZephyrContext(name="nemotron-terminal-chat-transform", resources=ResourceConfig(cpu=1, ram="32g")).execute(pipeline)
 
 
 def download_nemotron_terminal_step() -> StepSpec:
@@ -71,4 +114,17 @@ def nemotron_terminal_normalize_steps() -> tuple[StepSpec, ...]:
     return (
         processed,
         normalize_step(name="normalized/nemotron-terminal", download=processed),
+    )
+
+
+def nemotron_terminal_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    download = download_hf_step("raw/nemotron-terminal-corpus", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION)
+    processed = StepSpec(
+        name="processed-chat/nemotron-terminal-corpus",
+        deps=[download],
+        fn=lambda output_path: transform_chat(download.output_path, output_path),
+        hash_attrs={"version": "2026.09.11.review-fixes"},
+    )
+    return processed, normalize_chat_step(
+        output_schema=CHAT_SCHEMA, name="normalized-chat/nemotron-terminal", download=processed
     )

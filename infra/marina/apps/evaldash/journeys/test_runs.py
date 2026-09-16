@@ -3,7 +3,9 @@
 
 """Someone opens the run log, finds a launch, and reads what one of its evals scored."""
 
+import re
 from typing import Any, cast
+from urllib.parse import unquote
 
 from marina.journeys import Journey
 
@@ -38,4 +40,16 @@ def test_the_panel_serves_the_committed_catalog(journey: Journey) -> None:
     assert "snowball" in journey.reads()
     store = cast(dict[str, Any], journey.api(f"{API}/status"))["store"]
     assert store["backend"] == "postgres"
-    assert store["record_count"] == 15
+    assert store["record_count"] == 17
+
+
+def test_a_benchmark_family_variant_survives_a_shared_panel_url(journey: Journey) -> None:
+    journey.visit("/")
+    picker = journey.page.locator("select[title^='Which setting of this benchmark']").first
+
+    picker.select_option("gsm8k-0shot")
+    journey.page.wait_for_url(re.compile(r"[?&]benchmarks="))
+
+    assert "gsm8k-0shot" in unquote(journey.page.url)
+    journey.page.reload(wait_until="domcontentloaded")
+    assert picker.input_value() == "gsm8k-0shot"

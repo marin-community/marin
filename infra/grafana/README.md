@@ -31,7 +31,9 @@ fetch server-side, so nothing outside the container reaches it.
 ```
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
+GET /finelog/marin/relay_status                  direct regional relay heartbeats
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
+GET /finelog/marin/alerts/relay_status           stale relay/table rows + value(0|1)
 GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
 GET /finelog/marin/alerts/loss_spikes            active hero runs + loss-spike value(0|1)
 GET /finelog/marin/alerts/training_telemetry     watched hero runs + silent-telemetry value(0|1)
@@ -45,7 +47,7 @@ GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
 GET /wandb/report/{train-loss,paloma-macro-loss,mfu}
                                                     public report runset and sampled history
 GET /wandb/history?run=&metric=&project=          one run's whole logged history for one metric
-GET /wandb/activity?run=&project=                 one run's active, wall, and downtime seconds
+GET /wandb/activity?run=&project=                 one run's active, wall, and downtime seconds, and projected finish
 GET /k8s/control_plane | crashloops | pending     CW control-plane state, all clusters
 GET /k8s/termination_candidates | kueue | events | health
                                                     ... one response, `cluster` column
@@ -87,6 +89,11 @@ at or above 5 seconds is slow. Clusters' finelog row adds effective pod
 resources, restart history, probe presence, node placement, PVC class/capacity, and
 recent matching Kubernetes Warning events.
 
+`relay_status` comes from a complete snapshot each regional Finelog sends directly to
+the hub every 30 seconds. It does not travel through the row-forwarding path. The alert
+fires when a regional heartbeat is two minutes old, the required node-agent namespace
+is absent, or a nonzero publication/forwarding lag has made no progress for ten minutes.
+
 Iris: the bridge owns each query behind a fixed endpoint and returns flat rows, so the
 dashboard never sends raw admin SQL. `jobs` (root jobs by state — in-flight plus 24h
 terminal) and `query` use the controller's `ExecuteRawQuery`; `workers` aggregates
@@ -113,8 +120,10 @@ download: `_runtime` is the seconds the training process was alive, which
 across every attempt. Wall time runs from the run's creation to its last heartbeat,
 which makes the remainder downtime. `_runtime` advances only when an attempt logs, so
 the total holds still while a restart initializes rather than counting the wait as
-work. Without an explicit `project` the bridge searches `RUN_HISTORY_PROJECTS` in
-order and fails with a 404 when no project holds the run.
+work. The same request's `_step` and `run_progress`, with the first point of a
+sampled history, give the projected finish (see the training dashboard below). Without
+an explicit `project` the bridge searches `RUN_HISTORY_PROJECTS` in order and fails
+with a 404 when no project holds the run.
 
 k8s: the bridge polls the three production CoreWeave clusters' public CKS API servers with plain
 httpx GETs (paginated LISTs, bounded timeouts, one 429 retry) and a single org-wide CW
@@ -221,11 +230,15 @@ of repeating the Kubernetes object name.
 | Node | Node details | `nodes.json` | What is happening on one physical GPU node? | cluster, node |
 | Workload | Jobs | `jobs.json` | What is running, queued, and stuck? | cluster, job |
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
-| Workload | RL runs | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
+| Workload | RL Post-training | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
 | Workload | Inference overview | `inference_overview.json` | Is inference progressing, and are responses slow or queues growing? | identity kind, serve |
 | Workload | Inference diagnostics | `inference.json` | Which engines, request stages, or workload changes explain the slowdown? | identity kind, serve |
 | Services | Infra | `infra.json` | Are nightly runs, main CI, workers, and hero training healthy? | none |
+
+Getting a run onto the RL Post-training view is a MarinSkyRL-side question: which launch paths export
+the telemetry environment, what a run id should look like, and which panels a synchronous run
+leaves blank by design. MarinSkyRL documents it at `docs/grafana-rl-runs.md`.
 
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old
@@ -328,6 +341,21 @@ a `renameByRegex` transformation cannot, because it reads the raw field name and
 prefix is added later. The strip stands ten grid rows tall because the stat layout
 picks its tile grid from the aspect ratio, and twelve tiles in a shorter panel land in
 one unreadable row.
+
+Projected finish comes from `/wandb/activity` as well, extrapolating the same run-own
+accounting to the stop step: this run's steps since its first sampled one, over the wall
+clock since that sample, carried forward to the step the run stops at, which `_step /
+run_progress` recovers because Levanter logs progress as the global step over the stop
+step. Measuring from the first sample means a run resumed from a checkpoint is not
+credited with the steps it inherited, while every restart, checkpoint, and eval since
+then slows the rate. The averaging window is the run's whole life under this id, the
+steadiest one there is, and also the one that lags a throughput change longest; hero ids
+rotate at each restore, so in practice it is the time since the last one. The wall clock
+ends at the last heartbeat, so an outage in progress moves the date only once the run
+resumes. On 2026-09-10 `hero-ragged_a2a-nccl2307-ep-step81k`, resumed at step 81,740 and
+at 85,956 twenty-three hours later against a stop step of 390,244, projected 2026-11-18;
+a finelog query over the same day agreed to within a day, and crediting the run with the
+inherited steps would have put the finish three days out.
 
 The Attempts table carries the recent detail behind that total: one row per Iris
 execution over a fixed seven-day window, newest first, running or not, so the top row

@@ -22,7 +22,7 @@ from levanter.data.text.datasets import (
 from levanter.tokenizers import load_tokenizer
 from rigging.filesystem import marin_prefix
 
-from marin.execution import unwrap_versioned_value
+from marin.execution.executor import unwrap_versioned_value
 from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.execution.types import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfigBase

@@ -43,6 +43,15 @@ goes stale on the next commit.
 - Purpose: canonical Mixture-of-Experts variant; carries its own model, optimizer, train loop, and launch wiring so it can iterate independently of the dense template.
 - Issue: https://github.com/marin-community/marin/pull/3046
 
+### grug-moe-pipeline
+- Path: `experiments/grug/moe_pipeline/`
+- Origin: `moe`
+- Introduced: 734108b003
+- Status: active
+- Purpose: canonical automatic JaxPP ZeroBubble and DualPipeV implementation for Grug MoE.
+- Diff: https://marin-community.github.io/marin/grug-diffs/pr-8739/moe_pipeline-vs-moe/index.html
+- Issue: https://github.com/marin-community/marin/issues/7024
+
 ### grug-moe-hero-ep
 - Path: `experiments/grug/moe_hero_ep/`
 - Origin: `moe_hero_fsdp` at PR 7876

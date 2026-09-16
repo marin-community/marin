@@ -7,6 +7,7 @@ import json
 import logging
 import math
 from collections.abc import Mapping
+from dataclasses import replace
 from functools import cache
 from pathlib import Path, PurePosixPath
 
@@ -111,6 +112,17 @@ def auto_serve_overrides(
         config_path = StoragePath(hf_hub_download(model, _HF_CONFIG_FILENAME, revision=revision))
     config = json.loads(config_path.read_text())
     return _auto_serve_overrides_from_config(model, config, max_model_len, existing_extra_args)
+
+
+def resolved_serve_config(model: ModelConfig) -> ServeConfig:
+    """Resolve checkpoint-derived vLLM settings and retain them for serving."""
+    serve = model.serve
+    if serve.backend is not ServeBackend.VLLM or not serve.auto_overrides:
+        return serve
+    extra_args, max_model_len = auto_serve_overrides(
+        model.location, serve.max_model_len, serve_config_vllm_args(serve), revision=model.revision
+    )
+    return replace(serve, max_model_len=max_model_len, vllm_extra_args=extra_args, auto_overrides=False)
 
 
 def _is_weight_file(name: str) -> bool:
@@ -218,17 +230,10 @@ def inference_config_for_model(
     broker: BrokerConfig | None = None,
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
-    serve = model.serve
+    serve = resolved_serve_config(model)
     vllm_environment_variables = _vllm_environment_variables(serve, accelerator.platform)
     extra_args = serve_config_vllm_args(serve)
     max_model_len = serve.max_model_len
-    if serve.backend is ServeBackend.VLLM and serve.auto_overrides:
-        extra_args, max_model_len = auto_serve_overrides(
-            model.location,
-            max_model_len,
-            extra_args,
-            revision=model.revision,
-        )
 
     hint = model.resource_hint
     cpu = hint.cpu or DEFAULT_SERVE_CPU

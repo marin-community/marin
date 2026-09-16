@@ -3,7 +3,7 @@
 name: finelog-cw-use08a
 port: 10001
 image: ghcr.io/marin-community/finelog:latest
-remote_log_dir: s3://marin-na/finelog/cw-us-east-08a
+remote_log_dir: s3://marin-na/finelog/cw-us-east-08a-vnext
 deployment:
   k8s:
     namespace: iris
@@ -18,6 +18,8 @@ deployment:
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
     # Control-plane priority owned by the cluster substrate stack.
     priority_class_name: iris-system
+    memory_request: 32Gi
+    memory_limit: 64Gi
 # cidr admits this cluster's private network and loopback; no jwt layer, since this
 # server only sends to the hub and accepts no pushes.
 auth:

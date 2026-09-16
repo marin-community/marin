@@ -6,7 +6,7 @@ W=/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/ladder_watch_202609
 strip() { sed -E 's/^(ALERT|EVALOK) [0-9]{2}:[0-9]{2}Z /\1 /'; }
 [ -f "$W/prev_alerts.txt" ] || : > "$W/prev_alerts.txt"
 while true; do
-  out=$(uv run --offline --no-sync python "$W/tick.py" 2>/dev/null | grep -v '^Warning')
+  out=$(/Users/calvinxu/Projects/Work/Marin/marin/.venv/bin/python "$W/tick.py" 2>/dev/null | grep -v '^Warning')
   if [ -z "$out" ]; then
     echo "PROBEERR $(date -u +%H:%MZ): empty tick"
   else

@@ -23,6 +23,7 @@ from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from hero_health import DROP_FRACTION_MAX, ROUTER_BIAS_MAX, ROUTER_ENTROPY_MIN
 from k8s_source import K8sFleet
+from relay_health import RelaySenderStatus
 from server import create_app
 from starlette.testclient import TestClient
 from wandb_source import WandbSource
@@ -188,6 +189,9 @@ class _FakeFinelog:
                 }
             )
         return pa.table({})
+
+    def relay_status(self) -> tuple[RelaySenderStatus, ...]:
+        return ()
 
 
 def test_every_rule_query_url_answers_on_the_bridge():
@@ -390,6 +394,14 @@ def test_finelog_health_alert_pages_critical_after_five_minutes():
     assert rule["labels"]["severity"] == "critical"
     assert rule["data"][0]["datasourceUid"] == "finelog-marin"
     assert rule["data"][0]["model"]["url"] == "/alerts/fleet_health"
+
+
+def test_finelog_relay_alert_pages_stalled_or_missing_namespaces():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "finelog-relay-stalled"]
+    assert rule["for"] == "2m"
+    assert rule["labels"]["severity"] == "critical"
+    assert rule["noDataState"] == "Alerting"
+    assert rule["data"][0]["model"]["url"] == "/alerts/relay_status"
 
 
 def test_node_deadlock_alert_pages_critical_after_five_minutes():
@@ -1074,6 +1086,14 @@ def test_training_status_reads_whole_run_active_time_from_wandb():
     # Four days of wall clock, ninety hours of them running.
     assert (row["active_seconds"], row["active_share"]) == (324_000.0, 0.9375)
     assert {column["selector"] for column in target["columns"]} <= set(row)
+    # The projected finish rides on the same target as epoch milliseconds, which only the
+    # date unit makes readable in a stat tile.
+    finish = next(
+        override
+        for override in panel["fieldConfig"]["overrides"]
+        if override["matcher"]["options"] == "projected finish"
+    )
+    assert {field["id"]: field["value"] for field in finish["properties"]} == {"unit": "dateTimeAsIso"}
 
 
 def test_training_attempts_table_links_the_newest_attempt_to_iris():

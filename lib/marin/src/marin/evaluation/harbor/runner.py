@@ -6,7 +6,7 @@
 The group launcher serves a model once and hands this runner an OpenAI endpoint; the runner points a
 Harbor agent at it (``hosted_vllm/<served-name>``), runs the dataset's trials on the configured
 sandbox environment, and normalizes each finished trial into the shared eval
-contract: one agentic :class:`~marin.evaluation.archive.EvalSample` per task (its reward, its grading,
+contract: one agentic :class:`~finestore.eval.EvalSample` per task (its reward, its grading,
 and a reference to the saved trajectory) plus an aggregate this module's :class:`HarborResult` reads
 back for the record's metrics. Harbor writes each trial's ``result.json`` and trajectory straight to
 the durable output path as it finishes, so a completed trial survives a driver killed before the job
@@ -24,16 +24,18 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
+from finestore.eval import EvalSample, EvaluationStore, Grading, SampleKind
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.evaluation.archive import EvalSample, EvaluationStore, Grading, SampleKind
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
     HarborBackendsUnavailable,
+    HarborErrorTaxonomy,
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
     run_harbor_driver,
 )
+from marin.evaluation.harbor.trajectory import archive_trajectory
 from marin.evaluation.records import RunStatus, TaskCoverage
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import RemoteInferenceSession
@@ -56,16 +58,18 @@ _JOB_DIGEST_LENGTH = 12
 # margin tolerates float noise).
 SOLVED_REWARD = 0.99
 
-# The fraction of attempted trials a verifier must grade for a run to be accepted. An agentic run
-# loses occasional trials to agent and verifier timeouts, and discarding an otherwise usable batch
-# over one of them throws away the other 239; below this rate the run is not a usable measurement,
-# since the ungraded trials could take any value and the resulting interval is too wide to compare.
-# The gate is a rate, so it is coarse at small trial counts: one failure in eight is 0.875 and fails.
+# Fraction of attempted trials that must be scoreable under the Harbor taxonomy. Agent failures
+# remain scoreable, while infrastructure failures and passthrough failures without verifier results
+# reduce completion. Below this rate, the ungraded trials make the result too uncertain to compare.
+# The rate is coarse for small batches: one unscored trial in eight yields 0.875 and fails.
 DEFAULT_MIN_COMPLETION_RATE = 0.9
 
 # Error labels for ungraded trials that carry no exception of their own.
 _UNKNOWN_ERROR = "unknown"
 _MISSING_RESULT_ERROR = "no_result_written"
+_TRIAL_RESULT_GLOB = "*/result.json"
+
+_UNKNOWN_ERROR_PREFIX = "unknown:"
 
 _CANONICAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
@@ -74,10 +78,9 @@ _CANONICAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 class HarborTrial:
     """One finished Harbor trial, normalized off its ``result.json``.
 
-    ``scored`` is whether the trial is a usable measurement: a verifier graded it and the trial raised
-    no exception. A trial whose agent timed out part-way is often still verified, and scores zero
-    because it was cut short rather than because the model was wrong -- counting that as a wrong
-    answer is the imputation the coverage accounting exists to avoid, so it is an ungraded item.
+    ``scored`` follows the taxonomy from the pinned Harbor environment. Agent failures are model
+    outcomes even without a verifier result. Passthrough failures require a verifier result, and
+    infrastructure or unknown failures remain ungraded.
     """
 
     task_id: str
@@ -97,8 +100,8 @@ class HarborRunResult:
     launched rather than from the trial results it found: a trial that dies before writing a result
     leaves no file behind, so counting results would make the worst-affected runs look complete. It is
     ``None`` when Harbor's job bookkeeping is unreadable, which is unknown rather than complete.
-    ``scored_trials`` counts the trials a verifier actually graded, and the rates divide by it -- a
-    trial that errored is an ungraded item, not a wrong answer.
+    ``scored_trials`` counts outcomes accepted by the Harbor taxonomy, including agent failures
+    without verifier results. Accuracy and mean reward divide by this count.
     """
 
     dataset: str
@@ -111,15 +114,15 @@ class HarborRunResult:
     archive_path: str | None
 
     @property
-    def failed_trials(self) -> int | None:
-        """Attempted trials that produced no verifier grade, or None when the denominator is unknown."""
+    def unscored_trials(self) -> int | None:
+        """Unscored trials, or None when the attempted count is unknown."""
         if self.attempted_trials is None:
             return None
         return max(0, self.attempted_trials - self.scored_trials)
 
     @property
     def completion_rate(self) -> float | None:
-        """The fraction of attempted trials a verifier graded, or None when that count is unknown."""
+        """Scoreable fraction of attempted trials, or None when that count is unknown."""
         if self.attempted_trials is None:
             return None
         if self.attempted_trials <= 0:
@@ -177,8 +180,8 @@ def _job_dir(output_dir: str, job_name: str) -> StoragePath:
     return _jobs_dir(output_dir) / job_name
 
 
-def _read_trial(result_file: StoragePath) -> HarborTrial:
-    """Normalize one finished trial off its ``result.json``, locating its durable trajectory."""
+def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> HarborTrial:
+    """Normalize one Harbor result and locate its durable trajectory."""
     trial_dir = result_file.parent
     data = json.loads(result_file.read_text())
     task_id = data.get("task_name", trial_dir.name)
@@ -187,27 +190,40 @@ def _read_trial(result_file: StoragePath) -> HarborTrial:
     reward = rewards.get("reward", 0.0)
     reward = float(reward) if isinstance(reward, int | float) else 0.0
     exc = data.get("exception_info")
-    error = {"type": exc.get("exception_type"), "message": exc.get("exception_message")} if exc else None
+    exception_type = exc.get("exception_type") if exc else None
+    error = {"type": exception_type, "message": exc.get("exception_message")} if exc else None
+    if error is None:
+        scored = verifier_result is not None
+    elif exception_type in taxonomy.agent:
+        scored = True
+    elif exception_type in taxonomy.passthrough:
+        scored = verifier_result is not None
+    elif exception_type in taxonomy.infrastructure:
+        scored = False
+    elif exception_type in taxonomy.undecided:
+        scored = False
+    else:
+        error["type"] = f"{_UNKNOWN_ERROR_PREFIX}{exception_type or _UNKNOWN_ERROR}"
+        scored = False
     trajectory_file = trial_dir / "agent" / "trajectory.json"
     trajectory_path = str(trajectory_file) if trajectory_file.exists() else None
     return HarborTrial(
         task_id=task_id,
         trial_id=trial_dir.name,
         reward=reward,
-        scored=verifier_result is not None and error is None,
+        scored=scored,
         status="failed" if exc else "completed",
         trajectory_path=trajectory_path,
         error=error,
     )
 
 
-def _read_trials(job_dir: StoragePath) -> list[HarborTrial]:
-    """Read every finished trial under ``job_dir``, one parallel per-trial read each."""
-    result_files = sorted((job_dir / "*/result.json").glob(), key=lambda path: path.parent.name)
+def _read_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy) -> list[HarborTrial]:
+    result_files = sorted((job_dir / _TRIAL_RESULT_GLOB).glob(), key=lambda path: path.parent.name)
     if not result_files:
         return []
     with ThreadPoolExecutor(max_workers=min(_TRIAL_READ_WORKERS, len(result_files))) as pool:
-        return list(pool.map(_read_trial, result_files))
+        return list(pool.map(lambda result_file: _read_trial(result_file, taxonomy), result_files))
 
 
 def _attempted_trials(job_dir: StoragePath) -> int | None:
@@ -234,18 +250,19 @@ def _attempted_trials(job_dir: StoragePath) -> int | None:
     return None
 
 
-def _remove_unscored_trials(job_dir: StoragePath) -> None:
-    """Remove incomplete results so Harbor reruns them after a confirmed interruption."""
-    for result_file in (job_dir / "*/result.json").glob():
+def _remove_unscored_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy) -> None:
+    """Remove results Harbor should retry after a confirmed inference interruption."""
+    for result_file in (job_dir / _TRIAL_RESULT_GLOB).glob():
         try:
-            result = json.loads(result_file.read_text())
+            trial = _read_trial(result_file, taxonomy)
         except json.JSONDecodeError as exc:
             logger.warning(
                 "removing unreadable Harbor trial result after inference interruption: %s (%s)", result_file, exc
             )
             result_file.parent.rmtree()
             continue
-        if result.get("verifier_result") is None:
+        error_type = (trial.error or {}).get("type", "")
+        if not trial.scored and not error_type.startswith(_UNKNOWN_ERROR_PREFIX):
             result_file.parent.rmtree()
 
 
@@ -288,7 +305,8 @@ def _write_archive(trials: list[HarborTrial], dataset: str, output_dir: str) -> 
         for trial in trials:
             trajectory_uri = None
             if trial.trajectory_path is not None:
-                stored = store.add_trajectory(
+                stored = archive_trajectory(
+                    store,
                     StoragePath(trial.trajectory_path).read_bytes(),
                     task=dataset,
                     doc_id=trial.task_id,
@@ -303,7 +321,7 @@ def _write_archive(trials: list[HarborTrial], dataset: str, output_dir: str) -> 
 
 
 def _trial_errors(trials: list[HarborTrial], attempted: int | None) -> dict[str, int]:
-    """The error-type histogram over attempted trials that produced no grade.
+    """Count trial errors, including errors on scored outcomes.
 
     Trials the job never wrote a result for are counted under :data:`_MISSING_RESULT_ERROR`: they are
     the attrition Harbor's own bookkeeping knows about but its result files cannot show. With no
@@ -311,7 +329,7 @@ def _trial_errors(trials: list[HarborTrial], attempted: int | None) -> dict[str,
     """
     errors: dict[str, int] = {}
     for trial in trials:
-        if trial.scored:
+        if trial.scored and trial.error is None:
             continue
         name = (trial.error or {}).get("type") or _UNKNOWN_ERROR
         errors[name] = errors.get(name, 0) + 1
@@ -364,11 +382,11 @@ def _run_harbor_job(
             break
         except HarborBackendsUnavailable as exc:
             logger.warning("pausing Harbor job %s while inference recovers: %s", job_name, exc)
-            _remove_unscored_trials(job_dir)
+            _remove_unscored_trials(job_dir, config.error_taxonomy)
             inference_session.wait_until_ready()
             logger.info("inference recovered; resuming Harbor job %s", job_name)
 
-    trials = _read_trials(job_dir)
+    trials = _read_trials(job_dir, config.error_taxonomy)
     archive_path = _write_archive(trials, dataset, output_dir)
     result = _aggregate(trials, dataset, archive_path, _attempted_trials(job_dir))
     StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
@@ -378,7 +396,7 @@ def _run_harbor_job(
                 "attempted_trials": result.attempted_trials,
                 "scored_trials": result.scored_trials,
                 "solved_trials": result.solved_trials,
-                "failed_trials": result.failed_trials,
+                "unscored_trials": result.unscored_trials,
                 "errors": dict(result.errors),
                 "mean_reward": result.mean_reward,
                 "accuracy": result.accuracy,
@@ -407,8 +425,8 @@ def _evaluation_outcome(
 
     A run clearing the gate keeps its aggregate and its per-trial error distribution, so a downstream
     reader can tell the model's score apart from the infrastructure quality behind it. A run below the
-    gate fails as an infrastructure failure -- agent and verifier timeouts are not evaluation outcomes
-    -- and still records its coverage so the rejection is legible as counts rather than as prose.
+    gate fails as an infrastructure failure and still records its coverage so the rejection is legible
+    as counts rather than as prose. Unknown exception names reject the run as taxonomy drift.
 
     A run whose attempted-trial count is unknown has no rate to gate on. It is admitted with its
     coverage left unreported, which downstream widens to "completeness unknown" rather than treating
@@ -418,6 +436,14 @@ def _evaluation_outcome(
         result = run()
     except Exception as exc:
         raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc
+    unknown_errors = {name: count for name, count in result.errors.items() if name.startswith(_UNKNOWN_ERROR_PREFIX)}
+    if unknown_errors:
+        raise EvaluationError(
+            f"Harbor eval encountered error names absent from its taxonomy under {output_dir!r}: "
+            f"{_error_summary(unknown_errors)}",
+            status=RunStatus.INFRA_FAILED,
+            coverage=result.task_coverage(),
+        )
     if not result.scored_trials and not result.attempted_trials:
         raise EvaluationError(
             f"Harbor eval finished with no trials under {output_dir!r}",
@@ -463,7 +489,7 @@ class HarborExecutor:
     model_agent_kwargs: Mapping[str, object]
     secret_env_keys: tuple[str, ...] = ()
     min_completion_rate: float = DEFAULT_MIN_COMPLETION_RATE
-    """The fraction of attempted trials a verifier must grade for the run to be accepted."""
+    """Minimum scoreable fraction of attempted trials for accepting the run."""
 
     def _run(
         self,

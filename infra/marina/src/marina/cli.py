@@ -8,6 +8,8 @@ import os
 import subprocess
 import tempfile
 import threading
+from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -22,6 +24,7 @@ from marina.applets import (
     package_applet,
     parse_applet_manifest,
     read_applet_package,
+    validate_backend_import,
 )
 from marina.apps import is_python_app, migration, services_for
 from marina.client import DEFAULT_MARINA_URL, marina_request, publish_applet
@@ -48,6 +51,25 @@ DEFAULT_APPS_DIR = Path(os.environ.get(APPS_DIR_ENV) or Path(__file__).resolve()
 # Where `marina dev` reads app data: one directory per app, mirroring the production bucket.
 DEFAULT_DATA_ROOT = Path(__file__).resolve().parents[2] / ".data"
 DEFAULT_PORT = 8080
+
+
+class _AppletValidationCheck(StrEnum):
+    PACKAGE = "package"
+    INLINE_SCRIPTS = "inline_scripts"
+    BACKEND_IMPORT = "backend_import"
+    BACKEND_FACTORY_EXECUTION = "backend_factory_execution"
+    MIGRATION_EXECUTION = "migration_execution"
+    BROWSER = "browser"
+
+
+@dataclass(frozen=True)
+class _AppletValidationReport:
+    files: tuple[str, ...]
+    file_count: int
+    byte_size: int
+    digest: str
+    checks: tuple[_AppletValidationCheck, ...]
+    not_checked: tuple[_AppletValidationCheck, ...]
 
 
 @click.group()
@@ -187,20 +209,56 @@ def _publish_package(app_dir: Path, *, build: bool) -> tuple[bytes, AppletPackag
     return payload, read_applet_package(payload)
 
 
-def _print_dry_run(package: AppletPackage, *, json_output: bool) -> None:
-    files = sorted(package.files)
-    report = {
-        "files": files,
-        "file_count": len(files),
-        "byte_size": package.byte_size,
-        "digest": package.digest.hex(),
-    }
+def _validation_report(package: AppletPackage, *, backend_import_checked: bool) -> _AppletValidationReport:
+    files = tuple(sorted(package.files))
+    checks = [_AppletValidationCheck.PACKAGE, _AppletValidationCheck.INLINE_SCRIPTS]
+    not_checked = [_AppletValidationCheck.BROWSER]
+    if package.manifest.python_entrypoint is not None:
+        not_checked = [
+            _AppletValidationCheck.BACKEND_FACTORY_EXECUTION,
+            _AppletValidationCheck.MIGRATION_EXECUTION,
+            *not_checked,
+        ]
+        if backend_import_checked:
+            checks.append(_AppletValidationCheck.BACKEND_IMPORT)
+        else:
+            not_checked.insert(0, _AppletValidationCheck.BACKEND_IMPORT)
+    return _AppletValidationReport(
+        files=files,
+        file_count=len(files),
+        byte_size=package.byte_size,
+        digest=package.digest.hex(),
+        checks=tuple(checks),
+        not_checked=tuple(not_checked),
+    )
+
+
+def _print_validation_report(package: AppletPackage, *, backend_import_checked: bool, json_output: bool) -> None:
+    report = _validation_report(package, backend_import_checked=backend_import_checked)
     if json_output:
-        click.echo(json.dumps(report, sort_keys=True))
+        click.echo(json.dumps(asdict(report), sort_keys=True))
         return
-    click.echo(f"{report['file_count']} files, {report['byte_size']} bytes, sha256 {report['digest']}")
-    for path in files:
+    click.echo(f"{report.file_count} files, {report.byte_size} bytes, sha256 {report.digest}")
+    click.echo(f"Checks: {', '.join(report.checks)}")
+    click.echo(f"Not checked: {', '.join(report.not_checked)}")
+    for path in report.files:
         click.echo(path)
+
+
+@cli.command()
+@click.argument("app_dir", type=click.Path(path_type=Path, file_okay=False, exists=True))
+@click.option("--build/--no-build", default=True, help="Run a declared build_command before packaging.")
+@click.option("--json", "json_output", is_flag=True, help="Print the validation report as JSON.")
+def validate(app_dir: Path, build: bool, json_output: bool) -> None:
+    """Validate an applet package and import its backend in the Marina runtime."""
+    _payload, package = _publish_package(app_dir, build=build)
+    backend_import_checked = package.manifest.python_entrypoint is not None
+    if backend_import_checked:
+        try:
+            validate_backend_import(package)
+        except ValueError as error:
+            raise click.UsageError(str(error)) from error
+    _print_validation_report(package, backend_import_checked=backend_import_checked, json_output=json_output)
 
 
 def _print_publish_result(result: dict[str, object], service_url: str, *, json_output: bool) -> None:
@@ -251,7 +309,7 @@ def _serve_local_applet(payload: bytes, *, json_output: bool) -> None:
 @click.option("--base-version", type=int, default=None, help="Current version required by an update.")
 @click.option("--build/--no-build", default=True, help="Run a declared build_command before packaging.")
 @click.option("--local", is_flag=True, help="Run this applet against disposable Postgres and Marina.")
-@click.option("--dry-run", is_flag=True, help="Validate and print package contents without publishing.")
+@click.option("--dry-run", is_flag=True, help="Run package-only validation and print contents without publishing.")
 @click.option("--json", "json_output", is_flag=True, help="Print the publish result as JSON.")
 def publish(
     app_dir: Path,
@@ -274,7 +332,7 @@ def publish(
         _serve_local_applet(payload, json_output=json_output)
         return
     if dry_run:
-        _print_dry_run(package, json_output=json_output)
+        _print_validation_report(package, backend_import_checked=False, json_output=json_output)
         return
     if (applet_id is None) != (base_version is None):
         raise click.UsageError("--update and --base-version must be supplied together")

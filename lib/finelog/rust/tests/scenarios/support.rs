@@ -359,9 +359,9 @@ impl Invariants {
                 .unwrap(),
         ));
         // `load` is the contract for "HEAD names a state the controller
-        // committed": it rejects a HEAD whose state document is missing, fails
-        // its recorded SHA-256, or disagrees about revision, active version, or
-        // tombstone.
+        // committed": it rejects a HEAD whose catalog ancestry is missing, has
+        // the wrong stable byte size, or disagrees about revision, active
+        // version, or tombstone.
         let selected = states
             .load(TABLE)
             .await

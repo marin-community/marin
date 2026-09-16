@@ -39,7 +39,7 @@ from marin.evaluation.olmo_base_eval.bpb import EncodedInstance, encode_context_
 from marin.evaluation.olmo_base_eval.components import leaf_components, mmlu_subjects, scored_tasks
 from marin.evaluation.olmo_base_eval.metrics import build_wandb_metrics, sc_compat_metrics
 from marin.evaluation.olmo_base_eval.request_set import RequestInstance, load_request_set, read_manifest
-from marin.execution import ExecutorStep, InputName, this_output_path
+from marin.execution.types import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 logger = logging.getLogger(__name__)

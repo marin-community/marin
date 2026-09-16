@@ -26,9 +26,8 @@ from typing import Any
 import fsspec
 from fray.cluster import ResourceConfig
 from marin.evaluation.olmo_base_eval.run import RESULTS_FILENAME, olmo_base_eval_step
-from marin.execution import InputName
 from marin.execution.executor import ExecutorMainConfig, executor_main
-from marin.execution.types import ExecutorStep, output_path_of, this_output_path
+from marin.execution.types import ExecutorStep, InputName, output_path_of, this_output_path
 
 logger = logging.getLogger(__name__)
 

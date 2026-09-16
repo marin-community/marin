@@ -5,7 +5,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
@@ -19,15 +18,14 @@ import levanter
 import levanter.analysis
 import levanter.config
 import levanter.tracker
-from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
+from levanter.compat.hf_checkpoints import RepoRef
 from levanter.data.loader import DataLoader
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
+from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
 
 
@@ -127,27 +125,22 @@ def main(config: EvalLmConfig):
 
         # initialize the model
         if config.checkpoint_path is not None:
-            # initialize the model
-            with use_cpu_device():
-                model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                # TODO: can't load the EMA model with current setup here. Not a big deal for now.
-                # TODO: don't load the entire checkpoint into CPU memory when we only need our share of the model
-                checkpoint_path = latest_checkpoint_path(config.checkpoint_path)
-                model = load_checkpoint(model, checkpoint_path, subpath="model")
-
-            model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
-        elif config.hf_checkpoint is not None:
-            # load the huggingface model
-            model_config = config.model
-            if not hasattr(model_config, "hf_checkpoint_converter"):
-                raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
-            converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-            converter = converter.replaced(reference_checkpoint=config.hf_checkpoint, tokenizer=tokenizer)
-            model = converter.load_pretrained(
-                model_config.model_type,
-                ref=config.hf_checkpoint,
+            # TODO: can't load the EMA model with current setup here. Not a big deal for now.
+            # TODO: don't load the entire checkpoint into CPU memory when we only need our share of the model
+            model = load_levanter_checkpoint(
+                config.model,
+                config.checkpoint_path,
+                Vocab=Vocab,
                 axis_mapping=parameter_axis_mapping,
-                dtype=mp.compute_dtype,
+                key=key,
+            )
+        elif config.hf_checkpoint is not None:
+            model = load_hf_checkpoint(
+                config.model,
+                str(config.hf_checkpoint),
+                axis_mapping=parameter_axis_mapping,
+                tokenizer=tokenizer,
+                compute_dtype=mp.compute_dtype,
             )
         else:
             assert False, "Should not get here"

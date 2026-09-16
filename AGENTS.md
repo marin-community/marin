@@ -29,23 +29,8 @@ lands in the right pattern.
 Skills are task-focused playbooks in `.agents/skills/` (also accessible as
 `.claude/skills/`). **Before starting any non-trivial task, check whether a
 matching skill exists** by scanning the skill descriptions in your system
-prompt. If a skill matches, load and follow it — do not skip it in favor of
-ad-hoc commands.
-
-For long-running research experiments, Fieldbook is the local experiment
-ledger. If `.experiments/ledger.sqlite` exists, or the task asks about active
-experiments, job recovery, retries, experiment progress, context switching, or
-source-of-truth bookkeeping, start with:
-
-```bash
-uv run fieldbook db where --json
-uv run fieldbook experiment list --json
-```
-
-Then inspect the relevant experiment with `uv run fieldbook experiment status
-<experiment> --json` before relying on Iris, W&B, logbooks, or chat history.
-Record submissions, retries, artifacts, validations, and checkpoints back into
-Fieldbook when the task changes experiment state.
+prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
+favor of ad-hoc commands.
 
 ## Handle Requests
 
@@ -58,24 +43,10 @@ fix remains.
 ## Search Prior Work
 
 Use Echo when prior Marin decisions, incidents, workflows, GitHub work, or
-indexed repository documentation could inform a task:
-
-```bash
-uv run infra/marina/apps/echo/cli.py search "how do I deploy Iris"
-uv run infra/marina/apps/echo/cli.py search "compare cache implementations" --repository all
-uv run infra/marina/apps/echo/cli.py get <source-id>
-```
-
-Search covers wiki, repository files, pull requests, and issues by default.
-File search infers the configured Marin-community repository from the current
-Git checkout, including ordinary contributor forks. Pass `--repository
-<owner/repo>` for one configured repository or `--repository all` for all six.
-Repeat `--domain` to select a subset; searches without the file domain do not
-need a Git checkout. Add `--domain discord` only when discussion history is
-relevant. Use `grep` for exact strings in remote activity and `rg` for the
-current checkout, including branch-only or uncommitted files. Echo's file
-results follow the periodically refreshed GitHub head rather than the local
-working tree. See the `consult-echo` skill for the complete workflow.
+indexed repository documentation could inform a task. Follow `consult-echo`
+for search scope, exact-string search, result grading, and write rules. Use
+`rg` for the current checkout because Echo does not index branch-only or
+uncommitted files.
 
 ## Development
 
@@ -93,15 +64,12 @@ uv run --no-project infra/ci/run_tests.py
 ./infra/pre-commit.py --review
 ```
 
-- `./infra/pre-commit.py` is the required lint entry point for this repo. Do
-  not replace it with `uv run pre-commit ...`.
+- `./infra/pre-commit.py` is the required lint entry point. Do not replace it
+  with `uv run pre-commit`.
 - Keep type hints passing under `uv run pyrefly check`; configuration lives in
   `pyproject.toml`.
-- Run `./infra/pre-commit.py --review` once before opening or updating a PR,
-  and fix or respond to every finding it reports (see the `commit` skill). Do
-  not rerun it after small, targeted touch-ups made in response to its
-  findings. Rerun only when the follow-up materially changes the
-  implementation approach or scope.
+- Follow the `commit` skill for the required lint-review timing and response
+  workflow before publishing a PR.
 - Python >=3.12. Use `uv run` for entry points.
 - Do not replace pytest's default marker expression with a partial expression
   such as `-m "not slow"`; `-m` overrides the whole default and can select live
@@ -110,14 +78,6 @@ uv run --no-project infra/ci/run_tests.py
 - NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
 - In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
-- For east5 data-mixing work, every live Iris parent submission must include explicit parent placement:
-  `--region us-east5 --zone us-east5-a`. Child TPU placement inside a launcher is not enough; the parent also reads and writes GCS state. State CSVs, executor prefixes, checkpoint roots, eval caches, and `MARIN_PREFIX` must use `gs://marin-us-east5` unless the user explicitly approves a different region.
-  Before submitting, validate the exact command with
-  `uv run python -m experiments.domain_phase_mix.east5_launch_safety --command '<iris job run ...>'`.
-- Region-specific exceptions, such as historical StarCoder work in central1, must still be region-local:
-  parent `--region/--zone`, child TPU region/zone, `MARIN_PREFIX`, eval caches, tokenizers, checkpoint roots,
-  and state/executor paths must all point to the same approved region. Validate central1 StarCoder commands with
-  `uv run python -m experiments.domain_phase_mix.east5_launch_safety --expected-region us-central1 --expected-zone us-central1-a --expected-bucket-prefix gs://marin-us-central1 --command '<iris job run ...>'`.
 
 ## Communication & Commits
 
@@ -131,26 +91,11 @@ uv run --no-project infra/ci/run_tests.py
 - Agent *comments* on PRs/issues must begin with `🤖` unless the exact text was
   explicitly approved by the user. This applies to comments only — never put a
   `🤖` marker in a commit message or a PR/issue body.
-- All agent-authored commit, PR, and issue titles and bodies must follow
-  `.agents/skills/writing-style/SKILL.md` and its PR or issue guide. Review the
-  exact text that will be published, then apply `ai-writing-donts.md` as a final
-  compression pass. Do not publish raw implementation notes, test narration,
-  prompt-shaped headings, or claims that use emphasis in place of evidence.
-- A PR description is the squash-merge commit message. Keep every fact a future
-  reader needs to understand the behavior and rationale, including measured
-  results and caveats when they affect review. Remove headings, diff narration,
-  and implementation inventories; put extended history in a linked issue,
-  logbook, or artifact. Follow the `commit` skill
-  (`.agents/skills/commit/SKILL.md`) when committing, pushing, or opening a PR.
-- PR monitoring is part of the `commit` skill. After opening or updating a PR,
-  follow its `wait_for.py` loop through an exit condition. Do not substitute
-  `gh pr checks --watch`, repeated `gh pr view` calls, or handoff at green CI.
-  Keep one `wait_for.py` process attached in the foreground until it exits.
-  Never background it or give the shell, tool, or agent a separate timeout;
-  `wait_for.py --timeout` owns the deadline. If the execution interface yields
-  a process handle, keep making blocking wait/resume calls on that same handle
-  until the process exits. A runner yield is not a monitoring event: do not
-  narrate it or inspect GitHub while the process is still running.
+- Follow `writing-style` plus the medium-specific guide for agent-authored
+  commit, PR, issue, comment, documentation, report, and blog prose.
+- Follow `commit` when committing, pushing, opening or updating a PR, and
+  monitoring it through an exit condition. The skill owns PR-body content,
+  lint-review timing, publication, and monitoring procedure.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
 ## Code Style
@@ -210,12 +155,13 @@ uv run --no-project infra/ci/run_tests.py
 
 ## Agent Artifacts
 
-- Publish infrastructure incidents and durable debugging investigations to
-  Echo with the `write-ops-log` skill. Link the canonical Echo URL from the
-  associated PR or issue. Do not create repository debug-log files.
-- Keep user-facing and reusable product documentation in `docs/`; keep research
-  progress in the relevant task logbook or project artifact. These are distinct
-  from incident records.
+- Publish a live infrastructure incident through `write-ops-log` when a service,
+  production run, or shared operational system failed or degraded and required
+  diagnosis or mitigation. Do not use Echo as a work log for ordinary code
+  debugging or implementation.
+- Keep user-facing and reusable product documentation in `docs/`. Record
+  research progress in the task's existing issue, PR, report, or durable session
+  channel. These are distinct from incident records.
 
 ## Deprecation
 
@@ -238,17 +184,15 @@ Watch for and eliminate these patterns in generated code:
 
 ## Planning
 
-- The `write-design-doc` skill owns design-doc creation and runs only when the
-  user explicitly asks for one. Diff size and implementation complexity do not
-  require a design artifact.
 - Planning applies to change-mode work. Produce a detailed plan, with code
   snippets when they clarify a concrete implementation, for non-trivial
   changes. Resolve context from the repository and prior work first; ask only
   when a missing decision would materially change the implementation.
 - In answer mode, investigate and reply directly. Do not manufacture a plan or
-  `.agents/projects/` artifact.
-- When a change request is too large for one pass, capture a plan in
-  `.agents/projects/` before pausing.
+  repository artifact.
+- Keep plans in the conversation or an existing issue, PR, or durable session
+  channel. When a change request is too large for one pass, narrow the scope and
+  record the remaining work there instead of adding a repository planning file.
 
 ## Code Reuse
 

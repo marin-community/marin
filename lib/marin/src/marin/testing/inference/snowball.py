@@ -21,6 +21,8 @@ MAX_PROBABILITY_ERROR = 0.075
 _RESOURCES = Path(__file__).parent / "resources"
 # Frozen artifacts retain the identifiers of the June 67B training lineage.
 _REPRESENTATIVE_GOLDEN_PATH = _RESOURCES / "june_tpu_67b_a2b_step_42150_representative_eval_golden.json"
+# The exact checkpoint snapshot was reproduced on two H100 nodes with JAX 0.11.1 and CUTLASS DSL 4.6.2.
+_CHECKPOINT_GOLDEN_PATH = _RESOURCES / "june_tpu_67b_a2b_step_42150_current_fa4_golden.json"
 _PROMPT_FIXTURE_SHA256 = "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8"
 _PROMPT_FIXTURE_URL = (
     "https://storage.googleapis.com/marin-public/test-data/vllm/e2e/representative-eval-prompts/"
@@ -89,7 +91,17 @@ class RepresentativePromptFixture:
 
 
 def read_representative_goldens() -> tuple[RepresentativeGolden, ...]:
-    payload = json.loads(_REPRESENTATIVE_GOLDEN_PATH.read_bytes())
+    """Read the stable cross-backend probability contract."""
+    return _read_goldens(_REPRESENTATIVE_GOLDEN_PATH)
+
+
+def read_checkpoint_goldens() -> tuple[RepresentativeGolden, ...]:
+    """Read the exact snapshot for the current deterministic FA4 checkpoint path."""
+    return _read_goldens(_CHECKPOINT_GOLDEN_PATH)
+
+
+def _read_goldens(path: Path) -> tuple[RepresentativeGolden, ...]:
+    payload = json.loads(path.read_bytes())
     return tuple(
         RepresentativeGolden(
             id=raw_case["id"],

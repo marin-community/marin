@@ -22,14 +22,16 @@ use tokio::sync::{RwLock, Semaphore};
 
 use crate::errors::StatsError;
 use crate::store::object_store::{
-    ObjectId, ObjectMetadata, ObjectPrefix, ObjectReference, ObjectStore, ObjectVersion,
-    StoredObject, FINELOG_ROOT_COMPONENT,
+    DeleteManyOutcome, ObjectId, ObjectMetadata, ObjectPrefix, ObjectReference, ObjectStore,
+    ObjectVersion, StoredObject, FINELOG_ROOT_COMPONENT,
 };
 
 use super::local_file::atomic_write;
 
 /// Concurrent cache-miss downloads across every caller of this store.
 const MAX_PARALLEL_FETCHES: usize = 8;
+
+const MAX_PARALLEL_UPLOADS: usize = 8;
 
 /// Minimum gap between eviction sweeps. `gc` runs once per table per
 /// maintenance cycle; the sweep is store-wide, so most calls return
@@ -111,6 +113,8 @@ pub struct CachedObjectStore {
     cache: FileCache,
     /// Bounds concurrent cache-miss downloads.
     fetches: Arc<Semaphore>,
+    /// Bounds write-through uploads independently of reads and flush encoding.
+    uploads: Arc<Semaphore>,
     /// Total cache bytes to retain; `None` retains everything.
     capacity_bytes: Option<u64>,
     /// Store-wide scan lock. Eviction unlinks only behind its write side, so a
@@ -133,6 +137,7 @@ impl CachedObjectStore {
             source,
             cache: FileCache::new(root)?,
             fetches: Arc::new(Semaphore::new(MAX_PARALLEL_FETCHES)),
+            uploads: Arc::new(Semaphore::new(MAX_PARALLEL_UPLOADS)),
             capacity_bytes,
             query_visibility,
             last_gc: Arc::new(Mutex::new(None)),
@@ -274,6 +279,9 @@ impl ObjectStore for CachedObjectStore {
     }
 
     async fn upload_staged(&self, reference: &ObjectReference) -> Result<(), StatsError> {
+        let _permit = self.uploads.acquire().await.map_err(|error| {
+            StatsError::Internal(format!("object cache upload semaphore: {error}"))
+        })?;
         let Some(path) = self.lookup(reference).await? else {
             return Err(StatsError::Internal(format!(
                 "staged object {:?} has no local bytes to upload",
@@ -292,6 +300,10 @@ impl ObjectStore for CachedObjectStore {
 
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {
         self.source.read(id).await
+    }
+
+    async fn exists(&self, id: &ObjectId) -> Result<bool, StatsError> {
+        self.source.exists(id).await
     }
 
     async fn local_path(&self, reference: &ObjectReference) -> Result<PathBuf, StatsError> {
@@ -336,12 +348,43 @@ impl ObjectStore for CachedObjectStore {
     }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
+        // A scan may already hold the planned cache path. Wait for every pinned
+        // read before removing the remote object or its cache copy.
+        let _visibility = self.query_visibility.write().await;
         self.source.delete(id).await?;
         let cache = self.cache.clone();
         let id = id.clone();
         tokio::task::spawn_blocking(move || cache.remove(&id))
             .await
             .map_err(|error| StatsError::Internal(format!("object cache delete task: {error}")))?
+    }
+
+    async fn delete_many(&self, ids: Vec<ObjectId>) -> DeleteManyOutcome {
+        let outcome = self.source.delete_many(ids).await;
+        if outcome.deleted.is_empty() {
+            return outcome;
+        }
+        let _visibility = self.query_visibility.write().await;
+        let cache = self.cache.clone();
+        let deleted = outcome.deleted.clone();
+        let cache_result = tokio::task::spawn_blocking(move || {
+            for id in &deleted {
+                cache.remove(id)?;
+            }
+            Ok::<(), StatsError>(())
+        })
+        .await;
+        let cache_error = match cache_result {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error),
+            Err(error) => Some(StatsError::Internal(format!(
+                "object cache delete task: {error}"
+            ))),
+        };
+        DeleteManyOutcome {
+            deleted: outcome.deleted,
+            error: outcome.error.or(cache_error),
+        }
     }
 
     async fn list(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {

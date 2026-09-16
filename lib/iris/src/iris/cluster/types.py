@@ -400,14 +400,6 @@ class TaskAttempt:
         """Get the task index from the task_id."""
         return self.task_id.require_task()[1]
 
-    def with_attempt(self, attempt_id: int) -> "TaskAttempt":
-        """Return a new TaskAttempt with the given attempt_id."""
-        return TaskAttempt(task_id=self.task_id, attempt_id=attempt_id)
-
-    def without_attempt(self) -> "TaskAttempt":
-        """Return a new TaskAttempt with attempt_id=None."""
-        return TaskAttempt(task_id=self.task_id)
-
     def __str__(self) -> str:
         return self.to_wire()
 
@@ -842,6 +834,17 @@ class Namespace(str):
 
 TERMINAL_JOB_STATES: frozenset[int] = frozenset(
     job_pb2.JobState.Value(f"JOB_STATE_{state.name}") for state in NATIVE_TERMINAL_JOB_STATES
+)
+
+USER_JOB_STATES = (
+    job_pb2.JOB_STATE_PENDING,
+    job_pb2.JOB_STATE_BUILDING,
+    job_pb2.JOB_STATE_RUNNING,
+    job_pb2.JOB_STATE_SUCCEEDED,
+    job_pb2.JOB_STATE_FAILED,
+    job_pb2.JOB_STATE_KILLED,
+    job_pb2.JOB_STATE_WORKER_FAILED,
+    job_pb2.JOB_STATE_UNSCHEDULABLE,
 )
 
 TERMINAL_TASK_STATES: frozenset[int] = frozenset(

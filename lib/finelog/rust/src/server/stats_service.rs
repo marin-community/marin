@@ -16,16 +16,19 @@ use crate::errors::StatsError;
 use crate::policies::{managed_storage_policy_for, registration_namespace_for};
 use crate::proto::finelog::stats::{
     AbortTableMigrationResponse, DropTableResponse, GetTableSchemaResponse, GetTableStatusResponse,
-    ListNamespacesResponse, NamespaceInfo, OwnedAbortTableMigrationRequestView,
-    OwnedDropTableRequestView, OwnedGetTableSchemaRequestView, OwnedGetTableStatusRequestView,
-    OwnedListNamespacesRequestView, OwnedQueryRequestView, OwnedRegisterTableRequestView,
-    OwnedWriteRowsRequestView, QueryResponse, RegisterTableResponse, StatsService,
-    WriteRowsResponse,
+    ListNamespacesResponse, ListRelayStatusResponse, NamespaceInfo,
+    OwnedAbortTableMigrationRequestView, OwnedDropTableRequestView, OwnedGetTableSchemaRequestView,
+    OwnedGetTableStatusRequestView, OwnedListNamespacesRequestView,
+    OwnedListRelayStatusRequestView, OwnedQueryRequestView, OwnedRegisterTableRequestView,
+    OwnedReportRelayStatusRequestView, OwnedWriteRowsRequestView, QueryResponse,
+    RegisterTableResponse, ReportRelayNamespaceStatus, ReportRelayStatusRequest,
+    ReportRelayStatusResponse, StatsService, WriteRowsResponse,
 };
 use crate::query::{
     make_ctx, query_timeout, run_query_over, run_within_query_timeout, truncate_sql_for_log,
 };
 use crate::server::auth::{request_identity, AuthIdentity};
+use crate::server::relay_status::RelayStatusRegistry;
 use crate::server::MAX_QUERY_RESULT_BYTES;
 use crate::store::catalog::SpecLifecycle;
 use crate::store::ipc::encode_ipc;
@@ -46,6 +49,7 @@ const SLOW_PERSIST_WARN_THRESHOLD: std::time::Duration = std::time::Duration::fr
 pub struct StatsServiceImpl {
     store: Arc<Store>,
     ignored_forwarded_telemetry_columns: Mutex<HashSet<String>>,
+    relay_status: RelayStatusRegistry,
 }
 
 struct RegistrationOutcome {
@@ -62,6 +66,7 @@ impl StatsServiceImpl {
         Self {
             store,
             ignored_forwarded_telemetry_columns: Mutex::new(HashSet::new()),
+            relay_status: RelayStatusRegistry::default(),
         }
     }
 
@@ -117,6 +122,15 @@ fn write_origin_cluster(ctx: &RequestContext) -> Result<Option<String>, ConnectE
         Some(AuthIdentity::Network) => Ok(None),
         None => Err(ConnectError::internal(
             "finelog: request reached a handler with no auth identity",
+        )),
+    }
+}
+
+fn relay_cluster(ctx: &RequestContext) -> Result<String, ConnectError> {
+    match request_identity(ctx) {
+        Some(AuthIdentity::Jwt { cluster }) => Ok(cluster.clone()),
+        _ => Err(ConnectError::permission_denied(
+            "relay status requires a forwarding JWT",
         )),
     }
 }
@@ -499,6 +513,57 @@ impl StatsService for StatsServiceImpl {
             ..Default::default()
         })
     }
+
+    async fn report_relay_status(
+        &self,
+        ctx: RequestContext,
+        request: OwnedReportRelayStatusRequestView,
+    ) -> ServiceResult<ReportRelayStatusResponse> {
+        let cluster = relay_cluster(&ctx)?;
+        let namespaces = request
+            .namespaces
+            .iter()
+            .map(|namespace| ReportRelayNamespaceStatus {
+                namespace: namespace.namespace.map(str::to_string),
+                visible_high_water: namespace.visible_high_water,
+                published_high_water: namespace.published_high_water,
+                settled_cursor: namespace.settled_cursor,
+                ..Default::default()
+            })
+            .collect();
+        let report = ReportRelayStatusRequest {
+            boot_id: request.boot_id.map(str::to_string),
+            report_sequence: request.report_sequence,
+            target: request.target.map(str::to_string),
+            namespaces,
+            ..Default::default()
+        };
+        let received_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| {
+                ConnectError::internal(format!("system clock is before unix epoch: {error}"))
+            })?
+            .as_millis() as i64;
+        let received_at_ms = self
+            .relay_status
+            .report(cluster, report, received_at_ms)
+            .map_err(ConnectError::invalid_argument)?;
+        connectrpc::Response::ok(ReportRelayStatusResponse {
+            received_at_ms: Some(received_at_ms),
+            ..Default::default()
+        })
+    }
+
+    async fn list_relay_status(
+        &self,
+        _ctx: RequestContext,
+        _request: OwnedListRelayStatusRequestView,
+    ) -> ServiceResult<ListRelayStatusResponse> {
+        connectrpc::Response::ok(ListRelayStatusResponse {
+            senders: self.relay_status.list(),
+            ..Default::default()
+        })
+    }
 }
 
 #[cfg(test)]
@@ -551,5 +616,12 @@ mod tests {
         // identity. Refusing rather than defaulting fails closed: an unauthenticated
         // write can never silently become a hub-local row.
         assert!(write_origin_cluster(&ctx_with(None)).is_err());
+    }
+
+    #[test]
+    fn only_a_forwarding_jwt_can_report_relay_status() {
+        assert_eq!(relay_cluster(&jwt("cw-a")).unwrap(), "cw-a");
+        assert!(relay_cluster(&ctx_with(Some(AuthIdentity::Network))).is_err());
+        assert!(relay_cluster(&ctx_with(None)).is_err());
     }
 }

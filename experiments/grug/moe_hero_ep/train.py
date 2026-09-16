@@ -701,7 +701,7 @@ def initial_state(
     if offload_opt_state:
         opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
     return GrugTrainState(
-        step=jnp.array(0, dtype=jnp.int32),
+        step=jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
         params=params,
         master_params=master_params,
         opt_state=opt_state,

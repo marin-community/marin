@@ -12,9 +12,11 @@ app's own, so ``/search`` here is ``/echo/api/search`` behind the kernel.
 import contextlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import cast
 
 import pytest
 import sqlalchemy
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from echo import app as echo
@@ -158,7 +160,7 @@ def client_with():
         engine = FakeEngine(rows, responses)
         model = FakeModel()
         reranker = FakeReranker()
-        api = echo.create_api(FakeServices(engine))
+        api = cast(FastAPI, echo.create_api(FakeServices(engine)).app)
         api.dependency_overrides[echo.get_engine] = lambda: engine
         api.dependency_overrides[echo.get_models] = lambda: FakeModels(model, reranker)
         api.dependency_overrides[echo.get_model] = lambda: model

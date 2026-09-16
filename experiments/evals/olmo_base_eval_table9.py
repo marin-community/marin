@@ -21,8 +21,8 @@ import os
 
 from fray.cluster import ResourceConfig
 from marin.evaluation.olmo_base_eval.run import olmo_base_eval_step
-from marin.execution import InputName
 from marin.execution.executor import executor_main
+from marin.execution.types import InputName
 
 # Frozen Table 9 request set (51 components / 104 scored tasks), prefix-relative.
 REQUEST_SET_DIR = InputName.hardcoded("raw/eval-datasets/olmo_base_eval_table9/v2")

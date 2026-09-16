@@ -1,0 +1,22 @@
+{
+  "name": "marina-app-plantt",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "rsbuild dev",
+    "build": "vue-tsc --noEmit && rsbuild build",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "lz-string": "^1.5.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@rsbuild/core": "^1.1.13",
+    "@rsbuild/plugin-vue": "^1.0.5",
+    "typescript": "^5.7.3",
+    "vue-tsc": "^2.2.0"
+  }
+}

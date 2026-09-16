@@ -127,7 +127,6 @@ async fn a_crash_during_migration_backfill_resumes_and_rejects_the_stale_lease()
                 unreachable!("a lease from a dead writer must not run its mutation")
             },
         )
-        .await
         .map(|committed| committed.token.revision());
     assert!(
         matches!(rejected, Err(CommitError::Fenced(_))),

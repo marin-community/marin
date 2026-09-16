@@ -881,14 +881,6 @@ class Autoscaler:
             groups.append(group_row)
         return AutoscalerState(slices=all_slices, groups=groups)
 
-    def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
-        """Get VM info by platform worker ID from the centralized worker registry."""
-        return self._worker_registry.vm_info(vm_id)
-
-    def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
-        """Get bootstrap log for a VM by platform worker ID."""
-        return self._worker_registry.init_log(vm_id, tail)
-
     def job_feasibility(
         self,
         constraints: list[Constraint],

@@ -1,0 +1,11 @@
+tasks: [CruxEval]
+task_options:
+  CruxEval:
+    num_fewshot: 0
+    task_alias: cruxeval
+    generation: true
+apply_chat_template: true
+batch_size: 1
+seed: 42
+max_tokens: 2048
+runtime_extras: [cruxeval]

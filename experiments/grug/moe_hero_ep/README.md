@@ -16,25 +16,23 @@ data-parallel rack uses one 64-device expert mesh.
   diagnostic uses 1024 sequences.
 - Router: top-8 quantile balancing uses a global histogram with 10,000 bins. It has next-step,
   stop-gradient expert biases and no auxiliary balancing loss.
-- MoE backend: `fixed_pooled_wave_all_to_all`, as a temporary fallback. Each sender uses one fixed
-  pool per destination and stripes it over three static waves. The receiver runs all six local
-  experts in each wave and drops rows above the fixed expert capacity. Expert IDs travel in the
-  activation payload, so the method does not use a metadata collective. The receiver and sender
-  capacity factors are 1.15. `ragged_all_to_all` is the intended default and takes the hero back
-  once it stops hanging an 11-rack run after a watch step
-  ([#8870](https://github.com/marin-community/marin/issues/8870)): one update carries each (peer,
-  local expert) pair, so rows arrive grouped by expert, and it reaches XLA's device-initiated
-  (NCCL LSA) kernel, which needs Marin's patched PJRT build, installed on GB200 through the `gpu`
-  extra (`lib/marin/pyproject.toml`).
+- MoE backend: `ragged_all_to_all`. One update carries each (peer, local expert) pair, so rows
+  arrive grouped by expert, and local experts run in two chunks that share the 1.15 receiver
+  capacity. The transport reaches XLA's device-initiated (NCCL LSA) kernel, which needs Marin's patched
+  PJRT build, installed on GB200 through the `gpu` extra (`lib/marin/pyproject.toml`); a run that
+  reaches the stock plugin fails at startup.
+  The production hero trained on `fixed_pooled_wave_all_to_all` through step 81716 (3.77T of its 18T
+  tokens); `hero-ragged_a2a-ep-step81k` continues from that checkpoint on the ragged transport.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
-- Weights: bf16 on device with a pinned-host fp32 master, which the pooled-wave device peak needs.
-  A checkpoint written with a master restores natively here. A master-less checkpoint, which the
-  hero writes when it keeps fp32 weights on device under the ragged transport, cannot restore into
-  this mode: synthesizing a master is refused. The reverse direction migrates in process, so a
-  master-bearing checkpoint reaches either mode.
+- Weights: fp32 on device with bf16 compute. A checkpoint written with a pinned-host fp32 master
+  migrates in process on restore: its stored fp32 master is read directly into the run's params
+  (the bf16 compute copy goes unread), and the next save writes the new layout. The reverse
+  (synthesizing a master) is refused.
 - Runtime: Each GPU has one JAX process. The recipe uses `cuda_async`, no PGLE, and no GPU
-  command buffers. The layer carry stays in HBM, which only the ragged transport offloads. Inline
-  watch uses collective overlap limit 1. A disabled watch uses limit 4.
+  command buffers. The ragged transport stages each layer's residual carry on pinned host, which
+  frees the HBM the latency-hiding scheduler needs to run. Collective overlap stays at 1: the
+  offload, the scheduler, and a higher limit corrupt training together, though no pair of them
+  does.
 - Resources: Each four-GPU worker requests 120 CPU, 890 GB of RAM, and 1 TB of disk.
 
 The attention, shared-expert, language-model-head, and optimizer states use the combined `data` and
@@ -196,8 +194,8 @@ group `moe-hero-ep-small-abl` and carry Paloma and uncheatable evaluation at `--
 ### Scaling ladder
 
 `launch_scaling_ladder.py` trains one uniform hero recipe at five widths so a narrow rung predicts
-the `d6144` hero (which is the hero itself). Every rung shares the hero data (the Harrier
-2026.08.18 two-phase mixture on the Marin tokenizer, simulated against the 18.75T target budget),
+the `d6144` hero (which is the hero itself). Every rung shares the data schedule below on the
+Marin tokenizer (simulated against 18.75T for small runs; raw sampling above 1e23 training FLOPs),
 the offloaded MuonH optimizer, the hero mixed precision, 384 experts / top-8, the ragged
 all-to-all transport, the QB histogram estimator at 10k bins, and a dropless held-out eval. Only
 the width and the rack count vary; the rack count, batch, step budget, eval cadence, and
@@ -219,6 +217,10 @@ durable output root, and a rolling temporary checkpoint every hour goes to regio
 storage with the shared 14-day lifecycle TTL. One temporary checkpoint is kept. A hardware fault, a
 host out-of-memory, or a preemption thus costs at most one hour of training. The training job
 retries 1000 times on failure and 100 times on preemption.
+
+The [new mixture](../../../docs/reports/hero-mixture-log.md) starts at ~27.7%
+of training, with cooldown weights at ~80% (hero steps 108,000 and 312,192).
+Before using `trigger_hero.sh`, wait for permanent `step-108000` to finish and stop the old run.
 
 Launch or resume the production d6144 hero with `trigger_hero.sh`. The trigger first comments on
 [issue #8506](https://github.com/marin-community/marin/issues/8506) with the full `HEAD` commit,

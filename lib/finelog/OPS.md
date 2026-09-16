@@ -486,6 +486,25 @@ uv run finelog query marin --format table \
 
 ### Distinguishing missing regional logs from delayed hub forwarding
 
+`FinelogRelayStalled` is the primary fleet alert for this distinction. Each
+regional process sends a complete status snapshot directly to the hub every 30
+seconds; the report does not pass through `WriteRows` or a telemetry table. Its
+states mean:
+
+- `heartbeat_missing` or `heartbeat_stale`: the hub has no current direct report
+  from the cluster.
+- `namespace_missing`: the required `telemetry_v1.node_agent` table is absent
+  from an otherwise current complete snapshot.
+- `publication_stalled`: locally visible sequence positions have not reached
+  the published R2 catalog for ten minutes.
+- `forwarding_stalled`: published positions have not advanced the hub-settled
+  cursor for ten minutes.
+
+The Grafana rule holds a classified failure for two more minutes before paging.
+NoData and bridge/RPC errors alert rather than appearing healthy. On the
+regional Finelog UI, the table's Forwarding card shows the same visible,
+published, and settled boundaries for local diagnosis.
+
 The regional Finelog is the record; the `marin` hub is an asynchronous copy. If
 logs for a federated Iris task are absent from the hub, query the exact task key
 on both stores before diagnosing the pod-side shipper. Iris task keys include the
@@ -552,8 +571,11 @@ kubectl --kubeconfig <kubeconfig> --context <context> -n iris \
 Warnings name the affected namespace. `backlog exceeds the warning threshold`
 reports pressure but does not change the forwarding cursor; the sender continues
 processing retained rows without moving the cursor merely because of backlog pressure.
-`rows evicted before they were forwarded`
-means that local retention has already made source sequence positions unreadable.
+`object-native cursor precedes the live spool; refusing to skip rows` means the
+cursor and live segment state disagree. The sender fails closed for that namespace;
+inspect its selected HEAD and local projection instead of advancing the cursor.
+`rows evicted before they were forwarded` applies only to a legacy relay whose
+local retention already made source sequence positions unreadable.
 `batch conflicts with the hub schema; preserving the cursor` means the sender will
 re-register the namespace's current schema on the next sweep and retry the same rows.
 `hub permanently rejected the batch; dropping it` means the hub classified the content
@@ -563,6 +585,29 @@ routed from the legacy `telemetry_v1` root. A `namespace ... is not registered`
 rejection for such a destination means the hub predates that behavior or its managed
 registration failed. The cumulative, process-lifetime `skipped_seqs` log field includes
 permanent rejections and local-retention gaps and resets after restart.
+
+Slow forwarding lines include the live and selected segment counts, rows,
+visibility-lock wait, snapshot, planning, scan, encoding, hub acknowledgement,
+settlement, and total milliseconds. A settlement line also reports removed
+segment, row, and byte counts. Maintenance lines report resource class, queue
+wait, run time, and the requested follow-up class. Object-backed relays use the
+`RelayIo` class; `SpecMigration` and `QueryServing` have independent limits.
+
+The forwarding cursor and fully covered object-segment removals share one
+catalog transaction and one HEAD publication. Covered segments stop appearing
+in relay queries immediately after settlement. Their objects remain through the
+query and rollback retention window, then exact-release GC removes both the
+remote object and local cache copy. The generic 24-hour orphan grace applies to
+unselected uploads whose owning transaction is unknown, not to settled relay
+segments.
+
+State collection uses the selected catalog and its checkpoint-folded release
+set. It lists historical catalog keys for age and selected-chain membership but
+does not download them. CoreWeave S3 deletes up to 1,000 eligible keys per
+request. The `collected object table state` event reports listed catalog keys,
+selected-chain size, pending and deleted releases, deleted catalog keys, orphan
+counts, and milliseconds for each stage. `historical_nodes_opened` must remain
+zero.
 
 Sequence positions measure cursor distance, not decoded row count. Gaps and rows
 filtered because they already carry a foreign origin can make both `skipped_seqs` and

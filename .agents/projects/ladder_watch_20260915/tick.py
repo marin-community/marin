@@ -19,7 +19,9 @@ PARENTS = {
     "/calvinxu/dm-delphi-matched-olmix-scaling-v6e-20260910": 4,
     "/calvinxu/dm-delphi-matched-olmix-scaling-v6e-20260910-retry1": 12,
 }
-IRIS = ["uv", "run", "iris", "--config", "lib/iris/config/marin.yaml"]
+# Call the venv's iris directly rather than through `uv run`: an unresolved merge can leave uv.lock
+# with conflict markers, and every `uv run` then dies on a TOML parse error, blinding the whole watch.
+IRIS = ["/Users/calvinxu/Projects/Work/Marin/marin/.venv/bin/iris", "--config", "lib/iris/config/marin.yaml"]
 ROOTS = {
     "lwspu": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908",
     "olmixq": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910",
@@ -94,8 +96,8 @@ def main():
     parent_states = {}
     for parent, limit in PARENTS.items():
         listing = run([*IRIS, "job", "list", "--prefix", parent, "--limit", "100"])
-        if listing.startswith("ERR"):
-            print(f"PROBEERR {stamp}: list {parent.rsplit('/', 1)[-1]} {listing[:100]}")
+        if listing.startswith("ERR") or not any(l.startswith("/calvinxu") for l in listing.splitlines()):
+            print(f"PROBEERR {stamp}: list {parent.rsplit('/', 1)[-1]} returned no jobs: {listing[:120]!r}")
             continue
         # a parent that is preempted off the CPU pool kills its children, so track the parent too
         for row in listing.splitlines():

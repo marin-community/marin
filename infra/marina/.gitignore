@@ -1,4 +1,6 @@
 dist/
+!examples/static-html-applet/dist/
+!examples/static-html-applet/dist/**
 node_modules/
 .data/
 journeys-out/

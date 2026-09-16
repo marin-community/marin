@@ -61,7 +61,6 @@ class ControllerProvider(Protocol):
         self,
         config: IrisClusterConfig,
         dry_run: bool = False,
-        label_prefix: str | None = None,
     ) -> list[str]:
         """Stop controller and all managed slices.
 

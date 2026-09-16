@@ -610,11 +610,6 @@ class TaskAttempt:
         self.output_dir = self.workdir / _OUTPUT_HOST_DIRNAME
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Mount tmpfs on workdir for quota enforcement (Docker only; no-op for process/k8s).
-        # Must happen before _download_bundle() so staged files land on the tmpfs.
-        disk_bytes = self.request.resources.disk_bytes if self.request.HasField("resources") else 0
-        self._runtime.prepare_workdir(self.workdir, disk_bytes)
-
     def run(self) -> None:
         """Execute the full task lifecycle. Intended to run in a background thread.
 

@@ -30,8 +30,8 @@ from dataclasses import dataclass
 
 from fray.cluster import ResourceConfig
 from marin.evaluation.olmo_base_eval.run import olmo_base_eval_step
-from marin.execution import InputName
 from marin.execution.executor import executor_main
+from marin.execution.types import InputName
 
 REQUEST_SET_DIR = InputName.hardcoded("raw/eval-datasets/olmo_base_eval_table9/v2")
 

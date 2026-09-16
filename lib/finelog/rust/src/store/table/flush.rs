@@ -6,12 +6,10 @@
 //! partition on local disk, and commits their descriptors as a new table
 //! revision.
 //!
-//! Both acknowledge on local durability: the sealed rows are on disk and their
-//! catalog rows are committed before the durability high-water mark advances.
-//! An object-backed table then owes the revision to publication, which uploads
-//! the staged objects and swaps HEAD — attempted immediately after the ack and
-//! retried by maintenance, so a remote outage delays HEAD, never the ack. On
-//! failure before the local commit the sealed rows go back to the buffer.
+//! A legacy table acknowledges on local durability. An object-backed table's
+//! host policy decides whether the acknowledgement waits only for this local
+//! commit or for the subsequent remote publication. On failure before the
+//! local commit the sealed rows go back to the buffer.
 //!
 //! Callers serialize flushes; this module takes no locks of its own beyond the
 //! short buffer and view locks.
@@ -107,14 +105,15 @@ pub fn flush_local(target: FlushTarget<'_>, table_dir: &Path) -> Result<(), Stat
     Ok(())
 }
 
-/// Drain the buffer to locally staged immutable objects, commit their
-/// descriptors, and acknowledge; then attempt the owed publication.
+/// Drain the buffer to locally staged immutable objects and commit their
+/// descriptors. Returns the sealed high-water mark for the runtime to
+/// acknowledge under its configured durability policy.
 pub async fn flush_to_objects(
     target: FlushTarget<'_>,
     policy: &TablePolicy,
-) -> Result<(), StatsError> {
+) -> Result<Option<i64>, StatsError> {
     let Some(sealed) = target.buffer.seal() else {
-        return Ok(());
+        return Ok(None);
     };
     let max_seq = sealed.max_seq;
     if let Err(error) = write_sealed_objects(&target, sealed.batch.clone(), policy).await {
@@ -122,10 +121,7 @@ pub async fn flush_to_objects(
         tracing::warn!(namespace = %target.table, %error, "object-backed flush failed; restored RAM buffer");
         return Err(error);
     }
-    // Local durability is the ack: staged objects and catalog rows are on
-    // disk. HEAD is owed, and the caller publishes it outside the flush gate.
-    target.buffer.publish_persisted(max_seq);
-    Ok(())
+    Ok(Some(max_seq))
 }
 
 fn restore(target: &FlushTarget<'_>, error: StatsError) -> StatsError {

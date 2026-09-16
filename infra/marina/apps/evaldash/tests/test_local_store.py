@@ -14,6 +14,7 @@ import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
 from marin.evaluation.records import list_records, write_record
+from marina.apps import RegisteredApi
 from starlette.testclient import TestClient
 
 
@@ -26,12 +27,16 @@ def store(tmp_path) -> evaldash_app.MemoryRecordStore:
 
 
 @pytest.fixture
-def client(store) -> Iterator[TestClient]:
+def registered_api(store) -> RegisteredApi:
     # No prefixes, so no background ingest: the store is already populated from fixtures, and this
     # keeps the test hermetic (it never scans the remote gs://+s3:// defaults).
     config = evaldash_app.EvaldashConfig.from_env({"EVALDASH_STORE": "local", "RECORDS_PREFIXES": " "})
-    api = evaldash_app.build_api(store, evaldash_app.NullClusterGateway(), config)
-    with TestClient(api) as client:
+    return evaldash_app.build_api(store, evaldash_app.NullClusterGateway(), config)
+
+
+@pytest.fixture
+def client(registered_api: RegisteredApi) -> Iterator[TestClient]:
+    with TestClient(registered_api.app) as client:
         yield client
 
 
@@ -81,7 +86,7 @@ def test_groups_roll_up_mixed_launch_status(store):
     # tootsie-8b's launch has a success, an eval failure, and an infra failure -> mixed.
     assert groups["tootsie-8b-2026.07.20"]["status"] == "mixed"
     assert groups["snowball-2026.07.20"]["status"] == "succeeded"
-    assert groups["snowball-2026.07.20"]["n_succeeded"] == 5
+    assert groups["snowball-2026.07.20"]["n_succeeded"] == 6
 
 
 def test_status_rollup_does_not_invent_evaluator_failure():
@@ -130,7 +135,7 @@ def test_api_surface_over_fixtures(client):
     assert panel["request"]["min_coverage"] == pytest.approx(0.9)
 
     runs = client.get("/runs?limit=100").json()
-    assert len(runs) == 15
+    assert len(runs) == 17
     # Rows carry version (from the record jsonb) so the client can facet on it.
     assert any(row["version"] == "2026.07.20" for row in runs)
     assert {row["version"] for row in runs} >= {"2026.07.19", "2026.07.20", "2026.07.21"}
@@ -151,6 +156,14 @@ def test_api_surface_over_fixtures(client):
     samples_page = client.get("/runs/snowball-2026.07.20-mmlu/samples", params={"task": "mmlu"}).json()
     assert samples_page["total"] == 5
     assert samples_page["primary_metric"] == "acc,none"
+
+
+def test_agent_operation_schema_requires_executable_inputs(registered_api: RegisteredApi):
+    operations = {operation.name: operation for operation in asyncio.run(registered_api.mcp.list_tools())}
+
+    assert operations["read_logs"].parameters["required"] == ["run_id", "role"]
+    assert operations["read_samples"].parameters["required"] == ["run_id", "task"]
+    assert operations["read_history"].parameters["required"] == ["model", "task"]
 
 
 def test_run_detail_headline_is_null_for_a_failed_run(client):
@@ -217,7 +230,7 @@ def test_ingestor_surfaces_parse_failures(tmp_path):
     asyncio.run(ingestor.run_once())
 
     probe = ingestor.status()["prefixes"][0]
-    assert probe["record_count"] == 15
+    assert probe["record_count"] == 17
     assert probe["error"] is None
     assert len(probe["parse_failures"]) == 1
     assert probe["parse_failures"][0]["path"].endswith("20260722-000000-legacy-mmlu-broken/record.json")

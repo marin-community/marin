@@ -34,10 +34,12 @@ from jax.experimental.array_serialization.serialization import GlobalAsyncCheckp
 from jaxtyping import PyTree
 
 from rigging import telemetry
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
+    TensorStoreReadConfig,
     TensorStoreWriteConfig,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
@@ -796,6 +798,7 @@ def save_checkpoint(
     is_temporary: bool = True,
     debug: CheckpointDebugConfig | None = None,
     write_config: TensorStoreWriteConfig | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ):
     """
     Save a checkpoint to a given path using TensorStore with OCDBT.
@@ -812,8 +815,11 @@ def save_checkpoint(
         manager: the GlobalAsyncCheckpointManager to use for saving the checkpoint
         commit_callback: a callback to call after the checkpoint has been saved
         is_temporary: whether the checkpoint is temporary
+        metadata: Additional application metadata committed with the completion marker.
         write_config: how the save divides work across the processes holding the state
     """
+    if metadata is not None and {"step", "timestamp", "is_temporary"}.intersection(metadata):
+        raise ValueError("Checkpoint metadata must not override step, timestamp, or is_temporary")
     step = int(step)
     checkpoint_path = str(checkpoint_path)
     checkpoint_debug = debug or CheckpointDebugConfig()
@@ -844,7 +850,7 @@ def save_checkpoint(
             progress_logger.set_phase("metadata_write")
         status = "completed"
         try:
-            _save_metadata(checkpoint_path, fs, step, is_temporary)
+            _save_metadata(checkpoint_path, step, is_temporary, metadata)
             logger.info(f"Saved checkpoint to {checkpoint_path} for step {step}")
 
             if commit_callback is not None:
@@ -895,11 +901,16 @@ def save_checkpoint(
     return checkpoint_path
 
 
-def _save_metadata(checkpoint_path, fs, step, is_temporary):
-    metadata = {"step": step, "timestamp": datetime.datetime.now().isoformat(), "is_temporary": is_temporary}
+def _save_metadata(checkpoint_path, step, is_temporary, extra_metadata=None):
+    metadata = {
+        **(extra_metadata or {}),
+        "step": step,
+        "timestamp": datetime.datetime.now().isoformat(),
+        "is_temporary": is_temporary,
+    }
     if jax.process_index() == 0:
-        with fs.open(os.path.join(checkpoint_path, "metadata.json"), "w") as json_out:
-            json.dump(metadata, json_out)
+        with atomic_rename(prefix_join(checkpoint_path, "metadata.json")) as temporary_path:
+            StoragePath(temporary_path).write_text(json.dumps(metadata))
 
 
 def load_checkpoint(
@@ -910,6 +921,7 @@ def load_checkpoint(
     axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
     mesh: Optional[jax.sharding.Mesh] = None,
     allow_partial: bool = False,
+    read_config: TensorStoreReadConfig | None = None,
 ) -> M:
     """
     Load a checkpoint from a given path using TensorStore.
@@ -927,6 +939,7 @@ def load_checkpoint(
         subpath: the subpath to load from the checkpoint
         axis_mapping: the axis mapping to use for loading the checkpoint
         mesh: the mesh to use for loading the checkpoint
+        read_config: Controls replica-local reads and restore collectives.
         allow_partial: if True, allow partial loading of the checkpoint. If False, all parameters must be present in the checkpoint.
     Returns:
         the loaded checkpoint, with the same structure as the exemplar tree
@@ -947,7 +960,12 @@ def load_checkpoint(
 
     ser, non_ser = equinox.partition(tree, is_jax_array_like)
     tree = tree_deserialize_leaves_tensorstore(
-        checkpoint_path, ser, axis_mapping=axis_mapping, mesh=mesh, allow_missing=allow_partial
+        checkpoint_path,
+        ser,
+        axis_mapping=axis_mapping,
+        mesh=mesh,
+        allow_missing=allow_partial,
+        read_config=read_config,
     )
     tree = equinox.combine(tree, non_ser)
     return tree
@@ -1176,20 +1194,30 @@ def _discover_checkpoint_candidates_single(checkpoint_path: str) -> list[Checkpo
 
 
 def _discover_checkpoint_paths_single(checkpoint_path: str) -> list[str]:
-    """Discover valid checkpoint directories in a single root path."""
+    """Discover valid checkpoint directories in a single root path.
+
+    Uses a single delimited listing of the root. Globbing ``<root>/*`` instead would make object
+    stores enumerate every object below the root -- every tensorstore chunk of every saved step --
+    only to discard all but the first level.
+    """
     fs: AbstractFileSystem
     fs, _ = _get_fs_and_plain_path(checkpoint_path)
+    base_path_protocol = urllib.parse.urlparse(str(checkpoint_path)).scheme
 
     def is_checkpoint_dir(path: str):
         return fs.exists(os.path.join(path, "metadata.json"))
 
     def maybe_unstrip_protocol(path: str):
-        base_path_protocol = urllib.parse.urlparse(str(checkpoint_path)).scheme
         if base_path_protocol != "" and urllib.parse.urlparse(path).scheme == "":
             return f"{base_path_protocol}://{path}"
         return path
 
-    ckpt_dirs = [maybe_unstrip_protocol(d) for d in fs.glob(os.path.join(checkpoint_path, "*")) if fs.isdir(d)]
+    try:
+        entries = fs.ls(checkpoint_path, detail=True)
+    except FileNotFoundError:
+        entries = []
+
+    ckpt_dirs = [maybe_unstrip_protocol(e["name"]) for e in entries if e["type"] == "directory"]
     ckpt_dirs.append(checkpoint_path)
     return sorted(d for d in ckpt_dirs if is_checkpoint_dir(d))
 
@@ -1296,10 +1324,8 @@ def is_checkpoint_path(path: str) -> bool:
         metadata_path = os.path.join(plain_path, "metadata.json")
         if fs.exists(metadata_path):
             return True
-        # glob
-        # if we don't find a metadata file, we can check if the path has any subdirectories
-        metadata_files = fs.glob(os.path.join(plain_path, "*", "metadata.json"))
-        if len(metadata_files) > 0:
+        # if we don't find a metadata file, we can check if the path has any checkpoint subdirectories
+        if _discover_checkpoint_paths_single(path):
             return True
         else:
             logger.warning(
