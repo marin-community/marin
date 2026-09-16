@@ -18,6 +18,7 @@ from levanter.grug._moe.common import (
     _scaled_capacity,
     MoeDispatchCounts,
 )
+from levanter.grug._moe.ep_common import _ranks_within_groups
 from levanter.grug.sharding import _batch_axes
 
 
@@ -119,16 +120,8 @@ def _moe_mlp_ep_fixed_a2a_local(
         divisor=num_experts,
         maximum=capacity,
     )
-    sortable_experts = jnp.where(assignment_valid, flat_experts, num_experts)
     safe_experts = jnp.where(assignment_valid, flat_experts, 0)
-
-    order = jnp.argsort(sortable_experts, stable=True)
-    inverse_order = jnp.argsort(order)
-    expert_counts = jnp.bincount(sortable_experts, length=num_experts).astype(jnp.int32)
-    segment_start = jnp.cumsum(expert_counts) - expert_counts
-    sorted_experts = safe_experts[order]
-    sorted_rank = jnp.arange(assignments_per_shard, dtype=jnp.int32) - segment_start[sorted_experts]
-    slot = sorted_rank[inverse_order]
+    slot = _ranks_within_groups(flat_experts, num_groups=num_experts, valid=assignment_valid)
     keep = assignment_valid & (slot < logical_capacity)
     local_expert_indices = (safe_experts % local_experts).astype(jnp.int32)
     destination_shards = (safe_experts // local_experts).astype(jnp.int32)
