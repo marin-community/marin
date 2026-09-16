@@ -101,6 +101,27 @@ def moe_routing_stats(
     }
 
 
+def qb_topk_physical_count(local_tokens: int, *, num_experts_per_token: int, num_experts: int) -> int:
+    """Rows `top_k` keeps per expert on one shard, sized for the all-valid case."""
+    return max(1, local_tokens * num_experts_per_token // num_experts)
+
+
+def qb_beta_topk_shard(
+    s_local: Float[Array, "t E"],
+    valid_local: Bool[Array, "t"],
+    *,
+    physical_count: int,
+    num_experts_per_token: int,
+    num_experts: int,
+) -> tuple[Float[Array, "E"], Int[Array, ""]]:
+    """Per-shard QB threshold over valid tokens plus the valid count that weights it."""
+    valid_count = jnp.sum(valid_local, dtype=jnp.int32)
+    topk_values, _ = jax.lax.top_k(jnp.where(valid_local[None, :], s_local.T, -jnp.inf), physical_count)
+    logical_count = jnp.clip(valid_count * num_experts_per_token // num_experts, 1, physical_count)
+    beta = jnp.take(topk_values, logical_count - 1, axis=1)
+    return jnp.where(valid_count > 0, beta, 0), valid_count
+
+
 def estimate_qb_beta_topk(
     s_minus_alpha: Float[Array, "T E"],
     token_valid: Bool[Array, "T"],
@@ -115,14 +136,18 @@ def estimate_qb_beta_topk(
     for axis in batch_axes:
         num_devices *= mesh.shape[axis]
     local_tokens = s_minus_alpha.shape[0] // num_devices
-    physical_count = max(1, local_tokens * num_experts_per_token // num_experts)
+    physical_count = qb_topk_physical_count(
+        local_tokens, num_experts_per_token=num_experts_per_token, num_experts=num_experts
+    )
 
     def _local(s_local: jax.Array, valid_local: jax.Array) -> jax.Array:
-        valid_count = jnp.sum(valid_local, dtype=jnp.int32)
-        topk_values, _ = jax.lax.top_k(jnp.where(valid_local[None, :], s_local.T, -jnp.inf), physical_count)
-        logical_count = jnp.clip(valid_count * num_experts_per_token // num_experts, 1, physical_count)
-        beta = jnp.take(topk_values, logical_count - 1, axis=1)
-        beta = jnp.where(valid_count > 0, beta, 0)
+        beta, valid_count = qb_beta_topk_shard(
+            s_local,
+            valid_local,
+            physical_count=physical_count,
+            num_experts_per_token=num_experts_per_token,
+            num_experts=num_experts,
+        )
         weighted_beta = jax.lax.psum(beta * valid_count, axis_name=batch_axes)
         global_valid_count = jax.lax.psum(valid_count, axis_name=batch_axes)
         return weighted_beta / jnp.maximum(global_valid_count, 1)
@@ -475,6 +500,8 @@ __all__ = [
     "moe_mlp",
     "moe_routing_stats",
     "estimate_qb_beta_topk",
+    "qb_beta_topk_shard",
+    "qb_topk_physical_count",
     "resolve_moe_implementation",
     "split_moe_w13_output",
 ]

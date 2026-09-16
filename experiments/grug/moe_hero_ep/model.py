@@ -49,6 +49,8 @@ from levanter.grug.grug_moe import (
     MoeActivation,
     MoEExpertMlp,
     MoeImplementation,
+    qb_beta_topk_shard,
+    qb_topk_physical_count,
     resolve_moe_implementation,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
@@ -1067,20 +1069,22 @@ class MoEMLP(eqx.Module):
             for a in _BATCH_AXES:
                 num_devices *= mesh.shape[a]
             local_tokens = s_minus_alpha.shape[0] // num_devices
-            qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
+            qb_count = qb_topk_physical_count(
+                local_tokens,
+                num_experts_per_token=self.cfg.num_experts_per_token,
+                num_experts=self.cfg.num_experts,
+            )
 
             def _local_qb_beta(s_ma, valid):
-                valid_count = jnp.sum(valid, dtype=jnp.int32)
-                topk_vals, _ = jax.lax.top_k(jnp.where(valid[None, :], s_ma.T, -jnp.inf), qb_count)
-                logical_qb_count = jnp.clip(
-                    valid_count * self.cfg.num_experts_per_token // self.cfg.num_experts,
-                    1,
-                    qb_count,
-                )
                 # The cross-shard weighted mean is deferred to `_reduce_router_stats`, and beta is
                 # not read until the next step.
-                beta = jnp.take(topk_vals, logical_qb_count - 1, axis=1)
-                beta = jnp.where(valid_count > 0, beta, 0)
+                beta, valid_count = qb_beta_topk_shard(
+                    s_ma,
+                    valid,
+                    physical_count=qb_count,
+                    num_experts_per_token=self.cfg.num_experts_per_token,
+                    num_experts=self.cfg.num_experts,
+                )
                 return beta[None, :], valid_count[None]
 
             router_stats["qb_beta_local"], router_stats["qb_beta_weight_local"] = shard_map(
