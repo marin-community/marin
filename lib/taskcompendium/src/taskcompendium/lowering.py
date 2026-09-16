@@ -29,12 +29,14 @@ from taskcompendium.models import (
     HARBOR_REVISION,
     AssistantFinal,
     Capability,
+    CodeAnswerVerifier,
     ContainerRuntime,
     FileSubmission,
     FinalActionSubmission,
     FinalState,
     ImageOverlay,
     PlainText,
+    PredictedActionVerifier,
     ProviderStateVerifier,
     Rendering,
     ResourceRole,
@@ -55,9 +57,24 @@ def validate_lowering(
 ) -> None:
     """Reject incompatible interactions, environments, answer formats, and runtimes."""
     step = specification.steps[step_index]
+    submission = protocol.submission
+    if isinstance(step.verifier, PredictedActionVerifier):
+        if not isinstance(submission, FinalActionSubmission):
+            raise ValueError("Predicted-action verification requires final-action submission")
+        if step.answer_requirements.kind != "text":
+            raise ValueError("Final-action submission cannot replace intrinsic answer requirements")
+    elif isinstance(submission, FinalActionSubmission):
+        raise ValueError("Final-action submission requires predicted-action verification")
+    elif isinstance(step.verifier, ProviderStateVerifier) and not isinstance(submission, AssistantFinal):
+        raise ValueError("Provider-state verification requires a final assistant response")
     source = tasktrove_verifier(step.verifier)
     if source is not None:
         source_verifier(source)
+    if source is not None and source.mode in EXECUTABLE_MODES and not isinstance(step.verifier, CodeAnswerVerifier):
+        if not isinstance(submission, FinalState):
+            raise ValueError("Executable workspace verification requires final-state submission")
+    elif isinstance(submission, FinalState):
+        raise ValueError("Final-state submission requires executable workspace verification")
     if source is not None and source.mode in {Mode.JUNIT, Mode.GOTEST}:
         raise ValueError("This spike does not yet support isolated JUnit or Go execution")
     if source is not None and source.mode == Mode.STDIO and source.parameters.get("special_judge"):
@@ -68,6 +85,8 @@ def validate_lowering(
         raise ValueError("Provider-state verifier must match a declared task action interface")
     validate_requirements(semantic, actual)
     if not binding.tools:
+        if semantic.action_interfaces:
+            raise ValueError("Required action interfaces need explicit tool bindings")
         if bool(semantic.capabilities) or not isinstance(protocol.submission, AssistantFinal | FinalActionSubmission):
             raise ValueError(
                 "An empty tool list requires direct model submissions and no semantic environment requirement"
@@ -154,6 +173,8 @@ def resolve_harbor_execution(
     binding = execution.binding
     launch: HarborLaunchConfig = execution.launch
     validate_launch(binding, launch)
+    if len(renderings) > 1 and launch.agent in {"terminus-2", "mini-swe-agent"}:
+        raise ValueError("Native terminal agents do not yet retain conversation across ordered steps")
     agent_name = launch.agent
     agents = {
         "replay": "taskcompendium.harbor.agents:ReplayAgent",

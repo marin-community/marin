@@ -122,7 +122,9 @@ class ShellSimEnvironment(BaseEnvironment):
             self.session = None
 
     async def exec(self, command, cwd=None, env=None, timeout_sec=None, user=None) -> ExecResult:
-        result = await asyncio.to_thread(self._session().run, command, cwd=cwd, env=self._merge_env(env))
+        result = await asyncio.to_thread(
+            self._session().run, command, cwd=cwd, env=self._merge_env(env), timeout=timeout_sec
+        )
         return ExecResult(stdout=result.stdout, stderr=result.stderr, return_code=result.return_code)
 
     async def upload_file(self, source_path, target_path) -> None:
@@ -211,7 +213,12 @@ class TaskDockerEnvironment(DockerEnvironment):
         # Pinned input images are shared by trials and must survive cleanup.
         try:
             await self.prepare_logs_for_host()
-            await self._run_docker_compose_command(["down", "--volumes", "--remove-orphans"])
+            if self._keep_containers:
+                await self._run_docker_compose_command(["stop"])
+            elif delete:
+                await self._run_docker_compose_command(["down", "--volumes", "--remove-orphans"])
+            else:
+                await self._run_docker_compose_command(["down"])
         finally:
             self._cleanup_mounts_compose_file()
             self._cleanup_resources_compose_file()

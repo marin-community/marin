@@ -5,6 +5,7 @@
 
 from pathlib import Path
 
+import msgspec
 import pytest
 
 from taskcompendium.grading import grade_attempt
@@ -15,6 +16,7 @@ from taskcompendium.models import (
     VERIFIER_REVISION,
     AssistantFinal,
     BoxedLatex,
+    Capability,
     JsonPath,
     JudgeConfig,
     JudgeModelPolicy,
@@ -22,6 +24,8 @@ from taskcompendium.models import (
     Outcome,
     Rejected,
     Rendering,
+    TaskRequirements,
+    WorkspaceState,
 )
 from taskcompendium.rendering import render_instruction
 
@@ -32,9 +36,34 @@ CLEAN_09_FIXTURES = Path(__file__).parent / "fixtures/tasktrove-clean-09/judge"
 class FakeJudge:
     def __init__(self, score: str):
         self.score = score
+        self.prompts: list[str] = []
 
     def complete(self, prompt: str, policy: JudgeModelPolicy, timeout: float) -> JudgeReply:
+        self.prompts.append(prompt)
         return JudgeReply(f"The answer is evaluated by the fixture.\nSCORE: {self.score}", policy.model, "fixture")
+
+
+@pytest.mark.parametrize("path", ["/repo/report.md", "/assets/report.md"])
+def test_judge_receives_evidence_from_declared_workspace_roots(tmp_path, path):
+    _, spec = _spec("11676")
+    assert not isinstance(spec, Rejected)
+    step = spec.steps[0]
+    config = msgspec.structs.replace(step.verifier.judge, view=JudgeView(files=(path,)))
+    spec = msgspec.structs.replace(
+        spec,
+        requirements=TaskRequirements(
+            (Capability.FILESYSTEM,), WorkspaceState(workdir="/repo", additional_directories=("/assets",))
+        ),
+        steps=(msgspec.structs.replace(step, verifier=msgspec.structs.replace(step.verifier, judge=config)),),
+    )
+    relative = "report.md" if path.startswith("/repo/") else "__external__/assets/report.md"
+    evidence = tmp_path / relative
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    evidence.write_text("The report contains the requested evidence.")
+    judge = FakeJudge("1")
+    result = grade_attempt(spec, Rendering("plain", AssistantFinal()), "See the report.", tmp_path, judge_client=judge)
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    assert "The report contains the requested evidence." in judge.prompts[0]
 
 
 def _spec(row: str):

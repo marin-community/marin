@@ -106,7 +106,17 @@ def grade_judge_attempt(
     if config.view.transcript:
         evidence["transcript"] = transcript
     evidence["files"] = {
-        path: contained_path(workspace, submission_relative(path)).read_text() for path in config.view.files
+        path: (
+            contained_path(
+                workspace,
+                submission_relative(
+                    path,
+                    specification.requirements.state.workdir,
+                    specification.requirements.state.additional_directories,
+                ),
+            ).read_text()
+        )
+        for path in config.view.files
     }
     contexts = {path: contained_path(tests, path).read_text() for path in config.view.reference_context}
     if contract.context and contract.context not in contexts:

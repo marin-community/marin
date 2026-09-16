@@ -13,7 +13,7 @@ from threading import Thread
 import msgspec
 import pytest
 
-from taskcompendium.execution import HarborExecutionConfig, HarborLaunchConfig
+from taskcompendium.execution import HarborExecutionConfig, HarborLaunchConfig, HarborTaskBinding
 from taskcompendium.harbor.runner import run_trial
 from taskcompendium.importers.nemo_workplace import (
     FIXTURE_NAME,
@@ -30,6 +30,16 @@ from taskcompendium.rendering import render_instruction
 
 FIXTURES = Path(__file__).parent / "fixtures/nemo"
 REIMPORT_FIXTURES = FIXTURES / "reimport"
+
+
+def test_workplace_rejects_binding_without_required_action_tools(tmp_path):
+    sample = build_sample(FIXTURES)
+    destination = tmp_path / "invalid"
+    with pytest.raises(ValueError, match="action interfaces need explicit tool bindings"):
+        lower_to_harbor(
+            sample.specification, (sample.rendering,), HarborTaskBinding(sample.binding.environment), destination
+        )
+    assert not destination.exists()
 
 
 def _environment() -> NemoWorkplaceEnvironment:

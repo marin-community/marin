@@ -76,6 +76,15 @@ def _transcript(*calls: tuple[str, str]) -> tuple[dict, ...]:
     )
 
 
+def test_predicted_action_rejects_text_submission_before_export(tmp_path):
+    spec = import_row(ROW, SHA256)
+    assert not isinstance(spec, Rejected)
+    destination = tmp_path / "invalid"
+    with pytest.raises(ValueError, match="requires final-action submission"):
+        lower_to_harbor(spec, (Rendering("plain", AssistantFinal()),), HarborTaskBinding(NoEnvironment()), destination)
+    assert not destination.exists()
+
+
 def test_predicted_action_keeps_native_public_contract_and_private_expected_action(tmp_path):
     spec = import_row(ROW, SHA256)
     assert not isinstance(spec, Rejected)

@@ -31,7 +31,9 @@ from taskcompendium.models import (
     Capability,
     Embedded,
     FileSubmission,
+    FinalActionSubmission,
     JsonPath,
+    NativeFunction,
     Outcome,
     PlainText,
     Rendering,
@@ -443,3 +445,31 @@ def test_provider_matching_preserves_capabilities_and_pinned_state():
         validate_requirements(required, DockerEnvironment("sha256:" + "b" * 64, workdir="/repo"))
     with pytest.raises(ValueError, match="workspace state"):
         validate_requirements(required, DockerEnvironment(image, workdir="/repo"))
+
+
+@pytest.mark.parametrize("answer_kind", ["text", "literal", "json", "final_state"])
+def test_answer_verifier_rejects_native_action_submission_before_export(math_task, tmp_path, answer_kind):
+    spec = msgspec.structs.replace(
+        math_task,
+        steps=(msgspec.structs.replace(math_task.steps[0], answer_requirements=AnswerRequirements(answer_kind)),),
+    )
+    destination = tmp_path / "invalid"
+    with pytest.raises(ValueError, match="predicted-action verification"):
+        lower_to_harbor(
+            spec,
+            (Rendering("action", FinalActionSubmission((NativeFunction("submit", {}),))),),
+            HarborTaskBinding(NoEnvironment()),
+            destination,
+        )
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("agent", ["terminus-2", "mini-swe-agent"])
+def test_native_terminal_launch_rejects_ordered_steps_without_history_support(agent):
+    binding = HarborTaskBinding(DockerEnvironment("sha256:" + "1" * 64), (HarnessToolBinding("terminal", "docker"),))
+    with pytest.raises(ValueError, match="retain conversation"):
+        resolve_harbor_execution(
+            (Rendering("plain", AssistantFinal()),) * 2,
+            HarborExecutionConfig(binding, HarborLaunchConfig(agent)),
+            {"import_path": "taskcompendium.harbor.environments:TaskDockerEnvironment"},
+        )

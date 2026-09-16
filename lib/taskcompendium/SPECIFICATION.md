@@ -72,6 +72,8 @@ Each `StepSpecification` has the following fields.
 
 For Harbor, every ordered TaskCompendium run retains the full sequence of preceding user, assistant, and tool messages. `prior_conversation` marks a step that depends on this history. `instruction_and_workspace` is a minimum requirement: the history remains available, but the task does not rely on it. Importers should use `prior_conversation` only after a step that can produce the needed history.
 
+Ordered launches currently support the TaskCompendium chat, tool, provider, and replay adapters. Native Terminus-2 and mini-SWE-agent launches are rejected for ordered tasks because the pinned implementations start a fresh conversation for each step.
+
 An ordered static task can therefore express a workflow whose later request depends on an earlier request and its workspace or conversation. It cannot express an adaptive counterparty that decides the next user message from the model's prior action. That requires the interactive-environment extension described below.
 
 ### Requirements and initial state

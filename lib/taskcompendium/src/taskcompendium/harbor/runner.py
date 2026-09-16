@@ -12,6 +12,7 @@ from pathlib import Path
 from harbor.models.trial.config import TrialConfig
 from harbor.trial.trial import Trial
 
+from taskcompendium.harbor.agents import ActionOutputReplayAgent, DirectChatAgent, ReplayAgent
 from taskcompendium.models import HARBOR_REVISION
 from taskcompendium.serialization import from_json, renderings_from_json, specification_hash
 
@@ -45,6 +46,10 @@ async def run_trial(
         }
     )
     trial = await Trial.create(config)
+    if len(specification.steps) > 1 and not isinstance(
+        trial.agent, DirectChatAgent | ReplayAgent | ActionOutputReplayAgent
+    ):
+        raise ValueError("Ordered steps require an agent that retains the visible conversation")
     result = await trial.run()
     if len(specification.steps) > 1:
         steps = result.step_results or []

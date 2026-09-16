@@ -192,6 +192,9 @@ async def test_native_harbor_multistep_provider_trial_retains_state_and_conversa
     ]
     assert len(transcripts[2]) > len(transcripts[0])
     assert transcripts[2][-1]["content"] == "Completed."
+    contexts = [step.agent_result.metadata for step in result.step_results]
+    assert [context["all_messages"] for context in contexts] == transcripts
+    assert all(context["summarization_count"] == 0 for context in contexts)
 
 
 async def test_native_harbor_multistep_provider_rejects_malformed_tool_submission(tmp_path, monkeypatch):

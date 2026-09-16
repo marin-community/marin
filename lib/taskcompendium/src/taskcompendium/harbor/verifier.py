@@ -79,11 +79,9 @@ class SemanticVerifier(BaseVerifier):
         source_state_verifier = spec.steps[step_index].verifier
         if isinstance(source_state_verifier, ProviderStateVerifier):
             if not isinstance(self.environment, ProviderActionEnvironment):
-                raise GradingInfrastructureError("Provider-state verifier requires a provider action environment")
+                raise RuntimeError("Provider-state verifier requires a provider action environment")
             if self.environment.interface != source_state_verifier.interface:
-                raise GradingInfrastructureError(
-                    "Provider-state verifier interface does not match the provider environment"
-                )
+                raise RuntimeError("Provider-state verifier interface does not match the provider environment")
             if not (self.trial_paths.agent_dir / "response.txt").exists():
                 result = GradingResult(
                     Outcome.EXTRACTION_ERROR, None, {"error": "Provider agent produced no final response"}

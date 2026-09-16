@@ -104,7 +104,10 @@ class ShellSimSession:
         self._process.stdin.close()
         self._process.stdout.close()
 
-    def _request(self, operation: str, **arguments: Any) -> dict[str, Any]:
+    def _request(self, operation: str, *, timeout: float | None = None, **arguments: Any) -> dict[str, Any]:
+        timeout = self.timeout if timeout is None else timeout
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be finite and positive")
         payload = json.dumps({"op": operation, **arguments}, separators=(",", ":")).encode() + b"\n"
         if len(payload) > MAX_REQUEST_BYTES:
             raise ShellSimError("request exceeds byte limit")
@@ -113,7 +116,7 @@ class ShellSimSession:
                 raise ShellSimError("session is closed")
             assert self._process.stdin is not None
             assert self._process.stdout is not None
-            deadline = time.monotonic() + self.timeout
+            deadline = time.monotonic() + timeout
             sent = 0
             received = bytearray()
             try:
@@ -123,7 +126,7 @@ class ShellSimSession:
                     while b"\n" not in received:
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
-                            raise ShellSimTimeout(f"{operation} exceeded {self.timeout} seconds")
+                            raise ShellSimTimeout(f"{operation} exceeded {timeout} seconds")
                         for key, _ in selector.select(remaining):
                             if key.fileobj is self._process.stdin:
                                 sent += os.write(key.fd, payload[sent : sent + 65536])
@@ -151,10 +154,22 @@ class ShellSimSession:
             return response["result"]
 
     def run(
-        self, command: str, stdin: bytes = b"", *, cwd: str | None = None, env: dict[str, str] | None = None
+        self,
+        command: str,
+        stdin: bytes = b"",
+        *,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> ShellSimResult:
-        """Execute a simulated shell action in the trial's persistent session."""
-        result = self._request("exec", command=command, stdin=base64.b64encode(stdin).decode(), cwd=cwd, env=env or {})
+        """Execute a simulated shell action in the trial's persistent session.
+
+        An explicit timeout overrides the session deadline for this action.
+        Expiration kills the bridge and makes the session unusable.
+        """
+        result = self._request(
+            "exec", timeout=timeout, command=command, stdin=base64.b64encode(stdin).decode(), cwd=cwd, env=env or {}
+        )
         return ShellSimResult(
             stdout=base64.b64decode(result["stdout"], validate=True).decode(errors="replace"),
             stderr=base64.b64decode(result["stderr"], validate=True).decode(errors="replace"),

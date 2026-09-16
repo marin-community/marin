@@ -38,7 +38,12 @@ def _record(logs_dir, transcript: list[dict], response: str, context: AgentConte
     logs_dir.mkdir(parents=True, exist_ok=True)
     (logs_dir / "response.txt").write_text(response)
     (logs_dir / "transcript.json").write_text(json.dumps(transcript))
-    context.metadata = {"assistant_final": response, "turns": len(transcript)}
+    context.metadata = {
+        "assistant_final": response,
+        "turns": len(transcript),
+        "all_messages": list(transcript),
+        "summarization_count": 0,
+    }
 
 
 class ReplayAgent(BaseAgent):

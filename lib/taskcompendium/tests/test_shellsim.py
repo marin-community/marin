@@ -84,9 +84,8 @@ def test_timeout_kills_bridge_that_stops_reading_requests(tmp_path: Path):
     )
     script.chmod(0o755)
     with ShellSimSession(str(script)) as session:
-        session.timeout = 0.1
         with pytest.raises(ShellSimTimeout):
-            session.run("x" * 1_000_000)
+            session.run("x" * 1_000_000, timeout=0.1)
         with pytest.raises(ProcessLookupError):
             os.kill(int(pid_file.read_text()), 0)
         with pytest.raises(ShellSimError):
