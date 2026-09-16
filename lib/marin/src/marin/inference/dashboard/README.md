@@ -35,20 +35,25 @@ def lookup_weather(city: str, units: str = "celsius") -> dict[str, object]:
     return {"city": city, "units": units, "temperature": 21}
 ```
 
-For each model request, the UI adds the source to the system message inside a
-`<python_tools>` XML element. The model calls a function with this form:
+Before each user turn's first model request, the dashboard converts each
+function signature and docstring to an OpenAI-compatible JSON tool definition.
+It sends those definitions in the request's `tools` field. The model's chat
+template renders them using the same `<tools>` prompt used for Datakit SFT, and
+the model calls a function with the trained form:
 
 ```xml
 <tool_call>{"name":"lookup_weather","arguments":{"city":"Paris"}}</tool_call>
 ```
 
-The UI runs each tagged call in the Iris service, returns its JSON result in a
-`<tool_result>` XML element, and asks the model to continue. Argument and return
-annotations are validated with Pydantic. Each call runs in a fresh subprocess
-with a 10-second timeout, and source is limited to 64 KiB. One model response
-counts as one round, including a response with multiple calls. The UI executes
-calls from the eighth round, stops before another model request, and displays a
-limit error.
+The UI parses each tagged call, runs it in the Iris service, and adds the call
+and result to the next request as structured `tool_calls` and `role: "tool"`
+messages. The chat template renders those messages as `<tool_call>` and named
+`<tool_response>` XML exactly as Datakit SFT does. Argument and return
+annotations are validated with Pydantic. Schema generation and each call run in
+a fresh subprocess with a 10-second timeout, and source is limited to 64 KiB.
+One model response counts as one round, including a response with multiple
+calls. The UI executes calls from the eighth round, stops before another model
+request, and displays a limit error.
 
 After the endpoint becomes ready, `marin-serve iris` prints a capability URL.
 Possession of that URL authorizes both inference and arbitrary Python execution

@@ -743,6 +743,22 @@ def test_python_tool_source_requires_typed_functions_and_validates_arguments():
 
     assert tool.name == "multiply"
     assert tool.validate_arguments({"value": "3"}) == {"value": 3, "factor": 2}
+    definition = tool.definition()
+    assert definition["type"] == "function"
+    function = definition["function"]
+    assert isinstance(function, dict)
+    assert function["name"] == "multiply"
+    assert function["description"] == "Multiply a value by an optional factor."
+    parameters = function["parameters"]
+    assert isinstance(parameters, dict)
+    assert parameters["type"] == "object"
+    properties = parameters["properties"]
+    assert isinstance(properties, dict)
+    value_schema = properties["value"]
+    assert isinstance(value_schema, dict)
+    assert value_schema["type"] == "integer"
+    assert properties["factor"] == {"default": 2, "title": "Factor", "type": "integer"}
+    assert parameters["required"] == ["value"]
 
     with pytest.raises(ValueError, match="annotate its return value"):
         python_tools_from_source("def untyped(value: int):\n    return value\n")
@@ -771,6 +787,7 @@ def test_dashboard_executes_typed_python_tools():
 
     with serve_app_background(app, dashboard_sock):
         base = f"http://127.0.0.1:{dashboard_port}"
+        definitions = requests.post(f"{base}/tools", json={"source": MULTIPLY_TOOL_SOURCE}, timeout=10)
         payload = {"source": MULTIPLY_TOOL_SOURCE, "arguments": {"value": "6", "factor": 7}}
         result = requests.post(f"{base}/tools/multiply", json=payload, timeout=10)
         invalid = requests.post(
@@ -779,6 +796,8 @@ def test_dashboard_executes_typed_python_tools():
             timeout=10,
         )
 
+    assert definitions.json()[0]["function"]["name"] == "multiply"
+    assert definitions.json()[0]["function"]["parameters"]["required"] == ["value"]
     assert result.json() == 42
     assert invalid.status_code == 422
 

@@ -658,7 +658,11 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _compute_tokens(messages: list[ChatMessage], tokenizer: MarinTokenizer) -> List[int]:
+def _compute_tokens(
+    messages: list[ChatMessage],
+    tokenizer: MarinTokenizer,
+    tools: list[dict[str, object]] | None = None,
+) -> List[int]:
     """Encode a conversation with the tokenizer's chat template.
 
     A model with no chat template cannot represent a conversation, so a chat request against one
@@ -673,7 +677,13 @@ def _compute_tokens(messages: list[ChatMessage], tokenizer: MarinTokenizer) -> L
     dict_messages = [msg.model_dump(exclude_none=True) for msg in messages]
     # return_dict=False pins the token ids to a flat list; tokenizers otherwise hand back a
     # BatchEncoding here, which is the shape the rest of this module cannot use.
-    result = tokenizer.apply_chat_template(dict_messages, tokenize=True, add_generation_prompt=True, return_dict=False)
+    result = tokenizer.apply_chat_template(
+        dict_messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_dict=False,
+        tools=tools,
+    )
     assert isinstance(result, list)
     return result
 
@@ -699,7 +709,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
     """Create a chat completion using OpenAI API format."""
     try:
         # Convert Pydantic models to dicts for tokenizer
-        prompt_tokens = _compute_tokens(request.messages, ctx.tokenizer)
+        prompt_tokens = _compute_tokens(request.messages, ctx.tokenizer, request.tools)
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
 

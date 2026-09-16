@@ -14,8 +14,9 @@ would escape the prefix.
 ``/v1/*`` requests are reverse-proxied to whichever serving backend runs on the
 slice (see :mod:`marin.inference.backend`). Direct sessions preserve server-sent
 events end to end; brokered sessions return buffered JSON and reject streaming.
-``/tools/{name}`` validates and runs dashboard-authored Python in a short-lived
-subprocess, returning its typed JSON result.
+``/tools`` converts dashboard-authored Python to model-facing JSON schemas.
+``/tools/{name}`` validates and runs one function. Both operations use a
+short-lived subprocess.
 """
 
 import asyncio
@@ -40,7 +41,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Route
 
 from marin.inference.http_proxy import forwardable_request_headers, forwardable_response_headers
-from marin.inference.python_tools import PythonToolRequest, PythonToolSourceTooLarge
+from marin.inference.python_tools import PythonToolDefinitionsRequest, PythonToolRequest, PythonToolSourceTooLarge
 
 logger = logging.getLogger(__name__)
 PYTHON_TOOL_TIMEOUT_SECONDS = 10
@@ -61,16 +62,40 @@ class ServingInfo:
     streaming: bool = True
 
 
-def _run_python_tool(payload: bytes) -> subprocess.CompletedProcess[bytes]:
+def _run_python_tool(operation: str, payload: bytes) -> subprocess.CompletedProcess[bytes]:
     # Keep CPython on its posix_spawn path: forking after Levanter starts JAX threads can deadlock.
     return subprocess.run(
-        [sys.executable, "-m", "marin.inference.python_tools"],
+        [sys.executable, "-m", "marin.inference.python_tools", operation],
         input=payload,
         capture_output=True,
         timeout=PYTHON_TOOL_TIMEOUT_SECONDS,
         check=False,
         close_fds=False,
     )
+
+
+async def _python_tool_definitions_request(request: Request) -> Response:
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "tool definitions request must be JSON"}, status_code=400)
+    try:
+        definitions_request = PythonToolDefinitionsRequest.from_payload(payload)
+    except PythonToolSourceTooLarge:
+        return JSONResponse({"error": "Python tool source is too large"}, status_code=413)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    try:
+        result = await asyncio.to_thread(_run_python_tool, "definitions", definitions_request.to_json_bytes())
+    except subprocess.TimeoutExpired:
+        return JSONResponse(
+            {"error": f"Python tool definition exceeded {PYTHON_TOOL_TIMEOUT_SECONDS} seconds"}, status_code=408
+        )
+    if result.returncode != 0:
+        details = result.stderr.decode(errors="replace")[-_MAX_TOOL_ERROR_LENGTH:].strip()
+        return JSONResponse({"error": "Python tool definition failed", "details": details}, status_code=422)
+    return Response(result.stdout, media_type="application/json")
 
 
 async def _invoke_tool_request(request: Request) -> Response:
@@ -87,7 +112,7 @@ async def _invoke_tool_request(request: Request) -> Response:
 
     child_payload = tool_request.to_json_bytes()
     try:
-        result = await asyncio.to_thread(_run_python_tool, child_payload)
+        result = await asyncio.to_thread(_run_python_tool, "invoke", child_payload)
     except subprocess.TimeoutExpired:
         return JSONResponse({"error": f"Python tool exceeded {PYTHON_TOOL_TIMEOUT_SECONDS} seconds"}, status_code=408)
     if result.returncode != 0:
@@ -180,6 +205,7 @@ def build_dashboard_app(
             Route("/dashboard", index),
             Route("/info", serving_info),
             Route("/health", health),
+            Route("/tools", _python_tool_definitions_request, methods=["POST"]),
             Route("/tools/{name}", _invoke_tool_request, methods=["POST"]),
             Route("/v1/{path:path}", proxy, methods=["GET", "POST", "OPTIONS"]),
         ],

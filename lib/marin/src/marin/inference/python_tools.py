@@ -35,6 +35,19 @@ class PythonTool:
     arguments_model: type[BaseModel]
     result_adapter: TypeAdapter[Any]
 
+    def definition(self) -> dict[str, object]:
+        """Return the OpenAI function definition consumed by the Marin chat template."""
+        parameters = self.arguments_model.model_json_schema()
+        parameters.pop("title", None)
+        function: dict[str, object] = {
+            "name": self.name,
+            "parameters": parameters,
+        }
+        description = inspect.getdoc(self.function)
+        if description:
+            function["description"] = description
+        return {"type": "function", "function": function}
+
     def validate_arguments(self, arguments: object) -> dict[str, object]:
         parsed = self.arguments_model.model_validate(arguments)
         return {name: getattr(parsed, name) for name in self.arguments_model.model_fields}
@@ -68,6 +81,25 @@ class PythonToolRequest:
         return cls(source=source, name=resolved_name, arguments=arguments)
 
 
+@dataclass(frozen=True)
+class PythonToolDefinitionsRequest:
+    """Python source submitted for conversion to model-facing tool definitions."""
+
+    source: str
+
+    def to_json_bytes(self) -> bytes:
+        return json.dumps(dataclasses.asdict(self)).encode()
+
+    @classmethod
+    def from_payload(cls, payload: object) -> "PythonToolDefinitionsRequest":
+        if not isinstance(payload, dict) or not isinstance(payload.get("source"), str):
+            raise ValueError("Tool definitions request requires string source")
+        source = payload["source"]
+        if len(source.encode()) > MAX_PYTHON_TOOL_SOURCE_BYTES:
+            raise PythonToolSourceTooLarge(f"Python tool source exceeds {MAX_PYTHON_TOOL_SOURCE_BYTES} bytes")
+        return cls(source=source)
+
+
 class PythonToolSourceTooLarge(ValueError):
     """The submitted source exceeds the dashboard execution limit."""
 
@@ -94,6 +126,11 @@ def python_tools_from_source(source: str) -> tuple[PythonTool, ...]:
     if duplicates:
         raise ValueError(f"Python tool names must be unique; repeated: {', '.join(duplicates)}")
     return tools
+
+
+def python_tool_definitions(source: str) -> list[dict[str, object]]:
+    """Convert typed Python functions to the tool schema used by Datakit SFT."""
+    return [tool.definition() for tool in python_tools_from_source(source)]
 
 
 def _python_tool(function: object) -> PythonTool:
@@ -148,9 +185,18 @@ async def _invoke_tool(request: PythonToolRequest) -> bytes:
 
 
 def _main() -> None:
-    request = PythonToolRequest.from_payload(json.load(sys.stdin))
-    result = asyncio.run(_invoke_tool(request))
-    sys.stdout.buffer.write(result)
+    match sys.argv[1:]:
+        case ["definitions"]:
+            request = PythonToolDefinitionsRequest.from_payload(json.load(sys.stdin))
+            with contextlib.redirect_stdout(sys.stderr):
+                definitions = python_tool_definitions(request.source)
+            sys.stdout.buffer.write(json.dumps(definitions).encode())
+        case ["invoke"]:
+            request = PythonToolRequest.from_payload(json.load(sys.stdin))
+            result = asyncio.run(_invoke_tool(request))
+            sys.stdout.buffer.write(result)
+        case arguments:
+            raise ValueError(f"Expected one Python tool operation, got {arguments!r}")
 
 
 if __name__ == "__main__":

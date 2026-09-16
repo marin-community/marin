@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { nextTick, onUnmounted, ref, watch } from 'vue'
-import { invokeTool, isAbortError, requestCompletion } from '../lib/api'
+import { fetchToolDefinitions, invokeTool, isAbortError, requestCompletion } from '../lib/api'
 import { CHAT_EXAMPLES } from '../lib/examples'
 import type { ChatExample } from '../lib/examples'
 import { modelMessages } from '../lib/python_tools'
-import type { ModelMessage } from '../lib/python_tools'
+import type { ModelMessage, ToolDefinition } from '../lib/python_tools'
 import { splitThinking } from '../lib/thinking'
 import { inlineToolCalls } from '../lib/tool_calls'
 import type { AssistantMessage, Conversation, SamplingParams, ToolCall, ToolMessage } from '../lib/types'
@@ -105,8 +105,9 @@ async function send(text?: string) {
   abort = new AbortController()
   let reply: AssistantMessage | null = null
   try {
+    const tools = pythonTools ? await fetchToolDefinitions(pythonTools, abort.signal) : []
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-      const request = modelMessages(conversation, pythonTools)
+      const request = modelMessages(conversation)
       reply = { role: 'assistant', content: '', thinking: '', thinkingSeconds: null, error: null, toolCalls: [] }
       conversation.messages.push(reply)
       // Mutate through the reactive proxy so streaming deltas re-render.
@@ -115,7 +116,7 @@ async function send(text?: string) {
       reply = currentReply
       emit('persist')
 
-      await complete(currentReply, request, pythonTools, abort.signal)
+      await complete(currentReply, request, tools, abort.signal)
       const calls = currentReply.toolCalls ?? []
       conversation.updatedAt = Date.now()
       emit('persist')
@@ -169,7 +170,12 @@ function toolResultMessage(call: ToolCall, result: unknown): ToolMessage {
   }
 }
 
-async function complete(reply: AssistantMessage, messages: ModelMessage[], pythonTools: string, signal: AbortSignal) {
+async function complete(
+  reply: AssistantMessage,
+  messages: ModelMessage[],
+  tools: ToolDefinition[],
+  signal: AbortSignal,
+) {
   let rawContent = ''
   let reasoningStream = ''
   let thinkingStartedAt: number | null = null
@@ -182,6 +188,12 @@ async function complete(reply: AssistantMessage, messages: ModelMessage[], pytho
     max_tokens: props.params.maxTokens,
     top_p: props.params.topP,
   }
+  if (tools.length) {
+    body.tools = tools
+    // Keep calls in model content for the dashboard's Datakit XML parser. An omitted
+    // choice makes vLLM default to native auto-tool parsing, which requires server flags.
+    body.tool_choice = null
+  }
   await requestCompletion('v1/chat/completions', body, props.streaming, signal, (data) => {
     const delta = data.choices?.[0]?.delta ?? data.choices?.[0]?.message
     if (!delta) return
@@ -191,7 +203,7 @@ async function complete(reply: AssistantMessage, messages: ModelMessage[], pytho
 
     const split = splitThinking(rawContent)
     reply.thinking = reasoningStream + split.thinking
-    if (pythonTools) {
+    if (tools.length) {
       const inline = inlineToolCalls(split.visible)
       reply.content = inline.visible
       reply.toolCalls = inline.calls
@@ -273,7 +285,7 @@ async function complete(reply: AssistantMessage, messages: ModelMessage[], pytho
             @input="emit('persist')"
           ></textarea>
           <p class="mt-1 text-[0.7rem] text-text-muted">
-            Define typed top-level functions. They are sent inside &lt;python_tools&gt; XML and execute on this Iris task.
+            Define typed top-level functions. Their schemas use the model's trained tool format and execute on this Iris task.
           </p>
         </div>
         <div class="flex items-end gap-2">

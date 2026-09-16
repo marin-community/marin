@@ -1,4 +1,5 @@
 import type { ServingInfo } from './types'
+import type { ToolDefinition } from './python_tools'
 
 /** Resolve a path relative to the page URL. The dashboard is served under the
  * Iris controller proxy at /proxy/<name>/, and the proxy does not rewrite
@@ -24,6 +25,17 @@ export async function fetchHealth(): Promise<HealthResult> {
   const response = await fetch(api('health'))
   const body = await response.json().catch(() => ({}))
   return { ok: response.ok, model: body.model ?? null }
+}
+
+export async function fetchToolDefinitions(source: string, signal: AbortSignal): Promise<ToolDefinition[]> {
+  const response = await fetch(api('tools'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ source }),
+    signal,
+  })
+  if (response.ok) return response.json()
+  throw new Error(`tool definitions returned ${response.status}: ${await response.text()}`)
 }
 
 export async function invokeTool(
