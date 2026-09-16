@@ -141,10 +141,12 @@ row and sequence bounds, byte size, SHA-256 digest, each table's metadata object
 optional seal state. Writers compute shard integrity metadata while streaming Parquet,
 so it does not require another object-store read.
 
-Opening an archive for writing rewrites `_archive.json` and each registered schema
-object with their existing bytes. Bucket lifecycle rules under a `tmp/ttl=Nd/` prefix
-expire each object on its own clock, so these write-once objects must stay at least
-as young as the `HEAD` that every commit rewrites.
+On a remote root, the first commit after open and then at most one commit per day
+rewrite `_archive.json` and every schema object in the published manifest with their
+existing bytes. Bucket lifecycle rules under a `tmp/ttl=Nd/` prefix expire each object
+on its own clock, so these write-once objects must stay at least as young as the
+`HEAD` that every commit rewrites. Local roots have no lifecycle rules and are not
+rewritten.
 
 Manifest models preserve unknown optional JSON fields when an older writer rebases a
 commit. A manifest can also name `required_features`; readers reject features they do
