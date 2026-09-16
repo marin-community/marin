@@ -168,6 +168,7 @@ scale_groups:
 user_budgets:
   - user_ids:
       - ben.feuer@openathena.ai
+      - benfeuer
       - benjaminfeuer
       - david.hall@openathena.ai
       - dlwh

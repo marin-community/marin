@@ -343,6 +343,7 @@ user_budgets:
       - ryan
       - marinazh
       - benjaminfeuer
+      - benfeuer
       - morrisy
     budget_limit: 75000
     max_band: PRIORITY_BAND_INTERACTIVE
