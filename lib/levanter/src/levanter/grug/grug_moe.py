@@ -65,6 +65,8 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 
 MOE_DROPPED_ASSIGNMENTS_METRIC = "moe/dropped_assignments"
+MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC = "moe/sender_dropped_assignments"
+MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC = "moe/receiver_dropped_assignments"
 MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC = "moe/skipped_padding_assignments"
 MOE_VALID_ASSIGNMENTS_METRIC = "moe/valid_assignments"
 
@@ -489,6 +491,8 @@ def moe_mlp(
 
 __all__ = [
     "MOE_DROPPED_ASSIGNMENTS_METRIC",
+    "MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC",
+    "MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC",
     "MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC",
     "MOE_VALID_ASSIGNMENTS_METRIC",
     "MoeDispatchCounts",

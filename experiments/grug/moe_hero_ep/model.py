@@ -43,7 +43,9 @@ from levanter.grug.attention import (
 )
 from levanter.grug.grug_moe import (
     MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC,
     MOE_REMAT_SAVE_NAMES,
+    MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC,
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
     MoeActivation,
@@ -1454,10 +1456,10 @@ class Transformer(eqx.Module):
                 # 4096: 4096*4096*8*48 ~ 6.4e9 assignments > 2.1e9) and breaks the total==sender+receiver
                 # accounting check, since jax_enable_x64 is off so an in-device int64 sum silently downcasts.
                 summarized_metrics[MOE_DROPPED_ASSIGNMENTS_METRIC] = router_metrics["capacity_overflow_per_layer"]
-                summarized_metrics["moe/sender_dropped_assignments"] = router_metrics[
+                summarized_metrics[MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC] = router_metrics[
                     "sender_capacity_overflow_per_layer"
                 ]
-                summarized_metrics["moe/receiver_dropped_assignments"] = router_metrics[
+                summarized_metrics[MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC] = router_metrics[
                     "receiver_capacity_overflow_per_layer"
                 ]
                 summarized_metrics[MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC] = router_metrics[

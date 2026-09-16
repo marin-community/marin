@@ -30,6 +30,8 @@ from levanter.checkpoint import save_checkpoint
 from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import (
     MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC,
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
 )
@@ -1148,9 +1150,9 @@ def test_drop_metrics_reports_sender_and_receiver_fractions():
     assert metrics == {
         MOE_DROPPED_ASSIGNMENTS_METRIC: 5,
         "moe/drop_fraction": 5 / 12,
-        "moe/sender_dropped_assignments": 2,
+        MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC: 2,
         "moe/sender_drop_fraction": 2 / 12,
-        "moe/receiver_dropped_assignments": 3,
+        MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC: 3,
         "moe/receiver_drop_fraction": 3 / 12,
         "moe/receiver_drop_fraction_of_received": 3 / 10,
         MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: 4,
@@ -1184,8 +1186,8 @@ def test_drop_metrics_sums_per_layer_counts_in_int64_without_overflow():
     )
 
     assert metrics[MOE_DROPPED_ASSIGNMENTS_METRIC] == sender_total + receiver_total  # no int32 wrap
-    assert metrics["moe/sender_dropped_assignments"] == sender_total
-    assert metrics["moe/receiver_dropped_assignments"] == receiver_total
+    assert metrics[MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC] == sender_total
+    assert metrics[MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC] == receiver_total
 
 
 def test_baseline_eval_hook_runs_once_after_the_first_step():

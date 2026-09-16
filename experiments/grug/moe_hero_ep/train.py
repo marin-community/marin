@@ -42,6 +42,8 @@ from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
 from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_REQUIRED_XLA_FLAGS
 from levanter.grug.grug_moe import (
     MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC,
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
     MoeImplementation,
@@ -746,9 +748,9 @@ def _drop_metrics(
     return {
         MOE_DROPPED_ASSIGNMENTS_METRIC: dropped_assignments_host,
         "moe/drop_fraction": dropped_assignments_host / max(valid_assignments_host, 1),
-        "moe/sender_dropped_assignments": sender_dropped_assignments_host,
+        MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC: sender_dropped_assignments_host,
         "moe/sender_drop_fraction": sender_dropped_assignments_host / max(valid_assignments_host, 1),
-        "moe/receiver_dropped_assignments": receiver_dropped_assignments_host,
+        MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC: receiver_dropped_assignments_host,
         "moe/receiver_drop_fraction": receiver_dropped_assignments_host / max(valid_assignments_host, 1),
         "moe/receiver_drop_fraction_of_received": receiver_dropped_assignments_host / max(receiver_assignments, 1),
         MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: skipped_padding_assignments_host,
@@ -1221,8 +1223,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if MOE_DROPPED_ASSIGNMENTS_METRIC in metrics:
                         drop_metrics = _drop_metrics(
                             metrics[MOE_DROPPED_ASSIGNMENTS_METRIC],
-                            metrics["moe/sender_dropped_assignments"],
-                            metrics["moe/receiver_dropped_assignments"],
+                            metrics[MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC],
+                            metrics[MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC],
                             metrics[MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC],
                             metrics[MOE_VALID_ASSIGNMENTS_METRIC],
                             batch_size=batch.tokens.shape[0],
