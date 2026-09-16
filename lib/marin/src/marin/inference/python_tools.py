@@ -58,11 +58,8 @@ def _python_tool(function: Callable[..., object]) -> PythonTool:
         )
 
     signature = inspect.signature(function)
-    unsupported = [
-        parameter.name
-        for parameter in signature.parameters.values()
-        if parameter.kind not in _SUPPORTED_PARAMETER_KINDS
-    ]
+    parameters = tuple(signature.parameters.values())
+    unsupported = [parameter.name for parameter in parameters if parameter.kind not in _SUPPORTED_PARAMETER_KINDS]
     if unsupported:
         raise ValueError(f"Tool function {name!r} has unsupported parameters: {', '.join(unsupported)}")
 
@@ -71,14 +68,14 @@ def _python_tool(function: Callable[..., object]) -> PythonTool:
     except (NameError, TypeError) as exc:
         raise ValueError(f"Could not resolve type annotations for tool function {name!r}: {exc}") from exc
 
-    missing_annotations = [parameter.name for parameter in signature.parameters.values() if parameter.name not in annotations]
+    missing_annotations = [parameter.name for parameter in parameters if parameter.name not in annotations]
     if missing_annotations:
         raise ValueError(
             f"Tool function {name!r} must annotate every parameter; missing: {', '.join(missing_annotations)}"
         )
 
     fields: dict[str, tuple[Any, Any]] = {}
-    for parameter in signature.parameters.values():
+    for parameter in parameters:
         default = ... if parameter.default is inspect.Parameter.empty else parameter.default
         fields[parameter.name] = (annotations[parameter.name], default)
     arguments_model = create_model(

@@ -13,6 +13,8 @@ from pathlib import Path
 import draccus
 from rigging.filesystem.storage_path import StoragePath
 
+from marin.inference.config import vllm_tool_call_args
+
 
 class ServeBackend(StrEnum):
     """Inference backend used for evaluation."""
@@ -171,11 +173,7 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
         add("--limit-mm-per-prompt", serve.limit_mm_per_prompt)
     if serve.reasoning_parser is not None:
         add("--reasoning-parser", serve.reasoning_parser)
-    if serve.tool_call_parser is not None:
-        # vLLM only honors a tool-call parser when auto tool choice is enabled.
-        add("--enable-auto-tool-choice")
-        add("--tool-call-parser", serve.tool_call_parser)
-    return (*derived, *explicit)
+    return (*derived, *vllm_tool_call_args(explicit, serve.tool_call_parser))
 
 
 def load_model_config(path: Path) -> ModelConfig:

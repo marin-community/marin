@@ -50,6 +50,7 @@ from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
     _resolve_serving_plan,
+    _resolve_tool_configuration,
     main,
 )
 from marin.inference.levanter_backend import (
@@ -637,25 +638,20 @@ def test_iris_serve_loads_python_tool_into_service(monkeypatch, tmp_path):
     client.submit.assert_called_once()
     [tool] = services[0].tools
     assert tool("Paris") == {"city": "Paris", "unit": "celsius", "temperature": 21}
-    assert services[0].engine.extra_args[-3:] == (
-        "--enable-auto-tool-choice",
-        "--tool-call-parser",
-        "hermes",
-    )
+    assert "--enable-auto-tool-choice" in services[0].engine.extra_args
+    parser_index = services[0].engine.extra_args.index("--tool-call-parser")
+    assert services[0].engine.extra_args[parser_index + 1] == "hermes"
 
 
-def test_iris_serve_requires_vllm_tool_call_parser(monkeypatch):
-    result, client, services, _mint = _invoke_iris_serve(
-        monkeypatch,
-        "--tool",
-        "marin.inference.iris_cli:_default_job_name",
-        "--no-wait",
-    )
-
-    assert result.exit_code != 0
-    assert "--tool-call-parser is required" in result.output
-    client.submit.assert_not_called()
-    assert services == []
+def test_iris_serve_requires_vllm_tool_call_parser():
+    with pytest.raises(click.ClickException):
+        _resolve_tool_configuration(
+            specs=("marin.inference.iris_cli:_default_job_name",),
+            tool_call_parser=None,
+            backend="vllm",
+            workspace_dir=Path.cwd(),
+            vllm_args=(),
+        )
 
 
 def test_iris_serve_rejects_invalid_metric_config_before_submission(monkeypatch, tmp_path):

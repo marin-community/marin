@@ -80,6 +80,7 @@ from marin.inference.config import (
     VllmLauncherType,
     VllmSource,
     load_vllm_metric_family_additions,
+    vllm_tool_call_args,
 )
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 
@@ -254,6 +255,22 @@ def _load_tool_functions(specs: tuple[str, ...]) -> tuple[Callable[..., object],
             raise click.ClickException(f"Tool {spec!r} does not resolve to a Python function.")
         functions.append(function)
     return tuple(functions)
+
+
+def _resolve_tool_configuration(
+    *,
+    specs: tuple[str, ...],
+    tool_call_parser: str | None,
+    backend: str,
+    workspace_dir: Path | None,
+    vllm_args: tuple[str, ...],
+) -> tuple[tuple[Callable[..., object], ...], tuple[str, ...]]:
+    if specs and workspace_dir is None:
+        raise click.ClickException("--tool requires running from a Marin checkout so Iris can sync the tool module.")
+    tools = _load_tool_functions(specs)
+    if tools and backend == "vllm" and tool_call_parser is None:
+        raise click.ClickException("--tool-call-parser is required when --tool is used with the vLLM backend.")
+    return tools, vllm_tool_call_args(vllm_args, tool_call_parser)
 
 
 def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout_seconds: float) -> str:
@@ -490,16 +507,18 @@ def main(
 
     # None outside a marin checkout: the TPU path then serves checkout-free.
     workspace_dir = find_project_root()
-    if tool_specs and workspace_dir is None:
-        raise click.ClickException("--tool requires running from a Marin checkout so Iris can sync the tool module.")
-    tools = _load_tool_functions(tool_specs)
 
     tpu_from_cli = click.get_current_context().get_parameter_source("tpu") == ParameterSource.COMMANDLINE
     if gpu is not None and tpu_from_cli:
         raise click.ClickException("--gpu and --tpu are mutually exclusive; pass only one.")
     reject_backend_options(backend, _VLLM_ONLY_OPTIONS if backend == "levanter" else _LEVANTER_ONLY_OPTIONS)
-    if tools and backend == "vllm" and tool_call_parser is None:
-        raise click.ClickException("--tool-call-parser is required when --tool is used with the vLLM backend.")
+    tools, resolved_vllm_args = _resolve_tool_configuration(
+        specs=tool_specs,
+        tool_call_parser=tool_call_parser,
+        backend=backend,
+        workspace_dir=workspace_dir,
+        vllm_args=vllm_args,
+    )
 
     job_name = name or _default_job_name(model)
     if "/" in job_name:
@@ -518,9 +537,6 @@ def main(
     extra_metric_families = load_vllm_metric_family_additions(vllm_metrics_config)
 
     vllm_source_enum = VllmSource.MARIN_FORK if vllm_source == "marin-fork" else VllmSource.UPSTREAM
-    resolved_vllm_args = tuple(vllm_args)
-    if tool_call_parser is not None:
-        resolved_vllm_args += ("--enable-auto-tool-choice", "--tool-call-parser", tool_call_parser)
     plan = _resolve_serving_plan(
         backend=backend,
         tpu=tpu,

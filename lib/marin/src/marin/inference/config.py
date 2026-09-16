@@ -73,6 +73,25 @@ def load_vllm_metric_family_additions(path: Path | None) -> frozenset[str]:
     return _parse_vllm_metric_families(StoragePath(str(path)).read_bytes(), source=str(path))
 
 
+def vllm_tool_call_args(extra_args: tuple[str, ...], tool_call_parser: str | None) -> tuple[str, ...]:
+    """Enable automatic tool choice when a parser is configured.
+
+    Explicit vLLM arguments take precedence over the typed parser setting so callers can
+    override either flag without producing duplicates.
+    """
+    if tool_call_parser is None:
+        return extra_args
+
+    derived: list[str] = []
+    for option, values in (
+        ("--enable-auto-tool-choice", ()),
+        ("--tool-call-parser", (tool_call_parser,)),
+    ):
+        if not any(arg == option or arg.startswith(f"{option}=") for arg in extra_args):
+            derived.extend((option, *values))
+    return (*derived, *extra_args)
+
+
 class VllmLauncherType(StrEnum):
     PREINSTALLED = "preinstalled"
     CUDA = "cuda"
