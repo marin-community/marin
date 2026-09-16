@@ -13,6 +13,12 @@ capacity and padding counts, and peak allocator memory when the backend exposes 
 small enough for a workstation; pass production-local shapes and an expert-parallel backend for a
 representative accelerator measurement.
 
+Both cases run the same padded shapes, so peak memory is expected to match: every backend sizes
+its buffers from the padded token count. Runtime shrinks where transport rows and grouped-GEMM
+segments follow the valid rows (``scatter``, ``sonic``, ``ragged_all_to_all``) and stays flat for
+the dense fixed-buffer collectives (``fixed_all_to_all``, ``fixed_pooled_wave_all_to_all``).
+Shrinking the buffers themselves needs a static valid-token budget, which packing provides.
+
 Examples::
 
     python lib/levanter/scripts/bench/bench_grug_moe_padding.py
