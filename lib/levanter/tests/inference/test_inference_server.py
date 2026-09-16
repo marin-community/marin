@@ -17,7 +17,6 @@ from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
 
 try:
-    from fastapi import HTTPException
     from fastapi.testclient import TestClient
     from openai.types import Completion
 
@@ -29,9 +28,7 @@ try:
         InferenceResponse,
         InferenceServer,
         InferenceServerConfig,
-        _compute_tokens,
     )
-    from levanter.inference.openai_protocol import ChatMessage
 
 except ImportError:
     pytest.skip("Serving imports not installed, use --extra=serve", allow_module_level=True)
@@ -233,67 +230,6 @@ def test_chat_completion_without_a_chat_template_is_rejected(test_client, monkey
 
     assert response.status_code == 400
     assert "no chat template" in response.json()["detail"]
-
-
-def test_chat_completion_renders_tool_definitions(local_gpt2_tokenizer):
-    tokenizer = local_gpt2_tokenizer.with_chat_template(
-        "{% if tools %}tool={{ tools[0]['function']['name'] }}\n{% endif %}"
-        "{% for message in messages %}{{ message['role'] }}: {{ message['content'] }}\n{% endfor %}"
-        "{% if add_generation_prompt %}assistant: {% endif %}"
-    )
-    tools = [
-        {
-            "type": "function",
-            "function": {"name": "lookup_weather", "parameters": {"type": "object"}},
-        }
-    ]
-
-    tokens = _compute_tokens([ChatMessage(role="user", content="Will it rain?")], tokenizer, tools)
-
-    assert "lookup_weather" in tokenizer.decode(tokens)
-
-
-def test_chat_completion_renders_openai_tool_call_arguments_as_mapping(local_gpt2_tokenizer):
-    tokenizer = local_gpt2_tokenizer.with_chat_template(
-        "{{ messages[0]['tool_calls'][0]['function']['arguments']['city'] }}"
-    )
-    messages = [
-        ChatMessage(
-            role="assistant",
-            tool_calls=[
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "lookup_weather", "arguments": '{"city":"Paris"}'},
-                }
-            ],
-        )
-    ]
-
-    tokens = _compute_tokens(messages, tokenizer)
-
-    assert "Paris" in tokenizer.decode(tokens)
-
-
-def test_chat_completion_rejects_invalid_tool_call_arguments(local_gpt2_tokenizer):
-    tokenizer = local_gpt2_tokenizer.with_chat_template("{{ messages | length }}")
-    messages = [
-        ChatMessage(
-            role="assistant",
-            tool_calls=[
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "lookup_weather", "arguments": "not json"},
-                }
-            ],
-        )
-    ]
-
-    with pytest.raises(HTTPException) as excinfo:
-        _compute_tokens(messages, tokenizer)
-
-    assert excinfo.value.status_code == 400
 
 
 class _OpenAITestTokenizer:

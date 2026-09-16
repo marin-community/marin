@@ -13,7 +13,6 @@ Examples::
     marin-serve iris Qwen/Qwen3-0.6B --cluster marin --tpu v6e-8 --backend levanter
     marin-serve iris gs://my-bucket/ckpt --tpu v5litepod-8 --chat-template delphi_v0.jinja2
     marin-serve iris Qwen/Qwen3-0.6B --cluster marin --gpu H100x8 --target-cluster cw-rno2a
-    marin-serve iris Qwen/Qwen3-0.6B --tool my_tools:lookup_weather --tool-call-parser hermes
 
 ``--backend`` picks the stack that answers requests: ``vllm`` (default) runs vLLM as a
 subprocess, ``levanter`` runs Levanter's inference engine in-process on the slice's chips. Both
@@ -31,22 +30,15 @@ The Levanter backend needs no vLLM at all: it serves from the worker venv's JAX.
 named peer. The slice's tensor-parallel size and (for clamped-RoPE models) max sequence length are
 inferred automatically; override with ``--tensor-parallel-size`` / ``--max-model-len``. Once the
 endpoint is ready, the command always mints and prints an endpoint-scoped capability URL.
-
-``--tool module:function`` adds an importable typed Python function to the Chat UI. The UI sends
-its generated OpenAI function schema to the model, executes returned calls inside the Iris service,
-and supplies each JSON result to the next model turn. Repeat the option to expose multiple tools.
 """
 
 import contextlib
-import importlib
 import importlib.metadata
-import inspect
 import logging
 import re
 import shlex
 import time
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -70,7 +62,6 @@ from rigging.timing import Duration
 
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
-    VLLM_TOOL_CALL_PARSER_OPTION,
     WORKER_PYTHON_VERSION,
     BrokerConfig,
     InferenceProxyConfig,
@@ -81,7 +72,6 @@ from marin.inference.config import (
     VllmLauncherType,
     VllmSource,
     load_vllm_metric_family_additions,
-    vllm_tool_call_args,
 )
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 
@@ -104,7 +94,6 @@ _VLLM_ONLY_OPTIONS = {
     "vllm_args": "--vllm-arg",
     "vllm_metrics_config": "--vllm-metrics-config",
     "max_num_batched_tokens": "--max-num-batched-tokens",
-    "tool_call_parser": VLLM_TOOL_CALL_PARSER_OPTION,
 }
 _LEVANTER_ONLY_OPTIONS = {
     "max_seqs": "--max-seqs",
@@ -241,41 +230,6 @@ def _resolve_chat_template(spec: str | None) -> str | None:
     return path.read_text()
 
 
-def _load_tool_functions(specs: tuple[str, ...]) -> tuple[Callable[..., object], ...]:
-    functions: list[Callable[..., object]] = []
-    for spec in specs:
-        module_name, separator, function_name = spec.partition(":")
-        if not separator or not module_name or not function_name:
-            raise click.ClickException(f"Invalid --tool {spec!r}; expected MODULE:FUNCTION.")
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError as exc:
-            raise click.ClickException(f"Could not import tool module {module_name!r}: {exc}") from exc
-        function = getattr(module, function_name, None)
-        if not inspect.isfunction(function):
-            raise click.ClickException(f"Tool {spec!r} does not resolve to a Python function.")
-        functions.append(function)
-    return tuple(functions)
-
-
-def _resolve_tool_configuration(
-    *,
-    specs: tuple[str, ...],
-    tool_call_parser: str | None,
-    backend: str,
-    workspace_dir: Path | None,
-    vllm_args: tuple[str, ...],
-) -> tuple[tuple[Callable[..., object], ...], tuple[str, ...]]:
-    if specs and workspace_dir is None:
-        raise click.ClickException("--tool requires running from a Marin checkout so Iris can sync the tool module.")
-    tools = _load_tool_functions(specs)
-    if tools and backend == "vllm" and tool_call_parser is None:
-        raise click.ClickException(
-            f"{VLLM_TOOL_CALL_PARSER_OPTION} is required when --tool is used with the vLLM backend."
-        )
-    return tools, vllm_tool_call_args(vllm_args, tool_call_parser)
-
-
 def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout_seconds: float) -> str:
     """Poll the controller registry until the endpoint registers; return its address."""
     deadline = time.monotonic() + timeout_seconds
@@ -361,17 +315,6 @@ def _mint_and_print_capability_url(
 @click.option("--name", default=None, help="Iris job name (default: derived from the model).")
 @click.option("--endpoint-name", default=None, help="Endpoint name to register (default: /serve/<job-name>).")
 @click.option("--chat-template", default=None, help="Jinja chat template: local file path or http(s) URL.")
-@click.option(
-    "--tool",
-    "tool_specs",
-    multiple=True,
-    help="Python tool as MODULE:FUNCTION (repeatable); runs inside the Iris service for Chat UI requests.",
-)
-@click.option(
-    VLLM_TOOL_CALL_PARSER_OPTION,
-    default=None,
-    help="vLLM parser for automatic tool calls (for example, hermes, qwen3_coder, or mistral).",
-)
 @click.option(
     "--max-model-len",
     type=int,
@@ -476,8 +419,6 @@ def main(
     name: str | None,
     endpoint_name: str | None,
     chat_template: str | None,
-    tool_specs: tuple[str, ...],
-    tool_call_parser: str | None,
     max_model_len: int | None,
     max_num_batched_tokens: int,
     max_seqs: int,
@@ -515,13 +456,6 @@ def main(
     if gpu is not None and tpu_from_cli:
         raise click.ClickException("--gpu and --tpu are mutually exclusive; pass only one.")
     reject_backend_options(backend, _VLLM_ONLY_OPTIONS if backend == "levanter" else _LEVANTER_ONLY_OPTIONS)
-    tools, resolved_vllm_args = _resolve_tool_configuration(
-        specs=tool_specs,
-        tool_call_parser=tool_call_parser,
-        backend=backend,
-        workspace_dir=workspace_dir,
-        vllm_args=vllm_args,
-    )
 
     job_name = name or _default_job_name(model)
     if "/" in job_name:
@@ -553,7 +487,7 @@ def main(
             # The in-job vLLM boot budget must cover the same window the client waits, so raising
             # --wait-timeout for a slow-booting model actually takes effect.
             startup_timeout_seconds=int(wait_timeout),
-            extra_args=resolved_vllm_args,
+            extra_args=tuple(vllm_args),
             extra_metric_families=extra_metric_families,
         ),
         levanter=LevanterEngineConfig(max_seqs=max_seqs, page_size=page_size, hbm_utilization=hbm_utilization),
@@ -624,16 +558,13 @@ def main(
         broker=broker_config,
         timeout_hours=timeout_hours,
         controller_proxy_timeout_seconds=proxy_timeout,
-        tools=tools,
     )
 
-    outer_extras = plan.worker_extras
-    if brokered:
-        outer_extras = extras if tools else ()
     if workspace_dir is None:
+        outer_extras = () if brokered else plan.worker_extras
         environment = EnvironmentSpec(setup_scripts=[_checkout_free_setup_script(_marin_core_version(), outer_extras)])
     else:
-        environment = EnvironmentSpec(extras=outer_extras)
+        environment = EnvironmentSpec(extras=() if brokered else plan.worker_extras)
 
     # Broker workers carry their own device constraints. Leaving the lightweight broker job
     # region-free prevents Iris from implicitly pinning its child workers to a region that may not

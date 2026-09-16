@@ -41,6 +41,7 @@ function freshConversation(): Conversation {
     title: '',
     model: model.value,
     system: '',
+    pythonTools: '',
     createdAt: Date.now(),
     updatedAt: Date.now(),
     messages: [],
@@ -49,9 +50,10 @@ function freshConversation(): Conversation {
 
 function persist() {
   const current = active.value
-  if (!current.messages.length) return
+  const alreadySaved = conversations.value.some((conversation) => conversation.id === current.id)
+  if (!current.messages.length && !current.pythonTools.trim() && !alreadySaved) return
   if (!current.model) current.model = model.value
-  if (!conversations.value.some((c) => c.id === current.id)) conversations.value.push(current)
+  if (!alreadySaved) conversations.value.push(current)
   saveConversations(conversations.value)
 }
 
@@ -151,7 +153,6 @@ function clearHistory() {
           :model="model"
           :has-chat-template="info ? info.has_chat_template : true"
           :streaming="info ? info.streaming : true"
-          :tools="info?.tools ?? []"
           @persist="persist"
         />
         <CompletionView v-else :params="params" :model="model" :streaming="info ? info.streaming : true" />

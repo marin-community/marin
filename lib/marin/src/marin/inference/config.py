@@ -23,7 +23,6 @@ WORKER_PYTHON_VERSION = "3.12"
 # participate in Marin's workspace dependency resolution.
 DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
 VLLM_METRIC_PREFIX = "vllm:"
-VLLM_TOOL_CALL_PARSER_OPTION = "--tool-call-parser"
 
 # This standard set includes families consumed by Marin's inference dashboards or needed for
 # basic serving diagnosis: request volume, latency, scheduler pressure, KV-cache use, and
@@ -72,29 +71,6 @@ def load_vllm_metric_family_additions(path: Path | None) -> frozenset[str]:
     if path is None:
         return frozenset()
     return _parse_vllm_metric_families(StoragePath(str(path)).read_bytes(), source=str(path))
-
-
-def has_vllm_option(args: tuple[str, ...], option: str) -> bool:
-    return any(arg == option or arg.startswith(f"{option}=") for arg in args)
-
-
-def vllm_tool_call_args(extra_args: tuple[str, ...], tool_call_parser: str | None) -> tuple[str, ...]:
-    """Enable automatic tool choice when a parser is configured.
-
-    Explicit vLLM arguments take precedence over the typed parser setting so callers can
-    override either flag without producing duplicates.
-    """
-    if tool_call_parser is None:
-        return extra_args
-
-    derived: list[str] = []
-    for option, values in (
-        ("--enable-auto-tool-choice", ()),
-        (VLLM_TOOL_CALL_PARSER_OPTION, (tool_call_parser,)),
-    ):
-        if not has_vllm_option(extra_args, option):
-            derived.extend((option, *values))
-    return (*derived, *extra_args)
 
 
 class VllmLauncherType(StrEnum):

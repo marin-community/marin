@@ -22,11 +22,16 @@ export async function fetchHealth(): Promise<HealthResult> {
   return { ok: response.ok, model: body.model ?? null }
 }
 
-export async function invokeTool(name: string, arguments_: Record<string, unknown>, signal: AbortSignal): Promise<string> {
+export async function invokeTool(
+  name: string,
+  source: string,
+  arguments_: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<string> {
   const response = await fetch(api(`tools/${encodeURIComponent(name)}`), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(arguments_),
+    body: JSON.stringify({ source, arguments: arguments_ }),
     signal,
   })
   const body = await response.text()

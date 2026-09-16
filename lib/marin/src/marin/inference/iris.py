@@ -36,7 +36,6 @@ from marin.inference.config import (
 )
 from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, build_dashboard_app, serve_app_background
 from marin.inference.proxy import serve_inference_proxy
-from marin.inference.python_tools import python_tools
 from marin.inference.serve import LocalInferenceSession, local_inference
 from marin.inference.types import (
     InferenceRequestProvider,
@@ -168,12 +167,10 @@ class IrisServiceConfig:
     timeout_hours: float = 24.0
     controller_proxy_timeout_seconds: float = 2100.0
     port_name: str | None = "http"
-    tools: tuple[Callable[..., object], ...] = ()
 
     def __post_init__(self) -> None:
         if self.instances <= 0:
             raise ValueError("instances must be positive")
-        python_tools(self.tools)
 
 
 def _broker_config(instances: int, broker: BrokerConfig | None) -> BrokerConfig | None:
@@ -307,7 +304,6 @@ def _register_dashboard(
         upstream_base_url=_server_root(model),
         model_id=model.endpoint.model,
         info=info,
-        tools=service.tools,
         request_timeout_seconds=service.controller_proxy_timeout_seconds,
     )
     with serve_app_background(app, serving_socket):

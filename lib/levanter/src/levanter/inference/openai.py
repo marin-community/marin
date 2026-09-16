@@ -12,7 +12,6 @@ drop-in replacements for OpenAI models.
 import asyncio
 import collections
 import collections.abc
-import json
 import logging
 import queue
 import threading
@@ -659,11 +658,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _compute_tokens(
-    messages: list[ChatMessage],
-    tokenizer: MarinTokenizer,
-    tools: list[dict[str, object]] | None = None,
-) -> List[int]:
+def _compute_tokens(messages: list[ChatMessage], tokenizer: MarinTokenizer) -> List[int]:
     """Encode a conversation with the tokenizer's chat template.
 
     A model with no chat template cannot represent a conversation, so a chat request against one
@@ -676,35 +671,9 @@ def _compute_tokens(
             detail="This model has no chat template; use /v1/completions, or serve it with a chat template.",
         )
     dict_messages = [msg.model_dump(exclude_none=True) for msg in messages]
-    for message in dict_messages:
-        tool_calls = message.get("tool_calls")
-        if not isinstance(tool_calls, list):
-            continue
-        for tool_call in tool_calls:
-            if not isinstance(tool_call, dict):
-                continue
-            function = tool_call.get("function")
-            if not isinstance(function, dict):
-                continue
-            arguments = function.get("arguments")
-            if not isinstance(arguments, str):
-                continue
-            try:
-                parsed_arguments = json.loads(arguments)
-            except json.JSONDecodeError as exc:
-                raise HTTPException(status_code=400, detail="Tool call arguments must be valid JSON objects.") from exc
-            if not isinstance(parsed_arguments, dict):
-                raise HTTPException(status_code=400, detail="Tool call arguments must be valid JSON objects.")
-            function["arguments"] = parsed_arguments
     # return_dict=False pins the token ids to a flat list; tokenizers otherwise hand back a
     # BatchEncoding here, which is the shape the rest of this module cannot use.
-    result = tokenizer.apply_chat_template(
-        dict_messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_dict=False,
-        tools=tools,
-    )
+    result = tokenizer.apply_chat_template(dict_messages, tokenize=True, add_generation_prompt=True, return_dict=False)
     assert isinstance(result, list)
     return result
 
@@ -730,7 +699,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
     """Create a chat completion using OpenAI API format."""
     try:
         # Convert Pydantic models to dicts for tokenizer
-        prompt_tokens = _compute_tokens(request.messages, ctx.tokenizer, request.tools)
+        prompt_tokens = _compute_tokens(request.messages, ctx.tokenizer)
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
 

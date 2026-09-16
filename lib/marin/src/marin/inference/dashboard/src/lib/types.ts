@@ -8,19 +8,9 @@ export interface ServingInfo {
   has_chat_template: boolean
   endpoint: string
   streaming: boolean
-  tools: ToolDefinition[]
 }
 
 export type ServerStatus = 'connecting' | 'ok' | 'loading' | 'bad'
-
-export interface ToolDefinition {
-  type: 'function'
-  function: {
-    name: string
-    description?: string
-    parameters: Record<string, unknown>
-  }
-}
 
 export interface ToolCall {
   id: string
@@ -48,6 +38,7 @@ export interface Conversation {
   title: string
   model: string
   system: string
+  pythonTools: string
   createdAt: number
   updatedAt: number
   messages: ChatMessage[]

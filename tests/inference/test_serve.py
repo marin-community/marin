@@ -50,7 +50,6 @@ from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
     _resolve_serving_plan,
-    _resolve_tool_configuration,
     main,
 )
 from marin.inference.levanter_backend import (
@@ -60,7 +59,7 @@ from marin.inference.levanter_backend import (
     validate_levanter_dtype,
 )
 from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
-from marin.inference.python_tools import python_tools
+from marin.inference.python_tools import python_tools_from_source
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from marin.inference.vllm_backend import VllmBackend, vllm_launcher
@@ -79,10 +78,12 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route
 
-
-def multiply_tool(value: int, factor: int = 2) -> int:
+MULTIPLY_TOOL_SOURCE = '''
+def multiply(value: int, factor: int = 2) -> int:
     """Multiply a value by an optional factor."""
+    print("running multiply")
     return value * factor
+'''
 
 
 @pytest.mark.parametrize(
@@ -616,41 +617,6 @@ def test_iris_serve_resolves_additive_metric_families_before_submission(monkeypa
     assert services[0].engine.extra_metric_families == frozenset({"vllm:custom_scheduler_pressure"})
 
 
-def test_iris_serve_loads_python_tool_into_service(monkeypatch, tmp_path):
-    module = tmp_path / "serve_test_tools.py"
-    module.write_text(
-        'def lookup_temperature(city: str, unit: str = "celsius") -> dict[str, object]:\n'
-        '    """Return the configured temperature for a city."""\n'
-        '    return {"city": city, "unit": unit, "temperature": 21}\n'
-    )
-    monkeypatch.syspath_prepend(tmp_path)
-
-    result, client, services, _mint = _invoke_iris_serve(
-        monkeypatch,
-        "--tool",
-        "serve_test_tools:lookup_temperature",
-        "--tool-call-parser",
-        "hermes",
-        "--no-wait",
-    )
-
-    assert result.exit_code == 0, result.output
-    client.submit.assert_called_once()
-    [tool] = services[0].tools
-    assert tool("Paris") == {"city": "Paris", "unit": "celsius", "temperature": 21}
-
-
-def test_iris_serve_requires_vllm_tool_call_parser():
-    with pytest.raises(click.ClickException):
-        _resolve_tool_configuration(
-            specs=("marin.inference.iris_cli:_default_job_name",),
-            tool_call_parser=None,
-            backend="vllm",
-            workspace_dir=Path.cwd(),
-            vllm_args=(),
-        )
-
-
 def test_iris_serve_rejects_invalid_metric_config_before_submission(monkeypatch, tmp_path):
     config = tmp_path / "metrics.toml"
     config.write_text('families = "vllm:not-an-array"\n')
@@ -772,20 +738,18 @@ def test_dashboard_html_is_self_contained():
     assert 'src="http' not in DASHBOARD_HTML
 
 
-def test_python_tool_schema_and_argument_validation():
-    [tool] = python_tools((multiply_tool,))
+def test_python_tool_source_requires_typed_functions_and_validates_arguments():
+    [tool] = python_tools_from_source(MULTIPLY_TOOL_SOURCE)
 
-    function = tool.definition.function
-    assert function.name == "multiply_tool"
-    assert function.description == "Multiply a value by an optional factor."
-    parameters = function.parameters
-    assert parameters["required"] == ["value"]
-    assert parameters["additionalProperties"] is False
-    properties = parameters["properties"]
-    assert isinstance(properties, dict)
-    assert properties["value"]["type"] == "integer"
-    assert properties["factor"]["default"] == 2
+    assert tool.name == "multiply"
     assert tool.validate_arguments({"value": "3"}) == {"value": 3, "factor": 2}
+    assert tool.function(**tool.validate_arguments({"value": 3})) == 6
+
+    with pytest.raises(ValueError, match="annotate its return value"):
+        python_tools_from_source("def untyped(value: int):\n    return value\n")
+
+    with pytest.raises(ValueError, match="only top-level function definitions"):
+        python_tools_from_source("CONSTANT = 1\n")
 
 
 def test_dashboard_executes_typed_python_tools():
@@ -804,16 +768,18 @@ def test_dashboard_executes_typed_python_tools():
         upstream_base_url="http://127.0.0.1:1",
         model_id="fake-model",
         info=info,
-        tools=(multiply_tool,),
     )
 
     with serve_app_background(app, dashboard_sock):
         base = f"http://127.0.0.1:{dashboard_port}"
-        [definition] = requests.get(f"{base}/info", timeout=10).json()["tools"]
-        result = requests.post(f"{base}/tools/multiply_tool", json={"value": "6", "factor": 7}, timeout=10)
-        invalid = requests.post(f"{base}/tools/multiply_tool", json={"unknown": 1}, timeout=10)
+        payload = {"source": MULTIPLY_TOOL_SOURCE, "arguments": {"value": "6", "factor": 7}}
+        result = requests.post(f"{base}/tools/multiply", json=payload, timeout=10)
+        invalid = requests.post(
+            f"{base}/tools/multiply",
+            json={"source": MULTIPLY_TOOL_SOURCE, "arguments": {"unknown": 1}},
+            timeout=10,
+        )
 
-    assert definition["function"]["name"] == "multiply_tool"
     assert result.json() == 42
     assert invalid.status_code == 422
 
@@ -844,7 +810,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
             assert page.status_code == 200
             assert "marin · serve" in page.text
 
-            assert requests.get(f"{base}/info", timeout=10).json() == {**dataclasses.asdict(info), "tools": []}
+            assert requests.get(f"{base}/info", timeout=10).json() == dataclasses.asdict(info)
             assert requests.get(f"{base}/health", timeout=10).json() == {"status": "ok", "model": "fake-model"}
             assert requests.get(f"{base}/v1/models", timeout=10).json()["data"][0]["id"] == "fake-model"
 

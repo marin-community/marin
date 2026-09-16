@@ -13,8 +13,6 @@ from pathlib import Path
 import draccus
 from rigging.filesystem.storage_path import StoragePath
 
-from marin.inference.config import has_vllm_option, vllm_tool_call_args
-
 
 class ServeBackend(StrEnum):
     """Inference backend used for evaluation."""
@@ -140,6 +138,11 @@ class ModelConfig:
             raise ValueError("model name cannot contain '/'")
 
 
+def has_vllm_option(args: tuple[str, ...], option: str) -> bool:
+    """Whether ``args`` already specifies a vLLM option in either CLI spelling."""
+    return any(arg == option or arg.startswith(f"{option}=") for arg in args)
+
+
 def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
     """Render a :class:`ServeConfig`'s typed serve knobs into ``vllm serve`` flags.
 
@@ -168,7 +171,11 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
         add("--limit-mm-per-prompt", serve.limit_mm_per_prompt)
     if serve.reasoning_parser is not None:
         add("--reasoning-parser", serve.reasoning_parser)
-    return (*derived, *vllm_tool_call_args(explicit, serve.tool_call_parser))
+    if serve.tool_call_parser is not None:
+        # vLLM only honors a tool-call parser when auto tool choice is enabled.
+        add("--enable-auto-tool-choice")
+        add("--tool-call-parser", serve.tool_call_parser)
+    return (*derived, *explicit)
 
 
 def load_model_config(path: Path) -> ModelConfig:

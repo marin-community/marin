@@ -16,33 +16,33 @@ slice (see :mod:`marin.inference.backend`). Direct sessions preserve server-sent
 events end to end; brokered sessions return buffered JSON and reject streaming.
 """
 
+import asyncio
 import dataclasses
 import importlib.resources
-import inspect
 import json
 import logging
 import socket
+import subprocess
+import sys
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
-from functools import partial
-from typing import cast
 
 import httpx
 import uvicorn
-from pydantic import ValidationError
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
-from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from marin.inference.http_proxy import forwardable_request_headers, forwardable_response_headers
-from marin.inference.python_tools import PythonTool, python_tools
+from marin.inference.python_tools import MAX_PYTHON_TOOL_SOURCE_BYTES
 
 logger = logging.getLogger(__name__)
+PYTHON_TOOL_TIMEOUT_SECONDS = 10
+_MAX_TOOL_ERROR_LENGTH = 4_000
 
 
 @dataclass(frozen=True)
@@ -59,30 +59,41 @@ class ServingInfo:
     streaming: bool = True
 
 
-async def _invoke_tool_request(request: Request, *, registered_tools: dict[str, PythonTool]) -> Response:
-    tool = registered_tools.get(request.path_params["name"])
-    if tool is None:
-        return JSONResponse({"error": "unknown tool"}, status_code=404)
-    try:
-        arguments = await request.json()
-    except json.JSONDecodeError:
-        return JSONResponse({"error": "tool arguments must be JSON"}, status_code=400)
-    try:
-        validated = tool.validate_arguments(arguments)
-    except ValidationError as exc:
-        return JSONResponse(
-            {"error": "invalid tool arguments", "details": exc.errors(include_url=False)},
-            status_code=422,
-        )
+def _run_python_tool(payload: bytes) -> subprocess.CompletedProcess[bytes]:
+    # Keep CPython on its posix_spawn path: forking after Levanter starts JAX threads can deadlock.
+    return subprocess.run(
+        [sys.executable, "-m", "marin.inference.python_tools"],
+        input=payload,
+        capture_output=True,
+        timeout=PYTHON_TOOL_TIMEOUT_SECONDS,
+        check=False,
+        close_fds=False,
+    )
 
-    if inspect.iscoroutinefunction(tool.function):
-        async_function = cast(Callable[..., Awaitable[object]], tool.function)
-        result = await async_function(**validated)
-    else:
-        result = await run_in_threadpool(tool.function, **validated)
-        if inspect.isawaitable(result):
-            result = await cast(Awaitable[object], result)
-    return Response(tool.serialize_result(result), media_type="application/json")
+
+async def _invoke_tool_request(request: Request) -> Response:
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "tool request must be JSON"}, status_code=400)
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "tool request must be an object"}, status_code=400)
+    source = payload.get("source")
+    arguments = payload.get("arguments")
+    if not isinstance(source, str) or not isinstance(arguments, dict):
+        return JSONResponse({"error": "tool request requires string source and object arguments"}, status_code=400)
+    if len(source.encode()) > MAX_PYTHON_TOOL_SOURCE_BYTES:
+        return JSONResponse({"error": "Python tool source is too large"}, status_code=413)
+
+    child_payload = json.dumps({"source": source, "name": request.path_params["name"], "arguments": arguments}).encode()
+    try:
+        result = await asyncio.to_thread(_run_python_tool, child_payload)
+    except subprocess.TimeoutExpired:
+        return JSONResponse({"error": f"Python tool exceeded {PYTHON_TOOL_TIMEOUT_SECONDS} seconds"}, status_code=408)
+    if result.returncode != 0:
+        details = result.stderr.decode(errors="replace")[-_MAX_TOOL_ERROR_LENGTH:].strip()
+        return JSONResponse({"error": "Python tool failed", "details": details}, status_code=422)
+    return Response(result.stdout, media_type="application/json")
 
 
 def build_dashboard_app(
@@ -90,7 +101,6 @@ def build_dashboard_app(
     upstream_base_url: str,
     model_id: str,
     info: ServingInfo,
-    tools: tuple[Callable[..., object], ...] = (),
     request_timeout_seconds: float = 600.0,
 ) -> Starlette:
     """Build the Starlette app fronting a local serving backend.
@@ -99,11 +109,9 @@ def build_dashboard_app(
         upstream_base_url: Root URL of the backend's OpenAI server (without ``/v1``).
         model_id: The model id the backend reports; surfaced to the dashboard.
         info: Static serving metadata returned from ``/info``.
-        tools: Typed Python functions available to chat requests.
         request_timeout_seconds: Per-request timeout for upstream proxying.
     """
     state: dict[str, httpx.AsyncClient] = {}
-    registered_tools = {tool.name: tool for tool in python_tools(tools)}
 
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
@@ -120,12 +128,7 @@ def build_dashboard_app(
         return HTMLResponse(DASHBOARD_HTML)
 
     async def serving_info(_request: Request) -> Response:
-        return JSONResponse(
-            {
-                **dataclasses.asdict(info),
-                "tools": [tool.definition.to_dict() for tool in registered_tools.values()],
-            }
-        )
+        return JSONResponse(dataclasses.asdict(info))
 
     async def health(_request: Request) -> Response:
         client = state["client"]
@@ -177,7 +180,7 @@ def build_dashboard_app(
             Route("/dashboard", index),
             Route("/info", serving_info),
             Route("/health", health),
-            Route("/tools/{name}", partial(_invoke_tool_request, registered_tools=registered_tools), methods=["POST"]),
+            Route("/tools/{name}", _invoke_tool_request, methods=["POST"]),
             Route("/v1/{path:path}", proxy, methods=["GET", "POST", "OPTIONS"]),
         ],
         lifespan=lifespan,
