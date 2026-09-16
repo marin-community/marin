@@ -60,11 +60,6 @@ function pythonToolCallXml(call: ToolCall): string {
 }
 
 function pythonToolResultXml(message: ToolMessage): string {
-  let result: unknown = message.content
-  try {
-    result = JSON.parse(message.content)
-  } catch {
-    // Tool endpoints normally return JSON; preserve unexpected output as a string.
-  }
+  const result: unknown = JSON.parse(message.content)
   return `<${TOOL_RESULT_TAG}><![CDATA[${escapeCdataContent(JSON.stringify({ name: message.name, result }))}]]></${TOOL_RESULT_TAG}>`
 }

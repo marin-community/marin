@@ -14,6 +14,8 @@ would escape the prefix.
 ``/v1/*`` requests are reverse-proxied to whichever serving backend runs on the
 slice (see :mod:`marin.inference.backend`). Direct sessions preserve server-sent
 events end to end; brokered sessions return buffered JSON and reject streaming.
+``/tools/{name}`` validates and runs dashboard-authored Python in a short-lived
+subprocess, returning its typed JSON result.
 """
 
 import asyncio
