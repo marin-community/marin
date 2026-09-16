@@ -43,11 +43,12 @@ priority.
 
 Each request identifies a checkpoint and a sampling specification: the prompt bank,
 sampler release, completion count, and other generation settings in
-[config.py](config.py). Each workflow invocation publishes available results for
-the current specification. Older results stay stored and do not block publication
-or enter new retries. The workflow does not wait for GPU jobs to finish. New
-completions appear after a later invocation updates the report. A successful
-workflow does not mean that sampling completed.
+[config.py](config.py). The report retains completed results across sampling
+versions. It updates only when new usable results arrive. Missing historical
+scores appear as unavailable. Unusable files produce a warning and do not block
+other results. The report labels each sampling version in the checkpoint selector.
+Scheduling uses only the current specification. The workflow does not wait for
+GPU jobs to finish, so workflow success does not mean that sampling completed.
 
 ## Recovery
 
