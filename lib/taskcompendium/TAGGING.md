@@ -25,6 +25,8 @@ information to judge; every reviewed published example should have a value.
 Use the higher number for a harder task within each band. Do not copy source
 prestige or an evaluator's difficulty label. Measured pass rates should record
 model, lowering, tools, and budget separately and inform later recalibration.
+Large numbers in a prompt do not by themselves make the task hard: check whether
+a constraint reduces the work to a small symbolic or combinatorial case.
 
 ## Competency
 

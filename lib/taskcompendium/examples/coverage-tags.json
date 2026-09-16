@@ -85,7 +85,7 @@
       "shape:calculation",
       "subject:number_theory"
     ],
-    "difficulty": 10
+    "difficulty": 4
   },
   "nemo/open_math/1": {
     "coverage_tags": [
