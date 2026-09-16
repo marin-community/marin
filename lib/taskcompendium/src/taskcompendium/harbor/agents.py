@@ -34,15 +34,19 @@ def shell_tool_definition(binding: ShellToolBinding) -> dict[str, Any]:
     }
 
 
-def _record(logs_dir, transcript: list[dict], response: str, context: AgentContext) -> None:
+def _record(
+    logs_dir, transcript: list[dict], response: str, context: AgentContext, tools: list[dict] | None = None
+) -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
     (logs_dir / "response.txt").write_text(response)
     (logs_dir / "transcript.json").write_text(json.dumps(transcript))
+    (logs_dir / "tools.json").write_text(json.dumps(tools or []))
     context.metadata = {
         "assistant_final": response,
         "turns": len(transcript),
         "all_messages": list(transcript),
         "summarization_count": 0,
+        "tools": tools or [],
     }
 
 
@@ -89,12 +93,28 @@ class ReplayAgent(BaseAgent):
             response, commands = attempt["response"], attempt["commands"]
         if commands and self.tool_binding is None:
             raise ValueError("Replay commands require a declared tool binding")
+        tools = (
+            [shell_tool_definition(ShellToolBinding("terminal", self.tool_binding.backend))] if self.tool_binding else []
+        )
         for command in commands:
             result = await environment.exec(command)
-            transcript.append({"role": "assistant", "command": command})
-            transcript.append({"role": "tool", "content": result.model_dump()})
+            call_id = f"replay-{len(transcript)}"
+            transcript.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": "terminal", "arguments": json.dumps({"command": command})},
+                        }
+                    ],
+                }
+            )
+            transcript.append({"role": "tool", "tool_call_id": call_id, "content": json.dumps(result.model_dump())})
         transcript.append({"role": "assistant", "content": response})
-        _record(self.logs_dir, transcript, response, context)
+        _record(self.logs_dir, transcript, response, context, tools)
 
 
 class DirectChatAgent(BaseAgent):
@@ -180,15 +200,16 @@ class ShellToolAgent(DirectChatAgent):
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         transcript = self.history
         transcript.append({"role": "user", "content": instruction})
+        tools = [shell_tool_definition(self.tool_binding)]
         for _ in range(self.max_turns):
-            message = await asyncio.to_thread(self._completion, transcript, [shell_tool_definition(self.tool_binding)])
+            message = await asyncio.to_thread(self._completion, transcript, tools)
             transcript.append(message)
             calls = message.get("tool_calls", [])
             if not calls:
                 content = message.get("content")
                 if not isinstance(content, str):
                     raise ValueError("Final response must contain text")
-                _record(self.logs_dir, transcript, content, context)
+                _record(self.logs_dir, transcript, content, context, tools)
                 return
             for call in calls:
                 if call["function"]["name"] != self.tool_binding.name:
@@ -200,7 +221,7 @@ class ShellToolAgent(DirectChatAgent):
                 transcript.append(
                     {"role": "tool", "tool_call_id": call["id"], "content": json.dumps(result.model_dump())}
                 )
-            _record(self.logs_dir, transcript, "", context)
+            _record(self.logs_dir, transcript, "", context, tools)
         raise TurnCapExhaustedError("Shell-tool agent exhausted its turn budget")
 
 
@@ -255,7 +276,7 @@ class ActionOutputAgent(DirectChatAgent):
         if not calls and (not contract.allow_message or not isinstance(message.get("content"), str)):
             raise ValueError("Model action must be a permitted message or function call")
         transcript.append(message)
-        _record(self.logs_dir, transcript, message.get("content") or "", context)
+        _record(self.logs_dir, transcript, message.get("content") or "", context, action_output_definitions(contract))
 
 
 class ActionOutputReplayAgent(BaseAgent):
@@ -301,7 +322,7 @@ class ActionOutputReplayAgent(BaseAgent):
         message = {"role": "assistant", **action}
         transcript = self.history
         transcript.extend(({"role": "user", "content": instruction}, message))
-        _record(self.logs_dir, transcript, action.get("content") or "", context)
+        _record(self.logs_dir, transcript, action.get("content") or "", context, action_output_definitions(contract))
 
 
 class ProviderToolAgent(DirectChatAgent):
@@ -331,7 +352,7 @@ class ProviderToolAgent(DirectChatAgent):
                 content = message.get("content")
                 if not isinstance(content, str):
                     raise ValueError("Final response must contain text")
-                _record(self.logs_dir, transcript, content, context)
+                _record(self.logs_dir, transcript, content, context, tools)
                 return
             for call in calls:
                 function = call.get("function") if isinstance(call, dict) else None

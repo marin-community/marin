@@ -95,7 +95,7 @@ def grade_attempt(
                 Outcome.INVALID_TASK, None, {"error": "Predicted actions require final-action submission"}
             )
         reward, category = compare(verifier.expected_action, action_from_transcript(transcript), verifier.comparator)
-        return GradingResult(Outcome.GRADED, reward, {"category": category})
+        return GradingResult(Outcome.GRADED, float(reward), {"category": category})
     if isinstance(verifier, ConstraintVerifier):
         try:
             candidate = _candidate(specification, protocol, response, workspace)

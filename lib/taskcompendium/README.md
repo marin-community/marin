@@ -2,6 +2,11 @@
 
 Read [the TaskCompendium specification](SPECIFICATION.md) for the semantic schema, renderings, Harbor lowering, SkyRL integration path, and planned environment extensions.
 
+The [SkyRL generation example](examples/skyrl-generation.md) runs mixed Harbor
+lowerings through the pinned trajectory consumer interface and archives semantic
+outcomes separately from numeric batches. Production runner registration remains
+follow-up work.
+
 TaskCompendium stores task requirements independently of execution choices. It
 imports bounded samples from TaskTrove, R2E-Gym, GSM8K, and NeMo Gym into pinned
 `TaskSpec` records and exports Harbor lowerings with

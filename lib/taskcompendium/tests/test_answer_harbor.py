@@ -191,5 +191,5 @@ async def test_real_answer_harbor_shellsim_grades_file_not_final_response(
         assert result.exception_info is None, result.exception_info
         assert result.verifier_result.rewards == {"reward": reward}
     transcript = json.loads((tmp_path / f"trials/{attempt}/agent/transcript.json").read_text())
-    observations = [entry["content"] for entry in transcript if entry["role"] == "tool"]
+    observations = [json.loads(entry["content"]) for entry in transcript if entry["role"] == "tool"]
     assert all(observation["return_code"] == 0 for observation in observations), observations

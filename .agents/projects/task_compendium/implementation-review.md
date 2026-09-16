@@ -71,3 +71,20 @@ attempts with null reward, and reject a consumer batch containing any such
 attempt. Generation can still archive them; a later admission stage can select
 graded attempts before forming a training request. This first path does not
 start a trainer, GPU engine, or Ray worker.
+
+The first consumer implementation is in `examples/skyrl_generate.py`, backed by
+`harbor/generation.py`. Seven consumer tests passed against the descriptor's
+exact MarinSkyRL revision, using a local tokenizer and real Harbor trials.
+A separate CLI run produced 12 samples across plain, JSON, XML, native action,
+ordered chat, and multi-step Workplace, all with scripted success submissions.
+It retained identities, masked observations, and wrote both semantic JSONL and
+the numeric batch. This is interface validation rather than model-quality
+evidence.
+
+Consumer testing found a boolean reward in predicted-action grading; canonical
+grading now emits a float. Review also found that per-step infrastructure
+exceptions could disappear when a plugin produced no semantic grading file.
+The archive now preserves named step slots and exceptions, including null
+results for missing steps. Native Terminus-2 requires message capture for token
+conversion; native mini-SWE-agent conversion remains pending. Configured
+production runner selection and training admission are still deferred.
