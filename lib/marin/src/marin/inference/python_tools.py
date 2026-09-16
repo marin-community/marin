@@ -12,6 +12,7 @@ import json
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, create_model
@@ -24,6 +25,13 @@ _SUPPORTED_PARAMETER_KINDS = frozenset(
         inspect.Parameter.KEYWORD_ONLY,
     }
 )
+
+
+class PythonToolOperation(StrEnum):
+    """Operations supported by the isolated Python-tool worker."""
+
+    DEFINITIONS = "definitions"
+    INVOKE = "invoke"
 
 
 @dataclass(frozen=True)
@@ -185,18 +193,19 @@ async def _invoke_tool(request: PythonToolRequest) -> bytes:
 
 
 def _main() -> None:
-    match sys.argv[1:]:
-        case ["definitions"]:
+    if len(sys.argv) != 2:
+        raise ValueError(f"Expected one Python tool operation, got {sys.argv[1:]!r}")
+    operation = PythonToolOperation(sys.argv[1])
+    match operation:
+        case PythonToolOperation.DEFINITIONS:
             request = PythonToolDefinitionsRequest.from_payload(json.load(sys.stdin))
             with contextlib.redirect_stdout(sys.stderr):
                 definitions = python_tool_definitions(request.source)
             sys.stdout.buffer.write(json.dumps(definitions).encode())
-        case ["invoke"]:
+        case PythonToolOperation.INVOKE:
             request = PythonToolRequest.from_payload(json.load(sys.stdin))
             result = asyncio.run(_invoke_tool(request))
             sys.stdout.buffer.write(result)
-        case arguments:
-            raise ValueError(f"Expected one Python tool operation, got {arguments!r}")
 
 
 if __name__ == "__main__":

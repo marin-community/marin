@@ -14,9 +14,8 @@ would escape the prefix.
 ``/v1/*`` requests are reverse-proxied to whichever serving backend runs on the
 slice (see :mod:`marin.inference.backend`). Direct sessions preserve server-sent
 events end to end; brokered sessions return buffered JSON and reject streaming.
-``/tools`` converts dashboard-authored Python to model-facing JSON schemas.
-``/tools/{name}`` validates and runs one function. Both operations use a
-short-lived subprocess.
+``/tools`` returns model-facing JSON schemas for dashboard-authored Python, and
+``/tools/{name}`` validates and runs one function.
 """
 
 import asyncio
@@ -28,9 +27,10 @@ import socket
 import subprocess
 import sys
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
+from typing import Protocol
 
 import httpx
 import uvicorn
@@ -41,11 +41,20 @@ from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Route
 
 from marin.inference.http_proxy import forwardable_request_headers, forwardable_response_headers
-from marin.inference.python_tools import PythonToolDefinitionsRequest, PythonToolRequest, PythonToolSourceTooLarge
+from marin.inference.python_tools import (
+    PythonToolDefinitionsRequest,
+    PythonToolOperation,
+    PythonToolRequest,
+    PythonToolSourceTooLarge,
+)
 
 logger = logging.getLogger(__name__)
 PYTHON_TOOL_TIMEOUT_SECONDS = 10
 _MAX_TOOL_ERROR_LENGTH = 4_000
+_PYTHON_TOOL_OPERATION_LABELS = {
+    PythonToolOperation.DEFINITIONS: "Python tool definition",
+    PythonToolOperation.INVOKE: "Python tool",
+}
 
 
 @dataclass(frozen=True)
@@ -62,10 +71,14 @@ class ServingInfo:
     streaming: bool = True
 
 
-def _run_python_tool(operation: str, payload: bytes) -> subprocess.CompletedProcess[bytes]:
+class _SerializedPythonToolRequest(Protocol):
+    def to_json_bytes(self) -> bytes: ...
+
+
+def _run_python_tool_worker(operation: PythonToolOperation, payload: bytes) -> subprocess.CompletedProcess[bytes]:
     # Keep CPython on its posix_spawn path: forking after Levanter starts JAX threads can deadlock.
     return subprocess.run(
-        [sys.executable, "-m", "marin.inference.python_tools", operation],
+        [sys.executable, "-m", "marin.inference.python_tools", operation.value],
         input=payload,
         capture_output=True,
         timeout=PYTHON_TOOL_TIMEOUT_SECONDS,
@@ -74,51 +87,49 @@ def _run_python_tool(operation: str, payload: bytes) -> subprocess.CompletedProc
     )
 
 
-async def _python_tool_definitions_request(request: Request) -> Response:
+async def _python_tool_response(
+    request: Request,
+    *,
+    operation: PythonToolOperation,
+    parse_payload: Callable[[object], _SerializedPythonToolRequest],
+) -> Response:
+    label = _PYTHON_TOOL_OPERATION_LABELS[operation]
     try:
         payload = await request.json()
     except json.JSONDecodeError:
-        return JSONResponse({"error": "tool definitions request must be JSON"}, status_code=400)
+        return JSONResponse({"error": f"{label} request must be JSON"}, status_code=400)
     try:
-        definitions_request = PythonToolDefinitionsRequest.from_payload(payload)
+        tool_request = parse_payload(payload)
     except PythonToolSourceTooLarge:
         return JSONResponse({"error": "Python tool source is too large"}, status_code=413)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
     try:
-        result = await asyncio.to_thread(_run_python_tool, "definitions", definitions_request.to_json_bytes())
+        result = await asyncio.to_thread(_run_python_tool_worker, operation, tool_request.to_json_bytes())
     except subprocess.TimeoutExpired:
-        return JSONResponse(
-            {"error": f"Python tool definition exceeded {PYTHON_TOOL_TIMEOUT_SECONDS} seconds"}, status_code=408
-        )
+        return JSONResponse({"error": f"{label} exceeded {PYTHON_TOOL_TIMEOUT_SECONDS} seconds"}, status_code=408)
     if result.returncode != 0:
         details = result.stderr.decode(errors="replace")[-_MAX_TOOL_ERROR_LENGTH:].strip()
-        return JSONResponse({"error": "Python tool definition failed", "details": details}, status_code=422)
+        return JSONResponse({"error": f"{label} failed", "details": details}, status_code=422)
     return Response(result.stdout, media_type="application/json")
+
+
+async def _python_tool_definitions_request(request: Request) -> Response:
+    return await _python_tool_response(
+        request,
+        operation=PythonToolOperation.DEFINITIONS,
+        parse_payload=PythonToolDefinitionsRequest.from_payload,
+    )
 
 
 async def _invoke_tool_request(request: Request) -> Response:
-    try:
-        payload = await request.json()
-    except json.JSONDecodeError:
-        return JSONResponse({"error": "tool request must be JSON"}, status_code=400)
-    try:
-        tool_request = PythonToolRequest.from_payload(payload, name=request.path_params["name"])
-    except PythonToolSourceTooLarge:
-        return JSONResponse({"error": "Python tool source is too large"}, status_code=413)
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
-
-    child_payload = tool_request.to_json_bytes()
-    try:
-        result = await asyncio.to_thread(_run_python_tool, "invoke", child_payload)
-    except subprocess.TimeoutExpired:
-        return JSONResponse({"error": f"Python tool exceeded {PYTHON_TOOL_TIMEOUT_SECONDS} seconds"}, status_code=408)
-    if result.returncode != 0:
-        details = result.stderr.decode(errors="replace")[-_MAX_TOOL_ERROR_LENGTH:].strip()
-        return JSONResponse({"error": "Python tool failed", "details": details}, status_code=422)
-    return Response(result.stdout, media_type="application/json")
+    name = request.path_params["name"]
+    return await _python_tool_response(
+        request,
+        operation=PythonToolOperation.INVOKE,
+        parse_payload=lambda payload: PythonToolRequest.from_payload(payload, name=name),
+    )
 
 
 def build_dashboard_app(

@@ -97,58 +97,81 @@ async function send(text?: string) {
   const pythonTools = conversation.pythonTools.trim()
   if (!conversation.title) conversation.title = content.slice(0, 80)
   conversation.messages.push({ role: 'user', content })
-
-  conversation.updatedAt = Date.now()
-  emit('persist')
+  persistConversation(conversation)
 
   busy.value = true
   abort = new AbortController()
+  const signal = abort.signal
+  try {
+    await runToolExchange(conversation, pythonTools, signal)
+  } finally {
+    busy.value = false
+    abort = null
+    persistConversation(conversation)
+  }
+}
+
+async function runToolExchange(conversation: Conversation, pythonTools: string, signal: AbortSignal) {
   let reply: AssistantMessage | null = null
   try {
-    const tools = pythonTools ? await fetchToolDefinitions(pythonTools, abort.signal) : []
+    const tools = pythonTools ? await fetchToolDefinitions(pythonTools, signal) : []
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
       const request = modelMessages(conversation)
-      reply = { role: 'assistant', content: '', thinking: '', thinkingSeconds: null, error: null, toolCalls: [] }
-      conversation.messages.push(reply)
-      // Mutate through the reactive proxy so streaming deltas re-render.
-      const currentReply = conversation.messages[conversation.messages.length - 1]
-      if (currentReply.role !== 'assistant') throw new Error('Expected an assistant reply')
-      reply = currentReply
-      emit('persist')
+      reply = appendAssistantReply(conversation)
 
-      await complete(currentReply, request, tools, abort.signal)
-      const calls = currentReply.toolCalls ?? []
-      conversation.updatedAt = Date.now()
-      emit('persist')
+      await complete(reply, request, tools, signal)
+      const calls = reply.toolCalls ?? []
+      persistConversation(conversation)
       if (!calls.length) break
 
-      for (const call of calls) {
-        const result = await invokeTool(call.name, pythonTools, call.arguments, abort.signal)
-        conversation.messages.push(toolResultMessage(call, result))
-        conversation.updatedAt = Date.now()
-        emit('persist')
-      }
+      await executeToolCalls(conversation, calls, pythonTools, signal)
 
       if (round === MAX_TOOL_ROUNDS - 1) {
-        currentReply.error = `Stopped after ${MAX_TOOL_ROUNDS} consecutive tool rounds.`
+        reply.error = `Stopped after ${MAX_TOOL_ROUNDS} consecutive tool rounds.`
       }
     }
   } catch (error) {
     if (isAbortError(error)) {
       appendCancelledToolResults(conversation, reply)
     } else {
-      if (!reply) {
-        reply = { role: 'assistant', content: '', thinking: '', thinkingSeconds: null, error: null }
-        conversation.messages.push(reply)
-      }
+      reply ??= appendAssistantReply(conversation)
       reply.error = String(error)
     }
-  } finally {
-    busy.value = false
-    abort = null
-    conversation.updatedAt = Date.now()
-    emit('persist')
   }
+}
+
+function appendAssistantReply(conversation: Conversation): AssistantMessage {
+  conversation.messages.push({
+    role: 'assistant',
+    content: '',
+    thinking: '',
+    thinkingSeconds: null,
+    error: null,
+    toolCalls: [],
+  })
+  // Return the reactive proxy so streaming deltas re-render.
+  const reply = conversation.messages[conversation.messages.length - 1]
+  if (reply.role !== 'assistant') throw new Error('Expected an assistant reply')
+  persistConversation(conversation)
+  return reply
+}
+
+async function executeToolCalls(
+  conversation: Conversation,
+  calls: ToolCall[],
+  pythonTools: string,
+  signal: AbortSignal,
+) {
+  for (const call of calls) {
+    const result = await invokeTool(call.name, pythonTools, call.arguments, signal)
+    conversation.messages.push(toolResultMessage(call, result))
+    persistConversation(conversation)
+  }
+}
+
+function persistConversation(conversation: Conversation) {
+  conversation.updatedAt = Date.now()
+  emit('persist')
 }
 
 function appendCancelledToolResults(conversation: Conversation, reply: AssistantMessage | null) {
