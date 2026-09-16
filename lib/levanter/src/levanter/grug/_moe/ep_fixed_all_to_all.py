@@ -3,7 +3,6 @@
 
 """Fixed-capacity all-to-all expert-parallel Grug MoE backend."""
 
-import math
 from collections.abc import Callable
 
 import jax
@@ -15,6 +14,7 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_MOE_OUTPUT,
     _assignment_validity,
+    _capacity_ceiling,
     _scaled_capacity,
     CapacityDrops,
 )
@@ -109,7 +109,7 @@ def _moe_mlp_ep_fixed_a2a_local(
     topk = selected_experts_local.shape[1]
     hidden_dim = x_local.shape[1]
     assignments_per_shard = tokens_per_shard * topk
-    capacity = max(int(math.ceil(capacity_factor * assignments_per_shard / num_experts)), 1)
+    capacity = max(_capacity_ceiling(assignments_per_shard, capacity_factor=capacity_factor, divisor=num_experts), 1)
 
     flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
     assignment_valid = _assignment_validity(token_valid_local, tokens=tokens_per_shard, topk=topk)
@@ -117,6 +117,7 @@ def _moe_mlp_ep_fixed_a2a_local(
     logical_capacity = _scaled_capacity(
         valid_assignments,
         capacity_factor=capacity_factor,
+        max_assignments=assignments_per_shard,
         divisor=num_experts,
         maximum=capacity,
     )

@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
-from levanter.grug._moe.common import _assignment_validity, _scaled_capacity, CapacityDrops
+from levanter.grug._moe.common import _assignment_validity, _capacity_ceiling, _scaled_capacity, CapacityDrops
 from levanter.grug._moe.ep_common import (
     _assignment_sources,
     _ranks_within_groups,
@@ -537,11 +537,13 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     assignments_per_shard = tokens_per_shard * topk
     num_waves = num_expert_waves
     physical_pool_capacity = max(
-        math.ceil(transport_capacity_factor * assignments_per_shard / (expert_shards * num_waves)),
+        _capacity_ceiling(
+            assignments_per_shard, capacity_factor=transport_capacity_factor, divisor=expert_shards * num_waves
+        ),
         1,
     )
     physical_receiver_capacity = max(
-        math.ceil(capacity_factor * assignments_per_shard / (local_experts * num_waves)),
+        _capacity_ceiling(assignments_per_shard, capacity_factor=capacity_factor, divisor=local_experts * num_waves),
         1,
     )
 
@@ -554,6 +556,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     logical_pool_capacity = _scaled_capacity(
         valid_assignments,
         capacity_factor=transport_capacity_factor,
+        max_assignments=assignments_per_shard,
         divisor=expert_shards * num_waves,
         maximum=physical_pool_capacity,
     )
@@ -563,6 +566,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     logical_receiver_capacity = _scaled_capacity(
         global_valid_assignments,
         capacity_factor=capacity_factor,
+        max_assignments=assignments_per_shard * expert_shards,
         divisor=num_experts * num_waves,
         maximum=physical_receiver_capacity,
     )

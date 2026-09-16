@@ -5,6 +5,7 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Literal, NamedTuple, TypeAlias, cast, get_args
 
 import jax
@@ -17,6 +18,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
 # #2710 used 1.25 as the practical EP ring default to avoid over/under-packing.
+_INT32_MAX = (1 << 31) - 1
 
 
 def _pack_pairs_u32(a: jax.Array, b: jax.Array) -> jax.Array:
@@ -268,22 +270,47 @@ def _assignment_validity(
     return jnp.broadcast_to(token_valid[:, None], (tokens, topk)).reshape(tokens * topk)
 
 
+def _capacity_ratio(capacity_factor: float, divisor: int) -> Fraction:
+    if capacity_factor <= 0 or divisor <= 0:
+        raise ValueError("capacity_factor and divisor must be positive")
+    return Fraction(str(capacity_factor)) / divisor
+
+
+def _capacity_ceiling(assignments: int, *, capacity_factor: float, divisor: int = 1) -> int:
+    """Size a physical buffer using the configured decimal factor exactly."""
+    ratio = _capacity_ratio(capacity_factor, divisor)
+    return (assignments * ratio.numerator + ratio.denominator - 1) // ratio.denominator
+
+
 def _scaled_capacity(
     assignments: Int[Array, ""],
     *,
     capacity_factor: float,
+    max_assignments: int,
     divisor: int = 1,
     minimum: int = 1,
     maximum: int,
 ) -> Int[Array, ""]:
-    """Return a JIT-safe logical capacity derived from dynamic assignment demand.
+    """Return the exact decimal capacity, clamped to the physical buffer bounds.
 
-    ``maximum`` must be the static physical capacity the caller sized its buffers with.
-    The returned capacity is clamped to ``[minimum, maximum]``.
+    ``max_assignments`` bounds the nonnegative runtime count. Shapes and factors
+    whose integer arithmetic cannot fit in int32 are rejected during tracing.
     """
-    # The float32 product can exceed the Python-double buffer ceiling by one row:
-    # 7680 assignments at factor 4.05 over 8 experts gives 3889 vs 3888.
-    scaled = jnp.ceil(assignments.astype(jnp.float32) * capacity_factor / divisor).astype(jnp.int32)
+    ratio = _capacity_ratio(capacity_factor, divisor)
+    numerator, denominator = ratio.numerator, ratio.denominator
+    largest_product = max_assignments * numerator + denominator - 1
+    largest_capacity = largest_product // denominator
+    if max_assignments > _INT32_MAX or largest_capacity > _INT32_MAX or denominator > _INT32_MAX:
+        raise ValueError("MoE capacity exceeds int32 bounds; reduce the assignment count or capacity factor")
+    if largest_product <= _INT32_MAX:
+        scaled = (assignments * numerator + denominator - 1) // denominator
+    else:
+        # Splitting the count avoids overflowing N * numerator before division.
+        largest_remainder = min(max_assignments, denominator - 1) * numerator + denominator - 1
+        if numerator > _INT32_MAX or largest_remainder > _INT32_MAX:
+            raise ValueError("MoE capacity ratio exceeds int32 bounds; use a factor with fewer decimal digits")
+        quotient, remainder = jnp.divmod(assignments, denominator)
+        scaled = quotient * numerator + (remainder * numerator + denominator - 1) // denominator
     return jnp.clip(scaled, minimum, maximum)
 
 

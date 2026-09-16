@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
-import math
 import os
 import subprocess
 import sys
@@ -20,6 +19,7 @@ from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import (
+    _capacity_ceiling,
     _interleave_gate_up,
     _interleave_halves,
     _prepare_moe_dispatch,
@@ -417,14 +417,51 @@ def test_moe_mlp_all_padding_has_no_expert_output_or_gradients():
     assert int(overflow.padding_skipped) == x.shape[0] * selected_experts.shape[1]
 
 
-def test_scaled_capacity_stays_within_the_physical_buffer():
-    # float32 rounds 7680 * 4.05 / 8 up to 3889 while the buffer was sized with math.ceil (3888);
-    # an unclamped logical capacity would admit one row past the static buffer.
-    physical = max(math.ceil(4.05 * 7680 / 8), 1)
-    logical = _scaled_capacity(jnp.array(7680, dtype=jnp.int32), capacity_factor=4.05, divisor=8, maximum=physical)
+@pytest.mark.parametrize(
+    "count, factor, divisor, expected",
+    [
+        (130_967_264, 1.15, 64, 2_353_319),
+        (33_554_256, 1.15, 64, 602_929),
+        (16_777_217, 1.0, 1, 16_777_217),
+        (7680, 4.05, 8, 3888),
+        (90, 1.1, 3, 33),
+        (0, 1.15, 64, 0),
+    ],
+)
+def test_scaled_capacity_uses_exact_decimal_ceiling(count, factor, divisor, expected):
+    physical = _capacity_ceiling(count, capacity_factor=factor, divisor=divisor)
 
-    assert physical == 3888
-    assert int(logical) == physical
+    def capacity(assignments):
+        return _scaled_capacity(
+            assignments,
+            capacity_factor=factor,
+            max_assignments=max(count, 1),
+            divisor=divisor,
+            minimum=0,
+            maximum=max(expected + 1, 1),
+        )
+
+    assert physical == expected
+    assert int(jax.jit(capacity)(jnp.int32(count))) == expected
+
+
+def test_scaled_capacity_preserves_buffer_and_empty_demand_bounds():
+    capacity = jax.jit(
+        lambda count: _scaled_capacity(
+            count, capacity_factor=1.15, max_assignments=130_967_264, divisor=64, minimum=6, maximum=2_000_000
+        )
+    )
+    assert int(capacity(jnp.int32(0))) == 6
+    assert int(capacity(jnp.int32(130_967_264))) == 2_000_000
+
+
+def test_scaled_capacity_rejects_integer_overflow_during_tracing():
+    with pytest.raises(ValueError, match="int32"):
+        jax.jit(
+            lambda count: _scaled_capacity(
+                count, capacity_factor=2.0, max_assignments=(1 << 31) - 1, maximum=(1 << 31) - 1
+            )
+        ).lower(jax.ShapeDtypeStruct((), jnp.int32))
 
 
 def test_deepep_local_assignment_packing_uses_local_expert_ids():
