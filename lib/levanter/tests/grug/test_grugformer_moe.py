@@ -492,15 +492,18 @@ def test_prepare_moe_dispatch_indices_match_materialized_dispatch():
         topk=2,
     )
 
+    token_valid = jnp.ones((x.shape[0],), dtype=jnp.bool_)
     x_sort, w_sort, token_ids_sort, group_sizes = _prepare_moe_dispatch(
         x,
         selected_experts,
         combine_weights,
+        token_valid,
         num_experts=5,
     )
     token_ids_from_indices, dispatch_positions, index_group_sizes, sorted_assignment_ids = (
         _prepare_moe_dispatch_indices_with_assignment_ids(
             selected_experts,
+            token_valid,
             num_experts=5,
         )
     )
@@ -659,6 +662,7 @@ def test_sonic_gather_sum_matches_jax_reference_on_gpu():
     dispatch_output = jax.random.normal(jax.random.key(30), (tokens * topk, hidden_dim), dtype=jnp.float32)
     _token_ids, dispatch_positions, _group_sizes, _assignment_ids = _prepare_moe_dispatch_indices_with_assignment_ids(
         selected_experts,
+        jnp.ones((tokens,), dtype=jnp.bool_),
         num_experts=num_experts,
     )
 
@@ -698,6 +702,7 @@ def test_moe_mlp_sonic_matches_jax_gather_reference_on_gpu():
         token_ids, dispatch_positions, group_sizes, _assignment_ids = (
             _prepare_moe_dispatch_indices_with_assignment_ids(
                 selected_experts,
+                jnp.ones((tokens,), dtype=jnp.bool_),
                 num_experts=num_experts,
             )
         )

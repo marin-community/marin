@@ -186,7 +186,7 @@ def _prepare_moe_dispatch(
     x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
-    token_valid: Bool[Array, "T"] | None = None,
+    token_valid: Bool[Array, "T"],
     *,
     num_experts: int,
 ) -> tuple[
@@ -215,7 +215,7 @@ def _prepare_moe_dispatch(
 @named_call
 def _prepare_moe_dispatch_indices_with_assignment_ids(
     selected_experts: Int[Array, "T K"],
-    token_valid: Bool[Array, "T"] | None = None,
+    token_valid: Bool[Array, "T"],
     *,
     num_experts: int,
 ) -> tuple[
@@ -244,13 +244,11 @@ def _prepare_moe_dispatch_indices_with_assignment_ids(
 
 
 def _assignment_validity(
-    token_valid: Bool[Array, "T"] | None,
+    token_valid: Bool[Array, "T"],
     *,
     tokens: int,
     topk: int,
 ) -> Bool[Array, "TK"]:
-    if token_valid is None:
-        return jnp.ones((tokens * topk,), dtype=jnp.bool_)
     return jnp.broadcast_to(token_valid[:, None], (tokens, topk)).reshape(tokens * topk)
 
 
