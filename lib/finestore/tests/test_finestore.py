@@ -17,7 +17,14 @@ from botocore.exceptions import ClientError
 from finestore import commit as commit_module
 from finestore import shard_writer
 from finestore import store as store_module
-from finestore.commit import CommitConflict, CommitCoordinator, CommitDelta
+from finestore.commit import (
+    CommitConflict,
+    CommitCoordinator,
+    CommitDelta,
+    initialize_archive,
+    refresh_archive_marker,
+    validate_archive,
+)
 from finestore.compaction import CompactionResult, compact_table
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
@@ -34,7 +41,7 @@ from finestore.migrations import LegacyReadView, migrate
 from finestore.reader import BlobCorruptionError, ReadView
 from finestore.store import OBJECT_PART_BYTES, DataStore, DataTable, PrimaryKeyConflict, TransactionTooLarge
 from rigging import timing
-from rigging.filesystem.conditional_object import ConditionalWriteError
+from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.storage_path import StoragePath
 
 _STALE_MTIME = 1_000_000_000
@@ -779,6 +786,38 @@ def test_remote_commit_refreshes_marker_and_schema_objects_on_a_bounded_interval
         store.flush()
         assert _refreshed(layout.archive_path)
         assert _refreshed(schema_path)
+
+
+def test_marker_refresh_recreates_a_marker_deleted_during_the_conditional_write(tmp_path, monkeypatch):
+    # The lifecycle rule can delete the marker between the refresh's read and its conditional
+    # write. That conflict must recreate the marker instead of leaving HEAD without one.
+    root = str(tmp_path / "run")
+    layout = FineStoreLayout(root)
+    initialize_archive(layout)
+    real_marker = conditional_object(layout.archive_path)
+
+    class ExpiringMarker:
+        path = real_marker.path
+
+        def version(self):
+            return real_marker.version()
+
+        def read(self):
+            return real_marker.read()
+
+        def write(self, data, *, expected_version):
+            if expected_version is not None:
+                os.remove(layout.archive_path)
+                raise ConditionalWriteError("object expired")
+            return real_marker.write(data, expected_version=expected_version)
+
+    monkeypatch.setattr(
+        commit_module,
+        "conditional_object",
+        lambda path: ExpiringMarker() if path == layout.archive_path else conditional_object(path),
+    )
+    refresh_archive_marker(layout)
+    assert validate_archive(layout) is not None
 
 
 def test_local_commit_leaves_marker_and_schema_objects_untouched(tmp_path):
