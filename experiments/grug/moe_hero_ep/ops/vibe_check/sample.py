@@ -126,7 +126,7 @@ def expected_logprobs(
 
 
 def sample(request: SampleRequest, store_root: str) -> None:
-    """Run one rack of native inference and commit one validated result on process zero."""
+    """Run native inference for one checkpoint and save one validated result on process zero."""
     total = Timer()
     DistributedConfig().initialize()
     # Each rank keeps warnings and errors. Process zero writes shared progress.

@@ -22,9 +22,11 @@ gh workflow run marin-hero-completions.yaml --ref main -f submission=all -f prio
 ```
 
 Use the Actions summary for Iris job links, status, and errors.
-Each checkpoint job requires **64 GPUs**. The backfill skips completed results,
-active jobs, and requests that exhausted their retries. The checkpoint selection
-comes from [`CHECKPOINT_RUNS`](config.py).
+Each checkpoint job requests **32 GB200 GPUs** across eight nodes and uses a batch
+size of 32 across the job. With `submission=all`, two checkpoint jobs can run concurrently when
+64 GPUs and the corresponding node resources are available. The backfill skips
+completed results, active jobs, and requests that exhausted their retries. The
+checkpoint selection comes from [`CHECKPOINT_RUNS`](config.py).
 
 The workflow runs hourly. With its default, `submission=next`, it submits no new
 request while jobs for the current sampling specification are active. Otherwise,

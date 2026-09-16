@@ -29,6 +29,8 @@ CONFIG_DIRECTORY = Path(__file__).parent
 CHECKPOINT_ROOT = "s3://marin-us-east-02a/marin/grug"
 STORE_ROOT = "s3://marin-us-east-02a/marin/users/rav/hero-completions/"
 TARGET_CLUSTER = "cw-us-east-08a"
+SAMPLING_NODES = 8
+SAMPLING_GPUS_PER_NODE = 4
 
 
 @dataclasses.dataclass(frozen=True)
@@ -53,7 +55,7 @@ def sampling_spec() -> SamplingSpec:
     return SamplingSpec(
         release="hero-native-v3-three-completions",
         completions_per_prompt=3,
-        batch_size=hero_recipe.HERO_EP_EXPERT_AXIS_SIZE,
+        batch_size=SAMPLING_NODES * SAMPLING_GPUS_PER_NODE,
         prompts=tuple(Prompt.model_validate(row) for row in json.loads((CONFIG_DIRECTORY / "prompts.json").read_text())),
         tokenizer="marin-community/marin-tokenizer",
         tokenizer_revision="a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2",
@@ -66,11 +68,11 @@ def sampling_spec() -> SamplingSpec:
 
 def sampling_resources() -> ResourceConfig:
     return ResourceConfig(
-        cpu=hero_recipe.HERO_NODE_CPU,
-        ram=hero_recipe.HERO_NODE_RAM,
-        disk=hero_recipe.HERO_NODE_DISK,
-        device=GpuConfig(variant="GB200", count=hero_recipe.HERO_GPUS_PER_NODE),
-        replicas=hero_recipe.HERO_EP_NODES,
+        cpu=120,
+        ram="890g",
+        disk="1t",
+        device=GpuConfig(variant="GB200", count=SAMPLING_GPUS_PER_NODE),
+        replicas=SAMPLING_NODES,
     )
 
 

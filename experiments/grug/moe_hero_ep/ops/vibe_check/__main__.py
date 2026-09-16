@@ -16,10 +16,10 @@ from iris.client.client import IrisClient
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from experiments.grug.moe_hero_ep.hero_recipe import HERO_PROCESSES_PER_TASK
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleStore
 from experiments.grug.moe_hero_ep.ops.vibe_check.config import (
     CHECKPOINT_RUNS,
+    SAMPLING_GPUS_PER_NODE,
     STORE_ROOT,
     TARGET_CLUSTER,
     discover_requests,
@@ -93,7 +93,7 @@ def main(action: str, store_root: str, priority: str | None, submission: str) ->
                 Path.cwd(),
                 store_root,
                 sampling_resources(),
-                HERO_PROCESSES_PER_TASK,
+                SAMPLING_GPUS_PER_NODE,
                 sampler_module="experiments.grug.moe_hero_ep.ops.vibe_check.sample",
             )
             submit_pending(
