@@ -89,6 +89,10 @@ def _resolve_benchmark_config(environ: Mapping[str, str]) -> GrugPipelineTrainCo
         schedule=PipelineSchedule(environ.get("PIPELINE_SCHEDULE", PipelineSchedule.ZERO_BUBBLE)),
         checkpoint_root=environ.get("PIPELINE_CHECKPOINT_ROOT"),
         checkpoint_every_steps=_env_int(environ, "PIPELINE_CHECKPOINT_EVERY_STEPS", 0),
+        padding_fraction=_env_float(environ, "PIPELINE_PADDING_FRACTION", 0.0),
+        capacity_factor=(
+            None if "PIPELINE_CAPACITY_FACTOR" not in environ else _env_float(environ, "PIPELINE_CAPACITY_FACTOR", 0.0)
+        ),
     )
 
 

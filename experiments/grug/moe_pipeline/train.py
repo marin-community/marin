@@ -26,6 +26,7 @@ from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.data.text.examples import GrugLmExample
+from levanter.grug.attention import AttentionMask
 from levanter.pipeline import reshape_batch_into_microbatches
 from levanter.utils.flop_utils import lm_flops_per_token
 
@@ -33,6 +34,7 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_pipeline.checkpoint import restore_checkpoint, save_checkpoint
 from experiments.grug.moe_pipeline.model import BATCH_AXES, GrugModelConfig, Transformer
 from experiments.grug.moe_pipeline.pipeline import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
     TRAIN_LOSS_KEY,
     AutomaticPipelineSchedule,
     GrugMoePipelineConfig,
@@ -92,8 +94,17 @@ class GrugPipelineTrainConfig:
     schedule: PipelineSchedule
     checkpoint_root: str | None
     checkpoint_every_steps: int
+    # Trailing fraction of every synthetic row marked as padding (segment id -1), the way
+    # prepacked and RL datasets mark it. Exercises the padding-aware MoE dispatch.
+    padding_fraction: float = 0.0
+    # Routed expert capacity factor; None keeps the model default.
+    capacity_factor: float | None = None
 
     def __post_init__(self) -> None:
+        if not 0 <= self.padding_fraction < 1:
+            raise ValueError(f"padding_fraction must lie in [0, 1), got {self.padding_fraction}")
+        if self.capacity_factor is not None and self.capacity_factor <= 0:
+            raise ValueError(f"capacity_factor must be positive, got {self.capacity_factor}")
         if self.checkpoint_every_steps < 0:
             raise ValueError("checkpoint_every_steps must be nonnegative")
         if self.checkpoint_every_steps and not self.checkpoint_root:
@@ -149,6 +160,63 @@ def _validate_local_mesh(
         )
 
 
+def _synthetic_batch(config: GrugPipelineTrainConfig, *, vocab_size: int, sharding: NamedSharding) -> GrugLmExample:
+    """Build the repeated synthetic batch, with trailing padding when ``padding_fraction`` is set.
+
+    Padding keeps its generated token ids: a pad id can also sit at a valid position, so validity
+    must come from the mask. The last valid position predicts the first pad and carries no loss.
+    """
+    padded_positions = round(config.padding_fraction * config.seq_len)
+    valid_positions = config.seq_len - padded_positions
+    if valid_positions < 2:
+        raise ValueError(f"padding_fraction={config.padding_fraction} leaves {valid_positions} valid positions; need 2")
+    positions = np.arange(config.seq_len, dtype=np.int64)[None, :]
+    token_row = np.arange(config.seq_len, dtype=np.int32) % vocab_size
+    host_tokens = np.broadcast_to(token_row, (config.batch_size, config.seq_len)).copy()
+    host_loss_weight = np.broadcast_to(
+        (positions < valid_positions - 1).astype(np.float32), (config.batch_size, config.seq_len)
+    ).copy()
+    tokens = jax.device_put(host_tokens, sharding)
+    loss_weight = jax.device_put(host_loss_weight, sharding)
+    if padded_positions == 0:
+        return GrugLmExample(tokens=tokens, loss_weight=loss_weight)
+    host_segment_ids = np.broadcast_to(
+        np.where(positions < valid_positions, 0, -1).astype(np.int32), (config.batch_size, config.seq_len)
+    ).copy()
+    segment_ids = jax.device_put(host_segment_ids, sharding)
+    return GrugLmExample(
+        tokens=tokens,
+        loss_weight=loss_weight,
+        attn_mask=AttentionMask.causal().with_segment_ids(segment_ids),
+    )
+
+
+def _log_dispatch_counts(config: GrugPipelineTrainConfig, metrics: dict, *, step: int, mpmd_array_type: type) -> None:
+    """Log this process's stage-local MoE drop counts for one step (control: no padding skip)."""
+    dropped_by_stage = metrics[MOE_DROPPED_ASSIGNMENTS_METRIC]
+    layer_counts = config.layer_counts or ()
+    for stage_index, dropped in enumerate(dropped_by_stage):
+        if isinstance(dropped, mpmd_array_type):
+            if not dropped.is_partially_addressable:
+                continue
+            dropped = dropped.to_mpmd_local_array
+        dropped_count = float(np.asarray(dropped))
+        skipped_count = 0.0
+        stage_layers = layer_counts[stage_index] if layer_counts else config.num_layers / config.stages
+        positions = config.batch_size * config.seq_len * config.top_k * stage_layers
+        valid = positions - skipped_count
+        _log(
+            "PIPELINE_MOE_DISPATCH",
+            step=step,
+            stage=stage_index,
+            dropped_assignments=dropped_count,
+            skipped_padding_assignments=skipped_count,
+            valid_assignments=valid,
+            drop_fraction=dropped_count / max(valid, 1.0),
+            skipped_padding_fraction=skipped_count / max(positions, 1.0),
+        )
+
+
 def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
     os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     initialize_jax()
@@ -192,6 +260,7 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
         attention_implementation=cast(str, config.attention_implementation),
         moe_implementation=cast(str, config.moe_implementation),
         remat_mode=cast(str, config.remat_mode),
+        **({} if config.capacity_factor is None else {"capacity_factor": config.capacity_factor}),
     )
     mesh, mpmd_mesh = make_pipeline_mesh(
         pipeline_config,
@@ -241,14 +310,7 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
     with jax.set_mesh(mesh):
         model = mp_policy.cast_to_param(Transformer.init(model_config, key=jax.random.PRNGKey(0)))
         batch_sharding = NamedSharding(mesh, P(BATCH_AXES, None))
-        token_row = np.arange(config.seq_len, dtype=np.int32) % model_config.vocab_size
-        host_tokens = np.broadcast_to(token_row, (config.batch_size, config.seq_len)).copy()
-        host_loss_weight = np.ones((config.batch_size, config.seq_len), dtype=np.float32)
-        host_loss_weight[:, -1] = 0
-        batch = GrugLmExample(
-            tokens=jax.device_put(host_tokens, batch_sharding),
-            loss_weight=jax.device_put(host_loss_weight, batch_sharding),
-        )
+        batch = _synthetic_batch(config, vocab_size=model_config.vocab_size, sharding=batch_sharding)
         loss_denominator = jnp.sum(batch.loss_weight.astype(jnp.float32))
         batches = reshape_batch_into_microbatches(batch, config.microbatches)
         if config.schedule == PipelineSchedule.DUALPIPE_V:
@@ -346,6 +408,7 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
         elapsed = time.monotonic() - started
         step_times.append(elapsed)
         metric_loss = metrics[TRAIN_LOSS_KEY]
+        _log_dispatch_counts(config, metrics, step=step_index, mpmd_array_type=MpmdArray)
         if profiler_callback is not None:
             profiler_callback(SimpleNamespace(step=step_index))
         completed_steps = step_index + 1

@@ -16,7 +16,12 @@ each physical rank in JaxPP's V-shaped placement. DualPipeV requires at least `2
 microbatches. `PIPELINE_LAYERS_PER_STAGE` contains one positive layer count per logical
 stage.
 
-The canonical loop uses a fixed AdamW optimizer and synthetic token rows. Set
+The canonical loop uses a fixed AdamW optimizer and synthetic token rows.
+`PIPELINE_PADDING_FRACTION` marks the trailing fraction of every row as padding
+(segment id -1, no loss), which is how prepacked and RL batches present padding to
+the padding-aware MoE dispatch; `PIPELINE_CAPACITY_FACTOR` overrides the routed
+expert capacity. Each process logs a `PIPELINE_MOE_DISPATCH` line per step with its
+stage's dropped and padding-skipped assignment counts. Set
 `checkpoint_root` on `GrugPipelineTrainConfig` to resume the latest completed
 checkpoint in that root, or initialize fresh parameters if none exists. Set
 `checkpoint_every_steps` to a positive interval to save periodically and on clean

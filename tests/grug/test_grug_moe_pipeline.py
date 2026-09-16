@@ -25,7 +25,7 @@ from experiments.grug.moe_pipeline.pipeline import (
     split_automatic_stages,
     split_transformer,
 )
-from experiments.grug.moe_pipeline.train import PipelineSchedule, _validate_local_mesh
+from experiments.grug.moe_pipeline.train import PipelineSchedule, _synthetic_batch, _validate_local_mesh
 
 
 def _tiny_model(*, num_layers: int = 2) -> tuple[Mesh, Transformer]:
@@ -184,6 +184,41 @@ def test_dualpipe_v_train_config_rejects_too_few_microbatches():
             microbatches=3,
             schedule=PipelineSchedule.DUALPIPE_V,
         )
+
+
+def test_synthetic_padding_marks_trailing_positions_and_reaches_the_stages():
+    mesh, model = _tiny_model()
+    config = replace(
+        _resolve_benchmark_config({"PIPELINE_BATCH": "2", "PIPELINE_SEQ_LEN": "4", "PIPELINE_PADDING_FRACTION": "0.5"}),
+        stages=2,
+        physical_stages=2,
+    )
+    sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None))
+
+    with jax.set_mesh(mesh):
+        batch = _synthetic_batch(config, vocab_size=16, sharding=sharding)
+        stages = split_transformer(model, 2)
+        hidden = stages[0].embed(batch.tokens)
+        _, metrics = stages[0].run_blocks(hidden, batch.attn_mask)
+
+    # Two valid positions per row; the last valid one predicts a pad and carries no loss.
+    np.testing.assert_array_equal(batch.loss_weight, np.array([[1, 0, 0, 0], [1, 0, 0, 0]], dtype=np.float32))
+    np.testing.assert_array_equal(batch.attn_mask.segment_ids[0], np.array([[0, 0, -1, -1], [0, 0, -1, -1]]))
+    # Control branch (main): the model has no padding-aware dispatch, so only the drop stat is stacked.
+    assert "capacity_overflow_per_layer" in metrics
+
+
+def test_benchmark_config_rejects_padding_that_leaves_no_loss_position():
+    config = _resolve_benchmark_config({"PIPELINE_SEQ_LEN": "4", "PIPELINE_PADDING_FRACTION": "0.9"})
+    with pytest.raises(ValueError, match="leaves 0 valid positions"):
+        _synthetic_batch(config, vocab_size=16, sharding=jax.sharding.SingleDeviceSharding(jax.devices()[0]))
+
+
+def test_benchmark_config_reads_padding_and_capacity():
+    config = _resolve_benchmark_config({"PIPELINE_PADDING_FRACTION": "0.62", "PIPELINE_CAPACITY_FACTOR": "2"})
+    assert config.padding_fraction == 0.62
+    assert config.capacity_factor == 2.0
+    assert _resolve_benchmark_config({}).capacity_factor is None
 
 
 def test_checkpoint_restores_optimizer_and_pending_router_updates(tmp_path):
