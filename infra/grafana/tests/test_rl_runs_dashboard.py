@@ -8,7 +8,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from conftest import absent_namespace_error, queried_namespace
+from conftest import queried_namespace
 from dashboard_stitch import stitch_all
 from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
 
@@ -456,15 +456,14 @@ def test_a_trainer_that_stops_stamping_node_name_blanks_the_accelerator_panel(st
 
 
 def _census(database, present: frozenset[str]) -> list[dict[str, object]]:
-    """Run the census the way the route does: one query per namespace, absent ones dropped."""
+    """Run the census the way the route does: one query per namespace the deployment holds."""
 
     def query(sql: str) -> list[dict[str, object]]:
-        if queried_namespace(sql) not in present:
-            raise absent_namespace_error(sql)
+        assert queried_namespace(sql) in present, f"queried {queried_namespace(sql)}, which is absent"
         columns = [description[0] for description in database.execute(sql).description]
         return [dict(zip(columns, row, strict=True)) for row in database.execute(sql).fetchall()]
 
-    return collect_producers(query, RUN_ID, (CLUSTER,), _WINDOW_START_MS, _NOW_MS)
+    return collect_producers(query, present, RUN_ID, (CLUSTER,), _WINDOW_START_MS, _NOW_MS)
 
 
 def test_the_producer_census_separates_the_engine_series_from_the_trainer(store) -> None:
@@ -476,7 +475,7 @@ def test_the_producer_census_separates_the_engine_series_from_the_trainer(store)
 
 
 def test_the_census_still_answers_on_a_deployment_that_has_no_harbor_namespace(store) -> None:
-    """A deployment without every RL namespace is the normal case, so the census drops the absent ones."""
+    """A deployment without every RL namespace is the normal case, so the census leaves it out."""
     rows = _census(store, frozenset({"telemetry_v1.marinskyrl", "telemetry_v1.vllm"}))
 
     assert {row["producer"] for row in rows} == {"marinskyrl", "vllm"}

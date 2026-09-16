@@ -47,6 +47,7 @@ from loom_alerts import (
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from relay_health import RelayNamespaceStatus, RelaySenderStatus
+from rl_producers import RL_PRODUCER_NAMESPACES
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
@@ -105,6 +106,9 @@ class FakeSource:
             raise self._raises
         return self._table
 
+    def namespaces(self) -> frozenset[str]:
+        return frozenset(RL_PRODUCER_NAMESPACES)
+
     def health(self) -> FinelogHealth:
         return self._health
 
@@ -139,11 +143,14 @@ def _get(client: TestClient, sql: str, **params):
 
 
 class NamespaceSource(FakeSource):
-    """A finelog holding only some namespaces, answering the rest the way DataFusion does."""
+    """A finelog holding only some namespaces, and failing any query naming another."""
 
     def __init__(self, present: set[str], rows: pa.Table) -> None:
         super().__init__(rows)
-        self._present = present
+        self._present = frozenset(present)
+
+    def namespaces(self) -> frozenset[str]:
+        return self._present
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
         self.queries.append(sql)
@@ -170,15 +177,15 @@ _PRODUCER_ROW = finelog_result(
 )
 
 
-def test_the_producer_census_answers_when_a_namespace_is_absent():
-    """A namespace the deployment has never held is dropped from the census rather than failing it."""
+def test_the_producer_census_never_queries_a_namespace_the_deployment_lacks():
+    """Naming an absent namespace fails the statement at plan time, so the census leaves it out."""
     source = NamespaceSource({"telemetry_v1.marinskyrl", "telemetry_v1.vllm"}, _PRODUCER_ROW)
 
     resp = _producers(_client(source))
 
     assert resp.status_code == 200
     assert len(resp.json()) == 2
-    assert any("telemetry_v1.harbor" in sql for sql in source.queries), "harbor was never attempted"
+    assert not any("telemetry_v1.harbor" in sql for sql in source.queries)
 
 
 def test_the_producer_census_reports_a_real_query_failure_rather_than_an_empty_table():
