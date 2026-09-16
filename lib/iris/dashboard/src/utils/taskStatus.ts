@@ -5,7 +5,7 @@
 
 export const TASK_STATUS_NAMESPACE = 'iris.task_status'
 
-// Workers must re-emit faster than this window or their tasks will fall off the UI.
+// Workers must re-emit faster than this window to remain in live job summaries.
 export const TASK_STATUS_RETENTION_INTERVAL = "INTERVAL '10 minutes'"
 
 function sqlString(value: string): string {
