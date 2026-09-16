@@ -110,14 +110,7 @@
       "url": "/d/marin-runs"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "RL runs",
-      "type": "link",
-      "url": "/d/marin-rl-runs"
+      "linkRef": "rl_post_training"
     },
     {
       "linkRef": "fleet_health"
@@ -408,6 +401,16 @@
         "y": 36
       },
       "panelRef": "gpu_rack_tray_inventory"
+    },
+    {
+      "id": 16,
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "panelRef": "rl_recent_runs"
     }
   ]
 }

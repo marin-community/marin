@@ -17,6 +17,7 @@ from pathlib import PurePosixPath
 from typing import Literal, cast
 
 import fsspec
+import yaml
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -313,6 +314,32 @@ class SkyRLOutputPaths:
     terminal_manifest_uri: str
 
 
+# The trainer strategy each runtime profile installs the closure for. A profile decides which
+# dependencies reach the pod; `trainer.strategy` decides which backend the trainer then asks for.
+# Nothing downstream reconciles them, so a mismatch installs one backend and runs another.
+_STRATEGY_FOR_PROFILE = {
+    SkyRLRuntimeProfile.FSDP: "fsdp2",
+    SkyRLRuntimeProfile.MEGATRON: "megatron",
+}
+
+
+def _effective_strategy(config_yaml: str, overrides: tuple[str, ...]) -> str | None:
+    """Return the trainer strategy the launched run will use, or None when nothing names one.
+
+    MarinSkyRL applies overrides as Hydra arguments after the config, so the last override naming
+    `trainer.strategy` wins. `trainer:` with nothing under it names no strategy.
+    """
+    for override in reversed(overrides):
+        key, separator, value = override.lstrip("+").partition("=")
+        if separator and key == "trainer.strategy":
+            return value.strip("'\"")
+    declared = yaml.safe_load(config_yaml)
+    if not isinstance(declared, dict):
+        return None
+    trainer = declared.get("trainer")
+    return trainer.get("strategy") if isinstance(trainer, dict) else None
+
+
 @dataclass(frozen=True)
 class SkyRLLaunchRequest:
     run_id: str
@@ -326,6 +353,16 @@ class SkyRLLaunchRequest:
     output: SkyRLOutputPaths
     seed: int
     overrides: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Reject a runtime profile that does not install the strategy the config asks for."""
+        strategy = _effective_strategy(self.config_yaml, self.overrides)
+        expected = _STRATEGY_FOR_PROFILE.get(self.runtime.profile)
+        if strategy is not None and expected is not None and strategy != expected:
+            raise ValueError(
+                f"runtime profile {self.runtime.profile.value!r} installs the {expected!r} backend, "
+                f"but config_yaml asks for trainer.strategy={strategy!r}"
+            )
 
 
 @dataclass(frozen=True)

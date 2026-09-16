@@ -16,6 +16,7 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     Checkpoint,
     Completion,
     Prompt,
+    PromptCompletions,
     SampleRequest,
     SampleResult,
     SampleStore,
@@ -45,6 +46,7 @@ def sample_request():
         spec=SamplingSpec(
             release="test-v1",
             batch_size=1,
+            completions_per_prompt=3,
             prompts=(Prompt(id="add", text="def add(a, b):", seed=0, source_url="https://example.org"),),
             tokenizer="test",
             tokenizer_revision="a" * 40,
@@ -62,12 +64,19 @@ def completed(request):
     return SampleResult(
         request=request,
         completions=(
-            Completion(
+            PromptCompletions(
                 prompt_id="add",
                 prompt_token_ids=(1,),
-                token_ids=(2, 3),
-                text="a + b",
-                stop_reason=StopReason.MAX_NEW_TOKENS,
+                samples=tuple(
+                    Completion(
+                        sample_index=index,
+                        seed=request.spec.prompts[0].seed + index,
+                        token_ids=(2, 3),
+                        text="a + b",
+                        stop_reason=StopReason.MAX_NEW_TOKENS,
+                    )
+                    for index in range(request.spec.completions_per_prompt)
+                ),
             ),
         ),
         completed_at=NOW.isoformat(),
@@ -104,32 +113,32 @@ def test_retries_recover_service_errors_without_overlapping_jobs(tmp_path, sampl
     jobs = JobService()
     jobs.lose_submit_response = True
     with pytest.raises(ConnectionError):
-        submit_pending(store, jobs, [request])
+        submit_pending(store, jobs, [request], spec=sample_request.spec)
     # A fresh invocation has a different main revision, but must keep the submitted request.
     changed_main = request.model_copy(update={"source_revision": "c" * 40})
     older = request.model_copy(
         update={"checkpoint": request.checkpoint.model_copy(update={"step": 3000, "uri": "s3://checkpoints/step-3000"})}
     )
     jobs.lose_submit_response = False
-    submit_pending(store, jobs, [changed_main, older])
+    submit_pending(store, jobs, [changed_main, older], spec=sample_request.spec)
     assert len(jobs.jobs) == 1
     name = next(iter(jobs.jobs))
     assert jobs.requests[name].source_revision == request.source_revision
     jobs.unavailable = True
     with pytest.raises(ConnectionError):
-        submit_pending(store, jobs, [changed_main, older])
+        submit_pending(store, jobs, [changed_main, older], spec=sample_request.spec)
     assert len(jobs.jobs) == 1
     jobs.unavailable = False
     jobs.jobs[name] = JobState.FAILED
-    submit_pending(store, jobs, [changed_main, older])
+    submit_pending(store, jobs, [changed_main, older], spec=sample_request.spec)
     assert len(jobs.jobs) == 2
     retry = list(jobs.jobs)[-1]
     assert jobs.requests[retry] == request
     store.save_result(completed(request))
-    submit_pending(store, jobs, [])
+    submit_pending(store, jobs, [], spec=sample_request.spec)
     assert len(jobs.jobs) == 2  # A saved result does not mean GPU teardown finished.
     jobs.jobs[retry] = JobState.SUCCEEDED
-    submit_pending(store, jobs, [])
+    submit_pending(store, jobs, [], spec=sample_request.spec)
     assert list(jobs.requests.values())[-1] == older
 
 
@@ -145,39 +154,39 @@ def test_all_permanent_requests_survive_missed_ticks_and_retry_budget(tmp_path, 
         for step in [6000, 12000, 18000]
     ]
     newest = request.model_copy(update={"checkpoint": request.checkpoint.model_copy(update={"step": 24000})})
-    submit_pending(store, jobs, requests)
-    assert {row.sample_id for row in store.requests()} == {row.sample_id for row in requests}
+    submit_pending(store, jobs, requests, spec=sample_request.spec)
+    assert {row.sample_id for row in store.requests(sample_request.spec)} == {row.sample_id for row in requests}
     for state in [JobState.FAILED, JobState.UNSCHEDULABLE, JobState.SUCCEEDED]:
         active = next(name for name, job_state in jobs.jobs.items() if job_state == JobState.RUNNING)
         assert jobs.requests[active] == requests[-1]
         jobs.jobs[active] = state
         if state == JobState.UNSCHEDULABLE:
             jobs.jobs.clear()  # History deletion between attempts must not reset the budget.
-        submit_pending(store, jobs, [newest] if state == JobState.SUCCEEDED else [])
+        submit_pending(store, jobs, [newest] if state == JobState.SUCCEEDED else [], spec=sample_request.spec)
     assert store.retries_exhausted(requests[-1])
     assert sum(row == requests[-1] for row in jobs.requests.values()) == 3
     assert list(jobs.requests.values())[-1] == newest
     store.save_result(completed(newest))
     store.save_result(completed(requests[1]))
     jobs.jobs.clear()  # Iris prunes terminal job history.
-    submit_pending(store, jobs, [])
+    submit_pending(store, jobs, [], spec=sample_request.spec)
     assert len(jobs.jobs) == 1
     assert jobs.requests[next(iter(jobs.jobs))] == requests[0]
 
 
 def test_result_written_during_status_read_completes_last_attempt(tmp_path, monkeypatch, sample_request):
     store, jobs = SampleStore(str(tmp_path)), JobService()
-    submit_pending(store, jobs, [sample_request])
+    submit_pending(store, jobs, [sample_request], spec=sample_request.spec)
     for _ in range(2):
         jobs.jobs[list(jobs.jobs)[-1]] = JobState.FAILED
-        submit_pending(store, jobs, [])
+        submit_pending(store, jobs, [], spec=sample_request.spec)
 
     def finish_job():
         store.save_result(completed(sample_request))
         return dict.fromkeys(jobs.jobs, JobState.SUCCEEDED)
 
     monkeypatch.setattr(jobs, "states", finish_job)
-    submit_pending(store, jobs, [])
+    submit_pending(store, jobs, [], spec=sample_request.spec)
     assert store.result(sample_request.sample_id) == completed(sample_request)
     assert not store.retries_exhausted(sample_request)
     assert len(jobs.jobs) == 3
@@ -188,14 +197,15 @@ def test_prompt_changes_add_samples_and_source_changes_reuse_results(tmp_path, s
     store, jobs = SampleStore(str(tmp_path)), JobService()
     store.save_result(completed(request))
     new_main = request.model_copy(update={"source_revision": "d" * 40})
-    submit_pending(store, jobs, [new_main])
+    submit_pending(store, jobs, [new_main], spec=sample_request.spec)
     assert jobs.jobs == {}
     assert store.result(request.sample_id) == completed(request)
 
     changed_prompt = request.spec.prompts[0].model_copy(update={"text": "def subtract(a, b):"})
     changed = new_main.model_copy(update={"spec": request.spec.model_copy(update={"prompts": (changed_prompt,)})})
-    submit_pending(store, jobs, [new_main, changed])
-    assert len(store.requests()) == 2
+    submit_pending(store, jobs, [changed], spec=changed.spec)
+    assert store.requests(changed.spec) == [changed]
+    assert store.requests(sample_request.spec) == [new_main]
     assert len(jobs.jobs) == 1
     assert store.result(request.sample_id) == completed(request)
     assert changed.sample_id not in store.completed_ids()
@@ -212,6 +222,14 @@ def test_results_require_the_full_bank_and_keep_the_first_success(tmp_path, samp
         SampleResult.model_validate(partial)
     partial["completions"] += ({**partial["completions"][0], "prompt_id": "other"},)
     result = SampleResult.model_validate(partial)
+    missing_sample = result.model_dump()
+    missing_sample["completions"][0]["samples"] = missing_sample["completions"][0]["samples"][:-1]
+    with pytest.raises(ValueError, match="every sample index"):
+        SampleResult.model_validate(missing_sample)
+    duplicate_sample = result.model_dump(mode="json")
+    duplicate_sample["completions"][0]["samples"][1] = duplicate_sample["completions"][0]["samples"][0]
+    with pytest.raises(ValueError, match="every sample index"):
+        SampleResult.model_validate(duplicate_sample)
     store = SampleStore(str(tmp_path))
     store.save_result(result)
     store.save_result(result.model_copy(update={"completed_at": "2026-09-13T10:00:00+00:00"}))
@@ -265,8 +283,8 @@ def test_generation_stops_at_the_correct_boundary(sample_request, prompt_ids, pr
     result = generate(
         request.spec, [prompt_ids], eos_token_id=0, logits=logits, decode=lambda ids: "".join(map(str, ids))
     )[0]
-    assert result.token_ids == expected_ids
-    assert result.stop_reason == reason
+    assert len(result.samples) == 3
+    assert all(sample.token_ids == expected_ids and sample.stop_reason == reason for sample in result.samples)
 
 
 def test_sampling_streams_do_not_depend_on_prompt_order_or_early_eos(sample_request):
@@ -305,8 +323,10 @@ def test_sampling_streams_do_not_depend_on_prompt_order_or_early_eos(sample_requ
         decode=lambda ids: "".join(map(str, ids)),
     )
     assert batches == pair
-    assert pair[0].token_ids == reverse[1].token_ids
-    assert pair[1].token_ids == reverse[0].token_ids == alone[0].token_ids
+    assert pair[0] == reverse[1]
+    assert pair[1] == reverse[0] == alone[0]
+    assert len({sample.token_ids for sample in pair[1].samples}) == 3
+    assert [sample.seed for sample in pair[1].samples] == [27, 28, 29]
 
     def early_eos(tokens, positions):
         scores = logits(tokens, positions)
@@ -314,8 +334,8 @@ def test_sampling_streams_do_not_depend_on_prompt_order_or_early_eos(sample_requ
         return scores
 
     early = generate(spec, [[1], [2]], eos_token_id=0, logits=early_eos, decode=lambda ids: "".join(map(str, ids)))
-    assert early[0].stop_reason == StopReason.EOS
-    assert early[1].token_ids == alone[0].token_ids
+    assert all(sample.stop_reason == StopReason.EOS for sample in early[0].samples)
+    assert early[1] == alone[0]
 
 
 def report_data(path):
@@ -328,17 +348,32 @@ def test_empty_report_updates_after_results_arrive_without_freezing_an_empty_day
     monkeypatch.setattr(sites, "PUBLIC_ROOT", str(public))
     store = SampleStore(str(tmp_path / "private"))
     comments = []
-    url = publish_reports(store, date(2026, 9, 12), comments.append)
+    # Historical requests can use an incompatible schema. Their results must stay unread.
+    legacy = sample_request.model_dump(mode="json")
+    del legacy["spec"]["completions_per_prompt"]
+    legacy_path = tmp_path / "private/requests/legacy.json"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_text(json.dumps(legacy))
+    legacy_result = tmp_path / "private/results/legacy.json"
+    legacy_result.parent.mkdir()
+    legacy_result.write_text("invalid historical result")
+    url = publish_reports(store, date(2026, 9, 12), comments.append, spec=sample_request.spec)
     latest = public / "rav/hero-completions/latest/index.html"
     assert report_data(latest)["entries"] == []
     assert not list((tmp_path / "private/reports").glob("*"))
     assert not (public / "rav/hero-completions/2026.09.12/index.html").exists()
 
+    store.save_request(sample_request)
     store.save_result(completed(sample_request))
-    assert publish_reports(store, date(2026, 9, 12), comments.append) == url
+    assert publish_reports(store, date(2026, 9, 12), comments.append, spec=sample_request.spec) == url
     assert [entry["id"] for entry in report_data(latest)["entries"]] == [sample_request.sample_id]
     daily = public / "rav/hero-completions/2026.09.12/index.html"
     assert report_data(daily)["entries"] == report_data(latest)["entries"]
+    corrupt = completed(sample_request).model_dump(mode="json")
+    corrupt["request"]["checkpoint"]["metadata_digest"] = "changed"
+    (tmp_path / f"private/results/{sample_request.sample_id}.json").write_text(json.dumps(corrupt))
+    with pytest.raises(ValueError, match="provenance"):
+        publish_reports(store, date(2026, 9, 12), comments.append, spec=sample_request.spec)
 
 
 @pytest.mark.parametrize("failure", ["upload", "comment"])
@@ -346,6 +381,7 @@ def test_current_report_advances_while_daily_history_survives_retries(tmp_path, 
     public = tmp_path / "public"
     monkeypatch.setattr(sites, "PUBLIC_ROOT", str(public))
     store = SampleStore(str(tmp_path / "private"))
+    store.save_request(sample_request)
     store.save_result(completed(sample_request))
     comments = []
     publish_site = sites.publish_site
@@ -361,14 +397,20 @@ def test_current_report_advances_while_daily_history_survives_retries(tmp_path, 
         if failure == "upload":
             patch.setattr(sites, "publish_site", lose_upload_response)
         with pytest.raises(ConnectionError):
-            publish_reports(store, date(2026, 9, 12), fail_comment if failure == "comment" else comments.append)
+            publish_reports(
+                store,
+                date(2026, 9, 12),
+                fail_comment if failure == "comment" else comments.append,
+                spec=sample_request.spec,
+            )
     page = public / "rav/hero-completions/2026.09.12/index.html"
     first_page = page.read_bytes()
     newer = sample_request.model_copy(
         update={"checkpoint": sample_request.checkpoint.model_copy(update={"step": 24000})}
     )
+    store.save_request(newer)
     store.save_result(completed(newer))
-    url = publish_reports(store, date(2026, 9, 12), comments.append)
+    url = publish_reports(store, date(2026, 9, 12), comments.append, spec=sample_request.spec)
     latest = public / "rav/hero-completions/latest/index.html"
     assert page.read_bytes() == first_page
     assert [entry["step"] for entry in report_data(latest)["entries"]] == [24000, 6000]
@@ -378,11 +420,11 @@ def test_current_report_advances_while_daily_history_survives_retries(tmp_path, 
             (public / f"rav/hero-completions/results/{request.sample_id}.json").read_bytes()
         ) == completed(request)
     assert url in comments[-1]
-    publish_reports(store, date(2026, 9, 12), comments.append)
+    publish_reports(store, date(2026, 9, 12), comments.append, spec=sample_request.spec)
     assert page.read_bytes() == first_page
     assert [entry["step"] for entry in report_data(latest)["entries"]] == [24000, 6000]
     assert len(comments) == 2
-    publish_reports(store, date(2026, 9, 13), comments.append)
+    publish_reports(store, date(2026, 9, 13), comments.append, spec=sample_request.spec)
     assert page.read_bytes() == first_page
     next_page = public / "rav/hero-completions/2026.09.13/index.html"
     assert [entry["step"] for entry in report_data(next_page)["entries"]] == [24000, 6000]

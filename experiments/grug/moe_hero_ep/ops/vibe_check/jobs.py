@@ -22,7 +22,7 @@ from iris.rpc.proto_display import priority_band_rank
 from marin.training.training import resolve_training_env
 from rigging.timing import Duration
 
-from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleRequest, SampleStore
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleRequest, SampleStore, SamplingSpec
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,7 @@ def submit_pending(
     jobs: Jobs,
     requests: list[SampleRequest],
     *,
+    spec: SamplingSpec,
     priority_band: int | None = None,
     submission: SubmissionMode = SubmissionMode.NEXT,
 ) -> None:
@@ -64,14 +65,15 @@ def submit_pending(
         store.set_priorities([request.sample_id for request in requests], priority_band)
     # Read job states before results. Process zero can save a result during this RPC.
     states = jobs.states()
-    active = {name for name, state in states.items() if state not in TERMINAL_JOB_STATES}
+    saved_requests = store.requests(spec)
+    current_names = {name for request in saved_requests for name in sample_job_names(request)}
+    active = {name for name, state in states.items() if name in current_names and state not in TERMINAL_JOB_STATES}
     if active and submission == SubmissionMode.NEXT:
         logger.info("Waiting for active jobs: %s", active)
         return  # Wait for teardown even if the active job already wrote its result.
     completed = store.completed_ids()
     attempts = store.attempt_names()
     priorities = store.priorities()
-    saved_requests = store.requests()
     if submission == SubmissionMode.ALL:
         discovered_ids = {request.sample_id for request in requests}
         saved_requests = [request for request in saved_requests if request.sample_id in discovered_ids]
