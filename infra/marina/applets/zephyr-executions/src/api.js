@@ -48,7 +48,3 @@ export function useJson(pathFn) {
   }
   return { data, loading, error, refresh, reset };
 }
-
-export function encodeSegment(value) {
-  return encodeURIComponent(value);
-}

@@ -17,7 +17,7 @@ import math
 import os
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -32,6 +32,7 @@ from rigging.credentials import iap_provider_for
 
 from .queries import (
     EXECUTION_LIMIT,
+    EXECUTION_NAMESPACE,
     STAGE_LOOKBACK_SECONDS,
     execution_sql,
     executions_sql,
@@ -56,7 +57,9 @@ NAMESPACE_CACHE_TTL = 60.0
 class _Finelog:
     """Cached Finelog address; one short-lived client per call."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, url: str | None, iap_cluster: str | None) -> None:
+        self._url = url
+        self._iap_cluster = iap_cluster
         self._lock = threading.Lock()
         self._address: str | tuple[str, int] | None = None
         self._interceptors: tuple[Any, ...] = ()
@@ -70,10 +73,10 @@ class _Finelog:
         return self._source
 
     def _resolve_explicit(self) -> bool:
-        url = os.environ.get("ZEPHYR_APPLET_FINELOG_URL")
+        url = self._url
         if not url:
             return False
-        cluster = os.environ.get("ZEPHYR_APPLET_IAP_CLUSTER")
+        cluster = self._iap_cluster
         self._interceptors = tuple(IapAuth(iap_provider_for(cluster)).interceptors()) if cluster else ()
         self._address = url
         self._source = f"{url} ({'IAP ' + cluster if cluster else 'direct'})"
@@ -104,7 +107,7 @@ class _Finelog:
         with self._lock:
             self._address = None
 
-    def _call(self, operation: Callable[[LogClient], Any]) -> Any:
+    def _call[Result](self, operation: Callable[[LogClient], Result]) -> Result:
         """Run one operation on a fresh client, re-resolving once after a transport failure."""
         for attempt in range(2):
             try:
@@ -124,7 +127,7 @@ class _Finelog:
         with self._lock:
             if time.monotonic() - self._namespaces_at < NAMESPACE_CACHE_TTL:
                 return list(self._namespaces)
-        infos: Iterable[Any] = self._call(lambda client: client.list_namespaces())
+        infos = self._call(lambda client: client.list_namespaces())
         names = sorted(info.namespace for info in infos)
         with self._lock:
             self._namespaces = names
@@ -166,9 +169,12 @@ def _stage_start(plan: dict[str, Any]) -> datetime:
     return datetime.fromtimestamp(plan["ts"] / 1000, UTC) - timedelta(seconds=STAGE_LOOKBACK_SECONDS)
 
 
-def create_api(services: AppletServices | None = None) -> FastAPI:
+def create_api(_services: AppletServices | None = None) -> FastAPI:
     api = FastAPI()
-    finelog = _Finelog()
+    finelog = _Finelog(
+        url=os.environ.get("ZEPHYR_APPLET_FINELOG_URL"),
+        iap_cluster=os.environ.get("ZEPHYR_APPLET_IAP_CLUSTER"),
+    )
 
     def unavailable(error: Exception) -> HTTPException:
         logger.warning("Finelog request failed: %s", error)
@@ -187,7 +193,7 @@ def create_api(services: AppletServices | None = None) -> FastAPI:
             raise unavailable(error) from error
 
     def plan_or_404(execution_id: str) -> dict[str, Any]:
-        rows = run(execution_sql(execution_id)) if "zephyr.execution" in run_namespaces() else []
+        rows = run(execution_sql(execution_id)) if EXECUTION_NAMESPACE in run_namespaces() else []
         if not rows:
             raise HTTPException(status_code=404, detail=f"No plan record for execution {execution_id}")
         return _plan_row(rows[0])
@@ -195,7 +201,7 @@ def create_api(services: AppletServices | None = None) -> FastAPI:
     @api.get("/health")
     def health() -> dict[str, Any]:
         names = run_namespaces()
-        return {"finelog": finelog.source, "namespaces": names, "plan_records": "zephyr.execution" in names}
+        return {"finelog": finelog.source, "namespaces": names, "plan_records": EXECUTION_NAMESPACE in names}
 
     @api.get("/executions")
     def executions(
@@ -203,7 +209,7 @@ def create_api(services: AppletServices | None = None) -> FastAPI:
         limit: int = Query(EXECUTION_LIMIT, ge=1, le=500),
         root_job: str | None = None,
     ) -> list[dict[str, Any]]:
-        if "zephyr.execution" not in run_namespaces():
+        if EXECUTION_NAMESPACE not in run_namespaces():
             return []
         since = _now() - timedelta(days=days)
         rows = run(executions_sql(since=since, root_job=root_job or None, limit=limit))

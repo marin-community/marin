@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { encodeSegment, useJson } from "../api.js";
+import { useJson } from "../api.js";
 import {
   formatBytes,
   irisTaskUrl,
@@ -31,8 +31,8 @@ try {
 const nodes = computed(() => (Array.isArray(props.execution.stages) ? props.execution.stages : []));
 const selected = computed(() => nodes.value.find((node) => node.stage_name === selectedStage.value));
 const view = computed(() => stageView(nodes.value, savedView.value));
-const base = computed(() => `api/executions/${encodeSegment(props.execution.execution_id)}`);
-const stagePath = computed(() => `${base.value}/stages/${encodeSegment(selectedStage.value)}`);
+const base = computed(() => `api/executions/${encodeURIComponent(props.execution.execution_id)}`);
+const stagePath = computed(() => `${base.value}/stages/${encodeURIComponent(selectedStage.value)}`);
 const hasShuffle = computed(() => props.namespaces.includes("zephyr.shuffle"));
 
 const stages = useJson(() => (props.namespaces.includes("zephyr.stage") ? `${base.value}/stages` : null));
