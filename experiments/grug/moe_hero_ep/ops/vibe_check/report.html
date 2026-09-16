@@ -67,9 +67,10 @@
     const prompt = document.getElementById('prompt');
     const cache = new Map();
     const missingPromptText = 'Prompt text was not recorded.';
+    const unknownRelease = 'Unknown sampling version';
     let draw = 0;
     function element(tag, text) { const node = document.createElement(tag); node.textContent = text; return node; }
-    function label(entry) { return `${entry.step?.toLocaleString() ?? 'Unknown step'} · ${entry.run_id} · ${entry.release ?? 'Unknown sampling version'} · ${entry.id.slice(0, 8)}`; }
+    function label(entry) { return `${entry.step?.toLocaleString() ?? 'Unknown step'} · ${entry.run_id} · ${entry.release ?? unknownRelease} · ${entry.id.slice(0, 8)}`; }
     function records(value) { return Array.isArray(value) ? value.filter(row => row && typeof row === 'object') : []; }
     function validLogprob(value) { return typeof value === 'number' && Number.isFinite(value) && value <= 0; }
     function normalizeScores(value) {
@@ -182,10 +183,16 @@
     if (report.previous_url) {
       const previous = document.getElementById('previous'); previous.href = report.previous_url; previous.hidden = false;
     }
-    for (const entry of report.entries) {
+    const versionOrder = new Intl.Collator('en', {numeric: true});
+    const selectionEntries = [...report.entries].sort((a, b) => {
+      const releaseA = a.release === unknownRelease ? '' : a.release ?? '';
+      const releaseB = b.release === unknownRelease ? '' : b.release ?? '';
+      return versionOrder.compare(releaseB, releaseA) || (b.step ?? -1) - (a.step ?? -1);
+    });
+    for (const entry of selectionEntries) {
       for (const select of [left, right]) { const option = element('option', label(entry)); option.value = entry.id; select.append(option); }
       const row = document.createElement('tr');
-      for (const value of [`${entry.step} · ${entry.run_id}`, entry.id.slice(0, 12)]) row.append(element('td', value));
+      for (const value of [`${entry.step ?? 'Unknown step'} · ${entry.run_id} · ${entry.release ?? unknownRelease}`, entry.id.slice(0, 12)]) row.append(element('td', value));
       document.getElementById('inventory').append(row);
     }
     async function result(id) {
