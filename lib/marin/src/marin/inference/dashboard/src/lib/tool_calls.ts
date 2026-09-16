@@ -66,7 +66,7 @@ export function inlineToolCalls(content: string): { visible: string; calls: Tool
   return { visible: visible.trim(), calls }
 }
 
-/** Fill optional IDs and discard malformed calls that cannot be executed. */
+/** Fill optional IDs and discard calls without a function name. */
 export function executableToolCalls(calls: ToolCall[]): ToolCall[] {
   return calls
     .filter((call) => call.function.name)

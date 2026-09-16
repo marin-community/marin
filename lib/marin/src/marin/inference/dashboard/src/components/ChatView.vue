@@ -120,7 +120,13 @@ async function send(text?: string) {
       }
     }
   } catch (error) {
-    if (reply && !(error instanceof DOMException && error.name === 'AbortError')) reply.error = String(error)
+    if (!(error instanceof DOMException && error.name === 'AbortError')) {
+      if (!reply) {
+        reply = { role: 'assistant', content: '', thinking: '', thinkingSeconds: null, error: null }
+        conversation.messages.push(reply)
+      }
+      reply.error = String(error)
+    }
   } finally {
     busy.value = false
     abort = null
