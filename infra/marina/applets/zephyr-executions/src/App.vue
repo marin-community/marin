@@ -34,7 +34,6 @@ const namespaces = computed(() => health.data.value?.namespaces ?? []);
 const error = computed(() => health.error.value || executions.error.value);
 // A requested execution that cannot be shown keeps its id and its own error.
 const lookupError = computed(() => (selectedExecution.value && !execution.value ? linked.error.value : null));
-const finelogSource = computed(() => health.data.value?.finelog ?? "");
 
 async function refresh() {
   await Promise.all([health.refresh(), executions.refresh()]);
@@ -79,14 +78,9 @@ onBeforeUnmount(() => {
   <main>
     <h1>Zephyr</h1>
     <div class="row">
-      <h2>Executions</h2>
+      <h2>Finelog-based Execution Data</h2>
       <button class="link" :disabled="executions.loading.value" @click="refresh">Refresh</button>
     </div>
-    <p class="muted" style="margin: 4px 0 0">
-      Stages and reducer input sizes for each Zephyr run, read from Finelog. Data stays after the run ends, subject to Finelog retention and best-effort
-      delivery.
-      <span v-if="finelogSource" class="faint">Source: {{ finelogSource }}.</span>
-    </p>
     <div class="controls">
       <label>
         Root job
@@ -109,7 +103,7 @@ onBeforeUnmount(() => {
       This Finelog has no execution records yet.
     </p>
     <p v-else-if="!executions.loading.value && !list.length" class="muted">
-      No executions with a plan record in the last {{ DAYS }} days. Only runs that wrote a plan record appear.
+      No executions found in the last {{ DAYS }} days.
     </p>
     <section v-if="execution" class="panel" aria-label="Execution">
       <div class="row">

@@ -52,4 +52,3 @@ export function useJson(pathFn) {
 export function encodeSegment(value) {
   return encodeURIComponent(value);
 }
-

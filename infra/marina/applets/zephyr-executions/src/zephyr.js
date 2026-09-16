@@ -93,4 +93,3 @@ export function irisJobUrl(jobId) {
 export function irisTaskUrl(jobId) {
   return `${IRIS_DASHBOARD}/#/job/${encodeURIComponent(jobId)}/task/${encodeURIComponent(jobId + "/0")}`;
 }
-
