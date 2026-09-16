@@ -842,3 +842,33 @@ def test_a_run_the_model_merely_failed_is_not_flagged_as_unanswered():
 
 def test_record_adapter_returns_nothing_for_a_run_that_produced_no_metrics():
     assert measurement_from_record(_record(metrics={})) is None
+
+
+def test_record_adapter_reads_the_standard_error_of_a_repeated_sample_task():
+    """Evalchemy's aime24 writes ``accuracy_avg`` with ``accuracy_std_err``, not lm-eval's ``_stderr``.
+
+    Without that pairing the measurement has no dispersion and its interval is [0, 1], so the cell
+    shows a score with no precision behind it and Compare cannot rank it.
+    """
+    record = _record(
+        eval_name="aime24",
+        metrics={
+            "aime24": {
+                "num_total": 30.0,
+                "solved_avg": 4.9,
+                "accuracy_avg": 4.9 / 30,
+                "accuracy_std_err": 0.0173,
+                "num_repeat": 10.0,
+            }
+        },
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.metric == "accuracy"  # the legacy alias for accuracy_avg
+    assert measurement.recorded_stderr == pytest.approx(0.0173)
+    assert ResultFlag.NO_DISPERSION not in measurement.flags
+    interval = measurement_interval(measurement)
+    assert interval.low > 0.1
+    assert interval.high < 0.25

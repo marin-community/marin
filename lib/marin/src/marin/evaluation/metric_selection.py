@@ -9,6 +9,14 @@ from collections.abc import Iterable, Mapping
 # ``acc_norm`` outranks ``acc`` where both exist; ``accuracy`` covers Evalchemy's chat-native tasks.
 PRIMARY_METRIC_PRIORITY = ("exact_match", "accuracy", "acc_norm", "acc", "pass@1")
 
+# lm-eval pairs ``acc`` with ``acc_stderr``. Evalchemy's repeated-sample tasks (aime24) report the mean
+# over repeats as ``accuracy_avg`` and its standard error across repeats as ``accuracy_std_err``.
+# Neither standard error is ever a headline score.
+LM_EVAL_STDERR_SUFFIX = "_stderr"
+REPEAT_MEAN_SUFFIX = "_avg"
+REPEAT_STDERR_SUFFIX = "_std_err"
+DISPERSION_SUFFIXES = (LM_EVAL_STDERR_SUFFIX, REPEAT_STDERR_SUFFIX)
+
 # Chat models often solve gsm8k-style tasks without emitting the strict ``#### N`` format.
 FILTER_PRIORITY = ("flexible-extract",)
 
@@ -47,7 +55,7 @@ def declared_metric(metrics: Mapping[str, float], declared: str | None) -> tuple
 
 def primary_metric(metrics: Mapping[str, float]) -> tuple[str, float] | None:
     """Pick Marin's headline ``(key, value)`` from an evaluator metric mapping."""
-    candidates = {name: value for name, value in metrics.items() if not base_metric(name).endswith("_stderr")}
+    candidates = {name: value for name, value in metrics.items() if not base_metric(name).endswith(DISPERSION_SUFFIXES)}
     if not candidates:
         return None
     for preferred in PRIMARY_METRIC_PRIORITY:

@@ -120,6 +120,20 @@ def _lm_eval_ref(eval_name: str, num_fewshot: int) -> EvalRef:
     )
 
 
+def _legacy_lm_eval_ref(eval_name: str, num_fewshot: int) -> EvalRef:
+    """An lm-eval record from a launcher that predates benchmark metadata.
+
+    No declared benchmark and no canonical metrics, so the reader takes the legacy path and reads the
+    harness's own metric spelling. Every stored aime24 record has this shape.
+    """
+    return EvalRef(
+        name=eval_name,
+        mechanism="evalchemy",
+        family=_EVAL_FAMILIES.get(eval_name),
+        tasks=(EvalTaskRef(name=eval_name, num_fewshot=num_fewshot),),
+    )
+
+
 def _harbor_ref(dataset: str) -> EvalRef:
     benchmark = BenchmarkMetadataRef(
         schema_version=1,
@@ -408,6 +422,7 @@ _HEADLINE = {
     "gsm8k-0shot": ("exact_match,flexible-extract", "exact_match_stderr,flexible-extract"),
     "humaneval": ("pass@1", "pass@1_stderr"),
     "math500": ("accuracy", None),
+    "aime24": ("accuracy_avg", "accuracy_std_err"),
 }
 
 
@@ -423,6 +438,25 @@ def _lm_metrics(task: str, value: float, stderr: float | None) -> dict[str, dict
     if stderr_key is not None and stderr is not None:
         inner[stderr_key] = stderr
     return {task: inner}
+
+
+# Evalchemy's aime24 task samples every problem ``num_repeat`` times and reports the mean over repeats
+# as ``accuracy_avg`` with its standard error across repeats as ``accuracy_std_err``, not under
+# lm-eval's ``<metric>_stderr``.
+def _repeat_metrics(
+    task: str, solved_avg: float, num_total: int, num_repeat: int, std_err: float
+) -> dict[str, dict[str, float]]:
+    metric, stderr_key = _HEADLINE[task]
+    assert stderr_key is not None
+    return {
+        task: {
+            "num_total": float(num_total),
+            "solved_avg": solved_avg,
+            metric: solved_avg / num_total,
+            stderr_key: std_err,
+            "num_repeat": float(num_repeat),
+        }
+    }
 
 
 def build_fixtures(dest: str) -> list[str]:
@@ -607,6 +641,32 @@ def build_fixtures(dest: str) -> list[str]:
         ],
     )
 
+    r = f"{grp}-aime24"
+    emit(
+        _record(
+            run_id=r,
+            group_id=grp,
+            model=REFERENCE_MODEL,
+            version="2026.07.20",
+            created_at="2026-07-20T02:25:00+00:00",
+            evaluation=_legacy_lm_eval_ref("aime24", 0),
+            status=RunStatus.SUCCEEDED,
+            results_path=results_of(r),
+            metrics=_repeat_metrics("aime24", solved_avg=12.6, num_total=30, num_repeat=10, std_err=0.021),
+            description=desc,
+            runtime_minutes=25.0,
+        )
+    )
+    _write_samples(
+        fs,
+        results_of(r),
+        "aime24",
+        [
+            _generation_sample("aime24", "0", extracted="204", target="204"),
+            _generation_sample("aime24", "1", extracted="25", target="113"),
+        ],
+    )
+
     # --- tootsie-8b 2026.07.20: mixed outcomes (an eval failure and an infra failure) ---
     grp = "tootsie-8b-2026.07.20"
     desc = "Tootsie 8B checkpoint eval"
@@ -726,6 +786,31 @@ def build_fixtures(dest: str) -> list[str]:
             runtime_minutes=3.5,  # failed partway through grading
         )
     )
+    r = f"{grp}-aime24"
+    emit(
+        _record(
+            run_id=r,
+            group_id=grp,
+            model="tootsie-8b",
+            version="2026.07.20",
+            created_at="2026-07-20T04:25:00+00:00",
+            evaluation=_legacy_lm_eval_ref("aime24", 0),
+            status=RunStatus.SUCCEEDED,
+            results_path=results_of(r),
+            metrics=_repeat_metrics("aime24", solved_avg=4.9, num_total=30, num_repeat=10, std_err=0.0173),
+            description=desc,
+            runtime_minutes=25.0,
+        )
+    )
+    _write_samples(
+        fs,
+        results_of(r),
+        "aime24",
+        [
+            _generation_sample("aime24", "0", extracted="204", target="204"),
+            _generation_sample("aime24", "1", extracted="", target="113"),
+        ],
+    )
     r = f"{grp}-aime"
     emit(
         _record(
@@ -815,8 +900,9 @@ def build_fixtures(dest: str) -> list[str]:
             evaluation=_harbor_ref("aime"),
             status=RunStatus.SUCCEEDED,
             results_path=results_of(r),
-            metrics={"aime": {"accuracy": 0.3, "mean_reward": 0.3, "solved": 30.0, "total": 100.0}},
-            coverage={"aime": TaskCoverage(n_attempted=100, n_scored=100, n_correct=30)},
+            metrics={"aime": {"mean_reward": 0.3, "solved": 30.0, "total": 100.0}},
+            canonical_metrics={"aime": {"reward": 0.3, "reward_stderr": 0.0458}},
+            coverage={"aime": TaskCoverage(n_benchmark=100, n_attempted=100, n_scored=100, n_correct=30)},
             description="Qwen3 8B reference",
             runtime_minutes=95.0,
         )
@@ -871,8 +957,9 @@ def build_fixtures(dest: str) -> list[str]:
             evaluation=_harbor_ref("aime"),
             status=RunStatus.SUCCEEDED,
             results_path=results_of(r),
-            metrics={"aime": {"accuracy": 4 / 9, "mean_reward": 4 / 9, "solved": 4.0, "total": 9.0}},
-            coverage={"aime": TaskCoverage(n_attempted=10, n_scored=9, errors={"AgentTimeoutError": 1})},
+            metrics={"aime": {"mean_reward": 4 / 9, "solved": 4.0, "total": 9.0}},
+            canonical_metrics={"aime": {"reward": 4 / 9, "reward_stderr": 0.1657}},
+            coverage={"aime": TaskCoverage(n_benchmark=10, n_attempted=10, n_scored=9, errors={"AgentTimeoutError": 1})},
             description=None,
             runtime_minutes=40.0,
             serving=None,
