@@ -4,10 +4,6 @@ import { newId } from './storage'
 
 const INLINE_TOOL_CALL = new RegExp(`<${TOOL_CALL_TAG}>\\s*([\\s\\S]*?)\\s*</${TOOL_CALL_TAG}>`, 'g')
 
-function callId(): string {
-  return `call_${newId()}`
-}
-
 function parseToolCall(payload: string): ToolCall {
   const parsed: unknown = JSON.parse(payload)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -20,7 +16,7 @@ function parseToolCall(payload: string): ToolCall {
   if (!arguments_ || typeof arguments_ !== 'object' || Array.isArray(arguments_)) {
     throw new Error('Tool call arguments must be a JSON object')
   }
-  return { id: callId(), name, arguments: arguments_ as Record<string, unknown> }
+  return { id: `call_${newId()}`, name, arguments: arguments_ as Record<string, unknown> }
 }
 
 /** Parse XML tool calls, raising when a tagged payload does not match the protocol. */

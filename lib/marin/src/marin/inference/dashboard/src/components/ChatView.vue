@@ -7,7 +7,7 @@ import { modelMessages } from '../lib/python_tools'
 import type { ModelMessage } from '../lib/python_tools'
 import { splitThinking } from '../lib/thinking'
 import { inlineToolCalls } from '../lib/tool_calls'
-import type { ChatMessage, Conversation, SamplingParams, ToolCall } from '../lib/types'
+import type { AssistantMessage, Conversation, SamplingParams, ToolCall, ToolMessage } from '../lib/types'
 import MessageBubble from './MessageBubble.vue'
 
 const MAX_TOOL_ROUNDS = 8
@@ -61,7 +61,10 @@ function onKeydown(event: KeyboardEvent) {
 
 // Follow the stream unless the user scrolled up to read something.
 watch(
-  () => props.conversation.messages.map((m) => m.content.length + m.thinking.length).join(','),
+  () =>
+    props.conversation.messages
+      .map((message) => message.content.length + (message.role === 'assistant' ? message.thinking.length : 0))
+      .join(','),
   async () => {
     const el = scroller.value
     if (!el) return
@@ -90,25 +93,27 @@ async function send(text?: string) {
   const conversation = props.conversation
   const pythonTools = conversation.pythonTools.trim()
   if (!conversation.title) conversation.title = content.slice(0, 80)
-  conversation.messages.push({ role: 'user', content, thinking: '', thinkingSeconds: null, error: null })
+  conversation.messages.push({ role: 'user', content })
 
   conversation.updatedAt = Date.now()
   emit('persist')
 
   busy.value = true
   abort = new AbortController()
-  let reply: ChatMessage | null = null
+  let reply: AssistantMessage | null = null
   try {
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
       const request = modelMessages(conversation, pythonTools)
       reply = { role: 'assistant', content: '', thinking: '', thinkingSeconds: null, error: null, toolCalls: [] }
       conversation.messages.push(reply)
       // Mutate through the reactive proxy so streaming deltas re-render.
-      reply = conversation.messages[conversation.messages.length - 1]
+      const currentReply = conversation.messages[conversation.messages.length - 1]
+      if (currentReply.role !== 'assistant') throw new Error('Expected an assistant reply')
+      reply = currentReply
       emit('persist')
 
-      await complete(reply, request, pythonTools, abort.signal)
-      const calls = reply.toolCalls ?? []
+      await complete(currentReply, request, pythonTools, abort.signal)
+      const calls = currentReply.toolCalls ?? []
       conversation.updatedAt = Date.now()
       emit('persist')
       if (!calls.length) break
@@ -121,7 +126,7 @@ async function send(text?: string) {
       }
 
       if (round === MAX_TOOL_ROUNDS - 1) {
-        reply.error = `Stopped after ${MAX_TOOL_ROUNDS} consecutive tool rounds.`
+        currentReply.error = `Stopped after ${MAX_TOOL_ROUNDS} consecutive tool rounds.`
       }
     }
   } catch (error) {
@@ -142,7 +147,7 @@ async function send(text?: string) {
   }
 }
 
-function appendCancelledToolResults(conversation: Conversation, reply: ChatMessage | null) {
+function appendCancelledToolResults(conversation: Conversation, reply: AssistantMessage | null) {
   const completed = new Set(
     conversation.messages.filter((message) => message.role === 'tool').map((message) => message.toolCallId),
   )
@@ -152,19 +157,16 @@ function appendCancelledToolResults(conversation: Conversation, reply: ChatMessa
   }
 }
 
-function toolResultMessage(call: ToolCall, content: string): ChatMessage {
+function toolResultMessage(call: ToolCall, content: string): ToolMessage {
   return {
     role: 'tool',
     name: call.name,
     toolCallId: call.id,
     content,
-    thinking: '',
-    thinkingSeconds: null,
-    error: null,
   }
 }
 
-async function complete(reply: ChatMessage, messages: ModelMessage[], pythonTools: string, signal: AbortSignal) {
+async function complete(reply: AssistantMessage, messages: ModelMessage[], pythonTools: string, signal: AbortSignal) {
   let rawContent = ''
   let reasoningStream = ''
   let thinkingStartedAt: number | null = null

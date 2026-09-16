@@ -1,4 +1,4 @@
-import type { ChatMessage, Conversation, ToolCall } from './types'
+import type { Conversation, ToolCall, ToolMessage } from './types'
 
 const CDATA_END = ']]>'
 const CDATA_CONTINUATION = ']]]]><![CDATA[>'
@@ -10,7 +10,7 @@ export interface ModelMessage {
   content: string
 }
 
-function cdata(value: string): string {
+function escapeCdataContent(value: string): string {
   return value.split(CDATA_END).join(CDATA_CONTINUATION)
 }
 
@@ -30,9 +30,11 @@ export function modelMessages(conversation: Conversation, pythonTools: string): 
       })
     } else if (message.role === 'tool') {
       const results = [pythonToolResultXml(message)]
-      while (conversation.messages[index + 1]?.role === 'tool') {
+      while (true) {
+        const next = conversation.messages[index + 1]
+        if (!next || next.role !== 'tool') break
         index += 1
-        results.push(pythonToolResultXml(conversation.messages[index]))
+        results.push(pythonToolResultXml(next))
       }
       request.push({ role: 'user', content: results.join('\n') })
     } else {
@@ -45,7 +47,7 @@ export function modelMessages(conversation: Conversation, pythonTools: string): 
 function pythonToolInstructions(source: string): string {
   return `The user provided executable Python functions inside this XML block:
 <python_tools><![CDATA[
-${cdata(source)}
+${escapeCdataContent(source)}
 ]]></python_tools>
 Call a function only by emitting this exact XML form with JSON arguments:
 <${TOOL_CALL_TAG}>{"name":"function_name","arguments":{"parameter":"value"}}</${TOOL_CALL_TAG}>
@@ -57,12 +59,12 @@ function pythonToolCallXml(call: ToolCall): string {
   return `<${TOOL_CALL_TAG}>${JSON.stringify({ name: call.name, arguments: call.arguments })}</${TOOL_CALL_TAG}>`
 }
 
-function pythonToolResultXml(message: ChatMessage): string {
+function pythonToolResultXml(message: ToolMessage): string {
   let result: unknown = message.content
   try {
     result = JSON.parse(message.content)
   } catch {
     // Tool endpoints normally return JSON; preserve unexpected output as a string.
   }
-  return `<${TOOL_RESULT_TAG}><![CDATA[${cdata(JSON.stringify({ name: message.name, result }))}]]></${TOOL_RESULT_TAG}>`
+  return `<${TOOL_RESULT_TAG}><![CDATA[${escapeCdataContent(JSON.stringify({ name: message.name, result }))}]]></${TOOL_RESULT_TAG}>`
 }

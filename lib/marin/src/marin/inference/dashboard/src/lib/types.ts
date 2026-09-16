@@ -18,17 +18,29 @@ export interface ToolCall {
   arguments: Record<string, unknown>
 }
 
-export interface ChatMessage {
-  role: 'user' | 'assistant' | 'tool'
+export interface UserMessage {
+  role: 'user'
+  content: string
+}
+
+export interface AssistantMessage {
+  role: 'assistant'
   /** Visible text with any thinking segment stripped. */
   content: string
   thinking: string
   thinkingSeconds: number | null
   error: string | null
-  name?: string
-  toolCallId?: string
   toolCalls?: ToolCall[]
 }
+
+export interface ToolMessage {
+  role: 'tool'
+  content: string
+  name: string
+  toolCallId: string
+}
+
+export type ChatMessage = UserMessage | AssistantMessage | ToolMessage
 
 export interface Conversation {
   id: string

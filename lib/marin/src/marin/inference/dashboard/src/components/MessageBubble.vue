@@ -11,9 +11,12 @@ const props = defineProps<{
 }>()
 
 const rendered = computed(() => renderMarkdown(props.message.content))
-const thinkingActive = computed(() => props.streaming && !props.message.content)
+const thinkingActive = computed(
+  () => props.message.role === 'assistant' && props.streaming && !props.message.content,
+)
 const empty = computed(
   () =>
+    props.message.role === 'assistant' &&
     !props.streaming &&
     !props.message.content &&
     !props.message.thinking &&
