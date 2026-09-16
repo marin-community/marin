@@ -78,7 +78,7 @@ onBeforeUnmount(() => {
   <main>
     <h1>Zephyr</h1>
     <div class="row">
-      <h2>Finelog-based Execution Data</h2>
+      <h2>Execution Data</h2>
       <button class="link" :disabled="executions.loading.value" @click="refresh">Refresh</button>
     </div>
     <div class="controls">
