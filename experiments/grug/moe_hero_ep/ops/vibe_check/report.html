@@ -227,8 +227,8 @@
       } catch (error) { if (ticket === draw) document.getElementById('error').textContent = String(error); }
     }
     const selection = new URLSearchParams(location.hash.slice(1));
-    left.value = byId[selection.get('a')] ? selection.get('a') : (report.entries[0]?.id || '');
-    right.value = byId[selection.get('b')] ? selection.get('b') : (report.entries[1]?.id || left.value);
+    left.value = byId[selection.get('a')] ? selection.get('a') : (report.entries[1]?.id || report.entries[0]?.id || '');
+    right.value = byId[selection.get('b')] ? selection.get('b') : (report.entries[0]?.id || '');
     for (const select of [left, right, prompt]) select.addEventListener('change', render);
     render();
   </script>
