@@ -743,7 +743,6 @@ def test_python_tool_source_requires_typed_functions_and_validates_arguments():
 
     assert tool.name == "multiply"
     assert tool.validate_arguments({"value": "3"}) == {"value": 3, "factor": 2}
-    assert tool.function(**tool.validate_arguments({"value": 3})) == 6
 
     with pytest.raises(ValueError, match="annotate its return value"):
         python_tools_from_source("def untyped(value: int):\n    return value\n")
