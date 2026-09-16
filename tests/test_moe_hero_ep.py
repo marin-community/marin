@@ -27,7 +27,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.checkpoint import save_checkpoint
-from levanter.grug.attention import AttentionMask
+from levanter.grug.attention import AttentionMask, token_validity_from_attention_mask
 from levanter.grug.grug_moe import (
     MOE_DROPPED_ASSIGNMENTS_METRIC,
     MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC,
@@ -203,6 +203,78 @@ def test_synthetic_training_data_builds_a_reusable_global_batch():
     np.testing.assert_array_equal(batch.loss_weight[:, :-1], 1)
     np.testing.assert_array_equal(batch.loss_weight[:, -1], 0)
     assert batch.tokens.sharding == NamedSharding(mesh, P(train._BATCH_AXES, None))
+
+
+def test_synthetic_padding_marks_trailing_positions_for_the_moe_dispatch():
+    device_count = len(jax.devices())
+    mesh = Mesh(
+        np.asarray(jax.devices()).reshape(1, device_count, 1, 1),
+        ("replica_dcn", "data", "expert", "model"),
+    )
+    batch = train._make_synthetic_batch(
+        batch_size=device_count,
+        max_seq_len=8,
+        vocab_size=11,
+        seed=3,
+        mesh=mesh,
+        padding_fraction=0.25,
+    )
+
+    # Six valid positions, two padding; the last valid position predicts a pad so it has no loss.
+    expected_loss_weight = np.array([1, 1, 1, 1, 1, 0, 0, 0], dtype=np.float32)
+    np.testing.assert_array_equal(batch.loss_weight, np.tile(expected_loss_weight, (device_count, 1)))
+    # Padding keeps its generated token ids: validity must come from the mask, not the id.
+    np.testing.assert_array_equal(batch.tokens, (np.arange(device_count * 8).reshape(device_count, 8) + 3) % 11)
+    valid = token_validity_from_attention_mask(batch.attn_mask, batch_size=device_count, sequence_length=8)
+    np.testing.assert_array_equal(valid, np.tile([True] * 6 + [False] * 2, (device_count, 1)))
+    assert batch.tokens.sharding == NamedSharding(mesh, P(train._BATCH_AXES, None))
+
+
+def test_synthetic_padding_reaches_the_moe_metrics_through_the_model():
+    device_count = len(jax.devices())
+    mesh = _explicit_mesh(1, device_count, 1, 1)
+    cfg = dataclasses.replace(_latent_config(), report_capacity_overflow=True)
+    # Two rows per device: a one-row shard trips a sharding quirk in the FA4 segment-start slice.
+    batch_size = 2 * device_count
+    batch = train._make_synthetic_batch(
+        batch_size=batch_size,
+        max_seq_len=cfg.max_seq_len,
+        vocab_size=cfg.vocab_size,
+        seed=3,
+        mesh=mesh,
+        padding_fraction=0.5,
+    )
+
+    with set_mesh(mesh):
+        transformer = model.Transformer.init(cfg, key=jax.random.key(61))
+        _, metrics = jax.jit(
+            lambda tokens, weight, mask: transformer.next_token_loss(
+                tokens, weight, mask=mask, return_router_metrics=True
+            )
+        )(batch.tokens, batch.loss_weight, batch.attn_mask)
+
+    padded_tokens = batch_size * cfg.max_seq_len // 2
+    assert int(jnp.sum(metrics[MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC])) == padded_tokens * cfg.num_experts_per_token
+    assert int(jnp.sum(metrics[MOE_VALID_ASSIGNMENTS_METRIC])) == padded_tokens * cfg.num_experts_per_token
+
+
+def test_synthetic_padding_must_leave_a_loss_position():
+    device_count = len(jax.devices())
+    mesh = Mesh(
+        np.asarray(jax.devices()).reshape(1, device_count, 1, 1),
+        ("replica_dcn", "data", "expert", "model"),
+    )
+    with pytest.raises(ValueError, match="leaves 1 valid positions"):
+        train._make_synthetic_batch(
+            batch_size=device_count, max_seq_len=8, vocab_size=11, seed=3, mesh=mesh, padding_fraction=0.9
+        )
+
+
+def test_synthetic_padding_requires_synthetic_training_data():
+    with pytest.raises(ValueError, match="requires training_data_mode=synthetic"):
+        launch.build_diagnostic_run(
+            run_id="pad-mixture", dp_racks=1, num_steps=1, synthetic_padding_fraction=0.5, version="dev"
+        )
 
 
 def test_expert_bank_override_must_be_divisible_by_the_expert_axis():

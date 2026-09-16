@@ -40,6 +40,7 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
 from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_REQUIRED_XLA_FLAGS
+from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.grug_moe import (
     MOE_DROPPED_ASSIGNMENTS_METRIC,
     MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC,
@@ -286,6 +287,9 @@ class GrugTrainerConfig:
     offload_opt_state: bool = False
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE
+    # Fraction of each synthetic row that is trailing padding, marked with segment id -1 the way
+    # prepacked datasets mark it. Exercises the padding-aware MoE dispatch at production shape.
+    synthetic_padding_fraction: float = 0.0
     # Inline watch computes statistics on every step and uses the watch interval only for logging.
     # This keeps one training executable resident. A diagnostic watch repeats forward and backward
     # in a separate executable, which costs compute but shortens gradient liveness.
@@ -395,8 +399,21 @@ def _make_synthetic_batch(
     vocab_size: int,
     seed: int,
     mesh: Mesh,
+    padding_fraction: float = 0.0,
 ) -> GrugLmExample:
-    """Build one deterministic batch directly on the global batch sharding."""
+    """Build one deterministic batch directly on the global batch sharding.
+
+    ``padding_fraction`` turns the trailing positions of every row into padding: segment id -1,
+    no loss, and no loss on the last valid position because it would predict a pad. Token ids
+    are left as generated, since a pad id can also appear at a valid position and validity must
+    come from the mask alone.
+    """
+    if not 0 <= padding_fraction < 1:
+        raise ValueError(f"padding_fraction must lie in [0, 1), got {padding_fraction}")
+    padded_positions = round(padding_fraction * max_seq_len)
+    valid_positions = max_seq_len - padded_positions
+    if valid_positions < 2:
+        raise ValueError(f"padding_fraction={padding_fraction} leaves {valid_positions} valid positions; need 2")
     sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
     def tokens_for_slice(index):
@@ -415,15 +432,30 @@ def _make_synthetic_batch(
         position_start, position_stop, position_stride = position_slice.indices(max_seq_len)
         if batch_stride != 1 or position_stride != 1:
             raise ValueError("synthetic batch sharding requires contiguous slices")
-        loss_weight = np.ones((batch_stop - batch_start, position_stop - position_start), dtype=np.float32)
-        if position_start <= max_seq_len - 1 < position_stop:
-            loss_weight[:, max_seq_len - 1 - position_start] = 0
-        return loss_weight
+        positions = np.arange(position_start, position_stop, dtype=np.int64)[None, :]
+        # The last valid position predicts the first pad, so it carries no loss either.
+        loss_weight = (positions < valid_positions - 1).astype(np.float32)
+        return np.broadcast_to(loss_weight, (batch_stop - batch_start, position_stop - position_start)).copy()
+
+    def segment_ids_for_slice(index):
+        batch_slice, position_slice = index
+        batch_start, batch_stop, _ = batch_slice.indices(batch_size)
+        position_start, position_stop, _ = position_slice.indices(max_seq_len)
+        positions = np.arange(position_start, position_stop, dtype=np.int64)[None, :]
+        segment_ids = np.where(positions < valid_positions, 0, -1).astype(np.int32)
+        return np.broadcast_to(segment_ids, (batch_stop - batch_start, position_stop - position_start)).copy()
 
     shape = (batch_size, max_seq_len)
     tokens = jax.make_array_from_callback(shape, sharding, tokens_for_slice)
     loss_weight = jax.make_array_from_callback(shape, sharding, loss_weight_for_slice)
-    return GrugLmExample(tokens=tokens, loss_weight=loss_weight)
+    if padded_positions == 0:
+        return GrugLmExample(tokens=tokens, loss_weight=loss_weight)
+    segment_ids = jax.make_array_from_callback(shape, sharding, segment_ids_for_slice)
+    return GrugLmExample(
+        tokens=tokens,
+        loss_weight=loss_weight,
+        attn_mask=GrugAttentionMask.causal().with_segment_ids(segment_ids),
+    )
 
 
 def build_train_loader(
@@ -1003,6 +1035,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         train_dataset = None
         train_loader = None
         if config.trainer.training_data_mode == TrainingDataMode.MIXTURE:
+            if config.trainer.synthetic_padding_fraction != 0:
+                raise ValueError("synthetic_padding_fraction applies only to synthetic training data")
             train_dataset = build_train_dataset(
                 config.data,
                 max_seq_len=config.model.max_seq_len,
@@ -1078,6 +1112,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 vocab_size=config.model.vocab_size,
                 seed=trainer.seed + 1 if config.trainer.data_seed is None else config.trainer.data_seed,
                 mesh=mesh,
+                padding_fraction=config.trainer.synthetic_padding_fraction,
             )
             batch_source = itertools.repeat(synthetic_batch)
         else:

@@ -86,6 +86,7 @@ def build_diagnostic_run(
     profile_steps: int = 0,
     profile_start_step: int = 5,
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
+    synthetic_padding_fraction: float = 0.0,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build a bounded diagnostic run for the production EP64 hero recipe.
@@ -111,6 +112,8 @@ def build_diagnostic_run(
         raise ValueError(f"profile_start_step must be non-negative, got {profile_start_step}")
     if profile_steps > 0 and profile_start_step >= num_steps:
         raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
+    if synthetic_padding_fraction != 0 and training_data_mode != TrainingDataMode.SYNTHETIC:
+        raise ValueError("synthetic_padding_fraction requires training_data_mode=synthetic")
     # `schedule_steps` sets the whole learning-rate schedule; `num_steps` is the absolute step the
     # run stops at (a restore resumes mid-schedule, so it must lie past the restored step).
     # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
@@ -167,11 +170,13 @@ def build_diagnostic_run(
     # Only the pooled transport has a receiver capacity of its own to report.
     transport_capacity_tags = (f"transport-capacity-{model.pooled_transport_capacity_factor:g}",) if pooled else ()
     wave_tag = f"expert-waves-{model.num_expert_waves}"
+    padding_tags = (f"padding-{synthetic_padding_fraction:g}",) if synthetic_padding_fraction else ()
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = hero_grug_trainer_config(
         replica_axis_size=dp_racks,
         training_data_mode=training_data_mode,
+        synthetic_padding_fraction=synthetic_padding_fraction,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
         master_param_mode=master_param_mode,
@@ -224,6 +229,7 @@ def build_diagnostic_run(
                     f"master-params-{master_param_mode.value.replace('_', '-')}",
                     *transport_capacity_tags,
                     wave_tag,
+                    *padding_tags,
                     size_tag,
                     "gb200",
                     HARRIER_MIX_2026_08_18_TAG,
@@ -450,6 +456,13 @@ def build_diagnostic_run(
     help="Use the configured mixture or reuse a deterministic synthetic batch without opening TensorStore.",
 )
 @click.option(
+    "--synthetic-padding-fraction",
+    type=click.FloatRange(min=0, max=1, max_open=True),
+    default=0.0,
+    show_default=True,
+    help="Trailing fraction of every synthetic row marked as padding (segment id -1). Needs --training-data synthetic.",
+)
+@click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=HERO_MODEL_CONFIG.capacity_factor,
@@ -482,6 +495,7 @@ def main(
     profile_steps: int,
     profile_start_step: int,
     training_data: str,
+    synthetic_padding_fraction: float,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
@@ -518,6 +532,7 @@ def main(
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
         training_data_mode=TrainingDataMode(training_data),
+        synthetic_padding_fraction=synthetic_padding_fraction,
     )
 
 

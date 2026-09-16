@@ -74,6 +74,7 @@ def hero_grug_trainer_config(
     watch_mode: WatchMode,
     save_checkpoints: bool,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
+    synthetic_padding_fraction: float = 0.0,
 ) -> GrugTrainerConfig:
     """Set the Grug options that affect the compiled hero step."""
     return GrugTrainerConfig(
@@ -85,6 +86,7 @@ def hero_grug_trainer_config(
         offload_opt_state=True,
         master_param_mode=master_param_mode,
         training_data_mode=training_data_mode,
+        synthetic_padding_fraction=synthetic_padding_fraction,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
         expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
