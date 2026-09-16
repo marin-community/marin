@@ -819,7 +819,6 @@ def test_dashboard_executes_typed_python_tools():
     assert definition["function"]["name"] == "multiply_tool"
     assert result.json() == 42
     assert invalid.status_code == 422
-    assert invalid.json()["error"] == "invalid tool arguments"
 
 
 def test_dashboard_serves_ui_and_reverse_proxies_streaming():

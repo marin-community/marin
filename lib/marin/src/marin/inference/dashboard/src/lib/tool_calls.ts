@@ -59,7 +59,8 @@ export function inlineToolCalls(content: string): { visible: string; calls: Tool
         },
       })
       return ''
-    } catch {
+    } catch (error) {
+      console.warn('failed to parse inline tool call', error)
       return _match
     }
   })

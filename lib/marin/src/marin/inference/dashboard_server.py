@@ -26,6 +26,7 @@ import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
+from functools import partial
 from typing import cast
 
 import httpx
@@ -58,7 +59,7 @@ class ServingInfo:
     streaming: bool = True
 
 
-async def _invoke_tool_request(request: Request, registered_tools: dict[str, PythonTool]) -> Response:
+async def _invoke_tool_request(request: Request, *, registered_tools: dict[str, PythonTool]) -> Response:
     tool = registered_tools.get(request.path_params["name"])
     if tool is None:
         return JSONResponse({"error": "unknown tool"}, status_code=404)
@@ -126,9 +127,6 @@ def build_dashboard_app(
             }
         )
 
-    async def invoke_tool(request: Request) -> Response:
-        return await _invoke_tool_request(request, registered_tools)
-
     async def health(_request: Request) -> Response:
         client = state["client"]
         try:
@@ -179,7 +177,7 @@ def build_dashboard_app(
             Route("/dashboard", index),
             Route("/info", serving_info),
             Route("/health", health),
-            Route("/tools/{name}", invoke_tool, methods=["POST"]),
+            Route("/tools/{name}", partial(_invoke_tool_request, registered_tools=registered_tools), methods=["POST"]),
             Route("/v1/{path:path}", proxy, methods=["GET", "POST", "OPTIONS"]),
         ],
         lifespan=lifespan,
