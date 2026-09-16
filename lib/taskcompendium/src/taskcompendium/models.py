@@ -463,7 +463,9 @@ class TaskSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True, kw_only=
             raise ValueError(f"Unsupported task schema: {self.schema_version}")
         if not self.id or not self.steps:
             raise ValueError("Task id and at least one step are required")
-        if self.difficulty is not None and (type(self.difficulty) is not int or not 1 <= self.difficulty <= 10):
+        if self.difficulty is not None and (
+            isinstance(self.difficulty, bool) or not isinstance(self.difficulty, int) or not 1 <= self.difficulty <= 10
+        ):
             raise ValueError("Difficulty must be an integer from 1 to 10")
         _validate_coverage_tags(self.coverage_tags, _SEMANTIC_COVERAGE_TAG_PREFIXES)
         for step in self.steps:
