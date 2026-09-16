@@ -11,7 +11,8 @@ from typing import Any, Literal, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, create_model
 
-_TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_MAX_TOOL_NAME_LENGTH = 64
+_TOOL_NAME_PATTERN = re.compile(rf"^[A-Za-z0-9_-]{{1,{_MAX_TOOL_NAME_LENGTH}}}$")
 _SUPPORTED_PARAMETER_KINDS = frozenset(
     {
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
@@ -80,7 +81,8 @@ def _python_tool(function: Callable[..., object]) -> PythonTool:
     name = getattr(function, "__name__", "")
     if not _TOOL_NAME_PATTERN.fullmatch(name):
         raise ValueError(
-            f"Tool function {function!r} must have a 1-64 character name containing only letters, numbers, '_' or '-'"
+            f"Tool function {function!r} must have a 1-{_MAX_TOOL_NAME_LENGTH} character name containing only "
+            "letters, numbers, '_' or '-'"
         )
 
     signature = inspect.signature(function)

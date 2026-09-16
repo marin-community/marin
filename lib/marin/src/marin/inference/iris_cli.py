@@ -70,6 +70,7 @@ from rigging.timing import Duration
 
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
+    VLLM_TOOL_CALL_PARSER_OPTION,
     WORKER_PYTHON_VERSION,
     BrokerConfig,
     InferenceProxyConfig,
@@ -103,7 +104,7 @@ _VLLM_ONLY_OPTIONS = {
     "vllm_args": "--vllm-arg",
     "vllm_metrics_config": "--vllm-metrics-config",
     "max_num_batched_tokens": "--max-num-batched-tokens",
-    "tool_call_parser": "--tool-call-parser",
+    "tool_call_parser": VLLM_TOOL_CALL_PARSER_OPTION,
 }
 _LEVANTER_ONLY_OPTIONS = {
     "max_seqs": "--max-seqs",
@@ -269,7 +270,9 @@ def _resolve_tool_configuration(
         raise click.ClickException("--tool requires running from a Marin checkout so Iris can sync the tool module.")
     tools = _load_tool_functions(specs)
     if tools and backend == "vllm" and tool_call_parser is None:
-        raise click.ClickException("--tool-call-parser is required when --tool is used with the vLLM backend.")
+        raise click.ClickException(
+            f"{VLLM_TOOL_CALL_PARSER_OPTION} is required when --tool is used with the vLLM backend."
+        )
     return tools, vllm_tool_call_args(vllm_args, tool_call_parser)
 
 
@@ -365,7 +368,7 @@ def _mint_and_print_capability_url(
     help="Python tool as MODULE:FUNCTION (repeatable); runs inside the Iris service for Chat UI requests.",
 )
 @click.option(
-    "--tool-call-parser",
+    VLLM_TOOL_CALL_PARSER_OPTION,
     default=None,
     help="vLLM parser for automatic tool calls (for example, hermes, qwen3_coder, or mistral).",
 )

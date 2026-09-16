@@ -39,7 +39,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Route
 
 from marin.inference.http_proxy import forwardable_request_headers, forwardable_response_headers
-from marin.inference.python_tools import python_tools
+from marin.inference.python_tools import PythonTool, python_tools
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,32 @@ class ServingInfo:
     has_chat_template: bool
     endpoint: str
     streaming: bool = True
+
+
+async def _invoke_tool_request(request: Request, registered_tools: dict[str, PythonTool]) -> Response:
+    tool = registered_tools.get(request.path_params["name"])
+    if tool is None:
+        return JSONResponse({"error": "unknown tool"}, status_code=404)
+    try:
+        arguments = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "tool arguments must be JSON"}, status_code=400)
+    try:
+        validated = tool.validate_arguments(arguments)
+    except ValidationError as exc:
+        return JSONResponse(
+            {"error": "invalid tool arguments", "details": exc.errors(include_url=False)},
+            status_code=422,
+        )
+
+    if inspect.iscoroutinefunction(tool.function):
+        async_function = cast(Callable[..., Awaitable[object]], tool.function)
+        result = await async_function(**validated)
+    else:
+        result = await run_in_threadpool(tool.function, **validated)
+        if inspect.isawaitable(result):
+            result = await cast(Awaitable[object], result)
+    return Response(tool.serialize_result(result), media_type="application/json")
 
 
 def build_dashboard_app(
@@ -101,29 +127,7 @@ def build_dashboard_app(
         )
 
     async def invoke_tool(request: Request) -> Response:
-        tool = registered_tools.get(request.path_params["name"])
-        if tool is None:
-            return JSONResponse({"error": "unknown tool"}, status_code=404)
-        try:
-            arguments = await request.json()
-        except json.JSONDecodeError:
-            return JSONResponse({"error": "tool arguments must be JSON"}, status_code=400)
-        try:
-            validated = tool.validate_arguments(arguments)
-        except ValidationError as exc:
-            return JSONResponse(
-                {"error": "invalid tool arguments", "details": exc.errors(include_url=False)},
-                status_code=422,
-            )
-
-        if inspect.iscoroutinefunction(tool.function):
-            async_function = cast(Callable[..., Awaitable[object]], tool.function)
-            result = await async_function(**validated)
-        else:
-            result = await run_in_threadpool(tool.function, **validated)
-            if inspect.isawaitable(result):
-                result = await cast(Awaitable[object], result)
-        return Response(tool.serialize_result(result), media_type="application/json")
+        return await _invoke_tool_request(request, registered_tools)
 
     async def health(_request: Request) -> Response:
         client = state["client"]
