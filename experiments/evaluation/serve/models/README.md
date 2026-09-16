@@ -37,6 +37,8 @@ resource_hint:                  # ResourceHint -> experiment fleet placement
 serve:                          # ServeConfig -> model-server behavior
   tensor_parallel_size: 2
   data_parallel_size: null
+  pipeline_parallel_size: 1
+  gpu_memory_utilization: null
   max_model_len: 32768
   max_num_batched_tokens: null  # vLLM prefill-token budget
   max_num_seqs: null            # concurrent sequence limit
@@ -63,3 +65,27 @@ agent:                          # AgentConfig -> the Harbor/agentic agent
 `auto_serve_overrides` fills unset serve fields from the model's `config.json` and may clamp
 `max_model_len` to the model's native limit. `resource_hint.hbm_gb` is portable across TPU and GPU;
 `resource_hint.gpu` declares that the model requires one of the listed exact GPU shapes.
+
+## Multi-node GPU serving
+
+Set `serve.pipeline_parallel_size` to the number of Iris tasks in one vLLM serving gang.
+Each task runs one pipeline stage. For example, `resource_hint.gpu: {H100: 8}` with
+`tensor_parallel_size: 8`, `pipeline_parallel_size: 2`, and `data_parallel_size: 1`
+requests 16 GPUs across two tasks and exposes one endpoint.
+
+Multi-node serving requires the vLLM backend, an explicit GPU resource hint, and an explicit
+tensor parallel size. Tensor parallel size times data parallel size must equal GPUs per task.
+Set `serve.backend: vllm` (the default); an unset `data_parallel_size` means 1.
+The inference API requires `instances=1` and `broker=None` with pipeline parallelism.
+Host memory and CPU hints apply to each task; automatic host memory sizing budgets the full
+checkpoint on each task.
+
+For multi-node serving, the launcher owns topology flags; do not put tensor, data, or pipeline
+parallel sizes, node ranks, device IDs, rendezvous addresses, or `--headless` in `vllm_extra_args`.
+`gpu_memory_utilization` accepts values in `(0, 1]` for vLLM. Set either the typed field or its
+raw flag, not both. Unset values retain vLLM's default.
+
+Dry runs show per-task hardware and serving geometry. `record.json` retains requested model settings
+and reports resolved settings under `serving` after endpoint startup; `serving.effective` is false
+when startup did not produce an endpoint. Multi-node support and context capacity depend on the
+pinned vLLM version and model architecture and must be checked on the target hardware.

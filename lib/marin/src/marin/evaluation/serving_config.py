@@ -17,7 +17,7 @@ from iris.cluster.setup_scripts import default_setup_script
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
-from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
 from marin.inference.config import (
     BrokerConfig,
@@ -119,9 +119,11 @@ def resolved_serve_config(model: ModelConfig) -> ServeConfig:
     serve = model.serve
     if serve.backend is not ServeBackend.VLLM or not serve.auto_overrides:
         return serve
-    extra_args, max_model_len = auto_serve_overrides(
-        model.location, serve.max_model_len, serve_config_vllm_args(serve), revision=model.revision
+    rendered_args = serve_config_vllm_args(serve)
+    resolved_args, max_model_len = auto_serve_overrides(
+        model.location, serve.max_model_len, rendered_args, revision=model.revision
     )
+    extra_args = (*serve.vllm_extra_args, *resolved_args[len(rendered_args) :])
     return replace(serve, max_model_len=max_model_len, vllm_extra_args=extra_args, auto_overrides=False)
 
 
@@ -231,6 +233,7 @@ def inference_config_for_model(
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
     serve = resolved_serve_config(model)
+    geometry = serving_geometry(serve, accelerator)
     vllm_environment_variables = _vllm_environment_variables(serve, accelerator.platform)
     extra_args = serve_config_vllm_args(serve)
     max_model_len = serve.max_model_len
@@ -245,6 +248,7 @@ def inference_config_for_model(
         resources = ResourceConfig.with_gpu(
             accelerator.gpu_type or "H100",
             count=accelerator.gpu_count,
+            replicas=geometry.task_count if geometry is not None else 1,
             cpu=cpu,
             ram=memory,
             disk=disk,
@@ -290,6 +294,7 @@ def inference_config_for_model(
         ),
         engine=engine,
         iris=IrisConfig(
+            serving_geometry=geometry,
             worker_resources=resources,
             worker_environment=environment,
             endpoint_ready_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
