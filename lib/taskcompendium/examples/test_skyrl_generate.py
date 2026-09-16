@@ -176,6 +176,7 @@ async def test_mixed_renderings_preserve_rewards_identity_archives_and_reconstru
     output = tmp_path / "output"
     runner = TaskCompendiumTrajectoryRunner(tokenizer, output, concurrency=2)
     request = request_batch(rows, repetitions=2)
+    request["sampling_params"] = {"max_tokens": 512, "temperature": 1.0}
     batch = await runner.run(request)
     archived = _archive(output)
 

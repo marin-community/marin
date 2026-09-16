@@ -84,8 +84,9 @@ class TaskCompendiumTrajectoryRunner(TrajectoryRunner):
             raise ValueError("SkyRL requests require aligned launches, environment classes, and trajectory IDs")
         if any(name != ENV_CLASS for name in input_batch["env_classes"]):
             raise ValueError(f"This runner requires env_class={ENV_CLASS}")
-        if input_batch.get("sampling_params"):
-            raise ValueError("Set generation budgets in each explicit Harbor launch, not batch sampling parameters")
+        # SkyRL attaches the trainer's sampling parameters to every trajectory
+        # request. TaskCompendium lowerings carry their own Harbor launch
+        # parameters, so the outer values do not override them.
 
         requests = []
         for prompt, launch, identity in zip(input_batch["prompts"], extras, identities, strict=True):
