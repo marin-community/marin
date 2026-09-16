@@ -25,8 +25,6 @@ information to judge; every reviewed published example should have a value.
 Use the higher number for a harder task within each band. Do not copy source
 prestige or an evaluator's difficulty label. Measured pass rates should record
 model, lowering, tools, and budget separately and inform later recalibration.
-Large numbers in a prompt do not by themselves make the task hard: check whether
-a constraint reduces the work to a small symbolic or combinatorial case.
 
 ## Competency
 
@@ -63,10 +61,13 @@ belongs in requirements and the lowering, not in a generic `tool_use` tag.
 
 `subject` is optional. Use a recognizable topic, product, or operational area,
 such as `medicine`, `law`, `calculus`, `python`, `email`, or `event_ticketing`.
-Dotted subtags should recur across task families: `subject:javascript.react`
-and `subject:calculus.integration` are useful examples. Store the most specific
-useful value, without its parent. Add multiple subjects sparingly. Avoid
-incidental technologies and one-off details such as `name_handling`.
+Use `parent.specialty` for a recognizable specialization: `law.real_estate`,
+`physics.particle`, `medicine.oncology`, `javascript.react`, and
+`calculus.integration` are examples. Choose a broad recurring subject such as
+`ergonomics` when the narrower topic is unlikely to be useful for sampling.
+Store the most specific useful value, without its parent. Add multiple subjects
+sparingly. Avoid incidental technologies and one-off details such as
+`name_handling` or `lighting_design`.
 
 `artifact` describes a substantive deliverable: `prose`, `numeric_answer`,
 `formula`, `source_code`, `program`, `python_module`, `python_package`,
@@ -114,10 +115,11 @@ shell_workflow, predicted_action, stateful_domain, sequential_requirements.
 Subject is optional. Use a recognizable recurring area such as arithmetic,
 algebra, calculus, physics, chemistry, biology, medicine, law, finance,
 business, algorithms, python, javascript, machine_learning, filesystem,
-email, event_ticketing, or technical_operations. Dotted subtags can describe
-recurring specialties such as javascript.react or calculus.integration. Keep
-only the most specific useful value; add multiple subjects sparingly. Never
-create a one-off subject from a prompt detail.
+email, event_ticketing, ergonomics, or technical_operations. Use
+parent.specialty for a recognizable specialization, such as law.real_estate,
+physics.particle, or medicine.oncology. Keep only the most specific useful
+value; add multiple subjects sparingly. Never create a one-off subject from a
+prompt detail.
 
 Artifact: a substantive deliverable such as prose, numeric_answer, formula,
 source_code, program, python_module, python_package, workspace_state, or

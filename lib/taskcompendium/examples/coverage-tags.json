@@ -489,7 +489,7 @@
     "coverage_tags": [
       "competency:rule_application",
       "shape:explanation",
-      "subject:real_estate_law"
+      "subject:law.real_estate"
     ],
     "difficulty": 6
   },
@@ -498,7 +498,7 @@
       "competency:causal_reasoning",
       "context:experimental_measurement",
       "shape:explanation",
-      "subject:particle_physics"
+      "subject:physics.particle"
     ],
     "difficulty": 8
   },
@@ -599,7 +599,7 @@
     "coverage_tags": [
       "competency:recall",
       "shape:multiple_choice",
-      "subject:lighting_design"
+      "subject:ergonomics"
     ],
     "difficulty": 3
   },
@@ -607,7 +607,7 @@
     "coverage_tags": [
       "competency:causal_reasoning",
       "shape:multiple_choice",
-      "subject:oncology"
+      "subject:medicine.oncology"
     ],
     "difficulty": 8
   },
