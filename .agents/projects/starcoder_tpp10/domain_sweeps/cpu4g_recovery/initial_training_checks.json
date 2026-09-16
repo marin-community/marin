@@ -1,0 +1,147 @@
+{
+  "checked_at": "2026-09-11T21:30:14.172029+00:00",
+  "rows": [
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p100_s20260910",
+      "run_name": "tpp10_wikipedia_matched_p100_s20260910",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 8000,
+        "memory_bytes": "68719476736",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "34359738368"
+      },
+      "constraints": [
+        {
+          "key": "device-type",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "tpu"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "device-variant",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "v5p-8"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "region",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "us-central1"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "zone",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "us-central1-a"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        }
+      ],
+      "priority_band": "PRIORITY_BAND_INTERACTIVE",
+      "bundle_id": "84d71fb51bc6ebb2c368cdcd152ac696b33c21348a9b7c7e03f3dcf3711a5447",
+      "plan_row": {
+        "run_name": "tpp10_wikipedia_matched_p100_s20260910",
+        "arm": "matched",
+        "percent": 100,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260912,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "domain": "wikipedia",
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "a853b1a5",
+        "output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p100_s20260910/2026.09.11"
+      }
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p100_s20260910",
+      "run_name": "tpp10_finemath_3plus_matched_p100_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 8000,
+        "memory_bytes": "68719476736",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "34359738368"
+      },
+      "constraints": [
+        {
+          "key": "device-type",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "tpu"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "device-variant",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "v5p-8"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "region",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "us-central1"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "zone",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "us-central1-a"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        }
+      ],
+      "priority_band": "PRIORITY_BAND_INTERACTIVE",
+      "bundle_id": "84d71fb51bc6ebb2c368cdcd152ac696b33c21348a9b7c7e03f3dcf3711a5447",
+      "plan_row": {
+        "run_name": "tpp10_finemath_3plus_matched_p100_s20260910",
+        "arm": "matched",
+        "percent": 100,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260912,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "domain": "finemath_3plus",
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "5a5a6129",
+        "output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p100_s20260910/2026.09.11"
+      }
+    }
+  ]
+}

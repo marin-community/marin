@@ -109,6 +109,21 @@ federated handoff carries the same principal to the receiving cluster. Trusted
 local submissions (`local_admin`) and rows with an empty `submitting_user` use the
 job-path owner as a fallback budget key.
 
+An administrator can correct a missing allocation without restarting the
+controller or resubmitting jobs:
+
+```bash
+iris rpc controller get-current-user
+iris user budget set <verified-email> --limit <approved-limit> --max-band interactive
+iris rpc controller get-scheduler-state
+```
+
+Put the same principal and allocation in the cluster config's `user_budgets`.
+Pending tasks use the updated budget on subsequent scheduling passes; existing
+job IDs and owner prefixes stay unchanged. Removing a nickname from the config
+does not delete its historical budget row. An existing BATCH-stamped running
+attempt is not restarted by this update.
+
 If a higher-band submission is rejected:
 
 1. **Use the appropriate lower band.** Ordinary research should run at

@@ -1,0 +1,11 @@
+{
+  "approved": true,
+  "reviewer": "User authorized canary submission (Do those); Codex reviewed all eight calibration optimizer traces.",
+  "stage": "canary",
+  "plan_sha256": "4362a8b1b2e37d7ae73096f7658c5b3a79774288bf268f240fa4e49edd826b60",
+  "cache_audit_sha256": "c9d4f9e7f7d8c15ddfd4db14ae83b05c191cd3c157bfa8c375d9b132464793e6",
+  "approved_at": "2026-09-10T01:15:53.185581Z",
+  "optimizer_review_sha256": "f3061a0409cc887d88d83df39c1052fc9c0b5124462a825b096cde15e11e0f34",
+  "calibration_plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+  "scope": "Only the three p=1 canaries; pilot and dense stages remain unreleased."
+}

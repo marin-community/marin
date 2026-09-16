@@ -1,0 +1,7 @@
+## 12 September, 22:39 UTC: 43/45 refinements verified
+
+The interactive replacement has three new verified completions: target p55 (0.7701349258422852 BPB), target p60 (0.7694385051727295 BPB), and matched p80 with trainer 20260911/subset 20260914 (1.1448901891708374 BPB). Each passed exact frozen fingerprint, permanent final checkpoint, frozen child runtime, finite final PALOMA metric and finished W&B parity. The previously verified 40 outputs remain reused.
+
+Only target p65 and p80 remain. Their temporary checkpoints advanced from steps 2283 to 7112 and 728 to 5572 of 11491. All four targets' logs show restoration from the saved full-state checkpoint paths. Current parent is `/calvinxu/starcoder-tpp10-refinement-interactive`; it is running without failures or preemptions. Its actual start is 12 September 21:34:54.158 UTC, so the 172800-second deadline is 14 September 21:34:54.158 UTC. No recovery, new launch or priority change was needed.
+
+Evidence: `live/heartbeat_20260912_2237/remaining_artifact_audit.json`, `progress_receipt.json` and filtered runtime logs. Fieldbook records the three final BPB values and their validations plus current child states. Keep the existing heartbeat active. After the last two pass, use the complete-45 collector and 12-coordinate common-grid procedure in `live/completion_20260912/README.md`, then update the approved plot, caption/outline facts and compile/visually verify the paper. No partial-grid plot update was made in this check. FineMath's already completed work was not recollected.

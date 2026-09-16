@@ -1,0 +1,600 @@
+{
+  "blocking_failed_jobs": [],
+  "experiment": {
+    "attrs": {
+      "review.status": "prepared"
+    },
+    "created_at": "2026-09-08T23:37:24Z",
+    "deleted_at": null,
+    "description": "Review-stage three-curve experiment: reuse 25 C40 target measurements, correct the target p=1 parent-pool mismatch, compare matched and unmatched 278M-token proxies on one frozen parent corpus. No training submitted.",
+    "id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "idempotency_key": "starcoder-finite-pool-epoch-matching-20260908",
+    "name": "StarCoder finite-pool epoch-matching demonstration",
+    "status": "active",
+    "tags": [
+      "epoch-matching",
+      "starcoder"
+    ],
+    "updated_at": "2026-09-08T23:37:24Z"
+  },
+  "failed_jobs": [],
+  "freshness": {
+    "checkpoint_status": "current",
+    "drifted_artifact_count": 0,
+    "handoff_status": "current",
+    "last_checkpoint_at": "2026-09-09T14:32:52Z",
+    "last_handoff_at": "2026-09-09T14:32:52Z",
+    "since_last_checkpoint_hours": 0.0003059138888888889,
+    "since_last_handoff_hours": 0.0003059138888888889,
+    "stale_validation_count": 0
+  },
+  "historical": {
+    "erratum_count": 0,
+    "recent_errata": []
+  },
+  "job_counts": {
+    "succeeded": 22
+  },
+  "key_artifacts": [
+    {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788963972.6595984,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/excess_curves.png",
+        "fieldbook.local_size_at_capture": 78563
+      },
+      "content_hash": "sha256:da1f935e0c9ca1c6b743bcda3490604fd6214d6d5d0a8c3aebe7b7c9c9eb1158",
+      "created_at": "2026-09-09T14:32:51Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239byr11de8qjx94wpmx3w7",
+      "job_id": null,
+      "run_id": null,
+      "type": "plot",
+      "updated_at": "2026-09-09T14:32:51Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/excess_curves.png"
+    },
+    {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788964333.638457,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/RESULTS.md",
+        "fieldbook.local_size_at_capture": 7519
+      },
+      "content_hash": "sha256:67ba5309e63480c3bbd163a642db064b56877a6f0ddd5b0929954f94db480406",
+      "created_at": "2026-09-09T14:32:50Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239by49zx60yfp8e3fa2v9s",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-09T14:32:50Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/RESULTS.md"
+    },
+    {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788963972.5091577,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/curves.png",
+        "fieldbook.local_size_at_capture": 72601
+      },
+      "content_hash": "sha256:1dbcc148e799e2b0176257d711a7bb0d00f18f59fef976a307e1294dc9ffeafc",
+      "created_at": "2026-09-09T14:32:50Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239bye194gqrbe43y6ebhty",
+      "job_id": null,
+      "run_id": null,
+      "type": "plot",
+      "updated_at": "2026-09-09T14:32:50Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/curves.png"
+    },
+    {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788964333.6431944,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/source_manifest.json",
+        "fieldbook.local_size_at_capture": 2978
+      },
+      "content_hash": "sha256:a27def673d76750d762d2441b05089ea5f6fdf4c50cf48d15e9c0af3f9eec05a",
+      "created_at": "2026-09-09T14:32:50Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239bxtd114y9qkp2kk1emzh",
+      "job_id": null,
+      "run_id": null,
+      "type": "manifest",
+      "updated_at": "2026-09-09T14:32:50Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/source_manifest.json"
+    },
+    {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788963971.694222,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/analysis.json",
+        "fieldbook.local_size_at_capture": 8567
+      },
+      "content_hash": "sha256:0c10c4f5e3a1078721c6c738684cc170ce4a2ae210afa83d3a9f721f1284ed02",
+      "created_at": "2026-09-09T14:32:49Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239bwwy4fhbgt5ygd4nx9ek",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-09T14:32:49Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/analysis.json"
+    },
+    {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788964092.0774527,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/descriptive_diagnostics.json",
+        "fieldbook.local_size_at_capture": 1034
+      },
+      "content_hash": "sha256:c500de2a72efe53e534c8c4c90c5342828db0ae8f1c9ad08e6f43f4b1540fdd6",
+      "created_at": "2026-09-09T14:32:49Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239bx76ybxcca6skkaqk31a",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-09T14:32:49Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/descriptive_diagnostics.json"
+    },
+    {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788964045.4334488,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/independent_verification.json",
+        "fieldbook.local_size_at_capture": 4603
+      },
+      "content_hash": "sha256:a6d24df2861ca8dd817487cf7dcd8f22ce122dd8d837e37fbbeff67a538b9592",
+      "created_at": "2026-09-09T14:32:49Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239bxh7w4bjyd1ch236ssw2",
+      "job_id": null,
+      "run_id": null,
+      "type": "validation-report",
+      "updated_at": "2026-09-09T14:32:49Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/independent_verification.json"
+    },
+    {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788963955.5834696,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/measurements.csv",
+        "fieldbook.local_size_at_capture": 3963
+      },
+      "content_hash": "sha256:65f23da7430340f61146b22759790b694a5b5c36934e22489813582e7a8315ae",
+      "created_at": "2026-09-09T14:32:48Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239bw90c62p3s01y8ypfwnd",
+      "job_id": null,
+      "run_id": null,
+      "type": "metric-table",
+      "updated_at": "2026-09-09T14:32:48Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/measurements.csv"
+    },
+    {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788963971.6944623,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/curves.csv",
+        "fieldbook.local_size_at_capture": 2829
+      },
+      "content_hash": "sha256:6d42ff590ee688c8f6fdd5f8438a844d75eb0a487452910d1d468c4ebab63f44",
+      "created_at": "2026-09-09T14:32:48Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239bwjstg60we9mzk2jwznw",
+      "job_id": null,
+      "run_id": null,
+      "type": "metric-table",
+      "updated_at": "2026-09-09T14:32:48Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/curves.csv"
+    },
+    {
+      "attrs": {
+        "verification.config_fingerprint": "ee2d7c61"
+      },
+      "content_hash": null,
+      "created_at": "2026-09-09T04:18:13Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m2266h3e3f65pse1x1c5mevk",
+      "job_id": "job_01m21sa3k5sv18knj54mzjz717",
+      "run_id": "run_01m21s41jgqwd1kdf1stxr9ak9",
+      "type": "checkpoint",
+      "updated_at": "2026-09-09T14:27:59Z",
+      "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_target_c124_s20260711/2026.09.08"
+    },
+    {
+      "attrs": {
+        "verification.final_step_metric": "verified_by_refinement_collector"
+      },
+      "content_hash": null,
+      "created_at": "2026-09-09T04:19:57Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m2269pgs0zxkdk3cpr0vffw0",
+      "job_id": "job_01m21sa3k5sv18knj54mzjz717",
+      "run_id": "run_01m21s41jgqwd1kdf1stxr9ak9",
+      "type": "eval-result",
+      "updated_at": "2026-09-09T14:27:59Z",
+      "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_target_c124_s20260711/2026.09.08/checkpoints/eval_metrics.jsonl"
+    },
+    {
+      "attrs": {
+        "verification.final_step_metric": "verified_by_refinement_collector"
+      },
+      "content_hash": null,
+      "created_at": "2026-09-09T04:19:57Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m2269psdt5j929sjzmcgw2y7",
+      "job_id": "job_01m21sa40jz4wc8cb5kcnxx6z6",
+      "run_id": "run_01m21s418phn29qpnkygd5c381",
+      "type": "eval-result",
+      "updated_at": "2026-09-09T14:27:58Z",
+      "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c124_s20260711/2026.09.08/checkpoints/eval_metrics.jsonl"
+    },
+    {
+      "attrs": {
+        "verification.config_fingerprint": "0949c68a"
+      },
+      "content_hash": null,
+      "created_at": "2026-09-09T04:18:14Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m2266jq9xmq19t31a9qj88yf",
+      "job_id": "job_01m21sa40jz4wc8cb5kcnxx6z6",
+      "run_id": "run_01m21s418phn29qpnkygd5c381",
+      "type": "checkpoint",
+      "updated_at": "2026-09-09T14:27:57Z",
+      "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c124_s20260711/2026.09.08"
+    },
+    {
+      "attrs": {
+        "verification.final_step_metric": "verified_by_refinement_collector"
+      },
+      "content_hash": null,
+      "created_at": "2026-09-09T04:19:57Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m2269q25wprkr1bwhpxcf9xe",
+      "job_id": "job_01m21sa4bg4emx9jkdpm5979he",
+      "run_id": "run_01m21s40yr9sd9nt3xz9f2ajbr",
+      "type": "eval-result",
+      "updated_at": "2026-09-09T14:27:57Z",
+      "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c124_s20260711/2026.09.08/checkpoints/eval_metrics.jsonl"
+    },
+    {
+      "attrs": {
+        "verification.config_fingerprint": "ac32abe4"
+      },
+      "content_hash": null,
+      "created_at": "2026-09-09T04:18:16Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m2266mapg26qgmxfnttj5svp",
+      "job_id": "job_01m21sa4bg4emx9jkdpm5979he",
+      "run_id": "run_01m21s40yr9sd9nt3xz9f2ajbr",
+      "type": "checkpoint",
+      "updated_at": "2026-09-09T14:27:56Z",
+      "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c124_s20260711/2026.09.08"
+    },
+    {
+      "attrs": {
+        "verification.config_fingerprint": 40443787
+      },
+      "content_hash": null,
+      "created_at": "2026-09-09T14:27:55Z",
+      "deleted_at": null,
+      "experiment_id": null,
+      "id": "art_01m2392y36520qsxsgrzk8s71s",
+      "job_id": "job_01m227fsea14wzrx1nhna62v7z",
+      "run_id": "run_01m227761bpq24363ch1pt6vzs",
+      "type": "checkpoint",
+      "updated_at": "2026-09-09T14:27:55Z",
+      "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c119_s20260711/2026.09.08"
+    },
+    {
+      "attrs": {
+        "verification.final_step_metric": "verified_by_refinement_collector"
+      },
+      "content_hash": null,
+      "created_at": "2026-09-09T14:27:55Z",
+      "deleted_at": null,
+      "experiment_id": null,
+      "id": "art_01m2392ybqbt0rz2q5k9c0fvtr",
+      "job_id": "job_01m227fsea14wzrx1nhna62v7z",
+      "run_id": "run_01m227761bpq24363ch1pt6vzs",
+      "type": "eval-result",
+      "updated_at": "2026-09-09T14:27:55Z",
+      "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c119_s20260711/2026.09.08/checkpoints/eval_metrics.jsonl"
+    },
+    {
+      "attrs": {
+        "verification.config_fingerprint": "c683238a"
+      },
+      "content_hash": null,
+      "created_at": "2026-09-09T14:27:54Z",
+      "deleted_at": null,
+      "experiment_id": null,
+      "id": "art_01m2392wztnsf29c0gnnwt9ryz",
+      "job_id": "job_01m227fsrdkjhhwxqasq4nas2x",
+      "run_id": "run_01m22775r8w6gvev9s0qj1rg9a",
+      "type": "checkpoint",
+      "updated_at": "2026-09-09T14:27:54Z",
+      "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c119_s20260711/2026.09.08"
+    },
+    {
+      "attrs": {
+        "verification.final_step_metric": "verified_by_refinement_collector"
+      },
+      "content_hash": null,
+      "created_at": "2026-09-09T14:27:54Z",
+      "deleted_at": null,
+      "experiment_id": null,
+      "id": "art_01m2392x8pv332mmnh7ydpdwnw",
+      "job_id": "job_01m227fsrdkjhhwxqasq4nas2x",
+      "run_id": "run_01m22775r8w6gvev9s0qj1rg9a",
+      "type": "eval-result",
+      "updated_at": "2026-09-09T14:27:54Z",
+      "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c119_s20260711/2026.09.08/checkpoints/eval_metrics.jsonl"
+    },
+    {
+      "attrs": {
+        "verification.config_fingerprint": "46fe3934"
+      },
+      "content_hash": null,
+      "created_at": "2026-09-09T04:18:18Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m2266ny5ar44fap907mkrtyn",
+      "job_id": "job_01m21sa4q5rnzvvgz5r761ffp8",
+      "run_id": "run_01m21s40j44t4vm28zsze2v2bc",
+      "type": "checkpoint",
+      "updated_at": "2026-09-09T14:27:53Z",
+      "uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c109_s20260711/2026.09.08"
+    }
+  ],
+  "leases": {
+    "active": [],
+    "active_count": 0,
+    "expired": [],
+    "expired_count": 0,
+    "force_takeovers": [],
+    "stale": [],
+    "stale_count": 0,
+    "stale_threshold_hours": 1.0
+  },
+  "note_counts": {
+    "checkpoint": {
+      "open": 5,
+      "resolved": 1,
+      "superseded": 0
+    },
+    "debug": {
+      "open": 0,
+      "resolved": 0,
+      "superseded": 0
+    },
+    "decision": {
+      "open": 3,
+      "resolved": 2,
+      "superseded": 0
+    },
+    "handoff": {
+      "open": 2,
+      "resolved": 0,
+      "superseded": 0
+    },
+    "next-action": {
+      "open": 0,
+      "resolved": 0,
+      "superseded": 0
+    },
+    "research": {
+      "open": 1,
+      "resolved": 0,
+      "superseded": 0
+    },
+    "review": {
+      "open": 0,
+      "resolved": 1,
+      "superseded": 0
+    }
+  },
+  "notes": {
+    "open_debug": [],
+    "open_handoffs": [
+      {
+        "body_format": "markdown",
+        "body_preview": "Snapshot September 9, 07:18-07:21 PDT. The ten additional refinement children and their parent all succeeded; parent finished September 8 at 22:10:04 PDT. Independently reread all 20 cumulative artif\u2026",
+        "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+        "entity_type": "experiment",
+        "id": "note_01m238qn9dk805h0zyck9p0h8w",
+        "note_type": "handoff",
+        "status": "open",
+        "title": "Live status and ETA: September 9, 07:20 PDT",
+        "updated_at": "2026-09-09T14:21:46Z"
+      },
+      {
+        "body_format": "markdown",
+        "body_preview": "Live snapshot 2026-09-08 19:18-19:21 PDT. Eight successful proxy artifacts have matching frozen-plan configuration fingerprints and unique finite final-step1059 Paloma Programming Languages BPB. Valu\u2026",
+        "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+        "entity_type": "experiment",
+        "id": "note_01m21zhe8k8tkdvxrfhmj5j91z",
+        "note_type": "handoff",
+        "status": "open",
+        "title": "Live status and ETA: 2026-09-08 19:20 PDT",
+        "updated_at": "2026-09-09T02:21:50Z"
+      }
+    ],
+    "open_next_actions": [],
+    "recent_decisions": [
+      {
+        "body_format": "markdown",
+        "body_preview": "# Adaptive refinement of the StarCoder pilot",
+        "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+        "entity_type": "experiment",
+        "id": "note_01m2276b81tz4cz45sewwd6xcx",
+        "note_type": "decision",
+        "status": "open",
+        "title": "Authorized ten-run adaptive refinement after completed pilot",
+        "updated_at": "2026-09-09T04:35:35Z"
+      },
+      {
+        "body_format": "markdown",
+        "body_preview": "All ten pilot runs succeeded. Unmatched selects p=1 (target regret 0.031826 BPB), matched p=0.3 (0.033350 BPB), versus target p=0.7. Matched-minus-unmatched regret +0.001523 BPB is descriptive; no st\u2026",
+        "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+        "entity_type": "experiment",
+        "id": "note_01m2268sbnd2tvjcbm1cycyrcc",
+        "note_type": "decision",
+        "status": "open",
+        "title": "Pilot complete; turnover observed but target selection did not improve",
+        "updated_at": "2026-09-09T04:19:27Z"
+      },
+      {
+        "body_format": "markdown",
+        "body_preview": "Verified historical configuration and endpoint, actual packed-cache length, child JAX0.10.1/NumPy2.3.5 environment, and every parent/subset index against the archived shuffler. Reuse receipt passed. \u2026",
+        "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+        "entity_type": "experiment",
+        "id": "note_01m21qa89yk30a7tcyh7dkjzm2",
+        "note_type": "decision",
+        "status": "resolved",
+        "title": "Historical reuse verified; full experiment package ready for CC review",
+        "updated_at": "2026-09-09T00:32:38Z"
+      },
+      {
+        "body_format": "markdown",
+        "body_preview": "Pilot submitted after CC review on 2026-09-08 at 17:29:55 PDT.",
+        "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+        "entity_type": "experiment",
+        "id": "note_01m21s9ftq14111yawzxsse6vv",
+        "note_type": "decision",
+        "status": "open",
+        "title": "CC runtime correction applied; ten-run pilot submitted",
+        "updated_at": "2026-09-09T00:32:38Z"
+      },
+      {
+        "body_format": "markdown",
+        "body_preview": "# A finite-pool test of epoch matching",
+        "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+        "entity_type": "experiment",
+        "id": "note_01m21pvd2ymv9cxep5eekf5mqy",
+        "note_type": "decision",
+        "status": "resolved",
+        "title": "Frozen three-curve protocol prepared for review; historical reuse checks remain",
+        "updated_at": "2026-09-08T23:57:47Z"
+      }
+    ],
+    "recent_research": [
+      {
+        "body_format": "markdown",
+        "body_preview": "The StarCoder pilot plus adaptive refinement are complete and analyzed. All 20 distinct artifacts have matching frozen fingerprints and unique finite endpoint metrics; Fieldbook contains their checkp\u2026",
+        "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+        "entity_type": "experiment",
+        "id": "note_01m239bzbtm2scmgjrqzw24mvh",
+        "note_type": "research",
+        "status": "open",
+        "title": "Adaptive refinement moves matched optimum to p=0.2 and increases target regret",
+        "updated_at": "2026-09-09T14:32:51Z"
+      }
+    ]
+  },
+  "ready": {
+    "active_job_count": 0,
+    "blocker_count": 0,
+    "has_active_blockers": false,
+    "is_ready": true,
+    "recovered_failed_count": 0,
+    "recovery_in_progress_count": 0,
+    "submission_uncertainty_count": 0,
+    "validation_status": "pass"
+  },
+  "recovered_failed_jobs": [],
+  "recovery_in_progress_failed_jobs": [],
+  "run_count": 20,
+  "runs": {
+    "by_kind": {
+      "datapoint": 20
+    },
+    "by_phase": {
+      "complete": 20
+    },
+    "coverage": {
+      "by_metric": {
+        "eval/paloma/dolma_100_programing_languages-llama3/bpb": 20
+      },
+      "has_checkpoint": 20,
+      "has_eval_result": 20
+    },
+    "expected": null,
+    "failed_examples": [],
+    "missing_examples": [],
+    "missing_expected_count": null,
+    "total": 20
+  },
+  "stale_jobs": [],
+  "stale_threshold_hours": 24.0,
+  "submission_in_progress_jobs": [],
+  "submission_unknown_jobs": [],
+  "validations": {
+    "failed": [],
+    "rows": [
+      {
+        "attrs": {},
+        "check_name": "refinement.final_metrics_and_independent_analysis",
+        "created_at": "2026-09-09T14:32:51Z",
+        "deleted_at": null,
+        "details": {},
+        "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+        "entity_type": "experiment",
+        "expected_value": "20 frozen identities with final metrics and independently reproduced common-grid selections/regrets",
+        "id": "val_01m239bz27bdgt5ndqeyykp8de",
+        "measured_value": "20/20 verified; independent analysis agrees exactly; both plots visually checked; original pilot unchanged",
+        "session_id": "ses_01m238xvvtp38xarhmsg6d0s86",
+        "source_artifact_id": "art_01m239bxh7w4bjyd1ch236ssw2",
+        "source_job_id": null,
+        "status": "pass",
+        "updated_at": "2026-09-09T14:32:51Z"
+      },
+      {
+        "attrs": {},
+        "check_name": "live_health_20260909_0720",
+        "created_at": "2026-09-09T14:21:45Z",
+        "deleted_at": null,
+        "details": {},
+        "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+        "entity_type": "experiment",
+        "expected_value": "20 successful final-step artifacts across the original pilot and ten-run refinement",
+        "id": "val_01m238qmxdhm4g9dk7mm0bxaw7",
+        "measured_value": "20/20 fingerprints and final metrics verified; refinement parent completed September 8 at 22:10:04 PDT.",
+        "session_id": null,
+        "source_artifact_id": null,
+        "source_job_id": null,
+        "status": "pass",
+        "updated_at": "2026-09-09T14:21:45Z"
+      },
+      {
+        "attrs": {},
+        "check_name": "pilot.final_metric_coverage",
+        "created_at": "2026-09-09T04:18:28Z",
+        "deleted_at": null,
+        "details": {},
+        "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+        "entity_type": "experiment",
+        "expected_value": "10 successful final-step observations matching frozen run identities",
+        "id": "val_01m226709z9171y9wvx87daf3c",
+        "measured_value": "10/10; independently recomputed minima and regret match analyzer",
+        "session_id": "ses_01m2261qfr2x0em9z8jpqjmga7",
+        "source_artifact_id": "art_01m2266emc3dg3gjd431vmjas3",
+        "source_job_id": null,
+        "status": "pass",
+        "updated_at": "2026-09-09T04:18:28Z"
+      }
+    ],
+    "status": "pass",
+    "total": 3,
+    "unknown_blocking": [],
+    "warnings": []
+  }
+}

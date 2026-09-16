@@ -1,0 +1,11 @@
+{
+  "job": "/calvinxu/tpp10-bpb-repair",
+  "state": "running",
+  "resources": {
+    "cpu_millicores": 1000,
+    "memory_bytes": 4294967296,
+    "disk_bytes": 34359738368,
+    "device": null
+  },
+  "tasks": []
+}

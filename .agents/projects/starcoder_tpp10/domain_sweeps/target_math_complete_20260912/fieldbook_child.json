@@ -1,0 +1,23 @@
+{
+  "attrs": {
+    "evaluation.spec_sha256": "c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39"
+  },
+  "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+  "code_dirty": true,
+  "command": "fray.remote(evaluate_tpp10_target_math_complete.evaluate, name=\"target-math-completion\", resources=frozen central1 v5p-8 TPU)(spec c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39)",
+  "created_at": "2026-09-12T21:17:35Z",
+  "deleted_at": null,
+  "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+  "external_id": "/calvinxu/tpp10-target-math-completion/target-math-completion",
+  "external_system": "iris",
+  "failure_reason": null,
+  "finished_at": null,
+  "id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+  "launcher": "iris/fray",
+  "name": "Four final FineMath target math evaluations: TPU worker",
+  "retry_of": null,
+  "run_id": null,
+  "started_at": null,
+  "status": "queued",
+  "updated_at": "2026-09-12T21:17:35Z"
+}

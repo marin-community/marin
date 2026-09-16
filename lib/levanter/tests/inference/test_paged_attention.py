@@ -250,6 +250,133 @@ def test_do_tpu_ragged_paged_attention_accepts_traced_sm_scale(monkeypatch):
     assert out.axes == q.axes
 
 
+@pytest.mark.parametrize(
+    "num_kv_heads, dtype, expected",
+    [(20, jnp.bfloat16, 24), (8, jnp.bfloat16, 8), (20, jnp.float32, 20), (3, jnp.float32, 4), (1, jnp.int8, 2)],
+)
+def test_tpu_rpa_padded_kv_heads_matches_kernel_tiling_rule(num_kv_heads, dtype, expected):
+    assert attention_module._tpu_rpa_padded_kv_heads(num_kv_heads, dtype) == expected
+
+
+def _kernel_tiles_combined_heads(num_combined_kv_heads: int, dtype) -> bool:
+    packing = 32 // (jnp.dtype(dtype).itemsize * 8)
+    if num_combined_kv_heads % packing:
+        return False
+    packed = num_combined_kv_heads // packing
+    return packed in (1, 2, 4, 8) or packed % 8 == 0
+
+
+@pytest.mark.parametrize(
+    "num_kv_heads, dtype, atol, prepadded",
+    [(3, jnp.float32, 1e-5, False), (20, jnp.bfloat16, 3e-2, False), (20, jnp.bfloat16, 3e-2, True)],
+)
+def test_do_tpu_ragged_paged_attention_pads_untileable_kv_heads(monkeypatch, num_kv_heads, dtype, atol, prepadded):
+    """Head counts the Pallas kernel cannot tile are zero-padded for the kernel and sliced away afterwards."""
+    seen = {}
+
+    def _fake_tpu_rpa(
+        q_arr, kv_pages_arr, kv_lens_arr, page_indices_arr, cu_q_lens_arr, num_seqs_arr, *, sm_scale, soft_cap
+    ):
+        seen["combined_kv_heads"] = kv_pages_arr.shape[2]
+        assert _kernel_tiles_combined_heads(kv_pages_arr.shape[2], kv_pages_arr.dtype)
+        assert q_arr.shape[1] % (kv_pages_arr.shape[2] // 2) == 0
+        q_named = hax.named(q_arr, ("position", "kv_head", "head_size")).unflatten_axis(
+            "kv_head", (hax.Axis("kv_head", kv_pages_arr.shape[2] // 2), hax.Axis("q_heads_per_group", 1))
+        )
+        out = attention_module.default_ragged_paged_attention(
+            q_named,
+            hax.named(kv_pages_arr, ("page", "slot", "kv_head", "head_size")),
+            hax.named(kv_lens_arr, "seq"),
+            hax.named(page_indices_arr, ("seq", "page")),
+            cu_q_lens_arr,
+            num_seqs_arr[0],
+            sm_scale=sm_scale,
+            soft_cap=soft_cap,
+        )
+        return out.flatten_axes(("kv_head", "q_heads_per_group"), "kv_head").array
+
+    monkeypatch.setattr(attention_module, "tpu_ragged_paged_attention", _fake_tpu_rpa)
+
+    seq_lens = [6, 3]
+    tok_offsets = np.cumsum([0] + seq_lens)
+    cu_q_lens = hax.named(jnp.asarray(tok_offsets, dtype=jnp.int32), "seq")
+    pages_per_seq = [(n + NUM_SLOTS - 1) // NUM_SLOTS for n in seq_lens]
+    page_indices = -jnp.ones((len(seq_lens), KV_BS), dtype=jnp.int32)
+    next_page = 0
+    for sid, count in enumerate(pages_per_seq):
+        page_indices = page_indices.at[sid, :count].set(jnp.arange(next_page, next_page + count, dtype=jnp.int32))
+        next_page += count
+    rng = jr.PRNGKey(7)
+    kv_pages = hax.random.normal(
+        rng, {"page": next_page + 2, "slot": NUM_SLOTS, "kv_head": 2 * num_kv_heads, "head_size": D.size}
+    ).astype(dtype)
+    q = hax.random.normal(
+        jr.fold_in(rng, 1),
+        (hax.Axis("position", int(tok_offsets[-1])), hax.Axis("kv_head", num_kv_heads), QH, D),
+    ).astype(dtype)
+    kv_lens = hax.named(jnp.asarray(seq_lens, dtype=jnp.int32), "seq")
+    page_indices = hax.named(page_indices, ("seq", "page"))
+    num_seqs = jnp.array(len(seq_lens), dtype=jnp.int32)
+    kernel_input = kv_pages
+    if prepadded:
+        extra = 2 * (attention_module._tpu_rpa_padded_kv_heads(num_kv_heads, dtype) - num_kv_heads)
+        kernel_input = hax.concatenate(
+            "kv_head", [kv_pages, hax.zeros(_with_axis(kv_pages.axes, "kv_head", extra), dtype=dtype)]
+        )
+
+    with use_test_mesh():
+        out = attention_module._do_tpu_ragged_paged_attention(
+            q, kernel_input, kv_lens, page_indices, cu_q_lens, num_seqs, sm_scale=SM_SCALE, soft_cap=None
+        )
+    ref = attention_module.default_ragged_paged_attention(
+        q, kv_pages, kv_lens, page_indices, cu_q_lens.array, num_seqs, sm_scale=SM_SCALE, soft_cap=None
+    )
+
+    assert out.axes == q.axes
+    assert seen["combined_kv_heads"] == 2 * attention_module._tpu_rpa_padded_kv_heads(num_kv_heads, dtype)
+    assert_trees_all_close(out.array.astype(jnp.float32), ref.array.astype(jnp.float32), atol=atol, rtol=0)
+
+
+def test_page_cache_allocates_padded_heads_and_writes_only_real_ones():
+    pt = PageTable.init(max_pages=3, max_seqs=1, page_size=NUM_SLOTS, max_pages_per_seq=3)
+    cache = KvPageCache.init(pt.spec(), KV_HEADS, D, dtype=jnp.float32, cache_kv_heads=3)
+    assert cache.kv_pages.axis_size("kv_head") == 6
+    sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
+    sequences, seq_id_arr = sequences.reserve_slot()
+    seg_ids = hax.named([int(seq_id_arr)] * 2, "position")
+    pos_ids = hax.named(jnp.array([0, 1], dtype=jnp.int32), "position")
+    sequences, pt, binfo = sequences.allocate_for_seq(pt, seg_ids, pos_ids)
+    new_k = hax.random.normal(jr.PRNGKey(1), (hax.Axis("position", 2), KV_HEADS, D))
+    new_v = hax.random.normal(jr.PRNGKey(2), (hax.Axis("position", 2), KV_HEADS, D))
+    cache = cache.update(binfo, new_k, new_v)
+    pages = cache.kv_pages.array
+    assert float(jnp.abs(pages[:, :, 2:, :]).max()) == 0.0
+    assert_trees_all_close(pages[0, 0, 0, :], new_k.array[0, 0, :], atol=1e-6, rtol=0)
+    assert_trees_all_close(pages[0, 1, 1, :], new_v.array[1, 0, :], atol=1e-6, rtol=0)
+
+
+def test_reference_path_ignores_extra_cache_heads():
+    q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs = _build_random_case(jr.PRNGKey(5), [7, 3])
+    padded = hax.concatenate(
+        "kv_head", [kv_pages, hax.zeros(_with_axis(kv_pages.axes, "kv_head", 4), dtype=kv_pages.dtype)]
+    )
+    with use_test_mesh():
+        base = ragged_paged_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, sm_scale=SM_SCALE)
+        out = ragged_paged_attention(q, padded, kv_lens, page_indices, cu_q_lens, num_seqs, sm_scale=SM_SCALE)
+    assert out.axes == q.axes
+    assert_trees_all_close(out.array, base.array, atol=1e-5, rtol=0)
+
+
+@pytest.mark.parametrize("available, expected", [(True, 24), (False, 20)])
+def test_paged_cache_kv_heads_pads_only_when_the_tpu_kernel_runs(monkeypatch, available, expected):
+    monkeypatch.setattr(attention_module, "_tpu_rpa_available", lambda: available)
+    assert attention_module.paged_cache_kv_heads(20, jnp.bfloat16) == expected
+
+
+def _with_axis(axes, name, size):
+    return tuple(ax.resize(size) if ax.name == name else ax for ax in axes)
+
+
 # -----------------------------------------------------------------------------
 # Tests moved from tests/test_paged_attention.py
 # -----------------------------------------------------------------------------

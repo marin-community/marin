@@ -1,0 +1,511 @@
+{
+  "design_sha256": "72d14a845033b901d73397c74c724a668cbdec5fd72cec41178626b993f889a2",
+  "status": "passed",
+  "maximum_epoch_relative_error": 0.0005037267589483863,
+  "coordinates": [
+    {
+      "percent": 0,
+      "proxy_allocation": {
+        "hq_actual": 7593,
+        "hq_synth": 21158,
+        "medium_high": 6888,
+        "medium": 27813,
+        "medium_low": 12150,
+        "low_actual": 5422,
+        "starcoder": 0
+      },
+      "target_allocation": {
+        "hq_actual": 137890,
+        "hq_synth": 384232,
+        "medium_high": 124959,
+        "medium": 504888,
+        "medium_low": 220487,
+        "low_actual": 98392,
+        "starcoder": 0
+      },
+      "matched_epochs": 0.0,
+      "target_epochs": 0.0,
+      "relative_error": 0.0
+    },
+    {
+      "percent": 5,
+      "proxy_allocation": {
+        "hq_actual": 7199,
+        "hq_synth": 20092,
+        "medium_high": 6569,
+        "medium": 26431,
+        "medium_low": 11554,
+        "low_actual": 5145,
+        "starcoder": 4034
+      },
+      "target_allocation": {
+        "hq_actual": 130705,
+        "hq_synth": 364844,
+        "medium_high": 119217,
+        "medium": 479750,
+        "medium_low": 209706,
+        "low_actual": 93372,
+        "starcoder": 73254
+      },
+      "matched_epochs": 0.787890625,
+      "target_epochs": 0.7882877066115702,
+      "relative_error": 0.0005037267589483863
+    },
+    {
+      "percent": 10,
+      "proxy_allocation": {
+        "hq_actual": 6803,
+        "hq_synth": 19020,
+        "medium_high": 6210,
+        "medium": 25132,
+        "medium_low": 10914,
+        "low_actual": 4874,
+        "starcoder": 8071
+      },
+      "target_allocation": {
+        "hq_actual": 123523,
+        "hq_synth": 345457,
+        "medium_high": 112750,
+        "medium": 456047,
+        "medium_low": 198220,
+        "low_actual": 88331,
+        "starcoder": 146520
+      },
+      "matched_epochs": 1.5763671875,
+      "target_epochs": 1.5767045454545454,
+      "relative_error": 0.0002139639639638924
+    },
+    {
+      "percent": 15,
+      "proxy_allocation": {
+        "hq_actual": 6447,
+        "hq_synth": 17951,
+        "medium_high": 5860,
+        "medium": 23706,
+        "medium_low": 10320,
+        "low_actual": 4587,
+        "starcoder": 12153
+      },
+      "target_allocation": {
+        "hq_actual": 117059,
+        "hq_synth": 326072,
+        "medium_high": 106282,
+        "medium": 430192,
+        "medium_low": 187445,
+        "low_actual": 83308,
+        "starcoder": 220490
+      },
+      "matched_epochs": 2.3736328125,
+      "target_epochs": 2.372697141873278,
+      "relative_error": 0.0003943489500657371
+    },
+    {
+      "percent": 20,
+      "proxy_allocation": {
+        "hq_actual": 6047,
+        "hq_synth": 16932,
+        "medium_high": 5497,
+        "medium": 22314,
+        "medium_low": 9739,
+        "low_actual": 4306,
+        "starcoder": 16189
+      },
+      "target_allocation": {
+        "hq_actual": 109877,
+        "hq_synth": 307400,
+        "medium_high": 99818,
+        "medium": 405057,
+        "medium_low": 176673,
+        "low_actual": 78280,
+        "starcoder": 293743
+      },
+      "matched_epochs": 3.1619140625,
+      "target_epochs": 3.1609740874655645,
+      "relative_error": 0.0002973687883627285
+    },
+    {
+      "percent": 25,
+      "proxy_allocation": {
+        "hq_actual": 5692,
+        "hq_synth": 15862,
+        "medium_high": 5181,
+        "medium": 20892,
+        "medium_low": 9102,
+        "low_actual": 4036,
+        "starcoder": 20259
+      },
+      "target_allocation": {
+        "hq_actual": 103415,
+        "hq_synth": 288005,
+        "medium_high": 94076,
+        "medium": 379196,
+        "medium_low": 165187,
+        "low_actual": 73255,
+        "starcoder": 367714
+      },
+      "matched_epochs": 3.9568359375,
+      "target_epochs": 3.9569774449035813,
+      "relative_error": 3.5761488548113896e-05
+    },
+    {
+      "percent": 30,
+      "proxy_allocation": {
+        "hq_actual": 5296,
+        "hq_synth": 14797,
+        "medium_high": 4820,
+        "medium": 19395,
+        "medium_low": 8510,
+        "low_actual": 3792,
+        "starcoder": 24414
+      },
+      "target_allocation": {
+        "hq_actual": 96232,
+        "hq_synth": 268613,
+        "medium_high": 87620,
+        "medium": 351898,
+        "medium_low": 154415,
+        "low_actual": 68947,
+        "starcoder": 443123
+      },
+      "matched_epochs": 4.768359375,
+      "target_epochs": 4.7684551480716255,
+      "relative_error": 2.008471688452751e-05
+    },
+    {
+      "percent": 35,
+      "proxy_allocation": {
+        "hq_actual": 4901,
+        "hq_synth": 13726,
+        "medium_high": 4470,
+        "medium": 18001,
+        "medium_low": 7912,
+        "low_actual": 3530,
+        "starcoder": 28484
+      },
+      "target_allocation": {
+        "hq_actual": 89051,
+        "hq_synth": 249217,
+        "medium_high": 81163,
+        "medium": 326756,
+        "medium_low": 143644,
+        "low_actual": 63920,
+        "starcoder": 517097
+      },
+      "matched_epochs": 5.56328125,
+      "target_epochs": 5.564490788567493,
+      "relative_error": 0.0002173673411371979
+    },
+    {
+      "percent": 40,
+      "proxy_allocation": {
+        "hq_actual": 4548,
+        "hq_synth": 12697,
+        "medium_high": 4112,
+        "medium": 16611,
+        "medium_low": 7286,
+        "low_actual": 3243,
+        "starcoder": 32527
+      },
+      "target_allocation": {
+        "hq_actual": 82589,
+        "hq_synth": 230545,
+        "medium_high": 74694,
+        "medium": 301625,
+        "medium_low": 132146,
+        "low_actual": 58893,
+        "starcoder": 590356
+      },
+      "matched_epochs": 6.3529296875,
+      "target_epochs": 6.352832300275482,
+      "relative_error": 1.5329733245694754e-05
+    },
+    {
+      "percent": 45,
+      "proxy_allocation": {
+        "hq_actual": 4155,
+        "hq_synth": 11626,
+        "medium_high": 3797,
+        "medium": 15229,
+        "medium_low": 6686,
+        "low_actual": 2973,
+        "starcoder": 36558
+      },
+      "target_allocation": {
+        "hq_actual": 75408,
+        "hq_synth": 211149,
+        "medium_high": 68952,
+        "medium": 276491,
+        "medium_low": 121368,
+        "low_actual": 53868,
+        "starcoder": 663612
+      },
+      "matched_epochs": 7.140234375,
+      "target_epochs": 7.14114152892562,
+      "relative_error": 0.00012703206090303176
+    },
+    {
+      "percent": 50,
+      "proxy_allocation": {
+        "hq_actual": 3800,
+        "hq_synth": 10559,
+        "medium_high": 3437,
+        "medium": 13843,
+        "medium_low": 6055,
+        "low_actual": 2688,
+        "starcoder": 40642
+      },
+      "target_allocation": {
+        "hq_actual": 68944,
+        "hq_synth": 191757,
+        "medium_high": 62486,
+        "medium": 251363,
+        "medium_low": 109876,
+        "low_actual": 48835,
+        "starcoder": 737587
+      },
+      "matched_epochs": 7.937890625,
+      "target_epochs": 7.937187930440771,
+      "relative_error": 8.853192911484342e-05
+    },
+    {
+      "percent": 55,
+      "proxy_allocation": {
+        "hq_actual": 3406,
+        "hq_synth": 9491,
+        "medium_high": 3082,
+        "medium": 12457,
+        "medium_low": 5463,
+        "low_actual": 2410,
+        "starcoder": 44715
+      },
+      "target_allocation": {
+        "hq_actual": 61761,
+        "hq_synth": 172365,
+        "medium_high": 56023,
+        "medium": 226228,
+        "medium_low": 99108,
+        "low_actual": 43806,
+        "starcoder": 811557
+      },
+      "matched_epochs": 8.7333984375,
+      "target_epochs": 8.733180526859504,
+      "relative_error": 2.4952036640657482e-05
+    },
+    {
+      "percent": 60,
+      "proxy_allocation": {
+        "hq_actual": 3011,
+        "hq_synth": 8460,
+        "medium_high": 2729,
+        "medium": 11070,
+        "medium_low": 4868,
+        "low_actual": 2134,
+        "starcoder": 48752
+      },
+      "target_allocation": {
+        "hq_actual": 54579,
+        "hq_synth": 153692,
+        "medium_high": 49556,
+        "medium": 201101,
+        "medium_low": 88330,
+        "low_actual": 38782,
+        "starcoder": 884808
+      },
+      "matched_epochs": 9.521875,
+      "target_epochs": 9.521435950413224,
+      "relative_error": 4.61116988090815e-05
+    },
+    {
+      "percent": 65,
+      "proxy_allocation": {
+        "hq_actual": 2655,
+        "hq_synth": 7393,
+        "medium_high": 2412,
+        "medium": 9687,
+        "medium_low": 4233,
+        "low_actual": 1899,
+        "starcoder": 52745
+      },
+      "target_allocation": {
+        "hq_actual": 48114,
+        "hq_synth": 134300,
+        "medium_high": 43813,
+        "medium": 175965,
+        "medium_low": 76840,
+        "low_actual": 34472,
+        "starcoder": 957344
+      },
+      "matched_epochs": 10.3017578125,
+      "target_epochs": 10.301997245179063,
+      "relative_error": 2.3241384497052486e-05
+    },
+    {
+      "percent": 70,
+      "proxy_allocation": {
+        "hq_actual": 2258,
+        "hq_synth": 6320,
+        "medium_high": 2063,
+        "medium": 8304,
+        "medium_low": 3637,
+        "low_actual": 1620,
+        "starcoder": 56822
+      },
+      "target_allocation": {
+        "hq_actual": 40933,
+        "hq_synth": 114910,
+        "medium_high": 37345,
+        "medium": 150826,
+        "medium_low": 66080,
+        "low_actual": 29446,
+        "starcoder": 1031308
+      },
+      "matched_epochs": 11.098046875,
+      "target_epochs": 11.097925275482094,
+      "relative_error": 1.0956959511476683e-05
+    },
+    {
+      "percent": 75,
+      "proxy_allocation": {
+        "hq_actual": 1900,
+        "hq_synth": 5260,
+        "medium_high": 1695,
+        "medium": 6926,
+        "medium_low": 3006,
+        "low_actual": 1346,
+        "starcoder": 60891
+      },
+      "target_allocation": {
+        "hq_actual": 34468,
+        "hq_synth": 95519,
+        "medium_high": 30882,
+        "medium": 125688,
+        "medium_low": 54584,
+        "low_actual": 24422,
+        "starcoder": 1105285
+      },
+      "matched_epochs": 11.8927734375,
+      "target_epochs": 11.893993199035812,
+      "relative_error": 0.00010255273526726949
+    },
+    {
+      "percent": 80,
+      "proxy_allocation": {
+        "hq_actual": 1505,
+        "hq_synth": 4227,
+        "medium_high": 1349,
+        "medium": 5538,
+        "medium_low": 2412,
+        "low_actual": 1068,
+        "starcoder": 64925
+      },
+      "target_allocation": {
+        "hq_actual": 27287,
+        "hq_synth": 76846,
+        "medium_high": 24417,
+        "medium": 100550,
+        "medium_low": 43811,
+        "low_actual": 19393,
+        "starcoder": 1178544
+      },
+      "matched_epochs": 12.6806640625,
+      "target_epochs": 12.682334710743802,
+      "relative_error": 0.00013173033845159665
+    },
+    {
+      "percent": 85,
+      "proxy_allocation": {
+        "hq_actual": 1109,
+        "hq_synth": 3164,
+        "medium_high": 1023,
+        "medium": 4156,
+        "medium_low": 1820,
+        "low_actual": 794,
+        "starcoder": 68958
+      },
+      "target_allocation": {
+        "hq_actual": 20107,
+        "hq_synth": 57455,
+        "medium_high": 18670,
+        "medium": 75410,
+        "medium_low": 33039,
+        "low_actual": 14363,
+        "starcoder": 1251804
+      },
+      "matched_epochs": 13.468359375,
+      "target_epochs": 13.470686983471074,
+      "relative_error": 0.00017279062856478955
+    },
+    {
+      "percent": 90,
+      "proxy_allocation": {
+        "hq_actual": 752,
+        "hq_synth": 2102,
+        "medium_high": 670,
+        "medium": 2763,
+        "medium_low": 1189,
+        "low_actual": 511,
+        "starcoder": 73037
+      },
+      "target_allocation": {
+        "hq_actual": 13644,
+        "hq_synth": 38062,
+        "medium_high": 12209,
+        "medium": 50271,
+        "medium_low": 21549,
+        "low_actual": 9336,
+        "starcoder": 1325777
+      },
+      "matched_epochs": 14.2650390625,
+      "target_epochs": 14.266711862947659,
+      "relative_error": 0.00011725199637657724
+    },
+    {
+      "percent": 95,
+      "proxy_allocation": {
+        "hq_actual": 356,
+        "hq_synth": 1030,
+        "medium_high": 316,
+        "medium": 1389,
+        "medium_low": 590,
+        "low_actual": 237,
+        "starcoder": 77106
+      },
+      "target_allocation": {
+        "hq_actual": 6463,
+        "hq_synth": 18670,
+        "medium_high": 5745,
+        "medium": 25137,
+        "medium_low": 10774,
+        "low_actual": 4309,
+        "starcoder": 1399750
+      },
+      "matched_epochs": 15.059765625,
+      "target_epochs": 15.062736742424242,
+      "relative_error": 0.00019724950884081327
+    },
+    {
+      "percent": 100,
+      "proxy_allocation": {
+        "hq_actual": 0,
+        "hq_synth": 0,
+        "medium_high": 0,
+        "medium": 0,
+        "medium_low": 0,
+        "low_actual": 0,
+        "starcoder": 81024
+      },
+      "target_allocation": {
+        "hq_actual": 0,
+        "hq_synth": 0,
+        "medium_high": 0,
+        "medium": 0,
+        "medium_low": 0,
+        "low_actual": 0,
+        "starcoder": 1470848
+      },
+      "matched_epochs": 15.825,
+      "target_epochs": 15.827823691460056,
+      "relative_error": 0.00017840048733797076
+    }
+  ]
+}

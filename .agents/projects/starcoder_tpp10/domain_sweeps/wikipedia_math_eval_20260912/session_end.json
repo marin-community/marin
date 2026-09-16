@@ -1,0 +1,21 @@
+{
+  "closed": true,
+  "marker_path": "/Users/calvinxu/Projects/Work/Marin/.fieldbook.session",
+  "marker_status": "unchanged",
+  "session": {
+    "agent": "codex",
+    "attrs": {},
+    "cwd": "/Users/calvinxu/Projects/Work/Marin/marin",
+    "ended_at": "2026-09-12T07:51:53Z",
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "git_branch": "calvin/swarm-olmo3-regmix-test",
+    "git_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "git_root": "/Users/calvinxu/Projects/Work/Marin/marin",
+    "git_worktree_dir": "/Users/calvinxu/Projects/Work/Marin/marin",
+    "id": "ses_01m2a8p1z6ycrqdevj9bv4bn1q",
+    "intent": "Evaluate seven completed Wikipedia proxies under the identical FineMath math protocol; reuse verified shared p0, no training or targets",
+    "last_touch_at": "2026-09-12T07:51:53Z",
+    "ledger_id": "0db0b028-e7c7-4672-ba25-8fdf237da666",
+    "started_at": "2026-09-12T07:35:34Z"
+  }
+}

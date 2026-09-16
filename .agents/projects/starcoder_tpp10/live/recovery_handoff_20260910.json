@@ -1,0 +1,48 @@
+{
+  "experiment": {
+    "attrs": {},
+    "created_at": "2026-09-09T15:43:40Z",
+    "deleted_at": null,
+    "description": "Build and review a new matched-total-TPP three-curve experiment with finite StarCoder pools and independently replicated matched subsets. Training is not submitted.",
+    "id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "idempotency_key": "starcoder-tpp10-20260909",
+    "name": "StarCoder TPP 10 epoch-matching experiment",
+    "status": "active",
+    "tags": [
+      "epoch-matching",
+      "starcoder",
+      "tpp10"
+    ],
+    "updated_at": "2026-09-09T15:43:40Z"
+  },
+  "freshness": {
+    "checkpoint_status": "current",
+    "drifted_artifact_count": 0,
+    "drifted_artifacts": [],
+    "handoff_status": "current",
+    "last_checkpoint_at": "2026-09-10T01:05:31Z",
+    "last_handoff_at": "2026-09-10T01:05:31Z",
+    "since_last_checkpoint_hours": 8.106934056944445,
+    "since_last_handoff_hours": 8.106934056944445,
+    "stale_validation_count": 0,
+    "stale_validations": []
+  },
+  "note": {
+    "attrs": {
+      "session_id": "ses_01m258h0rx1r9d8tc7d7t96mgk"
+    },
+    "author": null,
+    "body": "Two canaries are complete and verified against the frozen plan: target BPB 0.820745587348938, unmatched proxy BPB 1.0613559484481812. Their final checkpoint metadata, runtime receipts, fingerprints and loss/gradient/LR traces are valid. The original parent lost its worker at 06:24:03 UTC; the matched child was still queued and had no checkpoint. No old descendant or output lease remained active before recovery.\n\nThe first recovery was superseded before its child started because the 2-CPU/8-GB parent landed on a preemptible TPU worker. The corrected parent /calvinxu/starcoder-tpp10-canary-recovery-ondemand-20260910 has explicit --no-preemptible and is confirmed on an on-demand CPU worker. Its sole child /calvinxu/starcoder-tpp10-canary-recovery-ondemand-20260910/verified_training-ba05b369 is queued for worker memory capacity. Do not change other jobs or the cluster to accelerate it. Completed canaries are reused. The 27 training pins, dataset identities, stage release and TPU resources are unchanged.\n\nThe runbook and future parent command templates now require explicit non-preemptible placement. A local history-reader correction collapses identical W&B export duplicates and still rejects conflicts; raw data and endpoints are unchanged. CC_CHANGES.md is updated. Echo incident search and publication returned HTTP 403; the unsubmitted draft is /tmp/starcoder_tpp10_parent_loss_20260910.md.\n\nNext: check the corrected parent and sole child, collect all three canaries through the archived-plan CLI when complete, review the matched trace, and verify its final runtime and checkpoint before considering pilot release. The pilot and dense stages remain unreleased. Exact commands, workspace receipts, partial metrics, trace summaries and current state are in .agents/projects/starcoder_tpp10/live/.\n\n## Freshness\n\n- Handoff status: `current`\n- Drifted artifacts: 0\n- Stale validations: 0\n",
+    "body_format": "markdown",
+    "created_at": "2026-09-10T09:11:55Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m259d1t0zepny0fy681gmgmh",
+    "note_type": "checkpoint",
+    "resolved_at": null,
+    "status": "open",
+    "title": "Experiment handoff",
+    "updated_at": "2026-09-10T09:11:55Z"
+  }
+}

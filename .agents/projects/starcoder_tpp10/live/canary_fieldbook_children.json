@@ -1,0 +1,20 @@
+[
+  {
+    "iris_job": "/calvinxu/starcoder-tpp10-canary/verified_training-08c23619",
+    "fieldbook_job": "job_01m24edf1yrbbw26nw1zhzfcfv",
+    "status": "queued",
+    "run_mapping": "Unresolved until direct child identity evidence is available."
+  },
+  {
+    "iris_job": "/calvinxu/starcoder-tpp10-canary/verified_training-312abc6f",
+    "fieldbook_job": "job_01m24edfd3239dddb8gmydy2sj",
+    "status": "queued",
+    "run_mapping": "Unresolved until direct child identity evidence is available."
+  },
+  {
+    "iris_job": "/calvinxu/starcoder-tpp10-canary/verified_training-8f76888a",
+    "fieldbook_job": "job_01m24edfq2memet5a7kgm984b6",
+    "status": "queued",
+    "run_mapping": "Unresolved until direct child identity evidence is available."
+  }
+]

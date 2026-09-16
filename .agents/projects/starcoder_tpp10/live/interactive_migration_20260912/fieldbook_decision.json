@@ -1,0 +1,18 @@
+{
+  "attrs": {
+    "session_id": "ses_01m2brcsm6qqm90rgm8w9h989a"
+  },
+  "author": null,
+  "body": "The user explicitly authorized moving the five unfinished StarCoder refinements from BATCH to INTERACTIVE. Iris has no supported in-place priority update. The replacement will call the unchanged original launcher under /calvinxu/starcoder-tpp10-refinement-interactive, with the same frozen release, all 45 scientific identities, runtime/data pins, central1 placement and output paths. It will skip 40 verified successes and resume the four saved target checkpoints; the fifth unfinished recipe is a matched p80 replicate. Fresh pre-migration audit verifies five unassigned leaves, original checkpoint generations and active old-coordinator leases. Cancel only /calvinxu/starcoder-tpp10-refinement-batch-recovery, verify full tree terminal and leases inactive, then submit the reviewed exact command. Native bundle and regional checks passed. No budget increase or new sweep points.\n",
+  "body_format": "markdown",
+  "created_at": "2026-09-12T21:32:11Z",
+  "deleted_at": null,
+  "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+  "entity_type": "experiment",
+  "id": "note_01m2brhxx8tbpee05wqpvme6sv",
+  "note_type": "decision",
+  "resolved_at": null,
+  "status": "open",
+  "title": "Return five StarCoder refinements to interactive",
+  "updated_at": "2026-09-12T21:32:11Z"
+}

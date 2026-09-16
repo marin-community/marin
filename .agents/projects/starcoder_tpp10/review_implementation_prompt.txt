@@ -1,0 +1,14 @@
+Perform an independent, read-only correctness review of the TPP10 epoch-matching experiment. Do not read the first scientific review or other review outputs. Do not edit files, use shell commands, delegate, access credentials, submit jobs, or request cloud reads.
+
+Read these current files under /Users/calvinxu/Projects/Work/Marin/marin:
+.agents/projects/starcoder_tpp10/design.md
+.agents/projects/starcoder_tpp10/spec.md
+experiments/domain_phase_mix/starcoder_tpp10.py
+experiments/domain_phase_mix/prepare_starcoder_tpp10.py
+experiments/domain_phase_mix/launch_starcoder_tpp10.py
+experiments/domain_phase_mix/analyze_starcoder_tpp10.py
+tests/test_starcoder_tpp10.py
+
+Inspect relevant underlying Levanter/Marin APIs where needed. The new asset directory pins a TinyLlama 32k tokenizer and GCS source generations. Tests and final packet assembly are ongoing; do not infer a test passed from its existence.
+
+Find concrete blockers, not hypothetical production hardening. Prioritize: actual finite parent and subset membership; tokenization/budget/metadata correctness; shard retry behavior; zero-weight source-name/key invariance; total-parameter TPP and actual allocator counts; runtime/lock checks on the TPU child without premature JAX initialization; placement and dependency execution; idempotent identities and stage gating; verified endpoint collection; per-subset rather than pooled-information selection regret. Distinguish a broken implementation from an empirical question for a canary. Cite exact file and line references, explain an execution scenario and minimal fix. Return blockers separately from optional improvements and state what you did not verify.

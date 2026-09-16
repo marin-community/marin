@@ -1,0 +1,31 @@
+{
+  "objective_metric": "eval/paloma/dolma_100_programing_languages/bpb",
+  "oracle_ceiling": [
+    {
+      "boundary_mass_005": 0.16666666666666666,
+      "dataset": "three_phase_starcoder",
+      "full_pool_max_coverage_distance": 0.2997792485926174,
+      "full_pool_mean_coverage_distance": 0.11681854114404219,
+      "high_starcoder_epoch_fraction": 0.25,
+      "k": 16,
+      "material_improvement": true,
+      "median_regret@1": 0.0,
+      "median_regret@5": 0.0,
+      "median_rmse": 0.8012846804906171,
+      "median_runtime_s": 16.381311416000244,
+      "median_spearman": 0.9085081448494081,
+      "median_true_rank": 1.0,
+      "policy": "random_observed",
+      "random_median_regret@1": 0.009085297584533691,
+      "seed": 1092,
+      "selected_indices": "[12, 13, 17, 28, 36, 43, 68, 91, 94, 116, 118, 119, 132, 135, 147, 148]",
+      "subset_id": "12-13-17-28-36-43-68-91-94-116-118-119-132-135-147-148",
+      "subset_mean_pairwise_distance": 0.35204632603194425,
+      "subset_min_pairwise_distance": 0.07813211841847158,
+      "success_rate": 1.0
+    }
+  ],
+  "recommended_k": {
+    "three_phase_starcoder": 16
+  }
+}

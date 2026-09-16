@@ -1,0 +1,55 @@
+{
+  "all_data_fit_metrics_on_subset": {
+    "best_candidate": "10",
+    "best_value": 0.9086067080497742,
+    "chosen_candidate": "45",
+    "chosen_value": 0.9137356281280518,
+    "r2": 0.9656730168796228,
+    "regret_at_1": 0.005128920078277588,
+    "rmse": 0.029483707465973712,
+    "spearman": 0.8436100131752305
+  },
+  "all_data_fit_params": {
+    "alpha": 8.31415564086338,
+    "eta": 0.9741879840630027,
+    "lam": 2.5126908591663857,
+    "reg": 1.522997974471263e-08,
+    "tau": 3.2201247392305
+  },
+  "all_data_fit_slice_min": {
+    "bpb": 0.8827374665150574,
+    "epochs": 3.254317654108085,
+    "phase_1_starcoder": 0.246
+  },
+  "all_data_fit_subset_rmse": 0.029483707465973712,
+  "n_subset_runs": 45,
+  "n_total_runs": 116,
+  "observed_subset_min": {
+    "bpb": 0.9086067080497742,
+    "phase_1_starcoder": 0.2814080848021789
+  },
+  "subset_fit_metrics_on_subset": {
+    "best_candidate": "10",
+    "best_value": 0.9086067080497742,
+    "chosen_candidate": "17",
+    "chosen_value": 0.9132933020591736,
+    "r2": 0.9953284891501982,
+    "regret_at_1": 0.004686594009399414,
+    "rmse": 0.010876594968502686,
+    "spearman": 0.9156785243741764
+  },
+  "subset_fit_params": {
+    "alpha": 2.7416383195223943,
+    "eta": 12.469341491971463,
+    "lam": 6.13421235332821e-06,
+    "reg": 0.01303801868826547,
+    "tau": 12.930006635603478
+  },
+  "subset_fit_slice_min": {
+    "bpb": 0.9070327032608381,
+    "epochs": 3.4659805909606436,
+    "phase_1_starcoder": 0.262
+  },
+  "subset_fit_subset_rmse": 0.010876594968502686,
+  "target": "eval/paloma/dolma_100_programing_languages/bpb"
+}

@@ -1,13 +1,122 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+import json
+import math
+import os
+import subprocess
+import sys
+import textwrap
+
+import jax
+import jmp
 import pytest
+from haliax import Axis
 from levanter.testing.helpers import skip_if_module_missing
 from transformers import AutoTokenizer
 
 from levanter.data.packing import PromptCompletion
-from levanter.eval_harness import LmEvalHarnessConfig, _call_with_retry, _iterate_tokenized_requests
+from levanter.eval_harness import (
+    LmEvalHarnessConfig,
+    SampleLoggingConfig,
+    _call_with_retry,
+    _iterate_tokenized_requests,
+    run_lm_eval_harness,
+)
 from levanter.eval_harness_config import TaskConfig
+from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
+from levanter.testing.helpers import use_test_mesh
+from levanter.eval_harness import _paged_attention_max_seqs
+
+
+def test_eval_entry_point_preserves_dependency_import_failure(tmp_path):
+    dependency = tmp_path / "lm_eval"
+    dependency.mkdir()
+    (dependency / "__init__.py").write_text("raise AttributeError('removed_transformers_api')\n")
+    probe = textwrap.dedent(
+        """\
+        from levanter.eval_harness import EvalHarnessMainConfig, LmEvalHarnessConfig, run_eval_harness_main
+
+        config = EvalHarnessMainConfig(
+            eval_harness=LmEvalHarnessConfig(task_spec=[]),
+            tokenizer="/nonexistent-tokenizer",
+            checkpoint_path="/nonexistent-checkpoint",
+        )
+        try:
+            run_eval_harness_main(config)
+        except ImportError as exc:
+            assert isinstance(exc.__cause__, AttributeError)
+            assert str(exc.__cause__) == "removed_transformers_api"
+        else:
+            raise AssertionError("Evaluation accepted a broken lm-eval dependency")
+        """
+    )
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(tmp_path), os.environ.get("PYTHONPATH", "")]))
+    result = subprocess.run([sys.executable, "-c", probe], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@skip_if_module_missing("lm_eval")
+@pytest.mark.parametrize("smooth_metrics", [False, True])
+def test_lm_eval_harness_scores_and_retains_local_multiple_choice_samples(
+    tmp_path, local_gpt2_tokenizer, smooth_metrics
+):
+    # Identical inputs with opposite gold labels give accuracy 1/2 for any deterministic model.
+    documents = [{"question": "Answer:", "choices": ["yes", "no"], "gold": gold} for gold in (0, 1)]
+    data_path = tmp_path / "questions.jsonl"
+    data_path.write_text("\n".join(json.dumps(doc) for doc in documents))
+    task = TaskConfig(
+        task="local_multiple_choice",
+        dataset_path="json",
+        dataset_kwargs={"data_files": {"test": str(data_path)}},
+        test_split="test",
+        output_type="multiple_choice",
+        doc_to_text="{{question}}",
+        doc_to_choice="{{choices}}",
+        doc_to_target="{{gold}}",
+        num_fewshot=0,
+        metric_list=[{"metric": "acc", "aggregation": "mean", "higher_is_better": True}],
+    )
+    if smooth_metrics:
+        task = dataclasses.replace(
+            task,
+            metric_list=task.metric_list
+            + [
+                {"metric": name, "aggregation": "mean", "higher_is_better": name != "bpb"}
+                for name in ("bpb", "logprob", "choice_logprob", "choice_prob_norm", "choice_logprob_norm")
+            ],
+        )
+    config = LmEvalHarnessConfig(
+        task_spec=[task], max_length=16, log_samples=True, sample_logging=SampleLoggingConfig(log_all=True)
+    )
+    model_config = Gpt2Config(
+        max_seq_len=16, hidden_dim=16, num_layers=1, num_heads=2, resid_pdrop=0.0, use_flash_attention=False
+    )
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(Axis("vocab", len(local_gpt2_tokenizer)), model_config, key=jax.random.PRNGKey(0))
+        result = run_lm_eval_harness(config, model, local_gpt2_tokenizer, 1, {}, jmp.get_policy("f32"))
+
+    assert result is not None
+    assert result["results"]["local_multiple_choice"]["acc,none"] == 0.5
+    assert result["n-samples"]["local_multiple_choice"]["effective"] == 2
+    samples = result["samples"]["local_multiple_choice"]
+    assert len(samples) == 2
+    assert all(len(sample["resps"]) == 2 for sample in samples)
+    assert all(math.isfinite(response[0][0]) for sample in samples for response in sample["resps"])
+    outputs = result["results"]["local_multiple_choice"]["outputs"]
+    assert len(outputs) == 4
+    assert {sample["generation"] for sample in outputs} == {" yes", " no"}
+    if smooth_metrics:
+        expected_bpb = []
+        for sample in samples:
+            gold = sample["doc"]["gold"]
+            logprob = sample["resps"][gold][0][0]
+            bpb = -logprob / (len(sample["doc"]["choices"][gold].encode("utf-8")) * math.log(2))
+            assert sample["bpb"] == pytest.approx(bpb)
+            assert sample["logprob"] == logprob
+            expected_bpb.append(bpb)
+        assert result["results"]["local_multiple_choice"]["bpb,none"] == pytest.approx(sum(expected_bpb) / 2)
 
 
 @skip_if_module_missing("lm_eval")
@@ -203,3 +312,10 @@ def test_call_with_retry_does_not_sleep_after_the_last_attempt(monkeypatch):
 
     assert attempts == 3
     assert len(sleeps) == 2
+
+
+def test_paged_attention_max_seqs_fits_smem_page_table():
+    assert _paged_attention_max_seqs(8192, 8) == 224
+    assert _paged_attention_max_seqs(4096, 8) == 256
+    assert _paged_attention_max_seqs(8192, 128) == 256
+    assert _paged_attention_max_seqs(1 << 20, 8) == 1

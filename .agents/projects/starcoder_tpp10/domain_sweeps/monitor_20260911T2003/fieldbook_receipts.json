@@ -1,0 +1,86 @@
+[
+  {
+    "attrs": {},
+    "author": null,
+    "body": "Refinement remains 40/45 verified complete at 20:04 UTC. All five unfinished TPU tasks remain pending, with unchanged preemption counts, batch priority and zero runtime failures. Both interactive CPU coordinators remain live. Final FineMath matched-subset preparation is CPU-capacity queued; no new-domain training has started. No repairs, resubmissions or scientific changes. Existing checkpoint evidence retained; status reported to the user with no operational change.",
+    "body_format": "markdown",
+    "created_at": "2026-09-11T20:04:44Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m29153jrdh3d1jw50v9tqxzt",
+    "note_type": "checkpoint",
+    "resolved_at": null,
+    "status": "open",
+    "title": "User status check: refinement 40/45; survey waiting on CPU",
+    "updated_at": "2026-09-11T20:04:44Z"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789157032.690521,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T2003/live_status.json",
+      "fieldbook.local_size_at_capture": 3261
+    },
+    "content_hash": "sha256:8665258560ce897660628019a9df2d8a95f75cf551690815be647fde37c4edac",
+    "created_at": "2026-09-11T20:04:45Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29153xpkg4v8d04apg4fw46",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T20:04:45Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T2003/live_status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789157084.4941826,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T2003/status.json",
+      "fieldbook.local_size_at_capture": 2699
+    },
+    "content_hash": "sha256:11141d70fcd0c8c9b9f22cd015a3bf4beb5dbbcfd01b6362ce07e4f440f4284f",
+    "created_at": "2026-09-11T20:04:45Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m291546rg9pdst6h3wdv00mk",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T20:04:45Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T2003/status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789157084.4943316,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/post_submission_status.json",
+      "fieldbook.local_size_at_capture": 2699
+    },
+    "content_hash": "sha256:11141d70fcd0c8c9b9f22cd015a3bf4beb5dbbcfd01b6362ce07e4f440f4284f",
+    "created_at": "2026-09-11T11:22:41Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m283961sm11n8j3fxffszns6",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T20:04:45Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/post_submission_status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789157084.4946487,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md",
+      "fieldbook.local_size_at_capture": 7980
+    },
+    "content_hash": "sha256:71f3591985add99ec890141bd0d305015daabd18f820702d5433735069576ecc",
+    "created_at": "2026-09-11T11:20:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28353vf9qqwr0bn6rh2vaw5",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T20:04:46Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md"
+  }
+]

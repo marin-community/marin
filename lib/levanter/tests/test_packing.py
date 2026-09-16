@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from levanter.data.loader import stack_batches
 from levanter.data.packing import (
     GreedyPrepackedDataset,
     PromptCompletion,
@@ -22,6 +23,33 @@ from levanter.data.packing import (
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
 from levanter.store.jagged_array import JaggedArrayStore
+from levanter.testing.helpers import use_test_mesh
+from levanter.utils.background_iterable import BackgroundIterator
+
+
+@pytest.mark.parametrize("count", [2, 3])
+def test_greedy_packing_stages_cpu_batches_inside_model_mesh(count):
+    if jax.default_backend() == "cpu" and jax.device_count() < 2:
+        pytest.skip("Requires distinct model and staging meshes; set JAX_NUM_CPU_DEVICES=4")
+    Pos, Batch = hax.Axis("pos", 4), hax.Axis("batch", 2)
+    sequences = [PromptCompletion(ids=[i + 1, i + 2], prompt_length=1, segment_id=i) for i in range(count)]
+    cpu = jax.local_devices(backend="cpu")[0]
+    with use_test_mesh():
+        packed = greedy_pack_prompt_completions(Pos, sequences, pad_token=0, max_segments_per_example=1)
+        batches = list(BackgroundIterator(stack_batches(iter(packed), Pos, Batch), max_capacity=2))
+        for batch in batches:
+            assert all(leaf.devices() == {cpu} for leaf in jax.tree.leaves(batch))
+
+    tokens = np.concatenate([np.asarray(batch.tokens.array) for batch in batches])
+    weights = np.concatenate([np.asarray(batch.loss_weight.array) for batch in batches])
+    segments = np.concatenate([np.asarray(batch.attn_mask.segment_ids[0].array) for batch in batches])
+    np.testing.assert_array_equal(tokens[:count], [[i + 1, i + 2, 0, 0] for i in range(count)])
+    np.testing.assert_array_equal(weights[:count], [[1, 0, 0, 0]] * count)
+    np.testing.assert_array_equal(segments[:count], [[i, i, -1, -1] for i in range(count)])
+    if count % Batch.size:
+        np.testing.assert_array_equal(tokens[count:], 0)
+        np.testing.assert_array_equal(weights[count:], 0)
+        np.testing.assert_array_equal(segments[count:], -1)
 
 
 def test_per_segment_loss():
@@ -46,6 +74,22 @@ def test_per_segment_loss():
     unique_ids, segment_losses = per_segment_loss(packed, losses, max_Segments=Segments)
 
     assert list(unique_ids.array) == [-1, 0, 1]
+    assert list(segment_losses.array) == [0.0, 0.6, 0.9]
+
+
+def test_per_segment_loss_preserves_explicit_noncontiguous_segment_ids():
+    Pos = hax.Axis("pos", size=10)
+    packer = SequencePacker(Pos=Pos, max_pack_size=10, pad_token=0)
+    packer.add_example(ids=[1, 2, 3], loss_weight=[1, 1, 1], segment_id=4)
+    packer.add_example(ids=[4, 5], loss_weight=[1, 1], segment_id=9)
+    packed = packer.pack()
+    packed = jax.tree_util.tree_map(lambda x: jax.device_put(x) if isinstance(x, jax.Array) else x, packed)
+    losses = hax.named(jnp.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0]), Pos)
+    Segments = hax.Axis("segments", size=3)
+
+    unique_ids, segment_losses = per_segment_loss(packed, losses, max_Segments=Segments)
+
+    assert list(unique_ids.array) == [-1, 4, 9]
     assert list(segment_losses.array) == [0.0, 0.6, 0.9]
 
 
@@ -160,6 +204,22 @@ def test_pack_prompt_completions_simple():
     np.testing.assert_array_equal(packed_2.tokens.array, expected_tokens_2)
     np.testing.assert_array_equal(packed_2.attn_mask.segment_ids[0].array, expected_segment_ids_2)
     np.testing.assert_array_equal(packed_2.loss_weight.array, expected_loss_weight_2)
+
+
+def test_greedy_pack_prompt_completions_preserves_explicit_segment_id():
+    Pos = hax.Axis("pos", size=10)
+    sequences = [
+        PromptCompletion(ids=[1, 2, 3], prompt_length=2, segment_id=11),
+        PromptCompletion(ids=[4, 5], prompt_length=1, segment_id=17),
+    ]
+
+    results = greedy_pack_prompt_completions(Pos, sequences, pad_token=0, max_segments_per_example=2)
+
+    assert len(results) == 1
+    np.testing.assert_array_equal(
+        results[0].attn_mask.segment_ids[0].array,
+        [11, 11, 11, 17, 17, -1, -1, -1, -1, -1],
+    )
 
 
 def test_pack_prompt_completions_exceed_max_buffered_examples():

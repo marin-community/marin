@@ -1,0 +1,1701 @@
+{
+  "scope": "Read-only plot and archived local-input audit. No paper/code edits and no live evaluations or training submissions.",
+  "conclusion": "The PDF faithfully plots the recorded CSV numbers, but those numbers mix BPB schemas. Fresh saved source metrics use schema2 at target p55, p60, p65, p80 and legacy/no-version BPB at the other target coordinates. Identical metric keys do not establish a common metric definition. The p70 discontinuity is not a sorting, mapping, smoothing, or stale-PDF issue.",
+  "checks": [
+    {
+      "check": "pilot_csv_plan_identity_all_rows",
+      "status": "passed",
+      "rows": 57
+    },
+    {
+      "check": "refinement_csv_plan_identity_all_rows",
+      "status": "passed",
+      "rows": 45
+    },
+    {
+      "check": "paper_analysis_identical_to_completion_analysis",
+      "status": "passed",
+      "sha256": "4508adb2af8454342841bca006f23dd22449b424472d167eb6edc7ea291d9e00"
+    },
+    {
+      "check": "all_60_curve_points_recomputed_from_102_csv_rows_with_identity_and_sorted_grid_checks",
+      "status": "passed"
+    },
+    {
+      "check": "actual_current_pdf_target_path_matches_all_10_visible_target_inputs",
+      "status": "passed",
+      "max_error_pdf_points": 4.838535829776447e-07
+    }
+  ],
+  "source_hash_checks": [
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/pilot_plan.json",
+      "expected_sha256": "4a60c10d04b57c8d3dc4807efaaec54c6cfe3e4df1f6c7004c71ead57c94e38a",
+      "actual_sha256": "4a60c10d04b57c8d3dc4807efaaec54c6cfe3e4df1f6c7004c71ead57c94e38a",
+      "matches": true
+    },
+    {
+      "path": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/pilot_metrics.csv",
+      "expected_sha256": "263395e98471389c0c339ce0a24697217014085f07c44c3c3fdc715aea0336bd",
+      "actual_sha256": "263395e98471389c0c339ce0a24697217014085f07c44c3c3fdc715aea0336bd",
+      "matches": true
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/refinement_plan.json",
+      "expected_sha256": "c456342e7bec3fecd464b640910c20ba80095476df77ed9d04903b223c49b0f3",
+      "actual_sha256": "c456342e7bec3fecd464b640910c20ba80095476df77ed9d04903b223c49b0f3",
+      "matches": true
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/verified_endpoints.json",
+      "expected_sha256": "d453914f60b164dda8c59f99260c8facb68118faa8c97f027d087216a5db74d1",
+      "actual_sha256": "d453914f60b164dda8c59f99260c8facb68118faa8c97f027d087216a5db74d1",
+      "matches": true
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/plot_starcoder_tpp10_refinement.py",
+      "expected_sha256": "837735671038e1a89c91ef360aa0f6f67469b1bae6a8f9fe8dfa2b628f2629c8",
+      "actual_sha256": "837735671038e1a89c91ef360aa0f6f67469b1bae6a8f9fe8dfa2b628f2629c8",
+      "matches": true
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/analyze_starcoder_tpp10.py",
+      "expected_sha256": "e332709a4eac55c0c286c2d4e1142bca44c8e4640dc4e6606d9234842b1b2618",
+      "actual_sha256": "e332709a4eac55c0c286c2d4e1142bca44c8e4640dc4e6606d9234842b1b2618",
+      "matches": true
+    }
+  ],
+  "figure_receipt_hash_checks": [
+    {
+      "path": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_outline_figures/data/epoch_matching_analysis.json",
+      "receipt_field": "source_sha256",
+      "matches": true,
+      "sha256": "4508adb2af8454342841bca006f23dd22449b424472d167eb6edc7ea291d9e00"
+    },
+    {
+      "path": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_outline_figures/data/allocation_audit.json",
+      "receipt_field": "allocation_source_sha256",
+      "matches": true,
+      "sha256": "561124284d1d90b4e25fcb873f232ff5b9cbd6afb9f81dbaf20faed770497167"
+    },
+    {
+      "path": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_outline_figures/build_epoch_matching.py",
+      "receipt_field": "builder_sha256",
+      "matches": true,
+      "sha256": "a8714062c0d653e066696b3ce1cac51e9ea150c0e838ac5b6594e5f70da47563"
+    }
+  ],
+  "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+  "pilot_refinement_shared_metric": true,
+  "target_trainer_seed": 20260910,
+  "target_final_logged_step": 11490,
+  "target_points": [
+    {
+      "percent": 0,
+      "value": 1.2149097919464111,
+      "seed_values": [
+        1.2149097919464111
+      ],
+      "run_names": [
+        "tpp10_target_p000_s20260910"
+      ],
+      "run_name": "tpp10_target_p000_s20260910",
+      "step": "11490",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "config_fingerprint": "7069115a",
+      "plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+      "status": "succeeded",
+      "cohort": "pilot",
+      "source_csv": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/pilot_metrics.csv",
+      "trainer_seed": 20260910,
+      "target_epochs": 0.0
+    },
+    {
+      "percent": 10,
+      "value": 0.88910973072052,
+      "seed_values": [
+        0.88910973072052
+      ],
+      "run_names": [
+        "tpp10_target_p010_s20260910"
+      ],
+      "run_name": "tpp10_target_p010_s20260910",
+      "step": "11490",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "config_fingerprint": "33d2329d",
+      "plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+      "status": "succeeded",
+      "cohort": "pilot",
+      "source_csv": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/pilot_metrics.csv",
+      "trainer_seed": 20260910,
+      "target_epochs": 1.5767045454545454
+    },
+    {
+      "percent": 30,
+      "value": 0.8211872577667236,
+      "seed_values": [
+        0.8211872577667236
+      ],
+      "run_names": [
+        "tpp10_target_p030_s20260910"
+      ],
+      "run_name": "tpp10_target_p030_s20260910",
+      "step": "11490",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "config_fingerprint": "100ce930",
+      "plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+      "status": "succeeded",
+      "cohort": "pilot",
+      "source_csv": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/pilot_metrics.csv",
+      "trainer_seed": 20260910,
+      "target_epochs": 4.7684551480716255
+    },
+    {
+      "percent": 40,
+      "value": 0.8066982626914978,
+      "seed_values": [
+        0.8066982626914978
+      ],
+      "run_names": [
+        "tpp10_target_p040_s20260910"
+      ],
+      "run_name": "tpp10_target_p040_s20260910",
+      "step": "11490",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "config_fingerprint": "30253400",
+      "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+      "status": "succeeded",
+      "cohort": "refinement",
+      "source_csv": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/refinement_metrics.csv",
+      "trainer_seed": 20260910,
+      "target_epochs": 6.352832300275482
+    },
+    {
+      "percent": 50,
+      "value": 0.7942407727241516,
+      "seed_values": [
+        0.7942407727241516
+      ],
+      "run_names": [
+        "tpp10_target_p050_s20260910"
+      ],
+      "run_name": "tpp10_target_p050_s20260910",
+      "step": "11490",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "config_fingerprint": "747891fe",
+      "plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+      "status": "succeeded",
+      "cohort": "pilot",
+      "source_csv": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/pilot_metrics.csv",
+      "trainer_seed": 20260910,
+      "target_epochs": 7.937187930440771
+    },
+    {
+      "percent": 55,
+      "value": 0.7701349258422852,
+      "seed_values": [
+        0.7701349258422852
+      ],
+      "run_names": [
+        "tpp10_target_p055_s20260910"
+      ],
+      "run_name": "tpp10_target_p055_s20260910",
+      "step": "11490",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "config_fingerprint": "650ffe00",
+      "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+      "status": "succeeded",
+      "cohort": "refinement",
+      "source_csv": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/refinement_metrics.csv",
+      "trainer_seed": 20260910,
+      "target_epochs": 8.733180526859504
+    },
+    {
+      "percent": 60,
+      "value": 0.7694385051727295,
+      "seed_values": [
+        0.7694385051727295
+      ],
+      "run_names": [
+        "tpp10_target_p060_s20260910"
+      ],
+      "run_name": "tpp10_target_p060_s20260910",
+      "step": "11490",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "config_fingerprint": "1e801f9f",
+      "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+      "status": "succeeded",
+      "cohort": "refinement",
+      "source_csv": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/refinement_metrics.csv",
+      "trainer_seed": 20260910,
+      "target_epochs": 9.521435950413224
+    },
+    {
+      "percent": 65,
+      "value": 0.7665561437606812,
+      "seed_values": [
+        0.7665561437606812
+      ],
+      "run_names": [
+        "tpp10_target_p065_s20260910"
+      ],
+      "run_name": "tpp10_target_p065_s20260910",
+      "step": "11490",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "config_fingerprint": "97b113a1",
+      "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+      "status": "succeeded",
+      "cohort": "refinement",
+      "source_csv": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/refinement_metrics.csv",
+      "trainer_seed": 20260910,
+      "target_epochs": 10.301997245179063
+    },
+    {
+      "percent": 70,
+      "value": 0.7843883633613586,
+      "seed_values": [
+        0.7843883633613586
+      ],
+      "run_names": [
+        "tpp10_target_p070_s20260910"
+      ],
+      "run_name": "tpp10_target_p070_s20260910",
+      "step": "11490",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "config_fingerprint": "66e8dc46",
+      "plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+      "status": "succeeded",
+      "cohort": "pilot",
+      "source_csv": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/pilot_metrics.csv",
+      "trainer_seed": 20260910,
+      "target_epochs": 11.097925275482094
+    },
+    {
+      "percent": 80,
+      "value": 0.770405113697052,
+      "seed_values": [
+        0.770405113697052
+      ],
+      "run_names": [
+        "tpp10_target_p080_s20260910"
+      ],
+      "run_name": "tpp10_target_p080_s20260910",
+      "step": "11490",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "config_fingerprint": "4ab6f469",
+      "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+      "status": "succeeded",
+      "cohort": "refinement",
+      "source_csv": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/refinement_metrics.csv",
+      "trainer_seed": 20260910,
+      "target_epochs": 12.682334710743802
+    },
+    {
+      "percent": 90,
+      "value": 0.7987733483314514,
+      "seed_values": [
+        0.7987733483314514
+      ],
+      "run_names": [
+        "tpp10_target_p090_s20260910"
+      ],
+      "run_name": "tpp10_target_p090_s20260910",
+      "step": "11490",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "config_fingerprint": "e51b00bd",
+      "plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+      "status": "succeeded",
+      "cohort": "pilot",
+      "source_csv": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/pilot_metrics.csv",
+      "trainer_seed": 20260910,
+      "target_epochs": 14.266711862947659
+    },
+    {
+      "percent": 100,
+      "value": 0.820745587348938,
+      "seed_values": [
+        0.820745587348938
+      ],
+      "run_names": [
+        "tpp10_target_p100_s20260910"
+      ],
+      "run_name": "tpp10_target_p100_s20260910",
+      "step": "11490",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "config_fingerprint": "0cbcd192",
+      "plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+      "status": "succeeded",
+      "cohort": "pilot",
+      "source_csv": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/pilot_metrics.csv",
+      "trainer_seed": 20260910,
+      "target_epochs": 15.827823691460056
+    }
+  ],
+  "target_cohort_percent": {
+    "pilot": [
+      0,
+      10,
+      30,
+      50,
+      70,
+      90,
+      100
+    ],
+    "refinement": [
+      40,
+      55,
+      60,
+      65,
+      80
+    ]
+  },
+  "focus_differences": [
+    {
+      "from_percent": 50,
+      "to_percent": 55,
+      "delta_bpb": -0.024105846881866455,
+      "percent_of_from_bpb": -3.035080508293003
+    },
+    {
+      "from_percent": 55,
+      "to_percent": 60,
+      "delta_bpb": -0.0006964206695556641,
+      "percent_of_from_bpb": -0.09042839717910457
+    },
+    {
+      "from_percent": 60,
+      "to_percent": 65,
+      "delta_bpb": -0.00288236141204834,
+      "percent_of_from_bpb": -0.3746058187458769
+    },
+    {
+      "from_percent": 65,
+      "to_percent": 70,
+      "delta_bpb": 0.01783221960067749,
+      "percent_of_from_bpb": 2.3262770438696934
+    },
+    {
+      "from_percent": 70,
+      "to_percent": 80,
+      "delta_bpb": -0.01398324966430664,
+      "percent_of_from_bpb": -1.7826946851154037
+    },
+    {
+      "from_percent": 80,
+      "to_percent": 90,
+      "delta_bpb": 0.028368234634399414,
+      "percent_of_from_bpb": 3.6822490051065153
+    },
+    {
+      "from_percent": 65,
+      "to_percent": 80,
+      "delta_bpb": 0.0038489699363708496,
+      "percent_of_from_bpb": 0.502111941532165
+    }
+  ],
+  "p70_above_refinement_chord_65_80_bpb": 0.016549229621887207,
+  "refinement_residuals_against_neighboring_pilot_chords": [
+    {
+      "refinement_percent": 40,
+      "left_pilot_percent": 30,
+      "right_pilot_percent": 50,
+      "pilot_chord_bpb": 0.8077140152454376,
+      "actual_bpb": 0.8066982626914978,
+      "residual_bpb": -0.0010157525539398193
+    },
+    {
+      "refinement_percent": 55,
+      "left_pilot_percent": 50,
+      "right_pilot_percent": 70,
+      "pilot_chord_bpb": 0.7917776703834534,
+      "actual_bpb": 0.7701349258422852,
+      "residual_bpb": -0.021642744541168213
+    },
+    {
+      "refinement_percent": 60,
+      "left_pilot_percent": 50,
+      "right_pilot_percent": 70,
+      "pilot_chord_bpb": 0.7893145680427551,
+      "actual_bpb": 0.7694385051727295,
+      "residual_bpb": -0.019876062870025635
+    },
+    {
+      "refinement_percent": 65,
+      "left_pilot_percent": 50,
+      "right_pilot_percent": 70,
+      "pilot_chord_bpb": 0.7868514657020569,
+      "actual_bpb": 0.7665561437606812,
+      "residual_bpb": -0.020295321941375732
+    },
+    {
+      "refinement_percent": 80,
+      "left_pilot_percent": 70,
+      "right_pilot_percent": 90,
+      "pilot_chord_bpb": 0.791580855846405,
+      "actual_bpb": 0.770405113697052,
+      "residual_bpb": -0.021175742149353027
+    }
+  ],
+  "interpolation_caveat": "Pilot-chord residuals describe cohort-associated geometry only. They do not estimate a cohort effect, prove a runtime mismatch, or establish smoothness of true target loss.",
+  "pdf": {
+    "path": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/figures/epoch_matching_tpp10.pdf",
+    "sha256": "48ea346aadcfd9444371a35df929bce2745bfe579ff49b35fd62a278093d02b4",
+    "pages": 1,
+    "target_path_verification": [
+      {
+        "percent": 30,
+        "data_value_bpb": 0.8211872577667236,
+        "pdf_path_xy": [
+          298.461484,
+          152.489989
+        ],
+        "expected_xy": [
+          298.461484375,
+          152.489988719115
+        ],
+        "max_coordinate_error_points": 3.7500001326407073e-07
+      },
+      {
+        "percent": 40,
+        "data_value_bpb": 0.8066982626914978,
+        "pdf_path_xy": [
+          325.661484,
+          125.095837
+        ],
+        "expected_xy": [
+          325.66148437500004,
+          125.09583733313409
+        ],
+        "max_coordinate_error_points": 3.750000701074896e-07
+      },
+      {
+        "percent": 50,
+        "data_value_bpb": 0.7942407727241516,
+        "pdf_path_xy": [
+          352.861484,
+          101.542626
+        ],
+        "expected_xy": [
+          352.86148437500003,
+          101.54262578995873
+        ],
+        "max_coordinate_error_points": 3.7500001326407073e-07
+      },
+      {
+        "percent": 55,
+        "data_value_bpb": 0.7701349258422852,
+        "pdf_path_xy": [
+          366.461484,
+          55.96602
+        ],
+        "expected_xy": [
+          366.46148437500005,
+          55.96601986659503
+        ],
+        "max_coordinate_error_points": 3.750000701074896e-07
+      },
+      {
+        "percent": 60,
+        "data_value_bpb": 0.7694385051727295,
+        "pdf_path_xy": [
+          380.061484,
+          54.649307
+        ],
+        "expected_xy": [
+          380.061484375,
+          54.64930651614642
+        ],
+        "max_coordinate_error_points": 4.838535829776447e-07
+      },
+      {
+        "percent": 65,
+        "data_value_bpb": 0.7665561437606812,
+        "pdf_path_xy": [
+          393.661484,
+          49.199664
+        ],
+        "expected_xy": [
+          393.66148437500004,
+          49.199663910789184
+        ],
+        "max_coordinate_error_points": 3.750000701074896e-07
+      },
+      {
+        "percent": 70,
+        "data_value_bpb": 0.7843883633613586,
+        "pdf_path_xy": [
+          407.261484,
+          82.914806
+        ],
+        "expected_xy": [
+          407.261484375,
+          82.91480569617633
+        ],
+        "max_coordinate_error_points": 3.7500001326407073e-07
+      },
+      {
+        "percent": 80,
+        "data_value_bpb": 0.770405113697052,
+        "pdf_path_xy": [
+          434.461484,
+          56.47686
+        ],
+        "expected_xy": [
+          434.46148437500005,
+          56.47686047063334
+        ],
+        "max_coordinate_error_points": 4.7063333852293e-07
+      },
+      {
+        "percent": 90,
+        "data_value_bpb": 0.7987733483314514,
+        "pdf_path_xy": [
+          461.661484,
+          110.112307
+        ],
+        "expected_xy": [
+          461.661484375,
+          110.11230655181377
+        ],
+        "max_coordinate_error_points": 4.481862276861648e-07
+      },
+      {
+        "percent": 100,
+        "data_value_bpb": 0.820745587348938,
+        "pdf_path_xy": [
+          488.861484,
+          151.654928
+        ],
+        "expected_xy": [
+          488.86148437500003,
+          151.65492830086575
+        ],
+        "max_coordinate_error_points": 3.7500001326407073e-07
+      }
+    ],
+    "visual_review": "Rendered current PDF at 150 dpi and inspected complete page. Target shows p65 minimum, p70 bump, p80 dip. Labels and line connection agree with raw values; no smoothing. X display omits p0 and p10 on target. Top axis gives materialized epochs at same p coordinates. No clipped or overlapping labels observed."
+  },
+  "hashes": {
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/pilot_plan.json": "4a60c10d04b57c8d3dc4807efaaec54c6cfe3e4df1f6c7004c71ead57c94e38a",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/refinement_plan.json": "c456342e7bec3fecd464b640910c20ba80095476df77ed9d04903b223c49b0f3",
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/pilot_metrics.csv": "263395e98471389c0c339ce0a24697217014085f07c44c3c3fdc715aea0336bd",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/refinement_metrics.csv": "963f61944aec2ae448f8f12be7150e9168d8f3d318d573b7808887eb500f675c",
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_outline_figures/data/epoch_matching_analysis.json": "4508adb2af8454342841bca006f23dd22449b424472d167eb6edc7ea291d9e00",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/analysis.json": "4508adb2af8454342841bca006f23dd22449b424472d167eb6edc7ea291d9e00",
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_outline_figures/build_epoch_matching.py": "a8714062c0d653e066696b3ce1cac51e9ea150c0e838ac5b6594e5f70da47563",
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_outline_figures/figure5_receipt.json": "e7c3e7abe7b27e4a42a37e464427e77819689e74e2cd0c8341127b8c9ed34bbd"
+  },
+  "semantic_metric_status": "failed: mixed BPB aggregation schema, despite identical metric key and validated run identities",
+  "target_fresh_schema_evidence": [
+    {
+      "percent": 0,
+      "schema_version": null,
+      "bpb": 1.2149097919464111,
+      "token_loss": 2.0631072521209717,
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p000_s20260910_eval_metrics.jsonl"
+    },
+    {
+      "percent": 10,
+      "schema_version": null,
+      "bpb": 0.88910973072052,
+      "token_loss": 1.4948610067367554,
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p010_s20260910_eval_metrics.jsonl"
+    },
+    {
+      "percent": 30,
+      "schema_version": null,
+      "bpb": 0.8211872577667236,
+      "token_loss": 1.3773658275604248,
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p030_s20260910_eval_metrics.jsonl"
+    },
+    {
+      "percent": 40,
+      "schema_version": null,
+      "bpb": 0.8066982626914978,
+      "token_loss": 1.3520867824554443,
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p040_s20260910_eval_metrics.jsonl"
+    },
+    {
+      "percent": 50,
+      "schema_version": null,
+      "bpb": 0.7942407727241516,
+      "token_loss": 1.3306833505630493,
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p050_s20260910_eval_metrics.jsonl"
+    },
+    {
+      "percent": 55,
+      "schema_version": 2,
+      "bpb": 0.7701349258422852,
+      "token_loss": 1.3211923837661743,
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p055_s20260910_eval_metrics.jsonl"
+    },
+    {
+      "percent": 60,
+      "schema_version": 2,
+      "bpb": 0.7694385051727295,
+      "token_loss": 1.319997787475586,
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p060_s20260910_eval_metrics.jsonl"
+    },
+    {
+      "percent": 65,
+      "schema_version": 2,
+      "bpb": 0.7665561437606812,
+      "token_loss": 1.3150529861450195,
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p065_s20260910_eval_metrics.jsonl"
+    },
+    {
+      "percent": 70,
+      "schema_version": null,
+      "bpb": 0.7843883633613586,
+      "token_loss": 1.3133516311645508,
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p070_s20260910_eval_metrics.jsonl"
+    },
+    {
+      "percent": 80,
+      "schema_version": 2,
+      "bpb": 0.770405113697052,
+      "token_loss": 1.3216559886932373,
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p080_s20260910_eval_metrics.jsonl"
+    },
+    {
+      "percent": 90,
+      "schema_version": null,
+      "bpb": 0.7987733483314514,
+      "token_loss": 1.3368908166885376,
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p090_s20260910_eval_metrics.jsonl"
+    },
+    {
+      "percent": 100,
+      "schema_version": null,
+      "bpb": 0.820745587348938,
+      "token_loss": 1.373488426208496,
+      "source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/tpp10_target_p100_s20260910_eval_metrics.jsonl"
+    }
+  ],
+  "fresh_target_token_loss_order": [
+    {
+      "percent": 0,
+      "loss": 2.0631072521209717
+    },
+    {
+      "percent": 10,
+      "loss": 1.4948610067367554
+    },
+    {
+      "percent": 30,
+      "loss": 1.3773658275604248
+    },
+    {
+      "percent": 40,
+      "loss": 1.3520867824554443
+    },
+    {
+      "percent": 50,
+      "loss": 1.3306833505630493
+    },
+    {
+      "percent": 55,
+      "loss": 1.3211923837661743
+    },
+    {
+      "percent": 60,
+      "loss": 1.319997787475586
+    },
+    {
+      "percent": 65,
+      "loss": 1.3150529861450195
+    },
+    {
+      "percent": 70,
+      "loss": 1.3133516311645508
+    },
+    {
+      "percent": 80,
+      "loss": 1.3216559886932373
+    },
+    {
+      "percent": 90,
+      "loss": 1.3368908166885376
+    },
+    {
+      "percent": 100,
+      "loss": 1.373488426208496
+    }
+  ],
+  "metric_guard_gap": {
+    "csv_validation": "analyze_starcoder_tpp10.py:20-42 checks primary_metric string, plan hash, config fingerprint, final step, success, finite value; not schema.",
+    "endpoint_collector": "plot_starcoder_tpp10_refinement.py:30-61 checks runtime manifest and primary_metric numeric agreement with W&B; not eval/bpb_schema_version.",
+    "paper_builder": "build_epoch_matching.py checks allocation and complete-grid provenance but has no BPB-schema metadata in its input."
+  },
+  "independent_common_schema_recomputation": {
+    "formula": "global_bpb=mean_token_loss*11612631/(ln(2)*28741166)",
+    "global_valid_token_count": 11612631,
+    "global_valid_byte_count": 28741166,
+    "global_bpb_per_nat_token_loss": 0.582909028651567,
+    "count_source": "Parent agent supplied exact counts from the previously audited evaluation population; this subaudit independently recomputed formula and compared all 102 saved metric files. Parent has verified original count receipts.",
+    "all_102_saved_source_hashes_and_final_values_verified": true,
+    "record_source": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/all_102_final_metric_records.json",
+    "record_source_sha256": "83b627a5b1799eb13bb6be6a7e5e02d7165eb60bdc1833fccd72316ed97f70eb",
+    "schema_counts": {
+      "None": 97,
+      "2": 5
+    },
+    "schema2_run_names": [
+      "tpp10_target_p055_s20260910",
+      "tpp10_target_p060_s20260910",
+      "tpp10_target_p065_s20260910",
+      "tpp10_target_p080_s20260910",
+      "tpp10_matched_p080_s20260911_d20260914"
+    ],
+    "maximum_reconstruction_vs_logged_schema2_error": 1.851067024105646e-07,
+    "curves": [
+      {
+        "arm": "target",
+        "subset_seed": null,
+        "reported_bpb_selected_percent": 65,
+        "global_bpb_selected_percent": 70,
+        "trainer_seed_selections": [
+          {
+            "trainer_seed": 20260910,
+            "reported_bpb_selected_percent": 65,
+            "global_bpb_selected_percent": 70
+          }
+        ],
+        "points": [
+          {
+            "percent": 0,
+            "reported_bpb_mean": 1.2149097919464111,
+            "global_bpb_from_token_loss_mean": 1.2026038443378393,
+            "mean_change": -0.012305947608571843,
+            "run_names": [
+              "tpp10_target_p000_s20260910"
+            ],
+            "schema_versions": [
+              null
+            ]
+          },
+          {
+            "percent": 10,
+            "reported_bpb_mean": 0.88910973072052,
+            "global_bpb_from_token_loss_mean": 0.8713679774060257,
+            "mean_change": -0.017741753314494346,
+            "run_names": [
+              "tpp10_target_p010_s20260910"
+            ],
+            "schema_versions": [
+              null
+            ]
+          },
+          {
+            "percent": 30,
+            "reported_bpb_mean": 0.8211872577667236,
+            "global_bpb_from_token_loss_mean": 0.802878976641109,
+            "mean_change": -0.018308281125614667,
+            "run_names": [
+              "tpp10_target_p030_s20260910"
+            ],
+            "schema_versions": [
+              null
+            ]
+          },
+          {
+            "percent": 40,
+            "reported_bpb_mean": 0.8066982626914978,
+            "global_bpb_from_token_loss_mean": 0.7881435930137257,
+            "mean_change": -0.018554669677772084,
+            "run_names": [
+              "tpp10_target_p040_s20260910"
+            ],
+            "schema_versions": [
+              null
+            ]
+          },
+          {
+            "percent": 50,
+            "reported_bpb_mean": 0.7942407727241516,
+            "global_bpb_from_token_loss_mean": 0.7756673393195197,
+            "mean_change": -0.01857343340463191,
+            "run_names": [
+              "tpp10_target_p050_s20260910"
+            ],
+            "schema_versions": [
+              null
+            ]
+          },
+          {
+            "percent": 55,
+            "reported_bpb_mean": 0.7701349258422852,
+            "global_bpb_from_token_loss_mean": 0.7701349690829891,
+            "mean_change": 4.3240703906377576e-08,
+            "run_names": [
+              "tpp10_target_p055_s20260910"
+            ],
+            "schema_versions": [
+              2
+            ]
+          },
+          {
+            "percent": 60,
+            "reported_bpb_mean": 0.7694385051727295,
+            "global_bpb_from_token_loss_mean": 0.7694386281196114,
+            "mean_change": 1.2294688189751213e-07,
+            "run_names": [
+              "tpp10_target_p060_s20260910"
+            ],
+            "schema_versions": [
+              2
+            ]
+          },
+          {
+            "percent": 65,
+            "reported_bpb_mean": 0.7665561437606812,
+            "global_bpb_from_token_loss_mean": 0.7665562587791359,
+            "mean_change": 1.1501845476047379e-07,
+            "run_names": [
+              "tpp10_target_p065_s20260910"
+            ],
+            "schema_versions": [
+              2
+            ]
+          },
+          {
+            "percent": 70,
+            "reported_bpb_mean": 0.7843883633613586,
+            "global_bpb_from_token_loss_mean": 0.7655645236000794,
+            "mean_change": -0.018823839761279215,
+            "run_names": [
+              "tpp10_target_p070_s20260910"
+            ],
+            "schema_versions": [
+              null
+            ]
+          },
+          {
+            "percent": 80,
+            "reported_bpb_mean": 0.770405113697052,
+            "global_bpb_from_token_loss_mean": 0.7704052085807014,
+            "mean_change": 9.488364938192717e-08,
+            "run_names": [
+              "tpp10_target_p080_s20260910"
+            ],
+            "schema_versions": [
+              2
+            ]
+          },
+          {
+            "percent": 90,
+            "reported_bpb_mean": 0.7987733483314514,
+            "global_bpb_from_token_loss_mean": 0.7792857273691156,
+            "mean_change": -0.019487620962335805,
+            "run_names": [
+              "tpp10_target_p090_s20260910"
+            ],
+            "schema_versions": [
+              null
+            ]
+          },
+          {
+            "percent": 100,
+            "reported_bpb_mean": 0.820745587348938,
+            "global_bpb_from_token_loss_mean": 0.8006188043853639,
+            "mean_change": -0.020126782963574064,
+            "run_names": [
+              "tpp10_target_p100_s20260910"
+            ],
+            "schema_versions": [
+              null
+            ]
+          }
+        ]
+      },
+      {
+        "arm": "unmatched",
+        "subset_seed": null,
+        "reported_bpb_selected_percent": 100,
+        "global_bpb_selected_percent": 100,
+        "trainer_seed_selections": [
+          {
+            "trainer_seed": 20260910,
+            "reported_bpb_selected_percent": 100,
+            "global_bpb_selected_percent": 100
+          },
+          {
+            "trainer_seed": 20260911,
+            "reported_bpb_selected_percent": 100,
+            "global_bpb_selected_percent": 100
+          }
+        ],
+        "points": [
+          {
+            "percent": 0,
+            "reported_bpb_mean": 1.7806804180145264,
+            "global_bpb_from_token_loss_mean": 1.7595969815957786,
+            "mean_change": -0.02108343641874777,
+            "run_names": [
+              "tpp10_unmatched_p000_s20260910",
+              "tpp10_unmatched_p000_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 10,
+            "reported_bpb_mean": 1.3038452863693237,
+            "global_bpb_from_token_loss_mean": 1.2730186402787909,
+            "mean_change": -0.030826646090532872,
+            "run_names": [
+              "tpp10_unmatched_p010_s20260910",
+              "tpp10_unmatched_p010_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 30,
+            "reported_bpb_mean": 1.1910187602043152,
+            "global_bpb_from_token_loss_mean": 1.1575948966140666,
+            "mean_change": -0.033423863590248626,
+            "run_names": [
+              "tpp10_unmatched_p030_s20260910",
+              "tpp10_unmatched_p030_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 40,
+            "reported_bpb_mean": 1.145219624042511,
+            "global_bpb_from_token_loss_mean": 1.1140561101279127,
+            "mean_change": -0.031163513914598262,
+            "run_names": [
+              "tpp10_unmatched_p040_s20260910",
+              "tpp10_unmatched_p040_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 50,
+            "reported_bpb_mean": 1.1263644099235535,
+            "global_bpb_from_token_loss_mean": 1.0951940324787643,
+            "mean_change": -0.03117037744478912,
+            "run_names": [
+              "tpp10_unmatched_p050_s20260910",
+              "tpp10_unmatched_p050_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 55,
+            "reported_bpb_mean": 1.1172249913215637,
+            "global_bpb_from_token_loss_mean": 1.085302391311535,
+            "mean_change": -0.03192260001002878,
+            "run_names": [
+              "tpp10_unmatched_p055_s20260910",
+              "tpp10_unmatched_p055_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 60,
+            "reported_bpb_mean": 1.1164177060127258,
+            "global_bpb_from_token_loss_mean": 1.0845571654197335,
+            "mean_change": -0.03186054059299237,
+            "run_names": [
+              "tpp10_unmatched_p060_s20260910",
+              "tpp10_unmatched_p060_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 65,
+            "reported_bpb_mean": 1.1038339734077454,
+            "global_bpb_from_token_loss_mean": 1.0720462371281094,
+            "mean_change": -0.031787736279635936,
+            "run_names": [
+              "tpp10_unmatched_p065_s20260910",
+              "tpp10_unmatched_p065_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 70,
+            "reported_bpb_mean": 1.0953689813613892,
+            "global_bpb_from_token_loss_mean": 1.0636281968629724,
+            "mean_change": -0.031740784498416774,
+            "run_names": [
+              "tpp10_unmatched_p070_s20260910",
+              "tpp10_unmatched_p070_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 80,
+            "reported_bpb_mean": 1.0861631035804749,
+            "global_bpb_from_token_loss_mean": 1.054923413659468,
+            "mean_change": -0.031239689921006786,
+            "run_names": [
+              "tpp10_unmatched_p080_s20260910",
+              "tpp10_unmatched_p080_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 90,
+            "reported_bpb_mean": 1.0725759863853455,
+            "global_bpb_from_token_loss_mean": 1.0400203898191172,
+            "mean_change": -0.032555596566228306,
+            "run_names": [
+              "tpp10_unmatched_p090_s20260910",
+              "tpp10_unmatched_p090_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 100,
+            "reported_bpb_mean": 1.0617330074310303,
+            "global_bpb_from_token_loss_mean": 1.0303341556858907,
+            "mean_change": -0.03139885174513957,
+            "run_names": [
+              "tpp10_unmatched_p100_s20260910",
+              "tpp10_unmatched_p100_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          }
+        ]
+      },
+      {
+        "arm": "matched",
+        "subset_seed": 20260912,
+        "reported_bpb_selected_percent": 50,
+        "global_bpb_selected_percent": 50,
+        "trainer_seed_selections": [
+          {
+            "trainer_seed": 20260910,
+            "reported_bpb_selected_percent": 50,
+            "global_bpb_selected_percent": 50
+          },
+          {
+            "trainer_seed": 20260911,
+            "reported_bpb_selected_percent": 50,
+            "global_bpb_selected_percent": 50
+          }
+        ],
+        "points": [
+          {
+            "percent": 0,
+            "reported_bpb_mean": 1.7806804180145264,
+            "global_bpb_from_token_loss_mean": 1.7595969815957786,
+            "mean_change": -0.02108343641874777,
+            "run_names": [
+              "tpp10_unmatched_p000_s20260910",
+              "tpp10_unmatched_p000_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 10,
+            "reported_bpb_mean": 1.2996904850006104,
+            "global_bpb_from_token_loss_mean": 1.2692725329705694,
+            "mean_change": -0.03041795203004094,
+            "run_names": [
+              "tpp10_matched_p010_s20260910_d20260912",
+              "tpp10_matched_p010_s20260911_d20260912"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 30,
+            "reported_bpb_mean": 1.1991100907325745,
+            "global_bpb_from_token_loss_mean": 1.1671675175874163,
+            "mean_change": -0.03194257314515814,
+            "run_names": [
+              "tpp10_matched_p030_s20260910_d20260912",
+              "tpp10_matched_p030_s20260911_d20260912"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 40,
+            "reported_bpb_mean": 1.1749659180641174,
+            "global_bpb_from_token_loss_mean": 1.1423124326149965,
+            "mean_change": -0.032653485449120945,
+            "run_names": [
+              "tpp10_matched_p040_s20260910_d20260912",
+              "tpp10_matched_p040_s20260911_d20260912"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 50,
+            "reported_bpb_mean": 1.1583462357521057,
+            "global_bpb_from_token_loss_mean": 1.126984002190692,
+            "mean_change": -0.031362233561413655,
+            "run_names": [
+              "tpp10_matched_p050_s20260910_d20260912",
+              "tpp10_matched_p050_s20260911_d20260912"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 55,
+            "reported_bpb_mean": 1.1679104566574097,
+            "global_bpb_from_token_loss_mean": 1.1337089979091557,
+            "mean_change": -0.03420145874825398,
+            "run_names": [
+              "tpp10_matched_p055_s20260910_d20260912",
+              "tpp10_matched_p055_s20260911_d20260912"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 60,
+            "reported_bpb_mean": 1.1708177328109741,
+            "global_bpb_from_token_loss_mean": 1.1363837018500649,
+            "mean_change": -0.034434030960909245,
+            "run_names": [
+              "tpp10_matched_p060_s20260910_d20260912",
+              "tpp10_matched_p060_s20260911_d20260912"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 65,
+            "reported_bpb_mean": 1.1720753908157349,
+            "global_bpb_from_token_loss_mean": 1.13807980387627,
+            "mean_change": -0.033995586939464806,
+            "run_names": [
+              "tpp10_matched_p065_s20260910_d20260912",
+              "tpp10_matched_p065_s20260911_d20260912"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 70,
+            "reported_bpb_mean": 1.169834017753601,
+            "global_bpb_from_token_loss_mean": 1.1360913651139177,
+            "mean_change": -0.033742652639683346,
+            "run_names": [
+              "tpp10_matched_p070_s20260910_d20260912",
+              "tpp10_matched_p070_s20260911_d20260912"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 80,
+            "reported_bpb_mean": 1.1770029067993164,
+            "global_bpb_from_token_loss_mean": 1.142733947861364,
+            "mean_change": -0.03426895893795234,
+            "run_names": [
+              "tpp10_matched_p080_s20260910_d20260912",
+              "tpp10_matched_p080_s20260911_d20260912"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 90,
+            "reported_bpb_mean": 1.2210935950279236,
+            "global_bpb_from_token_loss_mean": 1.181398347603874,
+            "mean_change": -0.03969524742404951,
+            "run_names": [
+              "tpp10_matched_p090_s20260910_d20260912",
+              "tpp10_matched_p090_s20260911_d20260912"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 100,
+            "reported_bpb_mean": 1.3085170984268188,
+            "global_bpb_from_token_loss_mean": 1.262820069859467,
+            "mean_change": -0.045697028567351916,
+            "run_names": [
+              "tpp10_matched_p100_s20260910_d20260912",
+              "tpp10_matched_p100_s20260911_d20260912"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          }
+        ]
+      },
+      {
+        "arm": "matched",
+        "subset_seed": 20260913,
+        "reported_bpb_selected_percent": 50,
+        "global_bpb_selected_percent": 50,
+        "trainer_seed_selections": [
+          {
+            "trainer_seed": 20260910,
+            "reported_bpb_selected_percent": 65,
+            "global_bpb_selected_percent": 65
+          },
+          {
+            "trainer_seed": 20260911,
+            "reported_bpb_selected_percent": 50,
+            "global_bpb_selected_percent": 50
+          }
+        ],
+        "points": [
+          {
+            "percent": 0,
+            "reported_bpb_mean": 1.7806804180145264,
+            "global_bpb_from_token_loss_mean": 1.7595969815957786,
+            "mean_change": -0.02108343641874777,
+            "run_names": [
+              "tpp10_unmatched_p000_s20260910",
+              "tpp10_unmatched_p000_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 10,
+            "reported_bpb_mean": 1.2953864932060242,
+            "global_bpb_from_token_loss_mean": 1.2657523317068484,
+            "mean_change": -0.02963416149917575,
+            "run_names": [
+              "tpp10_matched_p010_s20260910_d20260913",
+              "tpp10_matched_p010_s20260911_d20260913"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 30,
+            "reported_bpb_mean": 1.199903666973114,
+            "global_bpb_from_token_loss_mean": 1.1678019098461887,
+            "mean_change": -0.03210175712692531,
+            "run_names": [
+              "tpp10_matched_p030_s20260910_d20260913",
+              "tpp10_matched_p030_s20260911_d20260913"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 40,
+            "reported_bpb_mean": 1.1767389178276062,
+            "global_bpb_from_token_loss_mean": 1.1438604206043352,
+            "mean_change": -0.032878497223270964,
+            "run_names": [
+              "tpp10_matched_p040_s20260910_d20260913",
+              "tpp10_matched_p040_s20260911_d20260913"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 50,
+            "reported_bpb_mean": 1.161024034023285,
+            "global_bpb_from_token_loss_mean": 1.1289550341661643,
+            "mean_change": -0.03206899985712064,
+            "run_names": [
+              "tpp10_matched_p050_s20260910_d20260913",
+              "tpp10_matched_p050_s20260911_d20260913"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 55,
+            "reported_bpb_mean": 1.1617872714996338,
+            "global_bpb_from_token_loss_mean": 1.1292118971909249,
+            "mean_change": -0.03257537430870894,
+            "run_names": [
+              "tpp10_matched_p055_s20260910_d20260913",
+              "tpp10_matched_p055_s20260911_d20260913"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 60,
+            "reported_bpb_mean": 1.1662565469741821,
+            "global_bpb_from_token_loss_mean": 1.1326849159864156,
+            "mean_change": -0.0335716309877665,
+            "run_names": [
+              "tpp10_matched_p060_s20260910_d20260913",
+              "tpp10_matched_p060_s20260911_d20260913"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 65,
+            "reported_bpb_mean": 1.1656036972999573,
+            "global_bpb_from_token_loss_mean": 1.1321186916235695,
+            "mean_change": -0.03348500567638779,
+            "run_names": [
+              "tpp10_matched_p065_s20260910_d20260913",
+              "tpp10_matched_p065_s20260911_d20260913"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 70,
+            "reported_bpb_mean": 1.1678801774978638,
+            "global_bpb_from_token_loss_mean": 1.134608661261401,
+            "mean_change": -0.03327151623646274,
+            "run_names": [
+              "tpp10_matched_p070_s20260910_d20260913",
+              "tpp10_matched_p070_s20260911_d20260913"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 80,
+            "reported_bpb_mean": 1.1725330352783203,
+            "global_bpb_from_token_loss_mean": 1.1394980921941045,
+            "mean_change": -0.03303494308421584,
+            "run_names": [
+              "tpp10_matched_p080_s20260910_d20260913",
+              "tpp10_matched_p080_s20260911_d20260913"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 90,
+            "reported_bpb_mean": 1.220880150794983,
+            "global_bpb_from_token_loss_mean": 1.183159177861532,
+            "mean_change": -0.03772097293345089,
+            "run_names": [
+              "tpp10_matched_p090_s20260910_d20260913",
+              "tpp10_matched_p090_s20260911_d20260913"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 100,
+            "reported_bpb_mean": 1.311133623123169,
+            "global_bpb_from_token_loss_mean": 1.2647104260682012,
+            "mean_change": -0.04642319705496778,
+            "run_names": [
+              "tpp10_matched_p100_s20260910_d20260913",
+              "tpp10_matched_p100_s20260911_d20260913"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          }
+        ]
+      },
+      {
+        "arm": "matched",
+        "subset_seed": 20260914,
+        "reported_bpb_selected_percent": 50,
+        "global_bpb_selected_percent": 50,
+        "trainer_seed_selections": [
+          {
+            "trainer_seed": 20260910,
+            "reported_bpb_selected_percent": 50,
+            "global_bpb_selected_percent": 50
+          },
+          {
+            "trainer_seed": 20260911,
+            "reported_bpb_selected_percent": 80,
+            "global_bpb_selected_percent": 55
+          }
+        ],
+        "points": [
+          {
+            "percent": 0,
+            "reported_bpb_mean": 1.7806804180145264,
+            "global_bpb_from_token_loss_mean": 1.7595969815957786,
+            "mean_change": -0.02108343641874777,
+            "run_names": [
+              "tpp10_unmatched_p000_s20260910",
+              "tpp10_unmatched_p000_s20260911"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 10,
+            "reported_bpb_mean": 1.3048062324523926,
+            "global_bpb_from_token_loss_mean": 1.2723018003049158,
+            "mean_change": -0.03250443214747678,
+            "run_names": [
+              "tpp10_matched_p010_s20260910_d20260914",
+              "tpp10_matched_p010_s20260911_d20260914"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 30,
+            "reported_bpb_mean": 1.198056399822235,
+            "global_bpb_from_token_loss_mean": 1.1659432749875973,
+            "mean_change": -0.032113124834637796,
+            "run_names": [
+              "tpp10_matched_p030_s20260910_d20260914",
+              "tpp10_matched_p030_s20260911_d20260914"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 40,
+            "reported_bpb_mean": 1.1709054708480835,
+            "global_bpb_from_token_loss_mean": 1.1395922486660512,
+            "mean_change": -0.03131322218203225,
+            "run_names": [
+              "tpp10_matched_p040_s20260910_d20260914",
+              "tpp10_matched_p040_s20260911_d20260914"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 50,
+            "reported_bpb_mean": 1.1568414568901062,
+            "global_bpb_from_token_loss_mean": 1.125549940058,
+            "mean_change": -0.03129151683210618,
+            "run_names": [
+              "tpp10_matched_p050_s20260910_d20260914",
+              "tpp10_matched_p050_s20260911_d20260914"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 55,
+            "reported_bpb_mean": 1.1595885753631592,
+            "global_bpb_from_token_loss_mean": 1.1275203813840173,
+            "mean_change": -0.032068193979141846,
+            "run_names": [
+              "tpp10_matched_p055_s20260910_d20260914",
+              "tpp10_matched_p055_s20260911_d20260914"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 60,
+            "reported_bpb_mean": 1.1617706418037415,
+            "global_bpb_from_token_loss_mean": 1.129585569831436,
+            "mean_change": -0.03218507197230536,
+            "run_names": [
+              "tpp10_matched_p060_s20260910_d20260914",
+              "tpp10_matched_p060_s20260911_d20260914"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 65,
+            "reported_bpb_mean": 1.1642422676086426,
+            "global_bpb_from_token_loss_mean": 1.1307500526040417,
+            "mean_change": -0.03349221500460087,
+            "run_names": [
+              "tpp10_matched_p065_s20260910_d20260914",
+              "tpp10_matched_p065_s20260911_d20260914"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 70,
+            "reported_bpb_mean": 1.163600206375122,
+            "global_bpb_from_token_loss_mean": 1.1307618655931422,
+            "mean_change": -0.03283834078197989,
+            "run_names": [
+              "tpp10_matched_p070_s20260910_d20260914",
+              "tpp10_matched_p070_s20260911_d20260914"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 80,
+            "reported_bpb_mean": 1.168006956577301,
+            "global_bpb_from_token_loss_mean": 1.150990567104854,
+            "mean_change": -0.017016389472447102,
+            "run_names": [
+              "tpp10_matched_p080_s20260910_d20260914",
+              "tpp10_matched_p080_s20260911_d20260914"
+            ],
+            "schema_versions": [
+              null,
+              2
+            ]
+          },
+          {
+            "percent": 90,
+            "reported_bpb_mean": 1.207229495048523,
+            "global_bpb_from_token_loss_mean": 1.1739598473437518,
+            "mean_change": -0.033269647704771144,
+            "run_names": [
+              "tpp10_matched_p090_s20260910_d20260914",
+              "tpp10_matched_p090_s20260911_d20260914"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          },
+          {
+            "percent": 100,
+            "reported_bpb_mean": 1.2766250967979431,
+            "global_bpb_from_token_loss_mean": 1.2435862999826859,
+            "mean_change": -0.03303879681525723,
+            "run_names": [
+              "tpp10_matched_p100_s20260910_d20260914",
+              "tpp10_matched_p100_s20260911_d20260914"
+            ],
+            "schema_versions": [
+              null,
+              null
+            ]
+          }
+        ]
+      }
+    ],
+    "matched_subset_20260914_p80": [
+      {
+        "run_name": "tpp10_matched_p080_s20260910_d20260914",
+        "trainer_seed": 20260910,
+        "schema": null,
+        "reported_bpb": 1.1911237239837646,
+        "token_loss": 1.9850280284881592,
+        "global_bpb_from_token_loss": 1.157090759932168
+      },
+      {
+        "run_name": "tpp10_matched_p080_s20260911_d20260914",
+        "trainer_seed": 20260911,
+        "schema": 2,
+        "reported_bpb": 1.1448901891708374,
+        "token_loss": 1.9640978574752808,
+        "global_bpb_from_token_loss": 1.1448903742775398
+      }
+    ],
+    "corrected_figure_annotations": {
+      "target_selected_percent": 70,
+      "target_minimum_global_bpb": 0.7655645236000794,
+      "target_penalties_global_bpb": {
+        "unmatched": 0.0350542807852845,
+        "20260912": 0.010102815719440272,
+        "20260913": 0.010102815719440272,
+        "20260914": 0.010102815719440272
+      },
+      "target_penalties_percent_of_minimum": {
+        "unmatched": 4.578879990473067,
+        "20260912": 1.3196556799591,
+        "20260913": 1.3196556799591,
+        "20260914": 1.3196556799591
+      },
+      "excess_loss_reduction_percent": 71.17950934060711,
+      "total_target_loss_reduction_percent": 3.1165224860037477
+    }
+  }
+}

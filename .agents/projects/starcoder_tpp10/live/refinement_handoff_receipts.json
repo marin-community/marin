@@ -1,0 +1,129 @@
+{
+  "next_action": {
+    "attrs": {
+      "session_id": "ses_01m27m1y08wka3j74hqrpxrcth"
+    },
+    "author": null,
+    "body": "Follow /calvinxu/starcoder-tpp10-refinement through its 45 existing frozen recipes. At 00:19 PDT on 11 September, one target was running and 44 child jobs queued, with no failures. Children are mapped to all 45 planned runs by SHA256-verified callable metadata and recorded in Fieldbook. After completion, collect against live/refinement_plan.json with launch_starcoder_tpp10_refinement --collect-results; verify all final runtime/fingerprint/metric records. Explicitly extend common-grid analysis to the twelve coordinates {0,10,30,40,50,55,60,65,70,80,90,100}% and merge with the 57 verified pilot artifacts without changing either input plan. Recompute observed selections and target regret before updating Figure 5, prose and outline; no fitted overlay. Preserve adaptive-design provenance. Remaining dense coordinates have no release.",
+    "body_format": "markdown",
+    "created_at": "2026-09-11T07:20:59Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m27nem3hdxt8nfv0vq4v1aya",
+    "note_type": "next-action",
+    "resolved_at": null,
+    "status": "open",
+    "title": "Complete five-fraction refinement and update the measured common-grid figure",
+    "updated_at": "2026-09-11T07:20:59Z"
+  },
+  "checkpoint": {
+    "experiment": {
+      "attrs": {},
+      "created_at": "2026-09-09T15:43:40Z",
+      "deleted_at": null,
+      "description": "Build and review a new matched-total-TPP three-curve experiment with finite StarCoder pools and independently replicated matched subsets. Training is not submitted.",
+      "id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "idempotency_key": "starcoder-tpp10-20260909",
+      "name": "StarCoder TPP 10 epoch-matching experiment",
+      "status": "active",
+      "tags": [
+        "epoch-matching",
+        "starcoder",
+        "tpp10"
+      ],
+      "updated_at": "2026-09-09T15:43:40Z"
+    },
+    "freshness": {
+      "checkpoint_status": "current",
+      "drifted_artifact_count": 0,
+      "drifted_artifacts": [],
+      "handoff_status": "current",
+      "last_checkpoint_at": "2026-09-11T06:50:50Z",
+      "last_handoff_at": "2026-09-11T06:50:50Z",
+      "since_last_checkpoint_hours": 0.5026531252777778,
+      "since_last_handoff_hours": 0.5026531252777778,
+      "stale_validation_count": 0,
+      "stale_validations": []
+    },
+    "note": {
+      "attrs": {
+        "session_id": "ses_01m27m1y08wka3j74hqrpxrcth"
+      },
+      "author": null,
+      "body": "The user authorized only 40%, 55%, 60%, 65%, and 80%, and the measured paper plot without fits. Iris accepted /calvinxu/starcoder-tpp10-refinement at 2026-09-11T07:08:42Z. All 45 child jobs are acknowledged; the 07:19 UTC snapshot has one target running and 44 queued, zero failed. Fieldbook contains all 45 run rows, parent/child jobs, training links, exact run mappings, preflight/release/plan/bundle artifacts and validations.\n\nThe parent wrapper selects five target, ten unmatched and thirty matched recipes from the frozen dense plan. All 27 pins, the pilot/dense hashes and child fingerprints are unchanged. Plan 99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40; full bundle 8100461f4555644152f7a576754a5d25095ebe40b827dd6ffea4354024881fff is retained and matches local preflight exactly. Parent is explicitly nonpreemptible in central1-a, with zero automatic retries; children use original regional TPU resources. max_concurrent is 45. Cache/allocation/pilot gates passed before all child submissions. Remaining dense coordinates are unreleased.\n\nThe paper now contains measured Figure 5 on page 7, raw BPB and excess above each observed grid minimum, without fitted overlays. Section 4.2 reports the verified seven-coordinate pilot: 70% target minimum, 100% unmatched, 50% matched; target regret 0.0364 to 0.0099 BPB. Appendix B.1 documents the TPP10 protocol, replication limitations and earlier unfavorable fixed-model design. The static-cap and curricula placeholders remain. The outline, experiment CC_CHANGES.md and manuscript revision_notes/20260911_tpp10_measured_curves/CHANGES.md are synchronized. The final build is clean (43 pages; references page 10, unchanged), and pages 7,8,16,17 were rendered and visually checked. No commit or Overleaf push was made.\n\nContinue via the new next-action note. The collector supports the 45-run refinement plan; the original analyzer accepts only pilot/dense stages, so add an explicit twelve-coordinate validation before combining results. Preserve both archived plans and do not label 102 cumulative artifacts as the complete 183-artifact dense stage. Manuscript snapshots and data live in its revision directory; experiment state and receipts are under .agents/projects/starcoder_tpp10/live/.\n\n## Freshness\n\n- Handoff status: `current`\n- Drifted artifacts: 0\n- Stale validations: 0\n",
+      "body_format": "markdown",
+      "created_at": "2026-09-11T07:20:59Z",
+      "deleted_at": null,
+      "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "entity_type": "experiment",
+      "id": "note_01m27nemd9k2qmtxeprydmfaqg",
+      "note_type": "checkpoint",
+      "resolved_at": null,
+      "status": "open",
+      "title": "Experiment handoff",
+      "updated_at": "2026-09-11T07:20:59Z"
+    }
+  },
+  "review": {
+    "experiment": {
+      "attrs": {},
+      "created_at": "2026-09-09T15:43:40Z",
+      "deleted_at": null,
+      "description": "Build and review a new matched-total-TPP three-curve experiment with finite StarCoder pools and independently replicated matched subsets. Training is not submitted.",
+      "id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "idempotency_key": "starcoder-tpp10-20260909",
+      "name": "StarCoder TPP 10 epoch-matching experiment",
+      "status": "active",
+      "tags": [
+        "epoch-matching",
+        "starcoder",
+        "tpp10"
+      ],
+      "updated_at": "2026-09-09T15:43:40Z"
+    },
+    "note": {
+      "attrs": {
+        "fieldbook.review": true,
+        "fieldbook.reviewed_activity_count": 189,
+        "fieldbook.reviewed_activity_key": "2026-09-11T07:20:59Z note_01m27nem3hdxt8nfv0vq4v1aya",
+        "fieldbook.reviewed_at": "2026-09-11T07:20:59Z",
+        "session_id": "ses_01m27m1y08wka3j74hqrpxrcth"
+      },
+      "author": null,
+      "body": "Reviewed current Fieldbook experiment outputs.",
+      "body_format": "markdown",
+      "created_at": "2026-09-11T07:20:59Z",
+      "deleted_at": null,
+      "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "entity_type": "experiment",
+      "id": "note_01m27nemskb7zwpcrbb9mkrcbk",
+      "note_type": "review",
+      "resolved_at": null,
+      "status": "resolved",
+      "title": "Experiment reviewed",
+      "updated_at": "2026-09-11T07:20:59Z"
+    }
+  },
+  "session": {
+    "closed": true,
+    "marker_path": "/Users/calvinxu/Projects/Work/Marin/.fieldbook.session",
+    "marker_status": "removed",
+    "session": {
+      "agent": "codex",
+      "attrs": {},
+      "cwd": "/Users/calvinxu/Projects/Work/Marin/marin",
+      "ended_at": "2026-09-11T07:21:00Z",
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "git_branch": "calvin/swarm-olmo3-regmix-test",
+      "git_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "git_root": "/Users/calvinxu/Projects/Work/Marin/marin",
+      "git_worktree_dir": "/Users/calvinxu/Projects/Work/Marin/marin",
+      "id": "ses_01m27m1y08wka3j74hqrpxrcth",
+      "intent": "Release five TPP10 refinement fractions and add the measured three-curve figure to the manuscript",
+      "last_touch_at": "2026-09-11T07:21:00Z",
+      "ledger_id": "0db0b028-e7c7-4672-ba25-8fdf237da666",
+      "started_at": "2026-09-11T06:56:34Z"
+    }
+  }
+}

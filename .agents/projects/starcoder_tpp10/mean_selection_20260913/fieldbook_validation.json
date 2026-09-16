@@ -1,0 +1,17 @@
+{
+  "attrs": {},
+  "check_name": "mean_selection_target.runtime_and_allocation",
+  "created_at": "2026-09-14T01:11:18Z",
+  "deleted_at": null,
+  "details": {},
+  "entity_id": "run_01m2eq6fva59907aatmt7fqyxh",
+  "entity_type": "run",
+  "expected_value": "One p=8/15 target with unchanged protocol, verified child code and caches, corrected BPB collector",
+  "id": "val_01m2eqfvxzzz3f06gefdjj3mnp",
+  "measured_value": "One v5p-8 child running; first optimizer step completed 01:10:19 UTC; realized StarCoder53.4672515%,8.4627023epochs;29bundledsourcepins and12cachechecks passed",
+  "session_id": "ses_01m2epsbd7s2gv1a6aqqb05p3v",
+  "source_artifact_id": "art_01m2eqfv4cw8fzac0wy4wybmyz",
+  "source_job_id": "job_01m2eqe4sqeys23nddz7pd1yfd",
+  "status": "pass",
+  "updated_at": "2026-09-14T01:11:18Z"
+}

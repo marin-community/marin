@@ -12,6 +12,7 @@ Used by:
 
 Public API lives in those modules; helpers here are package-private.
 """
+
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ import braceexpand
 import fsspec
 import pyarrow.parquet as pq
 from levanter.data._preprocessor import BatchProcessor
+from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.formats import LmDatasetFormatBase, preprocessor_for_format
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from rigging.filesystem.factory import url_to_fs
@@ -247,6 +249,7 @@ def tokenize_batches_with_id(
     *,
     data_format: LmDatasetFormatBase,
     batches: Iterator[Sequence[dict]],
+    split_long_documents: bool = True,
 ) -> Iterator[dict]:
     """Tokenize batches and yield ``{id, chunk_index, input_ids, ...}`` rows.
 
@@ -266,16 +269,19 @@ def tokenize_batches_with_id(
     name = ctx.get_shared("tokenizer_name")
     backend = ctx.get_shared("tokenizer_backend")
     # load_tokenizer is @lru_cache, so this only loads once per worker process.
-    tokenizer: MarinTokenizer = load_tokenizer(name, backend=backend)
+    tokenizer: MarinTokenizer = load_tokenizer(
+        name,
+        backend=backend,
+        split_long_documents=split_long_documents,
+    )
     inner = preprocessor_for_format(data_format, tokenizer)
-    # Levanter's BatchTokenizer ships ``long_string_workaround`` opt-in but the
-    # behavior is desirable always: per-record texts above ``_workaround_len``
-    # (10K chars) get split at safe whitespace boundaries before the underlying
-    # ``encode_batch`` is called, then merged back. No-op for short records.
-    # Without this, a single multi-MB outlier passes one giant string to the
-    # Rust tokenizer and OOMs the worker.
-    if hasattr(inner, "_long_string_workaround"):
-        inner._long_string_workaround = True
+    # The default bounds tokenizer memory on pathological documents. Historical
+    # compatibility mode disables both this split and HfMarinTokenizer's split,
+    # reproducing the original full-document BPE boundaries at higher memory cost.
+    if isinstance(inner, BatchTokenizer):
+        inner.long_string_workaround = split_long_documents
+    elif not split_long_documents:
+        raise TypeError("Historical full-document tokenization requires a text-format BatchTokenizer")
     processor = IdPreservingPreprocessor(inner)
     token_data_key = data_format.token_data_key
     counters.pipeline.update_counter("tokenize/initialization_seconds", time.monotonic() - initialization_start)
@@ -382,6 +388,7 @@ def tokenize_pipeline(
     sample_count: int | None,
     sample_parquet_path: str | None,
     levanter_batch_size: int | None,
+    split_long_documents: bool = True,
 ) -> tuple[Dataset, int | None]:
     """Build the tokenize pipeline tail.
 
@@ -398,7 +405,11 @@ def tokenize_pipeline(
 
     return (
         ds.window(window_size).map_shard(
-            lambda batches, _, fmt=data_format: tokenize_batches_with_id(data_format=fmt, batches=batches)
+            lambda batches, _, fmt=data_format, split=split_long_documents: tokenize_batches_with_id(
+                data_format=fmt,
+                batches=batches,
+                split_long_documents=split,
+            ),
         ),
         batch_size,
     )

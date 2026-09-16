@@ -1,0 +1,98 @@
+[
+  {
+    "uri": "gs://marin-us-central1/raw/gsm8k-ef3e8c/gsm8k-00000.jsonl.gz",
+    "size": 1444876,
+    "generation": "1777880482953473",
+    "rows": 1319,
+    "keys": [
+      "problem_id",
+      "problem",
+      "ground_truth",
+      "prompt",
+      "solution"
+    ],
+    "first_value_types": {
+      "problem_id": "int",
+      "problem": "str",
+      "ground_truth": "str",
+      "prompt": "str",
+      "solution": "str"
+    }
+  },
+  {
+    "uri": "gs://marin-us-central1/raw/math500-ec7cea/math500-00000.jsonl.gz",
+    "size": 125766,
+    "generation": "1769929998023758",
+    "rows": 500,
+    "keys": [
+      "problem",
+      "solution",
+      "answer",
+      "subject",
+      "level",
+      "unique_id"
+    ],
+    "first_value_types": {
+      "problem": "str",
+      "solution": "str",
+      "answer": "str",
+      "subject": "str",
+      "level": "int",
+      "unique_id": "str"
+    },
+    "subject_values": [
+      "Algebra",
+      "Intermediate Algebra",
+      "Number Theory",
+      "Precalculus",
+      "Geometry",
+      "Counting & Probability",
+      "Prealgebra"
+    ],
+    "level_values": [
+      "5",
+      "1",
+      "4",
+      "2",
+      "3"
+    ]
+  },
+  {
+    "uri": "gs://marin-us-central1/raw/HuggingFaceH4--MATH-500-retry-2-4ecfc7/test.jsonl",
+    "size": 446564,
+    "generation": "1775950068557461",
+    "rows": 500,
+    "keys": [
+      "problem",
+      "solution",
+      "answer",
+      "subject",
+      "level",
+      "unique_id"
+    ],
+    "first_value_types": {
+      "problem": "str",
+      "solution": "str",
+      "answer": "str",
+      "subject": "str",
+      "level": "int",
+      "unique_id": "str"
+    },
+    "subject_values": [
+      "Algebra",
+      "Intermediate Algebra",
+      "Number Theory",
+      "Precalculus",
+      "Geometry",
+      "Counting & Probability",
+      "Prealgebra"
+    ],
+    "level_values": [
+      "5",
+      "1",
+      "4",
+      "2",
+      "3"
+    ]
+  }
+]

@@ -1,0 +1,457 @@
+{
+  "updated_at": "2026-09-11T07:19:31.016395+00:00",
+  "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+  "preparation": {
+    "iris_job": "/calvinxu/starcoder-tpp10-prepare",
+    "fieldbook_job": "job_01m23x0xz72cj77a3g9j2jwvz3",
+    "status": "succeeded",
+    "command_file": "submitted_preparation.txt",
+    "workspace_receipt": "preparation_workspace_receipt.json",
+    "finished_at": "2026-09-09T22:23:54.703Z"
+  },
+  "calibration": {
+    "status": "succeeded",
+    "runs": 8,
+    "command_file": "submitted_calibration.txt",
+    "authorization": "../releases/calibration_authorization.json",
+    "release_condition": "Preparation Iris success plus exact completed cache audit; reviewed plan unchanged.",
+    "iris_job": "/calvinxu/starcoder-tpp10-calibration",
+    "fieldbook_job": "job_01m23xr9jpeetpdf2wb3cvqy77",
+    "training_children_started": true,
+    "observed_at": "2026-09-10T01:05:30.956974+00:00",
+    "wait_log_at": "2026-09-09T20:30:00Z",
+    "workspace_receipt": "calibration_workspace_receipt.json",
+    "automatic_failure_retries": 0,
+    "automatic_preemption_retries": 0,
+    "completed_runs": 8,
+    "finished_at": "2026-09-09T23:18:03.239Z",
+    "batch32_loss_screen_passed": true,
+    "unmatched_batch32_minus_batch128_bpb": 0.005303561687469482,
+    "results_file": "calibration_results.json"
+  },
+  "canary": {
+    "status": "failed",
+    "runs": 3,
+    "iris_job": "/calvinxu/starcoder-tpp10-canary",
+    "fieldbook_job": "job_01m24e81eab4ds2k7pcb4cwg1a",
+    "command_file": "submitted_canary.txt",
+    "release": "../releases/canary.json",
+    "plan_sha256": "4362a8b1b2e37d7ae73096f7658c5b3a79774288bf268f240fa4e49edd826b60",
+    "optimizer_review": "calibration_optimizer_review.md",
+    "automatic_failure_retries": 0,
+    "automatic_preemption_retries": 0,
+    "training_children_started": false,
+    "workspace_receipt": "canary_workspace_receipt.json",
+    "acknowledged_at": "2026-09-10T01:17:38Z",
+    "training_children_submitted": 3,
+    "children": [
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-canary/verified_training-08c23619",
+        "fieldbook_job": "job_01m24edf1yrbbw26nw1zhzfcfv",
+        "status": "succeeded",
+        "run_mapping": "Target and unmatched identities verified by W&B URLs in child logs; sole remaining released request is the unstarted matched proxy.",
+        "run_name": "tpp10_target_p100_s20260910"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-canary/verified_training-312abc6f",
+        "fieldbook_job": "job_01m24edfd3239dddb8gmydy2sj",
+        "status": "succeeded",
+        "run_mapping": "Target and unmatched identities verified by W&B URLs in child logs; sole remaining released request is the unstarted matched proxy.",
+        "run_name": "tpp10_unmatched_p100_s20260910"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-canary/verified_training-8f76888a",
+        "fieldbook_job": "job_01m24edfq2memet5a7kgm984b6",
+        "status": "failed",
+        "run_mapping": "Target and unmatched identities verified by W&B URLs in child logs; sole remaining released request is the unstarted matched proxy.",
+        "run_name": "tpp10_matched_p100_s20260910_d20260912"
+      }
+    ],
+    "observed_at": "2026-09-10T01:20:18.669574Z",
+    "queue_reason": null,
+    "completed_runs": 2,
+    "finished_at": "2026-09-10T06:24:03.645000Z"
+  },
+  "pilot_dense": "Pilot complete; five-coordinate refinement released; remaining dense coordinates unreleased",
+  "canary_recovery": {
+    "status": "superseded",
+    "iris_job": "/calvinxu/starcoder-tpp10-canary-recovery-20260910",
+    "fieldbook_job": "job_01m258sew6z373kbpjj43qhf4z",
+    "retry_of": "/calvinxu/starcoder-tpp10-canary",
+    "selected_run": "tpp10_matched_p100_s20260910_d20260912",
+    "reused_completed_runs": 2,
+    "command_file": "submitted_canary_recovery_20260910.txt",
+    "plan_sha256": "4362a8b1b2e37d7ae73096f7658c5b3a79774288bf268f240fa4e49edd826b60",
+    "reason": "Parent occupied preemptible TPU worker; replaced before child started."
+  },
+  "canary_recovery_ondemand": {
+    "status": "succeeded",
+    "iris_job": "/calvinxu/starcoder-tpp10-canary-recovery-ondemand-20260910",
+    "fieldbook_job": "job_01m25941233ejwq7h8qw7kyh1r",
+    "retry_of": "/calvinxu/starcoder-tpp10-canary-recovery-20260910",
+    "parent_preemptible": false,
+    "selected_run": "tpp10_matched_p100_s20260910_d20260912",
+    "reused_completed_runs": 2,
+    "command_file": "submitted_canary_recovery_ondemand_20260910.txt",
+    "plan_sha256": "4362a8b1b2e37d7ae73096f7658c5b3a79774288bf268f240fa4e49edd826b60",
+    "acknowledged_at": "2026-09-10T09:07:16.774Z",
+    "parent_worker": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-worker-0",
+    "training_children_submitted": 1,
+    "training_children_started": true,
+    "child_iris_job": "/calvinxu/starcoder-tpp10-canary-recovery-ondemand-20260910/verified_training-ba05b369",
+    "child_fieldbook_job": "job_01m259aww495yczb6d0hzzdjmb",
+    "child_status": "succeeded",
+    "workspace_receipt": "canary_recovery_ondemand_workspace_receipt.json",
+    "queue_reason": null,
+    "finished_at": "2026-09-10T12:25:56.671000Z",
+    "child_started_at": "2026-09-10T12:19:46.338000Z",
+    "child_finished_at": "2026-09-10T12:25:40.118000Z"
+  },
+  "canary_stage": {
+    "status": "succeeded",
+    "completed_runs": 3,
+    "expected_runs": 3,
+    "finished_at": "2026-09-10T12:25:56.671000Z",
+    "endpoints_verified": true,
+    "optimizer_review_passed": true,
+    "results_file": "canary_metrics.csv",
+    "optimizer_review": "canary_optimizer_review.md",
+    "next_stage": "pilot",
+    "pilot_released": true,
+    "historical_attempts": "canary and canary_recovery retain the original terminated-parent records; the final attempt is canary_recovery_ondemand."
+  },
+  "pilot": {
+    "status": "succeeded",
+    "iris_job": "/calvinxu/starcoder-tpp10-pilot",
+    "fieldbook_job": "job_01m26rccj2xdbhr5sv2zk080f5",
+    "acknowledged_at": "2026-09-10T22:53:05Z",
+    "planned_runs": 57,
+    "reused_completed_runs": 7,
+    "new_runs": 50,
+    "max_concurrent": 50,
+    "parent_preemptible": false,
+    "region": "us-central1",
+    "zone": "us-central1-a",
+    "automatic_failure_retries": 0,
+    "automatic_preemption_retries": 0,
+    "release": "../releases/pilot.json",
+    "plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+    "command_file": "submitted_pilot.txt",
+    "plan_file": "pilot_plan.json",
+    "preflight": "pilot_preflight.json",
+    "started_at": "2026-09-10T22:53:07.680000Z",
+    "training_children_submitted": 50,
+    "training_children_started": true,
+    "child_status_counts": {
+      "succeeded": 50
+    },
+    "parent_worker": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-worker-0",
+    "children": [
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-0151b855",
+        "fieldbook_job": "job_01m26rnnqtqhcxfxeh2rxay985",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-061a5fff",
+        "fieldbook_job": "job_01m26rnp33c1mxv3cscrf3976x",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-0648291b",
+        "fieldbook_job": "job_01m26rnprgpt944vr1jgddndts",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-08ae9395",
+        "fieldbook_job": "job_01m26rnq4b2qkabe3376ck1caz",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-0f9987e9",
+        "fieldbook_job": "job_01m26rnqjvmwbg4fy35a22m5j5",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-17a4b03b",
+        "fieldbook_job": "job_01m26rnr171key5y93ywk88g5a",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-23d9bf2c",
+        "fieldbook_job": "job_01m26rnrgq39hx8beh81yx92bt",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-25f3f4d7",
+        "fieldbook_job": "job_01m26rnrzky4s90ahz70nkgrp3",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-29bd9ba7",
+        "fieldbook_job": "job_01m26rnsb89sdnpfch61s4dz2e",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-3cae081e",
+        "fieldbook_job": "job_01m26rnsqbcw6fsp4jvf0z7q8n",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-3f48c68c",
+        "fieldbook_job": "job_01m26rnt58a4y0eap0cgpf2yy9",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-44c611b9",
+        "fieldbook_job": "job_01m26rntkv3hhb5cecjvyj5hhy",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-45119b1d",
+        "fieldbook_job": "job_01m26rnv2tqcnt8e6233s77p8c",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-46ca478a",
+        "fieldbook_job": "job_01m26rnvhfn2rxv779jxct2z1c",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-51d7f6a3",
+        "fieldbook_job": "job_01m26rnvx79z5g5sz1w2nyem9q",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-5885b417",
+        "fieldbook_job": "job_01m26rnw8qxkn2zndtgew7pmz1",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-5ff87989",
+        "fieldbook_job": "job_01m26rnwqvm4vnzq4srzp3mv11",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-60c9ed1e",
+        "fieldbook_job": "job_01m26rnx6adfvsmca76rrwk3qt",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-68a8671d",
+        "fieldbook_job": "job_01m26rnxnh2q5v42yg9yv9hf8f",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-73deccfa",
+        "fieldbook_job": "job_01m26rny4tzbjaxb9xs9rrqnrk",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-75a482ae",
+        "fieldbook_job": "job_01m26rnykma9zcdyq377pmfwnd",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-83dcd8b6",
+        "fieldbook_job": "job_01m26rnyzesqerrvg8xdk8je4d",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-83f038e3",
+        "fieldbook_job": "job_01m26rnzcnpvpefr3ph7axnyyj",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-8500439c",
+        "fieldbook_job": "job_01m26rnztp249gcvke6rqdgabv",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-890db898",
+        "fieldbook_job": "job_01m26rp09crkqe9a4b5efr3gc1",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-895952f2",
+        "fieldbook_job": "job_01m26rp0qsc8nxzm3af9gg498x",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-8a146299",
+        "fieldbook_job": "job_01m26rp16qjhrt5tmgez5p7s5t",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-8f5db59f",
+        "fieldbook_job": "job_01m26rp1jj525d3t27nvek1c21",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-8f65767c",
+        "fieldbook_job": "job_01m26rp1xxq0sc940e0st3rj1e",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-a010878f",
+        "fieldbook_job": "job_01m26rp2azavn0ndxyzys76xmq",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-b240c0cd",
+        "fieldbook_job": "job_01m26rp2w481s53ewqp957z08y",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-b37a6b32",
+        "fieldbook_job": "job_01m26rp3920facxkdppc1tkk32",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-b3cee99f",
+        "fieldbook_job": "job_01m26rp3k33mn0tw3dcntefn27",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-b8087083",
+        "fieldbook_job": "job_01m26rp3wtgvjb56bswsr1r7rg",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-c106a464",
+        "fieldbook_job": "job_01m26rp4aea437rt4mds46w10j",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-c6d2b1a6",
+        "fieldbook_job": "job_01m26rp4r2hrs5dbr9ptrx2s00",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-d3fe0631",
+        "fieldbook_job": "job_01m26rp52pzjzc8mfrpgqr83yh",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-db3ae5ef",
+        "fieldbook_job": "job_01m26rp5dwpjfz2xcpak5dw9br",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-db5941f5",
+        "fieldbook_job": "job_01m26rp5ttpw9seszrfv2mz4h0",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-dea1bb57",
+        "fieldbook_job": "job_01m26rp64n9vw38tg2fkf4bhst",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-dee80c85",
+        "fieldbook_job": "job_01m26rp6egh19r3pk5k8hmb9v8",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-dfcaff7e",
+        "fieldbook_job": "job_01m26rp6vsyd1ypghzecvwwyz6",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-dfff5b33",
+        "fieldbook_job": "job_01m26rp75zwcq65dfvyek34b35",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-e1f81b33",
+        "fieldbook_job": "job_01m26rp7g14hbs2smf630cbd0p",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-f35793c8",
+        "fieldbook_job": "job_01m26rp7x5ve5hmb41ayver6fk",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-f3e892d9",
+        "fieldbook_job": "job_01m26rp86z39mm2kmahgz25dfz",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-f4d60886",
+        "fieldbook_job": "job_01m26rp8gm4kkmd4jkcw6sdrzx",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-f62fa13b",
+        "fieldbook_job": "job_01m26rp8yrqtk840pgc33fghsm",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-fc507635",
+        "fieldbook_job": "job_01m26rp9c9tw397dsm5341pghj",
+        "status": "succeeded"
+      },
+      {
+        "iris_job": "/calvinxu/starcoder-tpp10-pilot/verified_training-fe2f18db",
+        "fieldbook_job": "job_01m26rp9p1dysmap98xe3pdjn4",
+        "status": "succeeded"
+      }
+    ],
+    "workspace_receipt": "pilot_workspace_receipt.json",
+    "observed_at": "2026-09-11T05:33:02.936155Z",
+    "completed_primary_artifacts": 57,
+    "remaining_primary_artifacts": 0,
+    "partial_results": "pilot_partial_results.json",
+    "proxy_results": "pilot_proxy_results.json",
+    "target_progress": "pilot_target_progress.json",
+    "finished_at": "2026-09-11T04:34:02.581000Z",
+    "results_file": "pilot_metrics.csv",
+    "analysis_file": "pilot_results/analysis.json",
+    "report_file": "pilot_results/report.md",
+    "target_selected_percent": 70,
+    "unmatched_selected_percent": 100,
+    "matched_subset_selected_percent": [
+      50,
+      50,
+      50
+    ],
+    "unmatched_target_regret_bpb": 0.036357223987579346,
+    "matched_target_regret_bpb": 0.009852409362792969,
+    "dense_released": false
+  },
+  "refinement": {
+    "status": "running",
+    "iris_job": "/calvinxu/starcoder-tpp10-refinement",
+    "fieldbook_job": "job_01m27mq3b474x0wsd8mv9vc4w1",
+    "percents": [
+      40,
+      55,
+      60,
+      65,
+      80
+    ],
+    "runs": 45,
+    "target_runs": 5,
+    "unmatched_runs": 10,
+    "matched_runs": 30,
+    "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+    "command_file": "submitted_refinement.txt",
+    "parent_preemptible": false,
+    "automatic_failure_retries": 0,
+    "automatic_preemption_retries": 0,
+    "max_concurrent": 45,
+    "acknowledged_at": "2026-09-11T07:08:42Z",
+    "observed_phase": "all 45 training children acknowledged; first target training",
+    "training_children_submitted": 45,
+    "primary_analysis_unchanged": true,
+    "observed_at": "2026-09-11T07:19:31.016395+00:00",
+    "training_children_started": 1,
+    "child_status_counts": {
+      "running": 1,
+      "queued": 44
+    },
+    "workspace_receipt": "refinement_workspace_receipt.json",
+    "child_mapping": "refinement_child_mapping.json"
+  }
+}

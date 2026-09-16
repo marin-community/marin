@@ -1,0 +1,181 @@
+{
+  "checked_at": "2026-09-12T21:39:40.307078+00:00",
+  "parent_job_id": "/calvinxu/starcoder-tpp10-refinement-interactive",
+  "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+  "status": "dispatch_verified",
+  "expected_missing_recipes_only": true,
+  "completed_artifacts_reused": 40,
+  "selected": 45,
+  "pending_released": 5,
+  "scientific_recipes": [
+    {
+      "run_name": "tpp10_target_p055_s20260910",
+      "fingerprint": "650ffe00",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09"
+    },
+    {
+      "run_name": "tpp10_target_p060_s20260910",
+      "fingerprint": "1e801f9f",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09"
+    },
+    {
+      "run_name": "tpp10_target_p065_s20260910",
+      "fingerprint": "97b113a1",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09"
+    },
+    {
+      "run_name": "tpp10_target_p080_s20260910",
+      "fingerprint": "4ab6f469",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910/2026.09.09"
+    },
+    {
+      "run_name": "tpp10_matched_p080_s20260911_d20260914",
+      "fingerprint": "f310450f",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p080_s20260911_d20260914/2026.09.09"
+    }
+  ],
+  "children": [
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad",
+      "requested_priority": "PRIORITY_BAND_INTERACTIVE",
+      "leaf": {
+        "task_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0",
+        "state": "2",
+        "current_worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260912-0911-01e80471-worker-0"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "runtime_restoration_verified": false
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c",
+      "requested_priority": "PRIORITY_BAND_INTERACTIVE",
+      "leaf": {
+        "task_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0",
+        "state": "2",
+        "current_worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260912-0733-a84b4310-worker-0"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "runtime_restoration_verified": false
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0",
+      "requested_priority": "PRIORITY_BAND_INTERACTIVE",
+      "leaf": {
+        "task_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0",
+        "state": "2",
+        "current_worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260912-0842-b9563a3f-worker-0"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "runtime_restoration_verified": false
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513",
+      "requested_priority": "PRIORITY_BAND_INTERACTIVE",
+      "leaf": {
+        "task_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0",
+        "state": "2",
+        "current_worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260912-0749-ed28271d-worker-0"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "runtime_restoration_verified": false
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373",
+      "requested_priority": "PRIORITY_BAND_INTERACTIVE",
+      "leaf": {
+        "task_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0",
+        "state": "2",
+        "current_worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260912-0822-ea8f6947-worker-0"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "runtime_restoration_verified": false
+    }
+  ],
+  "checkpoint_restoration_status": "TPU leaves are building; verify child runtime logs after initialization.",
+  "source_files": [
+    "initial_job_tree.txt",
+    "initial_leaf_tasks.csv",
+    "initial_live_logs.txt",
+    "child_*_raw.json"
+  ]
+}

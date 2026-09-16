@@ -56,6 +56,15 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         self._append_eos = enforce_eos and tokenizer.eos_token_id is not None
         self._workaround_len = _workaround_len
 
+    @property
+    def long_string_workaround(self) -> bool:
+        """Whether to split long documents before batch encoding."""
+        return self._long_string_workaround
+
+    @long_string_workaround.setter
+    def long_string_workaround(self, enabled: bool) -> None:
+        self._long_string_workaround = enabled
+
     def __call__(self, batch: Sequence[dict]) -> list[dict]:
         bos_id = self.tokenizer.bos_token_id if self._append_bos else None
         eos_str = self.tokenizer.eos_token if self._append_eos else None

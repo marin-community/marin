@@ -1,0 +1,33 @@
+{
+  "pilot_zip_sha256": "4567a8171518c174da02918c41161850cd63bb465dc8510ea80a6138483395b5",
+  "refinement_zip_sha256": "8100461f4555644152f7a576754a5d25095ebe40b827dd6ffea4354024881fff",
+  "pilot_count": 5275,
+  "refinement_count": 5274,
+  "changed_files": [
+    "experiments/domain_phase_mix/exploratory/two_phase_many/plot_comparator_proposal_diagnostics_20260909.py",
+    "lib/iris/config/marin.yaml",
+    "lib/iris/docs/priority-bands.md"
+  ],
+  "added": [
+    ".agents/projects/starcoder_tpp10/releases/refinement.json",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/fit_starcoder_tpp10_mariner_20260911.py",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/summarize_delphi_comparator_proposals_20260909.py",
+    "experiments/domain_phase_mix/launch_starcoder_tpp10_refinement.py"
+  ],
+  "removed": [
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/collaborator_p3_comparison_20260504/fit_p3_60m_swarm.py",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/collaborator_p3_comparison_20260504/grp_pipeline_300m.py",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/collaborator_p3_comparison_20260504/grp_vs_p3_comparison.py",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/collaborator_p3_comparison_20260504/replicate_grp_vs_p3_updated.py",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/irt_marimo_gist_20260503/mixture_300m_irt.py"
+  ],
+  "design_equal": true,
+  "pinned_code_equal": true,
+  "runtime_versions_equal": true,
+  "runtime_versions": {
+    "jax": "0.11.1",
+    "jaxlib": "0.11.1",
+    "numpy": "2.3.5",
+    "tokenizers": "0.22.2"
+  }
+}

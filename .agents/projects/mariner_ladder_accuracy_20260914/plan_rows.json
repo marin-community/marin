@@ -1,0 +1,128 @@
+[
+  {
+    "name": "proportional_1e21-2f1a48",
+    "method": "Proportional",
+    "checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/hf/step-22056",
+    "checkpoint_step": 22056,
+    "checkpoint_files": {
+      "chat_template.jinja": {
+        "size": 5112,
+        "generation": "1782589801243300",
+        "crc32c": "jSXcIQ=="
+      },
+      "config.json": {
+        "size": 2561,
+        "generation": "1782589801255621",
+        "crc32c": "/apMrQ=="
+      },
+      "model-00001-of-00003.safetensors": {
+        "size": 4933674712,
+        "generation": "1782589695412775",
+        "crc32c": "sbpiJA=="
+      },
+      "model-00002-of-00003.safetensors": {
+        "size": 4928580272,
+        "generation": "1782589754319623",
+        "crc32c": "FrFlug=="
+      },
+      "model-00003-of-00003.safetensors": {
+        "size": 3670220688,
+        "generation": "1782589799131671",
+        "crc32c": "1/A8Vg=="
+      },
+      "model.safetensors.index.json": {
+        "size": 22613,
+        "generation": "1782589801246980",
+        "crc32c": "kQyzZw=="
+      },
+      "special_tokens_map.json": {
+        "size": 301,
+        "generation": "1782589801248063",
+        "crc32c": "3GMMKA=="
+      },
+      "tokenizer.json": {
+        "size": 17209892,
+        "generation": "1782589801450161",
+        "crc32c": "cv2h3Q=="
+      },
+      "tokenizer_config.json": {
+        "size": 44004,
+        "generation": "1782589801249936",
+        "crc32c": "RvZI5A=="
+      }
+    },
+    "source_training_experiment": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+    "source_export_audit_sha256": "9f776b33a68c1bb9ef7501325a804ade9c4bc886030fe1665181b5d797bfa8d7",
+    "training_metadata": {
+      "sha256": "a0503a9ce5f21d0a9d59c45f3a55ecdd007bcb79a2601921e58ce898a8e1ab3b",
+      "data": {
+        "step": 22056,
+        "timestamp": "2026-06-27T19:46:02.274098",
+        "is_temporary": false
+      }
+    }
+  },
+  {
+    "name": "unimax8_1e21-d685cd",
+    "method": "UniMax-8",
+    "checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/hf/step-22056",
+    "checkpoint_step": 22056,
+    "checkpoint_files": {
+      "chat_template.jinja": {
+        "size": 5112,
+        "generation": "1782618883730232",
+        "crc32c": "jSXcIQ=="
+      },
+      "config.json": {
+        "size": 2561,
+        "generation": "1782618883747415",
+        "crc32c": "/apMrQ=="
+      },
+      "model-00001-of-00003.safetensors": {
+        "size": 4933674712,
+        "generation": "1782618776846905",
+        "crc32c": "ETmBbg=="
+      },
+      "model-00002-of-00003.safetensors": {
+        "size": 4928580272,
+        "generation": "1782618835132437",
+        "crc32c": "d7ZeUA=="
+      },
+      "model-00003-of-00003.safetensors": {
+        "size": 3670220688,
+        "generation": "1782618879402705",
+        "crc32c": "EZ78jQ=="
+      },
+      "model.safetensors.index.json": {
+        "size": 22613,
+        "generation": "1782618883749904",
+        "crc32c": "kQyzZw=="
+      },
+      "special_tokens_map.json": {
+        "size": 301,
+        "generation": "1782618883742944",
+        "crc32c": "3GMMKA=="
+      },
+      "tokenizer.json": {
+        "size": 17209892,
+        "generation": "1782618883930086",
+        "crc32c": "cv2h3Q=="
+      },
+      "tokenizer_config.json": {
+        "size": 44004,
+        "generation": "1782618883742421",
+        "crc32c": "RvZI5A=="
+      }
+    },
+    "source_training_experiment": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+    "source_export_audit_sha256": "9f776b33a68c1bb9ef7501325a804ade9c4bc886030fe1665181b5d797bfa8d7",
+    "training_metadata": {
+      "sha256": "0cfb6429a5f48a682e075ffb235ef43bbbd8e7ef87365304ac9a0b2374c71bd8",
+      "data": {
+        "step": 22056,
+        "timestamp": "2026-06-28T03:50:42.429198",
+        "is_temporary": false
+      }
+    }
+  }
+]

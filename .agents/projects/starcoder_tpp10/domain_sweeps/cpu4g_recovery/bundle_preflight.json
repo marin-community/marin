@@ -1,0 +1,19 @@
+{
+  "size_bytes": 24153935,
+  "sha256": "84d71fb51bc6ebb2c368cdcd152ac696b33c21348a9b7c7e03f3dcf3711a5447",
+  "verified_pins": 36,
+  "wrapper_sha256": "4caaa519ca87f21b25ba4d99d2cb7fd4f342e10bee489a3ef844b4614be5b04c",
+  "extra_includes": [
+    ".agents/projects/starcoder_tpp10/domain_sweeps/plan.json",
+    ".agents/projects/starcoder_tpp10/domain_sweeps/release.json",
+    "experiments/domain_phase_mix/tpp10_domain_sweeps_assets/*"
+  ],
+  "excludes": [
+    "^(checkpoints|logs|wandb)/",
+    "^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$",
+    "^\\.agents/(?!projects/starcoder_tpp10/domain_sweeps/(plan|release)\\.json$).*",
+    "^(docs|tests)/",
+    "^lib/[^/]+/tests/",
+    "^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/"
+  ]
+}

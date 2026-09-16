@@ -1,0 +1,73 @@
+{
+  "artifact": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789257196.503958,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/heartbeat_20260912_2352/remaining_artifact_audit.json",
+      "fieldbook.local_size_at_capture": 2760
+    },
+    "content_hash": "sha256:90bd307462191472bfe13a281e30d61f599f449c9f12e6cd96b00ede408a1814",
+    "created_at": "2026-09-12T23:56:54Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2c0ty6kak7rfts80rmyf0rx",
+    "job_id": "job_01m2bs1r6bzqvfr24qk91p46hs",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-12T23:56:54Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/heartbeat_20260912_2352/remaining_artifact_audit.json"
+  },
+  "job": {
+    "attrs": {
+      "scheduling.priority": "interactive",
+      "training.plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-12T21:40:49Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m2bs1r6bzqvfr24qk91p46hs",
+    "launcher": "iris/fray",
+    "name": "Interactive refinement verified_training-869fe9a0",
+    "retry_of": null,
+    "run_id": null,
+    "started_at": null,
+    "status": "succeeded",
+    "updated_at": "2026-09-12T23:56:55Z"
+  },
+  "metric": {
+    "created_at": "2026-09-12T23:56:56Z",
+    "deleted_at": null,
+    "id": "met_01m2c0tzchw707khnybk1sebfr",
+    "metric_name": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+    "run_id": "run_01m27mq0dnp8akz8698eszx60r",
+    "source_artifact_id": "art_01m2c0ty6kak7rfts80rmyf0rx",
+    "source_job_id": "job_01m2bs1r6bzqvfr24qk91p46hs",
+    "split": "eval",
+    "step": "11490",
+    "updated_at": "2026-09-12T23:56:56Z",
+    "value": 0.770405113697052
+  },
+  "validation": {
+    "attrs": {},
+    "check_name": "refinement_final_checkpoint_runtime_wandb_20260912",
+    "created_at": "2026-09-12T23:56:56Z",
+    "deleted_at": null,
+    "details": {},
+    "entity_id": "run_01m27mq0dnp8akz8698eszx60r",
+    "entity_type": "run",
+    "expected_value": "SUCCESS, exact fingerprint, permanent final checkpoint, frozen runtime and finished W&B metric parity",
+    "id": "val_01m2c0tzn48x3kqkb3f7cqer5e",
+    "measured_value": "BPB 0.770405113697052 at final step 11490; all checks passed",
+    "session_id": "ses_01m2c0ns6jpcc937d2at085dpe",
+    "source_artifact_id": "art_01m2c0ty6kak7rfts80rmyf0rx",
+    "source_job_id": "job_01m2bs1r6bzqvfr24qk91p46hs",
+    "status": "pass",
+    "updated_at": "2026-09-12T23:56:56Z"
+  }
+}

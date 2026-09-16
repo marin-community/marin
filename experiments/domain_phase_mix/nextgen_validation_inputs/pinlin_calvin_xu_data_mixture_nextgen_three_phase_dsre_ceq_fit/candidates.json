@@ -1,0 +1,23 @@
+[
+  {
+    "candidate_id": "cand-b393aaab961da7a2",
+    "kind": "schedule",
+    "model_name": "DS-RE-CEQ",
+    "phase_weights": {
+      "phase_0": {
+        "nemotron_full": 1.0,
+        "starcoder": 0.0
+      },
+      "phase_1": {
+        "nemotron_full": 0.8321276095905549,
+        "starcoder": 0.16787239040944515
+      },
+      "phase_2": {
+        "nemotron_full": 0.6886593836328604,
+        "starcoder": 0.3113406163671396
+      }
+    },
+    "policy_ref": null,
+    "predicted_objective": 0.8512798986393375
+  }
+]

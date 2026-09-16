@@ -1,0 +1,22 @@
+{
+  "cc_review_path": ".agents/handoffs/starcoder_wsd80_lr_onset_dense_surfaces_cc_review_20260825.md",
+  "cc_review_sha256": "a0718afbe3ded80317dd6eabe77765ebfff53ff43dc7a8b3d69a3039a9a22765",
+  "confirmation": "I_AUTHORIZE_THE_STARCODER_WSD80_LR_ONSET_DENSE_SURFACES",
+  "design_file_sha256": "070664276dd4ed3edb30c964031d543152b6863e9dd2ca43c9db92ef82fc71ad",
+  "design_generator_path": "experiments/domain_phase_mix/exploratory/two_phase_many/design_starcoder_wsd80_lr_onset_dense_surfaces_20260825.py",
+  "design_generator_sha256": "a72850a7d154cf7c21cb3ad12ffd47a3b41d30dc450e1c3df261e2322d4b720c",
+  "design_path": "experiments/domain_phase_mix/starcoder_wsd80_lr_onset_dense_surface_design_20260825.json.gz",
+  "design_sha256": "99d3af5aff1f62e679c200219e92914df1f12a407e9afe08cd365c0a8079d889",
+  "launcher_path": "experiments/domain_phase_mix/launch_starcoder_wsd80_lr_onset_dense_surfaces.py",
+  "launcher_sha256": "8ddbb6c668fb68a3c754e6a54b3379d204fed6d8357b3fb21e768d4073f7667d",
+  "maximum_concurrent": 128,
+  "release_sha256": "ba53ba78739aa1e92294f449487e034171b3d8d4d3ccf9d6329e10197007cc5e",
+  "schema_version": "2026-08-25-starcoder-wsd80-lr-onset-dense-v1",
+  "training_environment": {
+    "jax_default_prng_impl": "threefry2x32",
+    "jax_enable_x64": false,
+    "jax_version": "0.11.0",
+    "numpy_version": "2.3.5",
+    "uv_lock_sha256": "5edf2440895451ed317d6a1c219b5ce266b10c31c0e486c9ea38bbe25f827566"
+  }
+}

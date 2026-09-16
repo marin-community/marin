@@ -1,0 +1,3 @@
+| variant                    | surrogate_variant    |   nonlinear_param_count |   total_param_count |   train_rmse |   cv_rmse |   cv_foldmean_regret_at_1 |   lower_tail_optimism |   cv_depopt_best8 |   cv_rawopt_nearest_tv |   raw_predicted_optimum_value |
+|:---------------------------|:---------------------|------------------------:|--------------------:|-------------:|----------:|--------------------------:|----------------------:|------------------:|-----------------------:|------------------------------:|
+| power_family_penalty_no_l2 | power_family_penalty |                       9 |                  42 |     0.007598 |  0.008720 |                  0.002082 |              0.002777 |          0.056273 |               0.552822 |                      1.013866 |

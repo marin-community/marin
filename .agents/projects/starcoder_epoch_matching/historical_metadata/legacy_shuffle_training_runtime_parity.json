@@ -1,0 +1,10 @@
+{
+  "jax_version": "0.10.1",
+  "jaxlib_version": "0.10.1",
+  "numpy_version": "2.3.5",
+  "positions": 136704,
+  "legacy_class_equals_current_class": true,
+  "legacy_class_equals_new_loader_audit": true,
+  "parent_indices_sha256": "24c5bdd4bd466de18bc56ba06ea92053e329ad749aadea354a983fb38c61c4c1",
+  "matched_indices_sha256": "6c8ac23d240d4c99f88b2fa854cb7f7415b19e5387a68cf634f03dd73d2706c3"
+}

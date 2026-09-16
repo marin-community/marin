@@ -1,0 +1,127 @@
+{
+  "preregistration_version": "2026-08-12-c06-operational-gate-v2",
+  "generation": 10,
+  "analysis_scope": "operational_only_no_endpoint_metrics",
+  "endpoint_metrics_read": false,
+  "scientific_inference_allowed": false,
+  "historical_operational_evidence_used": {
+    "generation": 9,
+    "scope": "runtime telemetry only; no endpoint outcomes",
+    "use": "identify terminal-checkpoint timestamp contamination and choose the fixed pause/bin design"
+  },
+  "implementation_sha256": {
+    "stress_launcher": "737b1f3e7cbe8a9ad6956fd6612f776660ffe5624614c72d504b9f86e7a7571e",
+    "runtime_gate": "30175528fb4265665a9347f6777af20342196a4433461aab1fb7f85502c1d256",
+    "tests": "23f15f15defe032596f4bf00a00c9214da18edc30bf968ec0b8a6b5846291aaf",
+    "history_audit": "7cc54a296040e903b011793b72fb421e341429c3b2b96573a8a88265c8565b2c"
+  },
+  "design": {
+    "stage": 6,
+    "total_steps": 3328,
+    "terminal_step": 3327,
+    "data_switch_step": 1536,
+    "optimizer_decay_steps": [
+      2048,
+      2176,
+      2560,
+      2688,
+      2304,
+      2432
+    ],
+    "support_ids": [
+      "m100a",
+      "m100a",
+      "m100a",
+      "m100a",
+      "full",
+      "m100b"
+    ],
+    "training_seeds": [
+      2026089600,
+      2026089601,
+      2026089602,
+      2026089603,
+      2026089604,
+      2026089605
+    ],
+    "rendezvous_ready_spread_seconds_max": 450.0
+  },
+  "release_gate": {
+    "unchanged_row_checks": {
+      "loading_p99_seconds_max": 0.01,
+      "loading_over_one_second_fraction_max": 0.0002837281883955171,
+      "loading_seconds_max": 60.0,
+      "duty_fraction_min": 0.99,
+      "tokens_per_second_p50_min": 690000.0,
+      "mfu_percent_p50_min": 33.0,
+      "rolling_window_steps": 1000,
+      "rolling_tokens_per_second_p50_min": 660000.0,
+      "history_coverage_fraction_min": 0.95,
+      "event_tokens_per_second_p50_min": 660000.0,
+      "event_loading_p99_seconds_max": 0.025,
+      "event_history_coverage_fraction_min": 0.95,
+      "runtime_accounting_ratio_min": 0.95,
+      "runtime_accounting_ratio_max": 1.25
+    },
+    "short_window": {
+      "window_steps": 32,
+      "tokens_per_second_min": 660000.0,
+      "max_consecutive_positions": 96,
+      "max_exceeding_rows": 1
+    },
+    "synchronized_depression": {
+      "quorum_fraction": 0.8333333333333334,
+      "depression_fraction": 0.95,
+      "bin_seconds": 12.0,
+      "grid_anchor": "all-row host-time overlap start",
+      "checkpoint_exclusion_rule": "Exclude any fixed grid bin intersecting the union of declared checkpoint-pause intervals; retain all rows on the shared host clock.",
+      "max_seconds": 36.0
+    },
+    "pause_accounting": {
+      "pause_detection_rule": "A consecutive host-time gap is a pause when delta exceeds the right step's recorded duration plus loading time plus the fixed slack.",
+      "accounting_slack_seconds": 1.0,
+      "declared_checkpoint_steps": [
+        1536,
+        3327
+      ],
+      "unexplained_pause_longest_seconds_max": 5.0,
+      "unexplained_pause_total_seconds_max": 15.0,
+      "checkpoint_pause_seconds_max": 60.0,
+      "checkpoint_pause_cross_row_spread_seconds_max": 30.0
+    },
+    "concurrency_and_integrity": {
+      "concurrent_overlap_seconds_min": 120.0,
+      "concurrent_overlap_fraction_min": 0.95,
+      "runtime_start_skew_seconds_max": 180.0,
+      "rendezvous_ready_spread_seconds_max": 450.0,
+      "finite_to_full_loading_p99_ratio_max": 1.5,
+      "permanent_checkpoint_bytes_max": 2350000000,
+      "clean_iris_completion_required": true,
+      "attempt_zero_required": true,
+      "checkpoint_inventory_required": true,
+      "all_event_windows_inside_all_row_overlap_required": true,
+      "unique_rendezvous_worker_claims_required": true,
+      "remote_preregistration_hash_required": true
+    }
+  },
+  "diagnostic_only": {
+    "event_recovery": true,
+    "decay_alignment": {
+      "c06_classification": "underpowered",
+      "primary_support_id": "m100a",
+      "c12_identification_requirement": "Eight same-support rows in four replicated onset cohorts; exact onset-assignment permutation inference at alpha 0.01 with fixed pretrend and placebo falsifications."
+    },
+    "decision_rule": "C6 event-relative summaries never override an operational gate. Causal attribution is deferred to the separately preregistered C12 design."
+  },
+  "predecessor": {
+    "generation": 9,
+    "preregistration_sha256": "981fc264091fcd245e30ddd98f45605341f09b2fc44e0ea84513780e1ad873b5",
+    "runtime_gate_status": "fail",
+    "failure": "terminal checkpoint finalization contaminated the last synchronized-coverage bin",
+    "integrity_rule": "Generation 9 remains failed and cannot release C12."
+  },
+  "next_stage": {
+    "on_pass": "C12 only after this exact report passes and its SHA-256 is pinned; C12 requires a separately reviewed generation-11 preregistration",
+    "on_fail": "Do not launch C12; diagnose without changing this generation's thresholds"
+  }
+}

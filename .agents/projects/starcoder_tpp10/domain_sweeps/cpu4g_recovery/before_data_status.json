@@ -1,0 +1,53 @@
+{
+  "plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b",
+  "rows": [
+    {
+      "key": "wikipedia/raw",
+      "path": "gs://marin-us-central1/tpp10_domain_sweeps/wikipedia/raw/2026.09.11",
+      "fingerprint": "5e2ac160",
+      "record_fingerprint": "5e2ac160",
+      "status": "SUCCESS",
+      "active_lease": null
+    },
+    {
+      "key": "wikipedia/parent",
+      "path": "gs://marin-us-central1/tpp10_domain_sweeps/wikipedia/parent/2026.09.11",
+      "fingerprint": "447ffaff",
+      "record_fingerprint": "447ffaff",
+      "status": "SUCCESS",
+      "active_lease": null
+    },
+    {
+      "key": "wikipedia/matched",
+      "path": "gs://marin-us-central1/tpp10_domain_sweeps/wikipedia/matched/2026.09.11",
+      "fingerprint": "475c0f64",
+      "record_fingerprint": "475c0f64",
+      "status": "SUCCESS",
+      "active_lease": null
+    },
+    {
+      "key": "finemath_3plus/raw",
+      "path": "gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11",
+      "fingerprint": "951e1108",
+      "record_fingerprint": "951e1108",
+      "status": "SUCCESS",
+      "active_lease": null
+    },
+    {
+      "key": "finemath_3plus/parent",
+      "path": "gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/parent/2026.09.11",
+      "fingerprint": "60e2a8fa",
+      "record_fingerprint": "60e2a8fa",
+      "status": "SUCCESS",
+      "active_lease": null
+    },
+    {
+      "key": "finemath_3plus/matched",
+      "path": "gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/matched/2026.09.11",
+      "fingerprint": "6d286890",
+      "record_fingerprint": null,
+      "status": "RUNNING",
+      "active_lease": "/calvinxu/tpp10-domain-sweeps/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139903555856064)"
+    }
+  ]
+}

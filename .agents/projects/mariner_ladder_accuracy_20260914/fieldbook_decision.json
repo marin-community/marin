@@ -1,0 +1,18 @@
+{
+  "attrs": {
+    "session_id": "ses_01m2f6pafa0wys0jfxpkfyjmns"
+  },
+  "author": null,
+  "body": "Calvin authorized launching accuracy evaluations for the completed 1e21 paper ladder mixtures on 13 September 2026 after CC review. This supersedes the earlier deferral for this rung only. Retain all metrics, task-level results, all per-example outputs supported by the chosen suite, and exact checkpoint, task, tokenizer, code and runtime provenance; do not constrain retention to a later headline aggregate. Completed final checkpoints only; no training or incomplete-rung evaluation.",
+  "body_format": "markdown",
+  "created_at": "2026-09-14T05:38:25Z",
+  "deleted_at": null,
+  "entity_id": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+  "entity_type": "experiment",
+  "id": "note_01m2f6rzbsw00cexc3d6082zfk",
+  "note_type": "decision",
+  "resolved_at": null,
+  "status": "open",
+  "title": "Resume accuracy evaluations for completed 1e21 ladder checkpoints",
+  "updated_at": "2026-09-14T05:38:25Z"
+}

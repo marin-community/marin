@@ -1,0 +1,187 @@
+{
+  "preregistration_version": "2026-08-13-c06-forced-retry-gate-v2",
+  "generation": 15,
+  "supersedes_failed_preregistration_sha256": "d5d9f600bca0ba8353ed32a50a47ff4346235832db3bd90088229375b870b91e",
+  "supersession_reason": "The v1 parent failed before child allocation because Iris intentionally propagates only region and zone, not per-job preemptibility, through IRIS_JOB_CONSTRAINTS. V2 asserts the observable placement contract and requires controller job_config readback before fault injection.",
+  "analysis_scope": "operational_only_no_endpoint_metrics",
+  "endpoint_metrics_read": false,
+  "scientific_inference_allowed": false,
+  "implementation_sha256": {
+    "stress_launcher": "48643a2f1efed730e873036b3797676a0dc4a3c7f44c24cebf9601d3654ed9dd",
+    "runtime_gate": "7ddcd45e40fb9cc789a0efc6cbf6af20d8aefe5affad8dc01f3124db8dc8bf73",
+    "tests": "af2caa9c670a8b24acc0b32e461d50f8ff3f9f0eff259b5c86f4cbe3bfee0670",
+    "gradient_conflict_full": "279fa9fe31c3f89fe345328154e3e70de0dc84a820338eaffa031f3eb1236847",
+    "wsd80_surface": "4334978b7c6fbe8c33c6af34806d33621655ca2082a4f1c08533ab8a7bc1d468"
+  },
+  "design": {
+    "stage": 6,
+    "total_steps": 3328,
+    "terminal_step": 3327,
+    "data_switch_step": 1536,
+    "optimizer_decay_steps": [
+      2048,
+      2176,
+      2560,
+      2688,
+      2304,
+      2432
+    ],
+    "support_ids": [
+      "m100a",
+      "m100a",
+      "m100a",
+      "m100a",
+      "full",
+      "m100b"
+    ],
+    "training_seeds": [
+      2026089600,
+      2026089601,
+      2026089602,
+      2026089603,
+      2026089604,
+      2026089605
+    ],
+    "cohort": {
+      "replicas": 6,
+      "coscheduling_group_by": "tpu-topology",
+      "parent_managed_whole_cohort_retries": 20,
+      "per_attempt_wait_timeout_seconds": 14400,
+      "max_retries_failure": 0,
+      "max_retries_preemption": 0,
+      "max_task_failures": 0,
+      "initialize_jax_distributed": false,
+      "start_and_completion_barriers_required": true,
+      "barriers_scoped_by_parent_and_iris_attempt": true,
+      "fresh_checkpoint_and_wandb_namespaces_per_parent_attempt": true
+    },
+    "parent_submission": {
+      "preemptible": false,
+      "max_retries_failure": 0,
+      "max_retries_preemption": 0,
+      "runtime_inherited_central1_placement_asserted": true,
+      "runtime_preemptible_true_rejected_if_present": true,
+      "runtime_retry_attestation_asserted": true,
+      "controller_readback_required_before_fault_injection": {
+        "preemptible": false,
+        "max_retries_failure": 0,
+        "max_retries_preemption": 0
+      },
+      "required_cli_flags": [
+        "--no-preemptible",
+        "--max-retries 0",
+        "--max-preemption-retries 0"
+      ],
+      "required_environment": {
+        "MARIN_STRESS_PARENT_PREEMPTIBLE": "false",
+        "MARIN_STRESS_PARENT_MAX_RETRIES_FAILURE": "0",
+        "MARIN_STRESS_PARENT_MAX_RETRIES_PREEMPTION": "0"
+      }
+    },
+    "future_training_release": {
+      "required_operational_concurrencies": [
+        6,
+        64
+      ],
+      "expected_exact_value": [
+        6,
+        64
+      ]
+    }
+  },
+  "fault_injection": {
+    "forced_preemption_recovery_required": true,
+    "mode": "operator_iris_kick",
+    "target_parent_cohort_attempt": 0,
+    "target_child_job_basename": "stage-c06-cohort-g15-attempt-000",
+    "target_task_index": 0,
+    "requested_state": "preempted",
+    "reason": "preregistered generation-15 whole-cohort recovery fault",
+    "trigger": "Inject exactly once after the attempt-000 start rendezvous release exists and logical task 0 is active, before the completion rendezvous exists. Abort rather than retarget if attempt 000 preempts or completes before this trigger.",
+    "expected_recovery": "Attempt 000 becomes a terminal preemption-only child; the non-preemptible parent submits attempt 001 for all six rows; the analyzer selects the latest complete attempt and requires at least one abandoned cohort.",
+    "application_failure_count_allowed": 0
+  },
+  "release_gate": {
+    "unchanged_row_checks": {
+      "loading_p99_seconds_max": 0.01,
+      "loading_over_one_second_fraction_max": 0.0002837281883955171,
+      "loading_seconds_max": 60.0,
+      "duty_fraction_min": 0.99,
+      "tokens_per_second_p50_min": 690000.0,
+      "mfu_percent_p50_min": 33.0,
+      "rolling_window_steps": 1000,
+      "rolling_tokens_per_second_p50_min": 660000.0,
+      "history_coverage_fraction_min": 0.95,
+      "event_tokens_per_second_p50_min": 660000.0,
+      "event_loading_p99_seconds_max": 0.025,
+      "event_history_coverage_fraction_min": 0.95,
+      "runtime_accounting_ratio_min": 0.95,
+      "runtime_accounting_ratio_max": 1.25
+    },
+    "short_window": {
+      "window_steps": 32,
+      "tokens_per_second_min": 660000.0,
+      "max_consecutive_positions": 96,
+      "max_exceeding_rows": 1
+    },
+    "synchronized_depression": {
+      "quorum_fraction": 0.8333333333333334,
+      "depression_fraction": 0.95,
+      "bin_seconds": 12.0,
+      "grid_anchor": "all-row host-time overlap start",
+      "checkpoint_exclusion_rule": "Exclude any fixed grid bin intersecting the union of declared checkpoint-pause intervals; retain all rows on the shared host clock.",
+      "max_seconds": 36.0
+    },
+    "pause_accounting": {
+      "pause_detection_rule": "A consecutive host-time gap is a pause when delta exceeds the right step's recorded duration plus loading time plus the fixed slack.",
+      "accounting_slack_seconds": 1.0,
+      "declared_checkpoint_steps": [
+        1536,
+        3327
+      ],
+      "unexplained_pause_longest_seconds_max": 5.0,
+      "unexplained_pause_total_seconds_max": 15.0,
+      "checkpoint_pause_seconds_max": 60.0,
+      "checkpoint_pause_cross_row_spread_seconds_max": 30.0
+    },
+    "concurrency_and_integrity": {
+      "concurrent_overlap_seconds_min": 120.0,
+      "concurrent_overlap_fraction_min": 0.95,
+      "runtime_start_skew_seconds_max": 180.0,
+      "rendezvous_ready_spread_seconds_max": 450.0,
+      "completion_rendezvous_ready_spread_seconds_max": 450.0,
+      "finite_to_full_loading_p99_ratio_max": 1.5,
+      "permanent_checkpoint_bytes_max": 2350000000,
+      "clean_iris_completion_required": true,
+      "historical_infrastructure_preemptions_allowed": true,
+      "application_failures_allowed": false,
+      "cohort_coscheduling_required": true,
+      "latest_released_attempt_required": true,
+      "one_complete_attempt_membership_required": true,
+      "one_shared_iris_attempt_per_barrier_required": true,
+      "parent_managed_whole_cohort_replacement_required": true,
+      "preempted_child_attempts_must_have_zero_application_failures": true,
+      "completion_barrier_required": true,
+      "fresh_checkpoint_namespace_per_attempt_required": true,
+      "fresh_wandb_namespace_per_attempt_required": true,
+      "cross_replica_jax_forbidden": true,
+      "checkpoint_inventory_required": true,
+      "all_pre_and_post_event_windows_inside_all_row_overlap_required": true,
+      "unique_rendezvous_worker_claims_required": true,
+      "remote_preregistration_hash_required": true,
+      "report_upload_create_only_and_remote_hash_verified": true,
+      "new_cohort_attempt_rejects_preexisting_start_or_completion_rendezvous_state": true,
+      "existing_child_reattachment_may_reuse_its_immutable_rendezvous_state": true
+    }
+  },
+  "prior_clean_c6_evidence": {
+    "generation": 11,
+    "runtime_report_sha256": "44e930e801681d1b809c3b6dd91124f317ba612d9d949fed44ef618aa635e6f1",
+    "runtime_report_remote_generation": "1786596853124878",
+    "role": "establishes the no-fault path only; it does not authorize C64"
+  },
+  "next_stage": {
+    "on_pass": "Freeze and independently review one direct C64 generation-16 gate citing this exact report hash and remote object generation.",
+    "on_fail": "Do not launch C64; diagnose the replacement failure without changing this gate."
+  }
+}

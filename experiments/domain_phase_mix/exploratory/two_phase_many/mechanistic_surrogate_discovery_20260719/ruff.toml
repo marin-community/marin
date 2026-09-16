@@ -1,0 +1,5 @@
+# Discovery scripts persist long preregistration prose and bootstrap repository imports.
+extend = "../../../../../pyproject.toml"
+
+[lint]
+extend-ignore = ["E402", "E501", "RUF100"]

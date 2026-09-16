@@ -1,0 +1,1808 @@
+{
+  "anchors": [
+    {
+      "anchor_id": "proportional",
+      "anchor_index": 0,
+      "description": "Token-proportional StarCoder share in both phases.",
+      "phase_0_starcoder": 0.03648954523000533,
+      "phase_1_starcoder": 0.03648954523000533,
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "source": "analytic_baseline"
+    },
+    {
+      "anchor_id": "nemotron_only",
+      "anchor_index": 1,
+      "description": "No StarCoder in either phase.",
+      "phase_0_starcoder": 0.0,
+      "phase_1_starcoder": 0.0,
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "source": "analytic_baseline"
+    },
+    {
+      "anchor_id": "balanced",
+      "anchor_index": 2,
+      "description": "Equal Nemotron/StarCoder in both phases.",
+      "phase_0_starcoder": 0.5,
+      "phase_1_starcoder": 0.5,
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "source": "analytic_baseline"
+    },
+    {
+      "anchor_id": "starcoder_only",
+      "anchor_index": 3,
+      "description": "All StarCoder in both phases.",
+      "phase_0_starcoder": 1.0,
+      "phase_1_starcoder": 1.0,
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "source": "analytic_baseline"
+    },
+    {
+      "anchor_id": "observed_global_best",
+      "anchor_index": 4,
+      "description": "Best observed target BPB in the 143-row two-phase StarCoder panel.",
+      "phase_0_starcoder": 0.228,
+      "phase_1_starcoder": 0.253,
+      "reference_bpb": 0.9057711362838744,
+      "reference_run_id": 90040,
+      "source": "observed_143_panel"
+    },
+    {
+      "anchor_id": "observed_p0_zero_slice_best",
+      "anchor_index": 5,
+      "description": "Best observed target BPB among p0 StarCoder == 0 slice.",
+      "phase_0_starcoder": 0.0,
+      "phase_1_starcoder": 0.28140808480217894,
+      "reference_bpb": 0.9086067080497742,
+      "reference_run_id": 10,
+      "source": "observed_143_panel"
+    },
+    {
+      "anchor_id": "late_code_moderate",
+      "anchor_index": 6,
+      "description": "No early StarCoder and moderate late StarCoder, near the observed U-shape optimum.",
+      "phase_0_starcoder": 0.0,
+      "phase_1_starcoder": 0.25,
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "source": "designed_anchor"
+    },
+    {
+      "anchor_id": "two_stage_default",
+      "anchor_index": 7,
+      "description": "Original two-stage-inspired high late-code baseline.",
+      "phase_0_starcoder": 0.01,
+      "phase_1_starcoder": 0.8,
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "source": "historical_baseline"
+    },
+    {
+      "anchor_id": "early_code_high_late_low",
+      "anchor_index": 8,
+      "description": "High early StarCoder with low late StarCoder.",
+      "phase_0_starcoder": 0.8,
+      "phase_1_starcoder": 0.1,
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "source": "designed_anchor"
+    },
+    {
+      "anchor_id": "high_both_moderate_late",
+      "anchor_index": 9,
+      "description": "High StarCoder in both phases, with heavier phase 1.",
+      "phase_0_starcoder": 0.5,
+      "phase_1_starcoder": 0.8,
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "source": "designed_anchor"
+    }
+  ],
+  "cohort": "two_phase_starcoder_heteroskedastic_snr",
+  "name_prefix": "pinlin_calvin_xu/data_mixture/t2s_heteroskedastic_snr_20260523",
+  "run_specs": [
+    {
+      "anchor_id": "proportional",
+      "anchor_index": 0,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810000,
+      "description": "Token-proportional StarCoder share in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.03648954523000533,
+      "phase_0_starcoder_epochs": 0.4817552273849973,
+      "phase_1_starcoder": 0.03648954523000533,
+      "phase_1_starcoder_epochs": 0.4817552273849973,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.9635104547699946,
+          "starcoder": 0.03648954523000533
+        },
+        "phase_1": {
+          "nemotron_full": 0.9635104547699946,
+          "starcoder": 0.03648954523000533
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 0,
+      "repeats_per_anchor": 5,
+      "run_id": 810000,
+      "run_name": "t2s_snr_a00_r00",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 0.9635104547699946,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "proportional",
+      "anchor_index": 0,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810001,
+      "description": "Token-proportional StarCoder share in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.03648954523000533,
+      "phase_0_starcoder_epochs": 0.4817552273849973,
+      "phase_1_starcoder": 0.03648954523000533,
+      "phase_1_starcoder_epochs": 0.4817552273849973,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.9635104547699946,
+          "starcoder": 0.03648954523000533
+        },
+        "phase_1": {
+          "nemotron_full": 0.9635104547699946,
+          "starcoder": 0.03648954523000533
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 1,
+      "repeats_per_anchor": 5,
+      "run_id": 810001,
+      "run_name": "t2s_snr_a00_r01",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 0.9635104547699946,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "proportional",
+      "anchor_index": 0,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810002,
+      "description": "Token-proportional StarCoder share in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.03648954523000533,
+      "phase_0_starcoder_epochs": 0.4817552273849973,
+      "phase_1_starcoder": 0.03648954523000533,
+      "phase_1_starcoder_epochs": 0.4817552273849973,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.9635104547699946,
+          "starcoder": 0.03648954523000533
+        },
+        "phase_1": {
+          "nemotron_full": 0.9635104547699946,
+          "starcoder": 0.03648954523000533
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 2,
+      "repeats_per_anchor": 5,
+      "run_id": 810002,
+      "run_name": "t2s_snr_a00_r02",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 0.9635104547699946,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "proportional",
+      "anchor_index": 0,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810003,
+      "description": "Token-proportional StarCoder share in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.03648954523000533,
+      "phase_0_starcoder_epochs": 0.4817552273849973,
+      "phase_1_starcoder": 0.03648954523000533,
+      "phase_1_starcoder_epochs": 0.4817552273849973,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.9635104547699946,
+          "starcoder": 0.03648954523000533
+        },
+        "phase_1": {
+          "nemotron_full": 0.9635104547699946,
+          "starcoder": 0.03648954523000533
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 3,
+      "repeats_per_anchor": 5,
+      "run_id": 810003,
+      "run_name": "t2s_snr_a00_r03",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 0.9635104547699946,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "proportional",
+      "anchor_index": 0,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810004,
+      "description": "Token-proportional StarCoder share in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.03648954523000533,
+      "phase_0_starcoder_epochs": 0.4817552273849973,
+      "phase_1_starcoder": 0.03648954523000533,
+      "phase_1_starcoder_epochs": 0.4817552273849973,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.9635104547699946,
+          "starcoder": 0.03648954523000533
+        },
+        "phase_1": {
+          "nemotron_full": 0.9635104547699946,
+          "starcoder": 0.03648954523000533
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 4,
+      "repeats_per_anchor": 5,
+      "run_id": 810004,
+      "run_name": "t2s_snr_a00_r04",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 0.9635104547699946,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "nemotron_only",
+      "anchor_index": 1,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810005,
+      "description": "No StarCoder in either phase.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.0,
+      "phase_1_starcoder_epochs": 0.0,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 0,
+      "repeats_per_anchor": 5,
+      "run_id": 810005,
+      "run_name": "t2s_snr_a01_r00",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 0.0,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "nemotron_only",
+      "anchor_index": 1,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810006,
+      "description": "No StarCoder in either phase.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.0,
+      "phase_1_starcoder_epochs": 0.0,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 1,
+      "repeats_per_anchor": 5,
+      "run_id": 810006,
+      "run_name": "t2s_snr_a01_r01",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 0.0,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "nemotron_only",
+      "anchor_index": 1,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810007,
+      "description": "No StarCoder in either phase.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.0,
+      "phase_1_starcoder_epochs": 0.0,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 2,
+      "repeats_per_anchor": 5,
+      "run_id": 810007,
+      "run_name": "t2s_snr_a01_r02",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 0.0,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "nemotron_only",
+      "anchor_index": 1,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810008,
+      "description": "No StarCoder in either phase.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.0,
+      "phase_1_starcoder_epochs": 0.0,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 3,
+      "repeats_per_anchor": 5,
+      "run_id": 810008,
+      "run_name": "t2s_snr_a01_r03",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 0.0,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "nemotron_only",
+      "anchor_index": 1,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810009,
+      "description": "No StarCoder in either phase.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.0,
+      "phase_1_starcoder_epochs": 0.0,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 4,
+      "repeats_per_anchor": 5,
+      "run_id": 810009,
+      "run_name": "t2s_snr_a01_r04",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 0.0,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "balanced",
+      "anchor_index": 2,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810010,
+      "description": "Equal Nemotron/StarCoder in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.5,
+      "phase_0_starcoder_epochs": 6.601277493982719,
+      "phase_1_starcoder": 0.5,
+      "phase_1_starcoder_epochs": 6.601277493982719,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        },
+        "phase_1": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 0,
+      "repeats_per_anchor": 5,
+      "run_id": 810010,
+      "run_name": "t2s_snr_a02_r00",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 13.202554987965438,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "balanced",
+      "anchor_index": 2,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810011,
+      "description": "Equal Nemotron/StarCoder in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.5,
+      "phase_0_starcoder_epochs": 6.601277493982719,
+      "phase_1_starcoder": 0.5,
+      "phase_1_starcoder_epochs": 6.601277493982719,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        },
+        "phase_1": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 1,
+      "repeats_per_anchor": 5,
+      "run_id": 810011,
+      "run_name": "t2s_snr_a02_r01",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 13.202554987965438,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "balanced",
+      "anchor_index": 2,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810012,
+      "description": "Equal Nemotron/StarCoder in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.5,
+      "phase_0_starcoder_epochs": 6.601277493982719,
+      "phase_1_starcoder": 0.5,
+      "phase_1_starcoder_epochs": 6.601277493982719,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        },
+        "phase_1": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 2,
+      "repeats_per_anchor": 5,
+      "run_id": 810012,
+      "run_name": "t2s_snr_a02_r02",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 13.202554987965438,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "balanced",
+      "anchor_index": 2,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810013,
+      "description": "Equal Nemotron/StarCoder in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.5,
+      "phase_0_starcoder_epochs": 6.601277493982719,
+      "phase_1_starcoder": 0.5,
+      "phase_1_starcoder_epochs": 6.601277493982719,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        },
+        "phase_1": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 3,
+      "repeats_per_anchor": 5,
+      "run_id": 810013,
+      "run_name": "t2s_snr_a02_r03",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 13.202554987965438,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "balanced",
+      "anchor_index": 2,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810014,
+      "description": "Equal Nemotron/StarCoder in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.5,
+      "phase_0_starcoder_epochs": 6.601277493982719,
+      "phase_1_starcoder": 0.5,
+      "phase_1_starcoder_epochs": 6.601277493982719,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        },
+        "phase_1": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 4,
+      "repeats_per_anchor": 5,
+      "run_id": 810014,
+      "run_name": "t2s_snr_a02_r04",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 13.202554987965438,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "starcoder_only",
+      "anchor_index": 3,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810015,
+      "description": "All StarCoder in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 1.0,
+      "phase_0_starcoder_epochs": 13.202554987965438,
+      "phase_1_starcoder": 1.0,
+      "phase_1_starcoder_epochs": 13.202554987965438,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.0,
+          "starcoder": 1.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.0,
+          "starcoder": 1.0
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 0,
+      "repeats_per_anchor": 5,
+      "run_id": 810015,
+      "run_name": "t2s_snr_a03_r00",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 26.405109975930877,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "starcoder_only",
+      "anchor_index": 3,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810016,
+      "description": "All StarCoder in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 1.0,
+      "phase_0_starcoder_epochs": 13.202554987965438,
+      "phase_1_starcoder": 1.0,
+      "phase_1_starcoder_epochs": 13.202554987965438,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.0,
+          "starcoder": 1.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.0,
+          "starcoder": 1.0
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 1,
+      "repeats_per_anchor": 5,
+      "run_id": 810016,
+      "run_name": "t2s_snr_a03_r01",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 26.405109975930877,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "starcoder_only",
+      "anchor_index": 3,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810017,
+      "description": "All StarCoder in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 1.0,
+      "phase_0_starcoder_epochs": 13.202554987965438,
+      "phase_1_starcoder": 1.0,
+      "phase_1_starcoder_epochs": 13.202554987965438,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.0,
+          "starcoder": 1.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.0,
+          "starcoder": 1.0
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 2,
+      "repeats_per_anchor": 5,
+      "run_id": 810017,
+      "run_name": "t2s_snr_a03_r02",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 26.405109975930877,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "starcoder_only",
+      "anchor_index": 3,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810018,
+      "description": "All StarCoder in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 1.0,
+      "phase_0_starcoder_epochs": 13.202554987965438,
+      "phase_1_starcoder": 1.0,
+      "phase_1_starcoder_epochs": 13.202554987965438,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.0,
+          "starcoder": 1.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.0,
+          "starcoder": 1.0
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 3,
+      "repeats_per_anchor": 5,
+      "run_id": 810018,
+      "run_name": "t2s_snr_a03_r03",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 26.405109975930877,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "starcoder_only",
+      "anchor_index": 3,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810019,
+      "description": "All StarCoder in both phases.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 1.0,
+      "phase_0_starcoder_epochs": 13.202554987965438,
+      "phase_1_starcoder": 1.0,
+      "phase_1_starcoder_epochs": 13.202554987965438,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.0,
+          "starcoder": 1.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.0,
+          "starcoder": 1.0
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 4,
+      "repeats_per_anchor": 5,
+      "run_id": 810019,
+      "run_name": "t2s_snr_a03_r04",
+      "simulated_epoch_subset_seed": null,
+      "source": "analytic_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 26.405109975930877,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "observed_global_best",
+      "anchor_index": 4,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810020,
+      "description": "Best observed target BPB in the 143-row two-phase StarCoder panel.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.228,
+      "phase_0_starcoder_epochs": 3.01018253725612,
+      "phase_1_starcoder": 0.253,
+      "phase_1_starcoder_epochs": 3.3402464119552557,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.772,
+          "starcoder": 0.228
+        },
+        "phase_1": {
+          "nemotron_full": 0.747,
+          "starcoder": 0.253
+        }
+      },
+      "reference_bpb": 0.9057711362838744,
+      "reference_run_id": 90040,
+      "repeat_index": 0,
+      "repeats_per_anchor": 5,
+      "run_id": 810020,
+      "run_name": "t2s_snr_a04_r00",
+      "simulated_epoch_subset_seed": null,
+      "source": "observed_143_panel",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 6.350428949211375,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "observed_global_best",
+      "anchor_index": 4,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810021,
+      "description": "Best observed target BPB in the 143-row two-phase StarCoder panel.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.228,
+      "phase_0_starcoder_epochs": 3.01018253725612,
+      "phase_1_starcoder": 0.253,
+      "phase_1_starcoder_epochs": 3.3402464119552557,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.772,
+          "starcoder": 0.228
+        },
+        "phase_1": {
+          "nemotron_full": 0.747,
+          "starcoder": 0.253
+        }
+      },
+      "reference_bpb": 0.9057711362838744,
+      "reference_run_id": 90040,
+      "repeat_index": 1,
+      "repeats_per_anchor": 5,
+      "run_id": 810021,
+      "run_name": "t2s_snr_a04_r01",
+      "simulated_epoch_subset_seed": null,
+      "source": "observed_143_panel",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 6.350428949211375,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "observed_global_best",
+      "anchor_index": 4,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810022,
+      "description": "Best observed target BPB in the 143-row two-phase StarCoder panel.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.228,
+      "phase_0_starcoder_epochs": 3.01018253725612,
+      "phase_1_starcoder": 0.253,
+      "phase_1_starcoder_epochs": 3.3402464119552557,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.772,
+          "starcoder": 0.228
+        },
+        "phase_1": {
+          "nemotron_full": 0.747,
+          "starcoder": 0.253
+        }
+      },
+      "reference_bpb": 0.9057711362838744,
+      "reference_run_id": 90040,
+      "repeat_index": 2,
+      "repeats_per_anchor": 5,
+      "run_id": 810022,
+      "run_name": "t2s_snr_a04_r02",
+      "simulated_epoch_subset_seed": null,
+      "source": "observed_143_panel",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 6.350428949211375,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "observed_global_best",
+      "anchor_index": 4,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810023,
+      "description": "Best observed target BPB in the 143-row two-phase StarCoder panel.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.228,
+      "phase_0_starcoder_epochs": 3.01018253725612,
+      "phase_1_starcoder": 0.253,
+      "phase_1_starcoder_epochs": 3.3402464119552557,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.772,
+          "starcoder": 0.228
+        },
+        "phase_1": {
+          "nemotron_full": 0.747,
+          "starcoder": 0.253
+        }
+      },
+      "reference_bpb": 0.9057711362838744,
+      "reference_run_id": 90040,
+      "repeat_index": 3,
+      "repeats_per_anchor": 5,
+      "run_id": 810023,
+      "run_name": "t2s_snr_a04_r03",
+      "simulated_epoch_subset_seed": null,
+      "source": "observed_143_panel",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 6.350428949211375,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "observed_global_best",
+      "anchor_index": 4,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810024,
+      "description": "Best observed target BPB in the 143-row two-phase StarCoder panel.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.228,
+      "phase_0_starcoder_epochs": 3.01018253725612,
+      "phase_1_starcoder": 0.253,
+      "phase_1_starcoder_epochs": 3.3402464119552557,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.772,
+          "starcoder": 0.228
+        },
+        "phase_1": {
+          "nemotron_full": 0.747,
+          "starcoder": 0.253
+        }
+      },
+      "reference_bpb": 0.9057711362838744,
+      "reference_run_id": 90040,
+      "repeat_index": 4,
+      "repeats_per_anchor": 5,
+      "run_id": 810024,
+      "run_name": "t2s_snr_a04_r04",
+      "simulated_epoch_subset_seed": null,
+      "source": "observed_143_panel",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 6.350428949211375,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "observed_p0_zero_slice_best",
+      "anchor_index": 5,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810025,
+      "description": "Best observed target BPB among p0 StarCoder == 0 slice.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.28140808480217894,
+      "phase_1_starcoder_epochs": 3.7153057136588084,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.7185919151978211,
+          "starcoder": 0.28140808480217894
+        }
+      },
+      "reference_bpb": 0.9086067080497742,
+      "reference_run_id": 10,
+      "repeat_index": 0,
+      "repeats_per_anchor": 5,
+      "run_id": 810025,
+      "run_name": "t2s_snr_a05_r00",
+      "simulated_epoch_subset_seed": null,
+      "source": "observed_143_panel",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 3.7153057136588084,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "observed_p0_zero_slice_best",
+      "anchor_index": 5,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810026,
+      "description": "Best observed target BPB among p0 StarCoder == 0 slice.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.28140808480217894,
+      "phase_1_starcoder_epochs": 3.7153057136588084,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.7185919151978211,
+          "starcoder": 0.28140808480217894
+        }
+      },
+      "reference_bpb": 0.9086067080497742,
+      "reference_run_id": 10,
+      "repeat_index": 1,
+      "repeats_per_anchor": 5,
+      "run_id": 810026,
+      "run_name": "t2s_snr_a05_r01",
+      "simulated_epoch_subset_seed": null,
+      "source": "observed_143_panel",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 3.7153057136588084,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "observed_p0_zero_slice_best",
+      "anchor_index": 5,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810027,
+      "description": "Best observed target BPB among p0 StarCoder == 0 slice.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.28140808480217894,
+      "phase_1_starcoder_epochs": 3.7153057136588084,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.7185919151978211,
+          "starcoder": 0.28140808480217894
+        }
+      },
+      "reference_bpb": 0.9086067080497742,
+      "reference_run_id": 10,
+      "repeat_index": 2,
+      "repeats_per_anchor": 5,
+      "run_id": 810027,
+      "run_name": "t2s_snr_a05_r02",
+      "simulated_epoch_subset_seed": null,
+      "source": "observed_143_panel",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 3.7153057136588084,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "observed_p0_zero_slice_best",
+      "anchor_index": 5,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810028,
+      "description": "Best observed target BPB among p0 StarCoder == 0 slice.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.28140808480217894,
+      "phase_1_starcoder_epochs": 3.7153057136588084,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.7185919151978211,
+          "starcoder": 0.28140808480217894
+        }
+      },
+      "reference_bpb": 0.9086067080497742,
+      "reference_run_id": 10,
+      "repeat_index": 3,
+      "repeats_per_anchor": 5,
+      "run_id": 810028,
+      "run_name": "t2s_snr_a05_r03",
+      "simulated_epoch_subset_seed": null,
+      "source": "observed_143_panel",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 3.7153057136588084,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "observed_p0_zero_slice_best",
+      "anchor_index": 5,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810029,
+      "description": "Best observed target BPB among p0 StarCoder == 0 slice.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.28140808480217894,
+      "phase_1_starcoder_epochs": 3.7153057136588084,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.7185919151978211,
+          "starcoder": 0.28140808480217894
+        }
+      },
+      "reference_bpb": 0.9086067080497742,
+      "reference_run_id": 10,
+      "repeat_index": 4,
+      "repeats_per_anchor": 5,
+      "run_id": 810029,
+      "run_name": "t2s_snr_a05_r04",
+      "simulated_epoch_subset_seed": null,
+      "source": "observed_143_panel",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 3.7153057136588084,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "late_code_moderate",
+      "anchor_index": 6,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810030,
+      "description": "No early StarCoder and moderate late StarCoder, near the observed U-shape optimum.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.25,
+      "phase_1_starcoder_epochs": 3.3006387469913596,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.75,
+          "starcoder": 0.25
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 0,
+      "repeats_per_anchor": 5,
+      "run_id": 810030,
+      "run_name": "t2s_snr_a06_r00",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 3.3006387469913596,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "late_code_moderate",
+      "anchor_index": 6,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810031,
+      "description": "No early StarCoder and moderate late StarCoder, near the observed U-shape optimum.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.25,
+      "phase_1_starcoder_epochs": 3.3006387469913596,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.75,
+          "starcoder": 0.25
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 1,
+      "repeats_per_anchor": 5,
+      "run_id": 810031,
+      "run_name": "t2s_snr_a06_r01",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 3.3006387469913596,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "late_code_moderate",
+      "anchor_index": 6,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810032,
+      "description": "No early StarCoder and moderate late StarCoder, near the observed U-shape optimum.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.25,
+      "phase_1_starcoder_epochs": 3.3006387469913596,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.75,
+          "starcoder": 0.25
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 2,
+      "repeats_per_anchor": 5,
+      "run_id": 810032,
+      "run_name": "t2s_snr_a06_r02",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 3.3006387469913596,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "late_code_moderate",
+      "anchor_index": 6,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810033,
+      "description": "No early StarCoder and moderate late StarCoder, near the observed U-shape optimum.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.25,
+      "phase_1_starcoder_epochs": 3.3006387469913596,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.75,
+          "starcoder": 0.25
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 3,
+      "repeats_per_anchor": 5,
+      "run_id": 810033,
+      "run_name": "t2s_snr_a06_r03",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 3.3006387469913596,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "late_code_moderate",
+      "anchor_index": 6,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810034,
+      "description": "No early StarCoder and moderate late StarCoder, near the observed U-shape optimum.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.0,
+      "phase_0_starcoder_epochs": 0.0,
+      "phase_1_starcoder": 0.25,
+      "phase_1_starcoder_epochs": 3.3006387469913596,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 1.0,
+          "starcoder": 0.0
+        },
+        "phase_1": {
+          "nemotron_full": 0.75,
+          "starcoder": 0.25
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 4,
+      "repeats_per_anchor": 5,
+      "run_id": 810034,
+      "run_name": "t2s_snr_a06_r04",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 3.3006387469913596,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "two_stage_default",
+      "anchor_index": 7,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810035,
+      "description": "Original two-stage-inspired high late-code baseline.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.01,
+      "phase_0_starcoder_epochs": 0.1320255498796544,
+      "phase_1_starcoder": 0.8,
+      "phase_1_starcoder_epochs": 10.562043990372352,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.99,
+          "starcoder": 0.01
+        },
+        "phase_1": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 0,
+      "repeats_per_anchor": 5,
+      "run_id": 810035,
+      "run_name": "t2s_snr_a07_r00",
+      "simulated_epoch_subset_seed": null,
+      "source": "historical_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 10.694069540252007,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "two_stage_default",
+      "anchor_index": 7,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810036,
+      "description": "Original two-stage-inspired high late-code baseline.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.01,
+      "phase_0_starcoder_epochs": 0.1320255498796544,
+      "phase_1_starcoder": 0.8,
+      "phase_1_starcoder_epochs": 10.562043990372352,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.99,
+          "starcoder": 0.01
+        },
+        "phase_1": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 1,
+      "repeats_per_anchor": 5,
+      "run_id": 810036,
+      "run_name": "t2s_snr_a07_r01",
+      "simulated_epoch_subset_seed": null,
+      "source": "historical_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 10.694069540252007,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "two_stage_default",
+      "anchor_index": 7,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810037,
+      "description": "Original two-stage-inspired high late-code baseline.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.01,
+      "phase_0_starcoder_epochs": 0.1320255498796544,
+      "phase_1_starcoder": 0.8,
+      "phase_1_starcoder_epochs": 10.562043990372352,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.99,
+          "starcoder": 0.01
+        },
+        "phase_1": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 2,
+      "repeats_per_anchor": 5,
+      "run_id": 810037,
+      "run_name": "t2s_snr_a07_r02",
+      "simulated_epoch_subset_seed": null,
+      "source": "historical_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 10.694069540252007,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "two_stage_default",
+      "anchor_index": 7,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810038,
+      "description": "Original two-stage-inspired high late-code baseline.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.01,
+      "phase_0_starcoder_epochs": 0.1320255498796544,
+      "phase_1_starcoder": 0.8,
+      "phase_1_starcoder_epochs": 10.562043990372352,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.99,
+          "starcoder": 0.01
+        },
+        "phase_1": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 3,
+      "repeats_per_anchor": 5,
+      "run_id": 810038,
+      "run_name": "t2s_snr_a07_r03",
+      "simulated_epoch_subset_seed": null,
+      "source": "historical_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 10.694069540252007,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "two_stage_default",
+      "anchor_index": 7,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810039,
+      "description": "Original two-stage-inspired high late-code baseline.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.01,
+      "phase_0_starcoder_epochs": 0.1320255498796544,
+      "phase_1_starcoder": 0.8,
+      "phase_1_starcoder_epochs": 10.562043990372352,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.99,
+          "starcoder": 0.01
+        },
+        "phase_1": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 4,
+      "repeats_per_anchor": 5,
+      "run_id": 810039,
+      "run_name": "t2s_snr_a07_r04",
+      "simulated_epoch_subset_seed": null,
+      "source": "historical_baseline",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 10.694069540252007,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "early_code_high_late_low",
+      "anchor_index": 8,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810040,
+      "description": "High early StarCoder with low late StarCoder.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.8,
+      "phase_0_starcoder_epochs": 10.562043990372352,
+      "phase_1_starcoder": 0.1,
+      "phase_1_starcoder_epochs": 1.320255498796544,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        },
+        "phase_1": {
+          "nemotron_full": 0.9,
+          "starcoder": 0.1
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 0,
+      "repeats_per_anchor": 5,
+      "run_id": 810040,
+      "run_name": "t2s_snr_a08_r00",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 11.882299489168897,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "early_code_high_late_low",
+      "anchor_index": 8,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810041,
+      "description": "High early StarCoder with low late StarCoder.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.8,
+      "phase_0_starcoder_epochs": 10.562043990372352,
+      "phase_1_starcoder": 0.1,
+      "phase_1_starcoder_epochs": 1.320255498796544,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        },
+        "phase_1": {
+          "nemotron_full": 0.9,
+          "starcoder": 0.1
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 1,
+      "repeats_per_anchor": 5,
+      "run_id": 810041,
+      "run_name": "t2s_snr_a08_r01",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 11.882299489168897,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "early_code_high_late_low",
+      "anchor_index": 8,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810042,
+      "description": "High early StarCoder with low late StarCoder.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.8,
+      "phase_0_starcoder_epochs": 10.562043990372352,
+      "phase_1_starcoder": 0.1,
+      "phase_1_starcoder_epochs": 1.320255498796544,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        },
+        "phase_1": {
+          "nemotron_full": 0.9,
+          "starcoder": 0.1
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 2,
+      "repeats_per_anchor": 5,
+      "run_id": 810042,
+      "run_name": "t2s_snr_a08_r02",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 11.882299489168897,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "early_code_high_late_low",
+      "anchor_index": 8,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810043,
+      "description": "High early StarCoder with low late StarCoder.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.8,
+      "phase_0_starcoder_epochs": 10.562043990372352,
+      "phase_1_starcoder": 0.1,
+      "phase_1_starcoder_epochs": 1.320255498796544,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        },
+        "phase_1": {
+          "nemotron_full": 0.9,
+          "starcoder": 0.1
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 3,
+      "repeats_per_anchor": 5,
+      "run_id": 810043,
+      "run_name": "t2s_snr_a08_r03",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 11.882299489168897,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "early_code_high_late_low",
+      "anchor_index": 8,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810044,
+      "description": "High early StarCoder with low late StarCoder.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.8,
+      "phase_0_starcoder_epochs": 10.562043990372352,
+      "phase_1_starcoder": 0.1,
+      "phase_1_starcoder_epochs": 1.320255498796544,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        },
+        "phase_1": {
+          "nemotron_full": 0.9,
+          "starcoder": 0.1
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 4,
+      "repeats_per_anchor": 5,
+      "run_id": 810044,
+      "run_name": "t2s_snr_a08_r04",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 11.882299489168897,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "high_both_moderate_late",
+      "anchor_index": 9,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810045,
+      "description": "High StarCoder in both phases, with heavier phase 1.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.5,
+      "phase_0_starcoder_epochs": 6.601277493982719,
+      "phase_1_starcoder": 0.8,
+      "phase_1_starcoder_epochs": 10.562043990372352,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        },
+        "phase_1": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 0,
+      "repeats_per_anchor": 5,
+      "run_id": 810045,
+      "run_name": "t2s_snr_a09_r00",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 17.163321484355073,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "high_both_moderate_late",
+      "anchor_index": 9,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810046,
+      "description": "High StarCoder in both phases, with heavier phase 1.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.5,
+      "phase_0_starcoder_epochs": 6.601277493982719,
+      "phase_1_starcoder": 0.8,
+      "phase_1_starcoder_epochs": 10.562043990372352,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        },
+        "phase_1": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 1,
+      "repeats_per_anchor": 5,
+      "run_id": 810046,
+      "run_name": "t2s_snr_a09_r01",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 17.163321484355073,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "high_both_moderate_late",
+      "anchor_index": 9,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810047,
+      "description": "High StarCoder in both phases, with heavier phase 1.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.5,
+      "phase_0_starcoder_epochs": 6.601277493982719,
+      "phase_1_starcoder": 0.8,
+      "phase_1_starcoder_epochs": 10.562043990372352,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        },
+        "phase_1": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 2,
+      "repeats_per_anchor": 5,
+      "run_id": 810047,
+      "run_name": "t2s_snr_a09_r02",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 17.163321484355073,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "high_both_moderate_late",
+      "anchor_index": 9,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810048,
+      "description": "High StarCoder in both phases, with heavier phase 1.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.5,
+      "phase_0_starcoder_epochs": 6.601277493982719,
+      "phase_1_starcoder": 0.8,
+      "phase_1_starcoder_epochs": 10.562043990372352,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        },
+        "phase_1": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 3,
+      "repeats_per_anchor": 5,
+      "run_id": 810048,
+      "run_name": "t2s_snr_a09_r03",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 17.163321484355073,
+      "trainer_seed": null
+    },
+    {
+      "anchor_id": "high_both_moderate_late",
+      "anchor_index": 9,
+      "cohort": "two_phase_starcoder_heteroskedastic_snr",
+      "data_seed": 810049,
+      "description": "High StarCoder in both phases, with heavier phase 1.",
+      "experiment_budget": 1000000000,
+      "num_train_steps": 3814,
+      "phase_0_starcoder": 0.5,
+      "phase_0_starcoder_epochs": 6.601277493982719,
+      "phase_1_starcoder": 0.8,
+      "phase_1_starcoder_epochs": 10.562043990372352,
+      "phase_weights": {
+        "phase_0": {
+          "nemotron_full": 0.5,
+          "starcoder": 0.5
+        },
+        "phase_1": {
+          "nemotron_full": 0.19999999999999996,
+          "starcoder": 0.8
+        }
+      },
+      "reference_bpb": null,
+      "reference_run_id": null,
+      "repeat_index": 4,
+      "repeats_per_anchor": 5,
+      "run_id": 810049,
+      "run_name": "t2s_snr_a09_r04",
+      "simulated_epoch_subset_seed": null,
+      "source": "designed_anchor",
+      "target_budget": 5729908864777,
+      "total_starcoder_epochs": 17.163321484355073,
+      "trainer_seed": null
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+# Closing review
+
+**Option A is scientifically adequate for its exact narrow claim.** With model, tokenizer, parent, subset, background weights, recipe, grid, seed and objective frozen, "conditional loss curve and observed grid minimum along a fixed mixture path" is a well-defined descriptive statistic, and one seed is consistent with asserting no significance. SPEC:11 now states that p moves exposure, repetition and web replacement together and that observed minima do not identify intrinsic repetition tolerance; SPEC:61/65 forbid importing StarCoder variation and require boundary and flat outcomes to be reported. Nothing further is needed for that claim. A is thin — it cannot support the paper's motivation — but that is a scope limit, not a defect.
+
+**Option B is a useful stronger experiment within its stated limits.** At fixed p the arms share background allocation, ordered block assignment, interleaving, initialization and web stream, so Δ_j(p) is a paired contrast that varies only focus support. SPEC:89 names the estimand correctly — restricted available unique data, including subset composition — and explicitly declines the pure-repetition and cap readings. This is the only quantity in either package indexed by epochs at fixed mixture weight, and 7.97084e17 FLOPs (1.6643% of the Figure 5 pilot) is proportionate. B is the better buy; A remains legitimate if the narrower claim is accepted.
+
+**Mandatory further scientific setting changes: none.** My three earlier blockers are discharged: the unmatched arm is B's content; SPEC:61 handles calibration by paired-coordinate statistics without importing thresholds; SPEC:63 handles objective dependence. Keep P_j, S_j, N, D, the grid and the seeds as frozen.
+
+**Corrections — accepted:**
+
+1. **Corpus versions — accepted, my claim withdrawn.** `dolma3_` wrappers reusing `finemath_3_plus-a26b0f` and `dolma/wiki-212315` make the labels uninformative about version. What survives is the difference in tokenization, sampled support, geometry and mixture weights, which SPEC:53/71 already carry.
+2. **Causal interpretation — accepted.** Calling Δ a repetition penalty overstates it; support size, diversity and subset composition move together. SPEC:89 is the correct wording.
+3. **Noise — accepted on method; residue retained.** Paired p70−p50 differences (mean 0.00836756, SD 0.00365544, 6/6 positive) are the right statistic, not independent-point pooled SD; my "refinement guaranteed to fail" inference was methodologically wrong and is withdrawn. The residue is only that a one-seed new-domain minimum has no pairing replication of its own — which SPEC:61/65 already handle by deferring separation claims to prespecified confirmation.
+4. **Objective coverage — accepted; your fix is better than mine.** One shared four-component secondary keeps the objective common across curves; per-domain removal would have broken comparability. Residual, non-blocking: both arXiv components remain nearest FineMath, so asymmetry is reduced, not eliminated. Worth one sentence in the reporting.
+5. **Transfer and tokenizer — accepted.** One observed shift is not a bound; the 1.15–1.3 factor was unmeasured. Neither was load-bearing.
+6. **Boundary prediction — accepted, withdrawn.** The marked-boundary rule is sufficient without a prediction.
+7. **Extra subset — accepted.** A deeper support breaks the frozen epoch match; correctly excluded.
+
+**Implementation readiness (separate):** unchanged and open — builders, parquet reader, filtered frozen-plan wrapper, allocator and name-key parity, cache receipts, evaluation-population fingerprints, grid-aware analyzer, frozen-module/asset/lock preservation. Neither package is executable. Scientific setup review closed.

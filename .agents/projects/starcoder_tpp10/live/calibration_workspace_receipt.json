@@ -1,0 +1,9 @@
+{
+  "uri": "gs://marin-us-central2/iris/marin/state/bundles/4922024a79c7de52ae0d9f96798fcf461473596621c15c4709e195594c6b248e",
+  "bundle_sha256": "4922024a79c7de52ae0d9f96798fcf461473596621c15c4709e195594c6b248e",
+  "size": 26135879,
+  "generation": 1788985754483820,
+  "crc32c": "FReewQ==",
+  "checked_at": "2026-09-09T20:30:40.713022+00:00",
+  "scope": "Full submitted Iris workspace; controller infrastructure code bundle, experimental data is central1."
+}

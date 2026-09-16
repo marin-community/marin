@@ -1,0 +1,16 @@
+{
+  "archive_commit": "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+  "dataset_source_old_sha256": "b539015dbda23015df097a7b3dcaf391f6247a7adb672124699629d83a73235a",
+  "dataset_source_current_sha256": "021f5336885a2b9dbe6a60abb26ff4809c0b3c4733baa81a1ba8830be6f56993",
+  "prp_source_byte_identical": true,
+  "prp_sha256": "ff43ef12f9a19bb4fd7dd41b2280d0b6d1ce3f9879befad4f8630724abe68f66",
+  "positions": 136704,
+  "all_positions_match": true,
+  "differing_positions": 0,
+  "parent_indices_sha256": "24c5bdd4bd466de18bc56ba06ea92053e329ad749aadea354a983fb38c61c4c1",
+  "matched_indices_sha256": "6c8ac23d240d4c99f88b2fa854cb7f7415b19e5387a68cf634f03dd73d2706c3",
+  "jax_version": "0.11.1",
+  "numpy_version": "2.3.5",
+  "elapsed_seconds": 3.259141708000243,
+  "scope": "Direct execution of archived BlockShufflingDataset class and current class on same index-valued dataset at actual cache length; shared PRP module is byte-identical."
+}

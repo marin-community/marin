@@ -1,0 +1,104 @@
+{
+  "preregistration_version": "2026-08-12-c06-operational-gate-v1",
+  "generation": 9,
+  "analysis_scope": "operational_only_no_endpoint_metrics",
+  "endpoint_metrics_read": false,
+  "scientific_inference_allowed": false,
+  "historical_gate_selection_allowed": false,
+  "implementation_sha256": {
+    "stress_launcher": "77805b196eb1141af799ec041872f96e95e099227946280cb0856a310a21242c",
+    "runtime_gate": "b926a5f0289398efb17d8d92e6f62427189ecb6b2208919ca81176f2a957f465",
+    "tests": "27f5f555d89d95b5915d0c5168d82d9defe673f1dd1bb4004c8e73462e56e4da",
+    "history_audit": "7cc54a296040e903b011793b72fb421e341429c3b2b96573a8a88265c8565b2c"
+  },
+  "design": {
+    "stage": 6,
+    "total_steps": 1664,
+    "terminal_step": 1663,
+    "data_switch_step": 768,
+    "optimizer_decay_steps": [
+      1024,
+      1088,
+      1280,
+      1344,
+      1152,
+      1216
+    ],
+    "support_ids": [
+      "m100a",
+      "m100a",
+      "m100a",
+      "m100a",
+      "full",
+      "m100b"
+    ],
+    "training_seeds": [
+      2026089600,
+      2026089601,
+      2026089602,
+      2026089603,
+      2026089604,
+      2026089605
+    ],
+    "rendezvous_ready_spread_seconds_max": 450.0
+  },
+  "release_gate": {
+    "unchanged_row_checks": {
+      "loading_p99_seconds_max": 0.01,
+      "loading_over_one_second_fraction_max": 0.0002837281883955171,
+      "loading_seconds_max": 60.0,
+      "duty_fraction_min": 0.99,
+      "tokens_per_second_p50_min": 690000.0,
+      "mfu_percent_p50_min": 33.0,
+      "rolling_window_steps": 1000,
+      "rolling_tokens_per_second_p50_min": 660000.0,
+      "history_coverage_fraction_min": 0.95,
+      "event_tokens_per_second_p50_min": 660000.0,
+      "event_loading_p99_seconds_max": 0.025,
+      "event_history_coverage_fraction_min": 0.95,
+      "runtime_accounting_ratio_min": 0.95,
+      "runtime_accounting_ratio_max": 1.25
+    },
+    "short_window": {
+      "window_steps": 32,
+      "tokens_per_second_min": 660000.0,
+      "max_consecutive_positions": 96,
+      "max_exceeding_rows": 1
+    },
+    "synchronized_depression": {
+      "quorum_fraction": 0.8333333333333334,
+      "depression_fraction": 0.95,
+      "max_equivalent_steps": 96
+    },
+    "concurrency_and_integrity": {
+      "concurrent_overlap_seconds_min": 120.0,
+      "concurrent_overlap_fraction_min": 0.95,
+      "runtime_start_skew_seconds_max": 180.0,
+      "rendezvous_ready_spread_seconds_max": 450.0,
+      "finite_to_full_loading_p99_ratio_max": 1.5,
+      "permanent_checkpoint_bytes_max": 2350000000,
+      "clean_iris_completion_required": true,
+      "attempt_zero_required": true,
+      "checkpoint_inventory_required": true,
+      "all_event_windows_inside_all_row_overlap_required": true,
+      "unique_rendezvous_worker_claims_required": true,
+      "remote_preregistration_hash_required": true
+    }
+  },
+  "diagnostic_only": {
+    "event_recovery": true,
+    "decay_alignment": {
+      "margin_steps": 32,
+      "classifications": [
+        "decay_following",
+        "common_step",
+        "indeterminate"
+      ]
+    },
+    "decision_rule": "A decay-following classification retains optimizer-relative interpretation; a common-step classification retires it; indeterminate requires another fresh design. Classification never overrides a failed absolute gate."
+  },
+  "next_stage": {
+    "on_pass": "C12 only after this exact report passes and its SHA-256 is pinned; C12 requires a separately reviewed generation-10 preregistration",
+    "on_fail": "Do not launch C12; diagnose without changing this generation's thresholds"
+  }
+}

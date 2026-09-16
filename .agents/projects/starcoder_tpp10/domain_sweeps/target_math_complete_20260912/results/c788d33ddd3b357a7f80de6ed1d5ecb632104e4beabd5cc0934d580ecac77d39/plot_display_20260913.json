@@ -1,0 +1,12 @@
+{
+  "change": "Set the two Wikipedia top-panel upper y limits to 50; higher measured points remain in the data and are clipped by the axes.",
+  "source_receipt_sha256": "7f0994dc178adb4663621389a8895cd3df7505ceec90d4d55ff38c939e610f47",
+  "data_unchanged": true,
+  "top_panels_y_max": 50,
+  "axes_scale": "log",
+  "builder_sha256": "bba1b04e7cefd4fbb9573d6bd58385795674c97ab5c8e2177681055f6c17bbd8",
+  "outputs": {
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/results/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/math_likelihood_proxy_target.png": "e0e2f2e4c1ed6743c6a9fddc5959cbe30d97d8f88bab28c5df977663976d090f",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/results/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/math_likelihood_proxy_target.pdf": "19a22a4f10d279fece9058297a03b65781be6511ca53b0bcd9ce9194acd4c041"
+  }
+}

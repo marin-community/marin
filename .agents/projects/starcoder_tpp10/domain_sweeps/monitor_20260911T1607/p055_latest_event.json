@@ -1,0 +1,10 @@
+{
+  "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+  "queried_at": "2026-09-11T16:09:15Z",
+  "event_time": "2026-09-11T16:01:44.814000+00:00",
+  "attempt": 6,
+  "source": "iris/controller",
+  "action": "TaskRetryScheduled",
+  "message": "Parent task preempted; controller returned the task to PENDING.",
+  "diagnostic_retry": "First event-query CLI failed; one read-only retry succeeded."
+}

@@ -1,0 +1,4 @@
+candidate_id,model_variant,kl_penalty,continuous_regularized_objective,runtime_regularized_objective,runtime_minus_continuous,runtime_unregularized_prediction,runtime_kl_to_incumbent
+shared_bounded_ensemble_kl0p05,shared_bounded_ensemble,0.05,1.031492908311167,1.031534311582907,4.140327173995928e-05,1.0189701786843188,0.25128265797176447
+shared_bounded_ensemble_kl0p2,shared_bounded_ensemble,0.2,1.049647179545277,1.0496581139463856,1.093440110855326e-05,1.0360250859571345,0.06816513994625524
+shared_bounded_ensemble_kl0p5,shared_bounded_ensemble,0.5,1.0617233932875247,1.0617450620282733,2.166874074860381e-05,1.0497389417762897,0.024012240503967195

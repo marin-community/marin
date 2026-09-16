@@ -1,0 +1,37 @@
+{
+  "checked_at": "2026-09-11T13:08:44.490228+00:00",
+  "iris_checked_at": "2026-09-11T13:07:43+00:00",
+  "survey": {
+    "parent": "/calvinxu/tpp10-domain-sweeps",
+    "state": "running",
+    "wikipedia_raw": "verified complete",
+    "wikipedia_parent": "verified complete",
+    "wikipedia_matched": "verified complete",
+    "finemath_raw": "verified complete",
+    "finemath_parent": "verified complete",
+    "finemath_matched_job": "/calvinxu/tpp10-domain-sweeps/prepare_subset-1430c306",
+    "finemath_matched": "pending CPU capacity",
+    "training_complete": 0
+  },
+  "refinement": {
+    "parent": "/calvinxu/starcoder-tpp10-refinement-batch-recovery",
+    "state": "one target training; 33 children pending TPU capacity",
+    "retained_successes": 11,
+    "unfinished_points": 34,
+    "live_child_band_verified": true,
+    "batch_children": 34,
+    "all_callable_hashes_match_original_jobs": true,
+    "completed_recipes_omitted": 11,
+    "artifact_successes_last_verified_at": "2026-09-11T12:45:40+00:00",
+    "training_children": 1,
+    "pending_children": 33,
+    "active_run": "tpp10_target_p055_s20260910",
+    "checkpoint_restoration_verified": true,
+    "resumed_from_step": 3010,
+    "last_verified_completed_step": 3011,
+    "wandb_previous_logged_step": 3402,
+    "resume_validation": "monitor_20260911T1305/refinement_resume_validation.json"
+  },
+  "repairs": [],
+  "manual_resubmissions": 0
+}

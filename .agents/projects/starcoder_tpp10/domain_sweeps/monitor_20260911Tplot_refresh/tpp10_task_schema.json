@@ -1,0 +1,108 @@
+{
+  "namespace": "iris.task",
+  "schema": {
+    "columns": [
+      {
+        "name": "task_id",
+        "type": "string",
+        "nullable": false,
+        "trigram_index": false,
+        "exact_values": [],
+        "value_counts": false
+      },
+      {
+        "name": "attempt_id",
+        "type": "int64",
+        "nullable": false,
+        "trigram_index": false,
+        "exact_values": [],
+        "value_counts": false
+      },
+      {
+        "name": "worker_id",
+        "type": "string",
+        "nullable": false,
+        "trigram_index": false,
+        "exact_values": [],
+        "value_counts": false
+      },
+      {
+        "name": "ts",
+        "type": "timestamp_ms",
+        "nullable": false,
+        "trigram_index": false,
+        "exact_values": [],
+        "value_counts": false
+      },
+      {
+        "name": "cpu_millicores",
+        "type": "int64",
+        "nullable": false,
+        "trigram_index": false,
+        "exact_values": [],
+        "value_counts": false
+      },
+      {
+        "name": "memory_mb",
+        "type": "int64",
+        "nullable": false,
+        "trigram_index": false,
+        "exact_values": [],
+        "value_counts": false
+      },
+      {
+        "name": "disk_mb",
+        "type": "int64",
+        "nullable": false,
+        "trigram_index": false,
+        "exact_values": [],
+        "value_counts": false
+      },
+      {
+        "name": "memory_peak_mb",
+        "type": "int64",
+        "nullable": false,
+        "trigram_index": false,
+        "exact_values": [],
+        "value_counts": false
+      },
+      {
+        "name": "accelerator_util_pct",
+        "type": "float64",
+        "nullable": true,
+        "trigram_index": false,
+        "exact_values": [],
+        "value_counts": false
+      },
+      {
+        "name": "accelerator_mem_bytes",
+        "type": "int64",
+        "nullable": true,
+        "trigram_index": false,
+        "exact_values": [],
+        "value_counts": false
+      },
+      {
+        "name": "cluster",
+        "type": "string",
+        "nullable": true,
+        "trigram_index": false,
+        "exact_values": [],
+        "value_counts": false
+      }
+    ],
+    "implicit_columns": [
+      {
+        "name": "seq",
+        "type": "int64",
+        "nullable": false,
+        "server_assigned": true
+      }
+    ],
+    "key_column": "task_id",
+    "sort_columns": [],
+    "max_row_group_rows": 0,
+    "projections": [],
+    "grouped_extrema": []
+  }
+}

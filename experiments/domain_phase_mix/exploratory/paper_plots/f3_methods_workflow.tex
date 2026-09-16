@@ -1,0 +1,57 @@
+\begin{tikzpicture}[
+  font=\scriptsize,
+  stage/.style={draw=black!70, rounded corners=2pt, line width=0.45pt, fill=white, align=center, inner sep=2pt},
+  grpstage/.style={draw=black!70, rounded corners=2pt, line width=0.65pt, fill=white, align=center, inner sep=2pt},
+  chip/.style={draw=black!45, rounded corners=1pt, line width=0.30pt, fill=green!8, align=center, inner sep=1.2pt},
+  penalty/.style={draw=red!60!black, rounded corners=1pt, line width=0.30pt, fill=red!7, align=center, inner sep=1.2pt},
+  pred/.style={draw=black!45, rounded corners=1pt, line width=0.30pt, fill=purple!8, align=center, inner sep=1.2pt},
+  arrow/.style={-{Stealth[length=1.7mm]}, line width=0.48pt, draw=black!72}
+]
+  \node[stage, minimum width=1.55cm, minimum height=1.18cm] (design) at (0,0) {};
+  \node[font=\scriptsize\bfseries] at (0,0.38) {Design};
+  \node at (0,0.10) {\(p^{(0)},p^{(1)}\)};
+  \foreach \yy in {-0.20,-0.42} {
+    \draw[fill=green!8, draw=black!30, line width=0.20pt] (-0.44,\yy) rectangle (0.44,\yy+0.08);
+    \node at (0,\yy+0.04) {\(\cdots\)};
+  }
+
+  \node[stage, minimum width=1.55cm, minimum height=1.18cm] (train) at (1.95,0) {};
+  \node[font=\scriptsize\bfseries] at (1.95,0.38) {Train};
+  \node at (1.95,0.13) {\(60\mathrm{M}/1.2\mathrm{B}\)};
+  \foreach \xx in {1.67,1.85,2.03,2.21} {
+    \foreach \yy in {-0.33,-0.18,-0.03} {
+      \filldraw[fill=blue!12, draw=blue!65!black, line width=0.18pt] (\xx,\yy) circle (0.023);
+    }
+  }
+
+  \node[stage, minimum width=1.35cm, minimum height=1.18cm] (eval) at (3.75,0) {};
+  \node[font=\scriptsize\bfseries] at (3.75,0.38) {Evaluate};
+  \node at (3.75,0.06) {BPB};
+  \node at (3.75,-0.24) {tasks};
+
+  \node[grpstage, minimum width=2.55cm, minimum height=1.18cm] (grp) at (5.80,0) {};
+  \node[font=\scriptsize\bfseries] at (5.80,0.38) {Fit \GRP{}};
+  \node at (5.80,0.14) {{\color{green!45!black}Group} \(+\) {\color{blue!60!black}Retain} \(+\) {\color{red!65!black}Penalize}};
+  \node[chip] (exposure) at (5.10,-0.24) {\(p\to E,x\)};
+  \node[penalty] (features) at (5.80,-0.24) {\(s_j,P_F\)};
+  \node[pred] (lhat) at (6.44,-0.24) {\(\hat L\)};
+  \draw[arrow] (exposure) -- (features);
+  \draw[arrow] (features) -- (lhat);
+
+  \node[stage, minimum width=1.35cm, minimum height=1.18cm] (opt) at (7.85,0) {};
+  \node[font=\scriptsize\bfseries] at (7.85,0.38) {Optimize};
+  \draw[fill=green!7, draw=black!38, line width=0.25pt] (7.53,-0.18) -- (7.85,0.18) -- (8.17,-0.18) -- cycle;
+  \node at (7.85,-0.45) {\(\min\hat L\)};
+
+  \node[stage, minimum width=1.55cm, minimum height=1.18cm] (validate) at (9.65,0) {};
+  \node[font=\scriptsize\bfseries] at (9.65,0.38) {Validate};
+  \node at (9.65,0.10) {300M};
+  \node at (9.65,-0.12) {520M};
+  \node at (9.65,-0.34) {1.2B};
+
+  \draw[arrow] (design.east) -- (train.west);
+  \draw[arrow] (train.east) -- (eval.west);
+  \draw[arrow] (eval.east) -- (grp.west);
+  \draw[arrow] (grp.east) -- (opt.west);
+  \draw[arrow] (opt.east) -- (validate.west);
+\end{tikzpicture}

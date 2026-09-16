@@ -1,0 +1,76 @@
+{
+  "plan_sha256": "2ec4492fd7cd0363284dc2ba24eb1dbca48aa25af34de6d6b1c1ebb730c99a7c",
+  "accuracy_macro_definition": "Descriptive equal mean over 11 families; MMLU has one weight. acc_norm for ARC Easy/Challenge, HellaSwag, PIQA; acc otherwise. Not a preregistered headline.",
+  "proportional_family_macro_pct": 54.52441235726369,
+  "unimax8_family_macro_pct": 53.24867001338407,
+  "unimax8_family_wins": 3,
+  "same_harness_family_correlation": {
+    "n": 7,
+    "direction_agreement": 5,
+    "ties": 0,
+    "pearson": -0.006160542219056132,
+    "spearman": 0.07142857142857144
+  },
+  "native_family_correlation": {
+    "n": 11,
+    "direction_agreement": 6,
+    "ties": 0,
+    "pearson": 0.028747653890771913,
+    "spearman": 0.13636363636363638
+  },
+  "same_harness_leaf_correlation": {
+    "n": 63,
+    "direction_agreement": 42,
+    "ties": 4,
+    "pearson": 0.5563418897929316,
+    "spearman": 0.5166292638374688
+  },
+  "native_leaf_correlation": {
+    "n": 67,
+    "direction_agreement": 34,
+    "ties": 4,
+    "pearson": 0.2598732005950791,
+    "spearman": 0.23907165308986547
+  },
+  "native_macro": {
+    "proportional": 0.6730906490967455,
+    "unimax8": 0.6252614556976779
+  },
+  "native_decomposition": {
+    "math": {
+      "n": 7,
+      "unimax_wins": 7,
+      "proportional_mean": 0.6321269063190259,
+      "unimax8_mean": 0.5176070089847121,
+      "contribution_to_macro_delta": -0.01571841728118033
+    },
+    "code": {
+      "n": 19,
+      "unimax_wins": 19,
+      "proportional_mean": 0.5216712100308932,
+      "unimax8_mean": 0.4590174002271215,
+      "contribution_to_macro_delta": -0.023341615417091417
+    },
+    "basic_skills": {
+      "n": 6,
+      "unimax_wins": 3,
+      "proportional_mean": 0.743475236778575,
+      "unimax8_mean": 0.6294603552329318,
+      "contribution_to_macro_delta": -0.013413515475958012
+    },
+    "qa_and_other": {
+      "n": 19,
+      "unimax_wins": 5,
+      "proportional_mean": 0.8173752814969696,
+      "unimax8_mean": 0.8298417074724047,
+      "contribution_to_macro_delta": 0.004644354775162076
+    }
+  },
+  "limitations": [
+    "One training seed per mixture; seeds differ (660704 vs 660705).",
+    "Correlations are descriptive task-level deltas for two models, not population-level model correlations.",
+    "Native BPB uses reading-comprehension prompts, 8192 context and FP32; fresh accuracy uses standard lm-eval, 4096 and BF16.",
+    "Only seven accuracy families report same-harness BPB; leaf correlations are dominated by 57 MMLU subjects.",
+    "Full per-document artifacts remain in GCS; only bounded summary/provenance files read in this analysis. Parent completion entails full artifact verification."
+  ]
+}

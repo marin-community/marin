@@ -1,0 +1,23 @@
+{
+  "experiments/domain_phase_mix/starcoder_tpp10.py": "e80cb8c4d88f8fb926de24a065804ce763d90caeee43a4a701ae4b077c7abacd",
+  "experiments/domain_phase_mix/prepare_starcoder_tpp10.py": "58c5d4dfc4dd4d5f480134308c7aac2b237688f585cd4155d214c922946fbe42",
+  "experiments/domain_phase_mix/launch_starcoder_tpp10.py": "c07982807438b40112d56d8d19c3980cdc08c83f6206a61820bd228e785a60c5",
+  "experiments/domain_phase_mix/launch_starcoder_epoch_matching.py": "2dea0230c54d0e8dd0d33d27bacda690177e196c46f135eea4951492fc3f0898",
+  "experiments/domain_phase_mix/starcoder_epoch_matching.py": "29dac8e4085591732c329fe6a238f07cb4e02cdc6198ce344d4ab8b599619085",
+  "lib/levanter/src/levanter/data/text/datasets.py": "c3ea1ea1f03ac5b96f81c208ce81fd50d5ebd9a74c57cb31ec02619fb4188948",
+  "lib/levanter/src/levanter/data/mixture.py": "67e97941a79753b2e5865f7f41c7762436a428599ecd1a60d643aa891a817685",
+  "lib/levanter/src/levanter/data/dataset.py": "021f5336885a2b9dbe6a60abb26ff4809c0b3c4733baa81a1ba8830be6f56993",
+  "lib/levanter/src/levanter/tokenizers.py": "c49f9f74dc25e683ee9dba413c4008ecbc78a4bac864cba4647a129d6eb0dcb3",
+  "lib/levanter/src/levanter/models/qwen.py": "241b086569a8aa23b3a006a4be3ebc9142c45cdda8eaef81a19dabc77526b66b",
+  "lib/levanter/src/levanter/models/llama.py": "f4ebbfbff8708d76e300d70e70c1393ff9553e46c251c38de3d71cd5b948de57",
+  "lib/marin/src/marin/experiment/train.py": "138170826fce499a37dcd09354079ac929bbd582ff2cf0dc80bce3b57b6628cf",
+  "lib/marin/src/marin/training/training.py": "4809c96be5a972241a6def1ed097ce195a6d41307bf552422ba97df8455adcb2",
+  "uv.lock": "347c4bb876ef55f60ecd5cf137d22016aaa742387717d20e296ca0ff2cc05dd5",
+  "experiments/domain_phase_mix/starcoder_tpp10_assets/design.json": "c4283f3f38b99d09705ca53eca92857512552fe562e2f77155b7b97a1cc0b4ed",
+  "experiments/domain_phase_mix/starcoder_tpp10_assets/pins.json": "e555f7ec9484c5ec813593de3cd2091fa3a0d35907f8a3209c086fd7de3d1068",
+  "experiments/domain_phase_mix/starcoder_tpp10_assets/sources.json": "9f9b80e55ca9d2d9decc3125336000713c81e941b8f4c08b61f898566259e44a",
+  "experiments/domain_phase_mix/starcoder_tpp10_assets/special_tokens_map.json": "6fa06efa2785e450051989a6f8fb4416b10149ded485ddd3f127a40734f5cfd0",
+  "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer.json": "bcd04f0eadf90287bd26e1a183ac487d8a141b09b06aecb7725bbdd343640f2e",
+  "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer.model": "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347",
+  "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer_config.json": "f514e7c3008881b6ba7e6a0cdb44c71ce47dc335920dac143ae7bc788197e53a"
+}

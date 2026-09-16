@@ -1,0 +1,1 @@
+[04:39:11] task=/calvinxu/starcoder-epoch-matching-refinement/0 attempt=0 | INFO:__main__:Selected 20 training runs; submitting 10 incomplete artifacts

@@ -1,0 +1,99 @@
+{
+  "checked_at": "2026-09-11T20:01:51.893490+00:00",
+  "new_refinement_completed": [],
+  "rows": [
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-cffa480f",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 1,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_matched_p080_s20260911_d20260914"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 1,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_target_p080_s20260910"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 3,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_target_p065_s20260910"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 5,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_target_p060_s20260910"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 10,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_target_p055_s20260910"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps/prepare_subset-1430c306",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient CPU (need 2 cores, available 0 cores) - 4 worker(s)\nInsufficient memory (need 8.0GB, available 4.1GB) - 2 worker(s)\n(with constraints=['region', 'zone', 'preemptible'])\n\nAutoscaler: Unsatisfied autoscaler demand: no_capacity: cpu_vm_e2_highmem_2_ondemand-us-central1-a=at_max_slices",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    }
+  ]
+}

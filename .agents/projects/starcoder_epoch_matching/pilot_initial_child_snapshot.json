@@ -1,0 +1,140 @@
+{
+  "observed_at": "2026-09-09T00:32:18.149523+00:00",
+  "source": "IrisClient.list_jobs and list_tasks; timestamps are controller-reported values",
+  "parent_job_id": "/calvinxu/starcoder-epoch-matching-pilot",
+  "jobs": [
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-fc2d1e9f",
+      "state": "pending",
+      "submitted_at": "2026-09-09T00:31:02.092000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 208.8GB) - 12 worker(s)\nInsufficient CPU (need 104 cores, available 102 cores) - 1 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-063a3da0",
+      "state": "pending",
+      "submitted_at": "2026-09-09T00:31:01.446000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 208.8GB) - 12 worker(s)\nInsufficient CPU (need 104 cores, available 102 cores) - 1 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-18d20eab",
+      "state": "pending",
+      "submitted_at": "2026-09-09T00:31:00.940000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 208.8GB) - 12 worker(s)\nInsufficient CPU (need 104 cores, available 102 cores) - 1 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-8d5a4157",
+      "state": "pending",
+      "submitted_at": "2026-09-09T00:31:00.713000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 208.8GB) - 12 worker(s)\nInsufficient CPU (need 104 cores, available 102 cores) - 1 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-645023e5",
+      "state": "pending",
+      "submitted_at": "2026-09-09T00:31:00.449000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 208.8GB) - 12 worker(s)\nInsufficient CPU (need 104 cores, available 102 cores) - 1 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-57e920fb",
+      "state": "pending",
+      "submitted_at": "2026-09-09T00:30:59.785000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 208.8GB) - 12 worker(s)\nInsufficient CPU (need 104 cores, available 102 cores) - 1 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-afaa78b8",
+      "state": "pending",
+      "submitted_at": "2026-09-09T00:30:59.743000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 208.8GB) - 12 worker(s)\nInsufficient CPU (need 104 cores, available 102 cores) - 1 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-a940dbf3",
+      "state": "pending",
+      "submitted_at": "2026-09-09T00:30:59.158000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 208.8GB) - 12 worker(s)\nInsufficient CPU (need 104 cores, available 102 cores) - 1 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-67eaa5b1",
+      "state": "pending",
+      "submitted_at": "2026-09-09T00:30:58.895000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 208.8GB) - 12 worker(s)\nInsufficient CPU (need 104 cores, available 102 cores) - 1 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot/run_levanter_train_lm-481a716a",
+      "state": "running",
+      "submitted_at": "2026-09-09T00:30:58.334000+00:00",
+      "started_at": "2026-09-09T00:30:59.196000+00:00",
+      "finished_at": null,
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": "epmatch_unmatched_c000_s20260711",
+      "logical_mapping_evidence": "Child task log at 2026-09-09T00:31:41Z (payload timestamp 00:31:39): Using run ID: epmatch_unmatched_c000_s20260711"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-pilot",
+      "state": "running",
+      "submitted_at": "2026-09-09T00:29:55.782000+00:00",
+      "started_at": "2026-09-09T00:30:02.069000+00:00",
+      "finished_at": null,
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "logical_run_name": null
+    }
+  ],
+  "parent_tasks": [
+    {
+      "task_id": "/calvinxu/starcoder-epoch-matching-pilot/0",
+      "state": "running",
+      "submitted_at": "2026-09-09T00:29:55.782000+00:00",
+      "started_at": "2026-09-09T00:30:02.460000+00:00",
+      "finished_at": null,
+      "worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260908-1857-1575c1d4-worker-0"
+    }
+  ],
+  "logical_mapping_note": "First child mapping is from its explicit training log; remaining mappings are unknown and not inferred from async submission order."
+}

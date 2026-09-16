@@ -1,0 +1,11 @@
+{
+  "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+  "verified_unchanged_runs": 45,
+  "checkpoint_uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09/checkpoints/step-3010/metadata.json",
+  "generation": 1789124409702554,
+  "checkpoint_metadata": {
+    "step": 3010,
+    "timestamp": "2026-09-11T11:00:09.560579",
+    "is_temporary": true
+  }
+}

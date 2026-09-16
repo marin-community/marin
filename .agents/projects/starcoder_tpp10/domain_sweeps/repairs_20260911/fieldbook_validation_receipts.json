@@ -1,0 +1,138 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789187325.0529459,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/plan.json",
+      "fieldbook.local_size_at_capture": 1635364
+    },
+    "content_hash": "sha256:f1e7765f22ffa9d608be8719602131c1b31eacb56c7935cc659c9ab815b27aa8",
+    "created_at": "2026-09-12T04:32:40Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29y74mk9g1dnz3bgypr8rck",
+    "job_id": "job_01m29y0ayqpw94gyaky3cg8fdp",
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-12T04:34:00Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/plan.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789187326.6020005,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/bundle_preflight.json",
+      "fieldbook.local_size_at_capture": 221
+    },
+    "content_hash": "sha256:3b72ddb028cec8154f37d5f55def2a3eab7245f9c323fac820ca0c59510c0538",
+    "created_at": "2026-09-12T04:32:40Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29y74xw2h3148qg1vbdnm9h",
+    "job_id": "job_01m29y0ayqpw94gyaky3cg8fdp",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-12T04:34:00Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/bundle_preflight.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789187292.2953863,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/cc_disposition.md",
+      "fieldbook.local_size_at_capture": 1675
+    },
+    "content_hash": "sha256:e850f4a695dd180f1c03fee31a722f0f77d3715e0569ecaa5ba05de6e0e56533",
+    "created_at": "2026-09-12T04:32:40Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29y757qqs8padtxfj553vsh",
+    "job_id": "job_01m29y0ayqpw94gyaky3cg8fdp",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-12T04:34:00Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/cc_disposition.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789187504.20953,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/VALIDATION.md",
+      "fieldbook.local_size_at_capture": 3230
+    },
+    "content_hash": "sha256:8ae019596d795e47cda9ee077f1d5bf3b94b8065bf31bdfe8d19a5169db4c0d4",
+    "created_at": "2026-09-12T04:32:41Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29y75qvwrwycek0v7k4863a",
+    "job_id": "job_01m29y0ayqpw94gyaky3cg8fdp",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-12T04:34:01Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/VALIDATION.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789184704.6116905,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/p050_wandb_repair_verified.json",
+      "fieldbook.local_size_at_capture": 3400
+    },
+    "content_hash": "sha256:7d2fd543567347ddc09ea83acf40ee8d15b586ac778544f262be8c8d5c21098c",
+    "created_at": "2026-09-12T04:32:41Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29y760s3ybb3j088yj262ze",
+    "job_id": "job_01m29y0ayqpw94gyaky3cg8fdp",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-12T04:34:01Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/p050_wandb_repair_verified.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789187568.1658452,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/population_counts.json",
+      "fieldbook.local_size_at_capture": 884
+    },
+    "content_hash": "sha256:2dae669cdaa9e543eb9aab50d0f6da78ba46ab3ace9a1cc067110348301beef7",
+    "created_at": "2026-09-12T04:34:01Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29y9mgzmjpka0gmtnv4dcnm",
+    "job_id": "job_01m29y0ayqpw94gyaky3cg8fdp",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-12T04:34:01Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/population_counts.json"
+  },
+  {
+    "attrs": {},
+    "check_name": "tpp10_bpb_local_regression",
+    "created_at": "2026-09-12T04:34:02Z",
+    "deleted_at": null,
+    "details": {},
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "expected_value": "{\"targeted_tests\": 34, \"four_device_tests\": 8}",
+    "id": "val_01m29y9mt3g76b8c3jaqdwd0je",
+    "measured_value": "{\"targeted_passed\": 34, \"four_device_passed\": 8, \"lint\": \"pass\", \"typecheck\": \"pass\"}",
+    "session_id": null,
+    "source_artifact_id": "art_01m29y75qvwrwycek0v7k4863a",
+    "source_job_id": "job_01m29y0ayqpw94gyaky3cg8fdp",
+    "status": "pass",
+    "updated_at": "2026-09-12T04:34:02Z"
+  },
+  {
+    "attrs": {},
+    "check_name": "tpp10_p050_wandb_replay",
+    "created_at": "2026-09-12T04:34:02Z",
+    "deleted_at": null,
+    "details": {},
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "expected_value": "{\"final_metrics\": 30, \"step\": 2531}",
+    "id": "val_01m29y9n2ztk95mztnsgpawzn7",
+    "measured_value": "{\"exact_matches\": 30, \"step\": 2531, \"maximum_difference\": 0}",
+    "session_id": null,
+    "source_artifact_id": "art_01m29y760s3ybb3j088yj262ze",
+    "source_job_id": "job_01m29y0ayqpw94gyaky3cg8fdp",
+    "status": "pass",
+    "updated_at": "2026-09-12T04:34:02Z"
+  }
+]

@@ -1,0 +1,98 @@
+{
+  "checked_at": "2026-09-11T21:28:17.012182+00:00",
+  "passed": true,
+  "rows": [
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 2000,
+        "memory_bytes": "8589934592",
+        "device": {},
+        "disk_bytes": "34359738368"
+      },
+      "constraints": [
+        {
+          "key": "region",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "us-central1"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "zone",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "us-central1-a"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "preemptible",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "false"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        }
+      ],
+      "priority_band": "PRIORITY_BAND_INTERACTIVE",
+      "bundle_id": "84d71fb51bc6ebb2c368cdcd152ac696b33c21348a9b7c7e03f3dcf3711a5447",
+      "max_retries_failure": 0,
+      "max_retries_preemption": 0,
+      "entrypoint_sha256": "e2507d1a49a70ba1aeff4f1e17ce863e98ad18310457c29a6d445fb0673238e7"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/prepare_subset-1a60a898",
+      "state": "JOB_STATE_SUCCEEDED",
+      "task_state_counts": {
+        "succeeded": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 2000,
+        "memory_bytes": "4294967296",
+        "device": {},
+        "disk_bytes": "34359738368"
+      },
+      "constraints": [
+        {
+          "key": "region",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "us-central1"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "zone",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "us-central1-a"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "preemptible",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "false"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        }
+      ],
+      "priority_band": "PRIORITY_BAND_INTERACTIVE",
+      "bundle_id": "84d71fb51bc6ebb2c368cdcd152ac696b33c21348a9b7c7e03f3dcf3711a5447",
+      "max_retries_failure": 0,
+      "max_retries_preemption": 100,
+      "entrypoint_sha256": "b095d2043f4a4f9533cdea3f5a6ac35250d3a0eccea7520f318f5bbe0b0cfd56"
+    }
+  ]
+}

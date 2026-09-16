@@ -1,0 +1,19 @@
+{
+  "design_sha256": "5b7ef54df7ba03726c0204efa53e6865050ee02d8c94767075758868ffc244a4",
+  "packed_starcoder_sequence_count": 105745752,
+  "parent_sequence_count": 136704,
+  "matched_sequence_count": 5120,
+  "legacy_parent_match": true,
+  "nested_subset_match": true,
+  "historical_endpoint_different_positions": 136704,
+  "parent_indices_sha256": "24c5bdd4bd466de18bc56ba06ea92053e329ad749aadea354a983fb38c61c4c1",
+  "matched_indices_sha256": "6c8ac23d240d4c99f88b2fa854cb7f7415b19e5387a68cf634f03dd73d2706c3",
+  "observed_environment": {
+    "jax_version": "0.11.1",
+    "numpy_version": "2.3.5",
+    "jax_default_prng_impl": "threefry2x32",
+    "jax_enable_x64": false
+  },
+  "matches_training_environment": false,
+  "scope": "Index mapping under the recorded audit runtime; no token reads or historical binary replay."
+}

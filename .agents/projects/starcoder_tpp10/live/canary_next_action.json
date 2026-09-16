@@ -1,0 +1,18 @@
+{
+  "attrs": {
+    "session_id": "ses_01m24dp3a66c6med6kz310bcdm"
+  },
+  "author": null,
+  "body": "The three p=1 canaries are submitted under /calvinxu/starcoder-tpp10-canary. All three TPU children are queued for central1 capacity. After all succeed, collect against .agents/projects/starcoder_tpp10/live/canary_plan.json, verify native final metrics, fingerprints and runtime receipts, review target and proxy optimizer traces, and reconcile child-to-run identities using direct evidence. Pilot and dense-grid stages remain unreleased; do not submit either without a separate release.",
+  "body_format": "markdown",
+  "created_at": "2026-09-10T01:20:19Z",
+  "deleted_at": null,
+  "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+  "entity_type": "experiment",
+  "id": "note_01m24edg7p4fhb5hk2myptfc3a",
+  "note_type": "next-action",
+  "resolved_at": null,
+  "status": "open",
+  "title": "Review the three p=1 canaries before pilot release",
+  "updated_at": "2026-09-10T01:20:19Z"
+}

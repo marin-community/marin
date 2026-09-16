@@ -1,0 +1,401 @@
+{
+  "marin-us-central1/raw/finemath-7090a5": [
+    {
+      "name": "marin-us-central1/raw/finemath-7090a5/.executor_info",
+      "type": "file",
+      "size": 786
+    },
+    {
+      "name": "marin-us-central1/raw/finemath-7090a5/.executor_status",
+      "type": "file",
+      "size": 112792
+    },
+    {
+      "name": "marin-us-central1/raw/finemath-7090a5/.gitattributes",
+      "type": "file",
+      "size": 2419
+    },
+    {
+      "name": "marin-us-central1/raw/finemath-7090a5/README.md",
+      "type": "file",
+      "size": 12013
+    },
+    {
+      "name": "marin-us-central1/raw/finemath-7090a5/assets",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/finemath-7090a5/finemath-3plus",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/finemath-7090a5/finemath-4plus",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/finemath-7090a5/infiwebmath-3plus",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/finemath-7090a5/infiwebmath-4plus",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/finemath-7090a5/main",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/finemath-7090a5/provenance.json",
+      "type": "file",
+      "size": 28135
+    }
+  ],
+  "marin-us-central1/raw/proof-pile-2-f1b1d8": [
+    {
+      "name": "marin-us-central1/raw/proof-pile-2-f1b1d8/.executor_info",
+      "type": "file",
+      "size": 808
+    },
+    {
+      "name": "marin-us-central1/raw/proof-pile-2-f1b1d8/.executor_status",
+      "type": "file",
+      "size": 7
+    },
+    {
+      "name": "marin-us-central1/raw/proof-pile-2-f1b1d8/.gitattributes",
+      "type": "file",
+      "size": 2915
+    },
+    {
+      "name": "marin-us-central1/raw/proof-pile-2-f1b1d8/.metrics",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/proof-pile-2-f1b1d8/README.md",
+      "type": "file",
+      "size": 4982
+    },
+    {
+      "name": "marin-us-central1/raw/proof-pile-2-f1b1d8/algebraic-stack",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/proof-pile-2-f1b1d8/arxiv",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/proof-pile-2-f1b1d8/open-web-math",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/proof-pile-2-f1b1d8/proof-pile-2.py",
+      "type": "file",
+      "size": 7144
+    },
+    {
+      "name": "marin-us-central1/raw/proof-pile-2-f1b1d8/proofpile_logo.jpg",
+      "type": "file",
+      "size": 122996
+    },
+    {
+      "name": "marin-us-central1/raw/proof-pile-2-f1b1d8/provenance.json",
+      "type": "file",
+      "size": 43694
+    },
+    {
+      "name": "marin-us-central1/raw/proof-pile-2-f1b1d8/test_dataloader.py",
+      "type": "file",
+      "size": 708
+    },
+    {
+      "name": "marin-us-central1/raw/proof-pile-2-f1b1d8/tokenizer.model",
+      "type": "file",
+      "size": 499723
+    }
+  ],
+  "marin-us-central1/raw/stack_edu-ad3cf0": [
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/.executor_info",
+      "type": "file",
+      "size": 725
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/.executor_status",
+      "type": "file",
+      "size": 7
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/.gitattributes",
+      "type": "file",
+      "size": 2461
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/.metrics",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/C",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/CSharp",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/Cpp",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/Go",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/Java",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/JavaScript",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/Markdown",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/PHP",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/Python",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/README.md",
+      "type": "file",
+      "size": 14847
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/Ruby",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/Rust",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/SQL",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/Shell",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/Swift",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/TypeScript",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/stack_edu-ad3cf0/provenance.json",
+      "type": "file",
+      "size": 3579
+    }
+  ],
+  "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae": [
+    {
+      "name": "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae/.artifact.json",
+      "type": "file",
+      "size": 4
+    },
+    {
+      "name": "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae/.executor_info",
+      "type": "file",
+      "size": 961
+    },
+    {
+      "name": "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae/.executor_status",
+      "type": "file",
+      "size": 7
+    },
+    {
+      "name": "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae/.gitattributes",
+      "type": "file",
+      "size": 2461
+    },
+    {
+      "name": "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae/.metrics",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae/Nemotron-Pretraining-InfiniByte-Reasoning",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae/Nemotron-Pretraining-Math-Textbooks",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae/Nemotron-Pretraining-RQA",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae/Nemotron-Pretraining-STEM-SFT",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae/Nemotron-Pretraining-Scientific-Coding",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae/Nemotron-Pretraining-Wiki-Rewrite",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/nemotron_pretraining_specialized_v1-a31fae/provenance.json",
+      "type": "file",
+      "size": 39695
+    }
+  ],
+  "marin-us-central1/raw/numinamath_1_5_4911a6eb": [
+    {
+      "name": "marin-us-central1/raw/numinamath_1_5_4911a6eb/.artifact.json",
+      "type": "file",
+      "size": 4
+    },
+    {
+      "name": "marin-us-central1/raw/numinamath_1_5_4911a6eb/.executor_info",
+      "type": "file",
+      "size": 727
+    },
+    {
+      "name": "marin-us-central1/raw/numinamath_1_5_4911a6eb/.executor_status",
+      "type": "file",
+      "size": 7
+    },
+    {
+      "name": "marin-us-central1/raw/numinamath_1_5_4911a6eb/.gitattributes",
+      "type": "file",
+      "size": 2461
+    },
+    {
+      "name": "marin-us-central1/raw/numinamath_1_5_4911a6eb/.metrics",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/numinamath_1_5_4911a6eb/README.md",
+      "type": "file",
+      "size": 5017
+    },
+    {
+      "name": "marin-us-central1/raw/numinamath_1_5_4911a6eb/data",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/numinamath_1_5_4911a6eb/provenance.json",
+      "type": "file",
+      "size": 515
+    }
+  ],
+  "marin-us-central1/raw/synthetic-1_1b24a14b": [
+    {
+      "name": "marin-us-central1/raw/synthetic-1_1b24a14b/.artifact.json",
+      "type": "file",
+      "size": 4
+    },
+    {
+      "name": "marin-us-central1/raw/synthetic-1_1b24a14b/.executor_info",
+      "type": "file",
+      "size": 815
+    },
+    {
+      "name": "marin-us-central1/raw/synthetic-1_1b24a14b/.executor_status",
+      "type": "file",
+      "size": 7
+    },
+    {
+      "name": "marin-us-central1/raw/synthetic-1_1b24a14b/.gitattributes",
+      "type": "file",
+      "size": 2461
+    },
+    {
+      "name": "marin-us-central1/raw/synthetic-1_1b24a14b/.metrics",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/synthetic-1_1b24a14b/README.md",
+      "type": "file",
+      "size": 5648
+    },
+    {
+      "name": "marin-us-central1/raw/synthetic-1_1b24a14b/data",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/synthetic-1_1b24a14b/provenance.json",
+      "type": "file",
+      "size": 10163
+    }
+  ],
+  "marin-us-central1/raw/allenai": [
+    {
+      "name": "marin-us-central1/raw/allenai/ai2_arc_9fc351b7",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/allenai/openbookqa_3b95bb0a",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/allenai/qasc_491d1bd3",
+      "type": "directory",
+      "size": 0
+    },
+    {
+      "name": "marin-us-central1/raw/allenai/sciq_55616027",
+      "type": "directory",
+      "size": 0
+    }
+  ]
+}

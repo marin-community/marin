@@ -1,0 +1,59 @@
+{
+  "checked_at": "2026-09-11T15:51:24.633808+00:00",
+  "iris_checked_at": "2026-09-11T15:50:30.034906+00:00",
+  "survey": {
+    "parent": "/calvinxu/tpp10-domain-sweeps",
+    "state": "running",
+    "wikipedia_raw": "verified complete",
+    "wikipedia_parent": "verified complete",
+    "wikipedia_matched": "verified complete",
+    "finemath_raw": "verified complete",
+    "finemath_parent": "verified complete",
+    "finemath_matched_job": "/calvinxu/tpp10-domain-sweeps/prepare_subset-1430c306",
+    "finemath_matched": "pending CPU capacity",
+    "training_complete": 0
+  },
+  "refinement": {
+    "parent": "/calvinxu/starcoder-tpp10-refinement-batch-recovery",
+    "state": "40 complete; 3 targets training; 2 queued after native preemption",
+    "retained_successes": 11,
+    "unfinished_points": 5,
+    "live_child_band_verified": true,
+    "batch_children": 34,
+    "all_callable_hashes_match_original_jobs": true,
+    "completed_recipes_omitted": 11,
+    "artifact_successes_last_verified_at": "2026-09-11T12:45:40+00:00",
+    "training_children": 3,
+    "pending_children": 2,
+    "checkpoint_restoration_verified": true,
+    "resume_validation": "monitor_20260911T1305/refinement_resume_validation.json",
+    "completed_points": 40,
+    "completed_since_migration": 29,
+    "automatically_requeued_children": 2,
+    "latest_saved_p055_step": 9216,
+    "last_verified_p055_runtime_step_approx": 10200,
+    "new_endpoints": "monitor_20260911T1527/new_refinement_endpoints.json",
+    "active_runs": [
+      "tpp10_target_p065_s20260910",
+      "tpp10_target_p060_s20260910",
+      "tpp10_target_p055_s20260910"
+    ],
+    "latest_saved_p060_step": 5406,
+    "target_checkpoint_check_at": "2026-09-11T15:32:06.359264+00:00",
+    "last_verified_p060_runtime_step_approx": 5580,
+    "queued_runs": [
+      "tpp10_matched_p080_s20260911_d20260914",
+      "tpp10_target_p080_s20260910"
+    ],
+    "queued_checkpoint_check_at": "2026-09-11T15:32:06.359264+00:00",
+    "queued_checkpoint_validation": "monitor_20260911T1527/queued_run_checkpoints.json",
+    "latest_saved_p080_step": 728,
+    "latest_saved_p065_step": 728,
+    "last_verified_p065_runtime_step_approx": 893,
+    "latest_runtime_validation": "monitor_20260911T1549/live_status.json"
+  },
+  "repairs": [],
+  "manual_resubmissions": 0,
+  "new_completion_count": 0,
+  "notification_required": false
+}

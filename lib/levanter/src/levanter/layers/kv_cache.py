@@ -36,7 +36,9 @@ class KvPageCache(PageCache):
     kv_pages: NamedArray  # [Page, Slot, 2 * KVHeads, Embed]
 
     @staticmethod
-    def init(spec: PageTableSpec, kv_heads: Axis, head_size: Axis, dtype=jnp.float32) -> "KvPageCache":
+    def init(
+        spec: PageTableSpec, kv_heads: Axis, head_size: Axis, dtype=jnp.float32, cache_kv_heads: int | None = None
+    ) -> "KvPageCache":
         """
         Initialize a KvPageCache with the given page table specification and dimensions.
 
@@ -45,12 +47,18 @@ class KvPageCache(PageCache):
             kv_heads: Axis for key/value heads.
             head_size: Axis for head size.
             dtype: Data type for the cache.
+            cache_kv_heads: Number of KV heads to allocate, at least ``kv_heads.size``. The extra heads stay zero;
+                the TPU ragged paged attention kernel needs a tileable head count, and allocating it here avoids
+                copying the cache on every decode step.
         """
+        allocated = kv_heads.size if cache_kv_heads is None else cache_kv_heads
+        if allocated < kv_heads.size:
+            raise ValueError(f"cache_kv_heads={allocated} is smaller than the model's {kv_heads.size} KV heads")
         kv_pages = hax.zeros(
             {
                 "page": spec.num_pages,
                 "slot": spec.page_size,
-                "kv_head": 2 * kv_heads.size,
+                "kv_head": 2 * allocated,
                 head_size.name: head_size.size,
             },
             dtype=dtype,
@@ -149,7 +157,7 @@ def kv_update_unified_prefix(kv_pages, t_pages, t_slots, new_k, new_v, K):
     """
     Update interleaved key/value pages with new tokens.
 
-    kv_pages: [P, S, 2H, D]  (unified K/V buffer, donated)
+    kv_pages: [P, S, 2H', D]  (unified K/V buffer, donated; H' >= H, extra heads stay untouched)
     t_pages, t_slots: [T] int32  (only first K are valid)
     new_k, new_v: [T, H, D]
     K: int32 scalar = number of valid updates (num_new_tokens)

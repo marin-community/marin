@@ -1,0 +1,91 @@
+{
+  "release_version": "2026-08-11-training-v4-long-gate",
+  "release_sha256": "861f65d7f71264a0a086690b62087247527b3fd4260acdb7dadf394faf5284b0",
+  "design_version": "2026-08-11-review-v8",
+  "design_sha256": "ee49474a2b57d795b902e35ca4ec3fe784892532158002a7d070d8ec66e10a10",
+  "design_manifest_sha256": "1b00f01db8a01d659ced55f0b467b9dcd7dae90dc3ac842a5ffb7e6226d1d267",
+  "training_fanout_allowed": true,
+  "probe_fanout_allowed": false,
+  "maximum_trajectory_count": 3,
+  "maximum_concurrent_trajectories": 3,
+  "allowed_trajectory_ids": [
+    "gcf_p3_r3d28260_m100a_confirmed-two-phase-winner_s2026082000",
+    "gcf_p3_r3d28260_full_confirmed-two-phase-winner_s2026082000",
+    "gcf_p1_r3d28260_m100b_common-tied-035_s2026081000"
+  ],
+  "stage1_gate": {
+    "kind": "observation",
+    "first_permanent_checkpoint_step": 382,
+    "automatic_stop": false,
+    "scientific_inference_allowed": false
+  },
+  "long_gate": {
+    "kind": "operational",
+    "trajectory_ids": [
+      "gcf_p3_r3d28260_m100a_confirmed-two-phase-winner_s2026082000",
+      "gcf_p3_r3d28260_full_confirmed-two-phase-winner_s2026082000",
+      "gcf_p1_r3d28260_m100b_common-tied-035_s2026081000"
+    ],
+    "total_steps": 28260,
+    "terminal_step": 28259,
+    "phase_and_decay_boundary_step": 22608,
+    "maximum_concurrent_trajectories": 3,
+    "scientific_inference_allowed": false,
+    "endpoint_metrics_read_allowed": false,
+    "thresholds": {
+      "steady_state_start_step": 64,
+      "loading_p99_seconds_max": 0.01,
+      "loading_over_1_second_count_max": 8,
+      "loading_seconds_max": 60.0,
+      "duty_fraction_min": 0.99,
+      "tokens_per_second_p50_min": 690000,
+      "mfu_percent_p50_min": 33.0,
+      "rolling_window_steps": 1000,
+      "rolling_tokens_per_second_p50_min": 660000,
+      "boundary_window_end_step": 23608,
+      "boundary_tokens_per_second_p50_min": 660000,
+      "boundary_loading_p99_seconds_max": 0.025,
+      "boundary_recovery_fraction_min": 0.97,
+      "finite_to_full_loading_p99_ratio_max": 1.5,
+      "permanent_checkpoint_physical_bytes_max": 2337200000
+    }
+  },
+  "required_region": "us-central1",
+  "required_zone": "us-central1-a",
+  "required_bucket_prefix": "gs://marin-us-central1",
+  "trajectory_count": 240,
+  "checkpoint_count": 2512,
+  "train_holdout_seed": 2026081102,
+  "train_holdout_partition": "random_sparse_swap",
+  "support_partition_audit_sha256": "822cf9d2d6b6130b330947021c3a24f96f75b9bafd594730ad3a9dcb93f67b0c",
+  "independent_review": {
+    "reviewer": "claude-opus-5",
+    "verdict": "PASS_STAGE1_AND_SPECIFY_LONG_GATE",
+    "session_id": "c471b9d0-32c4-4fda-a817-561098b1f698",
+    "completed_at": "2026-08-11T13:46:40Z"
+  },
+  "validated_evidence": {
+    "canary_exact_state_report_sha256": "80a10834814f607fa2b7b5488409976a563592291a4bc3ebfd392acae1f479da",
+    "decay_exact_state_report_sha256": "53a79c6f2135b852ed35c544d67a6a0d061286008f259d5b5e8f8ab43cc2d732",
+    "decay_local_evidence_sha256": "bb6956d699e9fcf27154ae5fd4e9d8cc9181762c40ebcf9d509fe7417d744777",
+    "runtime_config_count": 240,
+    "source_identity_count": 30,
+    "finite_support_required_tokens": 568328192,
+    "permanent_storage_projection_bytes": 5870951931216,
+    "block_shuffle_mapping_sha256": "4c5190c0140340865bee9086a1a0a79363fa46078a9aee895d8a3c275778fbd4",
+    "block_shuffle_mapping_indices": 400000,
+    "finite_first_batch_physical_block_count": 645,
+    "full_first_batch_physical_block_count": 512,
+    "starcoder_m100a_sequence_sha256": "f44bf12ef0da5f401689655cca9ce16c0ca30097e5e9e84123cc62cc7e8d7cd7",
+    "starcoder_m100b_sequence_sha256": "9dee546086dcd39111c0fad824696d5cbc895bae714d3bca86ba16d8e7ef415c",
+    "starcoder_holdout_sorted_sequence_sha256": "b40f0c563f181fc8a113728a2223f0ec583aa15b4e74ee2628fc9c76be3f62f9",
+    "starcoder_support_shared_sequence_count": 0,
+    "starcoder_support_shared_physical_block_count": 512,
+    "starcoder_support_holdout_overlap_count": 0,
+    "starcoder_flat_field_token_count": 216567300822,
+    "starcoder_packed_sequence_count": 105745752,
+    "starcoder_trailing_token_count": 726,
+    "stage1_report_sha256": "91392ddd1744c03263e23a50fde41e30e100e89de537461267e5e24ab2d9f4be",
+    "stage1_metrics_sha256": "cafc26fde5c46087bcd6b43c7e8b9394572bee015309a1fb25cc3fd154290fb8"
+  }
+}

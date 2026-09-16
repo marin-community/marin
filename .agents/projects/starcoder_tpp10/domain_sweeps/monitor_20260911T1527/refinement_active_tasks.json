@@ -1,0 +1,72 @@
+[
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-cffa480f",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "pending": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 1,
+    "pending_reason": "",
+    "run_name": "tpp10_matched_p080_s20260911_d20260914",
+    "priority_band": "PRIORITY_BAND_BATCH",
+    "last_training_progress": "[15:18:01] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-cffa480f/0 attempt=0 | I20260911 15:18:00 140700105888576 tqdm_loggable.tqdm_logging Progress on:train 1.68kit/2.53kit rate:12.3it/s remaining:01:09 elapsed:03:04 postfix:loss=2.58",
+    "last_log": "[15:18:01] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-cffa480f/0 attempt=0 | I20260911 15:18:00 140700105888576 tqdm_loggable.tqdm_logging Progress on:train 1.68kit/2.53kit rate:12.3it/s remaining:01:09 elapsed:03:04 postfix:loss=2.58"
+  },
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "pending": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 1,
+    "pending_reason": "",
+    "run_name": "tpp10_target_p080_s20260910",
+    "priority_band": "PRIORITY_BAND_BATCH",
+    "last_training_progress": "[15:15:45] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9/0 attempt=0 | I20260911 15:15:41 140413639828288 tqdm_loggable.tqdm_logging Progress on:train 832it/11.5kit rate:1.4it/s remaining:2:08:34 elapsed:11:16 postfix:loss=2.13",
+    "last_log": "[15:15:45] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9/0 attempt=0 | I20260911 15:15:41 140413639828288 tqdm_loggable.tqdm_logging Progress on:train 832it/11.5kit rate:1.4it/s remaining:2:08:34 elapsed:11:16 postfix:loss=2.13"
+  },
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "pending": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 2,
+    "pending_reason": "",
+    "run_name": "tpp10_target_p065_s20260910",
+    "priority_band": "PRIORITY_BAND_BATCH",
+    "last_training_progress": "[15:15:32] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:15:26 139823315006272 tqdm_loggable.tqdm_logging Progress on:train 830it/11.5kit rate:1.4it/s remaining:2:06:05 elapsed:11:14 postfix:loss=2.27",
+    "last_log": "[15:15:32] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:15:26 139823315006272 tqdm_loggable.tqdm_logging Progress on:train 830it/11.5kit rate:1.4it/s remaining:2:06:05 elapsed:11:14 postfix:loss=2.27"
+  },
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "pending": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 3,
+    "pending_reason": "",
+    "run_name": "tpp10_target_p060_s20260910",
+    "priority_band": "PRIORITY_BAND_BATCH",
+    "last_training_progress": "[15:15:55] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9/0 attempt=2 | I20260911 15:15:50 139942624813888 tqdm_loggable.tqdm_logging Progress on:train 6.00kit/11.5kit rate:1.2it/s remaining:1:13:22 elapsed:57:27 postfix:loss=2.28",
+    "last_log": "[15:15:55] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9/0 attempt=2 | I20260911 15:15:50 139942624813888 tqdm_loggable.tqdm_logging Progress on:train 6.00kit/11.5kit rate:1.2it/s remaining:1:13:22 elapsed:57:27 postfix:loss=2.28"
+  },
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "pending": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 6,
+    "pending_reason": "",
+    "run_name": "tpp10_target_p055_s20260910",
+    "priority_band": "PRIORITY_BAND_BATCH",
+    "last_training_progress": "[15:15:15] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=5 | I20260911 15:15:12 140664450732864 tqdm_loggable.tqdm_logging Progress on:train 9.83kit/11.5kit rate:1.4it/s remaining:19:35 elapsed:57:26 postfix:loss=2.44",
+    "last_log": "[15:15:15] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=5 | I20260911 15:15:12 140664450732864 tqdm_loggable.tqdm_logging Progress on:train 9.83kit/11.5kit rate:1.4it/s remaining:19:35 elapsed:57:26 postfix:loss=2.44"
+  }
+]

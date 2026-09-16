@@ -1,0 +1,2620 @@
+{
+  "expected_add_records": 68,
+  "expected_remove_records": 12,
+  "expected_transfer_content_bytes": 256782,
+  "expected_transfer_content_bytes_by_source_region": {
+    "us-central1": 234125,
+    "us-east5": 22657
+  },
+  "repair_id": "delphi-tpp40-stack-payload-delta-20260830",
+  "schema_version": 1,
+  "source_payload": "frozen East5 Delphi TPP40 Stack-Edu cache",
+  "source_record_counts": {
+    "us-central1": 59,
+    "us-east5": 9
+  },
+  "target_region": "europe-west4",
+  "tasks": [
+    {
+      "add_blob_ids": [
+        "50e605da2c07bb26899443b65fa266279bd16bcb"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows000000000-000020000.jsonl.zst",
+        "row_end": 20000,
+        "row_start": 0
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 20000,
+      "row_start": 0,
+      "source_region": "us-east5",
+      "source_shard": "gs://marin-us-east5/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows000000000-000020000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00000.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows000000000-000020000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "51421897c7b0fbcee88990bdd7a694f3844a501b"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows000720000-000740000.jsonl.zst",
+        "row_end": 740000,
+        "row_start": 720000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 740000,
+      "row_start": 720000,
+      "source_region": "us-east5",
+      "source_shard": "gs://marin-us-east5/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows000720000-000740000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00036.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows000720000-000740000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "90ad8de68758fb37c4fa5be599e60618ce8c23b0"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows001420000-001440000.jsonl.zst",
+        "row_end": 1440000,
+        "row_start": 1420000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 1440000,
+      "row_start": 1420000,
+      "source_region": "us-east5",
+      "source_shard": "gs://marin-us-east5/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows001420000-001440000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00071.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows001420000-001440000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "12c41e00a962439babf35789b784ae8de7c81eee"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows002200000-002220000.jsonl.zst",
+        "row_end": 2220000,
+        "row_start": 2200000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 2220000,
+      "row_start": 2200000,
+      "source_region": "us-east5",
+      "source_shard": "gs://marin-us-east5/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows002200000-002220000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00110.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows002200000-002220000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "828aebef12850b50747f65da6a12cff2fdc6fb40"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003160000-003180000.jsonl.zst",
+        "row_end": 3180000,
+        "row_start": 3160000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 3180000,
+      "row_start": 3160000,
+      "source_region": "us-east5",
+      "source_shard": "gs://marin-us-east5/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003160000-003180000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00158.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003160000-003180000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "7afca2ff9405bd5c92f0b6c9b7f84f30c889e4a2"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003400000-003420000.jsonl.zst",
+        "row_end": 3420000,
+        "row_start": 3400000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 3420000,
+      "row_start": 3400000,
+      "source_region": "us-east5",
+      "source_shard": "gs://marin-us-east5/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003400000-003420000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00170.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003400000-003420000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "b88e5a120e7af022da749de5a451d4f6239e1264"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003680000-003700000.jsonl.zst",
+        "row_end": 3700000,
+        "row_start": 3680000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 3700000,
+      "row_start": 3680000,
+      "source_region": "us-east5",
+      "source_shard": "gs://marin-us-east5/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003680000-003700000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00184.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003680000-003700000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [],
+      "baseline_missing_blob_ids": [
+        "6bf14dce93c9c51f1868244141b5ac0e18eefe0f"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19999,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 1,
+        "missing_blob_examples": [
+          "6bf14dce93c9c51f1868244141b5ac0e18eefe0f"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003740000-003760000.jsonl.zst",
+        "row_end": 3760000,
+        "row_start": 3740000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [
+        "6bf14dce93c9c51f1868244141b5ac0e18eefe0f"
+      ],
+      "row_end": 3760000,
+      "row_start": 3740000,
+      "source_region": "us-east5",
+      "source_shard": "gs://marin-us-east5/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003740000-003760000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00187.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003740000-003760000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "480fda96c6c2f7446764c44446b27337a43570a7"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003940000-003960000.jsonl.zst",
+        "row_end": 3960000,
+        "row_start": 3940000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 3960000,
+      "row_start": 3940000,
+      "source_region": "us-east5",
+      "source_shard": "gs://marin-us-east5/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003940000-003960000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00000-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00197.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00000-of-00004-rows003940000-003960000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "10677724c0205fb02f8d02a6e74ea448d2b3f0b3"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00001-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00001-of-00004-rows001640000-001660000.jsonl.zst",
+        "row_end": 1660000,
+        "row_start": 1640000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 1660000,
+      "row_start": 1640000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Cpp-9fffb9/train/train-00001-of-00004-rows001640000-001660000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00001-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00286.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00001-of-00004-rows001640000-001660000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "5e9881bdc362830d096e280c5859b6d92da0f001"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00001-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00001-of-00004-rows002600000-002620000.jsonl.zst",
+        "row_end": 2620000,
+        "row_start": 2600000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 2620000,
+      "row_start": 2600000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Cpp-9fffb9/train/train-00001-of-00004-rows002600000-002620000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00001-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00334.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00001-of-00004-rows002600000-002620000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "1812ae1d55faef8cf1353771e976ae722944c0dc"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00001-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00001-of-00004-rows002840000-002860000.jsonl.zst",
+        "row_end": 2860000,
+        "row_start": 2840000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 2860000,
+      "row_start": 2840000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Cpp-9fffb9/train/train-00001-of-00004-rows002840000-002860000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00001-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00346.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00001-of-00004-rows002840000-002860000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "05d4ba5cf9a18bedfb62c70b0cbe8ed2ffa80439"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00002-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00002-of-00004-rows000180000-000200000.jsonl.zst",
+        "row_end": 200000,
+        "row_start": 180000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 200000,
+      "row_start": 180000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Cpp-9fffb9/train/train-00002-of-00004-rows000180000-000200000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00002-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00417.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00002-of-00004-rows000180000-000200000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "de0312fd5562e2c9e5d45c021dd65d61d18fc95c"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00002-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00002-of-00004-rows001140000-001160000.jsonl.zst",
+        "row_end": 1160000,
+        "row_start": 1140000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 1160000,
+      "row_start": 1140000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Cpp-9fffb9/train/train-00002-of-00004-rows001140000-001160000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00002-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00465.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00002-of-00004-rows001140000-001160000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "2c0c1a96e0ca085092165d295eff8792c0bf9ba9"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00002-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00002-of-00004-rows001400000-001420000.jsonl.zst",
+        "row_end": 1420000,
+        "row_start": 1400000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 1420000,
+      "row_start": 1400000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Cpp-9fffb9/train/train-00002-of-00004-rows001400000-001420000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00002-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00478.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00002-of-00004-rows001400000-001420000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "9230e0af5e8854b8f7a15c29032e3e755ee58569"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows001060000-001080000.jsonl.zst",
+        "row_end": 1080000,
+        "row_start": 1060000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 1080000,
+      "row_start": 1060000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows001060000-001080000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00665.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows001060000-001080000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "a40b799d2932041819ae3135efe67fbf1dfa7cf7"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows001560000-001580000.jsonl.zst",
+        "row_end": 1580000,
+        "row_start": 1560000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 1580000,
+      "row_start": 1560000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows001560000-001580000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00690.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows001560000-001580000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "ec68be8303a195836ca701bc697823482e00e43c"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows001720000-001740000.jsonl.zst",
+        "row_end": 1740000,
+        "row_start": 1720000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 1740000,
+      "row_start": 1720000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows001720000-001740000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00698.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows001720000-001740000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "963829dc65392ab3d0cf4a0b082906fa3016623b"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows002100000-002120000.jsonl.zst",
+        "row_end": 2120000,
+        "row_start": 2100000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 2120000,
+      "row_start": 2100000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows002100000-002120000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00717.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows002100000-002120000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "e680c2d02e88b0bc64959596876641c64cef9dfa"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows002900000-002920000.jsonl.zst",
+        "row_end": 2920000,
+        "row_start": 2900000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 2920000,
+      "row_start": 2900000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows002900000-002920000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00757.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows002900000-002920000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "0b5f7e6bb906776e422206589efe6567024e05ad"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows003040000-003060000.jsonl.zst",
+        "row_end": 3060000,
+        "row_start": 3040000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 3060000,
+      "row_start": 3040000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows003040000-003060000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00764.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows003040000-003060000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "d75fac0cb314046ce530ef5808d82f9a6ecd13e2"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows003540000-003560000.jsonl.zst",
+        "row_end": 3560000,
+        "row_start": 3540000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 3560000,
+      "row_start": 3540000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows003540000-003560000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00789.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows003540000-003560000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "e2dae2c0647cef2db6810179446331720e975a96"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+        "language": "Cpp",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows003880000-003900000.jsonl.zst",
+        "row_end": 3900000,
+        "row_start": 3880000
+      },
+      "language": "Cpp",
+      "remove_blob_ids": [],
+      "row_end": 3900000,
+      "row_start": 3880000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows003880000-003900000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Cpp/train-00003-of-00004.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/.metrics/hydrate-00806.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Cpp-9fffb9/train/train-00003-of-00004-rows003880000-003900000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "632287cdcaf3af06504aadfa9d5d029887db2629"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00000-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00000-of-00005-rows000140000-000160000.jsonl.zst",
+        "row_end": 160000,
+        "row_start": 140000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [],
+      "row_end": 160000,
+      "row_start": 140000,
+      "source_region": "us-east5",
+      "source_shard": "gs://marin-us-east5/documents/stack_edu/Markdown-b278be/train/train-00000-of-00005-rows000140000-000160000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00000-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00007.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00000-of-00005-rows000140000-000160000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [],
+      "baseline_missing_blob_ids": [
+        "a4a161d81290bb866fe5c7e6d35ce5ac27666346"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19999,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00000-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 1,
+        "missing_blob_examples": [
+          "a4a161d81290bb866fe5c7e6d35ce5ac27666346"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00000-of-00005-rows000500000-000520000.jsonl.zst",
+        "row_end": 520000,
+        "row_start": 500000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [
+        "a4a161d81290bb866fe5c7e6d35ce5ac27666346"
+      ],
+      "row_end": 520000,
+      "row_start": 500000,
+      "source_region": "us-east5",
+      "source_shard": "gs://marin-us-east5/documents/stack_edu/Markdown-b278be/train/train-00000-of-00005-rows000500000-000520000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00000-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00025.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00000-of-00005-rows000500000-000520000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "b9da294d3a1c37cf300ad3ddb86377fd92d5a371"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00000-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00000-of-00005-rows004060000-004080000.jsonl.zst",
+        "row_end": 4080000,
+        "row_start": 4060000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [],
+      "row_end": 4080000,
+      "row_start": 4060000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Markdown-b278be/train/train-00000-of-00005-rows004060000-004080000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00000-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00203.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00000-of-00005-rows004060000-004080000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "577def0de85baa0d622c4b855de539335e2eee94"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00001-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00001-of-00005-rows000520000-000540000.jsonl.zst",
+        "row_end": 540000,
+        "row_start": 520000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [],
+      "row_end": 540000,
+      "row_start": 520000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Markdown-b278be/train/train-00001-of-00005-rows000520000-000540000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00001-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00233.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00001-of-00005-rows000520000-000540000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "4749ae6f4f085830612d9a78265bd639b37d1675"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00001-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00001-of-00005-rows000720000-000740000.jsonl.zst",
+        "row_end": 740000,
+        "row_start": 720000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [],
+      "row_end": 740000,
+      "row_start": 720000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Markdown-b278be/train/train-00001-of-00005-rows000720000-000740000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00001-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00243.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00001-of-00005-rows000720000-000740000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "f4146c99f79bcb3f39e9cad698fe5012085f906b"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00001-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00001-of-00005-rows001080000-001100000.jsonl.zst",
+        "row_end": 1100000,
+        "row_start": 1080000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [],
+      "row_end": 1100000,
+      "row_start": 1080000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Markdown-b278be/train/train-00001-of-00005-rows001080000-001100000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00001-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00261.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00001-of-00005-rows001080000-001100000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "2811f6419b57b9bacc52add7854db276d7cdcf86"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00002-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00002-of-00005-rows001320000-001340000.jsonl.zst",
+        "row_end": 1340000,
+        "row_start": 1320000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [],
+      "row_end": 1340000,
+      "row_start": 1320000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Markdown-b278be/train/train-00002-of-00005-rows001320000-001340000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00002-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00480.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00002-of-00005-rows001320000-001340000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "da64078fac167a981b5d571400ede7703e35c43a"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00002-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00002-of-00005-rows002860000-002880000.jsonl.zst",
+        "row_end": 2880000,
+        "row_start": 2860000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [],
+      "row_end": 2880000,
+      "row_start": 2860000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Markdown-b278be/train/train-00002-of-00005-rows002860000-002880000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00002-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00557.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00002-of-00005-rows002860000-002880000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "bcc10cd8acb6ee8d5da027213b5020edc7de4495"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00003-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00003-of-00005-rows000560000-000580000.jsonl.zst",
+        "row_end": 580000,
+        "row_start": 560000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [],
+      "row_end": 580000,
+      "row_start": 560000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Markdown-b278be/train/train-00003-of-00005-rows000560000-000580000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00003-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00649.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00003-of-00005-rows000560000-000580000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "2a9a976d04006963b7676dac6e3f706b02ea43ac"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00003-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00003-of-00005-rows003540000-003560000.jsonl.zst",
+        "row_end": 3560000,
+        "row_start": 3540000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [],
+      "row_end": 3560000,
+      "row_start": 3540000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Markdown-b278be/train/train-00003-of-00005-rows003540000-003560000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00003-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00798.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00003-of-00005-rows003540000-003560000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "e9815916c7810729401e52119c26b891fdbd1cdd"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00003-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00003-of-00005-rows003820000-003840000.jsonl.zst",
+        "row_end": 3840000,
+        "row_start": 3820000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [],
+      "row_end": 3840000,
+      "row_start": 3820000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Markdown-b278be/train/train-00003-of-00005-rows003820000-003840000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00003-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00812.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00003-of-00005-rows003820000-003840000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "3d713dcd122c4357e47038ebeee297ee81af10fb"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00004-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows000660000-000680000.jsonl.zst",
+        "row_end": 680000,
+        "row_start": 660000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [],
+      "row_end": 680000,
+      "row_start": 660000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows000660000-000680000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00004-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00861.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows000660000-000680000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [],
+      "baseline_missing_blob_ids": [
+        "60aa3ae3ef17b6b3e58b37ab695a4a773eb7c713"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19999,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00004-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 1,
+        "missing_blob_examples": [
+          "60aa3ae3ef17b6b3e58b37ab695a4a773eb7c713"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows000900000-000920000.jsonl.zst",
+        "row_end": 920000,
+        "row_start": 900000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [
+        "60aa3ae3ef17b6b3e58b37ab695a4a773eb7c713"
+      ],
+      "row_end": 920000,
+      "row_start": 900000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows000900000-000920000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00004-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00873.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows000900000-000920000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [],
+      "baseline_missing_blob_ids": [
+        "518ad881dfe015e450f81b0c485964124f55af87"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19999,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00004-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 1,
+        "missing_blob_examples": [
+          "518ad881dfe015e450f81b0c485964124f55af87"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows001780000-001800000.jsonl.zst",
+        "row_end": 1800000,
+        "row_start": 1780000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [
+        "518ad881dfe015e450f81b0c485964124f55af87"
+      ],
+      "row_end": 1800000,
+      "row_start": 1780000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows001780000-001800000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00004-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00917.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows001780000-001800000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "257ad453360b32ccc0c578621a62548a1e64de1d"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00004-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows002120000-002140000.jsonl.zst",
+        "row_end": 2140000,
+        "row_start": 2120000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [],
+      "row_end": 2140000,
+      "row_start": 2120000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows002120000-002140000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00004-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00934.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows002120000-002140000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "7245c79ce94a26617ab4cf94eb38b45d323e386a"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00004-of-00005.parquet",
+        "language": "Markdown",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows002780000-002800000.jsonl.zst",
+        "row_end": 2800000,
+        "row_start": 2780000
+      },
+      "language": "Markdown",
+      "remove_blob_ids": [],
+      "row_end": 2800000,
+      "row_start": 2780000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows002780000-002800000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Markdown/train-00004-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/.metrics/hydrate-00967.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Markdown-b278be/train/train-00004-of-00005-rows002780000-002800000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "f234e15ddc6cfad72fb23cf5a10531af5bd7810b"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00000-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00000-of-00005-rows001020000-001040000.jsonl.zst",
+        "row_end": 1040000,
+        "row_start": 1020000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 1040000,
+      "row_start": 1020000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00000-of-00005-rows001020000-001040000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00000-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00051.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00000-of-00005-rows001020000-001040000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "cd66fa1317929d5c040430fe01e1e99a96d6e179"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00000-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00000-of-00005-rows001320000-001340000.jsonl.zst",
+        "row_end": 1340000,
+        "row_start": 1320000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 1340000,
+      "row_start": 1320000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00000-of-00005-rows001320000-001340000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00000-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00066.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00000-of-00005-rows001320000-001340000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "86e1893069ac6c612b7eff628fe9658edb97179c"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00000-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00000-of-00005-rows002180000-002200000.jsonl.zst",
+        "row_end": 2200000,
+        "row_start": 2180000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 2200000,
+      "row_start": 2180000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00000-of-00005-rows002180000-002200000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00000-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00109.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00000-of-00005-rows002180000-002200000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [],
+      "baseline_missing_blob_ids": [
+        "1678c7dd9f24b90face3eba640d7152da3e7a61a"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19999,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00001-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 1,
+        "missing_blob_examples": [
+          "1678c7dd9f24b90face3eba640d7152da3e7a61a"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00001-of-00005-rows001440000-001460000.jsonl.zst",
+        "row_end": 1460000,
+        "row_start": 1440000
+      },
+      "language": "Python",
+      "remove_blob_ids": [
+        "1678c7dd9f24b90face3eba640d7152da3e7a61a"
+      ],
+      "row_end": 1460000,
+      "row_start": 1440000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00001-of-00005-rows001440000-001460000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00001-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00325.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00001-of-00005-rows001440000-001460000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "55e97abfcd90b7171a956409a12a0941820820a7"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00001-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00001-of-00005-rows003640000-003660000.jsonl.zst",
+        "row_end": 3660000,
+        "row_start": 3640000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 3660000,
+      "row_start": 3640000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00001-of-00005-rows003640000-003660000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00001-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00435.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00001-of-00005-rows003640000-003660000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "f0638e3d847eb1594082bd370d5d631d660035f8"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00001-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00001-of-00005-rows003700000-003720000.jsonl.zst",
+        "row_end": 3720000,
+        "row_start": 3700000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 3720000,
+      "row_start": 3700000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00001-of-00005-rows003700000-003720000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00001-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00438.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00001-of-00005-rows003700000-003720000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "dfc8e6d77e35c600ce569bf1c898f3ff5ed035cd"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00001-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00001-of-00005-rows004880000-004900000.jsonl.zst",
+        "row_end": 4900000,
+        "row_start": 4880000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 4900000,
+      "row_start": 4880000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00001-of-00005-rows004880000-004900000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00001-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00497.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00001-of-00005-rows004880000-004900000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "c9f9849caa95d26bd187037b4974ead95f234cad"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00002-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows000380000-000400000.jsonl.zst",
+        "row_end": 400000,
+        "row_start": 380000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 400000,
+      "row_start": 380000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows000380000-000400000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00002-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00525.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows000380000-000400000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "6eb3cfc5d0e21b10b7f86a4cbbceedde1f637d1f"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00002-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows000760000-000780000.jsonl.zst",
+        "row_end": 780000,
+        "row_start": 760000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 780000,
+      "row_start": 760000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows000760000-000780000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00002-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00544.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows000760000-000780000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "a24e9d9e57e4fda3b9e3ed3b8fb59e0380d007b7"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00002-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows003140000-003160000.jsonl.zst",
+        "row_end": 3160000,
+        "row_start": 3140000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 3160000,
+      "row_start": 3140000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows003140000-003160000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00002-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00663.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows003140000-003160000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "2cf615a7103bcbb2136b698b68953b0df76fdae3"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00002-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows003620000-003640000.jsonl.zst",
+        "row_end": 3640000,
+        "row_start": 3620000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 3640000,
+      "row_start": 3620000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows003620000-003640000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00002-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00687.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows003620000-003640000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "e35118f4da1ca506b50267e930c1e6993775b412"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00002-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows003720000-003740000.jsonl.zst",
+        "row_end": 3740000,
+        "row_start": 3720000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 3740000,
+      "row_start": 3720000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows003720000-003740000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00002-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00692.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows003720000-003740000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "e5ad1b9aa9509bee7b24881e4db9bc6d0ff65f3f"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00002-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows004000000-004020000.jsonl.zst",
+        "row_end": 4020000,
+        "row_start": 4000000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 4020000,
+      "row_start": 4000000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows004000000-004020000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00002-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00706.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00002-of-00005-rows004000000-004020000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "36d2d02faf8f01a97d226c1907250194abec6c0c"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00003-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00003-of-00005-rows001600000-001620000.jsonl.zst",
+        "row_end": 1620000,
+        "row_start": 1600000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 1620000,
+      "row_start": 1600000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00003-of-00005-rows001600000-001620000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00003-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00839.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00003-of-00005-rows001600000-001620000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "0621f154c502c06ce9953a96bc24bbde03c266fc"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00003-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00003-of-00005-rows002980000-003000000.jsonl.zst",
+        "row_end": 3000000,
+        "row_start": 2980000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 3000000,
+      "row_start": 2980000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00003-of-00005-rows002980000-003000000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00003-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00908.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00003-of-00005-rows002980000-003000000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "504cbc820abfd9474b45cf3e07e4ae000c1f7e46",
+        "a4f95fb3527c792b0a4d2a5c7bd71ffca91dd1c4"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00003-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00003-of-00005-rows003100000-003120000.jsonl.zst",
+        "row_end": 3120000,
+        "row_start": 3100000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 3120000,
+      "row_start": 3100000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00003-of-00005-rows003100000-003120000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00003-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00914.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00003-of-00005-rows003100000-003120000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "08b0fb65bccd6719ee5deaef1e395d5cbf385187"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00003-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00003-of-00005-rows004420000-004440000.jsonl.zst",
+        "row_end": 4440000,
+        "row_start": 4420000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 4440000,
+      "row_start": 4420000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00003-of-00005-rows004420000-004440000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00003-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-00980.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00003-of-00005-rows004420000-004440000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "da970f10df9f8246b5d6be13aa3ca274ef0079b7"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00004-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00004-of-00005-rows000460000-000480000.jsonl.zst",
+        "row_end": 480000,
+        "row_start": 460000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 480000,
+      "row_start": 460000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00004-of-00005-rows000460000-000480000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00004-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-01035.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00004-of-00005-rows000460000-000480000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "e6714759c2ffaa3b96509d38cb25880b9f55647f"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00004-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00004-of-00005-rows002460000-002480000.jsonl.zst",
+        "row_end": 2480000,
+        "row_start": 2460000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 2480000,
+      "row_start": 2460000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00004-of-00005-rows002460000-002480000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00004-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-01135.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00004-of-00005-rows002460000-002480000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "06cc6875904f60298530b52f7042bb6107c79aed"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00004-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00004-of-00005-rows002640000-002660000.jsonl.zst",
+        "row_end": 2660000,
+        "row_start": 2640000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 2660000,
+      "row_start": 2640000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00004-of-00005-rows002640000-002660000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00004-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-01144.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00004-of-00005-rows002640000-002660000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "ffeb40d45b9804ecf6190f03bff7c3297ab5266f"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00004-of-00005.parquet",
+        "language": "Python",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00004-of-00005-rows003680000-003700000.jsonl.zst",
+        "row_end": 3700000,
+        "row_start": 3680000
+      },
+      "language": "Python",
+      "remove_blob_ids": [],
+      "row_end": 3700000,
+      "row_start": 3680000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Python-4da2c7/train/train-00004-of-00005-rows003680000-003700000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Python/train-00004-of-00005.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/.metrics/hydrate-01196.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Python-4da2c7/train/train-00004-of-00005-rows003680000-003700000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [],
+      "baseline_missing_blob_ids": [
+        "9d69ed079119f2f4c6c47c6d5857c9cab47aad8b",
+        "c359c7aeb187168f0c9c596e6b97f93ab8c3e2bd",
+        "c8949bdb22b1e3cad6c4bb898f3c142091088f59"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19997,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 3,
+        "missing_blob_examples": [
+          "9d69ed079119f2f4c6c47c6d5857c9cab47aad8b",
+          "c359c7aeb187168f0c9c596e6b97f93ab8c3e2bd",
+          "c8949bdb22b1e3cad6c4bb898f3c142091088f59"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows000000000-000020000.jsonl.zst",
+        "row_end": 20000,
+        "row_start": 0
+      },
+      "language": "Shell",
+      "remove_blob_ids": [
+        "c8949bdb22b1e3cad6c4bb898f3c142091088f59"
+      ],
+      "row_end": 20000,
+      "row_start": 0,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows000000000-000020000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00000.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows000000000-000020000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "f39308ede5b27f76a976ff30cd5dbb45132e9683"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows000040000-000060000.jsonl.zst",
+        "row_end": 60000,
+        "row_start": 40000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [],
+      "row_end": 60000,
+      "row_start": 40000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows000040000-000060000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00002.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows000040000-000060000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "9c789436b89f0102f11a6a288ecaeed668c6f443"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows000520000-000540000.jsonl.zst",
+        "row_end": 540000,
+        "row_start": 520000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [],
+      "row_end": 540000,
+      "row_start": 520000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows000520000-000540000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00026.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows000520000-000540000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [],
+      "baseline_missing_blob_ids": [
+        "b46d6c6f5bbf4dbad142a860415265bb92a4b397"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19999,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 1,
+        "missing_blob_examples": [
+          "b46d6c6f5bbf4dbad142a860415265bb92a4b397"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001180000-001200000.jsonl.zst",
+        "row_end": 1200000,
+        "row_start": 1180000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [
+        "b46d6c6f5bbf4dbad142a860415265bb92a4b397"
+      ],
+      "row_end": 1200000,
+      "row_start": 1180000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001180000-001200000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00059.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001180000-001200000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "30baeb32fdd1e19d8db22f4f32f34ede9751f911"
+      ],
+      "baseline_missing_blob_ids": [
+        "ddae81cd8181cfbc89bb5264b92da7682156291f"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19999,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 1,
+        "missing_blob_examples": [
+          "ddae81cd8181cfbc89bb5264b92da7682156291f"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001200000-001220000.jsonl.zst",
+        "row_end": 1220000,
+        "row_start": 1200000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [],
+      "row_end": 1220000,
+      "row_start": 1200000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001200000-001220000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00060.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001200000-001220000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "c1b15652afcb7e3ba9b4895caca8211b62f1f9d7"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001240000-001260000.jsonl.zst",
+        "row_end": 1260000,
+        "row_start": 1240000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [],
+      "row_end": 1260000,
+      "row_start": 1240000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001240000-001260000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00062.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001240000-001260000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "a57b990b1b4af0d164290f44c123ece12a08ada1"
+      ],
+      "baseline_missing_blob_ids": [
+        "98c68404e8d62db938b165e410f446331ed6a36c"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19999,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 1,
+        "missing_blob_examples": [
+          "98c68404e8d62db938b165e410f446331ed6a36c"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001300000-001320000.jsonl.zst",
+        "row_end": 1320000,
+        "row_start": 1300000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [],
+      "row_end": 1320000,
+      "row_start": 1300000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001300000-001320000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00065.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001300000-001320000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "fdb20d7fb2906bd614c856511c8b9fb835da840b"
+      ],
+      "baseline_missing_blob_ids": [
+        "3a4bc37744ee5f6fa08d47d4284ea688990d0754"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19999,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 1,
+        "missing_blob_examples": [
+          "3a4bc37744ee5f6fa08d47d4284ea688990d0754"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001360000-001380000.jsonl.zst",
+        "row_end": 1380000,
+        "row_start": 1360000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [],
+      "row_end": 1380000,
+      "row_start": 1360000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001360000-001380000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00068.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001360000-001380000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [],
+      "baseline_missing_blob_ids": [
+        "26957e6d306101a2f8401b5e477d8ff0d88e735d"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19999,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 1,
+        "missing_blob_examples": [
+          "26957e6d306101a2f8401b5e477d8ff0d88e735d"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001780000-001800000.jsonl.zst",
+        "row_end": 1800000,
+        "row_start": 1780000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [
+        "26957e6d306101a2f8401b5e477d8ff0d88e735d"
+      ],
+      "row_end": 1800000,
+      "row_start": 1780000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001780000-001800000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00089.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows001780000-001800000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "81141c74c890e6e6848966f7f93525df67c52484"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002200000-002220000.jsonl.zst",
+        "row_end": 2220000,
+        "row_start": 2200000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [],
+      "row_end": 2220000,
+      "row_start": 2200000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002200000-002220000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00110.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002200000-002220000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [],
+      "baseline_missing_blob_ids": [
+        "0f3d87a9d6e21f41352adfb62c793945d7d8921c",
+        "895bcd14a387c5a8e21ec7a5c79e2ec5ade4d779"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19998,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 2,
+        "missing_blob_examples": [
+          "0f3d87a9d6e21f41352adfb62c793945d7d8921c",
+          "895bcd14a387c5a8e21ec7a5c79e2ec5ade4d779"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002280000-002300000.jsonl.zst",
+        "row_end": 2300000,
+        "row_start": 2280000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [
+        "895bcd14a387c5a8e21ec7a5c79e2ec5ade4d779"
+      ],
+      "row_end": 2300000,
+      "row_start": 2280000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002280000-002300000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00114.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002280000-002300000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "446527d3be6079d92deef11f3bc08141933baaad"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002360000-002380000.jsonl.zst",
+        "row_end": 2380000,
+        "row_start": 2360000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [],
+      "row_end": 2380000,
+      "row_start": 2360000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002360000-002380000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00118.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002360000-002380000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "f1d107c26590f508d2c224c99950804fcee5b913"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002680000-002700000.jsonl.zst",
+        "row_end": 2700000,
+        "row_start": 2680000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [],
+      "row_end": 2700000,
+      "row_start": 2680000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002680000-002700000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00134.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002680000-002700000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "2eb569a412e3de9de7024bcda317beb24ae31ff3"
+      ],
+      "baseline_missing_blob_ids": [
+        "7116709cb63a7bbcf4b715ad3321410c69a99a1f",
+        "a4c7a802955060a80f408b90bb5e58729d463004"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19998,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 2,
+        "missing_blob_examples": [
+          "7116709cb63a7bbcf4b715ad3321410c69a99a1f",
+          "a4c7a802955060a80f408b90bb5e58729d463004"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002820000-002840000.jsonl.zst",
+        "row_end": 2840000,
+        "row_start": 2820000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [],
+      "row_end": 2840000,
+      "row_start": 2820000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002820000-002840000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00141.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows002820000-002840000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "bd3a3b7a80e6b8c31668e6e6e0cf27f27ab09015"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003020000-003040000.jsonl.zst",
+        "row_end": 3040000,
+        "row_start": 3020000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [],
+      "row_end": 3040000,
+      "row_start": 3020000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003020000-003040000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00151.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003020000-003040000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [],
+      "baseline_missing_blob_ids": [
+        "6d2a14c10e3ee3a8ebf84d6f875278db59313bdb"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19999,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 1,
+        "missing_blob_examples": [
+          "6d2a14c10e3ee3a8ebf84d6f875278db59313bdb"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003440000-003460000.jsonl.zst",
+        "row_end": 3460000,
+        "row_start": 3440000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [
+        "6d2a14c10e3ee3a8ebf84d6f875278db59313bdb"
+      ],
+      "row_end": 3460000,
+      "row_start": 3440000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003440000-003460000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00172.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003440000-003460000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [],
+      "baseline_missing_blob_ids": [
+        "4319dd21934ee51d52e02c6ba76838dbb368d864"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19999,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 1,
+        "missing_blob_examples": [
+          "4319dd21934ee51d52e02c6ba76838dbb368d864"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003580000-003600000.jsonl.zst",
+        "row_end": 3600000,
+        "row_start": 3580000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [
+        "4319dd21934ee51d52e02c6ba76838dbb368d864"
+      ],
+      "row_end": 3600000,
+      "row_start": 3580000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003580000-003600000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00179.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003580000-003600000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [
+        "b1471f10b8e44e02b3b1b187b15c981d76a89e13"
+      ],
+      "baseline_missing_blob_ids": [],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 20000,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 0,
+        "missing_blob_examples": [],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003620000-003640000.jsonl.zst",
+        "row_end": 3640000,
+        "row_start": 3620000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [],
+      "row_end": 3640000,
+      "row_start": 3620000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003620000-003640000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00181.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003620000-003640000.jsonl.zst"
+    },
+    {
+      "add_blob_ids": [],
+      "baseline_missing_blob_ids": [
+        "891f4b01d370cbeee9519ed00270684bf2680bca"
+      ],
+      "expected_metric": {
+        "corrupt_blob": 0,
+        "corrupt_blob_examples": [],
+        "count": 19999,
+        "decoded_fallback": 0,
+        "empty_blob": 0,
+        "empty_blob_examples": [],
+        "fetch_error": 0,
+        "fetch_error_examples": [],
+        "input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+        "language": "Shell",
+        "missing_blob": 1,
+        "missing_blob_examples": [
+          "891f4b01d370cbeee9519ed00270684bf2680bca"
+        ],
+        "path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003760000-003780000.jsonl.zst",
+        "row_end": 3780000,
+        "row_start": 3760000
+      },
+      "language": "Shell",
+      "remove_blob_ids": [
+        "891f4b01d370cbeee9519ed00270684bf2680bca"
+      ],
+      "row_end": 3780000,
+      "row_start": 3760000,
+      "source_region": "us-central1",
+      "source_shard": "gs://marin-us-central1/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003760000-003780000.jsonl.zst",
+      "target_input_file": "gs://marin-eu-west4/raw/stack_edu-ad3cf0/Shell/train-00000-of-00001.parquet",
+      "target_metrics_path": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/.metrics/hydrate-00188.jsonl",
+      "target_shard": "gs://marin-eu-west4/documents/stack_edu/Shell-efddc1/train/train-00000-of-00001-rows003760000-003780000.jsonl.zst"
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "verified_at": "2026-09-12T06:40:54.225116+00:00",
+  "user_decision": "Cancel the four queued targets",
+  "status": "targets_canceled_checkpoints_preserved",
+  "user_reaffirmed_gate": "No additional target release or target restart before proxy results are reviewed and explicitly promoted by the user",
+  "canceled_targets": [
+    {
+      "iris_job": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p030_s20260910",
+      "state": "killed",
+      "checkpoint_uri": "gs://marin-us-central1/experiments/tpp10_domain_sweeps/30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b/paused_target_checkpoints/20260912/tpp10_finemath_3plus_target_p030_s20260910/step-7965",
+      "step": 7965
+    },
+    {
+      "iris_job": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p050_s20260910",
+      "state": "killed",
+      "checkpoint_uri": "gs://marin-us-central1/experiments/tpp10_domain_sweeps/30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b/paused_target_checkpoints/20260912/tpp10_finemath_3plus_target_p050_s20260910/step-6426",
+      "step": 6426
+    },
+    {
+      "iris_job": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p070_s20260910",
+      "state": "killed",
+      "checkpoint_uri": "gs://marin-us-central1/experiments/tpp10_domain_sweeps/30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b/paused_target_checkpoints/20260912/tpp10_finemath_3plus_target_p070_s20260910/step-7219",
+      "step": 7219
+    },
+    {
+      "iris_job": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p100_s20260910",
+      "state": "killed",
+      "checkpoint_uri": "gs://marin-us-central1/experiments/tpp10_domain_sweeps/30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b/paused_target_checkpoints/20260912/tpp10_finemath_3plus_target_p100_s20260910/step-6432",
+      "step": 6432
+    }
+  ],
+  "completed_proxy_points": 14,
+  "completed_target_points": 10,
+  "new_submissions": 0,
+  "target_cancellations": 4,
+  "coordinator_states": {
+    "/calvinxu/tpp10-domain-sweeps-cpu4g": "failed",
+    "/calvinxu/tpp10-bpb-repair": "killed"
+  },
+  "active_or_queued_jobs": {},
+  "checkpoint_preservation": "verified same-bucket server-side copies outside the TTL prefix; exact object sets, size, CRC32C and MD5",
+  "native_artifact_record_recovery": "Incomplete. The stopped repair coordinator requires all 28 successes. Recovering the 24 completed outputs needs a separately scoped record-only procedure; do not restart training or mark canceled runs succeeded.",
+  "evidence_files": [
+    "checkpoint_preservation_receipt.json",
+    "iris_after_cancel.txt",
+    "repair_after_cancel.txt",
+    "raw_eval_schemas.json",
+    "raw_eval_provenance.json",
+    "compute_accounting.json"
+  ]
+}

@@ -1,0 +1,16 @@
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 172800 \
+  --max-retries 0 --max-preemption-retries 0 \
+  --extra cpu --no-preemptible --region us-central1 --zone us-central1-a \
+  --priority interactive --job-name starcoder-tpp10-refinement-interactive \
+  --bundle-include .agents/projects/starcoder_tpp10/releases/refinement.json \
+  --exclude '^(checkpoints|logs|wandb)/' \
+  --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\.py)$' \
+  --exclude '^\.agents/(?!projects/starcoder_tpp10/releases/).*' \
+  --exclude '^(docs|tests)/' \
+  --exclude '^lib/[^/]+/tests/' \
+  --exclude '^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/' \
+  -e MARIN_PREFIX gs://marin-us-central1 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.domain_phase_mix.launch_starcoder_tpp10_refinement --release .agents/projects/starcoder_tpp10/releases/refinement.json \
+  --plan-path .agents/projects/starcoder_tpp10/live/refinement_plan.json --max-concurrent 45 --submit

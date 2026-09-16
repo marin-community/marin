@@ -1,0 +1,133 @@
+{
+  "tasks": [
+    {
+      "task": "mmlu",
+      "task_alias": "mmlu_5shot",
+      "num_fewshot": 5
+    },
+    {
+      "task": "arc_easy",
+      "task_alias": "arc_easy_5shot",
+      "num_fewshot": 5
+    },
+    {
+      "task": "arc_challenge",
+      "task_alias": "arc_challenge_5shot",
+      "num_fewshot": 5
+    },
+    {
+      "task": "commonsense_qa",
+      "task_alias": "csqa_5shot",
+      "num_fewshot": 5
+    },
+    {
+      "task": "hellaswag",
+      "task_alias": "hellaswag_5shot",
+      "num_fewshot": 5
+    },
+    {
+      "task": "winogrande",
+      "task_alias": "winogrande_5shot",
+      "num_fewshot": 5,
+      "dataset_path": "winogrande"
+    },
+    {
+      "task": "social_iqa",
+      "task_alias": "socialiqa_5shot",
+      "num_fewshot": 5,
+      "dataset_path": "social_i_qa"
+    },
+    {
+      "task": "piqa",
+      "task_alias": "piqa_5shot",
+      "num_fewshot": 5
+    },
+    {
+      "task": "sciq",
+      "task_alias": "sciq_5shot",
+      "num_fewshot": 5,
+      "dataset_path": "sciq"
+    },
+    {
+      "task": "lambada_openai",
+      "task_alias": "lambada_0shot",
+      "num_fewshot": 0
+    },
+    {
+      "task": "medmcqa",
+      "task_alias": "medmcqa_5shot",
+      "num_fewshot": 5
+    }
+  ],
+  "expected_tasks": [
+    "arc_challenge_5shot",
+    "arc_easy_5shot",
+    "csqa_5shot",
+    "hellaswag_5shot",
+    "lambada_0shot",
+    "medmcqa_5shot",
+    "mmlu_abstract_algebra_5shot",
+    "mmlu_anatomy_5shot",
+    "mmlu_astronomy_5shot",
+    "mmlu_business_ethics_5shot",
+    "mmlu_clinical_knowledge_5shot",
+    "mmlu_college_biology_5shot",
+    "mmlu_college_chemistry_5shot",
+    "mmlu_college_computer_science_5shot",
+    "mmlu_college_mathematics_5shot",
+    "mmlu_college_medicine_5shot",
+    "mmlu_college_physics_5shot",
+    "mmlu_computer_security_5shot",
+    "mmlu_conceptual_physics_5shot",
+    "mmlu_econometrics_5shot",
+    "mmlu_electrical_engineering_5shot",
+    "mmlu_elementary_mathematics_5shot",
+    "mmlu_formal_logic_5shot",
+    "mmlu_global_facts_5shot",
+    "mmlu_high_school_biology_5shot",
+    "mmlu_high_school_chemistry_5shot",
+    "mmlu_high_school_computer_science_5shot",
+    "mmlu_high_school_european_history_5shot",
+    "mmlu_high_school_geography_5shot",
+    "mmlu_high_school_government_and_politics_5shot",
+    "mmlu_high_school_macroeconomics_5shot",
+    "mmlu_high_school_mathematics_5shot",
+    "mmlu_high_school_microeconomics_5shot",
+    "mmlu_high_school_physics_5shot",
+    "mmlu_high_school_psychology_5shot",
+    "mmlu_high_school_statistics_5shot",
+    "mmlu_high_school_us_history_5shot",
+    "mmlu_high_school_world_history_5shot",
+    "mmlu_human_aging_5shot",
+    "mmlu_human_sexuality_5shot",
+    "mmlu_international_law_5shot",
+    "mmlu_jurisprudence_5shot",
+    "mmlu_logical_fallacies_5shot",
+    "mmlu_machine_learning_5shot",
+    "mmlu_management_5shot",
+    "mmlu_marketing_5shot",
+    "mmlu_medical_genetics_5shot",
+    "mmlu_miscellaneous_5shot",
+    "mmlu_moral_disputes_5shot",
+    "mmlu_moral_scenarios_5shot",
+    "mmlu_nutrition_5shot",
+    "mmlu_philosophy_5shot",
+    "mmlu_prehistory_5shot",
+    "mmlu_professional_accounting_5shot",
+    "mmlu_professional_law_5shot",
+    "mmlu_professional_medicine_5shot",
+    "mmlu_professional_psychology_5shot",
+    "mmlu_public_relations_5shot",
+    "mmlu_security_studies_5shot",
+    "mmlu_sociology_5shot",
+    "mmlu_us_foreign_policy_5shot",
+    "mmlu_virology_5shot",
+    "mmlu_world_religions_5shot",
+    "piqa_5shot",
+    "sciq_5shot",
+    "socialiqa_5shot",
+    "winogrande_5shot"
+  ],
+  "cache_uri": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1",
+  "cache_manifest_sha256": "d9fd4365f4367f163714febc124221f5382ffd2c6c2b28bb6d42775f292846ad"
+}

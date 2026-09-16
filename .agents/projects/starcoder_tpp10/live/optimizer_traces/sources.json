@@ -1,0 +1,58 @@
+[
+  {
+    "run_name": "tpp10_unmatched_p050_s20260910",
+    "uri": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p050_s20260910/2026.09.09/tracker_metrics.jsonl",
+    "bytes": 29496,
+    "sha256": "e780a5e14d71ab16462fd27ffd5e07ca8c88e10099c20d72ead93bff56cbbccf",
+    "rows": 1
+  },
+  {
+    "run_name": "tpp10_matched_p050_s20260910_d20260912",
+    "uri": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260910_d20260912/2026.09.09/tracker_metrics.jsonl",
+    "bytes": 29597,
+    "sha256": "4445530fea011fb524f771117fa92870d8d5dc15c550daffce425ec54b34e215",
+    "rows": 1
+  },
+  {
+    "run_name": "tpp10_unmatched_p050_s20260911",
+    "uri": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p050_s20260911/2026.09.09/tracker_metrics.jsonl",
+    "bytes": 29496,
+    "sha256": "f68321429862e9c06932ab7d76a8760cf5074788c8b3199e99a5ed9e6c2ae3ee",
+    "rows": 1
+  },
+  {
+    "run_name": "tpp10_matched_p050_s20260911_d20260912",
+    "uri": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260911_d20260912/2026.09.09/tracker_metrics.jsonl",
+    "bytes": 29585,
+    "sha256": "3fab7b04c168e61e0cde62e9374a34ea8a07937e826ffe17250ccb50ace95a26",
+    "rows": 1
+  },
+  {
+    "run_name": "tpp10_unmatched_p050_s20260910_b128",
+    "uri": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p050_s20260910_b128/2026.09.09/tracker_metrics.jsonl",
+    "bytes": 29589,
+    "sha256": "12aa08247b74450616fd10ef85fd7f406764412ba2a37eb1899547b19cc9e5db",
+    "rows": 1
+  },
+  {
+    "run_name": "tpp10_matched_p050_s20260910_d20260912_b128",
+    "uri": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260910_d20260912_b128/2026.09.09/tracker_metrics.jsonl",
+    "bytes": 29672,
+    "sha256": "e44139654f89528a7cc99182c88e33d24c641144f43ba11f1be312ae15e27cae",
+    "rows": 1
+  },
+  {
+    "run_name": "tpp10_unmatched_p050_s20260911_b128",
+    "uri": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p050_s20260911_b128/2026.09.09/tracker_metrics.jsonl",
+    "bytes": 29579,
+    "sha256": "24d65b9391bbad0f64f3ae1274160bc809286af6b22b62fca190cc4c9b3a90e7",
+    "rows": 1
+  },
+  {
+    "run_name": "tpp10_matched_p050_s20260911_d20260912_b128",
+    "uri": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260911_d20260912_b128/2026.09.09/tracker_metrics.jsonl",
+    "bytes": 29660,
+    "sha256": "78f516ab321fb6b6239b113eb7be4f7326eaf132ec0fc2400af3623e49c5eb60",
+    "rows": 1
+  }
+]

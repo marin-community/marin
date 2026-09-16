@@ -1,0 +1,39 @@
+{
+  "cc_review_path": ".agents/handoffs/starcoder_coupled_onset_refinement_confirmation_cc_review_20260901_FINAL_RESPONSE.md",
+  "cc_review_sha256": "214b5c69f61a999f60e1780087da5a4e78f3dce39e1af13b15795c4e9e6d11eb",
+  "confirmation": "I_AUTHORIZE_THE_STARCODER_WSD80_COUPLED_ONSET_REFINEMENT_CONFIRMATION",
+  "deployment": {
+    "allow_empty_starcoder_finished_shards": true,
+    "deployment_id": "central2-v4-coupled-successor",
+    "marin_prefix": "gs://marin-us-central2",
+    "name": "pinlin_calvin_xu/data_mixture/starcoder_wsd80_coupled_onset_refinement_confirmation_central2_v4_20260901",
+    "panel_tag": "wsd80_coupled_onset_successor_c2v4",
+    "run_id_prefix": "c2v4r_",
+    "tpu_region": "us-central2",
+    "tpu_type": "v4-8",
+    "tpu_zone": "us-central2-b",
+    "version": "2026.09.01.1",
+    "wandb_group": "starcoder_wsd80_coupled_onset_refinement_confirmation_central2_v4_20260901"
+  },
+  "design_file_sha256": "00ce0aedcbbb90fb513c404ebc8b541aaac809b210e173e31a50f921edfe9d9b",
+  "design_generator_path": "experiments/domain_phase_mix/exploratory/two_phase_many/design_starcoder_wsd80_coupled_onset_refinement_confirmation_20260901.py",
+  "design_generator_sha256": "a2cff9350e8997ffab1eb372bc12d908cc01f9511754e472a18645afae686355",
+  "design_path": "experiments/domain_phase_mix/starcoder_wsd80_coupled_onset_refinement_confirmation_design_20260901.json.gz",
+  "design_sha256": "79943e36932e942e9c42a5070663fae00f2c5b4e3cdb5b942fdeb1af7abac8a5",
+  "launcher_path": "experiments/domain_phase_mix/launch_starcoder_wsd80_coupled_onset_refinement_confirmation.py",
+  "launcher_sha256": "2dd0affbcfe15e7d3ef70d04e9c34f62658c8c44cf99eb42b11f03b4146c0e40",
+  "maximum_concurrent": 96,
+  "release_sha256": "561f2abbddfb17635fdab07785ea9eebc459bb47cfd2a10dc818ceffac1d310d",
+  "schema_version": "2026-09-01-starcoder-wsd80-coupled-onset-successor-v1",
+  "stage_counts": {
+    "bayesian_refinement_discovery": 24,
+    "fresh_confirmation": 72
+  },
+  "training_environment": {
+    "jax_default_prng_impl": "threefry2x32",
+    "jax_enable_x64": false,
+    "jax_version": "0.11.0",
+    "numpy_version": "2.3.5",
+    "uv_lock_sha256": "5edf2440895451ed317d6a1c219b5ce266b10c31c0e486c9ea38bbe25f827566"
+  }
+}

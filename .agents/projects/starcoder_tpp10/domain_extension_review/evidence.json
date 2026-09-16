@@ -1,0 +1,239 @@
+{
+  "scope": "Local source calculations and archived exploratory data, not new training results",
+  "models": {
+    "unmatched": {
+      "parameters": 16587008,
+      "steps": 2532,
+      "tokens": 165937152,
+      "tpp": 10.00404364669023,
+      "batch_size": 32,
+      "training_flops": 2.4908860401647616e+16
+    },
+    "target": {
+      "parameters": 301241344,
+      "steps": 11491,
+      "tokens": 3012296704,
+      "tpp": 9.99961248347106,
+      "batch_size": 128,
+      "training_flops": 6.66390282503612e+18
+    }
+  },
+  "parent_tokens": 190316544,
+  "matched_tokens": 10485760,
+  "grid": [
+    0,
+    0.05,
+    0.1,
+    0.2,
+    0.3,
+    0.5,
+    0.7,
+    1
+  ],
+  "grid_epochs_matched": [
+    0.0,
+    0.79125,
+    1.5825,
+    3.165,
+    4.7475000000000005,
+    7.9125,
+    11.077499999999999,
+    15.825
+  ],
+  "maximum_epochs": {
+    "matched": 15.825,
+    "target": 15.827823691460056,
+    "unmatched": 0.871900826446281
+  },
+  "token_budget_ratio": 18.153238546603475,
+  "costs": {
+    "one_proxy": 2.4908860401647616e+16,
+    "one_target": 6.66390282503612e+18,
+    "fourteen_new_domain_proxies": 3.487240456230666e+17,
+    "sixteen_common_grid_proxies": 3.9854176642636186e+17,
+    "fourteen_new_targets": 9.329463955050568e+19,
+    "two_additional_starcoder_targets": 1.332780565007224e+19,
+    "figure5_pilot": 4.789276279533522e+19,
+    "figure5_with_refinement": 8.220863133658173e+19
+  },
+  "archived_rows": [
+    {
+      "focal_domain": "dolma3_finemath_3plus",
+      "target_simulated_epochs": 0.0,
+      "focal_weight": 0.0,
+      "uncheatable_bpb": 1.0953155755996704,
+      "table9_macro_bpb": 1.2630145122565424
+    },
+    {
+      "focal_domain": "dolma3_finemath_3plus",
+      "target_simulated_epochs": 0.226338136733494,
+      "focal_weight": 0.0012167103743636,
+      "uncheatable_bpb": 1.0941869020462036,
+      "table9_macro_bpb": 1.2624743604620725
+    },
+    {
+      "focal_domain": "dolma3_finemath_3plus",
+      "target_simulated_epochs": 0.4526762734669881,
+      "focal_weight": 0.0024334207487273,
+      "uncheatable_bpb": 1.0939744710922241,
+      "table9_macro_bpb": 1.266317452171153
+    },
+    {
+      "focal_domain": "dolma3_finemath_3plus",
+      "target_simulated_epochs": 1.8107050938679523,
+      "focal_weight": 0.0097336829949093,
+      "uncheatable_bpb": 1.0940399169921875,
+      "table9_macro_bpb": 1.259820417380884
+    },
+    {
+      "focal_domain": "dolma3_finemath_3plus",
+      "target_simulated_epochs": 3.621410187735905,
+      "focal_weight": 0.0194673659898187,
+      "uncheatable_bpb": 1.0942052602767944,
+      "table9_macro_bpb": 1.2510316945532711
+    },
+    {
+      "focal_domain": "dolma3_finemath_3plus",
+      "target_simulated_epochs": 7.24282037547181,
+      "focal_weight": 0.0389347319796375,
+      "uncheatable_bpb": 1.0935977697372437,
+      "table9_macro_bpb": 1.2458218807342605
+    },
+    {
+      "focal_domain": "dolma3_finemath_3plus",
+      "target_simulated_epochs": 14.48564075094362,
+      "focal_weight": 0.077869463959275,
+      "uncheatable_bpb": 1.0972007513046265,
+      "table9_macro_bpb": 1.249683533205283
+    },
+    {
+      "focal_domain": "dolma3_finemath_3plus",
+      "target_simulated_epochs": 28.97128150188724,
+      "focal_weight": 0.1557389279185501,
+      "uncheatable_bpb": 1.1142950057983398,
+      "table9_macro_bpb": 1.2515790336360688
+    },
+    {
+      "focal_domain": "dolma3_wikipedia",
+      "target_simulated_epochs": 0.0,
+      "focal_weight": 0.0,
+      "uncheatable_bpb": 1.09414541721344,
+      "table9_macro_bpb": 1.2634550923233303
+    },
+    {
+      "focal_domain": "dolma3_wikipedia",
+      "target_simulated_epochs": 0.226338136733494,
+      "focal_weight": 0.0001312951469854,
+      "uncheatable_bpb": 1.0949324369430542,
+      "table9_macro_bpb": 1.270846047367997
+    },
+    {
+      "focal_domain": "dolma3_wikipedia",
+      "target_simulated_epochs": 0.4526762734669881,
+      "focal_weight": 0.0002625902939709,
+      "uncheatable_bpb": 1.0949324369430542,
+      "table9_macro_bpb": 1.270846047367997
+    },
+    {
+      "focal_domain": "dolma3_wikipedia",
+      "target_simulated_epochs": 1.8107050938679523,
+      "focal_weight": 0.0010503611758836,
+      "uncheatable_bpb": 1.093862533569336,
+      "table9_macro_bpb": 1.2648151721989496
+    },
+    {
+      "focal_domain": "dolma3_wikipedia",
+      "target_simulated_epochs": 3.621410187735905,
+      "focal_weight": 0.0021007223517672,
+      "uncheatable_bpb": 1.093092918395996,
+      "table9_macro_bpb": 1.2607347444555037
+    },
+    {
+      "focal_domain": "dolma3_wikipedia",
+      "target_simulated_epochs": 7.24282037547181,
+      "focal_weight": 0.0042014447035344,
+      "uncheatable_bpb": 1.0935899019241333,
+      "table9_macro_bpb": 1.2629282667360464
+    },
+    {
+      "focal_domain": "dolma3_wikipedia",
+      "target_simulated_epochs": 14.48564075094362,
+      "focal_weight": 0.0084028894070688,
+      "uncheatable_bpb": 1.0943394899368286,
+      "table9_macro_bpb": 1.2647351383222425
+    },
+    {
+      "focal_domain": "dolma3_wikipedia",
+      "target_simulated_epochs": 28.97128150188724,
+      "focal_weight": 0.0168057788141377,
+      "uncheatable_bpb": 1.094842791557312,
+      "table9_macro_bpb": 1.269507079226325
+    },
+    {
+      "focal_domain": "dolmino_synth_math",
+      "target_simulated_epochs": 0.0,
+      "focal_weight": 0.0,
+      "uncheatable_bpb": 1.0956605672836304,
+      "table9_macro_bpb": 1.265500107503296
+    },
+    {
+      "focal_domain": "dolmino_synth_math",
+      "target_simulated_epochs": 0.226338136733494,
+      "focal_weight": 0.0007808311742421,
+      "uncheatable_bpb": 1.0948283672332764,
+      "table9_macro_bpb": 1.2720772985353417
+    },
+    {
+      "focal_domain": "dolmino_synth_math",
+      "target_simulated_epochs": 0.4526762734669881,
+      "focal_weight": 0.0015616623484842,
+      "uncheatable_bpb": 1.0944733619689941,
+      "table9_macro_bpb": 1.2643765886630831
+    },
+    {
+      "focal_domain": "dolmino_synth_math",
+      "target_simulated_epochs": 1.8107050938679523,
+      "focal_weight": 0.0062466493939371,
+      "uncheatable_bpb": 1.0936819314956665,
+      "table9_macro_bpb": 1.2549490937498626
+    },
+    {
+      "focal_domain": "dolmino_synth_math",
+      "target_simulated_epochs": 3.621410187735905,
+      "focal_weight": 0.0124932987878743,
+      "uncheatable_bpb": 1.0944474935531616,
+      "table9_macro_bpb": 1.255384404140136
+    },
+    {
+      "focal_domain": "dolmino_synth_math",
+      "target_simulated_epochs": 7.24282037547181,
+      "focal_weight": 0.0249865975757486,
+      "uncheatable_bpb": 1.0920603275299072,
+      "table9_macro_bpb": 1.2411868971690956
+    },
+    {
+      "focal_domain": "dolmino_synth_math",
+      "target_simulated_epochs": 14.48564075094362,
+      "focal_weight": 0.0499731951514973,
+      "uncheatable_bpb": 1.0933647155761719,
+      "table9_macro_bpb": 1.2313362771009162
+    },
+    {
+      "focal_domain": "dolmino_synth_math",
+      "target_simulated_epochs": 28.97128150188724,
+      "focal_weight": 0.0999463903029946,
+      "uncheatable_bpb": 1.1044797897338867,
+      "table9_macro_bpb": 1.2399330672323443
+    }
+  ],
+  "source_sha256": {
+    "experiments/domain_phase_mix/starcoder_tpp10_assets/design.json": "bbcbfffb09ff23654abe115ecdc58bfe4bd5f073bff772246469eafcf917d781",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/intervention_identified_signed_dose_potential_20260808_erratum/observations_60m.csv": "20bca18990e46f8997b3d1d109c6bf45ec7888b5f377a7a96777b7424e6388e7",
+    "experiments/domain_phase_mix/starcoder_tpp10.py": "1c7cc50019f3e99234fb7b3f5668ae2a07b9381ef1fcabfa1aa8011fe98d6473",
+    "experiments/domain_phase_mix/prepare_starcoder_tpp10.py": "3dcd74598da46f09dc978ee0a6b0ddee62a820b6906c4c184bf9148883079105",
+    "experiments/domain_phase_mix/launch_starcoder_tpp10.py": "eb48d4ea35f323265972653568b6924a7999c8be0a1ce2db1441ac6273105f62",
+    "experiments/domain_phase_mix/evaluate_starcoder_tpp10_uncheatable.py": "e23c17714ba2fcc80c7733735d84ad867efdc10695557dbedef33f8e033e205d",
+    "experiments/datasets/midtraining.py": "da9acbd44d4128e4c49506da14d0db34b01e2dc90705369da0493295f5cffdc9",
+    "uv.lock": "347c4bb876ef55f60ecd5cf137d22016aaa742387717d20e296ca0ff2cc05dd5"
+  }
+}

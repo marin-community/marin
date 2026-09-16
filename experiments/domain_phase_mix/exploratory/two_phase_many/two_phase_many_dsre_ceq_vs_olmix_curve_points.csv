@@ -1,0 +1,25 @@
+subset_size,policy,model_name,predicted_bpb,regret_at_1,n_params
+20,feature_bayes_linear_observed,DS-RE-CEQ,2.2035543345726136,0.1407971335256044,162
+20,feature_bayes_linear_observed,Olmix loglinear,1.8956955821945052,0.058234514718466635,79
+40,feature_bayes_linear_observed,DS-RE-CEQ,2.1056404802512745,0.01354164091041854,162
+40,feature_bayes_linear_observed,Olmix loglinear,1.724453714171367,0.01354164091041854,79
+60,feature_bayes_linear_observed,DS-RE-CEQ,2.147831860122681,0.01354164091041854,162
+60,feature_bayes_linear_observed,Olmix loglinear,1.3063060989103463,0.29648346451222984,79
+80,feature_bayes_linear_observed,DS-RE-CEQ,2.2160435630549142,0.1591279989617651,162
+80,feature_bayes_linear_observed,Olmix loglinear,0.696114480834475,0.06382204965848182,79
+100,feature_bayes_linear_observed,DS-RE-CEQ,2.1945516320674128,0.0748807110548011,162
+100,feature_bayes_linear_observed,Olmix loglinear,1.9962875163584097,0.1407971335256044,79
+120,feature_bayes_linear_observed,DS-RE-CEQ,2.0806810512081313,0.16011201126543773,162
+120,feature_bayes_linear_observed,Olmix loglinear,2.1065745035004526,0.058234514718466635,79
+140,feature_bayes_linear_observed,DS-RE-CEQ,2.179288450210718,0.2879226482109787,162
+140,feature_bayes_linear_observed,Olmix loglinear,1.4011395932653823,0.2144031498007979,79
+160,feature_bayes_linear_observed,DS-RE-CEQ,2.1650576248120834,0.24579444089617297,162
+160,feature_bayes_linear_observed,Olmix loglinear,2.071176476369083,0.01354164091041854,79
+180,feature_bayes_linear_observed,DS-RE-CEQ,2.1968623774730585,0.0748807110548011,162
+180,feature_bayes_linear_observed,Olmix loglinear,2.231221398232974,0.16011201126543773,79
+200,feature_bayes_linear_observed,DS-RE-CEQ,2.1255578054308524,0.19519025852069083,162
+200,feature_bayes_linear_observed,Olmix loglinear,2.1460135930483406,0.18830600501017702,79
+220,feature_bayes_linear_observed,DS-RE-CEQ,2.1569562366236092,0.07864738656205095,162
+220,feature_bayes_linear_observed,Olmix loglinear,1.7632332789335325,0.16011201126543773,79
+240,feature_bayes_linear_observed,DS-RE-CEQ,2.173104267366857,0.07864738656205095,162
+240,feature_bayes_linear_observed,Olmix loglinear,2.234105739012896,0.16011201126543773,79

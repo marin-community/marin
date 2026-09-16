@@ -1,0 +1,42 @@
+{
+  "uncheatable_eval/wikipedia_english": {
+    "examples": 335,
+    "tokens": 685745,
+    "bytes": 2492578
+  },
+  "uncheatable_eval/github_python": {
+    "examples": 630,
+    "tokens": 1289610,
+    "bytes": 3887773
+  },
+  "uncheatable_eval/github_cpp": {
+    "examples": 649,
+    "tokens": 1328503,
+    "bytes": 3595778
+  },
+  "uncheatable_eval/bbc_news": {
+    "examples": 445,
+    "tokens": 910915,
+    "bytes": 3627591
+  },
+  "uncheatable_eval/arxiv_physics": {
+    "examples": 602,
+    "tokens": 1232294,
+    "bytes": 5009938
+  },
+  "uncheatable_eval/arxiv_computer_science": {
+    "examples": 536,
+    "tokens": 1097192,
+    "bytes": 4845846
+  },
+  "uncheatable_eval/ao3_english": {
+    "examples": 613,
+    "tokens": 1254811,
+    "bytes": 4800626
+  },
+  "paloma/dolma_100_programing_languages-tpp10": {
+    "examples": 5673,
+    "tokens": 11612631,
+    "bytes": 28741166
+  }
+}

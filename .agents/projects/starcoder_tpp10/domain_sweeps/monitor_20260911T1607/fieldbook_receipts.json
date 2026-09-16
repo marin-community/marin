@@ -1,0 +1,157 @@
+[
+  {
+    "attrs": {
+      "marin.callable_sha256": "3b6c83ee7e71b6fc9e6c6a8802c14144e459323435ac123748a76626cc4c98df",
+      "marin.priority": "batch"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T12:49:52Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m2888tdmr8vjmykx5t0792pg",
+    "launcher": "iris",
+    "name": "verified_training-15f44e0d",
+    "retry_of": "job_01m27nast1z1qt39qk5ww0sh4e",
+    "run_id": "run_01m27mprdmnq7716cf7as9t2zy",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-11T16:10:33Z"
+  },
+  {
+    "attrs": {},
+    "created_at": "2026-09-11T12:49:52Z",
+    "deleted_at": null,
+    "failure_reason": null,
+    "finished_at": null,
+    "job_id": "job_01m2888tdmr8vjmykx5t0792pg",
+    "role": "train",
+    "run_id": "run_01m27mprdmnq7716cf7as9t2zy",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-11T16:10:33Z"
+  },
+  {
+    "attrs": {},
+    "author": null,
+    "body": "Refinement remains 40/45 verified complete. Target p60/p65 tasks have fresh training logs near steps 6980/2300; p55 was natively preempted at 16:01:44 UTC and queued again, with saved temporary checkpoint metadata independently verified at step 10759. Target p80 and the remaining matched p80 proxy also remain queued. Zero runtime failures; both interactive CPU coordinators are live. Final FineMath matched-subset preparation is still CPU-capacity queued, so new-domain training has not started. The first task-event CLI diagnostic failed; one read-only retry succeeded and confirmed TaskRetryScheduled. No manual resubmission or scientific change. Notification suppressed for routine progress and queueing.",
+    "body_format": "markdown",
+    "created_at": "2026-09-11T16:10:33Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m28kr9qahabgb7dbw642yf0y",
+    "note_type": "checkpoint",
+    "resolved_at": null,
+    "status": "open",
+    "title": "Quiet monitor: two targets progressing, saved p55 checkpoint verified",
+    "updated_at": "2026-09-11T16:10:33Z"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789142867.0009584,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1607/live_status.json",
+      "fieldbook.local_size_at_capture": 4487
+    },
+    "content_hash": "sha256:19af272fd2637ec790703ed71c5057bdfa5c890e81332ba06e947b20dbe12b29",
+    "created_at": "2026-09-11T16:10:33Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28kra0vw65kph5bx283bsj1",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T16:10:33Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1607/live_status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789142938.4079585,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1607/p055_checkpoint.json",
+      "fieldbook.local_size_at_capture": 560
+    },
+    "content_hash": "sha256:3f1b0e3dd461ad63b3206190e75f9fe42ccebf50e0eb25337528167681818432",
+    "created_at": "2026-09-11T16:10:34Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28kra9jqjydsf7t8wzbm6qv",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T16:10:34Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1607/p055_checkpoint.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789143032.6675708,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1607/p055_latest_event.json",
+      "fieldbook.local_size_at_capture": 436
+    },
+    "content_hash": "sha256:1e5917c98dee56f6fb2bda81e84ce437dc52250a77355bade4090ade83350432",
+    "created_at": "2026-09-11T16:10:34Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28kraj8m4vqjztyfnmhfdhb",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T16:10:34Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1607/p055_latest_event.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789143032.6681006,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1607/status.json",
+      "fieldbook.local_size_at_capture": 2529
+    },
+    "content_hash": "sha256:f63cd42b1ba32f872286d624ac46c3cdae5943fff6b786c2a5d9b3f012717051",
+    "created_at": "2026-09-11T16:10:34Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28kravacy8agabycc8za2dg",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T16:10:34Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1607/status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789143032.6681864,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/post_submission_status.json",
+      "fieldbook.local_size_at_capture": 2529
+    },
+    "content_hash": "sha256:f63cd42b1ba32f872286d624ac46c3cdae5943fff6b786c2a5d9b3f012717051",
+    "created_at": "2026-09-11T11:22:41Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m283961sm11n8j3fxffszns6",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T16:10:35Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/post_submission_status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789143032.6685765,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md",
+      "fieldbook.local_size_at_capture": 8204
+    },
+    "content_hash": "sha256:e9cc1737e2121cb4c58da4932d8d2e6dff4b0f52d6632782f9f28a35d7c43081",
+    "created_at": "2026-09-11T11:20:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28353vf9qqwr0bn6rh2vaw5",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T16:10:35Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md"
+  }
+]

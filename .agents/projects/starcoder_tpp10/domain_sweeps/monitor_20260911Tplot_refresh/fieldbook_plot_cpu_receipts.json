@@ -1,0 +1,171 @@
+[
+  {
+    "attrs": {},
+    "author": null,
+    "body": "Current status at 20:24 UTC: Refinement remains 40/45 verified complete, and Figure 5 now includes all complete refinement averages (96 distinct artifacts total). Four target points and one matched seed remain absent; full refined common-grid regret is not available. The Wikipedia/FineMath survey remains 0/28 training, with only the final FineMath subset preparation pending. Investigation confirmed six healthy on-demand VMs at max_slices, 37 active held attempts, and no VM with both 2 CPU and 8 GiB free. The identical Wiki subset materializer peaked at 1.35 GiB; recommend 2 CPU/4 GiB for a subsequent in-scope prep recovery. No runtime/resource changes or resubmissions were made. Read monitor_20260911Tplot_refresh/ and the paper revision_notes/20260911_tpp10_refinement_update/CHANGES.md. Existing monitoring remains active.\n\n# StarCoder refinement update, 11 September 2026\n\nFigure 5 now includes the completed StarCoder refinement. The original colors, straight segments and observed-minimum stars are preserved; no fitted curve is overlaid.\n\n- Reverified 40/45 refinement endpoints against the archived plan: artifact fingerprints, exact child runtime receipts, final permanent checkpoint metadata, final PALOMA BPB and finished W&B summaries. Original pilot metrics are unchanged. The verified snapshot lists all 45 requests, including the five incomplete runs.\n- The figure uses 96 distinct completed artifacts (57 pilot + 39 refinement). One completed matched run at 80% is retained in the data but withheld from the plot because its second trainer seed is incomplete. Each plotted proxy point still averages both seeds. Target coverage is eight coordinates; unmatched twelve; matched subsets twelve/twelve/eleven.\n- Observed minima remain target 70%, unmatched 100%, and all matched subsets 50%. The quoted 0.0364 versus 0.0099 BPB target regrets remain explicitly tied to the original common seven-point grid. Four target refinements at 55/60/65/80% must finish before reporting refined common-grid regret.\n- The Figure 5 caption and Appendix B.1 use `\\placeholder{}` for missing results. Appendix B.1 records that refinement coordinates were chosen after looking at the pilot and descriptive fits. The governing outline and figure-caption inventory match these edits.\n- Added `experiments/domain_phase_mix/plot_starcoder_tpp10_refinement.py`, which verifies both original plans and requires complete seed pairs per plotted point. It has a GCS/W&B refresh mode and can regenerate the figure from the archived verification snapshot. Frozen training code, plan hashes, seeds, subset identities, and outputs are unchanged.\n\nValidation: lint, formatting, AST checks and focused Pyrefly all pass. The original seven-point analysis reproduces exactly. `./build.sh` succeeds, with no undefined references or overfull boxes; 43 pages, references still on page 10. The figure and affected pages 7 and 16 were rendered and visually checked. `before/` preserves the overwritten manuscript/figure/PDF; `data/` holds both plans, metrics, endpoint verification, plotted values, analysis, and the plotter. No commit or Overleaf push.\n\n## Operational finding for CC\n\nThe Wikipedia/FineMath survey remains at 0/28 training runs: five of six preparation caches are complete, and the final FineMath subset is blocked by CPU/RAM reservations in central1-a. The on-demand pool is at six VMs. No worker has both 2 CPU and 8 GiB free. Thirty-seven active attempts occupy these workers, including 24 runner Zephyr coordinators; the two TPP10 coordinators reserve 8 GiB each while peaking below 0.8 GiB.\n\nThe corresponding Wikipedia subset materializer peaked at 1.35 GiB. A 2 CPU/4 GiB prep request would fit currently available capacity; this is the recommended next operational change, with exact scientific recipes and completed caches preserved. FineMath's actual peak is unmeasured. No job cancellations, resubmissions, resource changes, or cluster changes were made. The user's priority budget is healthy. Echo publication was attempted but denied with HTTP 403; safe controller and Finelog evidence is recorded in Fieldbook and `domain_sweeps/monitor_20260911Tplot_refresh/`.\n",
+    "body_format": "markdown",
+    "created_at": "2026-09-11T20:27:51Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m292fe7wg4r9zkrdspqx4936",
+    "note_type": "handoff",
+    "resolved_at": null,
+    "status": "open",
+    "title": "Figure 5 refinement updated; CPU reservation bottleneck identified",
+    "updated_at": "2026-09-11T20:27:51Z"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789158422.8192332,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_refinement_update/CHANGES.md",
+      "fieldbook.local_size_at_capture": 3341
+    },
+    "content_hash": "sha256:d48d962ec7d4451b77cd86e276fb06d4e4ba0d150c2b71c88356c0603d940de6",
+    "created_at": "2026-09-11T20:27:52Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m292fehkwmdnw7fqn9fkhzjs",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T20:27:52Z",
+    "uri": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_refinement_update/CHANGES.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789158422.8236837,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_refinement_update/validation.json",
+      "fieldbook.local_size_at_capture": 1272
+    },
+    "content_hash": "sha256:cc8da4e2938f3ab220a379a985ffe8f0db2eab627c5cf7d632e6d09d6721fb7b",
+    "created_at": "2026-09-11T20:27:52Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m292fev50xpfh5g2kdd98qzg",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T20:27:52Z",
+    "uri": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_refinement_update/validation.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789158351.5008473,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_refinement_update/data/plotted_points.csv",
+      "fieldbook.local_size_at_capture": 2196
+    },
+    "content_hash": "sha256:1e7979394a6518ed1a95865822048ab8dc12b36faec9960a28ea32e829ca808c",
+    "created_at": "2026-09-11T20:27:52Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m292ff40yte2xs9sqf9na20t",
+    "job_id": null,
+    "run_id": null,
+    "type": "metric-table",
+    "updated_at": "2026-09-11T20:27:52Z",
+    "uri": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_refinement_update/data/plotted_points.csv"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789157906.4885204,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/refinement_results_20260911/verified_endpoints.json",
+      "fieldbook.local_size_at_capture": 49645
+    },
+    "content_hash": "sha256:e530d4627a9b7d550cc0c1590edd9a38dadd91228a0eb5c57297991cafce698e",
+    "created_at": "2026-09-11T20:27:53Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m292fffk8vvqshjje4km6v7g",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T20:27:53Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/refinement_results_20260911/verified_endpoints.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789158351.6723163,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/figures/epoch_matching_tpp10.pdf",
+      "fieldbook.local_size_at_capture": 23822
+    },
+    "content_hash": "sha256:0e82d55c8382aecb68e935e6ba9b30815ae989a53cc7072efbf34eab2762b03a",
+    "created_at": "2026-09-11T20:27:53Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m292ffrtgyj71bfwxyfz6f4v",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T20:27:53Z",
+    "uri": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/figures/epoch_matching_tpp10.pdf"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789158422.8242614,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md",
+      "fieldbook.local_size_at_capture": 8208
+    },
+    "content_hash": "sha256:e331949e52765667cfcc4783ff57558c08a3521752b94e61e632e5a1b7de2d39",
+    "created_at": "2026-09-11T11:20:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28353vf9qqwr0bn6rh2vaw5",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T20:27:53Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789158422.8238893,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/CC_CHANGES.md",
+      "fieldbook.local_size_at_capture": 15598
+    },
+    "content_hash": "sha256:20eacb602a171e1e89667fb0b65c55e2055312f5a6c034f53dbd749124b07031",
+    "created_at": "2026-09-11T11:20:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28353jzk1j9e9e0yxzpthww",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T20:27:54Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/CC_CHANGES.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789158166.4479854,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911Tplot_refresh/tpp10_cpu_held_attempts.csv",
+      "fieldbook.local_size_at_capture": 6661
+    },
+    "content_hash": "sha256:0ac4f606e08bda30d97bf9c8ab6d690bc5132c9fced504ad59476acffff82391",
+    "created_at": "2026-09-11T20:27:54Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m292fgkztnpecs46bp9npqhd",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T20:27:54Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911Tplot_refresh/tpp10_cpu_held_attempts.csv"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789158237.9050193,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911Tplot_refresh/tpp10_prep_memory.jsonl",
+      "fieldbook.local_size_at_capture": 885
+    },
+    "content_hash": "sha256:e643e23adacac1c2afc0ecffb35b23944279a6c17d40df7fa3a3fa58b983072b",
+    "created_at": "2026-09-11T20:27:54Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m292fgwn2jd5mm5g3tesye2y",
+    "job_id": null,
+    "run_id": null,
+    "type": "metric-table",
+    "updated_at": "2026-09-11T20:27:54Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911Tplot_refresh/tpp10_prep_memory.jsonl"
+  }
+]

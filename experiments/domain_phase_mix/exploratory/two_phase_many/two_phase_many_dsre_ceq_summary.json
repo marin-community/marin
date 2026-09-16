@@ -1,0 +1,159 @@
+{
+  "dsre_ceq": {
+    "n_params": 162,
+    "predicted_bpb": 2.178406044342455,
+    "r2": 0.062362306668544365,
+    "regret_at_1": 0.11463726980587552,
+    "rmse": 0.08843303071911154,
+    "spearman": 0.2569237313147797,
+    "top_phase_weights": {
+      "phase_0": [
+        {
+          "domain": "dolma3_wikipedia",
+          "weight": 0.0891178464019103
+        },
+        {
+          "domain": "dolma3_cc/food_and_dining_high",
+          "weight": 0.08159847811268145
+        },
+        {
+          "domain": "dolmino_synth_thinking",
+          "weight": 0.060989941403542657
+        },
+        {
+          "domain": "dolma3_cc/food_and_dining_low",
+          "weight": 0.049514214205175044
+        },
+        {
+          "domain": "dolma3_cc/literature_low",
+          "weight": 0.04906296785792682
+        },
+        {
+          "domain": "dolma3_cc/electronics_and_hardware_high",
+          "weight": 0.04618899625925157
+        },
+        {
+          "domain": "dolma3_cc/entertainment_high",
+          "weight": 0.04457863195648717
+        },
+        {
+          "domain": "dolma3_cc/history_and_geography_high",
+          "weight": 0.04355601206082373
+        }
+      ],
+      "phase_1": [
+        {
+          "domain": "dolmino_stem_heavy_crawl",
+          "weight": 0.13518260016745712
+        },
+        {
+          "domain": "dolmino_synth_qa",
+          "weight": 0.07629928077988876
+        },
+        {
+          "domain": "dolmino_synth_math",
+          "weight": 0.058803305261282475
+        },
+        {
+          "domain": "dolma3_cc/science_math_and_technology_high",
+          "weight": 0.05117633862388736
+        },
+        {
+          "domain": "dolma3_cc/electronics_and_hardware_low",
+          "weight": 0.05017226305003696
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_low",
+          "weight": 0.04603342700908985
+        },
+        {
+          "domain": "dolmino_olmocr_pdfs_hq",
+          "weight": 0.04153007118981492
+        },
+        {
+          "domain": "dolma3_cc/finance_and_business_low",
+          "weight": 0.0407190286051111
+        }
+      ]
+    }
+  },
+  "objective_metric": "lm_eval/mmlu_5shot/bpb",
+  "olmix_loglinear": {
+    "n_params": 79,
+    "predicted_bpb": 2.234105739012896,
+    "r2": -1.107664368884444,
+    "regret_at_1": 0.09565995981946482,
+    "rmse": 0.13258601175494253,
+    "spearman": -0.013666903939304498,
+    "top_phase_weights": {
+      "phase_0": [
+        {
+          "domain": "dolma3_cc/education_and_jobs_low",
+          "weight": 1.0
+        },
+        {
+          "domain": "dolma3_arxiv",
+          "weight": 0.0
+        },
+        {
+          "domain": "dolma3_cc/art_and_design_high",
+          "weight": 0.0
+        },
+        {
+          "domain": "dolma3_cc/art_and_design_low",
+          "weight": 0.0
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "weight": 0.0
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_low",
+          "weight": 0.0
+        },
+        {
+          "domain": "dolma3_cc/education_and_jobs_high",
+          "weight": 0.0
+        },
+        {
+          "domain": "dolma3_cc/electronics_and_hardware_high",
+          "weight": 0.0
+        }
+      ],
+      "phase_1": [
+        {
+          "domain": "dolmino_synth_qa",
+          "weight": 1.0
+        },
+        {
+          "domain": "dolma3_arxiv",
+          "weight": 0.0
+        },
+        {
+          "domain": "dolma3_cc/art_and_design_high",
+          "weight": 0.0
+        },
+        {
+          "domain": "dolma3_cc/art_and_design_low",
+          "weight": 0.0
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_high",
+          "weight": 0.0
+        },
+        {
+          "domain": "dolma3_cc/crime_and_law_low",
+          "weight": 0.0
+        },
+        {
+          "domain": "dolma3_cc/education_and_jobs_high",
+          "weight": 0.0
+        },
+        {
+          "domain": "dolma3_cc/education_and_jobs_low",
+          "weight": 0.0
+        }
+      ]
+    }
+  }
+}

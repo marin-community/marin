@@ -1,0 +1,29 @@
+{
+  "checked_at": "2026-09-11T12:25:47.798472+00:00",
+  "iris_checked_at": "2026-09-11T12:20:59+00:00",
+  "survey": {
+    "parent": "/calvinxu/tpp10-domain-sweeps",
+    "state": "running",
+    "wikipedia_raw": "verified complete",
+    "wikipedia_parent": "verified complete",
+    "wikipedia_matched": "verified complete",
+    "finemath_raw": "verified complete",
+    "finemath_verified_parts": 16,
+    "finemath_verified_tokens": 190316544,
+    "finemath_parent_job": "/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674",
+    "finemath_parent": "running",
+    "finemath_matched": "not completed",
+    "training_complete": 0,
+    "cache_validation": "monitor_20260911T1220/cache_validation.json"
+  },
+  "refinement": {
+    "parent": "/calvinxu/starcoder-tpp10-refinement-batch-recovery",
+    "state": "pending CPU capacity",
+    "retained_successes": 11,
+    "unfinished_points": 34,
+    "live_child_band_verified": false,
+    "artifact_successes_last_verified_at": "2026-09-11T11:41:00+00:00"
+  },
+  "repairs": [],
+  "manual_resubmissions": 0
+}

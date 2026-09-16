@@ -1,0 +1,348 @@
+{
+  "artifacts": {
+    "AUDIT.md": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789266890.8873467,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/AUDIT.md",
+        "fieldbook.local_size_at_capture": 5648
+      },
+      "content_hash": "sha256:331860de21e841159ffe48c59fcc111a8c3cc596525cbf8c89e62b709968b423",
+      "created_at": "2026-09-13T02:36:07Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2c9yf5b2nbvzxbgjbnxyta8",
+      "job_id": null,
+      "run_id": null,
+      "type": "validation-report",
+      "updated_at": "2026-09-13T02:36:07Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/AUDIT.md"
+    },
+    "consistent_bpb_audit.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789266768.505932,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/consistent_bpb_audit.json",
+        "fieldbook.local_size_at_capture": 10938
+      },
+      "content_hash": "sha256:8289b94633838cd312c88679f583cd2d1a6b048da9160d9d4ad12655cf47fbf1",
+      "created_at": "2026-09-13T02:36:08Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2c9yfe384d21hhtq83wd2z1",
+      "job_id": null,
+      "run_id": null,
+      "type": "validation-report",
+      "updated_at": "2026-09-13T02:36:08Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/consistent_bpb_audit.json"
+    },
+    "plot_audit.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789266768.7232926,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/plot_audit.json",
+        "fieldbook.local_size_at_capture": 59270
+      },
+      "content_hash": "sha256:bfd6ee4962b74491fb34f75ca6650d8f998b81aef5d739d787377f406860dd94",
+      "created_at": "2026-09-13T02:36:08Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2c9yfrkqvm41zpf47hvpsmy",
+      "job_id": null,
+      "run_id": null,
+      "type": "validation-report",
+      "updated_at": "2026-09-13T02:36:08Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/plot_audit.json"
+    },
+    "config_audit.md": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789266895.0977745,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/config_audit.md",
+        "fieldbook.local_size_at_capture": 9612
+      },
+      "content_hash": "sha256:0895edb75e338a3c605556f5ee3a2b318ab838d906a8c77e7982d071e53fa75c",
+      "created_at": "2026-09-13T02:36:08Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2c9yg1gpfse2kqme2vwtsb3",
+      "job_id": null,
+      "run_id": null,
+      "type": "validation-report",
+      "updated_at": "2026-09-13T02:36:08Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/config_audit.md"
+    },
+    "config_interactive_bundle_comparison.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789266732.111768,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/config_interactive_bundle_comparison.json",
+        "fieldbook.local_size_at_capture": 24446
+      },
+      "content_hash": "sha256:da02120737cbaeedc41622cad5a7ed58f5a0249cc0c6ecff1467c0f9340006ef",
+      "created_at": "2026-09-13T02:36:08Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2c9ygbqrsvmpb946yg4ry2s",
+      "job_id": null,
+      "run_id": null,
+      "type": "validation-report",
+      "updated_at": "2026-09-13T02:36:08Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/config_interactive_bundle_comparison.json"
+    },
+    "all_102_final_metric_records.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1789266666.4554112,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/all_102_final_metric_records.json",
+        "fieldbook.local_size_at_capture": 90836
+      },
+      "content_hash": "sha256:83b627a5b1799eb13bb6be6a7e5e02d7165eb60bdc1833fccd72316ed97f70eb",
+      "created_at": "2026-09-13T02:36:09Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "id": "art_01m2c9ygmv70nvyc2d6b6b0g39",
+      "job_id": null,
+      "run_id": null,
+      "type": "validation-report",
+      "updated_at": "2026-09-13T02:36:09Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/all_102_final_metric_records.json"
+    }
+  },
+  "validations": [
+    {
+      "attrs": {},
+      "check_name": "complete_grid_metric_schema_consistency_20260912",
+      "created_at": "2026-09-13T02:36:09Z",
+      "deleted_at": null,
+      "details": {},
+      "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "entity_type": "experiment",
+      "expected_value": "All combined scientific endpoints share the same BPB definition",
+      "id": "val_01m2c9ygydyscpk67s9bb2kjx7",
+      "measured_value": "97 legacy and5 schema2 endpoints; current paper jump,65% minimum and48.9% regret reduction invalid",
+      "session_id": "ses_01m2c9g34pvzw1pttngg7rzq2m",
+      "source_artifact_id": "art_01m2c9yf5b2nbvzxbgjbnxyta8",
+      "source_job_id": null,
+      "status": "fail",
+      "updated_at": "2026-09-13T02:36:09Z"
+    },
+    {
+      "attrs": {},
+      "check_name": "consistent_bpb_reconstruction_audit_20260912",
+      "created_at": "2026-09-13T02:36:09Z",
+      "deleted_at": null,
+      "details": {},
+      "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "entity_type": "experiment",
+      "expected_value": "Use saved token loss and exact population counts; agree with live corrected checkpoint audits and independent computation",
+      "id": "val_01m2c9yha9bx85gt330nqwbss1",
+      "measured_value": "All102 reconstructed; max schema2 error1.8511e-7; target minimum70%, matched50%, unmatched100%, regret reduction71.1795%; paper correction outstanding",
+      "session_id": "ses_01m2c9g34pvzw1pttngg7rzq2m",
+      "source_artifact_id": "art_01m2c9yfe384d21hhtq83wd2z1",
+      "source_job_id": null,
+      "status": "pass",
+      "updated_at": "2026-09-13T02:36:09Z"
+    }
+  ],
+  "handoff": {
+    "experiment": {
+      "attrs": {},
+      "created_at": "2026-09-09T15:43:40Z",
+      "deleted_at": null,
+      "description": "Build and review a new matched-total-TPP three-curve experiment with finite StarCoder pools and independently replicated matched subsets. Training is not submitted.",
+      "id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "idempotency_key": "starcoder-tpp10-20260909",
+      "name": "StarCoder TPP 10 epoch-matching experiment",
+      "status": "active",
+      "tags": [
+        "epoch-matching",
+        "starcoder",
+        "tpp10"
+      ],
+      "updated_at": "2026-09-09T15:43:40Z"
+    },
+    "freshness": {
+      "checkpoint_status": "current",
+      "drifted_artifact_count": 8,
+      "drifted_artifacts": [
+        {
+          "captured": {
+            "fieldbook.local_mtime_at_capture": 1789247426.2548494,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/verified_endpoints.json",
+            "fieldbook.local_size_at_capture": 49645
+          },
+          "drift_kind": "mtime_size",
+          "id": "art_01m2bqd01pe3xsmxdyz6hf1bf4",
+          "observed": {
+            "fieldbook.local_mtime_at_capture": 1789257407.9245584,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/verified_endpoints.json",
+            "fieldbook.local_size_at_capture": 52617
+          },
+          "suggested_action": "Run `fieldbook artifact refresh-local` or regenerate the artifact.",
+          "type": "validation-report",
+          "uri": ".agents/projects/starcoder_tpp10/live/completion_20260912/verified_endpoints.json"
+        },
+        {
+          "captured": {
+            "fieldbook.local_mtime_at_capture": 1789197600.2102072,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/RESULTS.md",
+            "fieldbook.local_size_at_capture": 2733
+          },
+          "drift_kind": "mtime_size",
+          "id": "art_01m2a7tvd476xtszk5b9j4ach9",
+          "observed": {
+            "fieldbook.local_mtime_at_capture": 1789199167.2443638,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/RESULTS.md",
+            "fieldbook.local_size_at_capture": 2769
+          },
+          "suggested_action": "Run `fieldbook artifact refresh-local` or regenerate the artifact.",
+          "type": "report",
+          "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/RESULTS.md"
+        },
+        {
+          "captured": {
+            "fieldbook.local_mtime_at_capture": 1789196024.2140787,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/spec.json",
+            "fieldbook.local_size_at_capture": 195719
+          },
+          "drift_kind": "mtime_size",
+          "id": "art_01m2a6h5x3013cyjxe1evy29vv",
+          "observed": {
+            "fieldbook.local_mtime_at_capture": 1789197223.1011345,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/spec.json",
+            "fieldbook.local_size_at_capture": 196201
+          },
+          "suggested_action": "Run `fieldbook artifact refresh-local` or regenerate the artifact.",
+          "type": "manifest",
+          "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/spec.json"
+        },
+        {
+          "captured": {
+            "fieldbook.local_mtime_at_capture": 1789169696.9805212,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/CC_CHANGES.md",
+            "fieldbook.local_size_at_capture": 19427
+          },
+          "drift_kind": "mtime_size",
+          "id": "art_01m28353jzk1j9e9e0yxzpthww",
+          "observed": {
+            "fieldbook.local_mtime_at_capture": 1789257949.782284,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/CC_CHANGES.md",
+            "fieldbook.local_size_at_capture": 51738
+          },
+          "suggested_action": "Run `fieldbook artifact refresh-local` or regenerate the artifact.",
+          "type": "report",
+          "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/CC_CHANGES.md"
+        },
+        {
+          "captured": {
+            "fieldbook.local_mtime_at_capture": 1789169696.9799418,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md",
+            "fieldbook.local_size_at_capture": 10854
+          },
+          "drift_kind": "mtime_size",
+          "id": "art_01m28353vf9qqwr0bn6rh2vaw5",
+          "observed": {
+            "fieldbook.local_mtime_at_capture": 1789257949.782038,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md",
+            "fieldbook.local_size_at_capture": 26610
+          },
+          "suggested_action": "Run `fieldbook artifact refresh-local` or regenerate the artifact.",
+          "type": "report",
+          "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md"
+        },
+        {
+          "captured": {
+            "fieldbook.local_mtime_at_capture": 1789158535.921285,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/scratch/20260911_tpp10_monitoring_state.json",
+            "fieldbook.local_size_at_capture": 6154
+          },
+          "drift_kind": "mtime_size",
+          "id": "art_01m292hdgkhfx8vyeny6h5m7g2",
+          "observed": {
+            "fieldbook.local_mtime_at_capture": 1789169696.9793184,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/scratch/20260911_tpp10_monitoring_state.json",
+            "fieldbook.local_size_at_capture": 8494
+          },
+          "suggested_action": "Run `fieldbook artifact refresh-local` or regenerate the artifact.",
+          "type": "manifest",
+          "uri": "/Users/calvinxu/Projects/Work/Marin/marin/scratch/20260911_tpp10_monitoring_state.json"
+        },
+        {
+          "captured": {
+            "fieldbook.local_mtime_at_capture": 1789158351.6723163,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/figures/epoch_matching_tpp10.pdf",
+            "fieldbook.local_size_at_capture": 23822
+          },
+          "drift_kind": "mtime_size",
+          "id": "art_01m292ffrtgyj71bfwxyfz6f4v",
+          "observed": {
+            "fieldbook.local_mtime_at_capture": 1789257605.9747539,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/figures/epoch_matching_tpp10.pdf",
+            "fieldbook.local_size_at_capture": 23350
+          },
+          "suggested_action": "Run `fieldbook artifact refresh-local` or regenerate the artifact.",
+          "type": "report",
+          "uri": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/figures/epoch_matching_tpp10.pdf"
+        },
+        {
+          "captured": {
+            "fieldbook.local_mtime_at_capture": 1789110782.6750214,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/CC_CHANGES.md",
+            "fieldbook.local_size_at_capture": 24540
+          },
+          "drift_kind": "mtime_size",
+          "id": "art_01m23h40esv05vv0jnhh3m92p6",
+          "observed": {
+            "fieldbook.local_mtime_at_capture": 1789266891.361065,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/CC_CHANGES.md",
+            "fieldbook.local_size_at_capture": 37692
+          },
+          "suggested_action": "Run `fieldbook artifact refresh-local` or regenerate the artifact.",
+          "type": "report",
+          "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/CC_CHANGES.md"
+        }
+      ],
+      "handoff_status": "current",
+      "last_checkpoint_at": "2026-09-13T00:11:46Z",
+      "last_handoff_at": "2026-09-13T00:11:46Z",
+      "since_last_checkpoint_hours": 2.406781021388889,
+      "since_last_handoff_hours": 2.406781021388889,
+      "stale_validation_count": 0,
+      "stale_validations": []
+    },
+    "note": {
+      "attrs": {
+        "session_id": "ses_01m2c9g34pvzw1pttngg7rzq2m"
+      },
+      "author": null,
+      "body": "# StarCoder target-curve audit: mixed BPB definitions\n\nThe jump is a metric-comparability bug in the combined figure. The PDF faithfully plots its inputs, but those inputs mix 97 results from the old BPB calculation with five results from the corrected calculation. It is not evidence of a training-loss increase at 70% StarCoder. The reported 65% target minimum and 48.9% regret reduction must be replaced.\n\n## Evidence\n\nAll 102 final metric files were read afresh from the original GCS artifacts. The four resumed targets at 55%, 60%, 65% and 80%, and one matched-proxy 80% replicate (trainer 20260911, subset 20260914), contain `eval/bpb_schema_version=2`. The other 97 endpoints have the legacy calculation. Final steps and original run identities match the plans. Target W&B summaries agree with the saved metrics; the problem is their differing definitions.\n\n| Target StarCoder fraction | Plotted BPB | Consistent BPB | Saved token-average loss |\n| --- | ---: | ---: | ---: |\n| 50% | 0.794241 | 0.775667 | 1.330683 |\n| 55% | 0.770135 | 0.770135 | 1.321192 |\n| 60% | 0.769439 | 0.769439 | 1.319998 |\n| 65% | 0.766556 | 0.766556 | 1.315053 |\n| 70% | 0.784388 | 0.765565 | 1.313352 |\n| 80% | 0.770405 | 0.770405 | 1.321656 |\n| 90% | 0.798773 | 0.779286 | 1.336891 |\n| 100% | 0.820746 | 0.800619 | 1.373488 |\n\nThe old evaluator averaged per-batch BPB using token weights. The corrected evaluator divides total loss bits by total scored bytes. The saved token-average loss is unaffected by that correction and decreases through 70%, removing the apparent bump independently of any BPB reconstruction.\n\nThe original pilot, original refinement and batch-recovery bundles contain the same legacy evaluator. A bounded range read of the actual interactive recovery bundle proves it contains the corrected `eval.py`. Among Levanter, Marin, Haliax and Fray library sources, `eval.py` is the only changed source by ZIP CRC/size comparison; its full extracted hash matches the corrected source. The target W&B configuration comparison finds only the intended mixture weights and run/output identities changed. Model, optimizer, schedule, data caches, data seed and component shuffle keys agree.\n\nThe training guard at `experiments/domain_phase_mix/launch_starcoder_tpp10.py:44` omits `lib/levanter/src/levanter/eval.py` from its code pins. Its collector at line 239, and the refinement collector's `collect_endpoint`, check the metric name and final step without checking BPB schema. Consequently, the existing runtime receipts and W&B parity checks passed. The earlier independent arithmetic check also reproduced the mixed inputs without validating their semantics; its interpretation as a fully validated scientific figure was too strong.\n\n## Consistent reconstruction\n\nThe pinned PALOMA population has 5,673 examples, 11,612,631 scored tokens and 28,741,166 scored bytes. For every endpoint, corrected BPB is saved token-average loss multiplied by `11612631 / (28741166 * ln(2)) = 0.582909028651567`.\n\nThe counts hash matches three previously completed, live checkpoint audits. Their corrected TPU scores agree with reconstruction within 1.23e-6 BPB. All five newly logged schema-2 endpoints agree within 1.86e-7 BPB. Two independent calculations reproduce the corrected selections and regrets. No checkpoint retraining is needed to put these saved losses on the same scale.\n\n- Target measured minimum: **70%**, **0.765564524 BPB**. The 65% point is 0.000991735 BPB higher; one target seed does not establish a population-optimal fraction.\n- Each of the three matched subset means still selects **50%**; unmatched mean still selects **100%**.\n- Target excess at those selections: **0.010102816 BPB (+1.3197%)** matched and **0.035054281 BPB (+4.5789%)** unmatched.\n- Matched selection avoids **71.1795%** of unmatched excess loss. Absolute target-loss advantage is **0.024951465 BPB**.\n- One individual matched replicate's minimum changes from 80% to 55%; its subset's two-seed mean still selects 50%.\n\n## Correction required\n\nRebuild all five plotted curves and all selection/regret statistics from consistently defined BPB, preserving the original raw measurements separately. Update the figure, caption, main paragraph and current outline facts. Make the collector reject mixed metric definitions or explicitly normalize from saved token losses and frozen population counts. Include evaluator semantics/source provenance in future runtime checks; do not rewrite the original frozen training plans.\n\nThis audit leaves the manuscript, paper inputs and scientific source code unchanged. `target_metric_schema_audit.png` is a diagnostic comparison, not the published figure. No training or evaluation jobs were submitted. CC should treat the previous complete-grid figure's numerical claims as superseded by this audit until the correction is applied.\n\n## Reproduction and records\n\nRun `uv run .agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/analyze_metric_schemas.py` from the Marin repository. It verifies input hashes and prior checkpoint audits, then writes `consistent_bpb_audit.json`, `consistent_bpb_audit.csv` and the diagnostic PNG. `plot_audit.json` contains an independent check of PDF coordinates, all 102 input mappings and the recomputed results. `config_interactive_bundle_comparison.json` and `config_audit.md` record the cross-bundle and configuration checks. Raw JSONL metrics and the three previous checkpoint audit receipts remain alongside them.\n\nEcho prior-work lookup returned HTTP 403; the standalone incident record could not be published there. Fieldbook and the experiment's CC change list carry the finding.\n\n## Freshness\n\n- Handoff status: `current`\n- Drifted artifacts: 8\n- Stale validations: 0\n\n### Drifted Artifacts\n- `art_01m2bqd01pe3xsmxdyz6hf1bf4` .agents/projects/starcoder_tpp10/live/completion_20260912/verified_endpoints.json (mtime_size)\n- `art_01m2a7tvd476xtszk5b9j4ach9` /Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/RESULTS.md (mtime_size)\n- `art_01m2a6h5x3013cyjxe1evy29vv` /Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/spec.json (mtime_size)\n- `art_01m28353jzk1j9e9e0yxzpthww` /Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/CC_CHANGES.md (mtime_size)\n- `art_01m28353vf9qqwr0bn6rh2vaw5` /Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md (mtime_size)\n",
+      "body_format": "markdown",
+      "created_at": "2026-09-13T02:36:10Z",
+      "deleted_at": null,
+      "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "entity_type": "experiment",
+      "id": "note_01m2c9yht67h5yh4gar1j56mdk",
+      "note_type": "checkpoint",
+      "resolved_at": null,
+      "status": "open",
+      "title": "Experiment handoff",
+      "updated_at": "2026-09-13T02:36:10Z"
+    }
+  },
+  "session_end": {
+    "closed": true,
+    "marker_path": "/Users/calvinxu/Projects/Work/Marin/.fieldbook.session",
+    "marker_status": "removed",
+    "session": {
+      "agent": "codex",
+      "attrs": {},
+      "cwd": "/Users/calvinxu/Projects/Work/Marin/marin",
+      "ended_at": "2026-09-13T02:36:10Z",
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "git_branch": "calvin/swarm-olmo3-regmix-test",
+      "git_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "git_root": "/Users/calvinxu/Projects/Work/Marin/marin",
+      "git_worktree_dir": "/Users/calvinxu/Projects/Work/Marin/marin",
+      "id": "ses_01m2c9g34pvzw1pttngg7rzq2m",
+      "intent": "Audit target p70 discontinuity against pilot and refinement provenance",
+      "last_touch_at": "2026-09-13T02:36:10Z",
+      "ledger_id": "0db0b028-e7c7-4672-ba25-8fdf237da666",
+      "started_at": "2026-09-13T02:28:16Z"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "approved": true,
+  "reviewer": "User authorized the seven-coordinate pilot (Do that); Codex verified all calibration/canary endpoints and reviewed optimizer traces.",
+  "stage": "pilot",
+  "plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+  "cache_audit_sha256": "c9d4f9e7f7d8c15ddfd4db14ae83b05c191cd3c157bfa8c375d9b132464793e6",
+  "approved_at": "2026-09-10T22:52:09.450470Z",
+  "optimizer_review_sha256": "dd50826caf8a6e2139fb78bc942c8516ae77224d53b369ebe7feede7543eac4b",
+  "canary_plan_sha256": "4362a8b1b2e37d7ae73096f7658c5b3a79774288bf268f240fa4e49edd826b60",
+  "scope": "Only the seven-coordinate pilot: 57 cumulative primary artifacts, seven verified successes reused and 50 new jobs. Dense stage remains unreleased."
+}

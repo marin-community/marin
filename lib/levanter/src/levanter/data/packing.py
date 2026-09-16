@@ -237,7 +237,7 @@ def greedy_pack_prompt_completions(
     max_segments_per_example: int = 64,
 ) -> list[LmExample]:
     """
-    Greedy packing of prompt completions into LmExamples using [pack_documents][]
+    Greedy packing of prompt completions into CPU LmExamples using [pack_documents][].
     """
 
     def make_loss_weight(id, prompt_length):
@@ -273,7 +273,8 @@ def greedy_pack_prompt_completions(
         for doc_id, seq, prompt_len in zip(docs_in_pack, pack_sequences, pack_prompt_lengths):
             concat_ids.extend(seq.ids)
             concat_loss_weight.extend(make_loss_weight(seq.ids, prompt_len))
-            segment_ids.extend([doc_id] * len(seq.ids))
+            segment_id = seq.segment_id if seq.segment_id is not None else doc_id
+            segment_ids.extend([segment_id] * len(seq.ids))
 
         # Pad to max length
         pad_length = Pos.size - len(concat_ids)
@@ -290,11 +291,12 @@ def greedy_pack_prompt_completions(
             concat_loss_weight = concat_loss_weight[-Pos.size :]
             segment_ids = segment_ids[-Pos.size :]
 
-        # Create the LmExample
-        tokens = hax.named(np.array(concat_ids), Pos)
-        loss_weight = hax.named(np.array(concat_loss_weight), Pos)
-        segment_ids = hax.named(np.array(segment_ids), Pos)
-        attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
+        # Stage on CPU, like SequencePacker.pack, before background batching and accelerator dispatch.
+        with local_cpu_mesh():
+            tokens = hax.named(np.array(concat_ids), Pos)
+            loss_weight = hax.named(np.array(concat_loss_weight), Pos)
+            segment_ids = hax.named(np.array(segment_ids), Pos)
+            attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
 
         out.append(LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask))
 

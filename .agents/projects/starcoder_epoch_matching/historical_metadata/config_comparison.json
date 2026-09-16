@@ -1,0 +1,137 @@
+{
+  "checks": {
+    "model_exact": true,
+    "optimizer_exact": true,
+    "tied_weight_schedule_exact": true,
+    "seven_source_cache_paths_exact": true,
+    "target_steps_exact": true,
+    "target_batch_exact": true,
+    "target_seq_len_exact": true,
+    "target_seed_exact": true,
+    "parent_cap_exact": true,
+    "shuffle_exact": true,
+    "global_epoch_slicing_disabled": true,
+    "validation_limit_unlimited": true,
+    "packing_mask_explicit": true,
+    "native_final_metric_exact": true
+  },
+  "parent_vs_worker_differences": [
+    [
+      "/trainer/mp/output_dtype",
+      {
+        "__dtype__": "bfloat16"
+      },
+      "jax.numpy.bfloat16"
+    ],
+    [
+      "/trainer/mp/param_dtype",
+      {
+        "__dtype__": "float32"
+      },
+      "jax.numpy.float32"
+    ],
+    [
+      "/trainer/mp/compute_dtype",
+      {
+        "__dtype__": "bfloat16"
+      },
+      "jax.numpy.bfloat16"
+    ],
+    [
+      "/trainer/per_device_eval_parallelism",
+      -1,
+      32
+    ],
+    [
+      "/trainer/checkpointer/append_run_id_to_base_path",
+      true,
+      false
+    ],
+    [
+      "/trainer/checkpointer/temporary_base_path",
+      null,
+      "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_wsd80_dense_support_surfaces_20260808/dss_r3d28260_m100_c109_s0711/2026.07.11/checkpoints"
+    ],
+    [
+      "/trainer/checkpointer/save_interval",
+      {
+        "days": 0,
+        "microseconds": 0,
+        "seconds": 600
+      },
+      "0:10:00"
+    ],
+    [
+      "/trainer/checkpointer/base_path",
+      "checkpoints/",
+      "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_wsd80_dense_support_surfaces_20260808/dss_r3d28260_m100_c109_s0711/2026.07.11/checkpoints"
+    ],
+    [
+      "/trainer/require_accelerator",
+      null,
+      true
+    ],
+    [
+      "/trainer/per_device_parallelism",
+      -1,
+      32
+    ],
+    [
+      "/data/auto_build_caches",
+      true,
+      false
+    ],
+    [
+      "/hf_save_path",
+      null,
+      "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_wsd80_dense_support_surfaces_20260808/dss_r3d28260_m100_c109_s0711/2026.07.11/hf"
+    ]
+  ],
+  "metric": {
+    "key": "eval/paloma/dolma_100_programing_languages-llama3/bpb",
+    "step": 28259,
+    "value": 0.7880429029464722,
+    "rows": 30
+  },
+  "component_order_from_launcher": [
+    "nemotron_cc/hq_actual-llama3",
+    "nemotron_cc/hq_synth-llama3",
+    "nemotron_cc/medium_high-llama3",
+    "nemotron_cc/medium-llama3",
+    "nemotron_cc/medium_low-llama3",
+    "nemotron_cc/low_actual-llama3",
+    "dolma/starcoder"
+  ],
+  "data_component_keys_in_canonical_record": [
+    "dolma/starcoder",
+    "nemotron_cc/hq_actual-llama3",
+    "nemotron_cc/hq_synth-llama3",
+    "nemotron_cc/low_actual-llama3",
+    "nemotron_cc/medium-llama3",
+    "nemotron_cc/medium_high-llama3",
+    "nemotron_cc/medium_low-llama3",
+    "paloma/4chan-llama3",
+    "paloma/c4_100_domains-llama3",
+    "paloma/c4_en-llama3",
+    "paloma/dolma-v1_5-llama3",
+    "paloma/dolma_100_programing_languages-llama3",
+    "paloma/dolma_100_subreddits-llama3",
+    "paloma/falcon-refinedweb-llama3",
+    "paloma/gab-llama3",
+    "paloma/m2d2_s2orc_unsplit-llama3",
+    "paloma/m2d2_wikipedia_unsplit-llama3",
+    "paloma/manosphere_meta_sep-llama3",
+    "paloma/mc4-llama3",
+    "paloma/ptb-llama3",
+    "paloma/redpajama-llama3",
+    "paloma/twitterAAE_HELM_fixed-llama3",
+    "paloma/wikitext_103-llama3",
+    "uncheatable_eval/ao3_english-llama3",
+    "uncheatable_eval/arxiv_computer_science-llama3",
+    "uncheatable_eval/arxiv_physics-llama3",
+    "uncheatable_eval/bbc_news-llama3",
+    "uncheatable_eval/github_cpp-llama3",
+    "uncheatable_eval/github_python-llama3",
+    "uncheatable_eval/wikipedia_english-llama3"
+  ]
+}

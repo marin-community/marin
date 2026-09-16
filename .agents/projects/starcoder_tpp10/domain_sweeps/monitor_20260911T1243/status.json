@@ -1,0 +1,29 @@
+{
+  "checked_at": "2026-09-11T12:48:47.151874+00:00",
+  "iris_checked_at": "2026-09-11T12:45:46+00:00",
+  "survey": {
+    "parent": "/calvinxu/tpp10-domain-sweeps",
+    "state": "running",
+    "wikipedia_raw": "verified complete",
+    "wikipedia_parent": "verified complete",
+    "wikipedia_matched": "verified complete",
+    "finemath_raw": "verified complete",
+    "finemath_parent": "verified complete",
+    "finemath_matched_job": "/calvinxu/tpp10-domain-sweeps/prepare_subset-1430c306",
+    "finemath_matched": "pending CPU capacity",
+    "training_complete": 0
+  },
+  "refinement": {
+    "parent": "/calvinxu/starcoder-tpp10-refinement-batch-recovery",
+    "state": "coordinator running; all 34 unfinished children pending TPU capacity",
+    "retained_successes": 11,
+    "unfinished_points": 34,
+    "live_child_band_verified": true,
+    "batch_children": 34,
+    "all_callable_hashes_match_original_jobs": true,
+    "completed_recipes_omitted": 11,
+    "artifact_successes_last_verified_at": "2026-09-11T12:45:40+00:00"
+  },
+  "repairs": [],
+  "manual_resubmissions": 0
+}

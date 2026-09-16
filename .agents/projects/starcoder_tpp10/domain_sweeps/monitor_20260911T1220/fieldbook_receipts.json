@@ -1,0 +1,196 @@
+[
+  {
+    "attrs": {
+      "marin.stage": "wikipedia_parent_materialization"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T12:04:28Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m285npvzrz2xd4rzfr2yp4rb",
+    "launcher": "iris",
+    "name": "prepare_parent-219e0a84",
+    "retry_of": null,
+    "run_id": null,
+    "started_at": null,
+    "status": "succeeded",
+    "updated_at": "2026-09-11T12:27:07Z"
+  },
+  {
+    "attrs": {
+      "marin.parent": "/calvinxu/tpp10-domain-sweeps",
+      "marin.stage": "domain_cache_preparation"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T11:21:51Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m2837p0rkj23kh8c5y0pt3pe",
+    "launcher": "iris",
+    "name": "prepare_parquet-ebd457af",
+    "retry_of": null,
+    "run_id": null,
+    "started_at": null,
+    "status": "succeeded",
+    "updated_at": "2026-09-11T12:27:07Z"
+  },
+  {
+    "attrs": {
+      "marin.stage": "wikipedia_matched_materialization"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T12:27:08Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-domain-sweeps/prepare_subset-73a9f18a",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m286z6gqveybs5kq4b114m1k",
+    "launcher": "iris",
+    "name": "prepare_subset-73a9f18a",
+    "retry_of": null,
+    "run_id": null,
+    "started_at": null,
+    "status": "succeeded",
+    "updated_at": "2026-09-11T12:27:08Z"
+  },
+  {
+    "attrs": {
+      "marin.stage": "finemath_parent_materialization"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T12:27:08Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m286z6zrjyg6553sj1pz95g5",
+    "launcher": "iris",
+    "name": "prepare_parent-49ac5674",
+    "retry_of": null,
+    "run_id": null,
+    "started_at": null,
+    "status": "running",
+    "updated_at": "2026-09-11T12:27:08Z"
+  },
+  {
+    "attrs": {},
+    "author": null,
+    "body": "Wikipedia raw, parent and matched caches are complete and independently checked: 190,316,544 parent tokens and 10,485,760 matched tokens, exact recipe/source-generation receipts, design, tokenizer metadata, finished cache ledgers, fingerprints and frozen index hashes. FineMath resumed automatically after scheduler preemption and completed all 16 raw parts, totaling 190,316,544 tokens; all part source-generation receipts and quotas match. Its parent materialization is running as prepare_parent-49ac5674. No new-domain training has started. Refinement recovery remains CPU-capacity queued, with 11 verified completed training artifacts retained and 34 unfinished. Actual refinement child BATCH priority remains to be checked after dispatch. No manual restart, duplicate submission, scientific change, or cluster change was needed.",
+    "body_format": "markdown",
+    "created_at": "2026-09-11T12:27:09Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m286z7bexsscgkwm0ck8b533",
+    "note_type": "checkpoint",
+    "resolved_at": null,
+    "status": "open",
+    "title": "Wikipedia caches and FineMath raw pool verified complete",
+    "updated_at": "2026-09-11T12:27:09Z"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789129547.7995014,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1220/cache_validation.json",
+      "fieldbook.local_size_at_capture": 3891
+    },
+    "content_hash": "sha256:7f3809c1f9031cba1b0c47d9b78b759c9883c54524a897ba0d88b843186afb42",
+    "created_at": "2026-09-11T12:27:09Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m286z7m3g6ybv9w62gtsv9q2",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T12:27:09Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1220/cache_validation.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789129598.2626977,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1220/status.json",
+      "fieldbook.local_size_at_capture": 1048
+    },
+    "content_hash": "sha256:994e532718b51fcd77e88056db6ed73dfc623aa60c979f4b0e7d9035d9e2a5ee",
+    "created_at": "2026-09-11T12:27:09Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m286z820gw7myj9308q58531",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T12:27:09Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1220/status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789129598.2628775,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/post_submission_status.json",
+      "fieldbook.local_size_at_capture": 1048
+    },
+    "content_hash": "sha256:994e532718b51fcd77e88056db6ed73dfc623aa60c979f4b0e7d9035d9e2a5ee",
+    "created_at": "2026-09-11T11:22:41Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m283961sm11n8j3fxffszns6",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T12:27:10Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/post_submission_status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789129598.2631936,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md",
+      "fieldbook.local_size_at_capture": 8272
+    },
+    "content_hash": "sha256:420a318ac4ddf9f573888d9b25a396c8e320e10705fdf54effdd23a1343469d1",
+    "created_at": "2026-09-11T11:20:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28353vf9qqwr0bn6rh2vaw5",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T12:27:10Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789129598.2633135,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/CC_CHANGES.md",
+      "fieldbook.local_size_at_capture": 6439
+    },
+    "content_hash": "sha256:ba0537ffb6d51d92740b8a3755111074cb835419400c5141e544efee30dca269",
+    "created_at": "2026-09-11T11:20:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28353jzk1j9e9e0yxzpthww",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T12:27:10Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/CC_CHANGES.md"
+  }
+]

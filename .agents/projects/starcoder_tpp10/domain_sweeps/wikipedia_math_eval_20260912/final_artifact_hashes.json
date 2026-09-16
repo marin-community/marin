@@ -1,0 +1,55 @@
+{
+  "spec_sha256": "12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51",
+  "artifacts": [
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/analyze_tpp10_wikipedia_math.py",
+      "sha256": "fa837d0b8f27f40f6f15139ee17c625b102d3f1167b587a4ca0fe0868507e68f",
+      "bytes": 22880
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/receipt.json",
+      "sha256": "63fd3294d13801a20c693c34b096fbe652464e562da86ee6ca91183279790da7",
+      "bytes": 296800
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/summary.json",
+      "sha256": "36ae5c1c8889489b6a7159b7187c0a6f83eaac8e17b4c847a496b20ac5985d04",
+      "bytes": 9517
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/points.csv",
+      "sha256": "a99b7ccd8c5b7de826bfbdfaec7518c8cba7e827d030c9f5754540efdbc7a020",
+      "bytes": 61440
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_comparison.png",
+      "sha256": "b19574bb815cc555e74d34b86f64b05fd4aeaf4e788b49575b39afb5a10e6e11",
+      "bytes": 91052
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_comparison.pdf",
+      "sha256": "c43ead0bc4469021c65e485644ee2f586c18caae8725a1e15a5afc933fdfb053",
+      "bytes": 305042
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_valley_detail.png",
+      "sha256": "9da9bbb1d850affcc145bc3a0ed11e2c5cc0418ce98e5b7771a80d3e9a1132bc",
+      "bytes": 119426
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_valley_detail.pdf",
+      "sha256": "aa5e296df728d1d98a20c12e8cf46753d02ada04db521fe48cc90f744fce7be0",
+      "bytes": 303823
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_log_scale.png",
+      "sha256": "c82da6d754d8b9c353c5da2d2da2c10e1f5a2740fb0704b542aa1b573ec6b953",
+      "bytes": 110752
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_math_eval_20260912/results/12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51/math_likelihood_log_scale.pdf",
+      "sha256": "24d9f181985e482a21ae572e98130e6db2f31babeba009504a876320e3e17565",
+      "bytes": 303732
+    }
+  ]
+}

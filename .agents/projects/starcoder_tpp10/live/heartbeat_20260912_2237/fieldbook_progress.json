@@ -1,0 +1,311 @@
+{
+  "artifact": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789252775.623533,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/heartbeat_20260912_2237/remaining_artifact_audit.json",
+      "fieldbook.local_size_at_capture": 10331
+    },
+    "content_hash": "sha256:5bc71c6c30cc67031418a507fc981c28079b030293b3e1cc1f6652773076fc2a",
+    "created_at": "2026-09-12T22:41:45Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2bwhayn2jeyzs6w0tsz7yd4",
+    "job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-12T22:41:45Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/heartbeat_20260912_2237/remaining_artifact_audit.json"
+  },
+  "records": [
+    {
+      "name": "tpp10_target_p055_s20260910",
+      "job": {
+        "attrs": {
+          "scheduling.priority": "interactive",
+          "training.plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40"
+        },
+        "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+        "code_dirty": true,
+        "command": null,
+        "created_at": "2026-09-12T21:40:49Z",
+        "deleted_at": null,
+        "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+        "external_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513",
+        "external_system": "iris",
+        "failure_reason": null,
+        "finished_at": null,
+        "id": "job_01m2bs1rg7z6kcb066qpeam8ak",
+        "launcher": "iris/fray",
+        "name": "Interactive refinement verified_training-98a32513",
+        "retry_of": null,
+        "run_id": null,
+        "started_at": null,
+        "status": "succeeded",
+        "updated_at": "2026-09-12T22:41:46Z"
+      },
+      "run_link": {
+        "attrs": {},
+        "created_at": "2026-09-12T22:41:46Z",
+        "deleted_at": null,
+        "failure_reason": null,
+        "finished_at": null,
+        "job_id": "job_01m2bs1rg7z6kcb066qpeam8ak",
+        "role": "train",
+        "run_id": "run_01m27mprdmnq7716cf7as9t2zy",
+        "started_at": null,
+        "status": "succeeded",
+        "updated_at": "2026-09-12T22:41:46Z"
+      },
+      "metric": {
+        "created_at": "2026-09-12T22:41:47Z",
+        "deleted_at": null,
+        "id": "met_01m2bwhc24qp2r4bz1j6art1hd",
+        "metric_name": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+        "run_id": "run_01m27mprdmnq7716cf7as9t2zy",
+        "source_artifact_id": "art_01m2bwhayn2jeyzs6w0tsz7yd4",
+        "source_job_id": "job_01m2bs1rg7z6kcb066qpeam8ak",
+        "split": "eval",
+        "step": "11490",
+        "updated_at": "2026-09-12T22:41:47Z",
+        "value": 0.7701349258422852
+      },
+      "validation": {
+        "attrs": {},
+        "check_name": "refinement_final_checkpoint_runtime_wandb_20260912",
+        "created_at": "2026-09-12T22:41:47Z",
+        "deleted_at": null,
+        "details": {},
+        "entity_id": "run_01m27mprdmnq7716cf7as9t2zy",
+        "entity_type": "run",
+        "expected_value": "SUCCESS, exact plan fingerprint, permanent final checkpoint, frozen runtime and finished W&B metric parity",
+        "id": "val_01m2bwhcaatcrx0f3btrm7v536",
+        "measured_value": "BPB 0.7701349258422852 at final step 11490; all checks passed",
+        "session_id": "ses_01m2bwcdcayxkntrnwt5d1schd",
+        "source_artifact_id": "art_01m2bwhayn2jeyzs6w0tsz7yd4",
+        "source_job_id": "job_01m2bs1rg7z6kcb066qpeam8ak",
+        "status": "pass",
+        "updated_at": "2026-09-12T22:41:47Z"
+      }
+    },
+    {
+      "name": "tpp10_target_p060_s20260910",
+      "job": {
+        "attrs": {
+          "scheduling.priority": "interactive",
+          "training.plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40"
+        },
+        "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+        "code_dirty": true,
+        "command": null,
+        "created_at": "2026-09-12T21:40:49Z",
+        "deleted_at": null,
+        "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+        "external_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c",
+        "external_system": "iris",
+        "failure_reason": null,
+        "finished_at": null,
+        "id": "job_01m2bs1qvm9qwf12mz56yvkrs4",
+        "launcher": "iris/fray",
+        "name": "Interactive refinement verified_training-449bcb9c",
+        "retry_of": null,
+        "run_id": null,
+        "started_at": null,
+        "status": "succeeded",
+        "updated_at": "2026-09-12T22:41:47Z"
+      },
+      "run_link": {
+        "attrs": {},
+        "created_at": "2026-09-12T22:41:47Z",
+        "deleted_at": null,
+        "failure_reason": null,
+        "finished_at": null,
+        "job_id": "job_01m2bs1qvm9qwf12mz56yvkrs4",
+        "role": "train",
+        "run_id": "run_01m27mpv1b6nrwtved53w0qbdd",
+        "started_at": null,
+        "status": "succeeded",
+        "updated_at": "2026-09-12T22:41:47Z"
+      },
+      "metric": {
+        "created_at": "2026-09-12T22:41:48Z",
+        "deleted_at": null,
+        "id": "met_01m2bwhdc0gbmgva97e6s86dy1",
+        "metric_name": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+        "run_id": "run_01m27mpv1b6nrwtved53w0qbdd",
+        "source_artifact_id": "art_01m2bwhayn2jeyzs6w0tsz7yd4",
+        "source_job_id": "job_01m2bs1qvm9qwf12mz56yvkrs4",
+        "split": "eval",
+        "step": "11490",
+        "updated_at": "2026-09-12T22:41:48Z",
+        "value": 0.7694385051727295
+      },
+      "validation": {
+        "attrs": {},
+        "check_name": "refinement_final_checkpoint_runtime_wandb_20260912",
+        "created_at": "2026-09-12T22:41:48Z",
+        "deleted_at": null,
+        "details": {},
+        "entity_id": "run_01m27mpv1b6nrwtved53w0qbdd",
+        "entity_type": "run",
+        "expected_value": "SUCCESS, exact plan fingerprint, permanent final checkpoint, frozen runtime and finished W&B metric parity",
+        "id": "val_01m2bwhdmvrmnfq77654rf9bh3",
+        "measured_value": "BPB 0.7694385051727295 at final step 11490; all checks passed",
+        "session_id": "ses_01m2bwcdcayxkntrnwt5d1schd",
+        "source_artifact_id": "art_01m2bwhayn2jeyzs6w0tsz7yd4",
+        "source_job_id": "job_01m2bs1qvm9qwf12mz56yvkrs4",
+        "status": "pass",
+        "updated_at": "2026-09-12T22:41:48Z"
+      }
+    },
+    {
+      "name": "tpp10_target_p065_s20260910",
+      "job": {
+        "attrs": {
+          "scheduling.priority": "interactive",
+          "training.plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40"
+        },
+        "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+        "code_dirty": true,
+        "command": null,
+        "created_at": "2026-09-12T21:40:50Z",
+        "deleted_at": null,
+        "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+        "external_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373",
+        "external_system": "iris",
+        "failure_reason": null,
+        "finished_at": null,
+        "id": "job_01m2bs1rthbbexg1pnh7nf611p",
+        "launcher": "iris/fray",
+        "name": "Interactive refinement verified_training-bafee373",
+        "retry_of": null,
+        "run_id": null,
+        "started_at": null,
+        "status": "running",
+        "updated_at": "2026-09-12T22:41:48Z"
+      },
+      "run_link": {
+        "attrs": {},
+        "created_at": "2026-09-12T22:41:49Z",
+        "deleted_at": null,
+        "failure_reason": null,
+        "finished_at": null,
+        "job_id": "job_01m2bs1rthbbexg1pnh7nf611p",
+        "role": "train",
+        "run_id": "run_01m27mpxta54khxb3s64prvpbb",
+        "started_at": null,
+        "status": "running",
+        "updated_at": "2026-09-12T22:41:49Z"
+      }
+    },
+    {
+      "name": "tpp10_target_p080_s20260910",
+      "job": {
+        "attrs": {
+          "scheduling.priority": "interactive",
+          "training.plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40"
+        },
+        "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+        "code_dirty": true,
+        "command": null,
+        "created_at": "2026-09-12T21:40:49Z",
+        "deleted_at": null,
+        "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+        "external_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0",
+        "external_system": "iris",
+        "failure_reason": null,
+        "finished_at": null,
+        "id": "job_01m2bs1r6bzqvfr24qk91p46hs",
+        "launcher": "iris/fray",
+        "name": "Interactive refinement verified_training-869fe9a0",
+        "retry_of": null,
+        "run_id": null,
+        "started_at": null,
+        "status": "running",
+        "updated_at": "2026-09-12T22:41:49Z"
+      },
+      "run_link": {
+        "attrs": {},
+        "created_at": "2026-09-12T22:41:50Z",
+        "deleted_at": null,
+        "failure_reason": null,
+        "finished_at": null,
+        "job_id": "job_01m2bs1r6bzqvfr24qk91p46hs",
+        "role": "train",
+        "run_id": "run_01m27mq0dnp8akz8698eszx60r",
+        "started_at": null,
+        "status": "running",
+        "updated_at": "2026-09-12T22:41:50Z"
+      }
+    },
+    {
+      "name": "tpp10_matched_p080_s20260911_d20260914",
+      "job": {
+        "attrs": {
+          "scheduling.priority": "interactive",
+          "training.plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40"
+        },
+        "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+        "code_dirty": true,
+        "command": null,
+        "created_at": "2026-09-12T21:40:48Z",
+        "deleted_at": null,
+        "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+        "external_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad",
+        "external_system": "iris",
+        "failure_reason": null,
+        "finished_at": null,
+        "id": "job_01m2bs1qh4qq0w3ybewndxth2f",
+        "launcher": "iris/fray",
+        "name": "Interactive refinement verified_training-26acd1ad",
+        "retry_of": null,
+        "run_id": null,
+        "started_at": null,
+        "status": "succeeded",
+        "updated_at": "2026-09-12T22:41:50Z"
+      },
+      "run_link": {
+        "attrs": {},
+        "created_at": "2026-09-12T22:41:50Z",
+        "deleted_at": null,
+        "failure_reason": null,
+        "finished_at": null,
+        "job_id": "job_01m2bs1qh4qq0w3ybewndxth2f",
+        "role": "train",
+        "run_id": "run_01m27mq30yq05gy5dfxx7jhdpe",
+        "started_at": null,
+        "status": "succeeded",
+        "updated_at": "2026-09-12T22:41:50Z"
+      },
+      "metric": {
+        "created_at": "2026-09-12T22:41:51Z",
+        "deleted_at": null,
+        "id": "met_01m2bwhgccn0c5wc4byw9nhgdw",
+        "metric_name": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+        "run_id": "run_01m27mq30yq05gy5dfxx7jhdpe",
+        "source_artifact_id": "art_01m2bwhayn2jeyzs6w0tsz7yd4",
+        "source_job_id": "job_01m2bs1qh4qq0w3ybewndxth2f",
+        "split": "eval",
+        "step": "2531",
+        "updated_at": "2026-09-12T22:41:51Z",
+        "value": 1.1448901891708374
+      },
+      "validation": {
+        "attrs": {},
+        "check_name": "refinement_final_checkpoint_runtime_wandb_20260912",
+        "created_at": "2026-09-12T22:41:51Z",
+        "deleted_at": null,
+        "details": {},
+        "entity_id": "run_01m27mq30yq05gy5dfxx7jhdpe",
+        "entity_type": "run",
+        "expected_value": "SUCCESS, exact plan fingerprint, permanent final checkpoint, frozen runtime and finished W&B metric parity",
+        "id": "val_01m2bwhgn355mw3gdcy8j6z6vz",
+        "measured_value": "BPB 1.1448901891708374 at final step 2531; all checks passed",
+        "session_id": "ses_01m2bwcdcayxkntrnwt5d1schd",
+        "source_artifact_id": "art_01m2bwhayn2jeyzs6w0tsz7yd4",
+        "source_job_id": "job_01m2bs1qh4qq0w3ybewndxth2f",
+        "status": "pass",
+        "updated_at": "2026-09-12T22:41:51Z"
+      }
+    }
+  ]
+}

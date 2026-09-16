@@ -35,6 +35,7 @@ from jax._src.mesh import get_concrete_mesh
 from jax._src.sharding import IndivisibleError
 from jax.sharding import Mesh, NamedSharding, PartitionSpec, Sharding, SingleDeviceSharding
 from jaxtyping import PyTree
+from rigging.filesystem import resolve_mirror_url
 
 from rigging.filesystem.cross_region import record_transfer
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -116,6 +117,9 @@ def build_kvstore_spec(path: str) -> dict:
     tensorstore reads neither AWS_ENDPOINT_URL nor AWS_DEFAULT_REGION from the environment.
     Custom endpoints use virtual-hosted-style addressing, which CoreWeave requires.
     """
+    if path.startswith("mirror://"):
+        path = resolve_mirror_url(path)
+
     parsed = urllib.parse.urlparse(path)
     if parsed.scheme == "s3":
         bucket = parsed.netloc

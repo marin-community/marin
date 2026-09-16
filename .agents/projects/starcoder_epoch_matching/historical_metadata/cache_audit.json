@@ -1,0 +1,309 @@
+{
+  "audited_at_utc": "2026-09-08T23:52:25.037326+00:00",
+  "cache_uri": "gs://marin-us-central1/tokenized/dolma/starcoder-8b6089",
+  "split": "train",
+  "metadata_only": true,
+  "token_data_read": false,
+  "cache_contract_passed": true,
+  "document_count": 206640114,
+  "finished_shard_count": 49,
+  "flat_input_ids_token_count": 216567300822,
+  "sequence_length": 2048,
+  "packed_starcoder_sequence_count": 105745752,
+  "discarded_tail_tokens": 726,
+  "parent_sequences": 136704,
+  "matched_sequences": 5120,
+  "calculation": "TokenSeqDataset.async_len = floor(JaggedArrayStore.data_size / seq_len); data_size = offsets[offsets[0]]. The continuous-stream text mode has pack=False.",
+  "offset_reads": [
+    {
+      "array_index": 0,
+      "value": 206640114
+    },
+    {
+      "array_index": 206640114,
+      "value": 216567300822
+    }
+  ],
+  "read_scope": "Only three JSON metadata objects and two scalar positions in the document-offset array were read. No input_ids/data payload was read. TensorStore resolves the scalar positions through the zarr3 sharding index and bounded compressed offset chunks.",
+  "offset_shard_objects": [
+    {
+      "uri": "gs://marin-us-central1/tokenized/dolma/starcoder-8b6089/train/input_ids/offsets/c/0",
+      "object_size_bytes": 282236560,
+      "generation": "1755378532812330",
+      "crc32c": "p/a3RA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/tokenized/dolma/starcoder-8b6089/train/input_ids/offsets/c/1",
+      "object_size_bytes": 151728415,
+      "generation": "1755378389788501",
+      "crc32c": "/LKgvA=="
+    }
+  ],
+  "metadata_objects": {
+    "shard_ledger.json": {
+      "uri": "gs://marin-us-central1/tokenized/dolma/starcoder-8b6089/train/shard_ledger.json",
+      "size_bytes": 2141,
+      "sha256": "233d550f44ee468d4f2be6e54f7c23a7d77a7286dedf76a619423ff7f6d9cad9",
+      "generation": "1755378533225155",
+      "metageneration": "1",
+      "crc32c": "IKR7Zw==",
+      "content": {
+        "total_num_rows": 206640114,
+        "shard_rows": {
+          "00_json_gz": 5370925,
+          "01_json_gz": 5280565,
+          "02_json_gz": 3297197,
+          "03_json_gz": 2899253,
+          "04_json_gz": 2899242,
+          "05_json_gz": 2783014,
+          "06_json_gz": 2514914,
+          "07_json_gz": 3213885,
+          "08_json_gz": 4528909,
+          "09_json_gz": 3331467,
+          "10_json_gz": 3331476,
+          "11_json_gz": 6440370,
+          "12_json_gz": 6301558,
+          "13_json_gz": 6301560,
+          "14_json_gz": 6301568,
+          "15_json_gz": 6139968,
+          "16_json_gz": 3917070,
+          "17_json_gz": 2745325,
+          "18_json_gz": 2389000,
+          "19_json_gz": 4383451,
+          "20_json_gz": 4383439,
+          "21_json_gz": 4383435,
+          "22_json_gz": 4383448,
+          "23_json_gz": 4712508,
+          "24_json_gz": 5111537,
+          "25_json_gz": 5111529,
+          "26_json_gz": 5111527,
+          "27_json_gz": 6850928,
+          "28_json_gz": 1583238,
+          "29_json_gz": 4802867,
+          "30_json_gz": 3194297,
+          "31_json_gz": 3194298,
+          "32_json_gz": 3194293,
+          "33_json_gz": 3194281,
+          "34_json_gz": 3194277,
+          "35_json_gz": 3194288,
+          "36_json_gz": 3760910,
+          "37_json_gz": 4884828,
+          "38_json_gz": 4884825,
+          "39_json_gz": 4580317,
+          "40_json_gz": 3489216,
+          "41_json_gz": 3489230,
+          "42_json_gz": 3489227,
+          "43_json_gz": 4893135,
+          "44_json_gz": 5410720,
+          "45_json_gz": 2866955,
+          "46_json_gz": 6341998,
+          "47_json_gz": 6564039,
+          "48_json_gz": 2013807
+        },
+        "is_finished": true,
+        "finished_shards": [
+          "00_json_gz",
+          "01_json_gz",
+          "02_json_gz",
+          "03_json_gz",
+          "04_json_gz",
+          "05_json_gz",
+          "06_json_gz",
+          "07_json_gz",
+          "08_json_gz",
+          "09_json_gz",
+          "10_json_gz",
+          "11_json_gz",
+          "12_json_gz",
+          "13_json_gz",
+          "14_json_gz",
+          "15_json_gz",
+          "16_json_gz",
+          "17_json_gz",
+          "18_json_gz",
+          "19_json_gz",
+          "20_json_gz",
+          "21_json_gz",
+          "22_json_gz",
+          "23_json_gz",
+          "24_json_gz",
+          "25_json_gz",
+          "26_json_gz",
+          "27_json_gz",
+          "28_json_gz",
+          "29_json_gz",
+          "30_json_gz",
+          "31_json_gz",
+          "32_json_gz",
+          "33_json_gz",
+          "34_json_gz",
+          "35_json_gz",
+          "36_json_gz",
+          "37_json_gz",
+          "38_json_gz",
+          "39_json_gz",
+          "40_json_gz",
+          "41_json_gz",
+          "42_json_gz",
+          "43_json_gz",
+          "44_json_gz",
+          "45_json_gz",
+          "46_json_gz",
+          "47_json_gz",
+          "48_json_gz"
+        ],
+        "field_counts": {},
+        "metadata": {
+          "preprocessor_metadata": {
+            "tokenizer": "meta-llama/Meta-Llama-3.1-8B",
+            "vocab_size": 128256,
+            "return_attention_mask": false,
+            "padding": false,
+            "max_length": 131072,
+            "append_bos": false,
+            "append_eos": true
+          }
+        }
+      }
+    },
+    "input_ids/offsets/zarr.json": {
+      "uri": "gs://marin-us-central1/tokenized/dolma/starcoder-8b6089/train/input_ids/offsets/zarr.json",
+      "size_bytes": 555,
+      "sha256": "ac1b2449b7e30fbfee5a52f4516a50ee446b99c422024ed84cb91d4dd29e4d47",
+      "generation": "1755319788315070",
+      "metageneration": "1",
+      "crc32c": "Lv25/g==",
+      "content": {
+        "chunk_grid": {
+          "configuration": {
+            "chunk_shape": [
+              134217728
+            ]
+          },
+          "name": "regular"
+        },
+        "chunk_key_encoding": {
+          "name": "default"
+        },
+        "codecs": [
+          {
+            "configuration": {
+              "chunk_shape": [
+                262144
+              ],
+              "codecs": [
+                {
+                  "configuration": {
+                    "endian": "little"
+                  },
+                  "name": "bytes"
+                },
+                {
+                  "configuration": {
+                    "blocksize": 0,
+                    "clevel": 5,
+                    "cname": "lz4",
+                    "shuffle": "shuffle",
+                    "typesize": 8
+                  },
+                  "name": "blosc"
+                }
+              ],
+              "index_codecs": [
+                {
+                  "configuration": {
+                    "endian": "little"
+                  },
+                  "name": "bytes"
+                },
+                {
+                  "name": "crc32c"
+                }
+              ]
+            },
+            "name": "sharding_indexed"
+          }
+        ],
+        "data_type": "int64",
+        "fill_value": 0,
+        "node_type": "array",
+        "shape": [
+          18014398509481984
+        ],
+        "zarr_format": 3
+      }
+    },
+    "input_ids/data/zarr.json": {
+      "uri": "gs://marin-us-central1/tokenized/dolma/starcoder-8b6089/train/input_ids/data/zarr.json",
+      "size_bytes": 555,
+      "sha256": "ac1b2449b7e30fbfee5a52f4516a50ee446b99c422024ed84cb91d4dd29e4d47",
+      "generation": "1755319788413209",
+      "metageneration": "1",
+      "crc32c": "Lv25/g==",
+      "content": {
+        "chunk_grid": {
+          "configuration": {
+            "chunk_shape": [
+              134217728
+            ]
+          },
+          "name": "regular"
+        },
+        "chunk_key_encoding": {
+          "name": "default"
+        },
+        "codecs": [
+          {
+            "configuration": {
+              "chunk_shape": [
+                262144
+              ],
+              "codecs": [
+                {
+                  "configuration": {
+                    "endian": "little"
+                  },
+                  "name": "bytes"
+                },
+                {
+                  "configuration": {
+                    "blocksize": 0,
+                    "clevel": 5,
+                    "cname": "lz4",
+                    "shuffle": "shuffle",
+                    "typesize": 8
+                  },
+                  "name": "blosc"
+                }
+              ],
+              "index_codecs": [
+                {
+                  "configuration": {
+                    "endian": "little"
+                  },
+                  "name": "bytes"
+                },
+                {
+                  "name": "crc32c"
+                }
+              ]
+            },
+            "name": "sharding_indexed"
+          }
+        ],
+        "data_type": "int64",
+        "fill_value": 0,
+        "node_type": "array",
+        "shape": [
+          18014398509481984
+        ],
+        "zarr_format": 3
+      }
+    }
+  },
+  "source_code": {
+    "length_formula": "lib/levanter/src/levanter/data/text/datasets.py:93",
+    "data_size_formula": "lib/levanter/src/levanter/store/jagged_array.py:293",
+    "pack_default": "lib/levanter/src/levanter/data/text/datasets.py:398"
+  }
+}

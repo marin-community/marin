@@ -1,0 +1,12 @@
+[22:14:49] task=/calvinxu/tpp10-domain-sweeps-cpu4g/0 attempt=0 |     raise RuntimeError('cannot schedule new futures after shutdown')
+[22:14:49] task=/calvinxu/tpp10-domain-sweeps-cpu4g/0 attempt=0 | RuntimeError: cannot schedule new futures after shutdown
+[22:14:49] task=/calvinxu/tpp10-domain-sweeps-cpu4g/0 attempt=0 |     raise RuntimeError('cannot schedule new futures after shutdown')
+[22:14:49] task=/calvinxu/tpp10-domain-sweeps-cpu4g/0 attempt=0 | RuntimeError: cannot schedule new futures after shutdown
+[22:21:57] task=/calvinxu/tpp10-domain-sweeps-cpu4g/0 attempt=0 |     raise RuntimeError('cannot schedule new futures after shutdown')
+[22:21:57] task=/calvinxu/tpp10-domain-sweeps-cpu4g/0 attempt=0 | RuntimeError: cannot schedule new futures after shutdown
+[22:21:57] task=/calvinxu/tpp10-domain-sweeps-cpu4g/0 attempt=0 |     raise RuntimeError('cannot schedule new futures after shutdown')
+[22:21:57] task=/calvinxu/tpp10-domain-sweeps-cpu4g/0 attempt=0 | RuntimeError: cannot schedule new futures after shutdown
+[22:28:44] task=/calvinxu/tpp10-domain-sweeps-cpu4g/0 attempt=0 |     raise RuntimeError('cannot schedule new futures after shutdown')
+[22:28:44] task=/calvinxu/tpp10-domain-sweeps-cpu4g/0 attempt=0 | RuntimeError: cannot schedule new futures after shutdown
+[22:28:44] task=/calvinxu/tpp10-domain-sweeps-cpu4g/0 attempt=0 |     raise RuntimeError('cannot schedule new futures after shutdown')
+[22:28:44] task=/calvinxu/tpp10-domain-sweeps-cpu4g/0 attempt=0 | RuntimeError: cannot schedule new futures after shutdown

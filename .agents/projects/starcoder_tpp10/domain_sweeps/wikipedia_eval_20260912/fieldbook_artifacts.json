@@ -1,0 +1,87 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789197967.7792568,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_eval_20260912/wikipedia_eval.png",
+      "fieldbook.local_size_at_capture": 124264
+    },
+    "content_hash": "sha256:17383841d0784e7e706d0403a57a773a1c3b212e01ced5c12c87d9f509502de4",
+    "created_at": "2026-09-12T07:26:39Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2a85q7q04z1jax0rqt3srpc",
+    "job_id": null,
+    "run_id": null,
+    "type": "plot",
+    "updated_at": "2026-09-12T07:26:39Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_eval_20260912/wikipedia_eval.png"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789197967.8680592,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_eval_20260912/wikipedia_eval.pdf",
+      "fieldbook.local_size_at_capture": 19616
+    },
+    "content_hash": "sha256:4ca8f3d2f1106face42430cffc07a40776aa221c66f9f989fb6269373eb774f1",
+    "created_at": "2026-09-12T07:26:39Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2a85qhzdtqv7k5c2pvamafb",
+    "job_id": null,
+    "run_id": null,
+    "type": "plot",
+    "updated_at": "2026-09-12T07:26:39Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_eval_20260912/wikipedia_eval.pdf"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789197967.868619,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_eval_20260912/points.csv",
+      "fieldbook.local_size_at_capture": 1310
+    },
+    "content_hash": "sha256:048ed4ec2fd8a7b85f0cc4e8cbaf8b20b4c19f2c5c2b7a4ba51c6b4b3f5234bd",
+    "created_at": "2026-09-12T07:26:39Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2a85qv5s564zsry9r8ryvgg",
+    "job_id": null,
+    "run_id": null,
+    "type": "metric-table",
+    "updated_at": "2026-09-12T07:26:39Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_eval_20260912/points.csv"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789197967.8689957,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_eval_20260912/receipt.json",
+      "fieldbook.local_size_at_capture": 4795
+    },
+    "content_hash": "sha256:e3dec2a563ac00648824a8ccab1429bccad125b1c0b31440e82c287a477b6df9",
+    "created_at": "2026-09-12T07:26:40Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2a85r4vdnr21p8eaer9nxf8",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-12T07:26:40Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_eval_20260912/receipt.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789197999.0734112,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_eval_20260912/README.md",
+      "fieldbook.local_size_at_capture": 1629
+    },
+    "content_hash": "sha256:14585b82f56dba569214982e8019eb85730c78bf94f104120e8765871af5aede",
+    "created_at": "2026-09-12T07:26:40Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2a85redvy09sxcxjw490ear",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-12T07:26:40Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_eval_20260912/README.md"
+  }
+]

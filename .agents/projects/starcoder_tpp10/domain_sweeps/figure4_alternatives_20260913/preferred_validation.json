@@ -1,0 +1,52 @@
+{
+  "source_hashes_current": true,
+  "all_six_fits_converged": true,
+  "all_minima_feasible": true,
+  "all_eight_points_retained_per_curve": true,
+  "independent_numeric_audit": "Reconstructed predictions and a 100001-point basin search passed for all six curves.",
+  "pdf_visual_audit": "Both PDF rasterizations inspected; no overlapping or cropped labels. Independent cold reader identified domains, samples, fitted minima, and differing scales.",
+  "clipping": "Wikipedia proxy MATH500 endpoint remains outside display limits but is included in fitting.",
+  "curves": [
+    {
+      "curve": "wikipedia_matched_wikipedia_english",
+      "observed_minimum_epochs": 7.937890625,
+      "predicted_minimum_epochs": 7.605910281778187,
+      "fit_rmse_bpb": 0.002691234952637591
+    },
+    {
+      "curve": "wikipedia_target_wikipedia_english",
+      "observed_minimum_epochs": 11.097925275482094,
+      "predicted_minimum_epochs": 10.76907330668275,
+      "fit_rmse_bpb": 0.00038727454040491966
+    },
+    {
+      "curve": "wikipedia_matched_math500",
+      "observed_minimum_epochs": 4.768359375,
+      "predicted_minimum_epochs": 5.341403685024973,
+      "fit_rmse_bpb": 0.005827768207326554
+    },
+    {
+      "curve": "wikipedia_target_math500",
+      "observed_minimum_epochs": 7.937187930440771,
+      "predicted_minimum_epochs": 5.988818599203669,
+      "fit_rmse_bpb": 0.0029016455299021083
+    },
+    {
+      "curve": "finemath_3plus_matched_math500",
+      "observed_minimum_epochs": 11.098046875,
+      "predicted_minimum_epochs": 13.277442128044147,
+      "fit_rmse_bpb": 0.0028196220220131746
+    },
+    {
+      "curve": "finemath_3plus_target_math500",
+      "observed_minimum_epochs": 15.827823691460056,
+      "predicted_minimum_epochs": 14.515613281577814,
+      "fit_rmse_bpb": 0.0012086151220041354
+    }
+  ],
+  "pdf_sha256": {
+    "figure4_left_wikipedia_english_math500.pdf": "ed6b579daeb117caf2d1c5abcbbc89af9061092e6305fb90f078603bfaf2c5a4",
+    "figure4_left_wikipedia_english_math500_mariner.pdf": "58f3e75522a8eeccebcce03d14390da56a50be5d68b133ef37c775c5c489de27"
+  },
+  "scope": "Descriptive minima without uncertainty intervals; FineMath target rebound is inferred between observed points."
+}

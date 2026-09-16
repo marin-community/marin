@@ -1,0 +1,49 @@
+{
+  "artifact": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789256080.7898571,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/heartbeat_20260912_2333/remaining_artifact_audit.json",
+      "fieldbook.local_size_at_capture": 4545
+    },
+    "content_hash": "sha256:f978997809c7ee68839d32625aefabf21ec0835f29b7d1d0cda3db986ae9f107",
+    "created_at": "2026-09-12T23:35:40Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2bzm19m74372aa429t9qqq7",
+    "job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-12T23:35:40Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/heartbeat_20260912_2333/remaining_artifact_audit.json"
+  },
+  "metric": {
+    "created_at": "2026-09-12T23:35:41Z",
+    "deleted_at": null,
+    "id": "met_01m2bzm3312jmdk3ytmxb2en78",
+    "metric_name": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+    "run_id": "run_01m27mpxta54khxb3s64prvpbb",
+    "source_artifact_id": "art_01m2bzm19m74372aa429t9qqq7",
+    "source_job_id": "job_01m2bs1rthbbexg1pnh7nf611p",
+    "split": "eval",
+    "step": "11490",
+    "updated_at": "2026-09-12T23:35:41Z",
+    "value": 0.7665561437606812
+  },
+  "validation": {
+    "attrs": {},
+    "check_name": "refinement_final_checkpoint_runtime_wandb_20260912",
+    "created_at": "2026-09-12T23:35:42Z",
+    "deleted_at": null,
+    "details": {},
+    "entity_id": "run_01m27mpxta54khxb3s64prvpbb",
+    "entity_type": "run",
+    "expected_value": "SUCCESS with exact fingerprint, permanent final checkpoint, frozen runtime and finished W&B metric parity",
+    "id": "val_01m2bzm3cdr9v3cem35ftzk1tt",
+    "measured_value": "BPB 0.7665561437606812 at final step 11490; all checks passed",
+    "session_id": "ses_01m2bzjeexm1e7peta0bh3dyw9",
+    "source_artifact_id": "art_01m2bzm19m74372aa429t9qqq7",
+    "source_job_id": "job_01m2bs1rthbbexg1pnh7nf611p",
+    "status": "pass",
+    "updated_at": "2026-09-12T23:35:42Z"
+  }
+}

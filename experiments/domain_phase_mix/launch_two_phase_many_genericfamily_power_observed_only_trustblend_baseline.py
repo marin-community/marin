@@ -1,0 +1,75 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Launch the full-data observed-only trustblend power-law GRP baseline."""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import sys
+
+from fray.cluster import ResourceConfig
+from marin.execution.executor import ExecutorMainConfig, executor_main
+
+from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
+    create_two_phase_dolma3_dolmino_top_level_experiment,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_power_observed_only_trustblend_baseline import (
+    GENERICFAMILY_POWER_OBSERVED_ONLY_TRUSTBLEND_SOURCE_EXPERIMENT,
+    create_genericfamily_power_observed_only_trustblend_weight_config,
+    genericfamily_power_observed_only_trustblend_summary,
+)
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_NAME_PREFIX = GENERICFAMILY_POWER_OBSERVED_ONLY_TRUSTBLEND_SOURCE_EXPERIMENT
+DEFAULT_TPU_REGION = "us-east5"
+DEFAULT_TPU_ZONE = "us-east5-a"
+
+
+def _parse_args() -> tuple[argparse.Namespace, list[str]]:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--name-prefix", default=DEFAULT_NAME_PREFIX)
+    parser.add_argument("--tpu-type", default="v5p-8")
+    parser.add_argument("--tpu-region", default=DEFAULT_TPU_REGION)
+    parser.add_argument("--tpu-zone", default=DEFAULT_TPU_ZONE)
+    return parser.parse_known_args()
+
+
+def main() -> None:
+    args, remaining = _parse_args()
+    sys.argv = [sys.argv[0], *remaining]
+
+    if os.getenv("CI") is not None:
+        logger.info("Skipping observed-only trustblend power-law GRP baseline launch in CI environment")
+        return
+
+    experiment = create_two_phase_dolma3_dolmino_top_level_experiment(
+        name=args.name_prefix,
+        resources=ResourceConfig.with_tpu(args.tpu_type, regions=[args.tpu_region], zone=args.tpu_zone),
+    )
+    summary = genericfamily_power_observed_only_trustblend_summary()
+    weight_config = create_genericfamily_power_observed_only_trustblend_weight_config()
+    training_step = experiment.create_training_step(
+        weight_config=weight_config, name_prefix=args.name_prefix, run_name=summary.run_name
+    )
+    logger.info(
+        "Launching observed-only trustblend power baseline %s "
+        "predicted=%.6f delta=%.3f gain_budget=%.6f nearest_tv=%.6f",
+        summary.run_name,
+        summary.predicted_optimum_value,
+        summary.deployment_delta,
+        summary.deployment_gain_budget,
+        summary.nearest_observed_tv_distance,
+    )
+    executor_main(
+        ExecutorMainConfig(max_concurrent=1),
+        steps=[training_step],
+        description=f"{args.name_prefix}: observed-only trustblend power-law GRP baseline",
+    )
+
+
+if __name__ == "__main__":
+    main()

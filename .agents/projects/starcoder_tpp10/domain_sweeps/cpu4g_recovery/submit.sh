@@ -1,0 +1,19 @@
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 172800 \
+  --max-retries 0 --max-preemption-retries 0 --priority interactive \
+  --extra cpu --no-preemptible --region us-central1 --zone us-central1-a \
+  --job-name tpp10-domain-sweeps-cpu4g \
+  --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/plan.json \
+  --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/release.json \
+  --bundle-include 'experiments/domain_phase_mix/tpp10_domain_sweeps_assets/*' \
+  --exclude '^(checkpoints|logs|wandb)/' \
+  --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\.py)$' \
+  --exclude '^\.agents/(?!projects/starcoder_tpp10/domain_sweeps/(plan|release)\.json$).*' \
+  --exclude '^(docs|tests)/' \
+  --exclude '^lib/[^/]+/tests/' \
+  --exclude '^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/' \
+  -e MARIN_PREFIX gs://marin-us-central1 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.domain_phase_mix.resume_tpp10_domain_sweeps \
+  --plan .agents/projects/starcoder_tpp10/domain_sweeps/plan.json \
+  --release .agents/projects/starcoder_tpp10/domain_sweeps/release.json --submit

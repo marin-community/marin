@@ -1,0 +1,282 @@
+{
+  "artifacts": {
+    "measurements.csv": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788963955.5834696,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/measurements.csv",
+        "fieldbook.local_size_at_capture": 3963
+      },
+      "content_hash": "sha256:65f23da7430340f61146b22759790b694a5b5c36934e22489813582e7a8315ae",
+      "created_at": "2026-09-09T14:32:48Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239bw90c62p3s01y8ypfwnd",
+      "job_id": null,
+      "run_id": null,
+      "type": "metric-table",
+      "updated_at": "2026-09-09T14:32:48Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/measurements.csv"
+    },
+    "curves.csv": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788963971.6944623,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/curves.csv",
+        "fieldbook.local_size_at_capture": 2829
+      },
+      "content_hash": "sha256:6d42ff590ee688c8f6fdd5f8438a844d75eb0a487452910d1d468c4ebab63f44",
+      "created_at": "2026-09-09T14:32:48Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239bwjstg60we9mzk2jwznw",
+      "job_id": null,
+      "run_id": null,
+      "type": "metric-table",
+      "updated_at": "2026-09-09T14:32:48Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/curves.csv"
+    },
+    "analysis.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788963971.694222,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/analysis.json",
+        "fieldbook.local_size_at_capture": 8567
+      },
+      "content_hash": "sha256:0c10c4f5e3a1078721c6c738684cc170ce4a2ae210afa83d3a9f721f1284ed02",
+      "created_at": "2026-09-09T14:32:49Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239bwwy4fhbgt5ygd4nx9ek",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-09T14:32:49Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/analysis.json"
+    },
+    "descriptive_diagnostics.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788964092.0774527,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/descriptive_diagnostics.json",
+        "fieldbook.local_size_at_capture": 1034
+      },
+      "content_hash": "sha256:c500de2a72efe53e534c8c4c90c5342828db0ae8f1c9ad08e6f43f4b1540fdd6",
+      "created_at": "2026-09-09T14:32:49Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239bx76ybxcca6skkaqk31a",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-09T14:32:49Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/descriptive_diagnostics.json"
+    },
+    "independent_verification.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788964045.4334488,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/independent_verification.json",
+        "fieldbook.local_size_at_capture": 4603
+      },
+      "content_hash": "sha256:a6d24df2861ca8dd817487cf7dcd8f22ce122dd8d837e37fbbeff67a538b9592",
+      "created_at": "2026-09-09T14:32:49Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239bxh7w4bjyd1ch236ssw2",
+      "job_id": null,
+      "run_id": null,
+      "type": "validation-report",
+      "updated_at": "2026-09-09T14:32:49Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/independent_verification.json"
+    },
+    "source_manifest.json": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788964333.6431944,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/source_manifest.json",
+        "fieldbook.local_size_at_capture": 2978
+      },
+      "content_hash": "sha256:a27def673d76750d762d2441b05089ea5f6fdf4c50cf48d15e9c0af3f9eec05a",
+      "created_at": "2026-09-09T14:32:50Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239bxtd114y9qkp2kk1emzh",
+      "job_id": null,
+      "run_id": null,
+      "type": "manifest",
+      "updated_at": "2026-09-09T14:32:50Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/source_manifest.json"
+    },
+    "RESULTS.md": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788964333.638457,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/RESULTS.md",
+        "fieldbook.local_size_at_capture": 7519
+      },
+      "content_hash": "sha256:67ba5309e63480c3bbd163a642db064b56877a6f0ddd5b0929954f94db480406",
+      "created_at": "2026-09-09T14:32:50Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239by49zx60yfp8e3fa2v9s",
+      "job_id": null,
+      "run_id": null,
+      "type": "report",
+      "updated_at": "2026-09-09T14:32:50Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/RESULTS.md"
+    },
+    "curves.png": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788963972.5091577,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/curves.png",
+        "fieldbook.local_size_at_capture": 72601
+      },
+      "content_hash": "sha256:1dbcc148e799e2b0176257d711a7bb0d00f18f59fef976a307e1294dc9ffeafc",
+      "created_at": "2026-09-09T14:32:50Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239bye194gqrbe43y6ebhty",
+      "job_id": null,
+      "run_id": null,
+      "type": "plot",
+      "updated_at": "2026-09-09T14:32:50Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/curves.png"
+    },
+    "excess_curves.png": {
+      "attrs": {
+        "fieldbook.local_mtime_at_capture": 1788963972.6595984,
+        "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/excess_curves.png",
+        "fieldbook.local_size_at_capture": 78563
+      },
+      "content_hash": "sha256:da1f935e0c9ca1c6b743bcda3490604fd6214d6d5d0a8c3aebe7b7c9c9eb1158",
+      "created_at": "2026-09-09T14:32:51Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "id": "art_01m239byr11de8qjx94wpmx3w7",
+      "job_id": null,
+      "run_id": null,
+      "type": "plot",
+      "updated_at": "2026-09-09T14:32:51Z",
+      "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/excess_curves.png"
+    }
+  },
+  "validation": {
+    "attrs": {},
+    "check_name": "refinement.final_metrics_and_independent_analysis",
+    "created_at": "2026-09-09T14:32:51Z",
+    "deleted_at": null,
+    "details": {},
+    "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "entity_type": "experiment",
+    "expected_value": "20 frozen identities with final metrics and independently reproduced common-grid selections/regrets",
+    "id": "val_01m239bz27bdgt5ndqeyykp8de",
+    "measured_value": "20/20 verified; independent analysis agrees exactly; both plots visually checked; original pilot unchanged",
+    "session_id": "ses_01m238xvvtp38xarhmsg6d0s86",
+    "source_artifact_id": "art_01m239bxh7w4bjyd1ch236ssw2",
+    "source_job_id": null,
+    "status": "pass",
+    "updated_at": "2026-09-09T14:32:51Z"
+  },
+  "research_note": {
+    "attrs": {
+      "session_id": "ses_01m238xvvtp38xarhmsg6d0s86"
+    },
+    "author": null,
+    "body": "The StarCoder pilot plus adaptive refinement are complete and analyzed. All 20 distinct artifacts have matching frozen fingerprints and unique finite endpoint metrics; Fieldbook contains their checkpoints, eval artifacts and measurements. There are 19 proxy runs and one corrected target endpoint, with one shared web-only proxy and nine historical target points on the ten-coordinate grid.\n\nUnmatched selects p=1 (target BPB 0.819869, regret 0.031826); matched selects p=0.2 (BPB 0.851813, regret 0.063770); target selects p=0.7 (BPB 0.788043). Matching raises observed grid regret by 0.031944 BPB. The independent raw-data calculation agrees exactly, and both plots were visually checked. The original pilot and release-recorded hashes are unchanged. Refinement was adaptive, uses one fixed subset/seed and mixes historical/new target runtimes; no significance or independent-confirmation claim is made.\n\nReport and CC handoff: .agents/projects/starcoder_epoch_matching/refinement/results/RESULTS.md. Primary measurements, curve CSV/JSON, raw/excess plots, descriptive diagnostics and independent verification are adjacent or linked. The paper outline records the unfavorable completed result; manuscript sources and figures remain unchanged. Recommendation: retain this as a limitation case and consider a separately specified subset-sensitivity diagnostic. No new job was released; full 26-point and replicated stages remain unsubmitted. The earlier partial-coverage warning is superseded by completed coverage and retained as an archived validation.\n",
+    "body_format": "markdown",
+    "created_at": "2026-09-09T14:32:51Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "entity_type": "experiment",
+    "id": "note_01m239bzbtm2scmgjrqzw24mvh",
+    "note_type": "research",
+    "resolved_at": null,
+    "status": "open",
+    "title": "Adaptive refinement moves matched optimum to p=0.2 and increases target regret",
+    "updated_at": "2026-09-09T14:32:51Z"
+  },
+  "handoff": {
+    "experiment": {
+      "attrs": {
+        "review.status": "prepared"
+      },
+      "created_at": "2026-09-08T23:37:24Z",
+      "deleted_at": null,
+      "description": "Review-stage three-curve experiment: reuse 25 C40 target measurements, correct the target p=1 parent-pool mismatch, compare matched and unmatched 278M-token proxies on one frozen parent corpus. No training submitted.",
+      "id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "idempotency_key": "starcoder-finite-pool-epoch-matching-20260908",
+      "name": "StarCoder finite-pool epoch-matching demonstration",
+      "status": "active",
+      "tags": [
+        "epoch-matching",
+        "starcoder"
+      ],
+      "updated_at": "2026-09-08T23:37:24Z"
+    },
+    "freshness": {
+      "checkpoint_status": "current",
+      "drifted_artifact_count": 0,
+      "drifted_artifacts": [],
+      "handoff_status": "current",
+      "last_checkpoint_at": "2026-09-09T04:41:15Z",
+      "last_handoff_at": "2026-09-09T04:41:15Z",
+      "since_last_checkpoint_hours": 9.860327471944444,
+      "since_last_handoff_hours": 9.860327471944444,
+      "stale_validation_count": 0,
+      "stale_validations": []
+    },
+    "note": {
+      "attrs": {
+        "session_id": "ses_01m238xvvtp38xarhmsg6d0s86"
+      },
+      "author": null,
+      "body": "The StarCoder pilot plus adaptive refinement are complete and analyzed. All 20 distinct artifacts have matching frozen fingerprints and unique finite endpoint metrics; Fieldbook contains their checkpoints, eval artifacts and measurements. There are 19 proxy runs and one corrected target endpoint, with one shared web-only proxy and nine historical target points on the ten-coordinate grid.\n\nUnmatched selects p=1 (target BPB 0.819869, regret 0.031826); matched selects p=0.2 (BPB 0.851813, regret 0.063770); target selects p=0.7 (BPB 0.788043). Matching raises observed grid regret by 0.031944 BPB. The independent raw-data calculation agrees exactly, and both plots were visually checked. The original pilot and release-recorded hashes are unchanged. Refinement was adaptive, uses one fixed subset/seed and mixes historical/new target runtimes; no significance or independent-confirmation claim is made.\n\nReport and CC handoff: .agents/projects/starcoder_epoch_matching/refinement/results/RESULTS.md. Primary measurements, curve CSV/JSON, raw/excess plots, descriptive diagnostics and independent verification are adjacent or linked. The paper outline records the unfavorable completed result; manuscript sources and figures remain unchanged. Recommendation: retain this as a limitation case and consider a separately specified subset-sensitivity diagnostic. No new job was released; full 26-point and replicated stages remain unsubmitted. The earlier partial-coverage warning is superseded by completed coverage and retained as an archived validation.\n\n## Freshness\n\n- Handoff status: `current`\n- Drifted artifacts: 0\n- Stale validations: 0\n",
+      "body_format": "markdown",
+      "created_at": "2026-09-09T14:32:52Z",
+      "deleted_at": null,
+      "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "entity_type": "experiment",
+      "id": "note_01m239bzptnd5nabp5vqhh68wq",
+      "note_type": "checkpoint",
+      "resolved_at": null,
+      "status": "open",
+      "title": "Experiment handoff",
+      "updated_at": "2026-09-09T14:32:52Z"
+    }
+  },
+  "reviewed": {
+    "experiment": {
+      "attrs": {
+        "review.status": "prepared"
+      },
+      "created_at": "2026-09-08T23:37:24Z",
+      "deleted_at": null,
+      "description": "Review-stage three-curve experiment: reuse 25 C40 target measurements, correct the target p=1 parent-pool mismatch, compare matched and unmatched 278M-token proxies on one frozen parent corpus. No training submitted.",
+      "id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "idempotency_key": "starcoder-finite-pool-epoch-matching-20260908",
+      "name": "StarCoder finite-pool epoch-matching demonstration",
+      "status": "active",
+      "tags": [
+        "epoch-matching",
+        "starcoder"
+      ],
+      "updated_at": "2026-09-08T23:37:24Z"
+    },
+    "note": {
+      "attrs": {
+        "fieldbook.review": true,
+        "fieldbook.reviewed_activity_count": 77,
+        "fieldbook.reviewed_activity_key": "2026-09-09T14:32:51Z val_01m239bz27bdgt5ndqeyykp8de",
+        "fieldbook.reviewed_at": "2026-09-09T14:32:52Z",
+        "session_id": "ses_01m238xvvtp38xarhmsg6d0s86"
+      },
+      "author": null,
+      "body": "The StarCoder pilot plus adaptive refinement are complete and analyzed. All 20 distinct artifacts have matching frozen fingerprints and unique finite endpoint metrics; Fieldbook contains their checkpoints, eval artifacts and measurements. There are 19 proxy runs and one corrected target endpoint, with one shared web-only proxy and nine historical target points on the ten-coordinate grid.\n\nUnmatched selects p=1 (target BPB 0.819869, regret 0.031826); matched selects p=0.2 (BPB 0.851813, regret 0.063770); target selects p=0.7 (BPB 0.788043). Matching raises observed grid regret by 0.031944 BPB. The independent raw-data calculation agrees exactly, and both plots were visually checked. The original pilot and release-recorded hashes are unchanged. Refinement was adaptive, uses one fixed subset/seed and mixes historical/new target runtimes; no significance or independent-confirmation claim is made.\n\nReport and CC handoff: .agents/projects/starcoder_epoch_matching/refinement/results/RESULTS.md. Primary measurements, curve CSV/JSON, raw/excess plots, descriptive diagnostics and independent verification are adjacent or linked. The paper outline records the unfavorable completed result; manuscript sources and figures remain unchanged. Recommendation: retain this as a limitation case and consider a separately specified subset-sensitivity diagnostic. No new job was released; full 26-point and replicated stages remain unsubmitted. The earlier partial-coverage warning is superseded by completed coverage and retained as an archived validation.\n",
+      "body_format": "markdown",
+      "created_at": "2026-09-09T14:32:52Z",
+      "deleted_at": null,
+      "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+      "entity_type": "experiment",
+      "id": "note_01m239c068q1m260xfte252thk",
+      "note_type": "review",
+      "resolved_at": null,
+      "status": "resolved",
+      "title": "Experiment reviewed",
+      "updated_at": "2026-09-09T14:32:52Z"
+    }
+  }
+}

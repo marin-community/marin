@@ -4,6 +4,7 @@
 """Lightweight task configuration for the LM Evaluation Harness."""
 
 import dataclasses
+from collections.abc import Callable
 from dataclasses import dataclass
 
 
@@ -31,11 +32,13 @@ class TaskConfig:
     # task definition is not present in lm-eval's registry.
     dataset_path: str | None = None
     dataset_name: str | None = None
+    dataset_kwargs: dict | None = None
     output_type: str | None = None
     test_split: str | None = None
     training_split: str | None = None
     validation_split: str | None = None
     fewshot_split: str | None = None
+    process_docs: Callable | None = None
     metric_list: list[dict] | None = None
     tag: list[str] | None = None
     metadata: dict | None = None

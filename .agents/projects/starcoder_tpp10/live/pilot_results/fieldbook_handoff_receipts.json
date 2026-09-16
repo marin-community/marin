@@ -1,0 +1,147 @@
+{
+  "resolved_action": {
+    "attrs": {
+      "session_id": "ses_01m26r5144k71tvk85s8jt9exx"
+    },
+    "author": null,
+    "body": "The pilot parent /calvinxu/starcoder-tpp10-pilot is running; all 50 new TPU children were queued at the initial snapshot, and seven prior successes are reused. Follow the current parent and children recorded in .agents/projects/starcoder_tpp10/live/launch_state.json. Once all artifacts succeed, collect endpoints against live/pilot_plan.json, verify final metrics/runtime/fingerprints, then run the existing common-grid analysis and visually inspect plots. Preserve all subset/seed selections and adverse outcomes. Dense remains unreleased. Reuse completed artifacts if recovery is needed; never change frozen fingerprints to bypass reuse checks.",
+    "body_format": "markdown",
+    "created_at": "2026-09-10T22:59:47Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m26rrx8jtp005kb56w6bjn1s",
+    "note_type": "next-action",
+    "resolved_at": "2026-09-11T05:33:38Z",
+    "status": "resolved",
+    "title": "Collect and analyze the seven-coordinate pilot after all 57 artifacts complete",
+    "updated_at": "2026-09-11T05:33:38Z"
+  },
+  "handoff": {
+    "experiment": {
+      "attrs": {},
+      "created_at": "2026-09-09T15:43:40Z",
+      "deleted_at": null,
+      "description": "Build and review a new matched-total-TPP three-curve experiment with finite StarCoder pools and independently replicated matched subsets. Training is not submitted.",
+      "id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "idempotency_key": "starcoder-tpp10-20260909",
+      "name": "StarCoder TPP 10 epoch-matching experiment",
+      "status": "active",
+      "tags": [
+        "epoch-matching",
+        "starcoder",
+        "tpp10"
+      ],
+      "updated_at": "2026-09-09T15:43:40Z"
+    },
+    "freshness": {
+      "checkpoint_status": "current",
+      "drifted_artifact_count": 0,
+      "drifted_artifacts": [],
+      "handoff_status": "current",
+      "last_checkpoint_at": "2026-09-11T03:12:48Z",
+      "last_handoff_at": "2026-09-11T03:12:48Z",
+      "since_last_checkpoint_hours": 2.3475378027777776,
+      "since_last_handoff_hours": 2.3475378027777776,
+      "stale_validation_count": 0,
+      "stale_validations": []
+    },
+    "note": {
+      "attrs": {
+        "session_id": "ses_01m27evjrd5va4jpd94vtnyjh3"
+      },
+      "author": null,
+      "body": "# StarCoder TPP10 pilot: complete target curve\n\nAll 57 pilot artifacts are complete. The 50 newly submitted child jobs succeeded, and seven earlier artifacts were reused. The parent finished on 10 September 2026 at 21:34:02 PDT (11 September 04:34:02 UTC).\n\nEpoch matching improves the mixture selected for the target in this setting. The unmatched proxies select pure StarCoder, while all three matched subsets select 50% StarCoder. The target's measured minimum is at 70%.\n\n| Selection source | Selected StarCoder fraction | Target loss (BPB) | Target regret (BPB) |\n| --- | ---: | ---: | ---: |\n| Target grid minimum | 0.70 | 0.784388 | 0 |\n| Unmatched proxy | 1.00 | 0.820746 | 0.036357 |\n| Epoch-matched proxy, each of three subsets | 0.50 | 0.794241 | 0.009852 |\n\nThe matched selection improves target loss by 0.026505 BPB, reducing regret by about 73%. Both trainer seeds agree on the unmatched selection and on each matched subset's selection. Matching recovers an interior optimum but places it earlier than the target and overstates the penalty at high repetition.\n\n| StarCoder fraction | Target BPB |\n| ---: | ---: |\n| 0.00 | 1.214910 |\n| 0.10 | 0.889110 |\n| 0.30 | 0.821187 |\n| 0.50 | 0.794241 |\n| 0.70 | 0.784388 |\n| 0.90 | 0.798773 |\n| 1.00 | 0.820746 |\n\n![Full pilot curves](curves.png)\n\nLeft: raw endpoint losses. Right: each curve with its own grid minimum subtracted; this removes the vertical loss difference between scales. Proxy lines average two trainer seeds, with each matched subset shown separately. Stars mark observed grid minima; straight segments only connect observations.\n\nAcross the seven coordinates, excess-curve RMSE is 0.12878 BPB for unmatched and 0.08756, 0.08603 and 0.08251 for matched subsets 20260912\u201320260914. Spearman correlations with the target are 0.67857 for unmatched and 0.78571, 0.78571 and 0.85714 for matched. Subtracting the minimum does not remove scale-dependent differences in curvature.\n\nThese are grid-selection results, not continuous optima. The target has one trainer seed and one finite parent corpus; the three subset comparisons share target and unmatched curves. The pilot supports improved selection in this setting, with residual transfer error. It does not establish uncertainty over target training seeds or other domains. The dense stage remains unreleased.\n\nThe [endpoint CSV](../pilot_metrics.csv) was collected through the archived-plan collector, which requires successful executor records, exact fingerprints and source/runtime receipts, and finite primary metrics at every planned final step. The analysis rechecks the full 57-run identity and grid before selecting minima. The [target checkpoint check](target_checkpoint_validation.json) independently verifies all seven final-step metadata records without reading tensor payloads. The [JSON analysis](analysis.json) retains full precision; the [PDF plot](curves.pdf) is available for review.\n\nFrozen pilot SHA-256: `afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0`.\n\n## Freshness\n\n- Handoff status: `current`\n- Drifted artifacts: 0\n- Stale validations: 0\n",
+      "body_format": "markdown",
+      "created_at": "2026-09-11T05:33:39Z",
+      "deleted_at": null,
+      "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "entity_type": "experiment",
+      "id": "note_01m27fa2y9e8hhe21mkcp65vxx",
+      "note_type": "checkpoint",
+      "resolved_at": null,
+      "status": "open",
+      "title": "Experiment handoff",
+      "updated_at": "2026-09-11T05:33:39Z"
+    }
+  },
+  "next_action": {
+    "attrs": {
+      "session_id": "ses_01m27evjrd5va4jpd94vtnyjh3"
+    },
+    "author": null,
+    "body": "All 57 seven-coordinate pilot artifacts are verified and analyzed. Target selects p=0.7; unmatched selects 1.0; each matched subset selects 0.5, reducing observed target regret from 0.036357 to 0.009852 BPB. Review the result, residual scale-transfer error and single-target-seed scope with the user/CC before any dense release. No new training is authorized by this completion record. Full report: .agents/projects/starcoder_tpp10/live/pilot_results/report.md.",
+    "body_format": "markdown",
+    "created_at": "2026-09-11T05:33:39Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m27fa38dgdk3z7vgv7nkdmx9",
+    "note_type": "next-action",
+    "resolved_at": null,
+    "status": "open",
+    "title": "Review the complete pilot before releasing the dense grid",
+    "updated_at": "2026-09-11T05:33:39Z"
+  },
+  "reviewed": {
+    "experiment": {
+      "attrs": {},
+      "created_at": "2026-09-09T15:43:40Z",
+      "deleted_at": null,
+      "description": "Build and review a new matched-total-TPP three-curve experiment with finite StarCoder pools and independently replicated matched subsets. Training is not submitted.",
+      "id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "idempotency_key": "starcoder-tpp10-20260909",
+      "name": "StarCoder TPP 10 epoch-matching experiment",
+      "status": "active",
+      "tags": [
+        "epoch-matching",
+        "starcoder",
+        "tpp10"
+      ],
+      "updated_at": "2026-09-09T15:43:40Z"
+    },
+    "note": {
+      "attrs": {
+        "fieldbook.review": true,
+        "fieldbook.reviewed_activity_count": 164,
+        "fieldbook.reviewed_activity_key": "2026-09-11T05:33:39Z note_01m27fa38dgdk3z7vgv7nkdmx9",
+        "fieldbook.reviewed_at": "2026-09-11T05:33:39Z",
+        "session_id": "ses_01m27evjrd5va4jpd94vtnyjh3"
+      },
+      "author": null,
+      "body": "Live Iris parent and all 50 newly submitted children succeeded. Archived-plan collection and analysis verify 57/57 endpoints; all seven target final checkpoint metadata records pass. Native curves visually checked; complete results recorded in Fieldbook and CC_CHANGES.md. Dense stage remains unreleased.",
+      "body_format": "markdown",
+      "created_at": "2026-09-11T05:33:39Z",
+      "deleted_at": null,
+      "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "entity_type": "experiment",
+      "id": "note_01m27fa3kd4bcdkke5jby2ntbb",
+      "note_type": "review",
+      "resolved_at": null,
+      "status": "resolved",
+      "title": "Experiment reviewed",
+      "updated_at": "2026-09-11T05:33:39Z"
+    }
+  },
+  "session_end": {
+    "closed": true,
+    "marker_path": "/Users/calvinxu/Projects/Work/Marin/.fieldbook.session",
+    "marker_status": "removed",
+    "session": {
+      "agent": "codex",
+      "attrs": {},
+      "cwd": "/Users/calvinxu/Projects/Work/Marin/marin",
+      "ended_at": "2026-09-11T05:33:40Z",
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "git_branch": "calvin/swarm-olmo3-regmix-test",
+      "git_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "git_root": "/Users/calvinxu/Projects/Work/Marin/marin",
+      "git_worktree_dir": "/Users/calvinxu/Projects/Work/Marin/marin",
+      "id": "ses_01m27evjrd5va4jpd94vtnyjh3",
+      "intent": "Verify the complete TPP10 target curve and analyze the full pilot",
+      "last_touch_at": "2026-09-11T05:33:40Z",
+      "ledger_id": "0db0b028-e7c7-4672-ba25-8fdf237da666",
+      "started_at": "2026-09-11T05:25:43Z"
+    }
+  }
+}

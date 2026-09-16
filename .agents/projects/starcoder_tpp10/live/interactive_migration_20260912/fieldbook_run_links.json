@@ -1,0 +1,67 @@
+[
+  {
+    "attrs": {},
+    "created_at": "2026-09-12T21:33:04Z",
+    "deleted_at": null,
+    "failure_reason": null,
+    "finished_at": null,
+    "job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "role": "train",
+    "run_id": "run_01m27mq30yq05gy5dfxx7jhdpe",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-12T21:33:04Z"
+  },
+  {
+    "attrs": {},
+    "created_at": "2026-09-12T21:33:04Z",
+    "deleted_at": null,
+    "failure_reason": null,
+    "finished_at": null,
+    "job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "role": "train",
+    "run_id": "run_01m27mq0dnp8akz8698eszx60r",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-12T21:33:04Z"
+  },
+  {
+    "attrs": {},
+    "created_at": "2026-09-12T21:33:05Z",
+    "deleted_at": null,
+    "failure_reason": null,
+    "finished_at": null,
+    "job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "role": "train",
+    "run_id": "run_01m27mpxta54khxb3s64prvpbb",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-12T21:33:05Z"
+  },
+  {
+    "attrs": {},
+    "created_at": "2026-09-12T21:33:05Z",
+    "deleted_at": null,
+    "failure_reason": null,
+    "finished_at": null,
+    "job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "role": "train",
+    "run_id": "run_01m27mpv1b6nrwtved53w0qbdd",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-12T21:33:05Z"
+  },
+  {
+    "attrs": {},
+    "created_at": "2026-09-12T21:33:05Z",
+    "deleted_at": null,
+    "failure_reason": null,
+    "finished_at": null,
+    "job_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "role": "train",
+    "run_id": "run_01m27mprdmnq7716cf7as9t2zy",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-12T21:33:05Z"
+  }
+]

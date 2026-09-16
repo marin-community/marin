@@ -1,0 +1,14 @@
+{
+  "complete_rows": 28,
+  "old_24_requests_metrics_legacy_metrics_identical": true,
+  "population_counts_identical": true,
+  "shared_controls_identical": true,
+  "native_records_verified": 28,
+  "result_sha256": "2c3b8286420202d3a30a34c920780473ba8eece3e48f33b5464de4e493de330f",
+  "immutable_result_uri": "gs://marin-us-central1/experiments/tpp10_bpb_repair/6c7f6700b8cbf69e363a07ba5e3d3ecfb98c55aa1dd429dce936007b91b5983b/result_snapshots/2c3b8286420202d3a30a34c920780473ba8eece3e48f33b5464de4e493de330f.json",
+  "publication_uri": "gs://marin-us-central1/experiments/tpp10_bpb_repair/6c7f6700b8cbf69e363a07ba5e3d3ecfb98c55aa1dd429dce936007b91b5983b/record_closeouts/b0ac18e7a714883122f392d8592b1cb38c2e5f3fd9d1c213c4888a90a01e2bf9/publication.json",
+  "plots_visually_checked": [
+    "completed_sweeps.png",
+    "component_tradeoffs.png"
+  ]
+}

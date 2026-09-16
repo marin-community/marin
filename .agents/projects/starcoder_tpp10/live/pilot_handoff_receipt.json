@@ -1,0 +1,48 @@
+{
+  "experiment": {
+    "attrs": {},
+    "created_at": "2026-09-09T15:43:40Z",
+    "deleted_at": null,
+    "description": "Build and review a new matched-total-TPP three-curve experiment with finite StarCoder pools and independently replicated matched subsets. Training is not submitted.",
+    "id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "idempotency_key": "starcoder-tpp10-20260909",
+    "name": "StarCoder TPP 10 epoch-matching experiment",
+    "status": "active",
+    "tags": [
+      "epoch-matching",
+      "starcoder",
+      "tpp10"
+    ],
+    "updated_at": "2026-09-09T15:43:40Z"
+  },
+  "freshness": {
+    "checkpoint_status": "current",
+    "drifted_artifact_count": 0,
+    "drifted_artifacts": [],
+    "handoff_status": "current",
+    "last_checkpoint_at": "2026-09-10T20:44:27Z",
+    "last_handoff_at": "2026-09-10T20:44:27Z",
+    "since_last_checkpoint_hours": 2.255798826388889,
+    "since_last_handoff_hours": 2.255798826388889,
+    "stale_validation_count": 0,
+    "stale_validations": []
+  },
+  "note": {
+    "attrs": {
+      "session_id": "ses_01m26r5144k71tvk85s8jt9exx"
+    },
+    "author": null,
+    "body": "The seven-coordinate TPP10 pilot was accepted at 15:53:05 PDT on 10 September 2026 as /calvinxu/starcoder-tpp10-pilot. It covers p = 0, 0.1, 0.3, 0.5, 0.7, 0.9 and 1.0 with 57 cumulative artifacts: seven verified successes reused and 50 newly submitted jobs (six target, 11 unmatched proxy, 33 matched proxy).\n\nAt the 15:56 PDT startup check, the parent was running on the intended on-demand central1 CPU worker and all 50 v5p-8 children were queued in central1-a, with no errors. The parent disables automatic failure/preemption retries. The actual 26,207,690-byte workspace bundle is retained and matches the locally checked zip, all 27 source pins, and the pilot release. Runtime checks on each child execute before training; no new pilot training result is claimed from this queued snapshot.\n\nThe exact command, release, archived plan, preflight, child IDs and bundle receipt are in .agents/projects/starcoder_tpp10/live/ and releases/pilot.json. Fieldbook records all 57 datapoints, links the 50 new runs to the parent, and records each child job. The README and CC_CHANGES.md are updated. No scientific code, manuscript or outline changes were made.\n\nNext: monitor the recorded tree, verify all final endpoints against the archived plan, and run the prespecified per-subset common-grid selection analysis. Do not release the dense stage. A capacity queue is not a training failure; preserve successful artifacts and frozen identities on any authorized recovery.\n\n## Freshness\n\n- Handoff status: `current`\n- Drifted artifacts: 0\n- Stale validations: 0\n",
+    "body_format": "markdown",
+    "created_at": "2026-09-10T22:59:47Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m26rrxhapvaba5as09bms6pn",
+    "note_type": "checkpoint",
+    "resolved_at": null,
+    "status": "open",
+    "title": "Experiment handoff",
+    "updated_at": "2026-09-10T22:59:47Z"
+  }
+}

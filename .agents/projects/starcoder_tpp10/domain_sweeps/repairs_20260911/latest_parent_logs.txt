@@ -1,0 +1,55 @@
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + typer==0.21.1
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + typing-extensions==4.15.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + typing-inspect==0.9.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + typing-inspection==0.4.2
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + tzdata==2025.3
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + uritemplate==4.2.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + urllib3==2.7.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + uvicorn==0.40.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + uvloop==0.22.1
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + vortex-data==0.61.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + wadler-lindig==0.1.7
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + wandb==0.26.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + watchdog==6.0.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + watchfiles==1.1.1
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + websocket-client==1.9.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + websockets==15.0.1
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + wrapt==1.17.3
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + xxhash==3.6.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + yarl==1.22.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + zipp==3.23.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + zstandard==0.25.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | Resolved 14 packages in 133ms
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | Installed 5 packages in 17ms
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + linkify-it-py==2.2.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + mdit-py-plugins==0.6.1
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + memray==1.20.0
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + py-spy==0.4.2
+[04:29:33] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 |  + textual==8.2.8
+[04:30:13] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | wandb: [wandb.Api()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/tokenized/uncheatable_eval/wikipedia_english-tpp10/2026.09.11/56aadad78362c1b7d2faca56f13594e0fe5584fe7f5326333775071d49d1cf0c/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/tokenized/uncheatable_eval/github_python-tpp10/2026.09.11/dd0ef40165054a5419152a0b9f3a289b58a4dd55849ece882470eb187c60adf5/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/tokenized/uncheatable_eval/github_cpp-tpp10/2026.09.11/4087483d339a8811e3b50112b3188d93f246c5f93a9935d13c811694b8dfc55f/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/tokenized/uncheatable_eval/bbc_news-tpp10/2026.09.11/5b0c5e6e05de77909432ae14e4b8fdc28fd3498f47b9befa0ca91292c9c8bb35/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/tokenized/uncheatable_eval/arxiv_physics-tpp10/2026.09.11/7d6e7f1c2e34383226494edcc4812273b3251c7cd6614b146926098e3878c509/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/tokenized/uncheatable_eval/arxiv_computer_science-tpp10/2026.09.11/df41770beca319c42762b31efe5d70ad7026c160e175cd51718174c6c5c043d7/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/tokenized/uncheatable_eval/ao3_english-tpp10/2026.09.11/63c94a7dc60e9e32a65cb6782bc687e546254824d164b5c6040534e0b7d3f6a8/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Loading cache from gs://marin-us-central1/tokenized/uncheatable_eval/wikipedia_english-tpp10/2026.09.11/56aadad78362c1b7d2faca56f13594e0fe5584fe7f5326333775071d49d1cf0c/validation
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/tokenized/uncheatable_eval/wikipedia_english-tpp10/2026.09.11/56aadad78362c1b7d2faca56f13594e0fe5584fe7f5326333775071d49d1cf0c/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Loading cache from gs://marin-us-central1/tokenized/uncheatable_eval/github_python-tpp10/2026.09.11/dd0ef40165054a5419152a0b9f3a289b58a4dd55849ece882470eb187c60adf5/validation
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Loading cache from gs://marin-us-central1/tokenized/uncheatable_eval/github_cpp-tpp10/2026.09.11/4087483d339a8811e3b50112b3188d93f246c5f93a9935d13c811694b8dfc55f/validation
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/tokenized/uncheatable_eval/github_cpp-tpp10/2026.09.11/4087483d339a8811e3b50112b3188d93f246c5f93a9935d13c811694b8dfc55f/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/tokenized/uncheatable_eval/github_python-tpp10/2026.09.11/dd0ef40165054a5419152a0b9f3a289b58a4dd55849ece882470eb187c60adf5/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Loading cache from gs://marin-us-central1/tokenized/uncheatable_eval/bbc_news-tpp10/2026.09.11/5b0c5e6e05de77909432ae14e4b8fdc28fd3498f47b9befa0ca91292c9c8bb35/validation
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Loading cache from gs://marin-us-central1/tokenized/uncheatable_eval/arxiv_physics-tpp10/2026.09.11/7d6e7f1c2e34383226494edcc4812273b3251c7cd6614b146926098e3878c509/validation
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/tokenized/uncheatable_eval/bbc_news-tpp10/2026.09.11/5b0c5e6e05de77909432ae14e4b8fdc28fd3498f47b9befa0ca91292c9c8bb35/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/tokenized/uncheatable_eval/arxiv_physics-tpp10/2026.09.11/7d6e7f1c2e34383226494edcc4812273b3251c7cd6614b146926098e3878c509/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Loading cache from gs://marin-us-central1/tokenized/uncheatable_eval/arxiv_computer_science-tpp10/2026.09.11/df41770beca319c42762b31efe5d70ad7026c160e175cd51718174c6c5c043d7/validation
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Loading cache from gs://marin-us-central1/tokenized/uncheatable_eval/ao3_english-tpp10/2026.09.11/63c94a7dc60e9e32a65cb6782bc687e546254824d164b5c6040534e0b7d3f6a8/validation
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Loading cache from gs://marin-us-central1/paloma/dolma_100_programing_languages-tpp10/2026.09.09/validation
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/tokenized/uncheatable_eval/arxiv_computer_science-tpp10/2026.09.11/df41770beca319c42762b31efe5d70ad7026c160e175cd51718174c6c5c043d7/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/tokenized/uncheatable_eval/ao3_english-tpp10/2026.09.11/63c94a7dc60e9e32a65cb6782bc687e546254824d164b5c6040534e0b7d3f6a8/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:levanter.store.cache:Attempting to load cache ledger from gs://marin-us-central1/paloma/dolma_100_programing_languages-tpp10/2026.09.09/validation/shard_ledger.json
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | I0912 04:30:22.472254      39 google_auth_provider.cc:181] Running on GCE, using service account iris-worker@hai-gcp-models.iam.gserviceaccount.com
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:rigging.timing:build_caches[validation] over 8 components took 0:00:00.400965
+[04:30:26] task=/calvinxu/tpp10-bpb-repair/0 attempt=0 | INFO:jax._src.xla_bridge:Unable to initialize backend 'tpu': INTERNAL: Failed to open libtpu.so: libtpu.so: cannot open shared object file: No such file or directory

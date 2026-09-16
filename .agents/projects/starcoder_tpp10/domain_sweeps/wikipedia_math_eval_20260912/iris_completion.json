@@ -1,0 +1,5 @@
+{
+  "checked_at": "2026-09-12T07:48:54.487070+00:00",
+  "stdout": "JOB ID                                                      STATE      SUBMITTED\n/calvinxu/tpp10-wikipedia-math-eval/wikipedia-math-proxies  succeeded  2026-09-12T07:40:18.178000+00:00\n/calvinxu/tpp10-wikipedia-math-eval                         succeeded  2026-09-12T07:39:20.098000+00:00\n",
+  "stderr": "I20260912 00:48:53 8553706816 iris.cluster.config Loading config from lib/iris/config/marin.yaml\nNot all requested scopes were granted by the authorization server, missing scopes email.\n"
+}

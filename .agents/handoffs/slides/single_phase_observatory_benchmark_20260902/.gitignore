@@ -1,0 +1,4 @@
+png/
+*.pdf
+node_modules/
+dist/

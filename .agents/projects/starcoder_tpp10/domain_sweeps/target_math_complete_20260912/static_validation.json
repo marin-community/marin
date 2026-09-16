@@ -1,0 +1,18 @@
+{
+  "checked_at": "2026-09-12T08:28:30.001339+00:00",
+  "shell_syntax": "pass",
+  "inline_python_syntax": "pass",
+  "command_template_safety": "pass",
+  "first_stage_frozen_pin": "pass",
+  "first_stage_spec_sha256": "66f74c1e8f6f2f360270726605acdead4e1afbd211590e2fa24dbf094b8adc6e",
+  "final_spec_exists": false,
+  "final_bundle_checked": false,
+  "submission_performed": false,
+  "source_sha256": {
+    "experiments/domain_phase_mix/evaluate_tpp10_target_math_complete.py": "7058bf8e2da6f7a2abe6d5a58a85b51000096278a4cf7cb4b50244aa1d40fa74",
+    "experiments/domain_phase_mix/evaluate_tpp10_target_math.py": "8727a7b68d7ce06d4e5d6563055d8fe7b4158aab8481c4526454372ca6a3d400",
+    "experiments/domain_phase_mix/evaluate_tpp10_finemath_math.py": "10e16282f3e53632ddee369a62348f3691c293228e967667c30feb9e9bbc408b",
+    "experiments/domain_phase_mix/analyze_tpp10_target_math.py": "ee964b24434bbb911e45b260d49f2fdd0053f0ecfc842da23ca19c31e6a8d51b"
+  },
+  "command_preflight_sha256": "babb9cb572aeac7d1eaa592cff62f19ee474895e5a0fbd66fd6925b44774a999"
+}

@@ -1,0 +1,14 @@
+{
+  "status": "pass",
+  "review_type": "independent live raw-receipt audit",
+  "checked": {
+    "curve_receipts_exact_match": 16,
+    "new_wikipedia_checkpoint_metadata_hashes": 7,
+    "scored_populations_identical": true,
+    "shared_p0_lineage_exact": true,
+    "max_wikipedia_paloma_absolute_loss_delta": 3.814697265625e-06,
+    "paloma_tolerance": 5e-05,
+    "minima_and_cross_choice_penalties_recomputed_from_gcs": true
+  },
+  "scope": "Read-only audit; no jobs or mutations by reviewer."
+}

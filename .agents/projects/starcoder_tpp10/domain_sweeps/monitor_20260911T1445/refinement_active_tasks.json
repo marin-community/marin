@@ -1,0 +1,46 @@
+[
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-3a3d98fc",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "pending": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 1,
+    "run_name": "tpp10_matched_p060_s20260910_d20260913"
+  },
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-84488469",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "pending": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 2,
+    "run_name": "tpp10_matched_p060_s20260910_d20260912"
+  },
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "running": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 2,
+    "run_name": "tpp10_target_p060_s20260910",
+    "last_training_progress": "[14:46:41] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9/0 attempt=2 | I20260911 14:46:39 139942624813888 tqdm_loggable.tqdm_logging Progress on:train 3.65kit/11.5kit rate:1.4it/s remaining:1:33:40 elapsed:28:16 postfix:loss=2.37",
+    "last_log": "[14:46:41] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9/0 attempt=2 | I20260911 14:46:39 139942624813888 tqdm_loggable.tqdm_logging Progress on:train 3.65kit/11.5kit rate:1.4it/s remaining:1:33:40 elapsed:28:16 postfix:loss=2.37"
+  },
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "running": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 5,
+    "run_name": "tpp10_target_p055_s20260910",
+    "last_training_progress": "[14:46:04] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=5 | I20260911 14:46:02 140664450732864 tqdm_loggable.tqdm_logging Progress on:train 7.44kit/11.5kit rate:1.4it/s remaining:47:36 elapsed:28:17 postfix:loss=2.4",
+    "last_log": "[14:46:04] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=5 | I20260911 14:46:02 140664450732864 tqdm_loggable.tqdm_logging Progress on:train 7.44kit/11.5kit rate:1.4it/s remaining:47:36 elapsed:28:17 postfix:loss=2.4"
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "uri": "gs://marin-us-central2/iris/marin/state/bundles/a5c501ada6fb0cae6d1d2c978d7005a6fffeb8e60eb130884da6bcc2d5bbbd61",
+  "bundle_sha256": "a5c501ada6fb0cae6d1d2c978d7005a6fffeb8e60eb130884da6bcc2d5bbbd61",
+  "size": 26142646,
+  "generation": "1789003058098235",
+  "crc32c": "YgjG3w==",
+  "checked_at": "2026-09-10T01:18:43.585201Z",
+  "scope": "Full submitted workspace bundle; controller code archive. Experiment parent, children and data are central1."
+}
