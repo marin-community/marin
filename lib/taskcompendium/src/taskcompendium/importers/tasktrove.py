@@ -10,8 +10,6 @@ from dataclasses import dataclass
 
 from taskcompendium.models import Source
 
-RELEASE = "2026.09.10.9"
-RELEASE_ROOT = f"s3://marin-us-east-02a/marin/tasktrove/clean/{RELEASE}"
 IMPORTER_REVISION = "taskcompendium-tasktrove-v0.1"
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 1_024
@@ -23,16 +21,29 @@ class TaskArchive:
 
     tasktrove_source: str
     tasktrove_path: str
+    release_uri: str
+    release_revision: str
     files: dict[str, bytes]
 
     @property
     def source(self) -> Source:
-        return Source(RELEASE_ROOT, RELEASE, f"{self.tasktrove_source}:{self.tasktrove_path}", IMPORTER_REVISION)
+        return Source(
+            self.release_uri,
+            self.release_revision,
+            f"{self.tasktrove_source}:{self.tasktrove_path}",
+            IMPORTER_REVISION,
+        )
 
 
-def read_archive(data: bytes, tasktrove_source: str, tasktrove_path: str) -> TaskArchive:
+def read_archive(
+    data: bytes,
+    tasktrove_source: str,
+    tasktrove_path: str,
+    release_uri: str,
+    release_revision: str,
+) -> TaskArchive:
     """Read regular archive members without extracting them to the host filesystem."""
-    if not tasktrove_source or not tasktrove_path or len(data) > MAX_ARCHIVE_BYTES:
+    if not all((tasktrove_source, tasktrove_path, release_uri, release_revision)) or len(data) > MAX_ARCHIVE_BYTES:
         raise ValueError("Task archive has an invalid identity or exceeds the input limit")
     files: dict[str, bytes] = {}
     size = 0
@@ -61,4 +72,4 @@ def read_archive(data: bytes, tasktrove_source: str, tasktrove_path: str) -> Tas
             raise ValueError("Task archive does not match its declared source identity")
     except (KeyError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError) as error:
         raise ValueError(f"Invalid TaskTrove archive metadata: {error}") from error
-    return TaskArchive(tasktrove_source, tasktrove_path, files)
+    return TaskArchive(tasktrove_source, tasktrove_path, release_uri, release_revision, files)
