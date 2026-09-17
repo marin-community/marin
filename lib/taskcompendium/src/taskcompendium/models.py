@@ -4,9 +4,10 @@
 """Private semantics for one deterministic, single-turn answer task."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
-SCHEMA_VERSION = "0.2"
+SCHEMA_VERSION = "0.3"
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,13 @@ class TaskRequirements:
     action_interfaces: tuple[str, ...] = ()
 
 
+class AnswerKind(StrEnum):
+    """Public semantic form of an answer, independent of its verifier."""
+
+    TEXT = "text"
+    OPTION_LETTER = "option_letter"
+
+
 @dataclass(frozen=True)
 class TaskSpec:
     """The private definition of one deterministic answer task."""
@@ -53,6 +61,7 @@ class TaskSpec:
     verifier: VerifierSpec
     source: Source
     requirements: TaskRequirements
+    answer_kind: AnswerKind = AnswerKind.TEXT
     schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
