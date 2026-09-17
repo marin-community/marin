@@ -34,6 +34,7 @@ from marin.evaluation.records import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
+from marin.rollout_catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 
 logger = logging.getLogger(__name__)
 
@@ -311,6 +312,24 @@ def _run_one_evaluation(
         coverage,
         canonical_metrics,
         tasks,
+    )
+    record_rollout_run(
+        rollout_run_record(
+            run_id=evaluation.identity.run_id,
+            run_kind=RolloutRunKind.EVALUATION,
+            producer=evaluation.identity.eval_ref.mechanism,
+            status=status.value,
+            rollout_uri=evaluation.identity.output_dir,
+            storage_format="finestore",
+            artifact_uri=path,
+            model=batch.model.name,
+            job_id=orchestrator_job_id,
+            attributes={
+                "eval_name": evaluation.identity.eval_ref.name,
+                "eval_runtime": evaluation.identity.eval_runtime,
+                "group_id": batch.group_id,
+            },
+        )
     )
     failure = f"{evaluation.identity.eval_ref.name} ({status.value})" if error is not None else None
     return _EvaluationExecution(

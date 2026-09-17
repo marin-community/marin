@@ -68,6 +68,30 @@ filters for one Evalchemy response share one rollout. Harbor's normalized `steps
 complete Harbor trajectory remain source objects and blobs, so normalization does not replace the
 raw record.
 
+### Rollout run catalog
+
+Completed and failed attempts are discoverable in Finelog's `marin.rollout_runs` table. Each row
+identifies the logical run and concrete attempt, its producer and terminal status, the model and Iris
+job when known, and the URI and format of the retained rollouts. Harbor and Evalchemy rows point to
+the FineStore archive that contains `rollouts` alongside the evaluator-owned tables and raw source
+objects. SkyRL rows point to the retained trajectory directory and terminal model manifest; the
+catalog contract does not depend on the trajectory storage format.
+
+For example, list the newest successful rollout attempts with:
+
+```sql
+SELECT timestamp_ms, run_kind, producer, run_id, attempt_id, model,
+       rollout_uri, storage_format
+FROM "marin.rollout_runs"
+WHERE status = 'succeeded'
+ORDER BY timestamp_ms DESC
+```
+
+The table is an append-only discovery index, not the source of truth for rollout contents. Writers
+emit one terminal row per attempt from Marin's evaluation orchestrator or SkyRL adapter. Evalchemy
+and Harbor do not need to depend on Marin's Finelog schema: they continue to own their native
+FineStore output, and Marin catalogs and normalizes it after the evaluator finishes.
+
 - [`eval_step`][marin.experiment.evaluation.eval_step] builds one post-hoc eval artifact from an
   `EvalGroup`; combine groups and aggregate them with
   [`eval_report`][marin.experiment.evaluation.eval_report]. Concrete task menus remain in

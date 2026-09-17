@@ -164,7 +164,7 @@ def rollout_records_from_steps(steps: Iterable[StepRecord]) -> Iterator[RolloutR
             part_id += 1
 
 
-def _sample_rows(reader: ReadView) -> Iterator[tuple[EvalSample, str]]:
+def _unique_sample_attempts(reader: ReadView) -> Iterator[tuple[EvalSample, str]]:
     previous_key: tuple[str, str, str] | None = None
     for row in reader.iter_rows(ARCHIVE_SAMPLES_TABLE):
         key = (row["task"], row["doc_id"], row.get("trial_id") or "")
@@ -188,7 +188,7 @@ def normalize_rollouts(root: str, *, writer_id: str) -> None:
     records = itertools.chain(
         (
             record
-            for sample, trial_id in _sample_rows(reader)
+            for sample, trial_id in _unique_sample_attempts(reader)
             for record in rollout_records_from_sample(sample, trial_id=trial_id)
         ),
         rollout_records_from_steps(_step_rows(reader)),

@@ -272,9 +272,9 @@ def sample_from_archive_row(row: dict) -> EvalSample:
 
     ``metrics`` is a pinned ``map<string,double>``, so a batch that wrote no metrics reads back a null
     map and a partly-populated map can carry null values; normalize null, absent, and null-valued
-    metrics to a plain dict (a null value means the metric is absent, not zero) before validation. The
-    caller must materialize map columns as dicts (``to_pylist(maps_as_pydicts="strict")``). Archive-only
-    keys (``trial_id`` and finestore's ``_seq``/``_writer``/``_gen`` columns) are ignored by the model.
+    metrics to a plain dict (a null value means the metric is absent, not zero) before validation.
+    Arrow map-pair iterables are accepted directly. Archive-only keys (``trial_id`` and finestore's
+    ``_seq``/``_writer``/``_gen`` columns) are ignored by the model.
     """
     metrics = dict(row.get("metrics") or {})
     return EvalSample.model_validate(
