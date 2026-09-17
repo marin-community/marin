@@ -10,7 +10,7 @@ import logging
 import os
 import time
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
@@ -65,6 +65,7 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
 from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, RematMode, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
@@ -279,6 +280,8 @@ class GrugTrainerConfig:
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
     data_seed: int | None = None
     log_every: int = 1
+    # None preserves automatic GC; 100 was tested with the full model on EP64.
+    gc_interval: int | None = None
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
@@ -305,6 +308,10 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     sharding_dump_path: str | None = None
+
+    def __post_init__(self):
+        if self.gc_interval is not None and self.gc_interval <= 0:
+            raise ValueError("GC interval must be positive")
 
 
 @dataclass(frozen=True)
@@ -497,6 +504,19 @@ def _first_step_only(hook: Callable[..., None]) -> Callable[..., None]:
         hook(step, *args, **kwargs)
 
     return gated
+
+
+def _collect_after_eval(hook: Callable[..., None]) -> Callable[..., None]:
+    @functools.wraps(hook)
+    def wrapped(*args, **kwargs):
+        try:
+            hook(*args, **kwargs)
+        finally:
+            # Eval can leave cycles holding replicated device buffers. Reclaim them
+            # after its frame has returned, before another eval or training step.
+            collect_garbage()
+
+    return wrapped
 
 
 def build_tagged_evaluator(
@@ -957,7 +977,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     dashboard = (
         TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
     )
-    with set_mesh(mesh), dashboard:
+    with set_mesh(mesh), dashboard, ExitStack() as gc_resources:
         batch_schedule = trainer.batch_schedule
 
         @jax.jit
@@ -1154,6 +1174,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 eval_hooks.append(dropless_eval_hook)
 
+            if config.trainer.gc_interval is not None:
+                eval_hooks = [_collect_after_eval(hook) for hook in eval_hooks]
+
             if interval is not None and interval > 0:
                 for hook in eval_hooks:
                     state_callbacks.add_hook(hook, every=interval)
@@ -1173,12 +1196,20 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
 
+        current_step = int(state.step)
+        gc_start_step = current_step + GC_WARMUP_STEPS
+
         # Main optimization loop.
         try:
-            while int(state.step) < stop_step:
+            while current_step < stop_step:
+                iteration_start = time.perf_counter()
+                if config.trainer.gc_interval is not None and current_step == gc_start_step:
+                    gc_start = time.perf_counter()
+                    gc_hook = gc_resources.enter_context(coordinated_gc())
+                    state_callbacks.add_hook(gc_hook, every=config.trainer.gc_interval)
+                    levanter.tracker.log({GC_TIME_METRIC: time.perf_counter() - gc_start}, step=current_step)
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
-                current_step = int(state.step)
                 watch_due = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
@@ -1192,13 +1223,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 state, metrics, inline_watch_stats = train_step(state, batch)
                 if inline_watch_stats is not None and watch_due:
                     watch_stats = inline_watch_stats
-                step = int(state.step) - 1
+                current_step = int(state.step)
+                step = current_step - 1
 
                 jax.block_until_ready(metrics["train/loss"])
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
 
                 if not jnp.isfinite(metrics["train/loss"]):
-                    raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
+                    raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {current_step}.")
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
@@ -1237,13 +1269,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
+                checkpoint_start = time.perf_counter()
                 if checkpointer is not None:
                     with callbacks.progress_event_scope(
                         state_callbacks.emit_event,
                         callbacks.ProgressEvent.CHECKPOINT_STARTED,
                         callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                     ):
-                        checkpointer.on_step(tree=state, step=int(state.step))
+                        checkpointer.on_step(tree=state, step=current_step)
+
+                checkpoint_duration = time.perf_counter() - checkpoint_start
+                levanter.tracker.log(
+                    {
+                        "throughput/checkpoint_time": checkpoint_duration,
+                        "throughput/iteration_time": time.perf_counter() - iteration_start,
+                    },
+                    step=step,
+                )
 
         except BaseException:
             logger.exception(

@@ -41,6 +41,45 @@ The attention, shared-expert, language-model-head, and optimizer states use the 
 Bounded diagnostics write metrics only by default. `--save-checkpoints` writes checkpoints below
 `--checkpoint-path` and resumes from the newest complete checkpoint.
 
+## Coordinated garbage collection
+
+Pass `--gc-interval 100` to `python -m experiments.grug.moe_hero_ep.launch_diagnostics`,
+or set `gc_interval=100` in `hero_grug_trainer_config`. The default `None` preserves automatic
+Python garbage collection. The launcher distributes one configuration to all ranks. After ten
+training steps in each process (including after resume), disable automatic cyclic collection
+and collect once. Then a training hook collects at completed global steps divisible by the
+interval, after evaluation hooks and before checkpoint work. It also collects on the forced
+final callback pass. Training collectives bound rank skew; GC adds no barriers. Collect after each
+evaluation hook as well, so cycles holding temporary eval buffers do not wait for the next periodic boundary.
+Reference-count deallocation continues. The previous GC policy is restored on exit.
+
+`throughput/gc_time` records local startup and hook collection time when GC runs; the `garbage_collection`
+profiler annotation also covers evaluation cleanup. Evaluation cleanup is included in callback
+and iteration time. `throughput/checkpoint_time` includes the save-decision broadcast and any
+synchronous checkpoint work. `throughput/iteration_time` includes batch loading, training,
+callbacks, checkpoint work, and GC. The existing `throughput/duration` excludes loading,
+callbacks, checkpoints, and GC. Tracker steps are zero-based: collections after completed updates
+100/200/300 appear at x=99/199/299. Use elapsed time per update for comparisons.
+
+The [single-rack validation](https://iris.oa.dev/#/job/%2Fmwittmann%2Fgc-sync-9205-hook-20260917-coord)
+used the full model with one sequence per GPU on 64 GPUs. Across 300 measured updates after ten
+warmup steps, elapsed time including initial and final collection fell from 795.576 to 776.003
+seconds (2.46%; 2.652 to 2.587 seconds/update). Before the final callback pass, elapsed time fell
+from 795.575 to 774.700 seconds (2.62%). Across all ranks, automatic GC produced 72 full
+collections across 48 steps; coordinated GC produced one collection per rank after warmup, at
+global updates 100/200/300, and on normal completion at global update 310. Scheduled collections ran through
+the training hook before checkpoint decisions. The slowest rank's periodic collections took
+1.15–1.22 seconds; final collection took up to 1.30 seconds.
+
+Both arms had identical sampled live HBM (35.094 GiB per rank) and allocator peaks (111.840 GiB),
+with no increase above their post-warmup baselines. Live memory was sampled every ten measured
+steps and at completion; the allocator peak includes warmup. The largest per-rank RSS increase in treatment was
+54.4 MiB above its post-warmup baseline. This single pair exercised checkpoint decisions with writes
+and evaluation disabled. The result supports the mechanism and short-term memory behavior at this
+batch size. Cycles can still retain device buffers between collections; keep the feature opt-in
+pending a production-batch trial that includes evaluation transitions and longer memory tracking.
+See [#9205](https://github.com/marin-community/marin/issues/9205).
+
 ## Why this recipe
 
 [#8549](https://github.com/marin-community/marin/pull/8549) selected the ragged transport in a
@@ -77,6 +116,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 
 | option | effect |
 | --- | --- |
+| `--gc-interval` | opts into cyclic GC at shared completed-step boundaries after warmup |
 | `--dp-racks` | sets the data-parallel rack count; `--batch-size` stays global |
 | `--batch-size` | sets global sequences per step and the optimizer token budget |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
