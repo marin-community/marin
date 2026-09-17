@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = ["msgspec>=0.18", "tasktrove-verify[answer]"]
 
 [project.entry-points."taskcompendium.verifiers"]
-exact_answer = "taskcompendium.grading:register_exact_answer"
+exact_answer = "taskcompendium.grading:exact_answer_handler"
 
 [project.optional-dependencies]
 harbor = ["harbor"]
