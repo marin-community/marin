@@ -11,7 +11,6 @@ from collections.abc import Iterator
 import httpx
 import pytest
 import requests
-
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.inference.chat_template_protocol import ChatTemplateProtocol, ToolCallFormat, protocol_for_chat_template
 from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, build_dashboard_app, serve_app_background
