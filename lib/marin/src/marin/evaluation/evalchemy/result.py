@@ -15,16 +15,13 @@ import logging
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from finestore.layout import BlobTables
-from finestore.reader import ReadView
 from pydantic import Field
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.evalchemy.client import EVALCHEMY_RESULTS_PREFIX, EVALCHEMY_RESULTS_SUFFIX
 from marin.evaluation.lm_eval_samples import (
-    EVALCHEMY_NATIVE_SOURCE_DIR,
-    EVALCHEMY_SOURCE_ROOT,
     is_scratch_artifact,
+    read_native_evalchemy_artifacts,
 )
 from marin.execution.artifact import Artifact, result_type_name
 
@@ -107,32 +104,13 @@ class FineStoreEvalchemyResult(EvalResult):
 
     @functools.cached_property
     def _task_metrics(self) -> dict[str, dict[str, float]]:
-        reader = ReadView(self.path)
-        result_sources: list[tuple[str, str]] = []
-        for key in reader.keys(BlobTables.DESCRIPTORS):
-            name = key[0]
-            if not isinstance(name, str):
-                continue
-            path = PurePosixPath(name)
-            if not path.is_relative_to(EVALCHEMY_SOURCE_ROOT):
-                continue
-            relative = path.relative_to(EVALCHEMY_SOURCE_ROOT)
-            if (
-                len(relative.parts) != 3
-                or relative.parts[1] != EVALCHEMY_NATIVE_SOURCE_DIR
-                or not relative.name.startswith(EVALCHEMY_RESULTS_PREFIX)
-                or relative.suffix != EVALCHEMY_RESULTS_SUFFIX
-            ):
-                continue
-            result_sources.append((name, relative.parts[0]))
-        if not result_sources:
+        result_payloads = read_native_evalchemy_artifacts(self.path).result_payloads
+        if not result_payloads:
             raise FileNotFoundError(f"no Evalchemy results artifacts in FineStore archive {self.path}")
 
         metrics: dict[str, dict[str, float]] = {}
-        for name, task_dir in sorted(result_sources):
-            payload = reader.read_blob(name)
-            if payload is None:
-                raise FileNotFoundError(f"FineStore archive {self.path} lists {name!r} but cannot read it")
+        for name, payload in sorted(result_payloads.items()):
+            task_dir = PurePosixPath(name).parent.parent.name
             results = json.loads(payload).get("results", {})
             metrics.update(_metrics_for_task_dir(results, task_dir))
         return metrics
