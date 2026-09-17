@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Inventory the source, copy each object into staging while recording verified
+# progress, then promote staged objects and publish the completion manifest last.
 """Resumable, content-verified prefix copies across routed filesystems."""
 
 import hashlib
@@ -377,6 +379,7 @@ def _promote(
     staged: _DestinationFile | None,
     published: _DestinationFile | None,
 ) -> None:
+    """Promote a verified staged object after rechecking its resume marker."""
     staging_path = _join_path(staging_root, verified.path)
     destination_path = _join_path(destination_root, verified.path)
     marker_path = _join_path(status_root, f"{hashlib.sha256(verified.path.encode()).hexdigest()}.json")
