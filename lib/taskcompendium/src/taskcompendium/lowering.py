@@ -72,6 +72,7 @@ def lower_to_harbor(
         raise ValueError("A rendering id is required")
     instruction = render_instruction(specification, rendering)
     destination.mkdir(parents=True, exist_ok=False)
+    (destination / "environment").mkdir()
     (destination / "instruction.md").write_text(instruction)
     (destination / "task.toml").write_text('version = "1.0"\n\n[environment]\nallow_internet = false\n')
     (destination / "specification.json").write_text(json.dumps(dataclasses.asdict(specification), indent=2) + "\n")

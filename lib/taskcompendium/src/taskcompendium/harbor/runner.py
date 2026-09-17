@@ -35,6 +35,8 @@ async def run_trial(task_dir: Path, binding: HarborTaskBinding, launch: HarborLa
         raise ValueError(f"Unsupported launch agent: {launch.agent}")
     if launch.agent == "chat" and launch.model is None:
         raise ValueError("Chat launch requires a model")
+    if "api_key" in launch.agent_kwargs:
+        raise ValueError("Use api_key_env so credentials stay out of Harbor trial artifacts")
     agent: dict[str, Any] = {"import_path": agents[launch.agent], "kwargs": launch.agent_kwargs}
     if launch.model is not None:
         agent["model_name"] = launch.model
