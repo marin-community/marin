@@ -49,7 +49,9 @@ examples and send a prompt that asks the model to use them.
 
 Tool source may contain only top-level function definitions. Every parameter
 and return value must be typed; positional-only parameters, `*args`, `**kwargs`,
-and decorators are rejected. Functions can be synchronous or asynchronous.
+keyword-only parameters, decorators, and asynchronous functions are rejected.
+Annotations may use `bool`, `float`, `int`, `str`, `object`, `None`, lists,
+string-keyed dictionaries, and `|` unions. Defaults must be JSON literals.
 
 ```python
 def lookup_weather(city: str, units: str = "celsius") -> dict[str, object]:
@@ -74,14 +76,20 @@ The Delphi template instead uses `<|tool_call|>` and
 model's template, runs each call in the Iris service, and adds the call and
 result to the next request as structured `tool_calls` and `role: "tool"`
 messages. The same template then renders the result in its trained format.
-Argument and return annotations are validated with Pydantic. Schema generation
-and each call run in a fresh subprocess with a 10-second timeout, and source is
-limited to 64 KiB. One model response counts as one round, including a response
-with multiple calls. The UI executes calls from the eighth round, stops before
-another model request, and displays a limit error.
+The server derives schemas from the function syntax without executing the
+source. Pydantic validates arguments before each call and the return value
+afterward. Each call runs in a fresh ShellSim environment that cannot access
+the host filesystem, processes, network, environment variables, or clock. The
+simulation is limited to 10 million CPU ticks, 64 MiB of memory, 4 MiB of disk,
+and 1 MiB of output. An outer worker also enforces a 10-second wall timeout,
+and source is limited to 64 KiB. ShellSim implements a source-compatible subset
+of Python rather than full CPython, so unsupported modules and language features
+fail the tool call.
+
+One model response counts as one round, including a response with multiple
+calls. The UI executes calls from the eighth round, stops before another model
+request, and displays a limit error.
 
 After the endpoint becomes ready, `marin-serve iris` prints a capability URL.
-Possession of that URL authorizes both inference and arbitrary Python execution
-through the tool editor. The subprocess is a process boundary, not a security
-sandbox: tool code has the same environment and credentials as the Iris
-service. Share the URL only with trusted users and treat it as a credential.
+Possession of that URL authorizes inference and simulated Python tool calls.
+Share the URL only with trusted users and treat it as a credential.

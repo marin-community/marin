@@ -92,6 +92,32 @@ def multiply(value: int, factor: int = 2) -> int:
     return value * factor
 '''
 
+COMPOUND_INTEREST_TOOL_SOURCE = '''
+def compound_interest(principal: float, annual_rate_percent: float, years: int) -> float:
+    """Return the balance after annual compounding."""
+    return principal * (1 + annual_rate_percent / 100) ** years
+'''
+
+WORD_STATISTICS_TOOL_SOURCE = '''
+def word_statistics(text: str) -> dict[str, int]:
+    """Count all words and case-insensitive unique words."""
+    words = text.split()
+    return {"words": len(words), "unique_words": len({word.lower() for word in words})}
+'''
+
+HOST_ENVIRONMENT_TOOL_SOURCE = '''
+def host_environment(name: str) -> str | None:
+    """Return a simulated environment variable."""
+    import os
+    return os.getenv(name)
+'''
+
+CPU_EXHAUSTION_TOOL_SOURCE = """
+def spin() -> int:
+    while True:
+        pass
+"""
+
 
 @pytest.mark.parametrize(
     ("heads", "chips", "kv_heads", "expected"),
@@ -775,8 +801,23 @@ def test_python_tool_source_requires_typed_functions_and_validates_arguments():
     with pytest.raises(ValueError):
         python_tools_from_source("def untyped(value: int):\n    return value\n")
 
+    with pytest.raises(ValueError, match="must be synchronous"):
+        python_tools_from_source("async def asynchronous(value: int) -> int:\n    return value\n")
+
     with pytest.raises(ValueError):
         python_tools_from_source("CONSTANT = 1\n")
+
+
+def test_python_tool_schema_rejects_executable_defaults_without_running_them(tmp_path):
+    marker = tmp_path / "executed"
+    source = f"""def unsafe(value: int = open({str(marker)!r}, "w").write("executed")) -> int:
+    return value
+"""
+
+    with pytest.raises(ValueError, match="JSON-literal default"):
+        python_tools_from_source(source)
+
+    assert not marker.exists()
 
 
 @pytest.mark.parametrize(
@@ -810,7 +851,8 @@ def test_chat_template_protocol_matches_generated_delimiters(template, expected)
     assert protocol_for_chat_template(template) == expected
 
 
-def test_dashboard_executes_typed_python_tools():
+def test_dashboard_executes_typed_python_tools_in_shellsim(monkeypatch):
+    monkeypatch.setenv("MARIN_SHELLSIM_HOST_SECRET", "must-not-leak")
     dashboard_sock = bind_serving_socket("127.0.0.1", 0)
     dashboard_port = dashboard_sock.getsockname()[1]
     info = ServingInfo(
@@ -838,11 +880,45 @@ def test_dashboard_executes_typed_python_tools():
             json={"source": MULTIPLY_TOOL_SOURCE, "arguments": {"unknown": 1}},
             timeout=10,
         )
+        compound_interest = requests.post(
+            f"{base}/tools/compound_interest",
+            json={
+                "source": COMPOUND_INTEREST_TOOL_SOURCE,
+                "arguments": {"principal": 2500, "annual_rate_percent": 4.5, "years": 8},
+            },
+            timeout=10,
+        )
+        word_statistics = requests.post(
+            f"{base}/tools/word_statistics",
+            json={
+                "source": WORD_STATISTICS_TOOL_SOURCE,
+                "arguments": {"text": "the quick brown fox jumps over the lazy dog"},
+            },
+            timeout=10,
+        )
+        host_environment = requests.post(
+            f"{base}/tools/host_environment",
+            json={
+                "source": HOST_ENVIRONMENT_TOOL_SOURCE,
+                "arguments": {"name": "MARIN_SHELLSIM_HOST_SECRET"},
+            },
+            timeout=10,
+        )
+        exhausted = requests.post(
+            f"{base}/tools/spin",
+            json={"source": CPU_EXHAUSTION_TOOL_SOURCE, "arguments": {}},
+            timeout=10,
+        )
 
     assert definitions.json()[0]["function"]["name"] == "multiply"
     assert definitions.json()[0]["function"]["parameters"]["required"] == ["value"]
     assert result.json() == 42
     assert invalid.status_code == 422
+    assert compound_interest.json() == pytest.approx(3555.2515320915186)
+    assert word_statistics.json() == {"words": 9, "unique_words": 8}
+    assert host_environment.json() is None
+    assert exhausted.status_code == 422
+    assert "cpu_exhausted" in exhausted.json()["details"]
 
 
 def test_dashboard_serves_ui_and_reverse_proxies_streaming():

@@ -27,7 +27,7 @@ export const CHAT_EXAMPLES: ChatExample[] = [
     prompt: 'Use the Python tool to calculate the balance on $2,500 at 4.5% annual interest for 8 years.',
     pythonTools: `def compound_interest(principal: float, annual_rate_percent: float, years: int) -> float:
     """Return the balance after annual compounding."""
-    return round(principal * (1 + annual_rate_percent / 100) ** years, 2)`,
+    return principal * (1 + annual_rate_percent / 100) ** years`,
   },
   {
     label: 'Python tool · Word statistics',

@@ -359,7 +359,7 @@ async function complete(
             @input="emit('persist')"
           ></textarea>
           <p class="mt-1 text-[0.7rem] text-text-muted">
-            Define typed top-level functions. Their schemas use the model's trained tool format and execute on this Iris task.
+            Define synchronous typed functions. Calls run in an isolated, resource-bounded ShellSim environment.
           </p>
         </div>
         <div class="flex items-end gap-2">
