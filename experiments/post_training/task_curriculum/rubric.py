@@ -22,6 +22,7 @@ class RubricConfig:
     minimum_ready_total: int
     require_full_evidence_support: bool
     require_full_generation_validity: bool
+    require_difficulty_gradient: bool
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ def load_rubric(path: Path) -> RubricConfig:
         minimum_ready_total=ready_gate["minimum_total"],
         require_full_evidence_support=ready_gate["requires_full_evidence_support"],
         require_full_generation_validity=ready_gate["requires_full_generation_validity"],
+        require_difficulty_gradient=ready_gate["requires_difficulty_gradient"],
     )
 
 
@@ -147,6 +149,7 @@ def evaluate_unit(evidence: UnitEvidence, config: RubricConfig) -> UnitRubricRes
         and total >= config.minimum_ready_total
         and (support == 2 or not config.require_full_evidence_support)
         and (generation_validity == 2 or not config.require_full_generation_validity)
+        and (difficulty_gradient > 0 or not config.require_difficulty_gradient)
     )
     return UnitRubricResult(
         unit_id=evidence.unit_id,

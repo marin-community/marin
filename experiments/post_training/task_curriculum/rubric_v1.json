@@ -41,7 +41,8 @@
   "ready_gate": {
     "minimum_total": 10,
     "requires_full_evidence_support": true,
-    "requires_full_generation_validity": true
+    "requires_full_generation_validity": true,
+    "requires_difficulty_gradient": true
   },
   "fatal_flaws": [
     "The outcome is a topic, source, answer format, or verifier rather than an observable behavior.",

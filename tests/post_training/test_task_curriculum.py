@@ -119,6 +119,7 @@ def _rubric() -> RubricConfig:
         minimum_ready_total=10,
         require_full_evidence_support=True,
         require_full_generation_validity=True,
+        require_difficulty_gradient=True,
     )
 
 
@@ -172,11 +173,10 @@ def test_curriculum_rejects_prerequisite_cycle(tmp_path: Path) -> None:
     ("task_vector", "unit_anchors", "expected"),
     [
         ((1.0, 0.0), {"add": ((1.0, 0.0),)}, AssignmentStatus.ASSIGNED),
-        ((1.0, 0.0), {}, AssignmentStatus.COVERAGE_GAP),
         ((0.0, 1.0), {"add": ((1.0, 0.0),)}, AssignmentStatus.OUTSIDE_INVENTORY),
     ],
 )
-def test_hierarchical_assignment_distinguishes_assignment_gaps_and_inventory(
+def test_hierarchical_assignment_distinguishes_assignment_and_outside_inventory(
     task_vector: tuple[float, float],
     unit_anchors: dict[str, tuple[tuple[float, float], ...]],
     expected: AssignmentStatus,
@@ -196,6 +196,45 @@ def test_hierarchical_assignment_distinguishes_assignment_gaps_and_inventory(
     )
 
     assert assignment.status == expected
+
+
+def test_hierarchical_assignment_reports_coverage_gap_without_local_units() -> None:
+    assignment = assign_hierarchically(
+        macro_vector=(1.0, 0.0),
+        unit_vector=(1.0, 0.0),
+        macro_anchors={"C01": ((1.0, 0.0),)},
+        unit_anchors={},
+        units_by_id={},
+        thresholds=AssignmentThresholds(
+            max_macro_distance=0.4,
+            min_macro_margin=0.0,
+            max_unit_distance=0.2,
+            min_unit_margin=0.0,
+        ),
+    )
+
+    assert assignment.status == AssignmentStatus.COVERAGE_GAP
+    assert assignment.macro_area_id == "C01"
+
+
+@pytest.mark.parametrize("unit_anchors", [{}, {"add": ()}])
+def test_hierarchical_assignment_rejects_missing_selected_macro_anchors(
+    unit_anchors: dict[str, tuple[tuple[float, float], ...]],
+) -> None:
+    with pytest.raises(ValueError, match="missing or empty unit anchors"):
+        assign_hierarchically(
+            macro_vector=(1.0, 0.0),
+            unit_vector=(1.0, 0.0),
+            macro_anchors={"C01": ((1.0, 0.0),)},
+            unit_anchors=unit_anchors,
+            units_by_id={"add": _unit()},
+            thresholds=AssignmentThresholds(
+                max_macro_distance=0.4,
+                min_macro_margin=0.0,
+                max_unit_distance=0.2,
+                min_unit_margin=0.0,
+            ),
+        )
 
 
 def test_hierarchical_assignment_abstains_between_neighboring_units() -> None:
@@ -285,6 +324,28 @@ def test_rubric_accepts_supported_valid_unit_with_mixed_solve_results() -> None:
     assert result.ready
 
 
+def test_rubric_rejects_ready_unit_without_difficulty_gradient() -> None:
+    result = evaluate_unit(
+        UnitEvidence(
+            unit_id="add",
+            observable_outcome=2,
+            distinct_boundary=2,
+            generation_feasible=2,
+            reviewed_examples=4,
+            source_count=2,
+            generated_valid=3,
+            generated_total=3,
+            solve_successes=6,
+            solve_attempts=6,
+            difficulty_ordering_plausible=True,
+        ),
+        _rubric(),
+    )
+
+    assert result.total == 10
+    assert not result.ready
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -319,6 +380,20 @@ def test_catalog_evaluation_rejects_inconsistent_macro_totals(tmp_path: Path) ->
     evidence_path = _write_json(tmp_path / "evidence.json", evidence)
 
     with pytest.raises(ValueError):
+        evaluate_catalog(
+            CURRICULUM_ROOT / "macro_areas.json",
+            CURRICULUM_ROOT / "math_v0.json",
+            CURRICULUM_ROOT / "rubric_v1.json",
+            evidence_path,
+        )
+
+
+def test_catalog_evaluation_rejects_string_boolean_evidence(tmp_path: Path) -> None:
+    evidence = json.loads((CURRICULUM_ROOT / "pilot_evaluation.json").read_text())
+    evidence["unit_evidence"][0]["difficulty_ordering_plausible"] = "false"
+    evidence_path = _write_json(tmp_path / "evidence.json", evidence)
+
+    with pytest.raises(ValueError, match="difficulty_ordering_plausible must be a boolean"):
         evaluate_catalog(
             CURRICULUM_ROOT / "macro_areas.json",
             CURRICULUM_ROOT / "math_v0.json",

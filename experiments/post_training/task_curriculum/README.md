@@ -26,7 +26,7 @@ The blind macro review found 24 micro-vocabulary gaps in 64 tasks. Twenty were m
 
 ## Rubric
 
-`rubric_v1.json` scores each unit from 0 to 2 on observable outcome, boundary quality, evidence support, generation feasibility, generated-task validity, and difficulty gradient. A ready unit needs at least 10 of 12 points, three reviewed examples from at least two sources, at least 95% valid generated tasks, and no fatal flaw.
+`rubric_v1.json` scores each unit from 0 to 2 on observable outcome, boundary quality, evidence support, generation feasibility, generated-task validity, and difficulty gradient. A ready unit needs at least 10 of 12 points, three reviewed examples from at least two sources, at least 95% valid generated tasks, a nonzero difficulty gradient, and no fatal flaw.
 
 The initial evidence in `pilot_evaluation.json` leaves all six units as candidates. Three lack cross-source discovery support, the other three have only two discovery examples, five generated-task sets were solved perfectly by Luna, and geometric optimization generated one wrong gold.
 

@@ -7,13 +7,15 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 
 from experiments.post_training.task_curriculum.catalog import load_curriculum, load_macro_catalog
 from experiments.post_training.task_curriculum.rubric import UnitEvidence, evaluate_unit, load_rubric
 
 PACKAGE_ROOT = Path(__file__).parent
+PILOT_TASK_COUNT = 64
+UNIT_EVIDENCE_FIELDS = frozenset(field.name for field in fields(UnitEvidence))
 
 
 def _nonnegative_integer(value: object, context: str) -> int:
@@ -22,22 +24,49 @@ def _nonnegative_integer(value: object, context: str) -> int:
     return value
 
 
-def _validate_macro_evaluation(raw: object) -> None:
+def _unit_evidence(raw: object, index: int) -> UnitEvidence:
     if not isinstance(raw, dict):
-        raise ValueError("macro_assignment must be an object")
-    reference = raw.get("blind_reference")
+        raise ValueError(f"unit_evidence[{index}] must be an object")
+    if set(raw) != UNIT_EVIDENCE_FIELDS:
+        raise ValueError(f"unit_evidence[{index}] must contain exactly {sorted(UNIT_EVIDENCE_FIELDS)}")
+    unit_id = raw["unit_id"]
+    if not isinstance(unit_id, str) or not unit_id:
+        raise ValueError(f"unit_evidence[{index}].unit_id must be a nonempty string")
+    difficulty_ordering = raw["difficulty_ordering_plausible"]
+    if not isinstance(difficulty_ordering, bool):
+        raise ValueError(f"unit_evidence[{index}].difficulty_ordering_plausible must be a boolean")
+
+    integer_fields = UNIT_EVIDENCE_FIELDS - {"unit_id", "difficulty_ordering_plausible"}
+    values = {field: _nonnegative_integer(raw[field], f"unit_evidence[{index}].{field}") for field in integer_fields}
+    return UnitEvidence(
+        unit_id=unit_id,
+        observable_outcome=values["observable_outcome"],
+        distinct_boundary=values["distinct_boundary"],
+        generation_feasible=values["generation_feasible"],
+        reviewed_examples=values["reviewed_examples"],
+        source_count=values["source_count"],
+        generated_valid=values["generated_valid"],
+        generated_total=values["generated_total"],
+        solve_successes=values["solve_successes"],
+        solve_attempts=values["solve_attempts"],
+        difficulty_ordering_plausible=difficulty_ordering,
+    )
+
+
+def _validate_blind_reference(reference: object) -> None:
     if not isinstance(reference, dict):
         raise ValueError("macro_assignment.blind_reference must be an object")
     exact = _nonnegative_integer(reference.get("exact_macro"), "exact_macro")
     ambiguous = _nonnegative_integer(reference.get("ambiguous_macro"), "ambiguous_macro")
     gap = _nonnegative_integer(reference.get("inventory_gap"), "inventory_gap")
-    if exact + ambiguous + gap != 64:
-        raise ValueError("macro blind-reference counts must cover 64 pilot tasks")
+    if exact + ambiguous + gap != PILOT_TASK_COUNT:
+        raise ValueError(f"macro blind-reference counts must cover {PILOT_TASK_COUNT} pilot tasks")
     micro_gap = _nonnegative_integer(reference.get("micro_vocabulary_gap"), "micro_vocabulary_gap")
-    if micro_gap > 64:
+    if micro_gap > PILOT_TASK_COUNT:
         raise ValueError("micro_vocabulary_gap exceeds pilot task count")
 
-    comparison = raw.get("embedding_comparison")
+
+def _validate_embedding_comparison(comparison: object) -> None:
     if not isinstance(comparison, dict):
         raise ValueError("macro_assignment.embedding_comparison must be an object")
     for name, row in comparison.items():
@@ -49,7 +78,8 @@ def _validate_macro_evaluation(raw: object) -> None:
         if not top_one <= top_three <= total:
             raise ValueError(f"embedding comparison {name} has inconsistent top-k counts")
 
-    threshold = raw.get("conservative_threshold")
+
+def _validate_conservative_threshold(threshold: object) -> None:
     if not isinstance(threshold, dict):
         raise ValueError("macro_assignment.conservative_threshold must be an object")
     threshold_tasks = 0
@@ -68,8 +98,16 @@ def _validate_macro_evaluation(raw: object) -> None:
         if correct + wrong > exact_count or correct_abstentions > abstention_count:
             raise ValueError(f"macro threshold {split} outcomes exceed reference counts")
         threshold_tasks += tasks
-    if threshold_tasks != 64:
-        raise ValueError("macro threshold splits must cover 64 pilot tasks")
+    if threshold_tasks != PILOT_TASK_COUNT:
+        raise ValueError(f"macro threshold splits must cover {PILOT_TASK_COUNT} pilot tasks")
+
+
+def _validate_macro_evaluation(raw: object) -> None:
+    if not isinstance(raw, dict):
+        raise ValueError("macro_assignment must be an object")
+    _validate_blind_reference(raw.get("blind_reference"))
+    _validate_embedding_comparison(raw.get("embedding_comparison"))
+    _validate_conservative_threshold(raw.get("conservative_threshold"))
 
 
 def evaluate_catalog(
@@ -92,7 +130,7 @@ def evaluate_catalog(
     evidence_rows = evidence_raw.get("unit_evidence")
     if not isinstance(evidence_rows, list):
         raise ValueError("unit_evidence must be a list")
-    evidence = [UnitEvidence(**row) for row in evidence_rows]
+    evidence = [_unit_evidence(row, index) for index, row in enumerate(evidence_rows)]
     evidence_by_id = {row.unit_id: row for row in evidence}
     unit_ids = {unit.id for unit in curriculum.units}
     if set(evidence_by_id) != unit_ids or len(evidence_by_id) != len(evidence):

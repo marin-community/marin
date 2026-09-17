@@ -38,10 +38,14 @@ class MacroCatalog:
 
     @property
     def macros_by_id(self) -> dict[str, MacroArea]:
+        """Index macro areas by identifier."""
+
         return {area.id: area for area in self.macro_areas}
 
     @property
     def micros_by_id(self) -> dict[str, tuple[str, MicroArea]]:
+        """Index micro areas by identifier with their parent macro identifier."""
+
         return {micro.id: (macro.id, micro) for macro in self.macro_areas for micro in macro.micro_areas}
 
 

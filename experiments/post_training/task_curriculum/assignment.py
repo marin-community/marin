@@ -106,12 +106,8 @@ def assign_hierarchically(
             (),
         )
 
-    macro_units = {
-        unit_id: unit_anchors[unit_id]
-        for unit_id, unit in units_by_id.items()
-        if unit.macro_area_id == nearest_macro.id and unit_id in unit_anchors
-    }
-    if not macro_units:
+    macro_unit_ids = {unit_id for unit_id, unit in units_by_id.items() if unit.macro_area_id == nearest_macro.id}
+    if not macro_unit_ids:
         return CurriculumAssignment(
             AssignmentStatus.COVERAGE_GAP,
             nearest_macro.id,
@@ -119,6 +115,10 @@ def assign_hierarchically(
             macro_candidates,
             (),
         )
+    missing_anchors = sorted(unit_id for unit_id in macro_unit_ids if not unit_anchors.get(unit_id))
+    if missing_anchors:
+        raise ValueError(f"selected macro {nearest_macro.id} has missing or empty unit anchors: {missing_anchors}")
+    macro_units = {unit_id: unit_anchors[unit_id] for unit_id in macro_unit_ids}
 
     unit_candidates = rank_anchors(unit_vector, macro_units)
     nearest_unit = unit_candidates[0]
