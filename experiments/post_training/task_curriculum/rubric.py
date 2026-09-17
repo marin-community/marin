@@ -5,7 +5,23 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class RubricConfig:
+    version: str
+    full_support_examples: int
+    full_support_sources: int
+    partial_support_examples: int
+    partial_support_sources: int
+    full_generation_validity: float
+    partial_generation_validity: float
+    minimum_ready_total: int
+    require_full_evidence_support: bool
+    require_full_generation_validity: bool
 
 
 @dataclass(frozen=True)
@@ -38,15 +54,43 @@ def _review_score(value: int, field: str) -> int:
     return value
 
 
-def evaluate_unit(evidence: UnitEvidence) -> UnitRubricResult:
+def load_rubric(path: Path) -> RubricConfig:
+    """Load the thresholds that turn evidence into unit rubric scores."""
+
+    raw = json.loads(path.read_text())
+    if raw.get("schema_version") != "task-curriculum-rubric-v1":
+        raise ValueError(f"{path} has an unsupported schema_version")
+    scoring = raw["scoring"]
+    ready_gate = raw["ready_gate"]
+    return RubricConfig(
+        version=raw["version"],
+        full_support_examples=scoring["evidence_support"]["full"]["minimum_examples"],
+        full_support_sources=scoring["evidence_support"]["full"]["minimum_sources"],
+        partial_support_examples=scoring["evidence_support"]["partial"]["minimum_examples"],
+        partial_support_sources=scoring["evidence_support"]["partial"]["minimum_sources"],
+        full_generation_validity=scoring["generation_validity"]["full_fraction"],
+        partial_generation_validity=scoring["generation_validity"]["partial_fraction"],
+        minimum_ready_total=ready_gate["minimum_total"],
+        require_full_evidence_support=ready_gate["requires_full_evidence_support"],
+        require_full_generation_validity=ready_gate["requires_full_generation_validity"],
+    )
+
+
+def evaluate_unit(evidence: UnitEvidence, config: RubricConfig) -> UnitRubricResult:
     """Score one unit on six criteria and apply readiness gates."""
 
     observable = _review_score(evidence.observable_outcome, "observable_outcome")
     boundary = _review_score(evidence.distinct_boundary, "distinct_boundary")
     generation_feasible = _review_score(evidence.generation_feasible, "generation_feasible")
-    if evidence.reviewed_examples >= 3 and evidence.source_count >= 2:
+    if (
+        evidence.reviewed_examples >= config.full_support_examples
+        and evidence.source_count >= config.full_support_sources
+    ):
         support = 2
-    elif evidence.reviewed_examples >= 2 and evidence.source_count >= 1:
+    elif (
+        evidence.reviewed_examples >= config.partial_support_examples
+        and evidence.source_count >= config.partial_support_sources
+    ):
         support = 1
     else:
         support = 0
@@ -55,7 +99,11 @@ def evaluate_unit(evidence: UnitEvidence) -> UnitRubricResult:
         generation_validity = 0
     else:
         validity = evidence.generated_valid / evidence.generated_total
-        generation_validity = 2 if validity >= 0.95 else 1 if validity >= 0.8 else 0
+        generation_validity = (
+            2
+            if validity >= config.full_generation_validity
+            else 1 if validity >= config.partial_generation_validity else 0
+        )
 
     if evidence.solve_attempts <= 0 or not 0 <= evidence.solve_successes <= evidence.solve_attempts:
         difficulty_gradient = 0
@@ -85,7 +133,12 @@ def evaluate_unit(evidence: UnitEvidence) -> UnitRubricResult:
         fatal_flaws.append("unit produced no valid generated task")
 
     total = sum(scores.values())
-    ready = not fatal_flaws and total >= 10 and support == 2 and generation_validity == 2
+    ready = (
+        not fatal_flaws
+        and total >= config.minimum_ready_total
+        and (support == 2 or not config.require_full_evidence_support)
+        and (generation_validity == 2 or not config.require_full_generation_validity)
+    )
     return UnitRubricResult(
         unit_id=evidence.unit_id,
         scores=scores,

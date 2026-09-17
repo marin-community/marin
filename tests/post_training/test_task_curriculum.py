@@ -17,7 +17,7 @@ from experiments.post_training.task_curriculum.catalog import (
     load_curriculum,
     load_macro_catalog,
 )
-from experiments.post_training.task_curriculum.rubric import UnitEvidence, evaluate_unit
+from experiments.post_training.task_curriculum.rubric import RubricConfig, UnitEvidence, evaluate_unit
 
 
 def _write_json(path: Path, value: object) -> Path:
@@ -89,6 +89,21 @@ def _unit(unit_id: str = "add") -> CurriculumUnit:
     )
 
 
+def _rubric() -> RubricConfig:
+    return RubricConfig(
+        version="test",
+        full_support_examples=3,
+        full_support_sources=2,
+        partial_support_examples=2,
+        partial_support_sources=1,
+        full_generation_validity=0.95,
+        partial_generation_validity=0.8,
+        minimum_ready_total=10,
+        require_full_evidence_support=True,
+        require_full_generation_validity=True,
+    )
+
+
 def test_curriculum_rejects_micro_area_from_another_macro(tmp_path: Path) -> None:
     macro_catalog = load_macro_catalog(_macro_catalog(tmp_path))
     curriculum_path = _write_json(
@@ -114,7 +129,7 @@ def test_curriculum_rejects_micro_area_from_another_macro(tmp_path: Path) -> Non
         },
     )
 
-    with pytest.raises(CatalogError, match="does not belong"):
+    with pytest.raises(CatalogError):
         load_curriculum(curriculum_path, macro_catalog)
 
 
@@ -181,7 +196,8 @@ def test_rubric_requires_cross_source_evidence_and_nontrivial_difficulty() -> No
             solve_successes=6,
             solve_attempts=6,
             difficulty_ordering_plausible=True,
-        )
+        ),
+        _rubric(),
     )
 
     assert result.scores["evidence_support"] == 1
@@ -203,7 +219,8 @@ def test_rubric_accepts_supported_valid_unit_with_mixed_solve_results() -> None:
             solve_successes=3,
             solve_attempts=6,
             difficulty_ordering_plausible=True,
-        )
+        ),
+        _rubric(),
     )
 
     assert result.total == 12

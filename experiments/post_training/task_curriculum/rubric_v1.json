@@ -28,6 +28,16 @@
       "question": "Do generated tasks produce both Luna successes and failures with plausible difficulty ordering?"
     }
   ],
+  "scoring": {
+    "evidence_support": {
+      "full": {"minimum_examples": 3, "minimum_sources": 2},
+      "partial": {"minimum_examples": 2, "minimum_sources": 1}
+    },
+    "generation_validity": {
+      "full_fraction": 0.95,
+      "partial_fraction": 0.8
+    }
+  },
   "ready_gate": {
     "minimum_total": 10,
     "requires_full_evidence_support": true,
