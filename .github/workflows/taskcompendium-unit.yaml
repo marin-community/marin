@@ -1,0 +1,29 @@
+name: "TaskCompendium - Unit"
+
+on:
+  pull_request:
+    paths:
+      - 'lib/taskcompendium/**'
+      - '.github/workflows/taskcompendium-unit.yaml'
+  push:
+    branches: [main]
+    paths:
+      - 'lib/taskcompendium/**'
+      - '.github/workflows/taskcompendium-unit.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - name: Test direct-chat Harbor lowerings
+        run: uv run --project lib/taskcompendium --frozen --extra harbor --group test pytest lib/taskcompendium/tests -q
