@@ -91,6 +91,9 @@ The table is an append-only discovery index, not the source of truth for rollout
 emit one terminal row per attempt from Marin's evaluation orchestrator or SkyRL adapter. Evalchemy
 and Harbor do not need to depend on Marin's Finelog schema: they continue to own their native
 FineStore output, and Marin catalogs and normalizes it after the evaluator finishes.
+Regional writers register the object-native table with their local Finelog server. The forwarder
+then registers it on the hub before forwarding its first row, so operators do not pre-register the
+table when enabling it on a new cluster.
 
 - [`eval_step`][marin.experiment.evaluation.eval_step] builds one post-hoc eval artifact from an
   `EvalGroup`; combine groups and aggregate them with

@@ -3,7 +3,7 @@
 
 from types import SimpleNamespace
 
-from finelog.client import FlushResult, schema_from_dataclass
+from finelog.client import FlushResult, L0Mode, schema_from_dataclass
 from finelog.rpc import finelog_stats_pb2
 from marin.rollouts.catalog import (
     ROLLOUT_RUNS_NAMESPACE,
@@ -30,11 +30,13 @@ class _Client:
         self.table = table
         self.namespace = None
         self.schema = None
+        self.table_spec = None
         self.closed = False
 
-    def get_table(self, namespace, schema):
+    def get_table(self, namespace, schema, *, table_spec=None):
         self.namespace = namespace
         self.schema = schema
+        self.table_spec = table_spec
         return self.table
 
     def close(self) -> None:
@@ -76,6 +78,8 @@ def test_record_rollout_run_adds_iris_attempt_identity(monkeypatch) -> None:
 
     assert client.namespace == ROLLOUT_RUNS_NAMESPACE
     assert client.schema is RolloutRunRecord
+    assert client.table_spec.version == 1
+    assert client.table_spec.operating_policy.l0_mode is L0Mode.OBJECT_STORE
     assert client.closed
     assert len(table.rows) == 1
     assert table.rows[0].attempt_id == "iris-attempt"

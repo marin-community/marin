@@ -9,13 +9,14 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import ClassVar
 
-from finelog.client import FlushResult, LogClient
+from finelog.client import FlushResult, LogClient, TableSpec
 from iris.runtime import telemetry as runtime_telemetry
 
 logger = logging.getLogger(__name__)
 
 ROLLOUT_RUNS_NAMESPACE = "marin.rollout_runs"
 _FLUSH_TIMEOUT = 10.0
+_ROLLOUT_RUNS_TABLE_SPEC = TableSpec(version=1)
 
 
 class RolloutRunKind(StrEnum):
@@ -75,7 +76,11 @@ def _record_rollout_run(record: RolloutRunRecord) -> None:
     )
     client = LogClient.connect(runtime.endpoint, resolver=runtime.resolver)
     try:
-        table = client.get_table(ROLLOUT_RUNS_NAMESPACE, RolloutRunRecord)
+        # Object-native tables replay their complete live spool when a regional
+        # forwarder first discovers them. Legacy-local tables deliberately seed
+        # a new forwarding cursor at the tip, which would omit this table's
+        # first catalog row from the hub.
+        table = client.get_table(ROLLOUT_RUNS_NAMESPACE, RolloutRunRecord, table_spec=_ROLLOUT_RUNS_TABLE_SPEC)
         table.write((resolved,))
         result = table.flush(timeout=_FLUSH_TIMEOUT)
     finally:
