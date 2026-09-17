@@ -515,6 +515,7 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
         set_job_info(None)
 
     assert "accelerator" not in registered_metadata
+    assert float(registered_metadata["proxy_timeout_seconds"]) == 43_200
 
 
 def test_resolve_serving_plan_rejects_incompatible_tpu_alternatives():
