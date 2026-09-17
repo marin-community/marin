@@ -251,7 +251,7 @@ def run_evalchemy(
     *,
     env_vars: Mapping[str, str],
 ) -> EvalchemyOutcome:
-    """Run Evalchemy against ``model`` and validate its durable result tree."""
+    """Run Evalchemy and validate its aggregate artifacts and normalized samples in FineStore."""
     if not config.tasks:
         raise ValueError("Evalchemy requires at least one task")
     if "://" not in output_dir:
@@ -260,7 +260,7 @@ def run_evalchemy(
     try:
         result = FineStoreEvalchemyResult(path=output_dir)
         result.task_metrics()
-        export = summarize_native_eval_samples(output_dir)
+        summary = summarize_native_eval_samples(output_dir)
     except Exception as exc:
         raise EvalPipelineError(
             str(exc),
@@ -271,15 +271,15 @@ def run_evalchemy(
     logger.info(
         "Evalchemy run %s wrote %d sample(s) to the finestore archive under %s, covering %d task(s)",
         config.name,
-        export.samples,
+        summary.samples,
         output_dir,
-        len(export.coverage),
+        len(summary.coverage),
     )
     return EvalchemyOutcome(
         jobs={_EVAL_JOB_ROLE: eval_job},
         result=result,
-        coverage=export.coverage,
-        recovered_metrics=export.recovered_metrics,
+        coverage=summary.coverage,
+        recovered_metrics=summary.recovered_metrics,
     )
 
 

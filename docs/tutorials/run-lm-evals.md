@@ -450,8 +450,8 @@ print(report_artifact.task_metrics)  # {task: {metric: value}}
 print(report_artifact.averages)      # suite-level rollups
 ```
 
-Each individual result is an `EvalchemyResult`; `task_metrics()` reads the per-task scores from the
-evalchemy output tree.
+Each individual result is a `FineStoreEvalchemyResult`; `task_metrics()` reads the per-task scores
+from Evalchemy's aggregate source artifacts in FineStore.
 
 ### Run the repository example scripts
 

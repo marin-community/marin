@@ -20,6 +20,7 @@ from finestore.reader import ReadView
 from pydantic import Field
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from marin.evaluation.evalchemy.client import EVALCHEMY_RESULTS_PREFIX, EVALCHEMY_RESULTS_SUFFIX
 from marin.evaluation.lm_eval_samples import (
     EVALCHEMY_NATIVE_SOURCE_DIR,
     EVALCHEMY_SOURCE_ROOT,
@@ -65,10 +66,12 @@ class EvalResult(Artifact):
 
 
 class EvalchemyResult(EvalResult):
-    """Per-task metrics from an Evalchemy result tree.
+    """Per-task metrics from a pre-native Evalchemy result tree.
 
     Metric keys use task-config directories; group tasks append subtask names. Task-config keys keep
-    shot variants distinct. Evalchemy does not record cross-task averages.
+    shot variants distinct. Evalchemy does not record cross-task averages. This reader remains while
+    reports may reference historical ``EvalchemyResult`` artifacts; remove it after those archives
+    have been rebuilt into FineStore or expired.
     """
 
     @functools.cached_property
@@ -76,7 +79,7 @@ class EvalchemyResult(EvalResult):
         # StoragePath.glob reattaches the protocol to each match; a bare fs.glob result drops the
         # gs:// prefix and would reopen as a local path.
         root = StoragePath(self.path)
-        found = sorted((root / "**/results_*.json").glob(), key=str)
+        found = sorted((root / f"**/{EVALCHEMY_RESULTS_PREFIX}*{EVALCHEMY_RESULTS_SUFFIX}").glob(), key=str)
         if root.scheme == "file":
             # fsspec's local glob returns bare paths, while ``relative_to`` compares protocols.
             found = [StoragePath(scheme="file", segments=path.segments, rooted=path.rooted) for path in found]
@@ -119,8 +122,8 @@ class FineStoreEvalchemyResult(EvalResult):
             if (
                 len(relative.parts) != 3
                 or relative.parts[1] != EVALCHEMY_NATIVE_SOURCE_DIR
-                or not relative.name.startswith("results_")
-                or relative.suffix != ".json"
+                or not relative.name.startswith(EVALCHEMY_RESULTS_PREFIX)
+                or relative.suffix != EVALCHEMY_RESULTS_SUFFIX
             ):
                 continue
             result_sources.append((name, relative.parts[0]))

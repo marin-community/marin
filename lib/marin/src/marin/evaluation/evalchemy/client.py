@@ -23,6 +23,8 @@ import urllib.request
 from pathlib import Path
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
+EVALCHEMY_RESULTS_PREFIX = "results_"
+EVALCHEMY_RESULTS_SUFFIX = ".json"
 
 # vLLM returns HTTP 400 when prompt_tokens + max_tokens exceeds the served context window. Reserve
 # this many tokens for the prompt when shrinking a generation budget to fit a small served context.
@@ -167,7 +169,7 @@ def scored_results(local_out: str) -> bool:
     """
     for dirpath, _, filenames in os.walk(local_out):
         for filename in filenames:
-            if not (filename.startswith("results_") and filename.endswith(".json")):
+            if not (filename.startswith(EVALCHEMY_RESULTS_PREFIX) and filename.endswith(EVALCHEMY_RESULTS_SUFFIX)):
                 continue
             with open(os.path.join(dirpath, filename)) as handle:
                 if json.load(handle).get("results"):

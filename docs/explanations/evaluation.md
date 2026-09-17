@@ -48,7 +48,7 @@ Marin records provenance and summarizes those outputs without rebuilding the tab
   [`eval_report`][marin.experiment.evaluation.eval_report]. Concrete task menus remain in
   `experiments/evals/evals.py`. See [Running Evaluations with Marin](../tutorials/run-lm-evals.md).
 
-One `EvalGroup` (a task set) becomes one `EvalchemyResult` artifact addressed by
+One `EvalGroup` (a task set) becomes one `FineStoreEvalchemyResult` artifact addressed by
 `evaluation/evalchemy/{model}/{group_id}`, so a pipeline picks up exactly the evals it needs and each
 is cached and reused. The in-loop `EvalSuite` and the post-hoc `EvalGroup`s draw from the same task
 menu.
