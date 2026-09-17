@@ -31,7 +31,6 @@ on:
         type: choice
         options:
           - gpu_fa4_cute
-          - gpu_fa4_thd
           - reference
         default: gpu_fa4_cute
         required: false

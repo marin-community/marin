@@ -426,7 +426,6 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     tokens=tokens,
                     loss_weight=loss_weight,
                     segment_ids=seg_ids_raw,
-                    max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
@@ -444,7 +443,6 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     tokens=tokens,
                     loss_weight=loss_weight,
                     segment_ids=seg_ids_raw,
-                    max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
@@ -497,7 +495,6 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
                 tokens=tokens,
                 loss_weight=loss_weight,
                 segment_ids=seg_ids_raw,
-                max_segments=max_segments_per_example + 1,
                 block_cross_document_attention=block_cross_document_attention,
             )
             out = jax.lax.with_sharding_constraint(out, sharding)
