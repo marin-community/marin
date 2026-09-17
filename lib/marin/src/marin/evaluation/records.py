@@ -17,8 +17,9 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 
@@ -55,6 +56,52 @@ class RunStatus(StrEnum):
     FAILED = "failed"
     ARTIFACT_FAILED = "artifact_failed"
     INFRA_FAILED = "infra_failed"
+
+
+class MetricKind(StrEnum):
+    """How a metric's uncertainty is computed."""
+
+    BINARY = "binary"
+    CONTINUOUS = "continuous"
+
+
+class BenchmarkMetricRef(BaseModel):
+    """One evaluator metric in its canonical and source vocabularies."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    source_name: str
+    kind: MetricKind
+    higher_is_better: bool
+
+
+class BenchmarkMetadataRef(BaseModel):
+    """The benchmark protocol emitted by an evaluation harness."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1]
+    task: str
+    primary_metric: str
+    metric_kind: MetricKind
+    metrics: tuple[BenchmarkMetricRef, ...]
+    n_benchmark: int | None = Field(ge=0)
+    n_attempted: int | None = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_protocol(self) -> "BenchmarkMetadataRef":
+        metrics = {metric.name: metric for metric in self.metrics}
+        if len(metrics) != len(self.metrics):
+            raise ValueError("metric names must be unique")
+        primary = metrics.get(self.primary_metric)
+        if primary is None:
+            raise ValueError("primary_metric must name one of metrics")
+        if primary.kind is not self.metric_kind:
+            raise ValueError("metric_kind must match the primary metric")
+        if self.n_benchmark is not None and self.n_attempted is not None and self.n_attempted > self.n_benchmark:
+            raise ValueError("n_attempted cannot exceed n_benchmark")
+        return self
 
 
 class ModelResourceConfig(BaseModel):
@@ -154,6 +201,8 @@ class EvalTaskRef(BaseModel):
     generation: bool = False
     unsafe_code: bool = False
     completion_only: bool = False
+    benchmark: BenchmarkMetadataRef | None = None
+    """The evaluator-owned benchmark protocol, when the harness emitted one."""
 
 
 class EvalchemyRef(BaseModel):
@@ -314,6 +363,9 @@ class TaskCoverage(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    n_benchmark: int | None = None
+    """Items in the full benchmark before any run cap."""
+
     n_attempted: int | None = None
     n_scored: int
     n_correct: int | None = None
@@ -355,6 +407,8 @@ class EvalRunRecord(BaseModel):
     error: str | None
     results_path: str
     metrics: dict[str, dict[str, float]]
+    canonical_metrics: dict[str, dict[str, float]] = Field(default_factory=dict)
+    """Per-task evaluator metrics projected into the benchmark metadata's canonical vocabulary."""
     coverage: dict[str, TaskCoverage] = Field(default_factory=dict)
     """Per-task item coverage, keyed like ``metrics``, for mechanisms that report an attempted-item
     count. Empty when the mechanism reports none and on every record written before coverage existed;
