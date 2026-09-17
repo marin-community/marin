@@ -321,6 +321,8 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
         return _FakeLauncherProcess(response=json.dumps(response), returncode=0, stdout=_kwargs["stdout"])
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    catalog_rows = []
+    monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", catalog_rows.append)
 
     model = run_skyrl(
         SkyRLRunConfig(
@@ -339,6 +341,12 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
     }
     assert launch_envelopes[0]["request"]["train_data"][0]["kind"] == "directory"
     assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
+    assert len(catalog_rows) == 1
+    assert catalog_rows[0].run_id == request.run_id
+    assert catalog_rows[0].attempt_id == request.attempt_id
+    assert catalog_rows[0].status == "succeeded"
+    assert catalog_rows[0].rollout_uri == f"{output.attempts_root}/trajectories"
+    assert catalog_rows[0].job_id == "01KTEST"
 
 
 def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:
@@ -393,6 +401,8 @@ def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.Monkey
         "Popen",
         lambda command, **_kwargs: _FakeLauncherProcess(response="", logs="entrypoint must be a registered name\n"),
     )
+    catalog_rows = []
+    monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", catalog_rows.append)
     step = skyrl_step(_spec(), _execution())
     config = step.build_config(
         StepContext.for_run(
@@ -405,6 +415,10 @@ def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.Monkey
 
     with pytest.raises(RuntimeError, match="entrypoint must be a registered name"):
         run_skyrl(config)
+
+    assert len(catalog_rows) == 1
+    assert catalog_rows[0].status == "failed"
+    assert catalog_rows[0].rollout_uri.endswith("/attempts/trajectories")
 
 
 def test_launcher_logs_reach_stderr_while_the_run_is_live(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

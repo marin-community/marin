@@ -279,7 +279,7 @@ def _write_evalchemy_output(
         store.close()
 
 
-def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp_path):
+def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp_path, monkeypatch):
     records = tmp_path / "records"
     endpoint = "https://iris.example/proxy/t/token/inference/v1"
     session = _remote_session(endpoint)
@@ -306,6 +306,8 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
         provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
         submission_cluster="marin",
     )
+    catalog_rows = []
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", catalog_rows.append)
 
     with pytest.raises(RuntimeError, match="1 of 2 evals failed"):
         evaluate_batch(batch, session, orchestrator_job_id="/orchestrator", env_vars={})
@@ -321,6 +323,11 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert succeeded.model.config is not None
     assert succeeded.model.config.model_dump(mode="json") == json.loads(json.dumps(asdict(batch.model)))
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
+    assert [(row.run_id, row.status) for row in catalog_rows] == [
+        ("run-failure", "failed"),
+        ("run-success", "succeeded"),
+    ]
+    assert all(row.storage_format == "finestore" for row in catalog_rows)
 
 
 def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypatch):

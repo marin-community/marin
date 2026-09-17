@@ -291,10 +291,12 @@ TPU-routed runs default to `gs://marin-eval-metadata/evals`. CoreWeave GPU runs 
 
 Every selected evaluation writes `{records_prefix}/{run_id}/record.json` and a FineStore archive
 under its results directory. Evalchemy writes its aggregate JSON and per-task JSONL as FineStore
-source artifacts and writes normalized samples for every extraction filter; Marin does not upload a
-second Evalchemy results tree. Harbor preserves its job metadata, trial results, and trajectories
-while writing normalized agentic samples and steps. Its job tree remains the checkpoint used for
-resume and inspection. Evalchemy records include the
+source artifacts and writes normalized samples for every extraction filter. Marin derives one
+evaluator-neutral `rollouts_v1` conversation per `(task, doc_id, trial_id)` attempt from those samples,
+deduplicated across extraction filters. Harbor preserves its job metadata, trial results, and
+trajectories while writing normalized agentic samples and steps; Marin derives its `rollouts_v1` rows
+from `steps`. The evaluator's raw artifacts remain in FineStore. Harbor's job tree remains the
+checkpoint used for resume and inspection. Evalchemy records include the
 normalized launch configuration; Harbor records include the dataset, agent, environment, task limit,
 and source-policy digest. A Harbor infrastructure exception remains ungraded and counts against the
 completion gate after its artifacts are saved; a verifier-scored zero remains a completed evaluation

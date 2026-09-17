@@ -36,6 +36,7 @@ from marin.evaluation.harbor.driver_config import (
     run_harbor_driver,
 )
 from marin.evaluation.records import BenchmarkMetadataRef, EvalTaskRef, RunStatus, TaskCoverage
+from marin.evaluation.rollouts import normalize_rollouts
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
@@ -339,6 +340,7 @@ def _run_harbor_job(
             inference_session.wait_until_ready()
             logger.info("inference recovered; resuming Harbor job %s", job_name)
 
+    normalize_rollouts(output_dir, writer_id=f"marin-harbor-rollouts-{job_name}")
     trials = _read_trials(job_dir, config.error_taxonomy)
     recorded_attempted = _attempted_trials(job_dir)
     recorded_benchmark = _job_benchmark(job_dir)

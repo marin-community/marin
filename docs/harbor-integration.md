@@ -163,12 +163,14 @@ Each Harbor evaluation writes:
 
 - `{records_prefix}/{run_id}/record.json`
 - a FineStore archive under `{records_prefix}/{run_id}/results/`, including normalized `samples`
-  and `steps` tables
+  and `steps` tables plus the evaluator-neutral `rollouts_v1` conversation table
 - Harbor-native job metadata, trial results, and trajectories preserved as FineStore objects
 
 Harbor writes each verifier-scored trial as it finishes, then adds surviving ungraded attempts and
 job metadata before sealing the archive. Every final trial becomes an agentic `EvalSample`. The
 verifier reward is stored as `Grading(method="harbor:verifier")`, and the trajectory is referenced
-by `trajectory_uri`. Evaldash reads the normalized table directly. `record.json` stores the
+by `trajectory_uri`. Marin derives the `rollouts_v1` table from `steps`, normalizing each trajectory's
+participants and ordered message, reasoning, tool-call, and observation parts. Evaldash reads the
+normalized sample table directly. `record.json` stores the
 deterministic source-policy digest and any Marin runtime task cap. A source policy's own `n_tasks`
 remains part of the policy digest.
