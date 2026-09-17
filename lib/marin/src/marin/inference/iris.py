@@ -26,6 +26,7 @@ from rigging.timing import Deadline, Duration
 
 from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.broker import InferenceBroker
+from marin.inference.chat_template_protocol import protocol_for_chat_template
 from marin.inference.config import (
     BrokerConfig,
     IrisConfig,
@@ -38,7 +39,6 @@ from marin.inference.dashboard_server import (
     ServingInfo,
     bind_serving_socket,
     build_dashboard_app,
-    protocol_for_chat_template,
     serve_app_background,
 )
 from marin.inference.proxy import serve_inference_proxy

@@ -37,7 +37,7 @@ function parseToolCall(payload: string, newId: () => string): ToolCall {
   }
 }
 
-/** Parse template-delimited calls, raising when a tagged payload is malformed. */
+/** Parse inline tool calls using the active template's output format. */
 export function inlineToolCalls(
   content: string,
   protocol: ChatTemplateProtocol | null,

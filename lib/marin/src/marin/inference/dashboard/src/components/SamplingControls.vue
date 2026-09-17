@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ThinkingMode, type ThinkingMode as ThinkingModeValue } from '../lib/chat_template'
 import type { SamplingParams } from '../lib/types'
 
 defineProps<{
@@ -7,7 +8,7 @@ defineProps<{
 }>()
 
 const system = defineModel<string>('system', { default: '' })
-const enableThinking = defineModel<boolean | null>('enableThinking', { default: null })
+const thinkingMode = defineModel<ThinkingModeValue>('thinkingMode', { default: ThinkingMode.TemplateDefault })
 const customInstructions = defineModel<string>('customInstructions', { default: '' })
 </script>
 
@@ -48,12 +49,12 @@ const customInstructions = defineModel<string>('customInstructions', { default: 
     <label v-if="showChatControls" class="flex min-w-44 flex-col gap-1 text-xs text-text-muted">
       Thinking
       <select
-        v-model="enableThinking"
+        v-model="thinkingMode"
         class="rounded-lg border border-surface-border bg-surface px-2 py-1.5 text-[0.8rem] text-text"
       >
-        <option :value="null">Template default</option>
-        <option :value="true">Enabled</option>
-        <option :value="false">Disabled</option>
+        <option :value="ThinkingMode.TemplateDefault">Template default</option>
+        <option :value="ThinkingMode.Enabled">Enabled</option>
+        <option :value="ThinkingMode.Disabled">Disabled</option>
       </select>
       <span>Passed to the active model template as <code>enable_thinking</code>. Templates may ignore it.</span>
     </label>

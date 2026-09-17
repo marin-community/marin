@@ -134,7 +134,7 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
   try {
     const tools = pythonTools ? await fetchToolDefinitions(pythonTools, signal) : []
     const templateFields = chatTemplateRequestFields(
-      conversation.enableThinking,
+      conversation.thinkingMode,
       conversation.customInstructions,
       tools,
     )
@@ -345,7 +345,7 @@ async function complete(
             title="Show the whole chat as a plain-text transcript"
           >
             <input v-model="showRawChat" type="checkbox" class="accent-accent" />
-            Raw stream
+            Raw chat
           </label>
         </div>
         <div v-if="showTools" class="mb-3">

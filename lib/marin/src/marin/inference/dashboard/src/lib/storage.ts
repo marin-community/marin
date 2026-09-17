@@ -1,3 +1,4 @@
+import { ThinkingMode } from './chat_template'
 import type { Conversation, SamplingParams } from './types'
 
 const CONVERSATIONS_KEY = 'marin-serve:conversations:v1'
@@ -19,7 +20,7 @@ export function loadConversations(): Conversation[] {
     return parsed.map((conversation) => ({
       ...conversation,
       pythonTools: conversation.pythonTools ?? '',
-      enableThinking: conversation.enableThinking ?? null,
+      thinkingMode: conversation.thinkingMode ?? ThinkingMode.TemplateDefault,
       customInstructions: conversation.customInstructions ?? '',
     }))
   } catch {

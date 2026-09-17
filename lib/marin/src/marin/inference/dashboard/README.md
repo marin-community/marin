@@ -34,7 +34,7 @@ template arguments. Functions entered in **Python tools** are converted to the
 standard OpenAI `tools` request field so the served model's active template
 formats them.
 
-Enable **Raw stream** above the Chat composer to replace the rendered messages
+Enable **Raw chat** above the Chat composer to replace the rendered messages
 with one plain-text transcript of the entire chat. The transcript includes the
 system and user messages, unparsed assistant `content` and reasoning fields,
 structured tool calls, tool results, and errors. The OpenAI-compatible response

@@ -6,6 +6,7 @@ import CompletionView from './components/CompletionView.vue'
 import HistoryPanel from './components/HistoryPanel.vue'
 import SamplingControls from './components/SamplingControls.vue'
 import { useServing } from './composables/useServing'
+import { ThinkingMode } from './lib/chat_template'
 import { loadConversations, loadParams, newId, saveConversations, saveParams } from './lib/storage'
 import type { Conversation } from './lib/types'
 
@@ -42,7 +43,7 @@ function freshConversation(): Conversation {
     model: model.value,
     system: '',
     pythonTools: '',
-    enableThinking: null,
+    thinkingMode: ThinkingMode.TemplateDefault,
     customInstructions: '',
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -151,7 +152,7 @@ function clearHistory() {
           v-if="showParams"
           :params="params"
           v-model:system="active.system"
-          v-model:enable-thinking="active.enableThinking"
+          v-model:thinking-mode="active.thinkingMode"
           v-model:custom-instructions="active.customInstructions"
           :show-chat-controls="mode === 'chat'"
         />

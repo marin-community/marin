@@ -1,3 +1,5 @@
+import type { ThinkingMode } from './chat_template'
+
 /** Output conventions discovered from the served model's active chat template. */
 export interface ChatTemplateProtocol {
   thinking_start: string | null
@@ -62,7 +64,7 @@ export interface Conversation {
   model: string
   system: string
   pythonTools: string
-  enableThinking: boolean | null
+  thinkingMode: ThinkingMode
   customInstructions: string
   createdAt: number
   updatedAt: number

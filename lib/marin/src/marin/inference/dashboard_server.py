@@ -18,20 +18,14 @@ events end to end; brokered sessions return buffered JSON and reject streaming.
 ``/tools/{name}`` validates and runs one function.
 """
 
-import asyncio
 import dataclasses
 import importlib.resources
-import json
 import logging
 import socket
-import subprocess
-import sys
 import threading
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import dataclass
-from enum import StrEnum
-from typing import Protocol
+from dataclasses import dataclass, field
 
 import httpx
 import uvicorn
@@ -41,73 +35,11 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from marin.inference.chat_template_protocol import ChatTemplateProtocol
 from marin.inference.http_proxy import forwardable_request_headers, forwardable_response_headers
-from marin.inference.python_tools import (
-    PythonToolDefinitionsRequest,
-    PythonToolOperation,
-    PythonToolRequest,
-    PythonToolSourceTooLarge,
-)
+from marin.inference.python_tool_routes import invoke_tool_response, python_tool_definitions_response
 
 logger = logging.getLogger(__name__)
-PYTHON_TOOL_TIMEOUT_SECONDS = 10
-_MAX_TOOL_ERROR_LENGTH = 4_000
-_THINKING_DELIMITERS = (
-    ("<|start_think|>", "<|end_think|>"),
-    ("<think>", "</think>"),
-    ("<THINK>", "</THINK>"),
-)
-_TOOL_CALL_DELIMITERS = (
-    ("<|tool_call|>", "<|tool_call_end|>"),
-    ("<tool_call>", "</tool_call>"),
-)
-_JSON_TOOL_CALL_MARKER = (
-    'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}.'
-)
-
-
-class ToolCallFormat(StrEnum):
-    DELIMITED = "delimited"
-    JSON = "json"
-
-
-@dataclass(frozen=True)
-class ChatTemplateProtocol:
-    """Generated-output delimiters found in the model's active chat template."""
-
-    thinking_start: str | None = None
-    thinking_end: str | None = None
-    tool_call_start: str | None = None
-    tool_call_end: str | None = None
-    tool_call_format: ToolCallFormat | None = None
-
-
-def _template_delimiters(template: str | None, candidates: tuple[tuple[str, str], ...]) -> tuple[str | None, str | None]:
-    if template is None:
-        return None, None
-    for start, end in candidates:
-        if start in template and end in template:
-            return start, end
-    return None, None
-
-
-def protocol_for_chat_template(template: str | None) -> ChatTemplateProtocol:
-    """Describe the reasoning and tool-call syntax emitted by a chat template."""
-    thinking_start, thinking_end = _template_delimiters(template, _THINKING_DELIMITERS)
-    tool_call_start, tool_call_end = _template_delimiters(template, _TOOL_CALL_DELIMITERS)
-    if tool_call_start is not None:
-        tool_call_format = ToolCallFormat.DELIMITED
-    elif template is not None and _JSON_TOOL_CALL_MARKER in template:
-        tool_call_format = ToolCallFormat.JSON
-    else:
-        tool_call_format = None
-    return ChatTemplateProtocol(
-        thinking_start=thinking_start,
-        thinking_end=thinking_end,
-        tool_call_start=tool_call_start,
-        tool_call_end=tool_call_end,
-        tool_call_format=tool_call_format,
-    )
 
 
 @dataclass(frozen=True)
@@ -122,76 +54,7 @@ class ServingInfo:
     has_chat_template: bool
     endpoint: str
     streaming: bool = True
-    chat_template_protocol: ChatTemplateProtocol = ChatTemplateProtocol()
-
-
-class _SerializedPythonToolRequest(Protocol):
-    def to_json_bytes(self) -> bytes: ...
-
-
-def _python_tool_operation_label(operation: PythonToolOperation) -> str:
-    match operation:
-        case PythonToolOperation.DEFINITIONS:
-            return "Python tool definition"
-        case PythonToolOperation.INVOKE:
-            return "Python tool"
-
-
-def _run_python_tool_worker(operation: PythonToolOperation, payload: bytes) -> subprocess.CompletedProcess[bytes]:
-    # Keep CPython on its posix_spawn path: forking after Levanter starts JAX threads can deadlock.
-    return subprocess.run(
-        [sys.executable, "-m", "marin.inference.python_tools", operation.value],
-        input=payload,
-        capture_output=True,
-        timeout=PYTHON_TOOL_TIMEOUT_SECONDS,
-        check=False,
-        close_fds=False,
-    )
-
-
-async def _python_tool_response(
-    request: Request,
-    *,
-    operation: PythonToolOperation,
-    parse_payload: Callable[[object], _SerializedPythonToolRequest],
-) -> Response:
-    label = _python_tool_operation_label(operation)
-    try:
-        payload = await request.json()
-    except json.JSONDecodeError:
-        return JSONResponse({"error": f"{label} request must be JSON"}, status_code=400)
-    try:
-        tool_request = parse_payload(payload)
-    except PythonToolSourceTooLarge:
-        return JSONResponse({"error": "Python tool source is too large"}, status_code=413)
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
-
-    try:
-        result = await asyncio.to_thread(_run_python_tool_worker, operation, tool_request.to_json_bytes())
-    except subprocess.TimeoutExpired:
-        return JSONResponse({"error": f"{label} exceeded {PYTHON_TOOL_TIMEOUT_SECONDS} seconds"}, status_code=408)
-    if result.returncode != 0:
-        details = result.stderr.decode(errors="replace")[-_MAX_TOOL_ERROR_LENGTH:].strip()
-        return JSONResponse({"error": f"{label} failed", "details": details}, status_code=422)
-    return Response(result.stdout, media_type="application/json")
-
-
-async def _python_tool_definitions_response(request: Request) -> Response:
-    return await _python_tool_response(
-        request,
-        operation=PythonToolOperation.DEFINITIONS,
-        parse_payload=PythonToolDefinitionsRequest.from_payload,
-    )
-
-
-async def _invoke_tool_response(request: Request) -> Response:
-    name = request.path_params["name"]
-    return await _python_tool_response(
-        request,
-        operation=PythonToolOperation.INVOKE,
-        parse_payload=lambda payload: PythonToolRequest.from_payload(payload, name=name),
-    )
+    chat_template_protocol: ChatTemplateProtocol = field(default_factory=ChatTemplateProtocol)
 
 
 def build_dashboard_app(
@@ -278,8 +141,8 @@ def build_dashboard_app(
             Route("/dashboard", index),
             Route("/info", serving_info),
             Route("/health", health),
-            Route("/tools", _python_tool_definitions_response, methods=["POST"]),
-            Route("/tools/{name}", _invoke_tool_response, methods=["POST"]),
+            Route("/tools", python_tool_definitions_response, methods=["POST"]),
+            Route("/tools/{name}", invoke_tool_response, methods=["POST"]),
             Route("/v1/{path:path}", proxy, methods=["GET", "POST", "OPTIONS"]),
         ],
         lifespan=lifespan,

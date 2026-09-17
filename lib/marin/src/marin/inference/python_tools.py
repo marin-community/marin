@@ -48,7 +48,6 @@ class PythonTool:
     result_adapter: TypeAdapter[Any]
 
     def definition(self) -> dict[str, object]:
-        """Return the OpenAI function definition consumed by the Marin chat template."""
         parameters = self.arguments_model.model_json_schema()
         parameters.pop("title", None)
         function: dict[str, object] = {
@@ -139,7 +138,6 @@ def python_tools_from_source(source: str) -> tuple[PythonTool, ...]:
 
 
 def python_tool_definitions(source: str) -> list[dict[str, object]]:
-    """Convert typed Python functions to OpenAI function tool definitions."""
     return [tool.definition() for tool in python_tools_from_source(source)]
 
 

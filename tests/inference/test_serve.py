@@ -11,6 +11,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +31,7 @@ from iris.time_proto import timestamp_to_proto
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.backend import ModelSpec
+from marin.inference.chat_template_protocol import ChatTemplateProtocol, ToolCallFormat, protocol_for_chat_template
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     IrisConfig,
@@ -41,12 +43,9 @@ from marin.inference.config import (
 )
 from marin.inference.dashboard_server import (
     DASHBOARD_HTML,
-    ChatTemplateProtocol,
     ServingInfo,
-    ToolCallFormat,
     bind_serving_socket,
     build_dashboard_app,
-    protocol_for_chat_template,
     serve_app_background,
 )
 from marin.inference.iris import IrisServiceConfig, _resolved_model, run_iris_service
@@ -63,6 +62,7 @@ from marin.inference.levanter_backend import (
     validate_levanter_dtype,
 )
 from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
+from marin.inference.python_tool_routes import PYTHON_TOOL_TIMEOUT
 from marin.inference.python_tools import python_tools_from_source
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.types import OpenAIEndpoint, RunningModel
@@ -117,6 +117,8 @@ def spin() -> int:
     while True:
         pass
 """
+
+DASHBOARD_REQUEST_TIMEOUT = PYTHON_TOOL_TIMEOUT + 5
 
 
 @pytest.mark.parametrize(
@@ -847,12 +849,12 @@ def test_python_tool_schema_rejects_executable_defaults_without_running_them(tmp
     ],
     ids=["datakit", "delphi", "llama-json"],
 )
-def test_chat_template_protocol_matches_generated_delimiters(template, expected):
+def test_chat_template_protocol_matches_generated_output_format(template, expected):
     assert protocol_for_chat_template(template) == expected
 
 
-def test_dashboard_executes_typed_python_tools_in_shellsim(monkeypatch):
-    monkeypatch.setenv("MARIN_SHELLSIM_HOST_SECRET", "must-not-leak")
+@pytest.fixture
+def dashboard_tool_base_url() -> Iterator[str]:
     dashboard_sock = bind_serving_socket("127.0.0.1", 0)
     dashboard_port = dashboard_sock.getsockname()[1]
     info = ServingInfo(
@@ -871,52 +873,75 @@ def test_dashboard_executes_typed_python_tools_in_shellsim(monkeypatch):
     )
 
     with serve_app_background(app, dashboard_sock):
-        base = f"http://127.0.0.1:{dashboard_port}"
-        definitions = requests.post(f"{base}/tools", json={"source": MULTIPLY_TOOL_SOURCE}, timeout=10)
-        payload = {"source": MULTIPLY_TOOL_SOURCE, "arguments": {"value": "6", "factor": 7}}
-        result = requests.post(f"{base}/tools/multiply", json=payload, timeout=10)
-        invalid = requests.post(
-            f"{base}/tools/multiply",
-            json={"source": MULTIPLY_TOOL_SOURCE, "arguments": {"unknown": 1}},
-            timeout=10,
-        )
-        compound_interest = requests.post(
-            f"{base}/tools/compound_interest",
-            json={
-                "source": COMPOUND_INTEREST_TOOL_SOURCE,
-                "arguments": {"principal": 2500, "annual_rate_percent": 4.5, "years": 8},
-            },
-            timeout=10,
-        )
-        word_statistics = requests.post(
-            f"{base}/tools/word_statistics",
-            json={
-                "source": WORD_STATISTICS_TOOL_SOURCE,
-                "arguments": {"text": "the quick brown fox jumps over the lazy dog"},
-            },
-            timeout=10,
-        )
-        host_environment = requests.post(
-            f"{base}/tools/host_environment",
-            json={
-                "source": HOST_ENVIRONMENT_TOOL_SOURCE,
-                "arguments": {"name": "MARIN_SHELLSIM_HOST_SECRET"},
-            },
-            timeout=10,
-        )
-        exhausted = requests.post(
-            f"{base}/tools/spin",
-            json={"source": CPU_EXHAUSTION_TOOL_SOURCE, "arguments": {}},
-            timeout=10,
-        )
+        yield f"http://127.0.0.1:{dashboard_port}"
+
+
+def test_dashboard_executes_typed_python_tools_in_shellsim(dashboard_tool_base_url):
+    definitions = requests.post(
+        f"{dashboard_tool_base_url}/tools",
+        json={"source": MULTIPLY_TOOL_SOURCE},
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
+    )
+    result = requests.post(
+        f"{dashboard_tool_base_url}/tools/multiply",
+        json={"source": MULTIPLY_TOOL_SOURCE, "arguments": {"value": "6", "factor": 7}},
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
+    )
+    invalid = requests.post(
+        f"{dashboard_tool_base_url}/tools/multiply",
+        json={"source": MULTIPLY_TOOL_SOURCE, "arguments": {"unknown": 1}},
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
+    )
 
     assert definitions.json()[0]["function"]["name"] == "multiply"
     assert definitions.json()[0]["function"]["parameters"]["required"] == ["value"]
     assert result.json() == 42
     assert invalid.status_code == 422
+
+
+def test_dashboard_shellsim_runs_example_tools(dashboard_tool_base_url):
+    compound_interest = requests.post(
+        f"{dashboard_tool_base_url}/tools/compound_interest",
+        json={
+            "source": COMPOUND_INTEREST_TOOL_SOURCE,
+            "arguments": {"principal": 2500, "annual_rate_percent": 4.5, "years": 8},
+        },
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
+    )
+    word_statistics = requests.post(
+        f"{dashboard_tool_base_url}/tools/word_statistics",
+        json={
+            "source": WORD_STATISTICS_TOOL_SOURCE,
+            "arguments": {"text": "the quick brown fox jumps over the lazy dog"},
+        },
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
+    )
+
     assert compound_interest.json() == pytest.approx(3555.2515320915186)
     assert word_statistics.json() == {"words": 9, "unique_words": 8}
+
+
+def test_dashboard_shellsim_cannot_read_host_environment(dashboard_tool_base_url, monkeypatch):
+    monkeypatch.setenv("MARIN_SHELLSIM_HOST_SECRET", "must-not-leak")
+    host_environment = requests.post(
+        f"{dashboard_tool_base_url}/tools/host_environment",
+        json={
+            "source": HOST_ENVIRONMENT_TOOL_SOURCE,
+            "arguments": {"name": "MARIN_SHELLSIM_HOST_SECRET"},
+        },
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
+    )
+
     assert host_environment.json() is None
+
+
+def test_dashboard_shellsim_enforces_cpu_limit(dashboard_tool_base_url):
+    exhausted = requests.post(
+        f"{dashboard_tool_base_url}/tools/spin",
+        json={"source": CPU_EXHAUSTION_TOOL_SOURCE, "arguments": {}},
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
+    )
+
     assert exhausted.status_code == 422
     assert "cpu_exhausted" in exhausted.json()["details"]
 
