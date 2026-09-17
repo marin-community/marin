@@ -5,14 +5,14 @@
 
 import hashlib
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from types import MappingProxyType
 
 from datasets import load_dataset
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import prefix_join
-from zephyr.readers import open_file
+from zephyr.readers import load_jsonl
 
 SEED_DATASET_REVISIONS: Mapping[str, str] = MappingProxyType(
     {
@@ -22,7 +22,7 @@ SEED_DATASET_REVISIONS: Mapping[str, str] = MappingProxyType(
 )
 
 
-def _source_conversation(row: dict) -> tuple[str | None, str | None]:
+def _source_seed_prompts(row: dict) -> tuple[str | None, str | None]:
     system = None
     first_user = None
     conversation = row.get("conversation") or []
@@ -49,15 +49,9 @@ def _protected_dataset(metadata: dict) -> str | None:
     return None
 
 
-def _chat_rows(path: str) -> Iterator[dict]:
-    with open_file(path, "rt") as source:
-        for line in source:
-            yield json.loads(line)
-
-
 def _needed_hashes(path: str) -> dict[str, set[str]]:
     needed = {dataset: set() for dataset in SEED_DATASET_REVISIONS}
-    for row in _chat_rows(path):
+    for row in load_jsonl(path):
         metadata = row.get("metadata") or {}
         dataset = _protected_dataset(metadata)
         if dataset not in needed:
@@ -86,7 +80,7 @@ def _replacement_prompts(needed: Mapping[str, set[str]]) -> dict[tuple[str, str]
             token=True if dataset.startswith("lmsys/") else None,
         )
         for row in source:
-            system, first_user = _source_conversation(row)
+            system, first_user = _source_seed_prompts(row)
             if not isinstance(first_user, str):
                 continue
             digest = hashlib.sha256(first_user.encode("utf-8")).hexdigest()
@@ -135,7 +129,7 @@ def restore_chat_prompts(input_path: str, output_path: str) -> None:
     destination = prefix_join(output_path, "data/chat.jsonl")
     replacements = _replacement_prompts(_needed_hashes(source))
     with atomic_rename(destination) as temporary_path, open_url(temporary_path, "wt") as output:
-        for row in _chat_rows(source):
+        for row in load_jsonl(source):
             restored = restore_chat_row(row, replacements)
             output.write(json.dumps(restored, ensure_ascii=False, separators=(",", ":")))
             output.write("\n")

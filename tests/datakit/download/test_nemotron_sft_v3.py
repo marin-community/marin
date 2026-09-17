@@ -36,8 +36,16 @@ def test_v3_chat_reconstruction_preserves_the_original_seed_prompt():
 
 def test_v3_chat_reconstruction_removes_absent_system_turn():
     row = {
-        "metadata": {"seed_dataset": "allenai/WildChat-1M", "seed_prompt_sha256": "digest", "train_turns": [False, False, True]},
-        "messages": [{"role": "system", "content": None}, {"role": "user", "content": None}, {"role": "assistant", "content": "Answer"}],
+        "metadata": {
+            "seed_dataset": "allenai/WildChat-1M",
+            "seed_prompt_sha256": "digest",
+            "train_turns": [False, False, True],
+        },
+        "messages": [
+            {"role": "system", "content": None},
+            {"role": "user", "content": None},
+            {"role": "assistant", "content": "Answer"},
+        ],
     }
 
     restored = restore_chat_row(row, {("allenai/WildChat-1M", "digest"): (None, "Original prompt")})
@@ -92,7 +100,11 @@ def test_v3_chat_retains_source_training_turn_annotation():
     assert len(documents) == 1
     document = documents[0]
     assert [message["role"] for message in document["messages"]] == [
-        "user", "assistant", "user", "assistant", "assistant"
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "assistant",
     ]
     assert document["source_train_turns"] == [False, False, False, True]
     assert document["source_id"] == "chat-example"
@@ -122,11 +134,22 @@ def test_opencode_tool_schema_is_available_to_chat_template():
     row = {
         "messages": [
             json.dumps({"role": "user", "content": "List files"}),
-            json.dumps({"role": "assistant", "tool_calls": [{"id": "call-1", "function": {"name": "bash", "arguments": '{"command":"ls"}'}}]}),
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"id": "call-1", "function": {"name": "bash", "arguments": '{"command":"ls"}'}}],
+                }
+            ),
             json.dumps({"role": "tool", "name": "bash", "tool_call_id": "call-1", "content": "README.md"}),
             json.dumps({"role": "assistant", "content": "Found README.md"}),
         ],
-        "tools": [{"id": "bash", "description": "Run a command", "inputSchema": {"jsonSchema": {"type": "object", "properties": {"command": {"type": "string"}}}}}],
+        "tools": [
+            {
+                "id": "bash",
+                "description": "Run a command",
+                "inputSchema": {"jsonSchema": {"type": "object", "properties": {"command": {"type": "string"}}}},
+            }
+        ],
     }
 
     documents = row_to_chat_doc(row, family="opencode_v1", partition_name="bash_only_tool")
