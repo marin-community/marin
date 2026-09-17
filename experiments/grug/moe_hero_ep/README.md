@@ -77,12 +77,18 @@ the agreed cutover preflight and stop the old coordinator before submitting:
 experiments/grug/moe_hero_ep/trigger_hero.sh launch
 ```
 
-`launch` requires a clean checkout at the fetched `origin/main`, terminal parent
-and child coordinators, and the child's recorded handoff. It submits training, which resumes
+`fork-wandb` requires a clean checkout at the fetched `origin/main` and records
+that SHA on the child. `launch` requires the same clean SHA, terminal parent and
+child coordinators, and the child's recorded handoff. Recovery stays on that
+accepted SHA even after main advances. It submits training, which resumes
 that W&B child without `fork_from`. Iris retries also resume the child. If fork
 creation succeeds but submission fails, inspect the child and use `launch` again
 only after confirming no coordinator is live. Do not repeat `fork-wandb` for
 recovery or rollback. Rollback uses the old run ID and old revision's launcher.
+
+Keep one operator as the submission owner; the coordinator checks do not
+serialize launches across machines. After submission, verify exactly one live
+coordinator for the child in Iris, as required by the cutover playbook.
 
 The fork preserves history through the selected W&B step. Training state still
 comes from `--initialize-from-checkpoint`; inherited history does not prove that

@@ -32,24 +32,29 @@ fi
 
 launch_commit=$(git rev-parse HEAD)
 main_commit=$(git rev-parse origin/main)
-if [[ "$launch_commit" != "$main_commit" ]]; then
+if [[ "$mode" == fork-wandb && "$launch_commit" != "$main_commit" ]]; then
   echo "Fetch origin/main and use its exact commit before a cutover launch." >&2
   exit 1
 fi
 
 # Create the tracker lineage once, outside the coordinator and training retry loops.
 # launch verifies the same child and lets training resume it without fork_from.
-uv run python - "$mode" "$RUN_ID" "$WANDB_PROJECT" "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" <<'PYTHON'
+uv run python - "$mode" "$RUN_ID" "$WANDB_PROJECT" "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" "$launch_commit" <<'PYTHON'
 import csv
 import io
 import subprocess
 import sys
 
 import wandb
+from iris.cluster.types import TERMINAL_JOB_STATES
 
-mode, run_id, project, fork_from, checkpoint = sys.argv[1:]
+mode, run_id, project, fork_from, checkpoint, launch_commit = sys.argv[1:]
 entity = "marin-community"
-lineage = {"hero_handoff_checkpoint": checkpoint, "hero_wandb_fork_from": fork_from}
+lineage = {
+    "hero_handoff_checkpoint": checkpoint,
+    "hero_wandb_fork_from": fork_from,
+    "hero_launch_commit": launch_commit,
+}
 api = wandb.Api()
 if mode == "fork-wandb":
     if list(api.runs(f"{entity}/{project}", filters={"name": run_id}, per_page=1)):
@@ -75,7 +80,7 @@ else:
     if not any(row["job_id"].startswith(parent_prefix) for row in rows):
         raise ValueError("Unknown parent coordinator state; refusing launch")
     for row in rows:
-        if row["job_id"].startswith((parent_prefix, child_prefix)) and int(row["state"]) not in (4, 5, 6, 7, 8):
+        if row["job_id"].startswith((parent_prefix, child_prefix)) and int(row["state"]) not in TERMINAL_JOB_STATES:
             raise ValueError(f"Coordinator is not terminal: {row['job_id']}")
     child = api.run(f"{entity}/{project}/{run_id}")
     for key, expected in lineage.items():

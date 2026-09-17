@@ -94,6 +94,8 @@ every guard as a dry run against the live cluster before the day:
   newest complete checkpoint instead;
   no competing live coordinator, gang, or hero pod apart from the old run;
   credentials for Iris, kubectl, the object store, and W&B all work.
+- Assign one submission owner; do not run cutover commands concurrently from
+  different sessions or machines.
 - Launch guard: refuse unless the old run's coordinator is terminal, no
   coordinator for the new run id is live, and the worktree is pristine. Capture
   the submit output to a file and verify exactly one coordinator for the new run
