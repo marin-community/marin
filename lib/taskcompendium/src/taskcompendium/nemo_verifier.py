@@ -58,6 +58,5 @@ def _grade_action(payload: PredictedActionPayload, attempt: GradingAttempt) -> G
     return GradeResult(Outcome.GRADED, reward)
 
 
-def nemo_predicted_action_handler() -> VerifierHandler:
-    """Return the NeMo predicted-action grading handler."""
+def nemo_predicted_action_handler() -> VerifierHandler[PredictedActionPayload]:
     return VerifierHandler(PredictedActionPayload, _grade_action)
