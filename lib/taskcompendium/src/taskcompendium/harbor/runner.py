@@ -13,6 +13,7 @@ from typing import Any
 from harbor.models.trial.config import TrialConfig
 from harbor.trial.trial import Trial
 
+from taskcompendium.harbor.adapter import DEFAULT_REQUEST_TIMEOUT
 from taskcompendium.lowering import HarborTaskBinding, read_binding, read_rendering, read_specification, validate_binding
 from taskcompendium.rendering import AnswerFormat
 
@@ -41,7 +42,7 @@ def _validate_launch(launch: HarborLaunch, answer_format: AnswerFormat | None) -
         api_key_env = launch.agent_kwargs.get("api_key_env")
         if api_key_env is not None and (not isinstance(api_key_env, str) or not api_key_env):
             raise ValueError("api_key_env must be a nonempty string")
-        timeout = launch.agent_kwargs.get("request_timeout", 120)
+        timeout = launch.agent_kwargs.get("request_timeout", DEFAULT_REQUEST_TIMEOUT)
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not isfinite(timeout) or timeout <= 0:
             raise ValueError("request_timeout must be finite and positive")
         return
