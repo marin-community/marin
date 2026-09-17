@@ -102,8 +102,9 @@ the same rules. Every cell is a measurement: the rate over the items a run grade
 behind it, the per-cause counts of items it attempted and never graded, and a 95% interval. When a run
 reports an attempted count, the interval covers the ungraded items by Manski bounds with an
 Imbens-Manski critical value rather than imputing them; when it reports none, the interval is labelled
-`sampling_only`, because completeness is then unknown. Rankings sort on the interval's lower bound, so
-losing items cannot buy rank. Each row's `last_updated` is the maximum `created_at` among its cells.
+`sampling_only`, because completeness is then unknown. A panel benchmark column sorts on the score;
+`/compare` ranks on the interval's lower bound, so losing items cannot buy rank there. Each row's
+`last_updated` is the maximum `created_at` among its cells.
 
 Both evaluators emit benchmark metadata with the full item count, the count selected after a run cap,
 and the canonical metric protocol. Marin preserves that block in `record.json`. Harbor reports task
