@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import Any
+from typing import Any, Generic, TypeVar, cast
 
 import msgspec
 from tasktrove_verify.grade import Status, grade
@@ -21,6 +21,7 @@ from taskcompendium.rendering import Rendering, extract_answer
 
 ENTRY_POINT_GROUP = "taskcompendium.verifiers"
 EXACT_ANSWER_KIND = "exact_answer"
+PayloadT = TypeVar("PayloadT")
 
 
 class Outcome(StrEnum):
@@ -46,19 +47,20 @@ class GradingAttempt:
 
 
 @dataclass(frozen=True)
-class VerifierHandler:
-    payload_type: type
-    grade: Callable[[Any, GradingAttempt], GradeResult]
+class VerifierHandler(Generic[PayloadT]):
+    payload_type: type[PayloadT]
+    grade: Callable[[PayloadT, GradingAttempt], GradeResult]
 
 
-def _handler(kind: str) -> VerifierHandler:
+def _handler(kind: str) -> VerifierHandler[Any]:
     matches = [entry for entry in entry_points(group=ENTRY_POINT_GROUP) if entry.name == kind]
     if len(matches) != 1:
         raise ValueError(f"Unknown or ambiguous verifier kind: {kind!r}")
-    return matches[0].load()()
+    factory = cast(Callable[[], VerifierHandler[Any]], matches[0].load())
+    return factory()
 
 
-def _resolved(verifier: VerifierSpec) -> tuple[VerifierHandler, Any]:
+def _resolved(verifier: VerifierSpec) -> tuple[VerifierHandler[Any], Any]:
     handler = _handler(verifier.kind)
     try:
         payload = msgspec.convert(verifier.parameters, type=handler.payload_type, strict=True)
@@ -118,5 +120,5 @@ def _grade_exact(payload: ExactAnswerPayload, attempt: GradingAttempt) -> GradeR
     return GradeResult(Outcome.GRADED, result.reward)
 
 
-def exact_answer_handler() -> VerifierHandler:
+def exact_answer_handler() -> VerifierHandler[ExactAnswerPayload]:
     return VerifierHandler(ExactAnswerPayload, _grade_exact)
