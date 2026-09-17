@@ -14,9 +14,11 @@ from types import SimpleNamespace
 import click
 import pytest
 from click.testing import CliRunner
+from finestore.eval import EvaluationStore
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
+from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
     HARBOR_RUNTIME,
@@ -25,6 +27,7 @@ from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.lm_eval_samples import samples_from_lm_eval
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
@@ -221,21 +224,14 @@ def _lm_eval_generation(doc_id: int, metric: str, score: float, response: str) -
 def _write_evalchemy_output(
     output_dir: str, task_dir: str, results: dict[str, dict[str, float]], samples: dict[str, list[dict]]
 ) -> None:
-    model_dir = StoragePath(output_dir) / task_dir / "model"
-    model_dir.mkdirs()
-    sample_counts = {
-        task: {
-            "original": max((int(row["doc_id"]) for row in rows), default=-1) + 1,
-            "effective": max((int(row["doc_id"]) for row in rows), default=-1) + 1,
-        }
-        for task, rows in samples.items()
-    }
+    sample_counts = {task: max((int(row["doc_id"]) for row in rows), default=-1) + 1 for task, rows in samples.items()}
     benchmark_metadata = {}
     canonical_results = {}
+    primary_sources = {}
     for task, count in sample_counts.items():
         source_name = next(name.split(",", 1)[0] for name in results[task] if "stderr" not in name)
         canonical_name = "accuracy" if source_name in {"acc", "exact_match"} else source_name
-        n_benchmark = count["original"]
+        primary_sources[task] = source_name
         benchmark_metadata[task] = {
             "schema_version": 1,
             "task": task,
@@ -249,21 +245,38 @@ def _write_evalchemy_output(
                     "higher_is_better": True,
                 }
             ],
-            "n_benchmark": n_benchmark,
-            "n_attempted": n_benchmark,
+            "n_benchmark": count,
+            "n_attempted": count,
         }
         canonical_results[task] = {canonical_name: next(iter(results[task].values()))}
-    (model_dir / "results_20260807.json").write_text(
-        json.dumps(
-            {
-                "results": results,
-                "benchmark_metadata": benchmark_metadata,
-                "canonical_results": canonical_results,
-            }
+
+    store = EvaluationStore.open(output_dir, writer_id="evalchemy-test")
+    try:
+        store.add_source_artifact(
+            f"evalchemy/{task_dir}/native/results_test.json",
+            json.dumps(
+                {
+                    "results": results,
+                    "benchmark_metadata": benchmark_metadata,
+                    "canonical_results": canonical_results,
+                }
+            ).encode(),
+            content_type="application/json",
         )
-    )
-    for task, rows in samples.items():
-        (model_dir / f"samples_{task}_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        for task, rows in samples.items():
+            normalized_task = task_dir if len(samples) == 1 else f"{task_dir}/{task}"
+            payload = ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
+            store.add_source_artifact(
+                f"evalchemy/{task_dir}/native/samples_{task}_native.jsonl",
+                payload,
+                content_type="application/x-ndjson",
+            )
+            for row in rows:
+                for sample in samples_from_lm_eval(normalized_task, row, primary_sources[task]):
+                    store.add_sample(sample)
+        store.seal()
+    finally:
+        store.close()
 
 
 def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp_path):
@@ -310,19 +323,8 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
 
 
-def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypatch):
+def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypatch):
     output_dir = str(StoragePath("memory://evalchemy-export-failure") / tmp_path.name)
-    model_dir = StoragePath(output_dir) / "gsm8k_5shot" / "model"
-    model_dir.mkdirs()
-    (model_dir / "results_20260807.json").write_text(
-        json.dumps(
-            {
-                "results": {"gsm8k": {"exact_match,flexible-extract": 0.75}},
-                "n-samples": {"gsm8k": {"original": 1, "effective": 1}},
-            }
-        )
-    )
-    (model_dir / "samples_gsm8k_20260807.jsonl").write_text('{"unterminated": "sample\n')
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
@@ -662,7 +664,7 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
         "tester",
     )
 
-    assert batch.evaluations[0].identity.eval_runtime == EVALCHEMY.requirement(("math500",))
+    assert batch.evaluations[0].identity.eval_runtime == EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, "math500"))
 
 
 def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):
@@ -842,7 +844,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         "aime-policy",
     ]
     ifeval = batch.evaluations[1].identity.eval_ref
-    assert batch.evaluations[1].identity.eval_runtime == EVALCHEMY.requirement(("ifeval",))
+    assert batch.evaluations[1].identity.eval_runtime == EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, "ifeval"))
     assert ifeval.model_dump(mode="json", exclude_none=True) == {
         "name": "ifeval",
         "mechanism": "evalchemy",
