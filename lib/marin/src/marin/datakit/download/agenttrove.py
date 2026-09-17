@@ -12,6 +12,11 @@ completeness (``original_teacher`` is populated on every row of the pinned
 revision; ``model`` and ``model_provider`` are null for some streams), so a row
 is dropped when any of them names an excluded family.
 
+The structured-chat SFT export also drops task sources with known weak task
+contracts or unverifiable outcomes. ``original_source`` groups several upstream
+repositories under labels such as ``exp_rpt``, so these exclusions intentionally
+remove whole groups.
+
 Transcripts carrying a task outcome are prefixed with a tag so the model can
 condition on it. Only two streams record a verdict — r2egym rows hold a numeric
 reward (``"1.0"``/``"0.0"``) and swesmith rows hold ``"success"``/``"timeout"``,
@@ -70,6 +75,14 @@ EXCLUDED_TEACHER_MARKERS = frozenset({"gpt", "openai", "claude", "anthropic", "g
 # markers. An allowed marker on any field keeps the row outright.
 ALLOWED_TEACHER_MARKERS = frozenset({"gpt-oss"})
 
+# The pinned AgentTrove revision exposes only coarse task-source labels. TaskTrove
+# retired bad task lineages within these groups, and sampled freelancer rows are
+# open-ended job postings rather than executable terminal tasks. Drop the groups
+# rather than retaining unidentifiable siblings of the bad lineages.
+EXCLUDED_TASK_SOURCES = frozenset(
+    {"freelancer", "Inferred Bugs", "MagiCoder Evol Instruct", "exp_rpt", "exp_rle", "unknown"}
+)
+
 PROVENANCE_FIELDS = ("model", "model_provider", "original_teacher")
 
 # ``result`` mixes conventions across streams: swesmith uses these words,
@@ -125,6 +138,9 @@ def row_to_doc(row: dict) -> list[dict]:
 
 
 def row_to_chat_doc(row: dict) -> list[dict]:
+    if row.get("original_source") in EXCLUDED_TASK_SOURCES:
+        counters.pipeline.update_counter("agenttrove/chat/dropped_source", 1)
+        return []
     if is_excluded_teacher(row):
         return []
     conversations = row.get("conversations")
@@ -222,7 +238,7 @@ def agenttrove_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/agenttrove",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.17.native-terminus"},
+        hash_attrs={"version": "2026.09.17.native-terminus-source-filter"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/agenttrove", download=processed

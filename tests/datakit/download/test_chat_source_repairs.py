@@ -104,6 +104,22 @@ def test_agenttrove_merges_terminal_output_with_user_followup() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "source",
+    ["freelancer", "Inferred Bugs", "MagiCoder Evol Instruct", "exp_rpt", "exp_rle", "unknown"],
+)
+def test_agenttrove_excludes_low_quality_task_source_from_chat_output(source) -> None:
+    row = {
+        "original_source": source,
+        "original_teacher": "GLM-4.6",
+        "conversations": [
+            {"role": "user", "content": "Task Description:\nFix the test."},
+            {"role": "assistant", "content": '{"commands":[],"task_complete":true}'},
+        ],
+    }
+    assert agenttrove_row_to_chat_doc(row) == []
+
+
 def test_davinci_filters_source_control_tokens() -> None:
     row = {
         "messages": [
