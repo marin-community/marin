@@ -193,7 +193,10 @@ def test_opencode_recovers_task_and_declared_tools_from_served_prompt():
 
 
 @pytest.mark.parametrize("cohort", ["minimax-m27-131k", "qwen35-122b-32k"])
-@pytest.mark.parametrize("observation", ["<|start_think|>assistant", "<|eot_id|>assistant"])
+@pytest.mark.parametrize(
+    "observation",
+    ["<|start_think|>assistant", "<|eot_id|>assistant", "<tool_response>contents</tool_response>"],
+)
 def test_terminal_cohorts_quarantine_malformed_observations(cohort, observation):
     transform = row_to_chat_doc(_dataset(cohort))
     assert (
