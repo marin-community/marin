@@ -51,26 +51,11 @@ class VerifierHandler:
     grade: Callable[[Any, GradingAttempt], GradeResult]
 
 
-_HANDLERS: dict[str, VerifierHandler] = {}
-
-
-def register_verifier(kind: str, *, payload_type: type, grade: Callable[[Any, GradingAttempt], GradeResult]) -> None:
-    """Register one kind's typed payload and grading function."""
-    if not kind or kind in _HANDLERS:
-        raise ValueError(f"Verifier kind is empty or already registered: {kind!r}")
-    _HANDLERS[kind] = VerifierHandler(payload_type, grade)
-
-
 def _handler(kind: str) -> VerifierHandler:
-    if kind in _HANDLERS:
-        return _HANDLERS[kind]
     matches = [entry for entry in entry_points(group=ENTRY_POINT_GROUP) if entry.name == kind]
     if len(matches) != 1:
         raise ValueError(f"Unknown or ambiguous verifier kind: {kind!r}")
-    matches[0].load()()
-    if kind not in _HANDLERS:
-        raise ValueError(f"Verifier entry point did not register kind: {kind!r}")
-    return _HANDLERS[kind]
+    return matches[0].load()()
 
 
 def _resolved(verifier: VerifierSpec) -> tuple[VerifierHandler, Any]:
@@ -133,6 +118,6 @@ def _grade_exact(payload: ExactAnswerPayload, attempt: GradingAttempt) -> GradeR
     return GradeResult(Outcome.GRADED, result.reward)
 
 
-def register_exact_answer() -> None:
-    """Entry point loaded when an exact-answer task is validated or graded."""
-    register_verifier(EXACT_ANSWER_KIND, payload_type=ExactAnswerPayload, grade=_grade_exact)
+def exact_answer_handler() -> VerifierHandler:
+    """Return the exact-answer grading handler."""
+    return VerifierHandler(ExactAnswerPayload, _grade_exact)
