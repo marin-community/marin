@@ -159,15 +159,16 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
     assert json.loads(completed.stdout) == {"status": "graded", "reward": 1.0}
 
 
-def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification):
+@pytest.mark.parametrize("schema_version", ["0.1", "0.2"])
+def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification, schema_version):
     task = lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), HarborTaskBinding(), tmp_path / "task")
     path = task / "specification.json"
     payload = json.loads(path.read_text())
-    payload["schema_version"] = "0.1"
+    payload["schema_version"] = schema_version
     payload["verifier"] = {"expected": "12", "ignore_case": True, "ignore_whitespace": True}
     path.write_text(json.dumps(payload))
 
-    with pytest.raises(ValueError, match=r"Unsupported TaskSpec schema: 0\.1"):
+    with pytest.raises(ValueError, match=rf"Unsupported TaskSpec schema: {schema_version}"):
         read_specification(path)
 
 
