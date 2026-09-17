@@ -40,8 +40,33 @@ result contracts. This keeps the lifecycle common without hiding mechanism-speci
 or outcomes behind a universal `do_eval` interface.
 
 Evalchemy and Harbor write their results directly into FineStore. Each evaluator preserves its native
-files as source objects and writes the shared normalized evaluation tables consumed by Evaldash;
-Marin records provenance and summarizes those outputs without rebuilding the tables after the run.
+files as source objects and writes the normalized `samples` and `steps` tables consumed by Evaldash.
+After the evaluator seals those tables, Marin derives the shared `rollouts` table from `samples` and
+`steps`, then records provenance and aggregate results.
+
+### Normalized rollout table
+
+The `rollouts` table stores one ordered conversation part per row. Its primary key is
+`(task, doc_id, trial_id, turn_id, part_id)`. `task`, `doc_id`, and `trial_id` identify one model
+attempt; `turn_id` orders turns; and `part_id` orders content within a turn.
+
+The remaining columns have the same meaning for both evaluators:
+
+- `conversation_type` is `chat` when an Evalchemy sample has structured `prompt_messages`,
+  `completion` when it has `prompt_text`, and `agentic` for Harbor steps.
+- `participant_type` is the normalized role: `system`, `user`, `assistant`, `tool`, `environment`,
+  or `other`. Evalchemy uses the message role as `participant_id`. Harbor uses an assistant step's
+  model name when available and otherwise uses the ATIF source role.
+- `content_type` is `message`, `reasoning`, `tool_call`, or `tool_result`. Structured tool content is
+  JSON in `content`; `metadata_json` holds small type-specific annotations.
+- Token counts, token IDs, log probabilities, and cost are attached to the first model-produced part
+  of a Harbor turn when the trajectory provides them.
+
+Evalchemy prompt messages and model responses become `completion` or `chat` rows. Multiple grading
+filters for one Evalchemy response share one rollout. Harbor's normalized `steps` rows supply the
+`agentic` messages, reasoning, tool calls, and observations. The evaluator-native JSON/JSONL and
+complete Harbor trajectory remain source objects and blobs, so normalization does not replace the
+raw record.
 
 - [`eval_step`][marin.experiment.evaluation.eval_step] builds one post-hoc eval artifact from an
   `EvalGroup`; combine groups and aggregate them with
