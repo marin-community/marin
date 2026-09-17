@@ -426,8 +426,8 @@ def _content_type(relative: str) -> str:
 
 
 @dataclass(frozen=True)
-class SampleExport:
-    """Rows, coverage, and recovered metrics produced by a sample export."""
+class SampleSummary:
+    """Sample count, coverage, and recovered metrics for an evaluation archive."""
 
     samples: int
     coverage: dict[str, TaskCoverage] = field(default_factory=dict)
@@ -438,14 +438,14 @@ class SampleExport:
 
 
 @dataclass
-class _SampleExportBuilder:
+class _SampleSummaryBuilder:
     task_keys: dict[str, str]
     samples: int = 0
     coverage: dict[str, TaskCoverage] = field(default_factory=dict)
     recovered_metrics: dict[str, dict[str, float]] = field(default_factory=dict)
 
     @classmethod
-    def for_sources(cls, sources: Sequence[str]) -> _SampleExportBuilder:
+    def for_sources(cls, sources: Sequence[str]) -> _SampleSummaryBuilder:
         return cls(task_keys=_task_keys(sources))
 
     def accepts(self, name: str) -> bool:
@@ -467,15 +467,15 @@ class _SampleExportBuilder:
         if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
             self.recovered_metrics[task_key] = task_metrics
 
-    def build(self) -> SampleExport:
-        return SampleExport(
+    def build(self) -> SampleSummary:
+        return SampleSummary(
             samples=self.samples,
             coverage=self.coverage,
             recovered_metrics=self.recovered_metrics,
         )
 
 
-def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> SampleExport:
+def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> SampleSummary:
     """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
 
     Returns the rows written, coverage, and metrics recovered from successful requests. The archive
@@ -492,9 +492,9 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> Sa
     if not any(_is_sample_source(relative) for relative in artifacts):
         # With no source there is nothing to write, and nothing that could stand in for what is
         # already stored, so a run evaluated by another mechanism keeps the archive it has.
-        return SampleExport(samples=0)
+        return SampleSummary(samples=0)
     require_current_samples(out_path)
-    summary = _SampleExportBuilder.for_sources(sources)
+    summary = _SampleSummaryBuilder.for_sources(sources)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     try:
         for relative in artifacts:
@@ -517,7 +517,7 @@ def _is_native_evalchemy_source(name: str) -> bool:
     return path.is_relative_to(EVALCHEMY_SOURCE_ROOT) and path.parent.name == EVALCHEMY_NATIVE_SOURCE_DIR
 
 
-def summarize_native_eval_samples(out_path: str) -> SampleExport:
+def summarize_native_eval_samples(out_path: str) -> SampleSummary:
     """Summarize Evalchemy's normalized FineStore samples without rewriting its table."""
     reader = ReadView(out_path)
     sources = tuple(name for name in preserved_sample_sources(out_path) if _is_native_evalchemy_source(name))
@@ -532,7 +532,7 @@ def summarize_native_eval_samples(out_path: str) -> SampleExport:
         sample = sample_from_archive_row(row)
         by_task.setdefault(sample.task, []).append(sample)
 
-    summary = _SampleExportBuilder.for_sources(sources)
+    summary = _SampleSummaryBuilder.for_sources(sources)
     for name in sources:
         task = _task_from_filename(PurePosixPath(name).name, ".jsonl")
         summary.add_samples(name, by_task.get(task, []))

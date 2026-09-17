@@ -46,7 +46,6 @@ def _result_task_dir(result_file: StoragePath) -> str:
 
 
 def _metrics_for_task_dir(results: dict, task_dir: str) -> dict[str, dict[str, float]]:
-    """Key one aggregate result payload by its task-config directory."""
     return {
         task_dir if len(results) == 1 else f"{task_dir}/{task}": _numeric(task_metrics)
         for task, task_metrics in results.items()

@@ -67,7 +67,7 @@ def test_served_evalchemy_smoke(iris_client: IrisClient, smoke_region: str) -> N
         if not is_job_finished(job.state):
             job.cancel()
 
-    # Metrics are keyed by each task's upload dir (name_Nshot when un-aliased), not the bare task name.
+    # Metrics are keyed by each task's archive source directory, not the bare task name.
     metrics = FineStoreEvalchemyResult.raw_load(out_path).task_metrics()
     assert set(metrics) >= {"arc_easy_0shot", "gsm8k_5shot"}, metrics
     assert metrics["arc_easy_0shot"], "arc_easy produced no numeric metrics"

@@ -3,13 +3,13 @@
 
 """Evaluate configured tasks through an OpenAI-compatible endpoint.
 
-Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG`` (the parent builds it in
-:mod:`marin.evaluation.evalchemy.runner`), so nothing else in Marin needs to import here.
-Each task runs through the evalchemy fork's ``evalchemy`` CLI once (one invocation per task so each
-carries its own ``num_fewshot``) with lm-eval's ``local-completions`` (or ``local-chat-completions``)
-API model pointed at the served URL. Evalchemy writes its aggregate JSON, sample JSONL, and normalized
-sample rows directly to the FineStore archive at ``out_path``. The ordinary ``--output_path`` is a
-temporary directory used for Evalchemy's local completion check and is discarded after each task.
+Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG``; the parent builds it in
+:mod:`marin.evaluation.evalchemy.runner`. Each task runs through the evalchemy fork's ``evalchemy``
+CLI once (one invocation per task so each carries its own ``num_fewshot``) with lm-eval's
+``local-completions`` (or ``local-chat-completions``) API model pointed at the served URL. Evalchemy
+writes its aggregate JSON, sample JSONL, and normalized sample rows directly to the FineStore archive
+at ``out_path``. The ordinary ``--output_path`` is a temporary directory used for Evalchemy's local
+completion check and is discarded after each task.
 """
 
 from __future__ import annotations

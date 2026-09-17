@@ -1,13 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed eval-output artifact + report aggregation: read metrics back through the artifact.
+"""Read current FineStore and historical Evalchemy metrics into typed reports.
 
-Each toy fixture writes the on-disk shape evalchemy's real producer writes — lm-eval's native
-``<task_dir>/<model>/results_<ts>.json`` tree — so reading through the typed accessor and compiling a
-report exercises the real round-trip without running an eval. The fixtures pin the behaviour that
-matters: metrics are keyed by the upload dir (unique per task-config), not by the bare task name
-lm-eval writes inside the JSON, so shot variants of one task do not overwrite each other.
+Historical fixtures use lm-eval's ``<task_dir>/<model>/results_<ts>.json`` tree. Current fixtures
+store the same aggregate artifacts in FineStore. Both readers key metrics by the task-config
+directory so shot variants of one task do not overwrite each other.
 """
 
 import json
@@ -82,9 +80,7 @@ def test_finestore_evalchemy_result_reads_native_aggregate_artifacts(tmp_path):
     finally:
         store.close()
 
-    result = FineStoreEvalchemyResult(path=root)
-
-    assert result.task_metrics() == {
+    expected = {
         "gsm8k_8shot": {"exact_match,none": 0.3, "exact_match_stderr,none": 0.02},
         "mmlu_5shot/mmlu": {"acc,none": 0.41},
         "mmlu_5shot/mmlu_stem": {"acc,none": 0.38},
@@ -94,7 +90,7 @@ def test_finestore_evalchemy_result_reads_native_aggregate_artifacts(tmp_path):
         [ReportEntry(root, result_type_name(FineStoreEvalchemyResult), "evalchemy")],
         str(tmp_path / "report"),
     )
-    assert report.task_metrics == result.task_metrics()
+    assert report.task_metrics == expected
 
 
 def test_evalchemy_result_keys_by_task_dir(tmp_path, monkeypatch):

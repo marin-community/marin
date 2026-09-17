@@ -18,6 +18,7 @@ from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     EvalchemyRuntimeConfig,
 )
+from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, ValidatedHarborConfig
@@ -230,7 +231,9 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         extra_gen_kwargs=extra_gen_kwargs,
         extra_model_args=extra_model_args,
         max_length=config.max_length,
-        runtime=EvalchemyRuntimeConfig(requirement=EVALCHEMY.requirement(("serve-eval", *config.runtime_extras))),
+        runtime=EvalchemyRuntimeConfig(
+            requirement=EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras))
+        ),
     )
 
 
