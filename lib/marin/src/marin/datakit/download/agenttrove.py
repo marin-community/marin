@@ -152,11 +152,14 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             counters.pipeline.update_counter("agenttrove/chat/missing_tool_definitions_filtered", 1)
             return []
         converted = opencode_protocol_messages(conversations, tools)
+        if converted is None:
+            return []
+        messages, metadata = converted
     else:
-        converted = terminus_protocol_messages(conversations)
-    if converted is None:
-        return []
-    messages, metadata = converted
+        messages = terminus_protocol_messages(conversations)
+        if messages is None:
+            return []
+        metadata = {}
     merged_messages: list[dict] = []
     for message in messages:
         if merged_messages and message.get("role") == "user" and merged_messages[-1].get("role") == "user":

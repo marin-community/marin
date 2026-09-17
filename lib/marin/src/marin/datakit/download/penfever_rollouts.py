@@ -1146,11 +1146,14 @@ def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
                 return []
             conversations, tools = recovered
             converted = opencode_protocol_messages(conversations, tools)
+            if converted is None:
+                return []
+            messages, metadata = converted
         else:
-            converted = terminus_protocol_messages(conversations)
-        if converted is None:
-            return []
-        messages, metadata = converted
+            messages = terminus_protocol_messages(conversations)
+            if messages is None:
+                return []
+            metadata = {}
         if dataset.cohort_name == "qwen35-122b-32k":
             merged: list[dict] = []
             for message in messages:

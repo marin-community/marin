@@ -4,9 +4,8 @@
 """Parse the Terminus JSON-command conversation protocol."""
 
 import json
-import re
 
-TOOL_WRAPPER = re.compile(r"</?tool_(?:call|response)(?:[: >])", re.IGNORECASE)
+from marin.datakit.download.rollout_transforms import TOOL_WRAPPER
 
 
 def _json_command_payload(content: str) -> dict | None:
@@ -23,7 +22,7 @@ def _json_command_payload(content: str) -> dict | None:
     return None
 
 
-def terminus_protocol_messages(conversations: list[dict]) -> tuple[list[dict], dict] | None:
+def terminus_protocol_messages(conversations: list[dict]) -> list[dict] | None:
     """Retain Terminus JSON responses and terminal observations as chat turns."""
     messages: list[dict] = []
     pending_observation = False
@@ -49,4 +48,4 @@ def terminus_protocol_messages(conversations: list[dict]) -> tuple[list[dict], d
         pending_observation = bool(payload["commands"]) or not payload.get("task_complete")
     if not messages or messages[-1]["role"] != "assistant":
         return None
-    return messages, {}
+    return messages

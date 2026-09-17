@@ -53,11 +53,14 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             counters.pipeline.update_counter("nemotron_terminal/chat/missing_tool_definitions_filtered", 1)
             return []
         converted = opencode_protocol_messages(conversations, tools)
+        if converted is None:
+            return []
+        messages, metadata = converted
     else:
-        converted = terminus_protocol_messages(conversations)
-    if converted is None:
-        return []
-    messages, metadata = converted
+        messages = terminus_protocol_messages(conversations)
+        if messages is None:
+            return []
+        metadata = {}
     return checked_openai_chat_document(messages, HF_DATASET_ID, counter_prefix="nemotron_terminal/chat", **metadata)
 
 
