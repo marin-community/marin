@@ -3,6 +3,12 @@
 
 """Errors the bridge surfaces to Grafana."""
 
+from finelog.errors import StatsError
+
+
+class FinelogUnavailableError(StatsError):
+    """A transient Finelog query-path failure that may succeed on retry."""
+
 
 class UpstreamError(Exception):
     """An upstream (controller, GitHub, W&B) failed, or lacks what was asked for.
