@@ -1,0 +1,49 @@
+{
+  "schema_version": "task-curriculum-rubric-v1",
+  "version": "v1",
+  "score_range": [0, 2],
+  "criteria": [
+    {
+      "id": "observable_outcome",
+      "question": "Does the unit state a behavior that can be observed across several tasks?"
+    },
+    {
+      "id": "distinct_boundary",
+      "question": "Can a reviewer separate members from adjacent skills using the includes and excludes?"
+    },
+    {
+      "id": "evidence_support",
+      "question": "Does the unit have at least three reviewed examples from at least two sources?"
+    },
+    {
+      "id": "generation_feasible",
+      "question": "Can a generator instantiate the outcome without copying a source template?"
+    },
+    {
+      "id": "generation_validity",
+      "question": "Do at least 95 percent of independently reviewed generated tasks have a correct gold?"
+    },
+    {
+      "id": "difficulty_gradient",
+      "question": "Do generated tasks produce both Luna successes and failures with plausible difficulty ordering?"
+    }
+  ],
+  "ready_gate": {
+    "minimum_total": 10,
+    "requires_full_evidence_support": true,
+    "requires_full_generation_validity": true
+  },
+  "fatal_flaws": [
+    "The outcome is a topic, source, answer format, or verifier rather than an observable behavior.",
+    "The unit has no usable boundary against adjacent skills.",
+    "The unit cannot generate a verifiable task.",
+    "The unit produces no valid generated task."
+  ],
+  "catalog_metrics": [
+    "covered-task top-two recall",
+    "confident assignment precision",
+    "covered-task confident recall",
+    "coverage-gap recall",
+    "outside-inventory recall"
+  ]
+}
