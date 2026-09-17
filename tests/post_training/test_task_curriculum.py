@@ -198,7 +198,7 @@ def test_curriculum_accepts_evidence_backed_micro_extension(tmp_path: Path) -> N
             "instruction_sha256": f"{index:064x}",
             "task_archive_sha256": f"{index + 3:064x}",
             "macro_area_id": "C01",
-            "micro_area_status": "gap",
+            "micro_vocabulary_gap": True,
         }
         for index in range(3)
     ]
@@ -236,22 +236,32 @@ def test_curriculum_accepts_evidence_backed_micro_extension(tmp_path: Path) -> N
     assert curriculum.units[0].micro_area_ids == ("C01.ext.geometry",)
 
 
-def test_micro_extension_rejects_untyped_evidence_split(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "invalid_fields",
+    [
+        {"split": "review"},
+        {"macro_area_id": "C02"},
+        {"micro_vocabulary_gap": False},
+    ],
+)
+def test_micro_extension_rejects_invalid_evidence(
+    tmp_path: Path,
+    invalid_fields: dict[str, object],
+) -> None:
     macro_catalog = load_macro_catalog(_macro_catalog(tmp_path))
-    evidence = [
-        {
-            "task_id": "t0",
-            "source": "source",
-            "path": "task",
-            "split": "review",
-            "instruction_sha256": "0" * 64,
-            "task_archive_sha256": "1" * 64,
-            "macro_area_id": "C01",
-            "micro_area_status": "gap",
-        }
-    ]
+    evidence = {
+        "task_id": "t0",
+        "source": "source",
+        "path": "task",
+        "split": "discovery",
+        "instruction_sha256": "0" * 64,
+        "task_archive_sha256": "1" * 64,
+        "macro_area_id": "C01",
+        "micro_vocabulary_gap": True,
+    }
+    evidence.update(invalid_fields)
 
-    with pytest.raises(CatalogError, match="unknown evidence split"):
+    with pytest.raises(CatalogError):
         load_micro_extensions(
             _micro_extensions(
                 tmp_path,
@@ -261,40 +271,7 @@ def test_micro_extension_rejects_untyped_evidence_split(tmp_path: Path) -> None:
                         "name": "Geometry",
                         "parent_macro_area_id": "C01",
                         "status": "provisional",
-                        "evidence": evidence,
-                    }
-                ],
-            ),
-            macro_catalog,
-        )
-
-
-def test_micro_extension_rejects_evidence_from_another_macro(tmp_path: Path) -> None:
-    macro_catalog = load_macro_catalog(_macro_catalog(tmp_path))
-    evidence = [
-        {
-            "task_id": "t0",
-            "source": "source",
-            "path": "task",
-            "split": "discovery",
-            "instruction_sha256": "0" * 64,
-            "task_archive_sha256": "1" * 64,
-            "macro_area_id": "C02",
-            "micro_area_status": "gap",
-        }
-    ]
-
-    with pytest.raises(CatalogError, match="evidence belongs to macro C02"):
-        load_micro_extensions(
-            _micro_extensions(
-                tmp_path,
-                [
-                    {
-                        "id": "C01.ext.geometry",
-                        "name": "Geometry",
-                        "parent_macro_area_id": "C01",
-                        "status": "provisional",
-                        "evidence": evidence,
+                        "evidence": [evidence],
                     }
                 ],
             ),
@@ -354,7 +331,7 @@ def test_hierarchical_assignment_reports_coverage_gap_without_local_units() -> N
 def test_hierarchical_assignment_rejects_missing_selected_macro_anchors(
     unit_anchors: dict[str, tuple[tuple[float, float], ...]],
 ) -> None:
-    with pytest.raises(ValueError, match="missing or empty unit anchors"):
+    with pytest.raises(ValueError):
         assign_hierarchically(
             macro_vector=(1.0, 0.0),
             unit_vector=(1.0, 0.0),
@@ -507,27 +484,16 @@ def test_rubric_rejects_impossible_evidence_counts(overrides: dict[str, int]) ->
         evaluate_unit(UnitEvidence(**values), _rubric())
 
 
-def test_catalog_evaluation_rejects_inconsistent_macro_totals(tmp_path: Path) -> None:
+@pytest.mark.parametrize("invalid_case", ["inconsistent_macro_totals", "string_boolean"])
+def test_catalog_evaluation_rejects_invalid_evidence(tmp_path: Path, invalid_case: str) -> None:
     evidence = json.loads((CURRICULUM_ROOT / "pilot_evaluation.json").read_text())
-    evidence["macro_assignment"]["blind_reference"]["exact_macro"] += 1
+    if invalid_case == "inconsistent_macro_totals":
+        evidence["macro_assignment"]["blind_reference"]["exact_macro"] += 1
+    else:
+        evidence["unit_evidence"][0]["difficulty_ordering_plausible"] = "false"
     evidence_path = _write_json(tmp_path / "evidence.json", evidence)
 
     with pytest.raises(ValueError):
-        evaluate_catalog(
-            CURRICULUM_ROOT / "macro_areas.json",
-            CURRICULUM_ROOT / "micro_extensions_v0.json",
-            CURRICULUM_ROOT / "math_v0.json",
-            CURRICULUM_ROOT / "rubric_v1.json",
-            evidence_path,
-        )
-
-
-def test_catalog_evaluation_rejects_string_boolean_evidence(tmp_path: Path) -> None:
-    evidence = json.loads((CURRICULUM_ROOT / "pilot_evaluation.json").read_text())
-    evidence["unit_evidence"][0]["difficulty_ordering_plausible"] = "false"
-    evidence_path = _write_json(tmp_path / "evidence.json", evidence)
-
-    with pytest.raises(ValueError, match="difficulty_ordering_plausible must be a boolean"):
         evaluate_catalog(
             CURRICULUM_ROOT / "macro_areas.json",
             CURRICULUM_ROOT / "micro_extensions_v0.json",

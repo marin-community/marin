@@ -39,14 +39,10 @@ class MacroCatalog:
 
     @property
     def macros_by_id(self) -> dict[str, MacroArea]:
-        """Index macro areas by identifier."""
-
         return {area.id: area for area in self.macro_areas}
 
     @property
     def micros_by_id(self) -> dict[str, tuple[str, MicroArea]]:
-        """Index micro areas by identifier with their parent macro identifier."""
-
         return {micro.id: (macro.id, micro) for macro in self.macro_areas for micro in macro.micro_areas}
 
 
@@ -61,10 +57,6 @@ class EvidenceSplit(StrEnum):
     HOLDOUT = "holdout"
 
 
-class MicroEvidenceStatus(StrEnum):
-    GAP = "gap"
-
-
 @dataclass(frozen=True)
 class ExtensionEvidence:
     task_id: str
@@ -74,7 +66,7 @@ class ExtensionEvidence:
     instruction_sha256: str
     task_archive_sha256: str
     macro_area_id: str
-    micro_area_status: MicroEvidenceStatus
+    micro_vocabulary_gap: bool
 
 
 @dataclass(frozen=True)
@@ -95,8 +87,6 @@ class MicroExtensionCatalog:
 
     @property
     def extensions_by_id(self) -> dict[str, MicroExtension]:
-        """Index local micro-area extensions by identifier."""
-
         return {extension.id: extension for extension in self.extensions}
 
 
@@ -133,7 +123,9 @@ def _string(value: object, context: str) -> str:
     return value
 
 
-def _integer(value: object, context: str) -> int:
+def nonnegative_integer(value: object, context: str) -> int:
+    """Return a nonnegative JSON integer, rejecting booleans."""
+
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise CatalogError(f"{context} must be a nonnegative integer")
     return value
@@ -236,13 +228,13 @@ def load_macro_catalog(path: Path) -> MacroCatalog:
                 MicroArea(
                     id=micro_id,
                     name=_string(micro_raw.get("name"), f"{micro_id}.name"),
-                    taxonomy_unit_count=_integer(
+                    taxonomy_unit_count=nonnegative_integer(
                         micro_raw.get("taxonomy_unit_count"), f"{micro_id}.taxonomy_unit_count"
                     ),
-                    credited_task_count=_integer(
+                    credited_task_count=nonnegative_integer(
                         micro_raw.get("credited_task_count"), f"{micro_id}.credited_task_count"
                     ),
-                    mapped_source_count=_integer(
+                    mapped_source_count=nonnegative_integer(
                         micro_raw.get("mapped_source_count"), f"{micro_id}.mapped_source_count"
                     ),
                     coverage_status=_string(micro_raw.get("coverage_status"), f"{micro_id}.coverage_status"),
@@ -316,7 +308,7 @@ def load_micro_extensions(path: Path, macro_catalog: MacroCatalog) -> MicroExten
                     "instruction_sha256",
                     "task_archive_sha256",
                     "macro_area_id",
-                    "micro_area_status",
+                    "micro_vocabulary_gap",
                 },
                 "extension evidence",
             )
@@ -327,12 +319,9 @@ def load_micro_extensions(path: Path, macro_catalog: MacroCatalog) -> MicroExten
             evidence_macro_id = _string(evidence_raw.get("macro_area_id"), "extension evidence macro_area_id")
             if evidence_macro_id != parent_macro_id:
                 raise CatalogError(f"micro extension {extension_id} evidence belongs to macro {evidence_macro_id}")
-            try:
-                micro_area_status = MicroEvidenceStatus(
-                    _string(evidence_raw.get("micro_area_status"), "extension evidence micro_area_status")
-                )
-            except ValueError as error:
-                raise CatalogError(f"micro extension {extension_id} has unknown micro-area evidence status") from error
+            micro_vocabulary_gap = evidence_raw.get("micro_vocabulary_gap")
+            if micro_vocabulary_gap is not True:
+                raise CatalogError(f"micro extension {extension_id} evidence must record a micro-vocabulary gap")
             evidence.append(
                 ExtensionEvidence(
                     task_id=_string(evidence_raw.get("task_id"), "extension evidence task_id"),
@@ -346,7 +335,7 @@ def load_micro_extensions(path: Path, macro_catalog: MacroCatalog) -> MicroExten
                         evidence_raw.get("task_archive_sha256"), "extension evidence task_archive_sha256"
                     ),
                     macro_area_id=evidence_macro_id,
-                    micro_area_status=micro_area_status,
+                    micro_vocabulary_gap=micro_vocabulary_gap,
                 )
             )
         if not evidence:

@@ -1,7 +1,6 @@
 {
   "schema_version": "task-curriculum-rubric-v1",
   "version": "v1",
-  "score_range": [0, 2],
   "criteria": [
     {
       "id": "observable_outcome",
