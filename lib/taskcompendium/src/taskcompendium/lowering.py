@@ -11,8 +11,8 @@ from pathlib import Path
 import msgspec
 
 from taskcompendium.grading import validate_verifier
-from taskcompendium.models import SCHEMA_VERSION, Source, TaskRequirements, TaskSpec, VerifierSpec
-from taskcompendium.rendering import AnswerFormat, Rendering, render_instruction
+from taskcompendium.models import SCHEMA_VERSION, NativeFunction, Source, TaskRequirements, TaskSpec, VerifierSpec
+from taskcompendium.rendering import AnswerFormat, NativeMessage, Rendering, render_instruction
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
 
@@ -66,7 +66,14 @@ def read_binding(path: Path) -> HarborTaskBinding:
 def read_rendering(path: Path) -> Rendering:
     """Read the selected output convention from an exported Harbor task."""
     data = json.loads(path.read_text())
-    return Rendering(id=data["id"], answer_format=AnswerFormat(data["answer_format"]))
+    return Rendering(
+        id=data["id"],
+        answer_format=AnswerFormat(data["answer_format"]),
+        functions=tuple(NativeFunction(**function) for function in data.get("functions", ())),
+        messages=tuple(NativeMessage(**message) for message in data.get("messages", ())),
+        tool_choice=data.get("tool_choice"),
+        parallel_tool_calls=data.get("parallel_tool_calls"),
+    )
 
 
 def lower_to_harbor(

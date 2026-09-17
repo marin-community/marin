@@ -4,6 +4,7 @@
 """Private semantics for one deterministic, single-turn answer task."""
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import Any
 
 SCHEMA_VERSION = "0.2"
@@ -29,6 +30,35 @@ class VerifierSpec:
 
     kind: str
     parameters: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class FunctionCall:
+    name: str
+    arguments: str
+
+
+@dataclass(frozen=True)
+class ToolCallComparatorConfig:
+    numeric_tolerance: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.numeric_tolerance is not None and (
+            isinstance(self.numeric_tolerance, bool)
+            or not isfinite(self.numeric_tolerance)
+            or self.numeric_tolerance < 0
+        ):
+            raise ValueError("Numeric tolerance must be finite and nonnegative")
+
+
+@dataclass(frozen=True)
+class NativeFunction:
+    """Advertised output function, without an execution binding."""
+
+    name: str
+    parameters: dict[str, Any]
+    description: str | None = None
+    strict: bool | None = None
 
 
 @dataclass(frozen=True)

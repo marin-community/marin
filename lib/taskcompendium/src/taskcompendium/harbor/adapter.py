@@ -18,25 +18,59 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
 
-from taskcompendium.grading import GradeResult, Outcome, grade_answer
+from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, grade_attempt
 from taskcompendium.lowering import read_rendering, read_specification
+from taskcompendium.rendering import AnswerFormat
 
 RESPONSE_FILE = "response.txt"
+ACTION_FILE = "action.json"
+CHAT_COMPLETIONS_PATH = "/chat/completions"
 
 
-def _record_response(logs_dir: Path, instruction: str, response: str, context: AgentContext) -> None:
+def _record_answer(logs_dir: Path, instruction: str, answer: str, context: AgentContext) -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
-    (logs_dir / RESPONSE_FILE).write_text(response)
+    (logs_dir / RESPONSE_FILE).write_text(answer)
     context.metadata = {
-        "assistant_final": response,
+        "assistant_final": answer,
         "turns": 1,
-        "all_messages": [
-            {"role": "user", "content": instruction},
-            {"role": "assistant", "content": response},
-        ],
+        "all_messages": [{"role": "user", "content": instruction}, {"role": "assistant", "content": answer}],
         "summarization_count": 0,
         "tools": [],
     }
+
+
+def _record_action(
+    logs_dir: Path, messages: list[dict[str, str]], action: dict[str, Any], context: AgentContext
+) -> None:
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / ACTION_FILE).write_text(json.dumps(action))
+    context.metadata = {
+        "assistant_final": action,
+        "turns": 1,
+        "all_messages": [*messages, action],
+        "summarization_count": 0,
+        "tools": [],
+    }
+
+
+def _chat_completion(
+    api_base: str, api_key_env: str | None, request_timeout: float, body: dict[str, Any]
+) -> dict[str, Any]:
+    headers = {"Content-Type": "application/json"}
+    if api_key_env is not None:
+        headers["Authorization"] = f"Bearer {os.environ[api_key_env]}"
+    request = urllib.request.Request(
+        f"{api_base}{CHAT_COMPLETIONS_PATH}", data=json.dumps(body).encode(), headers=headers, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=request_timeout) as response:
+            message = json.load(response)["choices"][0]["message"]
+    except urllib.error.HTTPError as error:
+        detail = error.read(4096).decode("utf-8", errors="replace")
+        raise RuntimeError(f"Chat completion HTTP {error.code}: {detail}") from error
+    if not isinstance(message, dict):
+        raise ValueError("Chat completion requires an assistant message object")
+    return message
 
 
 class NoToolEnvironment(BaseEnvironment):
@@ -101,7 +135,28 @@ class ReplayAgent(BaseAgent):
         pass
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
-        _record_response(self.logs_dir, instruction, self.response, context)
+        _record_answer(self.logs_dir, instruction, self.response, context)
+
+
+class ActionReplayAgent(BaseAgent):
+    """Replay a native final action without invoking its advertised function."""
+
+    def __init__(self, *args, response: dict[str, Any], **kwargs):
+        super().__init__(*args, **kwargs)
+        self.response = response
+
+    @staticmethod
+    def name() -> str:
+        return "taskcompendium-action-replay"
+
+    def version(self) -> str:
+        return "0.1"
+
+    async def setup(self, environment: BaseEnvironment) -> None:
+        pass
+
+    async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+        _record_action(self.logs_dir, [{"role": "user", "content": instruction}], self.response, context)
 
 
 class DirectChatAgent(BaseAgent):
@@ -127,25 +182,56 @@ class DirectChatAgent(BaseAgent):
 
     def _completion(self, instruction: str) -> str:
         body = {"model": self.model_name, "messages": [{"role": "user", "content": instruction}]}
-        headers = {"Content-Type": "application/json"}
-        if self.api_key_env is not None:
-            headers["Authorization"] = f"Bearer {os.environ[self.api_key_env]}"
-        request = urllib.request.Request(
-            f"{self.api_base}/chat/completions", data=json.dumps(body).encode(), headers=headers, method="POST"
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
-                message: dict[str, Any] = json.load(response)["choices"][0]["message"]
-        except urllib.error.HTTPError as error:
-            detail = error.read(4096).decode("utf-8", errors="replace")
-            raise RuntimeError(f"Chat completion HTTP {error.code}: {detail}") from error
+        message = _chat_completion(self.api_base, self.api_key_env, self.request_timeout, body)
         if message.get("tool_calls") or not isinstance(message.get("content"), str):
             raise ValueError("Direct chat requires a textual final answer")
         return message["content"]
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         response = await asyncio.to_thread(self._completion, instruction)
-        _record_response(self.logs_dir, instruction, response, context)
+        _record_answer(self.logs_dir, instruction, response, context)
+
+
+class NativeActionAgent(DirectChatAgent):
+    """Request one native final action and retain it without tool dispatch."""
+
+    def __init__(
+        self,
+        *args,
+        functions: list[dict[str, Any]],
+        messages: list[dict[str, str]],
+        tool_choice: str | None = None,
+        parallel_tool_calls: bool | None = None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.functions = functions
+        self.messages = messages
+        self.tool_choice = tool_choice
+        self.parallel_tool_calls = parallel_tool_calls
+
+    @staticmethod
+    def name() -> str:
+        return "taskcompendium-final-action"
+
+    def _action_completion(self) -> dict[str, Any]:
+        tools = []
+        for function in self.functions:
+            definition = {"name": function["name"], "parameters": function["parameters"]}
+            for key in ("description", "strict"):
+                if function.get(key) is not None:
+                    definition[key] = function[key]
+            tools.append({"type": "function", "function": definition})
+        body = {"model": self.model_name, "messages": self.messages, "tools": tools}
+        if self.tool_choice is not None:
+            body["tool_choice"] = self.tool_choice
+        if self.parallel_tool_calls is not None:
+            body["parallel_tool_calls"] = self.parallel_tool_calls
+        return _chat_completion(self.api_base, self.api_key_env, self.request_timeout, body)
+
+    async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+        response = await asyncio.to_thread(self._action_completion)
+        _record_action(self.logs_dir, self.messages, response, context)
 
 
 class SemanticVerifier(BaseVerifier):
@@ -156,9 +242,10 @@ class SemanticVerifier(BaseVerifier):
             root = self.task.paths.task_dir
             specification = read_specification(root / "specification.json")
             rendering = read_rendering(root / "rendering.json")
-            response_path = self.trial_paths.agent_dir / RESPONSE_FILE
+            action = rendering.answer_format == AnswerFormat.FINAL_ACTION
+            response_path = self.trial_paths.agent_dir / (ACTION_FILE if action else RESPONSE_FILE)
             response = response_path.read_text() if response_path.exists() else None
-            result = grade_answer(specification, rendering, response)
+            result = grade_attempt(specification, GradingAttempt(rendering, response))
         except Exception as error:
             result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
             self._write_result(result)
