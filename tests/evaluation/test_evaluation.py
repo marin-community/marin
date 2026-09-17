@@ -698,6 +698,34 @@ def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):
     assert evalchemy.apply_chat_template is True
 
 
+def test_seed_override_replaces_the_evalchemy_config_seed_in_records(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    definition = EvalchemyDefinition(
+        name="ifeval",
+        config_path=Path("experiments/evaluation/configs/evalchemy/ifeval.yaml"),
+    )
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=(),
+        evalchemy_definitions=(definition,),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        seed=51,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
+    assert evalchemy is not None
+    assert evalchemy.seed == 51
+
+
 def test_registry_family_travels_into_the_record_the_launcher_writes(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
