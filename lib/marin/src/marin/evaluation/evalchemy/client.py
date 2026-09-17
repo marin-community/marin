@@ -72,11 +72,23 @@ def served_max_length(base_url: str) -> int | None:
 def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> str:
     """lm-eval ``--model_args`` for the served OpenAI endpoint (comma-joined ``key=value`` list)."""
     endpoint_path = "chat/completions" if use_chat else "completions"
+    if use_chat:
+        # The endpoint applies its own chat template, so the client needs no tokenizer. Loading one
+        # rejects checkpoints whose tokenizer ships custom code (Kimi-Linear) or metadata the
+        # client's Transformers cannot parse (Gemma 4). Mirrors marin-community/evalchemy#140.
+        tokenizer_args: dict[str, object] = {"tokenizer_backend": "none"}
+    else:
+        # Loglikelihood scoring needs local token IDs, so load the checkpoint tokenizer and allow
+        # its custom code.
+        tokenizer_args = {
+            "tokenizer": config["tokenizer"],
+            "tokenizer_backend": "huggingface",
+            "trust_remote_code": True,
+        }
     args: dict[str, object] = {
         "model": config["model_id"],
         "base_url": f"{config['base_url'].rstrip('/')}/{endpoint_path}",
-        "tokenizer": config["tokenizer"],
-        "tokenizer_backend": "huggingface",
+        **tokenizer_args,
         "tokenized_requests": False,
         "num_concurrent": config["num_concurrent"],
         # The TPU vLLM prompt-logprobs path 500s in whole-batch bursts (every in-flight request at

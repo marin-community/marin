@@ -165,7 +165,16 @@ def test_build_command_chat_route_needs_template_and_generation():
     cmd = build_command(config, generative, "/tmp/out", "/opt/py", None)
     assert cmd[cmd.index("--model") + 1] == "local-chat-completions"
     assert "--apply_chat_template" in cmd
-    assert "base_url=http://10.0.0.1:30000/v1/chat/completions" in build_model_args(config, True, None)
+    chat_args = dict(pair.split("=", 1) for pair in build_model_args(config, True, None).split(","))
+    assert chat_args["base_url"] == "http://10.0.0.1:30000/v1/chat/completions"
+    # The endpoint applies the chat template; a client-side tokenizer would reject custom tokenizer
+    # code (Kimi-Linear) or metadata the client's Transformers cannot read (Gemma 4).
+    assert chat_args["tokenizer_backend"] == "none"
+    assert "tokenizer" not in chat_args
+    completion_args = dict(pair.split("=", 1) for pair in build_model_args(config, False, None).split(","))
+    assert completion_args["tokenizer_backend"] == "huggingface"
+    assert completion_args["tokenizer"] == _MODEL.tokenizer
+    assert completion_args["trust_remote_code"] == "True"
 
     # ...but a loglikelihood (MCQ) task always uses completions: chat endpoints cannot echo prompt
     # logprobs, and lm-eval rejects loglikelihood over chat completions.
