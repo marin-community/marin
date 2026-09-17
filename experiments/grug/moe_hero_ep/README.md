@@ -61,19 +61,20 @@ callbacks, checkpoint work, and GC. The existing `throughput/duration` excludes 
 callbacks, checkpoints, and GC. Tracker steps are zero-based: collections after completed updates
 100/200/300 appear at x=99/199/299. Use elapsed time per update for comparisons.
 
-The [single-rack validation](https://iris.oa.dev/#/job/%2Fmwittmann%2Fgc-sync-9205-nobarrier-20260917-coord)
+The [single-rack validation](https://iris.oa.dev/#/job/%2Fmwittmann%2Fgc-sync-9205-hook-20260917-coord)
 used the full model with one sequence per GPU on 64 GPUs. Across 300 measured updates after ten
-warmup steps, elapsed time including the initial collection fell from 789.279 to 770.634 seconds
-(2.36%; 2.631 to 2.569 seconds/update). Across all ranks, automatic GC produced 66 full collections
-across 40 steps; coordinated GC produced one collection per rank after warmup and at updates 100,
-200, and 300. The slowest rank's scheduled collections took 1.27–1.48 seconds. This benchmark
-predates moving scheduled collection into a training hook; it collected after checkpoint work
-and did not include a forced final collection.
+warmup steps, elapsed time including initial and final collection fell from 795.576 to 776.003
+seconds (2.46%; 2.652 to 2.587 seconds/update). Before the final callback pass, elapsed time fell
+from 795.575 to 774.700 seconds (2.62%). Across all ranks, automatic GC produced 72 full
+collections across 48 steps; coordinated GC produced one collection per rank after warmup, at
+global updates 100/200/300, and on normal completion at global update 310. Scheduled collections ran through
+the training hook before checkpoint decisions. The slowest rank's periodic collections took
+1.15–1.22 seconds; final collection took up to 1.30 seconds.
 
 Both arms had identical sampled live HBM (35.094 GiB per rank) and allocator peaks (111.840 GiB),
 with no increase above their post-warmup baselines. Live memory was sampled every ten measured
-steps; the allocator peak includes warmup. The largest per-rank RSS increase in treatment was
-8.8 MiB above its post-warmup baseline. This single pair exercised checkpoint decisions with writes
+steps and at completion; the allocator peak includes warmup. The largest per-rank RSS increase in treatment was
+54.4 MiB above its post-warmup baseline. This single pair exercised checkpoint decisions with writes
 and evaluation disabled. The result supports the mechanism and short-term memory behavior at this
 batch size. Cycles can still retain device buffers between collections; keep the feature opt-in
 pending a production-batch trial that includes evaluation transitions and longer memory tracking.
