@@ -81,7 +81,7 @@ def test_agenttrove_merges_completion_and_handoff_prompts() -> None:
     ]
 
 
-def test_agenttrove_preserves_tool_observation_before_user_followup() -> None:
+def test_agenttrove_merges_terminal_output_with_user_followup() -> None:
     row = {
         "conversations": [
             {"role": "user", "content": "Task Description:\nInspect the repository."},
