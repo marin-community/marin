@@ -28,9 +28,7 @@ export async function fetchHealth(): Promise<HealthResult> {
 }
 
 export async function fetchToolDefinitions(source: string, signal: AbortSignal): Promise<ToolDefinition[]> {
-  const response = await postJson('tools', { source }, signal)
-  if (response.ok) return response.json()
-  throw new Error(`tool definitions returned ${response.status}: ${await response.text()}`)
+  return postJsonResult('tools', { source }, signal, 'tool definitions')
 }
 
 export async function invokeTool(
@@ -39,9 +37,7 @@ export async function invokeTool(
   arguments_: Record<string, unknown>,
   signal: AbortSignal,
 ): Promise<unknown> {
-  const response = await postJson(`tools/${encodeURIComponent(name)}`, { source, arguments: arguments_ }, signal)
-  if (response.ok) return response.json()
-  throw new Error(`tool returned ${response.status}: ${await response.text()}`)
+  return postJsonResult(`tools/${encodeURIComponent(name)}`, { source, arguments: arguments_ }, signal, 'tool')
 }
 
 export interface ShellCommandResult {
@@ -59,9 +55,7 @@ export async function invokeShell(
   command: string,
   signal: AbortSignal,
 ): Promise<ShellCommandResult> {
-  const response = await postJson('shell', { files, history, command }, signal)
-  if (response.ok) return response.json()
-  throw new Error(`shell command returned ${response.status}: ${await response.text()}`)
+  return postJsonResult('shell', { files, history, command }, signal, 'shell command')
 }
 
 export interface RepositorySnapshot {
@@ -70,9 +64,7 @@ export interface RepositorySnapshot {
 }
 
 export async function importRepository(url: string, signal: AbortSignal): Promise<RepositorySnapshot> {
-  const response = await postJson('shell/repository', { url }, signal)
-  if (response.ok) return response.json()
-  throw new Error(`repository import returned ${response.status}: ${await response.text()}`)
+  return postJsonResult('shell/repository', { url }, signal, 'repository import')
 }
 
 /** POST an OpenAI request and invoke onData for either buffered JSON or SSE events. */
@@ -121,4 +113,15 @@ function postJson(path: string, body: Record<string, unknown>, signal: AbortSign
     body: JSON.stringify(body),
     signal,
   })
+}
+
+async function postJsonResult<T>(
+  path: string,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+  label: string,
+): Promise<T> {
+  const response = await postJson(path, body, signal)
+  if (response.ok) return response.json()
+  throw new Error(`${label} returned ${response.status}: ${await response.text()}`)
 }

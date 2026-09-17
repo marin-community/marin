@@ -6,6 +6,8 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
+# The browser repeats these as a fallback when /info metadata is absent or stale;
+# Python and TypeScript cannot share this runtime constant.
 _THINKING_DELIMITERS = (
     ("<|start_think|>", "<|end_think|>"),
     ("<think>", "</think>"),

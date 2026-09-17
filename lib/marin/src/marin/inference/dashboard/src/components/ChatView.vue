@@ -2,7 +2,6 @@
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import {
   fetchToolDefinitions,
-  importRepository,
   invokeShell,
   invokeTool,
   isAbortError,
@@ -37,6 +36,7 @@ import type {
   ToolMessage,
 } from '../lib/types'
 import MessageBubble from './MessageBubble.vue'
+import ShellWorkspacePanel from './ShellWorkspacePanel.vue'
 
 const MAX_TOOL_ROUNDS = 8
 
@@ -56,39 +56,25 @@ const busy = ref(false)
 const showTools = ref(false)
 const showWorkspace = ref(false)
 const showRawChat = ref(false)
-const importingRepository = ref(false)
-const repositoryStatus = ref('')
 const rawChat = computed(() => plainTextChat(props.conversation))
 const scroller = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
 let abort: AbortController | null = null
-let repositoryAbort: AbortController | null = null
 
 watch(
   () => props.conversation.id,
   () => {
     stopStreaming()
-    stopRepositoryImport()
     draft.value = ''
     showTools.value = Boolean(props.conversation.pythonTools)
     showWorkspace.value = Boolean(props.conversation.shellWorkspace)
-    repositoryStatus.value = ''
   },
 )
-onUnmounted(() => {
-  stopStreaming()
-  stopRepositoryImport()
-})
+onUnmounted(stopStreaming)
 
 function stopStreaming() {
   abort?.abort()
   abort = null
-}
-
-function stopRepositoryImport() {
-  repositoryAbort?.abort()
-  repositoryAbort = null
-  importingRepository.value = false
 }
 
 function resizeComposer() {
@@ -252,60 +238,6 @@ async function executeToolCalls(
     }
     conversation.messages.push(toolResultMessage(call, result))
     persistConversation(conversation)
-  }
-}
-
-function enableWorkspace() {
-  props.conversation.shellWorkspace = { filesJson: '{}', history: [], repositoryUrl: '' }
-  showWorkspace.value = true
-  repositoryStatus.value = ''
-  persistConversation(props.conversation)
-}
-
-function removeWorkspace() {
-  props.conversation.shellWorkspace = null
-  showWorkspace.value = false
-  repositoryStatus.value = ''
-  persistConversation(props.conversation)
-}
-
-function resetWorkspaceHistory() {
-  const workspace = props.conversation.shellWorkspace
-  if (!workspace) return
-  workspace.history = []
-  repositoryStatus.value = 'Command history reset.'
-  persistConversation(props.conversation)
-}
-
-function workspaceFilesChanged() {
-  const workspace = props.conversation.shellWorkspace
-  if (!workspace) return
-  workspace.history = []
-  repositoryStatus.value = 'Command history reset because the initial files changed.'
-  persistConversation(props.conversation)
-}
-
-async function loadRepository() {
-  const workspace = props.conversation.shellWorkspace
-  if (!workspace || !workspace.repositoryUrl.trim() || importingRepository.value || busy.value) return
-  importingRepository.value = true
-  repositoryStatus.value = ''
-  const controller = new AbortController()
-  repositoryAbort = controller
-  try {
-    const snapshot = await importRepository(workspace.repositoryUrl.trim(), controller.signal)
-    workspace.filesJson = JSON.stringify(snapshot.files, null, 2)
-    workspace.history = []
-    const fileCount = Object.keys(snapshot.files).length
-    repositoryStatus.value = `Loaded ${fileCount} text files; skipped ${snapshot.skipped_files}.`
-    persistConversation(props.conversation)
-  } catch (error) {
-    if (!isAbortError(error)) repositoryStatus.value = String(error)
-  } finally {
-    if (repositoryAbort === controller) {
-      repositoryAbort = null
-      importingRepository.value = false
-    }
   }
 }
 
@@ -493,76 +425,13 @@ async function complete(
             Define synchronous typed functions. Calls run in an isolated, resource-bounded ShellSim environment.
           </p>
         </div>
-        <div v-if="showWorkspace" class="mb-3 rounded-xl border border-surface-border bg-surface-raised p-3">
-          <div v-if="!conversation.shellWorkspace" class="flex items-center justify-between gap-4">
-            <p class="text-xs text-text-muted">
-              Give the model an isolated filesystem, shell, Python, and simulated Git repository.
-            </p>
-            <button
-              class="shrink-0 rounded-lg border border-accent px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/10"
-              :disabled="busy"
-              @click="enableWorkspace"
-            >
-              Enable workspace
-            </button>
-          </div>
-          <template v-else>
-            <div class="flex gap-2">
-              <input
-                v-model="conversation.shellWorkspace.repositoryUrl"
-                type="url"
-                :disabled="busy || importingRepository"
-                placeholder="https://github.com/owner/repository"
-                class="min-w-0 flex-1 rounded-lg border border-surface-border bg-surface-sunken px-3 py-1.5 font-mono text-xs text-text outline-none transition-colors focus:border-accent disabled:opacity-60"
-                @input="emit('persist')"
-                @keydown.enter.prevent="loadRepository"
-              />
-              <button
-                class="rounded-lg border border-surface-border px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:border-accent hover:text-text disabled:opacity-40"
-                :disabled="busy || importingRepository || !conversation.shellWorkspace.repositoryUrl.trim()"
-                @click="loadRepository"
-              >
-                {{ importingRepository ? 'Loading…' : 'Load public repo' }}
-              </button>
-            </div>
-            <p class="mt-1 text-[0.7rem] text-text-muted">
-              Loads a bounded snapshot of a public GitHub repository's default branch. Remote history and .git are excluded.
-            </p>
-            <textarea
-              v-model="conversation.shellWorkspace.filesJson"
-              rows="7"
-              :disabled="busy || importingRepository"
-              spellcheck="false"
-              placeholder="{&#10;  &quot;README.md&quot;: &quot;# Example repository\\n&quot;&#10;}"
-              class="mt-3 w-full resize-y rounded-xl border border-surface-border bg-surface-sunken px-3 py-2 font-mono text-xs leading-relaxed text-text outline-none transition-colors focus:border-accent disabled:opacity-60"
-              @input="workspaceFilesChanged"
-            ></textarea>
-            <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
-              <p class="text-[0.7rem] text-text-muted">
-                Commands run from /work. {{ conversation.shellWorkspace.history.length }} commands will be replayed before the next call.
-              </p>
-              <div class="flex gap-2">
-                <button
-                  class="text-xs text-text-muted transition-colors hover:text-text"
-                  :disabled="busy || !conversation.shellWorkspace.history.length"
-                  @click="resetWorkspaceHistory"
-                >
-                  Reset commands
-                </button>
-                <button
-                  class="text-xs text-status-danger transition-opacity hover:opacity-80"
-                  :disabled="busy"
-                  @click="removeWorkspace"
-                >
-                  Remove workspace
-                </button>
-              </div>
-            </div>
-            <p v-if="repositoryStatus" class="mt-2 break-words text-[0.7rem] text-text-secondary">
-              {{ repositoryStatus }}
-            </p>
-          </template>
-        </div>
+        <ShellWorkspacePanel
+          v-if="showWorkspace"
+          v-model:workspace="conversation.shellWorkspace"
+          :disabled="busy"
+          @close="showWorkspace = false"
+          @persist="persistConversation(conversation)"
+        />
         <div class="flex items-end gap-2">
           <textarea
             ref="composer"

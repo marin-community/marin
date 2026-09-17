@@ -21,6 +21,7 @@ _SHELLSIM_CPU_LIMIT = 50_000_000
 _SHELLSIM_MEMORY_LIMIT = 64 * 1024 * 1024
 _SHELLSIM_DISK_LIMIT = 16 * 1024 * 1024
 _SHELLSIM_OUTPUT_LIMIT = 2 * 1024 * 1024
+_WORKSPACE_ROOT = "/work"
 
 
 @dataclass(frozen=True)
@@ -115,10 +116,10 @@ def _seed_workspace(environment: shellsim.Environment, files: dict[str, str]) ->
     for name, content in sorted(files.items()):
         parent = PurePosixPath(name).parent
         if parent != PurePosixPath("."):
-            environment.mkdir(f"/work/{parent}", parents=True)
-        environment.write_file(f"/work/{name}", content)
+            environment.mkdir(f"{_WORKSPACE_ROOT}/{parent}", parents=True)
+        environment.write_file(f"{_WORKSPACE_ROOT}/{name}", content)
 
-    initialized = environment.run("cd /work; git init")
+    initialized = environment.run(f"cd {_WORKSPACE_ROOT}; git init")
     if initialized.returncode != 0:
         raise ValueError(f"Could not initialize simulated Git workspace: {initialized.stderr_text.strip()}")
     if files:

@@ -23,6 +23,7 @@ from marin.inference.shell_workspace import ShellWorkspaceRequest
 
 TOOL_WORKER_TIMEOUT = 10
 _MAX_TOOL_ERROR_LENGTH = 4_000
+_PYTHON_TOOL_MODULE = "marin.inference.python_tools"
 
 
 class _SerializedToolRequest(Protocol):
@@ -88,7 +89,7 @@ async def python_tool_definitions_response(request: Request) -> Response:
     return await _tool_response(
         request,
         label=_python_tool_operation_label(operation),
-        module="marin.inference.python_tools",
+        module=_PYTHON_TOOL_MODULE,
         arguments=(operation.value,),
         parse_payload=PythonToolDefinitionsRequest.from_payload,
     )
@@ -100,7 +101,7 @@ async def invoke_tool_response(request: Request) -> Response:
     return await _tool_response(
         request,
         label=_python_tool_operation_label(operation),
-        module="marin.inference.python_tools",
+        module=_PYTHON_TOOL_MODULE,
         arguments=(operation.value,),
         parse_payload=lambda payload: PythonToolRequest.from_payload(payload, name=name),
     )

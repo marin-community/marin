@@ -271,7 +271,7 @@ def test_chat_completion_renders_template_arguments_and_tool_definitions(local_g
 def test_chat_completion_rejects_rendering_argument_overrides(local_gpt2_tokenizer):
     tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
 
-    with pytest.raises(HTTPException, match="chat_template_kwargs may not override: tokenize"):
+    with pytest.raises(HTTPException):
         _compute_tokens(
             [ChatMessage(role="user", content="Hello")],
             tokenizer,

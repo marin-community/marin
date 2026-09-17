@@ -4,7 +4,7 @@ type ThinkingDelimiters = readonly [open: string, close: string]
 
 const KNOWN_THINKING_DELIMITERS: readonly ThinkingDelimiters[] = Object.freeze([
   // Browser fallback for missing or stale /info metadata. Keep aligned with
-  // dashboard_server.py; the Python service and TypeScript bundle cannot share a runtime constant.
+  // chat_template_protocol.py; the Python service and TypeScript bundle cannot share a runtime constant.
   Object.freeze(['<|start_think|>', '<|end_think|>'] as const),
   Object.freeze(['<think>', '</think>'] as const),
   Object.freeze(['<THINK>', '</THINK>'] as const),

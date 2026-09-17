@@ -70,7 +70,9 @@ def _valid_github_name(value: str) -> bool:
     return bool(value) and all(character.isalnum() or character in "-_." for character in value)
 
 
-async def fetch_repository_snapshot(url: object, *, transport: httpx.AsyncBaseTransport | None = None) -> RepositorySnapshot:
+async def fetch_repository_snapshot(
+    url: object, *, transport: httpx.AsyncBaseTransport | None = None
+) -> RepositorySnapshot:
     """Download and extract the default branch of one public GitHub repository."""
     owner, repository = github_repository_slug(url)
     api_url = f"https://{_GITHUB_API_HOST}/repos/{owner}/{repository}/zipball"
@@ -149,6 +151,7 @@ def repository_snapshot_from_zip(archive: bytes) -> RepositorySnapshot:
 
 
 def _archive_path(entry: zipfile.ZipInfo) -> str | None:
+    """Return a safe workspace path, or ``None`` for entries that must be skipped."""
     mode = entry.external_attr >> 16
     if entry.is_dir() or stat.S_ISLNK(mode):
         return None
