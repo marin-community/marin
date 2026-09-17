@@ -1,0 +1,814 @@
+{
+  "version": "2026.09.03",
+  "source_url": "https://storage.googleapis.com/marin-public/benjaminfeuer/tasktrove-competency-coverage/2026.09.03/index.html",
+  "areas": [
+    {
+      "id": "C25",
+      "name": "Knowledge Application & QA",
+      "guideposts": [
+        {
+          "id": "C25.1",
+          "name": "Factual QA & retrieval"
+        },
+        {
+          "id": "C25.2",
+          "name": "Multi-hop reasoning over sources"
+        },
+        {
+          "id": "C25.4",
+          "name": "Tutoring & explanation"
+        },
+        {
+          "id": "C25.3",
+          "name": "Fact-checking & claim verification"
+        }
+      ]
+    },
+    {
+      "id": "C33",
+      "name": "Healthcare Informatics",
+      "guideposts": [
+        {
+          "id": "C33.3",
+          "name": "Clinical decision support"
+        },
+        {
+          "id": "C33.1",
+          "name": "EHR & clinical data management"
+        },
+        {
+          "id": "C33.4",
+          "name": "Imaging informatics"
+        },
+        {
+          "id": "C33.6",
+          "name": "Medication safety & interaction checking"
+        },
+        {
+          "id": "C33.2",
+          "name": "Medical coding & billing"
+        },
+        {
+          "id": "C33.5",
+          "name": "Clinical chart summarization"
+        }
+      ]
+    },
+    {
+      "id": "C14",
+      "name": "Mathematics & Formal Reasoning",
+      "guideposts": [
+        {
+          "id": "C14.1",
+          "name": "Arithmetic & symbolic algebra"
+        },
+        {
+          "id": "C14.4",
+          "name": "Optimization & operations research"
+        },
+        {
+          "id": "C14.2",
+          "name": "Analysis & proof construction"
+        },
+        {
+          "id": "C14.5",
+          "name": "Numerical methods"
+        },
+        {
+          "id": "C14.3",
+          "name": "Probability & statistical theory"
+        },
+        {
+          "id": "C14.6",
+          "name": "Logic & formal verification"
+        }
+      ]
+    },
+    {
+      "id": "C07",
+      "name": "Data Analysis & Visualization",
+      "guideposts": [
+        {
+          "id": "C07.1",
+          "name": "Statistical analysis & EDA"
+        },
+        {
+          "id": "C07.5",
+          "name": "Biostatistics & epidemiology"
+        },
+        {
+          "id": "C07.4",
+          "name": "Experiment design & A/B analysis"
+        },
+        {
+          "id": "C07.6",
+          "name": "Econometrics & forecasting"
+        },
+        {
+          "id": "C07.2",
+          "name": "Dashboard & report building"
+        },
+        {
+          "id": "C07.3",
+          "name": "Chart & infographic production"
+        }
+      ]
+    },
+    {
+      "id": "C21",
+      "name": "Office Productivity & Documents",
+      "guideposts": [
+        {
+          "id": "C21.1",
+          "name": "Spreadsheet modeling & formulas"
+        },
+        {
+          "id": "C21.5",
+          "name": "Records forms & filing"
+        },
+        {
+          "id": "C21.2",
+          "name": "Document drafting & formatting"
+        },
+        {
+          "id": "C21.4",
+          "name": "Email & calendar management"
+        },
+        {
+          "id": "C21.3",
+          "name": "Presentation production"
+        }
+      ]
+    },
+    {
+      "id": "C34",
+      "name": "Bioinformatics & Life-Science Computing",
+      "guideposts": [
+        {
+          "id": "C34.3",
+          "name": "Cheminformatics & drug discovery"
+        },
+        {
+          "id": "C34.2",
+          "name": "Protein & structural bioinformatics"
+        },
+        {
+          "id": "C34.4",
+          "name": "Lab data management & LIMS"
+        },
+        {
+          "id": "C34.1",
+          "name": "Sequence alignment & comparative genomics"
+        },
+        {
+          "id": "C34.7",
+          "name": "Population & evolutionary genomics"
+        },
+        {
+          "id": "C34.6",
+          "name": "Expression & functional genomics"
+        },
+        {
+          "id": "C34.5",
+          "name": "Variant calling & genome annotation"
+        },
+        {
+          "id": "C34.8",
+          "name": "Clinical genomics interpretation"
+        }
+      ]
+    },
+    {
+      "id": "C24",
+      "name": "Research & Scholarship",
+      "guideposts": [
+        {
+          "id": "C24.1",
+          "name": "Literature search & synthesis"
+        },
+        {
+          "id": "C24.5",
+          "name": "Survey & questionnaire design"
+        },
+        {
+          "id": "C24.3",
+          "name": "Experimental design & reproducibility"
+        },
+        {
+          "id": "C24.2",
+          "name": "Citation & bibliography management"
+        },
+        {
+          "id": "C24.4",
+          "name": "Peer review & critique"
+        }
+      ]
+    },
+    {
+      "id": "C10",
+      "name": "Computer Vision & Document AI",
+      "guideposts": [
+        {
+          "id": "C10.1",
+          "name": "Image classification & detection"
+        },
+        {
+          "id": "C10.3",
+          "name": "Video analysis"
+        },
+        {
+          "id": "C10.2",
+          "name": "OCR & document understanding"
+        },
+        {
+          "id": "C10.4",
+          "name": "Generative image & video synthesis"
+        }
+      ]
+    },
+    {
+      "id": "C15",
+      "name": "Computational Science & Simulation",
+      "guideposts": [
+        {
+          "id": "C15.4",
+          "name": "Earth & climate systems modeling"
+        },
+        {
+          "id": "C15.3",
+          "name": "Signal & image processing"
+        },
+        {
+          "id": "C15.1",
+          "name": "Continuum FEA/CFD & PDE simulation"
+        },
+        {
+          "id": "C15.5",
+          "name": "Electronic-structure & quantum simulation"
+        },
+        {
+          "id": "C15.6",
+          "name": "Molecular dynamics & mesoscale simulation"
+        },
+        {
+          "id": "C15.2",
+          "name": "HPC & parallel computing"
+        }
+      ]
+    },
+    {
+      "id": "C32",
+      "name": "Engineering Design & Geospatial",
+      "guideposts": [
+        {
+          "id": "C32.1",
+          "name": "CAD drafting & 3D part design"
+        },
+        {
+          "id": "C32.5",
+          "name": "GIS mapping & geospatial analysis"
+        },
+        {
+          "id": "C32.2",
+          "name": "BIM & architectural documentation"
+        },
+        {
+          "id": "C32.4",
+          "name": "CAM & manufacturing documentation"
+        },
+        {
+          "id": "C32.3",
+          "name": "Electrical & controls schematics"
+        }
+      ]
+    },
+    {
+      "id": "C28",
+      "name": "Legal & Compliance",
+      "guideposts": [
+        {
+          "id": "C28.3",
+          "name": "Regulatory compliance monitoring"
+        },
+        {
+          "id": "C28.1",
+          "name": "Contract review & drafting"
+        },
+        {
+          "id": "C28.2",
+          "name": "Legal research"
+        },
+        {
+          "id": "C28.4",
+          "name": "IP & patent prior-art search"
+        }
+      ]
+    },
+    {
+      "id": "C26",
+      "name": "Education & Training",
+      "guideposts": [
+        {
+          "id": "C26.3",
+          "name": "Lesson planning & delivery"
+        },
+        {
+          "id": "C26.1",
+          "name": "Curriculum & course design"
+        },
+        {
+          "id": "C26.2",
+          "name": "Assessment authoring & grading"
+        }
+      ]
+    },
+    {
+      "id": "C23",
+      "name": "Technical Writing & Documentation",
+      "guideposts": [
+        {
+          "id": "C23.3",
+          "name": "Specs & design documents"
+        },
+        {
+          "id": "C23.2",
+          "name": "Tutorials & how-to guides"
+        },
+        {
+          "id": "C23.1",
+          "name": "API & reference documentation"
+        }
+      ]
+    },
+    {
+      "id": "C27",
+      "name": "Finance Accounting & Audit",
+      "guideposts": [
+        {
+          "id": "C27.2",
+          "name": "Financial modeling & valuation"
+        },
+        {
+          "id": "C27.1",
+          "name": "Bookkeeping & reconciliation"
+        },
+        {
+          "id": "C27.6",
+          "name": "Billing invoicing & payments ops"
+        },
+        {
+          "id": "C27.5",
+          "name": "Trading & portfolio analytics"
+        },
+        {
+          "id": "C27.4",
+          "name": "Audit & internal controls"
+        },
+        {
+          "id": "C27.3",
+          "name": "Tax & regulatory filing prep"
+        }
+      ]
+    },
+    {
+      "id": "C22",
+      "name": "Agent & Workflow Automation",
+      "guideposts": [
+        {
+          "id": "C22.4",
+          "name": "Scheduled jobs & monitoring watchers"
+        },
+        {
+          "id": "C22.1",
+          "name": "GUI & RPA computer-use"
+        },
+        {
+          "id": "C22.2",
+          "name": "API orchestration & integration"
+        },
+        {
+          "id": "C22.3",
+          "name": "Browser automation & web scraping"
+        }
+      ]
+    },
+    {
+      "id": "C03",
+      "name": "Shell & Systems Administration",
+      "guideposts": [
+        {
+          "id": "C03.3",
+          "name": "Process service & log management"
+        },
+        {
+          "id": "C03.5",
+          "name": "User permission & security administration"
+        },
+        {
+          "id": "C03.4",
+          "name": "Package & environment management"
+        },
+        {
+          "id": "C03.1",
+          "name": "File & text processing pipelines"
+        },
+        {
+          "id": "C03.6",
+          "name": "Backup restore & storage management"
+        },
+        {
+          "id": "C03.2",
+          "name": "Shell scripting & task automation"
+        }
+      ]
+    },
+    {
+      "id": "C29",
+      "name": "Business Operations & Admin",
+      "guideposts": [
+        {
+          "id": "C29.4",
+          "name": "Shipment tracking & transport operations"
+        },
+        {
+          "id": "C29.5",
+          "name": "Operations scheduling & resource allocation"
+        },
+        {
+          "id": "C29.3",
+          "name": "HR & recruiting operations"
+        },
+        {
+          "id": "C29.2",
+          "name": "Vendor & procurement ops"
+        },
+        {
+          "id": "C29.6",
+          "name": "Event & program coordination"
+        },
+        {
+          "id": "C29.7",
+          "name": "Cross-party coordination & liaison"
+        },
+        {
+          "id": "C29.1",
+          "name": "Meeting capture & follow-ups"
+        }
+      ]
+    },
+    {
+      "id": "C30",
+      "name": "Marketing Sales & Content",
+      "guideposts": [
+        {
+          "id": "C30.1",
+          "name": "Copywriting & content production"
+        },
+        {
+          "id": "C30.2",
+          "name": "SEO SEM & analytics"
+        },
+        {
+          "id": "C30.3",
+          "name": "Campaign & social media operations"
+        },
+        {
+          "id": "C30.5",
+          "name": "Market & competitor research"
+        },
+        {
+          "id": "C30.4",
+          "name": "Lead & CRM pipeline operations"
+        }
+      ]
+    },
+    {
+      "id": "C06",
+      "name": "Databases & Data Engineering",
+      "guideposts": [
+        {
+          "id": "C06.3",
+          "name": "Data wrangling & cleaning"
+        },
+        {
+          "id": "C06.1",
+          "name": "SQL querying & schema design"
+        },
+        {
+          "id": "C06.2",
+          "name": "ETL & pipeline construction"
+        },
+        {
+          "id": "C06.5",
+          "name": "NoSQL & graph data modeling"
+        }
+      ]
+    },
+    {
+      "id": "C02",
+      "name": "Software QA & Testing",
+      "guideposts": [
+        {
+          "id": "C02.2",
+          "name": "Test execution & defect reporting"
+        },
+        {
+          "id": "C02.1",
+          "name": "Test planning & case design"
+        }
+      ]
+    },
+    {
+      "id": "C09",
+      "name": "NLP & Language Technology",
+      "guideposts": [
+        {
+          "id": "C09.2",
+          "name": "Summarization & rewriting"
+        },
+        {
+          "id": "C09.4",
+          "name": "Dialogue & assistant behavior"
+        },
+        {
+          "id": "C09.1",
+          "name": "Text extraction & information extraction"
+        },
+        {
+          "id": "C09.3",
+          "name": "Text classification & sentiment"
+        },
+        {
+          "id": "C09.5",
+          "name": "Machine translation"
+        }
+      ]
+    },
+    {
+      "id": "C01",
+      "name": "Software Engineering",
+      "guideposts": [
+        {
+          "id": "C01.1",
+          "name": "Code synthesis from spec"
+        },
+        {
+          "id": "C01.2",
+          "name": "Debugging & fault localization"
+        },
+        {
+          "id": "C01.3",
+          "name": "Refactoring & code migration"
+        },
+        {
+          "id": "C01.7",
+          "name": "Version control operations"
+        },
+        {
+          "id": "C01.6",
+          "name": "Build packaging & dependency management"
+        },
+        {
+          "id": "C01.4",
+          "name": "Test authoring"
+        }
+      ]
+    },
+    {
+      "id": "C04",
+      "name": "DevOps Infrastructure & Cloud",
+      "guideposts": [
+        {
+          "id": "C04.4",
+          "name": "Observability & incident response"
+        },
+        {
+          "id": "C04.2",
+          "name": "Containerization & orchestration"
+        },
+        {
+          "id": "C04.3",
+          "name": "Infrastructure-as-code & provisioning"
+        },
+        {
+          "id": "C04.5",
+          "name": "Cloud cost & capacity optimization"
+        },
+        {
+          "id": "C04.1",
+          "name": "CI/CD pipeline operations"
+        }
+      ]
+    },
+    {
+      "id": "C31",
+      "name": "Design & Media Production",
+      "guideposts": [
+        {
+          "id": "C31.2",
+          "name": "Video editing & motion graphics"
+        },
+        {
+          "id": "C31.5",
+          "name": "Page layout & print design"
+        },
+        {
+          "id": "C31.6",
+          "name": "Brand & visual design systems"
+        },
+        {
+          "id": "C31.1",
+          "name": "Image editing & compositing"
+        },
+        {
+          "id": "C31.3",
+          "name": "Audio & music production"
+        },
+        {
+          "id": "C31.4",
+          "name": "3D modeling & animation"
+        }
+      ]
+    },
+    {
+      "id": "C12",
+      "name": "Robotics & Embodied Systems",
+      "guideposts": [
+        {
+          "id": "C12.2",
+          "name": "Control & motion planning"
+        },
+        {
+          "id": "C12.1",
+          "name": "Perception & sensor fusion"
+        },
+        {
+          "id": "C12.3",
+          "name": "Robot simulation & benchmarking"
+        }
+      ]
+    },
+    {
+      "id": "C16",
+      "name": "Hardware Embedded & Architecture",
+      "guideposts": [
+        {
+          "id": "C16.2",
+          "name": "Embedded firmware"
+        },
+        {
+          "id": "C16.3",
+          "name": "Circuit & PCB design"
+        },
+        {
+          "id": "C16.1",
+          "name": "Digital design & verification"
+        },
+        {
+          "id": "C16.4",
+          "name": "Computer architecture & performance"
+        }
+      ]
+    },
+    {
+      "id": "C13",
+      "name": "Algorithms & Competitive Programming",
+      "guideposts": [
+        {
+          "id": "C13.1",
+          "name": "Algorithm design & complexity"
+        },
+        {
+          "id": "C13.2",
+          "name": "Data structure implementation"
+        }
+      ]
+    },
+    {
+      "id": "C08",
+      "name": "ML/AI Development",
+      "guideposts": [
+        {
+          "id": "C08.1",
+          "name": "Model training & fine-tuning"
+        },
+        {
+          "id": "C08.2",
+          "name": "Model evaluation & benchmarking"
+        },
+        {
+          "id": "C08.5",
+          "name": "Prompt & context engineering"
+        },
+        {
+          "id": "C08.3",
+          "name": "Feature engineering & dataset preparation"
+        }
+      ]
+    },
+    {
+      "id": "C11",
+      "name": "Speech & Audio Processing",
+      "guideposts": [
+        {
+          "id": "C11.3",
+          "name": "Audio analysis"
+        },
+        {
+          "id": "C11.1",
+          "name": "Speech recognition & transcription"
+        },
+        {
+          "id": "C11.2",
+          "name": "Speech synthesis"
+        }
+      ]
+    },
+    {
+      "id": "C05",
+      "name": "Networking",
+      "guideposts": [
+        {
+          "id": "C05.1",
+          "name": "Protocol analysis & packet debugging"
+        },
+        {
+          "id": "C05.2",
+          "name": "Network configuration & edge ops"
+        }
+      ]
+    },
+    {
+      "id": "C17",
+      "name": "Web Frontend",
+      "guideposts": [
+        {
+          "id": "C17.1",
+          "name": "UI implementation from mockups"
+        },
+        {
+          "id": "C17.2",
+          "name": "Accessibility & responsive compliance"
+        }
+      ]
+    },
+    {
+      "id": "C19",
+      "name": "Security & Adversarial Analysis",
+      "guideposts": [
+        {
+          "id": "C19.3",
+          "name": "Malware & threat analysis"
+        },
+        {
+          "id": "C19.1",
+          "name": "Vulnerability research & pentesting"
+        },
+        {
+          "id": "C19.4",
+          "name": "Applied cryptography"
+        }
+      ]
+    },
+    {
+      "id": "C18",
+      "name": "Web Backend & Distributed Systems",
+      "guideposts": [
+        {
+          "id": "C18.1",
+          "name": "API design & implementation"
+        },
+        {
+          "id": "C18.3",
+          "name": "Distributed systems & concurrency"
+        },
+        {
+          "id": "C18.4",
+          "name": "Backend performance & scaling"
+        },
+        {
+          "id": "C18.2",
+          "name": "Auth & application security"
+        }
+      ]
+    },
+    {
+      "id": "C35",
+      "name": "Game & Interactive Development",
+      "guideposts": [
+        {
+          "id": "C35.3",
+          "name": "Graphics & shader programming"
+        },
+        {
+          "id": "C35.1",
+          "name": "Gameplay scripting & systems"
+        },
+        {
+          "id": "C35.2",
+          "name": "Level & systems design"
+        }
+      ]
+    }
+  ]
+}

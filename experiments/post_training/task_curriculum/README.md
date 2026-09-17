@@ -1,51 +1,75 @@
 # Task curriculum pilot
 
-This directory contains the first task-level curriculum catalog and the code used to validate it. It separates five records:
+This experiment tests a small, repeatable loop for turning a broad subject inventory into trainable curricula and
+then mapping tasks onto the reviewed sections. It keeps curriculum design separate from task correctness:
+TaskCompendium owns model-visible task semantics and private verifier contracts; a curriculum describes observable
+capabilities, boundaries, examples, and prerequisites.
 
-1. `macro_areas.json` is the broad coverage inventory. It vendors the active hierarchy from the September 3 TaskTrove competency audit: 34 active macro areas and 151 active micro areas. The source vocabulary has 35 macros; one has no active child in the published chart. Credited task counts are source-level, overlap across competencies, and are not task labels.
-2. `micro_extensions_v0.json` records project-owned additions without rewriting that source snapshot. Geometry and combinatorics are provisional because repeated blind gaps support them, but they have not received human domain review. Evidence rows include the TaskTrove release, source identity, content hashes, frozen split, parent macro, and blind micro-gap status.
-3. `math_v0.json` contains six candidate units derived from 24 TaskTrove Clean discovery tasks. A unit states an observable outcome, its boundaries, and representative examples. It does not select a verifier.
-4. A semantic task key contains a summary, subject hint, hardest operation, required operations, and answer form. This remains independent of any curriculum version. TaskCompendium's `TaskSpec` remains the owner of task semantics and private correctness contracts.
-5. A versioned assignment records macro and unit candidates, distances, thresholds, and status. Changing a curriculum re-embeds changed unit text and searches the cached task vectors. It does not rerun task annotation.
+## Inputs
 
-The broad inventory is a navigation layer. Macro and micro names seed coverage work; they are not trainable units. `math_v0.json` maps every unit to a macro area and uses either a published micro area or an evidence-backed local extension. The source snapshot remains unchanged when local task evidence exposes a gap.
+- `subject_inventory.json` is the September 3, 2026 TaskTrove competency chart reduced to 34 macro areas and 151
+  micro guideposts. Its labels help find omissions; generated sections must still satisfy the curriculum rubric.
+- `rubric.md` defines the cross-subject review criteria.
+- A small set of model-visible TaskTrove or evaluation tasks supplies concrete discovery evidence. Source names,
+  solutions, and verifier implementations are excluded from curriculum generation.
+- TaskCompendium's subject, competency, task-shape, artifact, context, interaction, and state facets are optional
+  vocabulary for describing task semantics.
 
-Broad and local assignment use different projections of the same semantic key. Macro routing embeds subject, summary, and hardest operation. Unit routing embeds the hardest operation alone. In the pilot, adding subject and summary improved macro top-one accuracy from 35/58 to 45/58 and mathematics top-one accuracy from 32/48 to 40/48. Mathematics reached 48/48 top-three recall. A conservative threshold assigned only 2 of 17 exact-macro holdout tasks, so label-name anchors are not adequate for production macro routing.
+## Curriculum iteration
 
-A second blind sample drew eight tasks from each of six sources. The review found 42 exact macro matches, two ambiguous matches, and four inventory gaps. Calendar tasks all mapped to C21 and competitive-programming tasks all mapped to C13. The other four sources crossed macro boundaries; open-domain QA also exposed three biology or astrophysics gaps. Source mappings are therefore useful priors, but only calendar and competitive programming supported a single source-level macro in this sample.
+One-off agent runs produce curricula and reviews. The repository retains their inputs and results. For each selected
+macro area:
 
-The second sample also compared published label names with examples from the calibration half. On 22 exact-macro holdout tasks, the label names reached 10 top-one and 18 top-three matches. Task-derived nearest anchors covered 18 of the 22 tasks and reached 16 top-one and 18 top-three matches within that covered set. C01 and C28 had no calibration anchors. Add reviewed examples to every macro before fitting assignment thresholds.
+1. Give the generator the inventory area, rubric, requested tree depth, and representative tasks. Every generated
+   section includes two sample instructions so vague or incoherent boundaries are visible cheaply.
+2. Validate the JSON with `Curriculum` and `Curriculum.check_generation_contract`.
+3. Give the curriculum and rubric to an independent reviewer. The reviewer returns a score, verdict, concrete
+   findings, and proposed rubric changes.
+4. Compare findings across subjects. Revise the rubric or generation instructions only for problems that recur,
+   then generate another version.
 
-## Assignment states
+The checked-in `pilot/` directory contains the resulting curricula and reviews. The artifacts are evidence for
+changing the rubric; they are not canonical training taxonomies.
 
-`assignment.py` performs hierarchical nearest-anchor assignment:
+## Task mapping
 
-- `assigned`: macro and unit pass their distance and margin thresholds;
-- `ambiguous`: the macro or unit winner is too close to its runner-up;
-- `coverage_gap`: the task fits a known macro, but no local unit fits;
-- `outside_inventory`: no macro anchor is close enough.
+Task mapping uses a curriculum-independent semantic key:
 
-The distinction between `coverage_gap` and `outside_inventory` matters. Most held-out mathematics tasks missed by the six-unit pilot are evidence that the local catalog is incomplete, not evidence that they lie outside a global curriculum.
-
-The blind macro review found 24 micro-vocabulary gaps in 64 tasks. Twenty were mathematics tasks involving geometry, combinatorics, number theory, or abstract algebra. Repeated examples across sources and splits support provisional geometry and combinatorics extensions. Chemistry, physics, ecology, abstract algebra, legal reasoning, and sequence interpretation remain recorded gaps because the pilot evidence is sparse. The inventory also mixes domain and workflow axes: `Knowledge Application & QA` overlaps clinical and scientific reasoning.
-
-The broad sample stores `subject_domain` and `task_mechanic` as separate annotation fields. Calendar and competitive-programming sources were coherent by mechanic; open-domain QA was not. A two-facet catalog remains an experiment until a balanced cross-domain sample shows that both projections improve held-out routing.
-
-## Rubric
-
-`rubric_v1.json` scores each unit from 0 to 2 on observable outcome, boundary quality, evidence support, generation feasibility, generated-task validity, and difficulty gradient. Treat this score as a diagnostic. Its 10-of-12 threshold combines independent failure modes and uses pilot-scale sample counts as policy.
-
-The next rubric revision uses three gate results: `pass`, `fail`, and `insufficient_evidence`. Units advance through `candidate`, `boundary_validated`, `generation_validated`, `difficulty_qualified`, and `ready_for_training_trial`. Boundary, generation, and difficulty gates require frozen evidence artifacts and an explicit sufficiency policy. Those policies are pending; the pilot does not define sample-size defaults.
-
-All six units currently pass only the candidate gate. No unit has a frozen balanced boundary fixture. Five 3/3 generated-task reviews are insufficient to establish a 95% validity rate. Geometric optimization fails generation validity because one of three generated tasks had a wrong gold. Five units fail the current Luna difficulty batch because every valid task was solved, the ordering was implausible, or both. Modular exponentiation produced mixed outcomes with plausible ordering and remains insufficient pending a difficulty sufficiency policy.
-
-Run the checked-in evaluation with:
-
-```bash
-uv run python -m experiments.post_training.task_curriculum.evaluate
+```text
+model-visible TaskSpec -> semantic key -> cached task embedding
+reviewed curriculum    -> section anchors -> cached anchor embeddings
+cached vectors         -> batched cosine ranking -> top section candidates
 ```
 
-The next evaluation should freeze per-unit fixtures with exact members, close non-members, ambiguous cases, coverage gaps, and outside-inventory tasks. Catalog metrics are covered-task top-two recall, confident assignment precision, covered-task confident recall, coverage-gap recall, and outside-inventory recall. Prerequisite edges require a separate transfer experiment and remain empty in `math_v0`.
+The semantic key records the operational subject, requested result, hardest operation, required operations, and
+answer form. The subject is the domain of work the solver performs. Narrative details are omitted. For example, a
+calendar request about a nursing workshop has the subject calendar scheduling.
+Annotate it once in model batches of 8–16 and persist it with the task-content hash, annotation prompt version, and
+model. Do not include a curriculum label in the annotation prompt. `cli.py` embeds those reviewed keys, caches each
+vector by text and embedding model, derives section anchors from outcomes and sample tasks, and ranks sections with
+NumPy in bounded row batches. A curriculum edit therefore re-embeds changed anchors and reuses all task vectors.
+Changing the semantic-key schema or annotation model requires reannotation; changing the embedding model requires
+re-embedding.
+
+Run a pilot mapping with:
+
+```bash
+uv run python -m experiments.post_training.task_curriculum.cli \
+  --annotations experiments/post_training/task_curriculum/pilot/C14/task_annotations.jsonl \
+  --curriculum experiments/post_training/task_curriculum/pilot/C14/curriculum_v4.json \
+  --cache /tmp/curriculum-embeddings.sqlite \
+  --embedding-model text-embedding-3-small \
+  --top-k 3 \
+  --output /tmp/C14-mappings.jsonl
+```
+
+The mapper has no source-specific rules. Review low-similarity tasks, unstable top candidates, and repeated
+out-of-scope examples as possible anchor, boundary, or coverage failures. Do not add per-source exceptions.
+
+For the full TaskTrove run, materialize the approximately 4 GB clean release, render only model-visible task text,
+and shard annotation and embedding work. Store annotation and vector artifacts under content and model identities;
+use the same ranking computation per task shard. The pilot uses SQLite on one node; a distributed run needs sharded
+artifact storage under the same content identities.
 
 ## Provenance
 

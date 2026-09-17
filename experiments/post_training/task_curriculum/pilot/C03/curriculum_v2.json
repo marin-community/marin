@@ -1,0 +1,490 @@
+{
+  "version": "pilot-2",
+  "subject_id": "C03",
+  "subject_name": "Shell & Systems Administration",
+  "sections": [
+    {
+      "id": "c03.reliable-shell-automation",
+      "parent_id": null,
+      "name": "Build reliable shell data automations",
+      "outcome": "Turn a file or text operation into a rerunnable shell workflow that preserves input boundaries, performs the intended transformation, and controls partial failure and cleanup as one coherent job.",
+      "includes": [
+        "workflows that jointly require shell data semantics, file or record transformation, and execution control",
+        "end-to-end verification of outputs, exit status, rerun behavior, and cleanup"
+      ],
+      "excludes": [
+        "diagnosing where a running process's standard streams or service logs went",
+        "one-off text queries that do not require shell state or automation control"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Write a rerunnable POSIX shell job that finds input names containing spaces or glob characters, derives one collision-free output name per input, stops dependent work after a failed conversion, and removes only temporary outputs on interruption."
+        },
+        {
+          "instruction": "Build a shell workflow that reads a multiline selection value without losing its boundaries, filters and aggregates matching records from many files, publishes the result atomically, and returns a failure if any input was malformed."
+        }
+      ]
+    },
+    {
+      "id": "c03.shell-data-semantics",
+      "parent_id": "c03.reliable-shell-automation",
+      "name": "Preserve values through shell evaluation",
+      "outcome": "Predict and control how shell variables, quoting, expansion, splitting, and globbing turn stored values into command arguments without modifying unrelated shell or process state.",
+      "includes": [
+        "shell variables versus exported environment entries, parameter expansion, quoting, field splitting, and pathname expansion",
+        "multiline values, empty values, positional arguments, arrays where available, and portability limits"
+      ],
+      "excludes": [
+        "persistent login or host environment configuration",
+        "file-content parsing and transformation once command arguments have been formed"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "In a POSIX shell, enumerate variables whose names start with BUILD_ and print each complete value, including empty values and embedded newlines, without exporting or changing the variables; explain any unavoidable portability limit."
+        },
+        {
+          "instruction": "A loop passes one stored filename as several command arguments and expands literal asterisks in another. Trace the expansions responsible and rewrite the argument construction so every original filename is preserved exactly."
+        }
+      ]
+    },
+    {
+      "id": "c03.file-record-transforms",
+      "parent_id": "c03.reliable-shell-automation",
+      "name": "Transform files and records safely",
+      "outcome": "Select, rename, filter, join, sort, or aggregate files and records while preserving the relevant boundaries and preventing unintended matches, data loss, or overwrites.",
+      "includes": [
+        "filename decomposition and reconstruction, null-delimited path handling, and collision checks",
+        "structured field selection, substitution, sorting, joining, counting, and malformed-record detection"
+      ],
+      "excludes": [
+        "explaining stream destinations, buffering, or event order in an operational incident",
+        "filesystem capacity, mount, and repair operations"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Given names such as ABC_1.fastq.Block12, including names with spaces, produce the corresponding _2 names while preserving every other component and refusing collisions or ambiguous matches."
+        },
+        {
+          "instruction": "From a large delimited dataset, report the ten most frequent status values only for valid rows, treating quoted delimiters correctly and rejecting malformed records instead of silently miscounting them."
+        }
+      ]
+    },
+    {
+      "id": "c03.shell-execution-control",
+      "parent_id": "c03.reliable-shell-automation",
+      "name": "Control shell job execution",
+      "outcome": "Structure a repeated shell job so sequencing, exit status, retries, concurrency, temporary resources, interruption, and reruns have explicit and testable behavior.",
+      "includes": [
+        "loops, conditionals, functions, pipelines as control flow, traps, temporary resources, and scheduled invocation",
+        "failure propagation, bounded concurrency, idempotence, dry runs, and partial-progress recording"
+      ],
+      "excludes": [
+        "the content-level correctness of a file or record transformation",
+        "persistent daemon supervision and service-manager configuration"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Write a batch driver that processes pending items at most four at a time, records each success, retries transient failures twice, cleans its private temporary directory on signals, and exits nonzero if any item remains failed."
+        },
+        {
+          "instruction": "A nightly script continues after a failed database export and deletes the previous good snapshot. Restructure its control flow so dependent steps require success, publication is atomic, and an interrupted rerun preserves the last verified snapshot."
+        }
+      ]
+    },
+    {
+      "id": "c03.runtime-provisioning",
+      "parent_id": null,
+      "name": "Provision a reproducible host runtime",
+      "outcome": "Prepare a host command or service to run predictably by selecting the packaged software and applying environment and time settings at the required scopes, then verify the combined behavior in new and existing processes.",
+      "includes": [
+        "tasks coupling package state with process, user, or host runtime context",
+        "verification of executable provenance, inherited environment, locale-sensitive behavior, wall-clock display, and synchronization state"
+      ],
+      "excludes": [
+        "service topology, restart policy, and failure diagnosis after the runtime has been provisioned",
+        "building or releasing application source code"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Provision a reporting command from configured repositories, make it run in UTF-8 with a fixed timezone for one service account, and verify both the selected executable and the environment inherited by a newly started process without changing other users."
+        },
+        {
+          "instruction": "Preview an upgrade to a scheduled data tool, verify its dependency changes, configure the host clock and the job's locale for reproducible timestamps, and state which already running processes must be restarted to observe each change."
+        }
+      ]
+    },
+    {
+      "id": "c03.package-lifecycle",
+      "parent_id": "c03.runtime-provisioning",
+      "name": "Select and maintain packaged software",
+      "outcome": "Resolve a requested capability to the correct package and perform or reject an installation, removal, or upgrade based on exact metadata, repository state, dependency effects, and post-transaction verification.",
+      "includes": [
+        "exact package metadata, file ownership lookup, configured repositories, dependencies, candidate versions, and holds or pins",
+        "transaction previews and verification of installed versions and executable provenance"
+      ],
+      "excludes": [
+        "language-specific dependency development from source",
+        "environment variables, locale, timezone, and service configuration"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "A package search for git returns hundreds of descriptions. Identify the principal client and closely related official packages using exact package metadata, then verify which package owns the installed executable."
+        },
+        {
+          "instruction": "Before upgrading a shared command-line tool, report the candidate version and every package that the transaction would add, remove, or change, and retain the current version if the preview violates the stated constraint."
+        }
+      ]
+    },
+    {
+      "id": "c03.process-environment",
+      "parent_id": "c03.runtime-provisioning",
+      "name": "Scope process environments and locales",
+      "outcome": "Configure environment variables, search paths, and locale behavior at invocation, process, user-session, or service scope and verify exactly which future processes inherit the change.",
+      "includes": [
+        "environment inheritance, command-local assignments, login and non-login startup, service environments, PATH, and locale categories",
+        "distinguishing current shell state from persistent configuration for future processes"
+      ],
+      "excludes": [
+        "system clock synchronization and timezone databases",
+        "shell expansion bugs unrelated to configuring an execution environment"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Run one command with a different numeric locale, then configure the same locale for one user's future login sessions while leaving non-login batch jobs and other users unchanged; show how each scope is verified."
+        },
+        {
+          "instruction": "A service finds a different executable than an interactive shell. Trace the two inherited PATH values, set an explicit service environment, and verify the executable selected after starting a new service process."
+        }
+      ]
+    },
+    {
+      "id": "c03.system-time",
+      "parent_id": "c03.runtime-provisioning",
+      "name": "Configure system time and timezone",
+      "outcome": "Set and verify the host timezone, clock, and synchronization source while distinguishing absolute time from display conventions and accounting for already running processes.",
+      "includes": [
+        "timezone selection, UTC offsets and daylight transitions, hardware and system clocks, synchronization status, and clock corrections",
+        "verification of host-wide changes and effects on timestamps, timers, and long-lived processes"
+      ],
+      "excludes": [
+        "locale categories other than timezone behavior",
+        "application scheduling policy unrelated to the host clock"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Change the system timezone for all users without rebooting, verify the active zone and synchronization state, and explain why stored UTC timestamps do not change while displayed civil times do."
+        },
+        {
+          "instruction": "A host clock is several minutes wrong even though its timezone label is correct. Determine whether synchronization is active and healthy, correct the clock safely, and verify the source and offset rather than merely changing the display zone."
+        }
+      ]
+    },
+    {
+      "id": "c03.service-incident-control",
+      "parent_id": null,
+      "name": "Diagnose and control service incidents",
+      "outcome": "Restore a failing or degraded service by correlating process lifecycle and resource evidence with stream or log evidence and service configuration, then apply a controlled change and verify recovery.",
+      "includes": [
+        "incidents requiring evidence across process, logging, and service-manager boundaries",
+        "causal diagnosis, safe signal or configuration changes, health checks, and rollback criteria"
+      ],
+      "excludes": [
+        "application feature bugs with no operating-system cause",
+        "single-log queries or single-process controls that do not require cross-layer diagnosis"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "A daemon repeatedly wakes before its intended deadline, grows in memory, and emits startup messages to both the terminal and a service log. Correlate signals, resource use, process instances, streams, and unit settings; then propose a controlled correction and recovery check."
+        },
+        {
+          "instruction": "A directory proxy starts successfully but intermittently returns incomplete results after reloads. Separate old and new process logs, check worker and descriptor pressure, validate backend and reload configuration, and define client checks plus a rollback trigger."
+        }
+      ]
+    },
+    {
+      "id": "c03.process-lifecycle-resources",
+      "parent_id": "c03.service-incident-control",
+      "name": "Control processes and diagnose resource use",
+      "outcome": "Start, wait for, signal, and terminate related processes without races or orphans, and attribute abnormal CPU, memory, descriptor, or timing behavior to the responsible process or thread.",
+      "includes": [
+        "process trees, jobs, exit status, signals, interrupted waits, deadlines, graceful termination, and escalation",
+        "per-process and per-thread CPU, memory, open-file, and descriptor observations"
+      ],
+      "excludes": [
+        "service-specific configuration syntax",
+        "reconstructing message destinations or order from standard streams and logs"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Explain why a thread's 60-second sleep repeatedly ends when another thread's timer signal is delivered, and revise the timing logic so it waits until the intended monotonic deadline."
+        },
+        {
+          "instruction": "A worker pool is slowing while host memory and open-file counts rise. Identify the responsible processes and resource class, distinguish a leak from expected cache or workload growth, and define a graceful shutdown sequence that leaves no workers behind."
+        }
+      ]
+    },
+    {
+      "id": "c03.operational-streams-logs",
+      "parent_id": "c03.service-incident-control",
+      "name": "Trace process streams and logs",
+      "outcome": "Determine where operational messages went and reconstruct the defensible order and origin of events despite descriptor duplication, buffering, rotation, concurrent writers, and process restarts.",
+      "includes": [
+        "standard input, output, and error; descriptor redirection and duplication; terminal and nohup behavior; buffering",
+        "log filtering, rotation, timestamps, process identity, boots, and restart boundaries"
+      ],
+      "excludes": [
+        "ordinary file or record transformation whose goal is a derived dataset",
+        "choosing pipeline data inputs and outputs when no operational diagnosis is requested"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "A program prints some messages to the terminal and others to a redirected file, and their apparent order changes under nohup. Identify the descriptors and buffering involved and give capture options with explicit ordering guarantees and limits."
+        },
+        {
+          "instruction": "Investigate a service restart by selecting the relevant log window, separating rotated records and old versus new process instances, and identifying the earliest causal error rather than later shutdown symptoms."
+        }
+      ]
+    },
+    {
+      "id": "c03.persistent-service-operation",
+      "parent_id": "c03.service-incident-control",
+      "name": "Configure and operate persistent services",
+      "outcome": "Translate a service topology into valid manager and daemon configuration, apply it with the least disruptive lifecycle action, and verify startup, dependencies, health, and client-visible behavior.",
+      "includes": [
+        "configuration validation, dependency ordering, startup policy, reload versus restart, health checks, failover, and rollback",
+        "proxies and replicated backends when service topology determines request handling"
+      ],
+      "excludes": [
+        "host routing policy independent of a service topology",
+        "process resource diagnosis and stream-order reconstruction"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Configure a read-only proxy for two replicated directory backends serving the same naming context, validate the configuration before activation, and test complete results and failover from a client."
+        },
+        {
+          "instruction": "Roll out a daemon configuration change by checking syntax, selecting reload or restart from documented behavior, verifying dependencies and health, and using an explicit rollback point if client requests fail."
+        }
+      ]
+    },
+    {
+      "id": "c03.host-access-policy",
+      "parent_id": null,
+      "name": "Implement least-privilege host access",
+      "outcome": "Translate an access policy into accounts, group and file permissions, authentication controls, and narrowly delegated privileges, then test the combined allowed, denied, and audited paths from the affected identities.",
+      "includes": [
+        "tasks requiring both resource permissions and an authentication or privileged-operation boundary",
+        "effective-identity testing, inheritance, negative tests, credential handling, and audit evidence"
+      ],
+      "excludes": [
+        "network route and name-resolution policy",
+        "application roles wholly internal to an application"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Provision a service account that can read one protected configuration tree and restart only its own daemon without an interactive privileged shell; verify inherited file access, rejected writes and unrelated commands, and audit records."
+        },
+        {
+          "instruction": "Onboard a project operator who authenticates with an individual credential, collaborates through a group-owned directory, and may run one fixed backup command; test new-file inheritance, outsider denial, privilege argument restrictions, and revocation."
+        }
+      ]
+    },
+    {
+      "id": "c03.identity-file-permissions",
+      "parent_id": "c03.host-access-policy",
+      "name": "Administer identities and file permissions",
+      "outcome": "Create and retire users and groups and configure ownership, mode bits, ACLs, and inheritance so the effective file access of each relevant identity matches policy.",
+      "includes": [
+        "account lifecycle, primary and supplementary groups, ownership, mode bits, ACLs, setgid directories, umask, and default permissions",
+        "effective identity and tests of allowed and denied filesystem operations"
+      ],
+      "excludes": [
+        "privileged command delegation and authentication-factor policy",
+        "packet filtering, routes, and remote service authorization"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Create a shared project directory where members of one group can create and edit files, new entries inherit the project group, and unrelated users cannot list or read contents; verify with representative identities."
+        },
+        {
+          "instruction": "Give one service account read-only traversal of a protected directory tree without changing access for other users, accounting for directory execute permission and existing ACL masks, then test one allowed and one denied path."
+        }
+      ]
+    },
+    {
+      "id": "c03.authentication-privilege",
+      "parent_id": "c03.host-access-policy",
+      "name": "Constrain authentication and privileged actions",
+      "outcome": "Configure authentication and privilege delegation so a named identity can perform only the intended administrative actions with attributable credentials and without escalation through arguments or environment.",
+      "includes": [
+        "credential and key lifecycle, login restrictions, privilege delegation, fixed commands, environment sanitization, revocation, and auditability",
+        "testing interactive, non-interactive, allowed, denied, and escalation attempts"
+      ],
+      "excludes": [
+        "ordinary ownership, mode-bit, and ACL administration",
+        "application-specific authorization tokens and roles"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Allow an operator to execute one maintenance program as a service user without gaining a general privileged shell, passing arbitrary subcommands, or overriding its executable search path; demonstrate the accepted and rejected invocations."
+        },
+        {
+          "instruction": "Replace a shared administrative login with individual key-based identities, disable the obsolete credential, retain an emergency access path, and verify attribution and revocation without locking out current administrators."
+        }
+      ]
+    },
+    {
+      "id": "c03.network-connectivity",
+      "parent_id": null,
+      "name": "Establish and verify host connectivity",
+      "outcome": "Make a named remote endpoint reachable by coordinating route and source-address selection with name resolution and transport checks, and prove the chosen forward and return behavior under normal and failover conditions.",
+      "includes": [
+        "tasks requiring both network-path policy and endpoint or resolver verification",
+        "multi-interface preference, failure behavior, DNS evidence, transport reachability, and client-context checks"
+      ],
+      "excludes": [
+        "service-layer backend selection after traffic reaches an application proxy",
+        "local users, file permissions, and privileged command policy"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Configure a multi-interface host so private names and destinations use the organization link, public traffic prefers cellular with Ethernet fallback, and trusted Wi-Fi supersedes both; verify resolver choice, selected source and route, and behavior as links change."
+        },
+        {
+          "instruction": "A named service resolves to reachable addresses but inbound sessions fail because replies leave through another gateway. Trace DNS answers, forward and return paths, source selection, and the transport test, then correct policy without breaking failover."
+        }
+      ]
+    },
+    {
+      "id": "c03.route-selection",
+      "parent_id": "c03.network-connectivity",
+      "name": "Select and verify network paths",
+      "outcome": "Predict and configure the interface, gateway, and source address used for traffic based on prefixes, metrics, and policy rules, including return paths and link failures.",
+      "includes": [
+        "longest-prefix matching, default routes, metrics, policy routing, interface state, source addresses, and asymmetric paths",
+        "route queries and packet-path observations under preference and failure changes"
+      ],
+      "excludes": [
+        "DNS record selection and application endpoint behavior",
+        "service-layer load balancing among backend instances"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Given three active interfaces and their subnets, propose routes and priorities that keep 10.0.0.0/8 on Ethernet, prefer cellular for other traffic, fall back to Ethernet, and override both when Wi-Fi connects."
+        },
+        {
+          "instruction": "A host accepts an inbound connection on one interface but sends replies through another gateway. Show the applicable route and policy decisions for both directions and correct the return-path selection."
+        }
+      ]
+    },
+    {
+      "id": "c03.name-endpoint-diagnosis",
+      "parent_id": "c03.network-connectivity",
+      "name": "Diagnose names and transport endpoints",
+      "outcome": "Determine whether a connectivity failure arises in name resolution, address-family selection, listening endpoints, or transport reachability using observations from the affected client context.",
+      "includes": [
+        "resolver configuration and search domains, DNS answers and caching, IPv4 and IPv6 selection, listening addresses and ports, and connection tests",
+        "distinguishing resolution, routing, filtering, refusal, and timeout evidence"
+      ],
+      "excludes": [
+        "changing route preference or policy rules",
+        "debugging application protocol correctness after a transport connection succeeds"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "A service works by numeric IPv4 address but not by its short hostname for one user. Compare that user's resolver inputs and answers, search-domain expansion, cache state, and address-family choice to identify the failing layer."
+        },
+        {
+          "instruction": "A daemon reports healthy locally, but remote clients time out. Verify its listening address and port, test loopback and host-interface endpoints, and use the differing refusal or timeout evidence to locate the boundary without changing routes."
+        }
+      ]
+    },
+    {
+      "id": "c03.storage-recoverability",
+      "parent_id": null,
+      "name": "Maintain recoverable storage",
+      "outcome": "Change or recover storage without losing service data by coordinating filesystem capacity and mount state with a verified backup or restore point, safe sequencing, and post-change integrity checks.",
+      "includes": [
+        "operations whose safety depends on both live storage state and recoverability evidence",
+        "capacity remediation or migration with backup validation, quiescing, rollback, and service consistency checks"
+      ],
+      "excludes": [
+        "ordinary file transformation",
+        "remote replication treated as a backup without a recovery and retention contract"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "A critical service is exhausting its filesystem. Identify the growth and mount constraints, verify a current restorable copy, move or extend the data safely, and confirm both service consistency and the ability to roll back."
+        },
+        {
+          "instruction": "Migrate application data to a new persistent volume while meeting a short recovery-point target: prepare and identify the filesystem, take a consistent backup, switch mounts, validate data and metadata, and rehearse reversal."
+        }
+      ]
+    },
+    {
+      "id": "c03.filesystem-capacity",
+      "parent_id": "c03.storage-recoverability",
+      "name": "Operate filesystems and capacity",
+      "outcome": "Inspect, mount, extend, and repair storage while accounting for device identity, filesystem state, byte and inode use, quotas, open files, and safe unmount requirements.",
+      "includes": [
+        "block devices, partitions, filesystems, stable mount identity, persistent mounts, resizing, quotas, and repair preconditions",
+        "diagnosing deleted-but-open files, inode exhaustion, nested mounts, and space attribution"
+      ],
+      "excludes": [
+        "backup retention, recovery objectives, and restore validation",
+        "database-level consistency beyond identifying a need to quiesce it"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Disk usage remains full after a large log is deleted. Determine whether an open file, inode exhaustion, or a hidden nested mount explains the discrepancy and remediate without rebooting or deleting unrelated data."
+        },
+        {
+          "instruction": "Add a volume for application data, create and mount an appropriate filesystem persistently by stable identity, set ownership, and verify expected behavior after an unmount and mount cycle."
+        }
+      ]
+    },
+    {
+      "id": "c03.backup-restoration",
+      "parent_id": "c03.storage-recoverability",
+      "name": "Create and prove recoverable backups",
+      "outcome": "Choose and execute backup, snapshot, retention, and restore procedures that meet stated recovery goals, preserve required metadata and consistency, and demonstrate recovery through a tested restore.",
+      "includes": [
+        "full and incremental copies, snapshots, application consistency, retention, encryption, integrity checks, and restore drills",
+        "recovery point and recovery time tradeoffs, staged restores, and selective recovery"
+      ],
+      "excludes": [
+        "high availability or replication alone",
+        "resizing, repairing, or mounting the live filesystem"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Plan backups for a changing dataset with a four-hour recovery-point target and limited repository capacity, including consistency, retention, encryption, integrity checks, and a timed restore drill."
+        },
+        {
+          "instruction": "Restore one accidentally deleted directory from an encrypted backup into staging, verify contents, ownership, ACLs, and timestamps, then return it to service without overwriting newer unrelated data."
+        }
+      ]
+    }
+  ]
+}

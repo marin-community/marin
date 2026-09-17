@@ -1,0 +1,540 @@
+{
+  "version": "pilot-2",
+  "subject_id": "C14",
+  "subject_name": "Mathematics & Formal Reasoning",
+  "sections": [
+    {
+      "id": "arithmetic-algebra",
+      "parent_id": null,
+      "name": "Integrated exact and discrete algebraic reasoning",
+      "outcome": "Combine exact computation, symbolic derivation, and discrete case structure to obtain and check exact answers for problems whose constraints cannot be handled by any one of those capabilities alone.",
+      "includes": [
+        "Problems that require a symbolic formula or recurrence together with exact evaluation or discrete counting",
+        "Cross-checking a derived algebraic result against number-theoretic or combinatorial structure"
+      ],
+      "excludes": [
+        "Single-mode calculations, equations, recurrences, or counts that belong in one child section",
+        "Approximate computation whose main challenge is controlling numerical error"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "For a positive integer N, derive a closed formula for the number of positive integers at most N that are divisible by 6 or 15 but not both, then evaluate it exactly for N = 500."
+        },
+        {
+          "instruction": "A sequence satisfies a_0 = 2 and a_(n+1) = 2a_n + n. Derive a closed form, use it to compute the exact sum of a_0 through a_8, and verify the result from the recurrence."
+        }
+      ]
+    },
+    {
+      "id": "arithmetic-algebra.exact-computation",
+      "parent_id": "arithmetic-algebra",
+      "name": "Exact expression evaluation",
+      "outcome": "Evaluate multi-step numerical expressions exactly by applying operation rules and reducing the result to a canonical form.",
+      "includes": [
+        "Signed arithmetic, fractions, powers, radicals, and nested operations",
+        "Exact simplification of numerical rational and radical expressions"
+      ],
+      "excludes": [
+        "Solving for unknown quantities or deriving formulas",
+        "Floating-point approximation and error estimation"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Evaluate -18 - 3(7 - 11) + 5^2/10 exactly and express the result as a reduced fraction."
+        },
+        {
+          "instruction": "Simplify sqrt(72) - 2sqrt(8) + 3/sqrt(2) exactly, rationalizing any denominator."
+        }
+      ]
+    },
+    {
+      "id": "arithmetic-algebra.equations-identities",
+      "parent_id": "arithmetic-algebra",
+      "name": "Algebraic equivalence and equation solving",
+      "outcome": "Transform algebraic expressions into equivalent forms and solve equations or systems while preserving domain restrictions and checking candidate solutions.",
+      "includes": [
+        "Factoring, expansion, substitution, and rational-expression simplification",
+        "Polynomial, rational, exponential, and simultaneous equations"
+      ],
+      "excludes": [
+        "Recurrence relations and sequence formulas",
+        "Optimization over a feasible region or purely numerical evaluation"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Solve (x - 2)/(x + 3) = (2x + 1)/(x - 1), state all excluded values, and check every proposed solution in the original equation."
+        },
+        {
+          "instruction": "Factor x^4 - 5x^2 + 4 over the integers and use the factorization to solve x^4 - 5x^2 + 4 = 0."
+        }
+      ]
+    },
+    {
+      "id": "arithmetic-algebra.recurrences",
+      "parent_id": "arithmetic-algebra",
+      "name": "Recurrence and sequence derivation",
+      "outcome": "Derive explicit terms, closed forms, or generating relations for sequences defined recursively and verify that the result satisfies the initial conditions and recurrence.",
+      "includes": [
+        "First-order and constant-coefficient linear recurrences",
+        "Inductively defined sequences, generating relations, and recurrence verification"
+      ],
+      "excludes": [
+        "Unindexed algebraic equations and identities",
+        "Analytic convergence or asymptotic bounds for a sequence"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Find a closed form for a_0 = 4 and a_(n+1) = 3a_n - 2, then verify both the initial value and recurrence."
+        },
+        {
+          "instruction": "Solve b_n = 5b_(n-1) - 6b_(n-2) for n at least 2 with b_0 = 1 and b_1 = 4, and check the first four terms."
+        }
+      ]
+    },
+    {
+      "id": "arithmetic-algebra.integer-enumeration",
+      "parent_id": "arithmetic-algebra",
+      "name": "Integer and divisibility enumeration",
+      "outcome": "Count or identify integers satisfying prime, divisor, congruence, or divisibility conditions using a justified finite algorithm or arithmetic decomposition.",
+      "includes": [
+        "Exact prime counts by sieving or systematic candidate testing",
+        "Divisor, multiple, greatest-common-divisor, and modular counts over bounded ranges"
+      ],
+      "excludes": [
+        "Permutations, combinations, digit arrangements, and other counts of constructed configurations",
+        "Unsupported manual listing; systematic enumeration and sieving are permitted"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Determine exactly how many primes lie from 1200 through 1500, and explain a reproducible sieve or candidate-elimination procedure that produces the count."
+        },
+        {
+          "instruction": "Count the integers n with 1 <= n <= 1000 for which gcd(n, 60) = 1, using the prime factors of 60 rather than listing all candidates."
+        }
+      ]
+    },
+    {
+      "id": "arithmetic-algebra.combinatorial-enumeration",
+      "parent_id": "arithmetic-algebra",
+      "name": "Finite combinatorial enumeration",
+      "outcome": "Count finite configurations by decomposing cases and applying bijections, permutations, combinations, recurrences, or inclusion-exclusion.",
+      "includes": [
+        "Selections, arrangements, constrained strings, paths, and digit patterns",
+        "Case partitions, complementary counting, and inclusion-exclusion over constructed objects"
+      ],
+      "excludes": [
+        "Prime sieving, divisor counts, and searches whose objects are integers selected by arithmetic properties",
+        "Event probabilities when the requested result depends on a random experiment"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "How many six-digit numbers have strictly increasing digits and contain exactly two even digits? Separate the cases affected by a leading zero."
+        },
+        {
+          "instruction": "Count the binary strings of length 12 with exactly five 1s and no two 1s adjacent, giving a combinatorial justification."
+        }
+      ]
+    },
+    {
+      "id": "analysis-proof",
+      "parent_id": null,
+      "name": "Multi-method mathematical proof",
+      "outcome": "Connect analytic estimates, geometric relations, and structural invariants to prove a conclusion that cannot be established within only one of those modes of reasoning.",
+      "includes": [
+        "Proofs that translate between geometric, analytic, or abstract representations",
+        "Arguments in which one child capability supplies a construction and another supplies the decisive bound or invariant"
+      ],
+      "excludes": [
+        "Proofs wholly contained in one child section",
+        "Formal verification of programs or logical systems"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Using exact chord lengths and a limit argument, prove that the perimeters of regular n-gons inscribed in a unit circle converge to 2 pi, including an explicit bound that tends to zero."
+        },
+        {
+          "instruction": "Prove that a minimum-total-length straight-line spanning tree on finitely many points in the plane has no crossing edges by combining a geometric distance inequality with a tree exchange argument."
+        }
+      ]
+    },
+    {
+      "id": "analysis-proof.convergence-bounds",
+      "parent_id": "analysis-proof",
+      "name": "Convergence, inequalities, and asymptotic bounds",
+      "outcome": "Establish convergence, divergence, inequalities, or growth bounds for real sequences and functions from definitions and analytic estimates.",
+      "includes": [
+        "Limits, continuity, monotone convergence, and comparison arguments",
+        "Analytic inequalities and finite or asymptotic upper and lower bounds"
+      ],
+      "excludes": [
+        "Computing derivatives or integrals as the decisive operation",
+        "Numerical approximation with a discretization or rounding-error budget"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Determine whether n(sqrt(n^2 + 1) - n) converges and justify the limit using exact inequalities rather than decimal approximations."
+        },
+        {
+          "instruction": "Prove from the epsilon-delta definition that f(x) = x^2 is continuous at an arbitrary real number a, making the delta choice explicit."
+        }
+      ]
+    },
+    {
+      "id": "analysis-proof.differential-integral",
+      "parent_id": "analysis-proof",
+      "name": "Differential and integral analysis",
+      "outcome": "Use derivatives, integrals, or the fundamental theorem of calculus to derive exact properties and identities of real-valued functions.",
+      "includes": [
+        "Derivative-based monotonicity, convexity, and local behavior",
+        "Exact integration, integral identities, and relationships between accumulation and rate of change"
+      ],
+      "excludes": [
+        "Approximate quadrature or finite-difference error control",
+        "Decision problems whose requested result is the optimum of an explicit objective over a feasible set"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Prove that ln x <= x - 1 for every positive x by analyzing derivatives, and determine exactly when equality holds."
+        },
+        {
+          "instruction": "Evaluate the integral from 0 to 1 of x ln(1 + x) exactly using integration by parts, and verify the antiderivative by differentiation."
+        }
+      ]
+    },
+    {
+      "id": "analysis-proof.geometric-deduction",
+      "parent_id": "analysis-proof",
+      "name": "Geometric relation and locus deduction",
+      "outcome": "Derive exact lengths, angles, areas, incidences, or loci from geometric constraints using synthetic or coordinate arguments.",
+      "includes": [
+        "Euclidean, coordinate, and analytic geometry",
+        "Tangency, similarity, congruence, constructions, and locus characterization without an optimization objective"
+      ],
+      "excludes": [
+        "Tasks asking to maximize or minimize a geometric quantity; those route to optimization once an objective is present",
+        "Optimization models whose geometry merely visualizes nongeometric constraints"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "In a regular octagon of side length 2, derive the exact distance between two vertices separated by three edges."
+        },
+        {
+          "instruction": "Find all circles above the x-axis that pass through the origin and are tangent to y = x^2 at a second point, deriving the tangency conditions."
+        }
+      ]
+    },
+    {
+      "id": "analysis-proof.structural-proof",
+      "parent_id": "analysis-proof",
+      "name": "Structural and abstract proof",
+      "outcome": "Use definitions, invariants, and structure-preserving maps to prove or refute claims about discrete or abstract mathematical objects.",
+      "includes": [
+        "Groups, rings, fields, graphs, sets, and combinatorial structures",
+        "Classification from generators, relations, invariants, and isomorphisms"
+      ],
+      "excludes": [
+        "Finite enumeration when only a numeric count is requested",
+        "Propositional validity with no domain-specific mathematical structure"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Classify, up to isomorphism, the group generated by a and b with a^4 = 1, b^2 = a^2, and b^(-1)ab = a^(-1), justifying each structural claim."
+        },
+        {
+          "instruction": "Prove that every finite tree with at least two vertices has at least two leaves without appealing to a drawing."
+        }
+      ]
+    },
+    {
+      "id": "probability-statistics",
+      "parent_id": null,
+      "name": "Model-to-inference probabilistic reasoning",
+      "outcome": "Construct a probability model from a stated data-generating process and use the derived distribution to make and justify an inferential or predictive conclusion about unknown quantities.",
+      "includes": [
+        "End-to-end tasks where both the stochastic model and inferential procedure must be derived",
+        "Connecting latent mechanisms, observed distributions, estimators, uncertainty, and predictions"
+      ],
+      "excludes": [
+        "Known-parameter probability calculations or explicit-distribution inference that belongs in one child",
+        "Exploratory analysis or visualization of a supplied dataset"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "A screening test has known sensitivity and specificity, while disease prevalence p is unknown. Derive the distribution of the number of positive results in an independent sample, obtain the maximum-likelihood estimator of p, and state when it is identifiable."
+        },
+        {
+          "instruction": "Events follow a Poisson process with unknown rate, but observation stops at a fixed time T. Derive the likelihood from the process model, estimate the rate, and give the plug-in probability of at least one event in the next time interval of length s."
+        }
+      ]
+    },
+    {
+      "id": "probability-statistics.probabilistic-modeling",
+      "parent_id": "probability-statistics",
+      "name": "Known-parameter probabilistic modeling",
+      "outcome": "Construct and analyze a probability model with specified parameters to compute event probabilities, distributions, expectations, and dependence.",
+      "includes": [
+        "Discrete and continuous random variables with known laws",
+        "Conditional probability, independence, expectation, and stopping times"
+      ],
+      "excludes": [
+        "Inference about unknown population parameters from a sample",
+        "Combinatorial counts with no random experiment"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Two cards are drawn without replacement from a standard deck. Compute the conditional probability that both are aces given that at least one is an ace."
+        },
+        {
+          "instruction": "A coin with known head probability p is tossed until the first tail. Derive the probability generating function and expectation of the number of heads."
+        }
+      ]
+    },
+    {
+      "id": "probability-statistics.statistical-inference",
+      "parent_id": "probability-statistics",
+      "name": "Inference under an explicit sampling model",
+      "outcome": "Derive and compare estimators, tests, and uncertainty procedures when the sampling distribution and its unknown parameter are explicitly specified.",
+      "includes": [
+        "Likelihood, bias, variance, consistency, and sufficiency",
+        "Confidence intervals, hypothesis tests, power, and asymptotic distributions"
+      ],
+      "excludes": [
+        "Deriving the stochastic observation model from an informal mechanism",
+        "Probability calculations in which all parameters are known"
+      ],
+      "prerequisites": [
+        "probability-statistics.probabilistic-modeling"
+      ],
+      "sample_tasks": [
+        {
+          "instruction": "For n independent Poisson observations with unknown rate lambda, derive the maximum-likelihood estimator and determine its bias and variance."
+        },
+        {
+          "instruction": "For an independent normal sample with unknown mean and variance, derive a 95% confidence interval for the mean and justify the reference distribution."
+        }
+      ]
+    },
+    {
+      "id": "optimization-operations",
+      "parent_id": null,
+      "name": "End-to-end optimization",
+      "outcome": "Translate a verbal, geometric, or operational decision problem into variables, an objective, and constraints, then find a feasible optimum and certify its quality.",
+      "includes": [
+        "Problems requiring both model formulation and exact or bounded solution",
+        "Geometric maximization or minimization when deriving the feasible family is part of the task"
+      ],
+      "excludes": [
+        "Already formulated models requiring only solution and certification",
+        "Geometric relation or locus problems with no maximize or minimize objective"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "A square sheet has equal squares cut from its corners and is folded into an open box. Formulate the volume and feasible interval in terms of the cut size, find the maximizing box, and certify global optimality."
+        },
+        {
+          "instruction": "Given six workers, their shift availability, and required coverage for three shifts, formulate a minimum-cost integer assignment, solve the stated small instance, and provide a lower bound or structural argument certifying optimality."
+        }
+      ]
+    },
+    {
+      "id": "optimization-operations.model-formulation",
+      "parent_id": "optimization-operations",
+      "name": "Optimization model formulation",
+      "outcome": "Represent a decision problem with explicit variables, objective, constraints, domains, and assumptions suitable for mathematical solution.",
+      "includes": [
+        "Linear, integer, network, assignment, routing, and scheduling formulations",
+        "Identification of feasible sets and modeling tradeoffs"
+      ],
+      "excludes": [
+        "Finding or certifying an optimum for the formulated model",
+        "Geometry problems that request a relation or locus but no objective"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Formulate a mixed-integer program that assigns nurses to shifts while meeting coverage, rest, and weekly-hour requirements; define every variable and constraint."
+        },
+        {
+          "instruction": "Express the shortest path from a source to a destination as a linear optimization problem using flow-conservation constraints, without solving an instance."
+        }
+      ]
+    },
+    {
+      "id": "optimization-operations.solution-certification",
+      "parent_id": "optimization-operations",
+      "name": "Solution of specified optimization models",
+      "outcome": "Find candidate optima for an explicitly specified objective and feasible set and establish local or global optimality using analytic, structural, or dual arguments.",
+      "includes": [
+        "Convexity, derivatives, KKT conditions, exchange arguments, and duality",
+        "Exact solutions and certified bounds for already formulated discrete optimization problems"
+      ],
+      "excludes": [
+        "Deriving decision variables or constraints from an informal operational or geometric problem",
+        "Approximation error analysis for numerical algorithms"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Minimize x^2 + 4y^2 subject to x + y = 6, and certify that the solution is globally optimal."
+        },
+        {
+          "instruction": "Given weighted unit-time jobs with deadlines, derive an algorithm that maximizes total scheduled weight and prove its optimality by an exchange argument."
+        }
+      ]
+    },
+    {
+      "id": "numerical-methods",
+      "parent_id": null,
+      "name": "Coupled numerical approximation",
+      "outcome": "Build and solve a discretized scalar or system model while balancing discretization, iteration, stability, and rounding errors in one justified approximation pipeline.",
+      "includes": [
+        "Problems where a discretization produces an equation or system that must itself be solved approximately",
+        "Allocating error tolerances across multiple numerical stages and checking stability"
+      ],
+      "excludes": [
+        "One-stage scalar approximation or an already discretized system that belongs in one child",
+        "Exact symbolic manipulation"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Discretize -u'' = 1 on [0, 1] with u(0) = u(1) = 0 by centered differences, solve the resulting linear system iteratively, and bound the combined discretization and algebraic-solve error."
+        },
+        {
+          "instruction": "Apply the implicit trapezoidal method to a stiff nonlinear initial-value problem for two steps, use Newton iteration for each implicit equation, and choose a stopping tolerance so nonlinear-solve error does not dominate time-discretization error."
+        }
+      ]
+    },
+    {
+      "id": "numerical-methods.approximation-error",
+      "parent_id": "numerical-methods",
+      "name": "Scalar approximation and error control",
+      "outcome": "Approximate scalar quantities, roots, derivatives, or integrals while bounding truncation, iteration, and rounding error.",
+      "includes": [
+        "Root finding, interpolation, quadrature, and finite differences",
+        "Convergence rates, stopping criteria, and scalar error propagation"
+      ],
+      "excludes": [
+        "Exact closed-form evaluation",
+        "Linear, nonlinear, or differential systems with coupled unknowns"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Apply bisection to locate a root of x^3 - x - 1 in [1, 2] within absolute error 0.001, and determine the required iteration count."
+        },
+        {
+          "instruction": "Approximate the integral of exp(-x^2) from 0 to 1 with composite Simpson's rule and derive an error bound from the fourth derivative."
+        }
+      ]
+    },
+    {
+      "id": "numerical-methods.iterative-systems",
+      "parent_id": "numerical-methods",
+      "name": "Iterative solution and stability of systems",
+      "outcome": "Solve coupled linear, nonlinear, or differential systems numerically and diagnose convergence, conditioning, or time-stepping stability.",
+      "includes": [
+        "Direct and iterative numerical linear algebra",
+        "Time-stepping and boundary-value discretizations with multiple coupled unknowns"
+      ],
+      "excludes": [
+        "Single-variable root, derivative, integral, or interpolation tasks",
+        "Parallelization or performance engineering of a simulation"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Perform three Gauss-Seidel iterations for a specified diagonally dominant 3 by 3 linear system and justify convergence from the coefficient matrix."
+        },
+        {
+          "instruction": "Discretize a one-dimensional heat equation with an explicit finite-difference scheme and derive the time-step condition required for stability."
+        }
+      ]
+    },
+    {
+      "id": "logic-verification",
+      "parent_id": null,
+      "name": "Logical encoding of system behavior",
+      "outcome": "Encode operational system behavior and desired properties in a logical theory, then use validity or satisfiability reasoning to prove the property or extract a concrete counterexample execution.",
+      "includes": [
+        "Reducing bounded executions or proof obligations to propositional or first-order formulas",
+        "Interpreting a proof, model, or countermodel back in the semantics of a program or transition system"
+      ],
+      "excludes": [
+        "Pure logical entailment with no operational semantics",
+        "Invariant or contract proofs that do not require a separate logical encoding"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Encode all executions of a two-bit transition system up to length four as a propositional formula together with a safety violation, determine satisfiability, and translate any satisfying assignment into a counterexample trace."
+        },
+        {
+          "instruction": "For a loop that sums the first n nonnegative integers, translate initialization, preservation, and exit obligations for a proposed invariant into quantified implications and discharge each implication explicitly."
+        }
+      ]
+    },
+    {
+      "id": "logic-verification.logical-deduction",
+      "parent_id": "logic-verification",
+      "name": "Formal logical deduction",
+      "outcome": "Translate declarative statements into a logical language and determine validity, satisfiability, equivalence, or entailment by explicit derivation or countermodel.",
+      "includes": [
+        "Truth-functional reasoning, quantifiers, proof systems, and countermodels",
+        "Normal forms and finite satisfiability arguments"
+      ],
+      "excludes": [
+        "Proofs relying mainly on algebraic or geometric domain facts",
+        "Claims about stateful program or transition-system executions"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Convert (p implies q) and (r implies not q) and (p or r) into conjunctive normal form and determine whether the formula is satisfiable."
+        },
+        {
+          "instruction": "Given premises forall x (P(x) implies Q(x)) and exists x P(x), construct a natural-deduction proof of exists x Q(x)."
+        }
+      ]
+    },
+    {
+      "id": "logic-verification.system-verification",
+      "parent_id": "logic-verification",
+      "name": "Invariant and contract verification",
+      "outcome": "Formulate behavioral properties of programs or transition systems and prove or refute them with invariants, contracts, induction over executions, or state exploration.",
+      "includes": [
+        "Preconditions, postconditions, loop invariants, and temporal safety or liveness properties",
+        "Inductive proofs over executions and reachable counterexample traces"
+      ],
+      "excludes": [
+        "Testing a finite set of executions without a general behavioral claim",
+        "Standalone logical validity or satisfiability with no program or transition semantics"
+      ],
+      "prerequisites": [
+        "logic-verification.logical-deduction"
+      ],
+      "sample_tasks": [
+        {
+          "instruction": "Give preconditions, a loop invariant, and a postcondition for an in-place array-reversal loop, and prove initialization, preservation, and the postcondition at termination."
+        },
+        {
+          "instruction": "For a specified two-process mutual-exclusion protocol, formalize the safety property and either prove it inductive over reachable states or provide a reachable counterexample trace."
+        }
+      ]
+    }
+  ]
+}

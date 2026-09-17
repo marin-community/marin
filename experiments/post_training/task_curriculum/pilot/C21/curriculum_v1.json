@@ -1,0 +1,386 @@
+{
+  "version": "v1",
+  "subject_id": "C21",
+  "subject_name": "Office Productivity & Documents",
+  "sections": [
+    {
+      "id": "c21.spreadsheets",
+      "parent_id": null,
+      "name": "Build decision-ready spreadsheet models",
+      "outcome": "Given operational data and a decision need, design or revise a spreadsheet model whose inputs, calculations, checks, and summaries are organized, correct, and traceable.",
+      "includes": [
+        "structuring tables and model regions for reliable calculation",
+        "deriving values with references, formulas, lookups, conditions, and aggregations",
+        "checking calculations and presenting compact spreadsheet summaries or scenarios"
+      ],
+      "excludes": [
+        "open-ended statistical research or formal experiment analysis",
+        "building database applications or general-purpose software",
+        "designing a visual report when no spreadsheet model is involved"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Create a quarterly program-budget workbook from the supplied transactions. Separate assumptions from calculated results, compute actual-versus-budget amounts by category, flag categories over budget, and add a compact summary that a director can audit back to the source rows."
+        },
+        {
+          "instruction": "Revise a volunteer-hours workbook so coordinators can enter shifts once, calculate each volunteer's total and remaining commitment automatically, and see warnings for duplicate shifts or totals that do not reconcile."
+        }
+      ]
+    },
+    {
+      "id": "c21.spreadsheets.structure",
+      "parent_id": "c21.spreadsheets",
+      "name": "Structure auditable spreadsheet data and models",
+      "outcome": "Organize raw entries, assumptions, identifiers, and outputs into consistent tables and model regions that can be extended, filtered, and audited without ambiguous ranges or duplicated facts.",
+      "includes": [
+        "choosing row, column, identifier, and table layouts",
+        "normalizing dates, categories, units, and missing-value conventions",
+        "separating source data, user inputs, calculations, and outputs"
+      ],
+      "excludes": [
+        "writing the substantive formulas that derive business results",
+        "designing standalone data-entry forms or archival filing systems",
+        "performing statistical inference"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Restructure a worksheet of purchase requests whose departments, vendors, dates, and line items are mixed across repeated header blocks. Produce one extensible transaction table, a separate assumptions area, and a clear list of any ambiguous source entries."
+        },
+        {
+          "instruction": "Design the sheet structure for tracking room reservations across three sites. Specify the fields and stable identifiers needed for filtering by site, organizer, date, and status while preventing one reservation's details from being repeated inconsistently."
+        }
+      ]
+    },
+    {
+      "id": "c21.spreadsheets.calculate",
+      "parent_id": "c21.spreadsheets",
+      "name": "Compute and check spreadsheet results",
+      "outcome": "Translate business rules into maintainable spreadsheet calculations, then test references, edge cases, and reconciliations so changes to inputs produce trustworthy results.",
+      "includes": [
+        "relative, absolute, cross-table, conditional, date, lookup, and aggregate calculations",
+        "scenario and what-if calculations driven by explicit assumptions",
+        "error handling, reasonableness checks, subtotals, and reconciliation controls"
+      ],
+      "excludes": [
+        "reorganizing fundamentally malformed source tables",
+        "statistical modeling that requires specialized analytical methods",
+        "manual arithmetic whose results do not update with the workbook"
+      ],
+      "prerequisites": [
+        "c21.spreadsheets.structure"
+      ],
+      "sample_tasks": [
+        {
+          "instruction": "Add formulas to a staffing-cost model to select each employee's pay rate from a role table, calculate regular and overtime cost, and flag missing roles. Include control totals that reconcile employee detail to the departmental summary."
+        },
+        {
+          "instruction": "Repair a loan-comparison sheet in which copied formulas use the wrong rate cells and blank fees produce errors. Make the calculations robust, show total cost for three scenarios, and add checks that expose incomplete assumptions."
+        }
+      ]
+    },
+    {
+      "id": "c21.records",
+      "parent_id": null,
+      "name": "Capture and maintain usable office records",
+      "outcome": "Create and maintain records that collect the required facts consistently, preserve status and provenance, and remain easy for authorized people to retrieve and update.",
+      "includes": [
+        "designing structured intake and update workflows",
+        "validating required fields and controlled values",
+        "classifying, naming, filing, versioning, and retrieving records"
+      ],
+      "excludes": [
+        "analytical spreadsheet modeling",
+        "drafting narrative documents whose primary purpose is communication",
+        "implementing enterprise databases or access-control infrastructure"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Design an intake and filing workflow for community-partner agreements. Capture the parties, effective dates, renewal status, owner, approvals, and supporting files, and explain how staff should update and retrieve a record without creating duplicates."
+        },
+        {
+          "instruction": "Clean up a shared collection of equipment inspection records. Define a consistent naming and folder scheme, identify missing or conflicting metadata, distinguish current from superseded inspections, and produce an index for authorized staff."
+        }
+      ]
+    },
+    {
+      "id": "c21.records.capture",
+      "parent_id": "c21.records",
+      "name": "Design reliable forms and intake flows",
+      "outcome": "Turn an information need into a concise form or intake sequence that elicits complete, consistently encoded, and reviewable responses from the intended users.",
+      "includes": [
+        "selecting necessary fields and response controls",
+        "writing clear labels, instructions, and conditional questions",
+        "specifying required-field, range, date, uniqueness, and consistency validation"
+      ],
+      "excludes": [
+        "conducting research survey methodology or psychometric instrument design",
+        "deciding long-term folder and retention policies",
+        "writing narrative reports from collected responses"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Create a facilities-incident intake form for employees. Collect only the information needed to route and investigate an incident, use conditional questions for injury or equipment damage, and specify validation that prevents unusable dates, locations, and contact details."
+        },
+        {
+          "instruction": "Revise a volunteer registration form that currently asks duplicate questions and allows free-text availability. Produce a shorter field sequence with consistent time-slot choices, emergency-contact checks, consent, and a final review step."
+        }
+      ]
+    },
+    {
+      "id": "c21.records.organize",
+      "parent_id": "c21.records",
+      "name": "Organize and retrieve controlled records",
+      "outcome": "Apply consistent classification, naming, status, version, and index information so records can be found, distinguished, updated, and retired without losing provenance.",
+      "includes": [
+        "folder, filename, label, and metadata conventions",
+        "indexes, cross-references, ownership, and lifecycle status",
+        "duplicate resolution, version control, retention, and archival disposition"
+      ],
+      "excludes": [
+        "collecting new information through user-facing forms",
+        "editing the substantive prose inside documents",
+        "configuring storage systems, permissions services, or backup infrastructure"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Given a mixed folder of signed contracts, drafts, amendments, and scans, propose and apply a filing plan that preserves the contract relationship, identifies the authoritative version, and lets staff retrieve active agreements by partner and renewal date."
+        },
+        {
+          "instruction": "Create a records index for a training program whose attendance sheets and certificates use inconsistent participant names. Reconcile likely duplicates, retain evidence of uncertainty, and mark which records are complete, pending, or superseded."
+        }
+      ]
+    },
+    {
+      "id": "c21.documents",
+      "parent_id": null,
+      "name": "Produce polished workplace documents",
+      "outcome": "Draft, revise, structure, and format workplace documents so their content is accurate, audience-appropriate, navigable, and ready for distribution.",
+      "includes": [
+        "creating and reorganizing purpose-driven prose",
+        "revising for clarity, consistency, tone, and completeness",
+        "using headings, lists, tables, styles, references, and page layout to support reading"
+      ],
+      "excludes": [
+        "slide-based presentation production",
+        "record classification and retention",
+        "creative writing whose primary goal is artistic expression"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Turn the supplied meeting notes and policy decisions into a staff procedure. Resolve repeated points, organize the steps and exceptions, add a revision summary, and format the result for quick use during daily operations."
+        },
+        {
+          "instruction": "Revise a five-page grant narrative for a mixed technical and community audience. Preserve the approved facts, strengthen the problem-to-impact argument, standardize headings and terminology, and prepare a clean final document with a concise contents aid."
+        }
+      ]
+    },
+    {
+      "id": "c21.documents.compose",
+      "parent_id": "c21.documents",
+      "name": "Draft and revise purpose-driven documents",
+      "outcome": "Transform requirements, notes, and source material into coherent document content with the right structure, detail, tone, and calls to action for its audience.",
+      "includes": [
+        "outlining and drafting memos, procedures, proposals, reports, and letters",
+        "synthesizing supplied facts without inventing unsupported claims",
+        "reorganizing and editing for clarity, concision, consistency, and audience fit"
+      ],
+      "excludes": [
+        "page-layout polish that does not change the document's content",
+        "short conversational correspondence and inbox triage",
+        "designing a sequence of presentation slides"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Draft a two-page decision memo from the supplied project notes. State the decision, compare the three options using only the provided evidence, identify risks and unresolved questions, and recommend next steps for an executive reader."
+        },
+        {
+          "instruction": "Rewrite a confusing onboarding procedure so a new employee can complete it without oral guidance. Put actions in dependency order, define unfamiliar terms, separate required steps from optional tips, and surface the two escalation conditions."
+        }
+      ]
+    },
+    {
+      "id": "c21.documents.finalize",
+      "parent_id": "c21.documents",
+      "name": "Format and finalize readable documents",
+      "outcome": "Apply consistent styles, layout, navigation, and final-quality checks so a document remains readable, accessible, and stable across pages and revisions.",
+      "includes": [
+        "heading hierarchies, paragraph and list styles, tables, captions, and cross-references",
+        "page breaks, margins, headers, footers, numbering, and contents aids",
+        "visual consistency, accessibility checks, and final proofreading"
+      ],
+      "excludes": [
+        "substantive argument development or fact selection",
+        "slide layout and live-presentation support",
+        "folder naming or records-retention decisions"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Format the supplied employee handbook so heading levels, lists, callout boxes, page numbering, and the table of contents behave consistently. Fix stranded headings and inaccessible tables without changing the approved wording."
+        },
+        {
+          "instruction": "Prepare a print-ready version of a committee report assembled from several contributors. Standardize typography and captions, keep wide tables readable, add consistent headers and section starts, and complete a final visual and accessibility check."
+        }
+      ]
+    },
+    {
+      "id": "c21.presentations",
+      "parent_id": null,
+      "name": "Develop audience-ready presentations",
+      "outcome": "Turn a communication goal and supporting material into a coherent presentation whose narrative, slides, and delivery support help an audience understand and act.",
+      "includes": [
+        "planning an audience-centered sequence and selecting evidence",
+        "building legible slides with purposeful visuals and restrained text",
+        "creating speaker support, handoffs, accessibility, and final consistency"
+      ],
+      "excludes": [
+        "long-form document drafting",
+        "standalone data analysis whose presentation is incidental",
+        "video editing or interactive application development"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Develop a ten-minute board presentation from the supplied budget tables and program update. Lead to a specific funding decision, choose only the evidence needed for that decision, create a consistent slide sequence, and add speaker notes for the transitions and ask."
+        },
+        {
+          "instruction": "Rework a crowded training deck for first-time supervisors. Establish a clear learning arc, replace dense paragraphs with usable examples and visuals, add an opening objective and closing practice prompt, and make the slides accessible for projection."
+        }
+      ]
+    },
+    {
+      "id": "c21.presentations.plan",
+      "parent_id": "c21.presentations",
+      "name": "Plan persuasive presentation narratives",
+      "outcome": "Define the audience, decision or learning goal, evidence, and slide-by-slide progression before production so each part advances a clear presentation story.",
+      "includes": [
+        "audience and purpose analysis",
+        "message hierarchy, evidence selection, and sequencing",
+        "storyboards, section arcs, transitions, and calls to action"
+      ],
+      "excludes": [
+        "applying final slide layouts, typography, or graphics",
+        "writing a complete prose report",
+        "inventing evidence not present in the source material"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Create a slide-by-slide outline for persuading a city committee to approve a pilot recycling program. Use the supplied costs, resident feedback, and operational risks; identify the purpose of each slide and the final decision request."
+        },
+        {
+          "instruction": "Plan a 20-minute orientation presentation for new volunteers. Sequence the mission, safety rules, example shift, and escalation process so the audience first understands why the work matters and then can act correctly."
+        }
+      ]
+    },
+    {
+      "id": "c21.presentations.produce",
+      "parent_id": "c21.presentations",
+      "name": "Build and refine effective slides",
+      "outcome": "Convert an established presentation plan into consistent, legible slides and delivery support that emphasize key information without distracting or overloading the audience.",
+      "includes": [
+        "slide layouts, typography, color, spacing, images, diagrams, and data displays",
+        "speaker notes, timing cues, handoffs, and rehearsal-oriented refinements",
+        "consistency, source attribution, contrast, reading order, and accessibility checks"
+      ],
+      "excludes": [
+        "choosing the core argument when no narrative plan exists",
+        "performing the underlying spreadsheet analysis",
+        "producing motion graphics or edited video"
+      ],
+      "prerequisites": [
+        "c21.presentations.plan"
+      ],
+      "sample_tasks": [
+        {
+          "instruction": "Build slides from the approved fundraising-pitch outline and asset folder. Use a consistent visual system, turn the impact figures into readable displays, keep citations attached to claims, and add concise notes that fit an eight-minute delivery."
+        },
+        {
+          "instruction": "Polish a nearly complete quarterly-review deck whose charts, fonts, and spacing are inconsistent. Repair visual hierarchy and accessibility, simplify overloaded slides without removing required facts, and add cues for two presenter handoffs."
+        }
+      ]
+    },
+    {
+      "id": "c21.coordination",
+      "parent_id": null,
+      "name": "Coordinate correspondence and time commitments",
+      "outcome": "Maintain clear workplace communication and feasible schedules by extracting intent, preserving commitments, resolving conflicts, and issuing concise updates as information changes.",
+      "includes": [
+        "drafting and managing actionable correspondence",
+        "creating and revising appointments under time, duration, and availability constraints",
+        "tracking requests, decisions, participants, and prior schedule state across updates"
+      ],
+      "excludes": [
+        "full project planning with task dependencies and resource forecasts",
+        "long-form document or presentation production",
+        "customer-support decisions that require domain-specific policy judgment"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Review the supplied email thread about a vendor demonstration, identify the commitments and unanswered question, draft the next reply, and update the proposed meeting time so it respects every participant's stated availability."
+        },
+        {
+          "instruction": "Coordinate a rescheduled staff workshop after the facilitator becomes unavailable. Preserve the room and attendee constraints, find a conflict-free replacement slot, and draft concise notices that distinguish the new arrangement from the canceled one."
+        }
+      ]
+    },
+    {
+      "id": "c21.coordination.correspondence",
+      "parent_id": "c21.coordination",
+      "name": "Compose and manage actionable correspondence",
+      "outcome": "Read communication context and produce concise messages that preserve relevant facts, match the relationship and tone, and make decisions, requests, ownership, and next steps explicit.",
+      "includes": [
+        "drafting, replying, forwarding, and summarizing workplace messages",
+        "extracting requests, commitments, deadlines, owners, and unresolved questions from threads",
+        "prioritizing, routing, and following up on correspondence"
+      ],
+      "excludes": [
+        "allocating events into a conflict-free schedule",
+        "writing long-form reports, policies, or proposals",
+        "inventing approvals, commitments, or facts absent from the communication history"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Read the supplied procurement email thread and draft a reply that confirms the accepted quantity and delivery window, asks only for the missing tax document, assigns the internal approval step, and uses an appropriately firm but cooperative tone."
+        },
+        {
+          "instruction": "Triage twelve incoming messages for a program director. Group related threads, identify which require a reply today, summarize each requested action with owner and deadline, and draft the two highest-priority responses."
+        }
+      ]
+    },
+    {
+      "id": "c21.coordination.scheduling",
+      "parent_id": "c21.coordination",
+      "name": "Maintain schedules under evolving constraints",
+      "outcome": "Create, revise, and restore schedule state across successive requests while preserving event identity, duration, applicable constraints, and non-overlap within the allowed planning horizon.",
+      "includes": [
+        "adding, moving, canceling, and restoring events across multiple turns",
+        "interpreting exact starts, earliest starts, latest finishes, time windows, durations, and working-hour limits",
+        "resolving collisions while preserving prior constraints and communicating the resulting schedule accurately"
+      ],
+      "excludes": [
+        "project plans whose primary challenge is dependency or resource optimization",
+        "drafting the substantive content of meetings or events",
+        "discarding prior constraints merely because a later request causes a conflict"
+      ],
+      "prerequisites": [],
+      "sample_tasks": [
+        {
+          "instruction": "Maintain a workday calendar through a sequence of additions and changes. Keep all events between 09:00 and 17:00, preserve each duration and previously stated time window, automatically move flexible events to prevent overlap, and return the complete current schedule after each change."
+        },
+        {
+          "instruction": "Starting from the supplied conversation history, restore the calendar snapshot that followed the third scheduling request, add a 45-minute review meeting, then apply a new latest-finish constraint to one restored event without changing event identities or losing earlier constraints."
+        }
+      ]
+    }
+  ]
+}
