@@ -47,12 +47,13 @@ Pass `--gc-interval 100` to `python -m experiments.grug.moe_hero_ep.launch_diagn
 or set `gc_interval=100` in `hero_grug_trainer_config`. The default `None` preserves automatic
 Python garbage collection. The launcher distributes one configuration to all ranks. After ten
 training steps in each process (including after resume), disable automatic cyclic collection
-and collect once. Then collect after checkpoint work at completed global steps divisible by the
-interval. Training collectives bound rank skew; GC adds no barriers. Collect after each evaluation
-hook as well, so cycles holding temporary eval buffers do not wait for the next periodic boundary.
+and collect once. Then a training hook collects at completed global steps divisible by the
+interval, after evaluation hooks and before checkpoint work. It also collects on the forced
+final callback pass. Training collectives bound rank skew; GC adds no barriers. Collect after each
+evaluation hook as well, so cycles holding temporary eval buffers do not wait for the next periodic boundary.
 Reference-count deallocation continues. The previous GC policy is restored on exit.
 
-`throughput/gc_time` measures local startup and scheduled collection time; the `garbage_collection`
+`throughput/gc_time` records local startup and hook collection time when GC runs; the `garbage_collection`
 profiler annotation also covers evaluation cleanup. Evaluation cleanup is included in callback
 and iteration time. `throughput/checkpoint_time` includes the save-decision broadcast and any
 synchronous checkpoint work. `throughput/iteration_time` includes batch loading, training,
@@ -65,7 +66,9 @@ used the full model with one sequence per GPU on 64 GPUs. Across 300 measured up
 warmup steps, elapsed time including the initial collection fell from 789.279 to 770.634 seconds
 (2.36%; 2.631 to 2.569 seconds/update). Across all ranks, automatic GC produced 66 full collections
 across 40 steps; coordinated GC produced one collection per rank after warmup and at updates 100,
-200, and 300. The slowest rank's scheduled collections took 1.27–1.48 seconds.
+200, and 300. The slowest rank's scheduled collections took 1.27–1.48 seconds. This benchmark
+predates moving scheduled collection into a training hook; it collected after checkpoint work
+and did not include a forced final collection.
 
 Both arms had identical sampled live HBM (35.094 GiB per rank) and allocator peaks (111.840 GiB),
 with no increase above their post-warmup baselines. Live memory was sampled every ten measured

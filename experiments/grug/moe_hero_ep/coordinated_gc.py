@@ -9,6 +9,8 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 import jax
+import levanter.tracker
+from levanter.callbacks import StepInfo
 
 GC_WARMUP_STEPS = 10
 
@@ -22,20 +24,18 @@ def collect_garbage() -> float:
 
 
 @contextmanager
-def coordinated_gc(interval: int) -> Iterator[Callable[[int], float]]:
+def coordinated_gc() -> Iterator[Callable[[StepInfo], None]]:
     """Collect after warmup and at shared steps; restore the caller's GC policy.
 
-    Enter after warmup with a positive interval. Invoke the yielded function at
-    each completed global step; it returns the local collection duration.
+    Enter after warmup and register the yielded hook at the collection interval.
+    The hook also collects on the runner's forced final callback pass.
     """
     was_enabled = gc.isenabled()
     gc.disable()
 
-    def collect(step: int) -> float:
-        if step % interval:
-            return 0.0
+    def collect(info: StepInfo) -> None:
         # Training collectives bound rank skew; early arrivals can start collecting immediately.
-        return collect_garbage()
+        levanter.tracker.log({"throughput/gc_time": collect_garbage()}, step=info.step)
 
     try:
         collect_garbage()

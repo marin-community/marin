@@ -1182,17 +1182,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         current_step = int(state.step)
         gc_start_step = current_step + GC_WARMUP_STEPS
-        collect = None
 
         # Main optimization loop.
         try:
             while current_step < stop_step:
                 iteration_start = time.perf_counter()
-                gc_duration = 0.0
                 if config.trainer.gc_interval is not None and current_step == gc_start_step:
                     gc_start = time.perf_counter()
-                    collect = gc_resources.enter_context(coordinated_gc(config.trainer.gc_interval))
-                    gc_duration = time.perf_counter() - gc_start
+                    gc_hook = gc_resources.enter_context(coordinated_gc())
+                    state_callbacks.add_hook(gc_hook, every=config.trainer.gc_interval)
+                    levanter.tracker.log({"throughput/gc_time": time.perf_counter() - gc_start}, step=current_step)
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 watch_due = (
@@ -1262,11 +1261,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         checkpointer.on_step(tree=state, step=current_step)
 
                 checkpoint_duration = time.perf_counter() - checkpoint_start
-                gc_duration += collect(current_step) if collect is not None else 0.0
                 levanter.tracker.log(
                     {
                         "throughput/checkpoint_time": checkpoint_duration,
-                        "throughput/gc_time": gc_duration,
                         "throughput/iteration_time": time.perf_counter() - iteration_start,
                     },
                     step=step,
