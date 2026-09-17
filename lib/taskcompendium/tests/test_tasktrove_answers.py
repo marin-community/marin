@@ -3,7 +3,9 @@
 
 """TaskTrove Clean MCQA import and direct-chat Harbor coverage."""
 
+import io
 import json
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -12,18 +14,19 @@ from tasktrove_verify.spec import McqSpec
 
 from taskcompendium.grading import Outcome, grade_answer
 from taskcompendium.harbor.runner import HarborLaunch, run_trial
-from taskcompendium.importers.tasktrove import RELEASE, RELEASE_ROOT, read_archive
+from taskcompendium.importers.tasktrove import MAX_ARCHIVE_MEMBERS, RELEASE, RELEASE_ROOT, read_archive
 from taskcompendium.importers.tasktrove_answers import import_task
 from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
 from taskcompendium.models import AnswerKind, MultipleChoiceAnswer
 from taskcompendium.rendering import AnswerFormat, Rendering, render_instruction
 
 FIXTURE = Path(__file__).parent / "fixtures/tasktrove/mcq-1961bdb52b5a.tar.gz"
-ROW = "Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz"
+TASKTROVE_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
+TASKTROVE_PATH = "Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz"
 
 
 def _archive():
-    return read_archive(FIXTURE.read_bytes(), ROW)
+    return read_archive(FIXTURE.read_bytes(), TASKTROVE_SOURCE, TASKTROVE_PATH)
 
 
 def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(tmp_path):
@@ -32,6 +35,8 @@ def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(t
 
     assert specification.source.dataset == RELEASE_ROOT
     assert specification.source.revision == RELEASE
+    assert specification.source.row == f"{TASKTROVE_SOURCE}:{TASKTROVE_PATH}"
+    assert "/" not in specification.id
     assert specification.requirements.capabilities == ()
     assert specification.answer_kind is AnswerKind.OPTION_LETTER
     assert isinstance(specification.verifier, MultipleChoiceAnswer)
@@ -61,6 +66,21 @@ def test_import_rejects_non_mcqa_source_before_lowering():
 
     with pytest.raises(ValueError, match="MCQ verifier"):
         import_task(archive)
+
+
+def test_archive_rejects_caller_identity_that_disagrees_with_metadata():
+    with pytest.raises(ValueError, match="source identity"):
+        read_archive(FIXTURE.read_bytes(), "other_source", TASKTROVE_PATH)
+
+
+def test_archive_rejects_excessive_empty_members():
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w:gz") as archive:
+        for index in range(MAX_ARCHIVE_MEMBERS + 1):
+            archive.addfile(tarfile.TarInfo(f"empty-{index}"), io.BytesIO())
+
+    with pytest.raises(ValueError, match="member limit"):
+        read_archive(data.getvalue(), TASKTROVE_SOURCE, TASKTROVE_PATH)
 
 
 async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
