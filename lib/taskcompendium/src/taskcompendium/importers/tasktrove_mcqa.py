@@ -4,6 +4,7 @@
 """Import the supported cleaned TaskTrove MCQA answer format."""
 
 import hashlib
+import json
 import tomllib
 
 from tasktrove_verify.spec import McqSpec, parse_spec
@@ -46,8 +47,12 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         instructions = _clean_instructions(archive.files["instruction.md"].decode())
     except (KeyError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError) as error:
         raise ValueError(f"Invalid TaskTrove MCQA archive: {error}") from error
+    identity = json.dumps(
+        (archive.source.dataset, archive.source.revision, archive.source.row),
+        separators=(",", ":"),
+    )
     return TaskSpec(
-        id=f"tasktrove-{hashlib.sha256(archive.source.row.encode()).hexdigest()}",
+        id=f"tasktrove-{hashlib.sha256(identity.encode()).hexdigest()}",
         instructions=instructions,
         verifier=tasktrove_mcqa(contract.expected, contract.options),
         source=archive.source,
