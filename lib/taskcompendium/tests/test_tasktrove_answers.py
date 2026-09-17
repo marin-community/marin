@@ -15,7 +15,7 @@ from taskcompendium.harbor.runner import HarborLaunch, run_trial
 from taskcompendium.importers.tasktrove import RELEASE, RELEASE_ROOT, read_archive
 from taskcompendium.importers.tasktrove_answers import import_task
 from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
-from taskcompendium.models import MultipleChoiceAnswer
+from taskcompendium.models import AnswerKind, MultipleChoiceAnswer
 from taskcompendium.rendering import AnswerFormat, Rendering, render_instruction
 
 FIXTURE = Path(__file__).parent / "fixtures/tasktrove/mcq-1961bdb52b5a.tar.gz"
@@ -33,6 +33,7 @@ def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(t
     assert specification.source.dataset == RELEASE_ROOT
     assert specification.source.revision == RELEASE
     assert specification.requirements.capabilities == ()
+    assert specification.answer_kind is AnswerKind.OPTION_LETTER
     assert isinstance(specification.verifier, MultipleChoiceAnswer)
     assert "verifier" not in specification.instructions.lower()
     assert "/app/answer.txt" not in specification.instructions
