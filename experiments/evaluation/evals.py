@@ -230,7 +230,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         extra_gen_kwargs=extra_gen_kwargs,
         extra_model_args=extra_model_args,
         max_length=config.max_length,
-        runtime=EvalchemyRuntimeConfig(requirement=EVALCHEMY.requirement(config.runtime_extras)),
+        runtime=EvalchemyRuntimeConfig(requirement=EVALCHEMY.requirement(("serve-eval", *config.runtime_extras))),
     )
 
 

@@ -586,7 +586,7 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
         "tester",
     )
 
-    assert batch.evaluations[0].identity.eval_runtime == EVALCHEMY.requirement(("math500",))
+    assert batch.evaluations[0].identity.eval_runtime == EVALCHEMY.requirement(("serve-eval", "math500"))
 
 
 def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):
@@ -766,7 +766,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         "aime-policy",
     ]
     ifeval = batch.evaluations[1].identity.eval_ref
-    assert batch.evaluations[1].identity.eval_runtime == EVALCHEMY.requirement(("ifeval",))
+    assert batch.evaluations[1].identity.eval_runtime == EVALCHEMY.requirement(("serve-eval", "ifeval"))
     assert ifeval.model_dump(mode="json", exclude_none=True) == {
         "name": "ifeval",
         "mechanism": "evalchemy",
