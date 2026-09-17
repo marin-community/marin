@@ -308,6 +308,7 @@ def segmented_flash_attention_backward_sm90_native(
         input_spec=preprocess_input_spec,
         output_spec=preprocess_output_spec,
         use_static_tensors=True,
+        softmax_scale=softmax_scale,
     )
     dpsum, lse_log2, _dq_accum = preprocess_call(out, dout, lse)
 

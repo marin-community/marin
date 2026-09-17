@@ -116,8 +116,10 @@ For a quota warning, check the zone values in the Storage dashboard and in the
 [CoreWeave quota page].
 
 Both rules read the `storage.usage` namespace, which exists only after the
-collector writes its first rows. Until then the query fails, and because both
-rules set `execErrState: Alerting`, each one pages with `[no value]` labels. Run
-the collector once when you add a rule that reads a new namespace.
+collector writes its first rows. Until then Finelog reports the namespace as
+missing, and both rules alert on that non-retryable query error. Run the
+collector once when you add a rule that reads a new namespace. A retryable
+Finelog service failure returns no data and stays normal; `FinelogFleetUnhealthy`
+reports the outage instead.
 
 [CoreWeave quota page]: https://docs.coreweave.com/products/storage/object-storage/manage-quotas

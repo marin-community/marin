@@ -14,6 +14,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
     GET /finelog/{cluster}/v1/vllm/overview       bounded per-job/run vLLM telemetry
     GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
+    GET /finelog/{cluster}/alerts/query          alert SQL; no data when Finelog is unavailable
     GET /finelog/marin/relay_status              direct regional relay heartbeats
     GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
     GET /finelog/marin/alerts/relay_status       stale relay/table rows + value(0|1)
@@ -63,9 +64,10 @@ Routes, grouped by source (cluster is a path segment where it applies):
 
 A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
 cached. The k8s routes aggregate every CW cluster into one response, so a dead
-cluster becomes labeled error rows while the rest render; the alert routes always
-return at least one row per cluster (explicit zeros when healthy) so Grafana
-rules never hit NoData. Handlers are sync defs; Starlette runs them in a
+cluster becomes labeled error rows while the rest render. Fixed-shape alert routes
+return at least one row per cluster (explicit zeros when healthy), while generic
+alert SQL uses each rule's explicit no-data behavior. Handlers are sync defs;
+Starlette runs them in a
 threadpool. The two alert webhooks are async because they post to Slack, and the
 Loom one also exchanges tokens and creates a run over HTTP.
 """
@@ -73,7 +75,7 @@ Loom one also exchanges tokens and creates a run over HTTP.
 import json
 import logging
 from collections.abc import Hashable, Mapping, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
 import pyarrow as pa
@@ -90,7 +92,7 @@ from config import (
     BridgeConfig,
     ClusterTarget,
 )
-from errors import UpstreamError
+from errors import FinelogUnavailableError, UpstreamError
 from finelog.errors import QueryResultTooLargeError
 from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
@@ -122,6 +124,7 @@ from loom_alerts import (
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from nightly_config import NIGHTLY_LANES
 from relay_health import relay_alert_rows
+from rl_producers import check_window, collect_producers
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -346,29 +349,51 @@ def _target_for(name: str, sources: Mapping[str, MetricSource]) -> ClusterTarget
     return sources[name].target
 
 
-def _query(request: Request, config: BridgeConfig, sources: Mapping[str, MetricSource], cache: TtlCache):
-    target = _target_for(request.path_params["cluster"], sources)
-    params = request.query_params
+@dataclass(frozen=True)
+class _FinelogQueries:
+    config: BridgeConfig
+    sources: Mapping[str, MetricSource]
+    cache: TtlCache
 
-    sql = _require(params, "sql")
-    start = _optional_time(params, "from")
-    end = _optional_time(params, "to")
+    def _rows(self, request: Request):
+        target = _target_for(request.path_params["cluster"], self.sources)
+        params = request.query_params
 
-    # Key on the SQL as written, before substitution, with each window edge snapped
-    # to a TTL bucket, so a relative range stays one key as its edges drift.
-    key = (target.name, sql, _bucket(start, config.cache_ttl), _bucket(end, config.cache_ttl))
+        sql = _require(params, "sql")
+        start = _optional_time(params, "from")
+        end = _optional_time(params, "to")
 
-    try:
-        effective_sql = substitute_time_macros(sql, start, end)
-    except ValueError as err:
-        raise _BadRequest(str(err)) from err
+        # Key on the SQL as written, before substitution, with each window edge snapped
+        # to a TTL bucket, so a relative range stays one key as its edges drift.
+        key = (target.name, sql, _bucket(start, self.config.cache_ttl), _bucket(end, self.config.cache_ttl))
 
-    def run():
-        logger.info("query %s: %s", target.name, effective_sql)
-        table = sources[target.name].query(effective_sql, max_rows=config.max_rows)
-        return rows_to_json(table)
+        try:
+            effective_sql = substitute_time_macros(sql, start, end)
+        except ValueError as err:
+            raise _BadRequest(str(err)) from err
 
-    return cache.get_or_compute(key, run)
+        def run():
+            logger.info("query %s: %s", target.name, effective_sql)
+            table = self.sources[target.name].query(effective_sql, max_rows=self.config.max_rows)
+            return rows_to_json(table)
+
+        return self.cache.get_or_compute(key, run)
+
+    def query(self, request: Request) -> JSONResponse:
+        try:
+            return JSONResponse(self._rows(request))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except QueryResultTooLargeError as err:
+            return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
+
+    def alert_query(self, request: Request) -> JSONResponse:
+        """Run alert SQL while treating only transient Finelog failures as no data."""
+        try:
+            return self.query(request)
+        except FinelogUnavailableError as err:
+            logger.warning("Finelog alert query unavailable: %s", err)
+            return JSONResponse([])
 
 
 def _iris_for(name: str, sources: Mapping[str, IrisSource]) -> IrisSource:
@@ -394,14 +419,7 @@ def create_app(
     github_cache: TtlCache = TtlCache(config.github_cache_ttl)
     k8s_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     wandb_cache: TtlCache = TtlCache(config.github_cache_ttl)
-
-    def query(request: Request) -> JSONResponse:
-        try:
-            return JSONResponse(_query(request, config, finelog_sources, finelog_cache))
-        except _BadRequest as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-        except QueryResultTooLargeError as err:
-            return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
+    finelog_queries = _FinelogQueries(config, finelog_sources, finelog_cache)
 
     def vllm_overview(request: Request) -> JSONResponse:
         try:
@@ -464,6 +482,54 @@ def create_app(
             return JSONResponse({"error": str(err)}, status_code=400)
         except QueryResultTooLargeError as err:
             return JSONResponse({"error": f"{err}; narrow the vLLM time range"}, status_code=400)
+
+    def rl_producers(request: Request) -> JSONResponse:
+        try:
+            target = _target_for(request.path_params["cluster"], finelog_sources)
+            params = request.query_params
+            run = _require(params, "run")
+            clusters = tuple(value for value in params.get("clusters", "").split(",") if value)
+            if not clusters:
+                raise _BadRequest("clusters must name at least one cluster")
+            start = _require_time(params, "from")
+            end = _require_time(params, "to")
+            start_ms = round(start.timestamp() * 1000)
+            end_ms = round(end.timestamp() * 1000)
+
+            source = finelog_sources[target.name]
+
+            # Snap the window edges as /query does; the window is inside the SQL this route builds,
+            # so keying on the SQL alone would never hit on a rolling range.
+            key = (
+                target.name,
+                "rl_producers",
+                run,
+                clusters,
+                _bucket(start, config.cache_ttl),
+                _bucket(end, config.cache_ttl),
+            )
+
+            try:
+                check_window(start_ms, end_ms)
+            except ValueError as err:
+                raise _BadRequest(str(err)) from err
+
+            def run_query() -> list[dict[str, object]]:
+                logger.info("rl producers %s: run=%s [%d, %d)", target.name, run, start_ms, end_ms)
+                return collect_producers(
+                    lambda sql: rows_to_json(source.query(sql, max_rows=config.max_rows)),
+                    source.namespaces(),
+                    run,
+                    clusters,
+                    start_ms,
+                    end_ms,
+                )
+
+            return JSONResponse(finelog_cache.get_or_compute(key, run_query))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except QueryResultTooLargeError as err:
+            return JSONResponse({"error": f"{err}; narrow the time range"}, status_code=400)
 
     def fleet_health_rows() -> list[FinelogHealth]:
         _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
@@ -545,13 +611,16 @@ def create_app(
             lambda: source.query(loss_window_query(now, runs, executions), max_rows=config.max_rows),
         )
 
-    def finelog_alert_endpoint(name: str, project) -> JSONResponse:
+    def finelog_alert_endpoint(name: str, project, unavailable_rows) -> JSONResponse:
         """Serve one finelog-backed alert projection under the hub's cache and error contract."""
+        now = datetime.now(UTC)
         try:
             target = _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
-            now = datetime.now(UTC)
             key = (name, _bucket(now, config.cache_ttl))
             return JSONResponse(finelog_cache.get_or_compute(key, lambda: project(target, now)))
+        except FinelogUnavailableError as err:
+            logger.warning("Finelog alert endpoint %s unavailable: %s", name, err)
+            return JSONResponse(unavailable_rows(now))
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
         except QueryResultTooLargeError as err:
@@ -567,21 +636,33 @@ def create_app(
             )
             return training_stall_alert_rows(runs, telemetry_metrics, now)
 
-        return finelog_alert_endpoint("training_stalls", project)
+        return finelog_alert_endpoint(
+            "training_stalls",
+            project,
+            lambda now: training_stall_alert_rows((), pa.table({}), now),
+        )
 
     def finelog_alerts_loss_spikes(_: Request) -> JSONResponse:
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
             runs = hero_runs(target, now)
             return loss_spike_alert_rows(runs, hero_loss_windows(target, now, runs))
 
-        return finelog_alert_endpoint("loss_spikes", project)
+        return finelog_alert_endpoint(
+            "loss_spikes",
+            project,
+            lambda _: loss_spike_alert_rows((), pa.table({})),
+        )
 
     def finelog_alerts_training_telemetry(_: Request) -> JSONResponse:
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
             runs = hero_watched_runs(target, now)
             return telemetry_alert_rows(runs, hero_signals(target, now, runs), now)
 
-        return finelog_alert_endpoint("training_telemetry", project)
+        return finelog_alert_endpoint(
+            "training_telemetry",
+            project,
+            lambda now: telemetry_alert_rows((), {}, now),
+        )
 
     def finelog_alerts_training_optimizer(_: Request) -> JSONResponse:
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
@@ -592,7 +673,11 @@ def create_app(
             loss_windows = hero_loss_windows(target, now, runs, selected_executions(signals))
             return optimizer_alert_rows(runs, signals, loss_windows, now)
 
-        return finelog_alert_endpoint("training_optimizer", project)
+        return finelog_alert_endpoint(
+            "training_optimizer",
+            project,
+            lambda now: optimizer_alert_rows((), {}, pa.table({}), now),
+        )
 
     def finelog_alerts_training_health(_: Request) -> JSONResponse:
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
@@ -602,14 +687,22 @@ def create_app(
             )
             return health_alert_rows(runs, hero_signals(target, now, runs), retry_events, now)
 
-        return finelog_alert_endpoint("training_health", project)
+        return finelog_alert_endpoint(
+            "training_health",
+            project,
+            lambda now: health_alert_rows((), {}, pa.table({}), now),
+        )
 
     def finelog_alerts_zephyr_stalls(_: Request) -> JSONResponse:
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
             progress_metrics = finelog_sources[target.name].query(zephyr_progress_query(now), max_rows=config.max_rows)
             return zephyr_stall_alert_rows(progress_metrics, now)
 
-        return finelog_alert_endpoint("zephyr_stalls", project)
+        return finelog_alert_endpoint(
+            "zephyr_stalls",
+            project,
+            lambda now: zephyr_stall_alert_rows(pa.table({}), now),
+        )
 
     def iris_endpoint(request: Request, endpoint: str, run) -> JSONResponse:
         try:
@@ -853,8 +946,10 @@ def create_app(
             Route("/wandb/history", wandb_run_history),
             Route("/wandb/activity", wandb_run_activity),
             Route("/wandb/report/{chart}", wandb_report_chart),
-            Route("/finelog/{cluster}/query", query),
+            Route("/finelog/{cluster}/query", finelog_queries.query),
+            Route("/finelog/{cluster}/alerts/query", finelog_queries.alert_query),
             Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),
+            Route("/finelog/{cluster}/v1/rl/producers", rl_producers),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/relay_status", finelog_relay_status),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),

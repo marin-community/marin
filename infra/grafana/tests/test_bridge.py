@@ -12,8 +12,18 @@ import pyarrow as pa
 import pytest
 from cache import TtlCache
 from config import ClusterTarget
-from conftest import FINELOG_DEPLOYMENTS_PATH, bridge_config, deployment, healthy_k8s_routes, k8s_api, make_k8s_source
-from finelog.errors import QueryResultTooLargeError
+from conftest import (
+    FINELOG_DEPLOYMENTS_PATH,
+    absent_namespace_error,
+    bridge_config,
+    deployment,
+    healthy_k8s_routes,
+    k8s_api,
+    make_k8s_source,
+    queried_namespace,
+)
+from errors import FinelogUnavailableError
+from finelog.errors import QueryResultTooLargeError, StatsError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from hero_health import (
@@ -38,6 +48,7 @@ from loom_alerts import (
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from relay_health import RelayNamespaceStatus, RelaySenderStatus
+from rl_producers import RL_PRODUCER_NAMESPACES
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
@@ -96,6 +107,9 @@ class FakeSource:
             raise self._raises
         return self._table
 
+    def namespaces(self) -> frozenset[str]:
+        return frozenset(RL_PRODUCER_NAMESPACES)
+
     def health(self) -> FinelogHealth:
         return self._health
 
@@ -109,6 +123,7 @@ def _client(
     k8s_fleet: K8sFleet | None = None,
     loom_alerts: LoomAlertClient | None = None,
     slack_alerts: SlackAlertClient | None = None,
+    raise_server_exceptions: bool = True,
 ) -> TestClient:
     github = GithubSource(auth=None, timeout=5.0)
     return TestClient(
@@ -121,12 +136,79 @@ def _client(
             WandbSource(timeout=5.0),
             loom_alerts,
             slack_alerts,
-        )
+        ),
+        raise_server_exceptions=raise_server_exceptions,
     )
 
 
 def _get(client: TestClient, sql: str, **params):
     return client.get("/finelog/marin/query", params={"sql": sql, "from": FROM_MS, "to": TO_MS, **params})
+
+
+class NamespaceSource(FakeSource):
+    """A finelog holding only some namespaces, and failing any query naming another."""
+
+    def __init__(self, present: set[str], rows: pa.Table) -> None:
+        super().__init__(rows)
+        self._present = frozenset(present)
+
+    def namespaces(self) -> frozenset[str]:
+        return self._present
+
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        self.queries.append(sql)
+        if queried_namespace(sql) not in self._present:
+            raise absent_namespace_error(sql)
+        return self._table
+
+
+def _producers(client: TestClient, **params):
+    return client.get(
+        "/finelog/marin/v1/rl/producers",
+        params={"run": "run-1", "clusters": "cw-rno2a", "from": FROM_MS, "to": TO_MS, **params},
+    )
+
+
+_PRODUCER_ROW = finelog_result(
+    producer=["marinskyrl"],
+    role=["trainer"],
+    attempt=["a"],
+    metric_source=[""],
+    signals=[4],
+    records=[540],
+    last_record_ms=[1_784_257_200_000],
+)
+
+
+def test_the_producer_census_never_queries_a_namespace_the_deployment_lacks():
+    """Naming an absent namespace fails the statement at plan time, so the census leaves it out."""
+    source = NamespaceSource({"telemetry_v1.marinskyrl", "telemetry_v1.vllm"}, _PRODUCER_ROW)
+
+    resp = _producers(_client(source))
+
+    assert resp.status_code == 200
+    assert len(resp.json()) == 2
+    assert not any("telemetry_v1.harbor" in sql for sql in source.queries)
+
+
+def test_the_producer_census_reports_a_real_query_failure_rather_than_an_empty_table():
+    """A deployment that is down must not be indistinguishable from one with no producers.
+
+    The route lets it out, as `/query` does, and Starlette answers 500; what matters is that a
+    failure which is not an absent table is never mistaken for "this run has no producers".
+    """
+    source = FakeSource(
+        _ONE_ROW, raises=StatsError("Error during planning: column 'resource_attributes_json' not found")
+    )
+
+    with pytest.raises(StatsError):
+        _producers(_client(source))
+
+
+def test_the_producer_census_rejects_a_request_naming_no_cluster():
+    resp = _producers(_client(FakeSource(_PRODUCER_ROW)), clusters="")
+
+    assert resp.status_code == 400
 
 
 def test_query_returns_json_rows_with_millis_timestamps():
@@ -175,6 +257,29 @@ def test_oversized_result_is_a_400_with_guidance():
     resp = _get(_client(FakeSource(raises=QueryResultTooLargeError("query returned 500000 rows"))), "SELECT 1")
     assert resp.status_code == 400
     assert "narrow the time range" in resp.json()["error"]
+
+
+def test_alert_endpoints_return_non_firing_results_when_finelog_is_unavailable():
+    source = FakeSource(raises=FinelogUnavailableError("unavailable"))
+    client = _client(source)
+
+    assert client.get("/finelog/marin/alerts/query", params={"sql": "SELECT 1"}).json() == []
+    assert client.get("/finelog/marin/alerts/training_stalls").json() == [
+        {"cluster": "fleet", "job": "", "run": "", "phase": "idle", "reason": "healthy", "value": 0}
+    ]
+
+
+@pytest.mark.parametrize(
+    "path, params",
+    [
+        ("/finelog/marin/alerts/query", {"sql": "SELECT 1"}),
+        ("/finelog/marin/alerts/training_stalls", {}),
+    ],
+)
+def test_alert_endpoints_surface_invalid_finelog_results(path, params):
+    client = _client(FakeSource(raises=pa.ArrowInvalid("invalid result")), raise_server_exceptions=False)
+
+    assert client.get(path, params=params).status_code == 500
 
 
 def test_repeated_identical_panels_hit_finelog_once():
@@ -1386,3 +1491,15 @@ def test_cache_prunes_expired_entries_on_write():
     for i in range(50):
         cache.get_or_compute(f"bucket-{i}", lambda i=i: i)
     assert len(cache) == 0
+
+
+def test_the_producer_census_refuses_a_window_wider_than_it_will_scan():
+    # max_rows bounds the answer, not the scan, so an unbounded window is a request to read the
+    # whole retained table.
+    resp = _producers(
+        _client(FakeSource(_PRODUCER_ROW)),
+        **{"from": str(int(FROM_MS) - 30 * 24 * 60 * 60 * 1000), "to": TO_MS},
+    )
+
+    assert resp.status_code == 400
+    assert "maximum" in resp.json()["error"]

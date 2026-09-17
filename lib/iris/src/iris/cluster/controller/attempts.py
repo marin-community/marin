@@ -30,7 +30,12 @@ from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.process_status import get_process_status as local_process_status
-from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET, build_profile_row, profile_local_process
+from iris.cluster.runtime.profile import (
+    DEFAULT_PROFILE_DURATION_SECONDS,
+    SYSTEM_PROCESS_TARGET,
+    build_profile_row,
+    profile_local_process,
+)
 from iris.cluster.types import JobName, TaskAttempt, WorkerId
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
@@ -38,13 +43,12 @@ from iris.time_proto import duration_from_proto, timestamp_to_proto
 
 Response = TypeVar("Response")
 
-_DEFAULT_PROFILE_DURATION = 10
 _PROFILE_RPC_TIMEOUT_MARGIN_MS = 30_000
 _SYSTEM_CONTROLLER_TARGET = "/system/controller"
 
 
 def _profile_duration(request: job_pb2.ProfileTaskRequest) -> int:
-    return request.duration_seconds or _DEFAULT_PROFILE_DURATION
+    return request.duration_seconds or DEFAULT_PROFILE_DURATION_SECONDS
 
 
 def _profile_rpc_timeout_ms(request: job_pb2.ProfileTaskRequest) -> int:

@@ -158,14 +158,21 @@ class CoordinatorDashboard:
                 return PipelinePlan(pipeline_name="", execution_id=execution_id)
             return self._plan_locked(run)
 
-    def _worker_counter_entries_locked(self, worker_id: str) -> dict[str, CounterEntry]:
-        merged, conflicted = merge_counter_entries(
-            (name, entry)
-            for (snapshot_worker_id, _), snapshot in self._coordinator._worker_counters.items()
-            if snapshot_worker_id == worker_id
-            for name, entry in snapshot.counters.items()
-        )
-        return {name: entry for name, entry in merged.items() if name not in conflicted}
+    def _worker_counter_entries_locked(self) -> dict[str, dict[str, CounterEntry]]:
+        """Merge live counter entries for every worker, keyed by worker id.
+
+        ``_worker_counters`` is keyed by ``(worker_id, execution_id)``, so merging one worker at a
+        time rescans the whole map per worker. Group in a single pass instead.
+        """
+        entries_by_worker: dict[str, list[tuple[str, CounterEntry]]] = defaultdict(list)
+        for (worker_id, _), snapshot in self._coordinator._worker_counters.items():
+            entries_by_worker[worker_id].extend(snapshot.counters.items())
+
+        merged_by_worker: dict[str, dict[str, CounterEntry]] = {}
+        for worker_id, entries in entries_by_worker.items():
+            merged, conflicted = merge_counter_entries(entries)
+            merged_by_worker[worker_id] = {name: entry for name, entry in merged.items() if name not in conflicted}
+        return merged_by_worker
 
     def status(self, execution_id: str) -> PipelineStatus:
         with self._coordinator._lock:
@@ -291,6 +298,7 @@ class CoordinatorDashboard:
                     continue
                 for shard, entry in run.in_flight.items():
                     assignments_by_worker[entry.worker_id].append((run.execution_id, shard))
+            counters_by_worker = self._worker_counter_entries_locked()
             snapshots = [
                 _DashboardWorkerSnapshot(
                     worker_id=worker_id,
@@ -298,7 +306,7 @@ class CoordinatorDashboard:
                     state=state,
                     last_seen_age_seconds=max(0, now - self._coordinator._last_seen.get(worker_id, now)),
                     assignments=tuple(sorted(assignments_by_worker[worker_id])),
-                    counters=self._worker_counter_entries_locked(worker_id),
+                    counters=counters_by_worker.get(worker_id, {}),
                 )
                 for worker_id, state in self._coordinator._worker_states.items()
             ]
