@@ -8,7 +8,7 @@ import tomllib
 from tasktrove_verify.spec import McqSpec, parse_spec
 
 from taskcompendium.importers.tasktrove import TaskArchive
-from taskcompendium.models import MultipleChoiceAnswer, TaskRequirements, TaskSpec
+from taskcompendium.models import AnswerKind, MultipleChoiceAnswer, TaskRequirements, TaskSpec
 
 FAMILY = "qa-short-answer"
 CONVERTER = "nemotron_mcqa"
@@ -50,4 +50,5 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         verifier=MultipleChoiceAnswer(contract.expected, contract.options),
         source=archive.source,
         requirements=TaskRequirements(),
+        answer_kind=AnswerKind.OPTION_LETTER,
     )
