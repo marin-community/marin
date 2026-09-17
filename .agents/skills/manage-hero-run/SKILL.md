@@ -130,6 +130,17 @@ Many failures can be recoverable just by relaunching using the same id. These in
 ### Launching with a new run id
 
 - Use a new run id and W&B id only when the old lineage is unsafe or semantically different, such as W&B corruption or a nontrivial code change. Nontrivial code changes should have a new W&B id. Document the reason, old and new identities, source checkpoint, output root, and code SHA in the durable run record.
+- For a cutover to a new W&B ID, fork from the parent history with
+  `WandbConfig(fork_from="<parent-run-id>?_step=<history-step>")`. Verify the
+  history boundary against the checkpoint; the W&B `_step` and checkpoint step
+  are separate recorded values. Keep the entity and project unchanged.
+- Fork only once. W&B forbids `resume` alongside `fork_from`; `WandbConfig`
+  omits `resume` for fork creation. Recover the child with its existing ID,
+  `fork_from=None`, and `resume="allow"`. Keep fork creation outside automatic
+  retry loops; the hero launcher uses `fork-wandb` once, then `launch`.
+- Forking preserves tracker lineage but does not restore training state. Inherited
+  history is not evidence that the new execution has made progress. Confirm its
+  new steps and execution identity in Finelog, following `deploy-hero-change`.
 - Use `initialize_from` to have training pick up from a specific prior checkpoint.
 - If the user does not specify a checkpoint to use for a resume, select the newest "complete" one. Complete checkpoints have `metadata.json`. If no complete checkpoints are available, escalate to the DRI instead of guessing. If the user specifies a checkpoint that does not have `metadata.json`, block the launch and escalate instead of guessing. Do not use incomplete checkpoints for resume or relaunch.
 - Sort by parsed numeric step, not lexicographic path order.

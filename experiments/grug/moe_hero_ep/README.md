@@ -41,6 +41,56 @@ The attention, shared-expert, language-model-head, and optimizer states use the 
 Bounded diagnostics write metrics only by default. `--save-checkpoints` writes checkpoints below
 `--checkpoint-path` and resumes from the newest complete checkpoint.
 
+## Hero cutovers and W&B lineage
+
+`trigger_hero.sh` is the launch record. After validation passes, replace its
+`RUN_ID`, `HANDOFF_CHECKPOINT`, and `WANDB_FORK_FROM` placeholders together and
+land them on main. The checkpoint must have `metadata.json` and remain retained
+through the trial and rollback window. Use a new run ID and checkpoint tree.
+
+W&B forks use `<parent-run-id>?_step=<history-step>`. Inspect parent history to
+choose the boundary before the first replayed update. The checkpoint records
+completed updates, while hero training metrics use zero-based steps; verify the
+actual W&B `_step` rather than copying the checkpoint number. Record both values
+in the cutover plan.
+
+For checkpoint `step-N`, the next update logs training step `N`. Inspect the
+parent's rows around that boundary with `wandb.Api().run("marin-community/marin_moe/<parent>")`
+and `run.scan_history(keys=["_step", "global_step"], min_step=N-2, max_step=N+1)`.
+For the hero's explicit-step logging, confirm the selected row has
+`global_step == N-1` and record its `_step`. If those indices differ or the row is
+missing, resolve the mapping before forking. Do not include parent results from
+the replayed updates in the child's inherited history.
+
+Fetch main and verify the chosen source SHA, checkpoint metadata, retention,
+empty child checkpoint tree, and completed control window as specified in the
+cutover playbook. From that pristine main worktree, create the child tracker once:
+
+```bash
+experiments/grug/moe_hero_ep/trigger_hero.sh fork-wandb
+```
+
+This command creates W&B lineage and exits without submitting training. Complete
+the agreed cutover preflight and stop the old coordinator before submitting:
+
+```bash
+experiments/grug/moe_hero_ep/trigger_hero.sh launch
+```
+
+`launch` requires a clean checkout at the fetched `origin/main`, terminal parent
+and child coordinators, and the child's recorded handoff. It submits training, which resumes
+that W&B child without `fork_from`. Iris retries also resume the child. If fork
+creation succeeds but submission fails, inspect the child and use `launch` again
+only after confirming no coordinator is live. Do not repeat `fork-wandb` for
+recovery or rollback. Rollback uses the old run ID and old revision's launcher.
+
+The fork preserves history through the selected W&B step. Training state still
+comes from `--initialize-from-checkpoint`; inherited history does not prove that
+the new execution has trained. Check new steps in Finelog. See the
+[cutover playbook](../../../.agents/skills/deploy-hero-change/SKILL.md),
+[W&B fork documentation](https://docs.wandb.ai/models/runs/forking), and
+[tracker support](https://github.com/marin-community/marin/pull/9231).
+
 ## Coordinated garbage collection
 
 Pass `--gc-interval 100` to `python -m experiments.grug.moe_hero_ep.launch_diagnostics`,

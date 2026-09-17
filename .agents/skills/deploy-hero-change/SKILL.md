@@ -30,6 +30,12 @@ Write down, and get agreement on:
   the checkpoint tree (`launch_scaling_ladder` derives the output path from
   `--run-id`, so a new id is a fresh tree by construction). Keep the W&B project;
   dashboards, the public report, and alerts key on it.
+- The W&B lineage: fork the new child from the old run with
+  `fork_from="<parent-run-id>?_step=<history-step>"`. Verify the parent history
+  boundary against the checkpoint's completed-update count. `_step` is W&B's
+  history index; do not assume it equals the checkpoint number. For the hero's
+  zero-based training metrics, inspect the last parent row before the first
+  update the child will log. Record both the checkpoint step and fork `_step`.
 - The gate. Common criteria: loss tracks the control step for step up to bf16
   noise (or by the amount the change is meant to improve); MFU equal or better;
   token-drop rate equal or better; the metric the change targets moves as
@@ -52,8 +58,19 @@ Write down, and get agreement on:
 - `--initialize-from-checkpoint` appends the named checkpoint directory to the
   resume search paths and makes a checkpoint mandatory, so the first launch
   restores the full state (params, optimizer, step, data position) from exactly
-  that step and later restarts prefer the new run's own, newer checkpoints. The
+  that step when the child tree is empty. Later restarts prefer the new run's own, newer checkpoints. The
   old run's tree is never written again.
+- Create the W&B fork once, outside automatic retry loops. `WandbConfig.fork_from`
+  (PR #9231) omits `resume` during initialization; later launches must omit
+  `fork_from` and resume the child ID. The hero launcher separates these actions:
+  run `trigger_hero.sh fork-wandb` once, then `trigger_hero.sh launch` for the
+  initial training submission and subsequent recovery. If submission fails after
+  fork creation, verify the existing child and use `launch`; do not fork again.
+  Both commands refuse unresolved handoff placeholders.
+- W&B lineage does not restore model, optimizer, or data state. Keep the explicit
+  `--initialize-from-checkpoint` handoff and a fresh checkpoint tree. The W&B
+  child inherits history through the fork point, so check new Finelog rows and
+  execution identity when proving that the child has trained.
 - Inventory downstream reporting for the run id: the public W&B report's pinned
   run set (the Grafana bridge follows it), any tracker that hard-codes the id,
   metric keys the change renames (those need their own PR). Grafana hero-health
@@ -72,9 +89,11 @@ every guard as a dry run against the live cluster before the day:
   checkpoint from` and the loop entering.
 - Preflight (read-only): deploy worktree at `origin/main` and clean; rollback
   worktree at the old run's exact SHA and clean; handoff checkpoint complete
-  (`metadata.json` present) and in the expected layout; the new run's tree empty;
-  no other live coordinator, gang, or hero pod; credentials for Iris, kubectl,
-  the object store, and W&B all work.
+  (`metadata.json` present) and in the expected layout; the new run's tree empty
+  for the initial cutover. For recovery, preserve the child tree and verify its
+  newest complete checkpoint instead;
+  no competing live coordinator, gang, or hero pod apart from the old run;
+  credentials for Iris, kubectl, the object store, and W&B all work.
 - Launch guard: refuse unless the old run's coordinator is terminal, no
   coordinator for the new run id is live, and the worktree is pristine. Capture
   the submit output to a file and verify exactly one coordinator for the new run
@@ -82,6 +101,7 @@ every guard as a dry run against the live cluster before the day:
 - Rollback: cancel the new coordinator (this also stops the Iris retry loop)
   and confirm it is terminal; relaunch the old commit's `trigger_hero.sh` from
   the pristine rollback worktree under the old run id.
+  Never fork W&B again during rollback. Use the old revision's command syntax.
   The old tree resumes its own newest checkpoint; confirm that is the intended
   anchor before launching.
 - Get an independent review of the scripts and fix or refute every finding;
@@ -121,6 +141,10 @@ Submit as `IRIS_USER=marin` so the run is attributed to the project, not a perso
 
 ## 5. Decide
 
+During the trial, this rollback gate overrides `manage-hero-run`'s ordinary
+recovery policy. Cancel the coordinator promptly on a failed gate to stop its
+automatic retries. Resume ordinary recovery only after the trial is accepted.
+
 Go: leave it running, post the numbers and the report, update the status issue.
 Anything short of the agreed gate, a hang, a retry loop, or a signature the
 change does not explain: roll back without waiting for more attempts. Each Iris
@@ -159,4 +183,5 @@ known failure family (#8861, #8870).
 - `experiments/grug/moe_hero_ep/trigger_hero.sh`, `launch_scaling_ladder.py`
   (`--initialize-from-checkpoint`, #8868).
 - `docs/ops/training-stall-alert-contract.md` for the RAS query.
+- [W&B forking](https://docs.wandb.ai/models/runs/forking) and [tracker support (#9231)](https://github.com/marin-community/marin/pull/9231).
 - The 2026-09-02 ragged all-to-all swap: #8506, #8861, #8870.
