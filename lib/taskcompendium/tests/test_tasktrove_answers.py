@@ -1,9 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """TaskTrove Clean MCQA import and direct-chat Harbor coverage."""
 
 import json
@@ -15,7 +12,8 @@ from tasktrove_verify.spec import McqSpec
 
 from taskcompendium.grading import Outcome, grade_answer
 from taskcompendium.harbor.runner import HarborLaunch, run_trial
-from taskcompendium.importers.tasktrove_mcqa import RELEASE, RELEASE_ROOT, import_task, read_archive
+from taskcompendium.importers.tasktrove import RELEASE, RELEASE_ROOT, read_archive
+from taskcompendium.importers.tasktrove_answers import import_task
 from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
 from taskcompendium.models import MultipleChoiceAnswer
 from taskcompendium.rendering import AnswerFormat, Rendering
