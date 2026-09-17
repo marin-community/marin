@@ -213,6 +213,42 @@ class AttentionMask(eqx.Module):
         return mask
 
 
+def token_validity_from_attention_mask(
+    mask: AttentionMask | jax.Array | None,
+    *,
+    batch_size: int,
+    sequence_length: int,
+) -> Bool[Array, "B S"]:
+    """Return positions that represent tokens rather than sequence padding.
+
+    Negative query segment IDs encode padding for structured masks. Boolean
+    dense masks treat a query row with no allowed keys as padding. Additive
+    masks do not encode query validity unambiguously and therefore remain
+    all-valid.
+    """
+    if isinstance(mask, AttentionMask):
+        if mask.fa4_bounds is not None:
+            valid = mask.fa4_bounds[1]
+        elif mask.segment_ids is not None:
+            valid = mask.segment_ids[0] >= 0
+        else:
+            return jnp.ones((batch_size, sequence_length), dtype=jnp.bool_)
+    elif mask is not None and mask.dtype == jnp.bool_:
+        valid = jnp.any(mask, axis=-1)
+    else:
+        return jnp.ones((batch_size, sequence_length), dtype=jnp.bool_)
+
+    if valid.ndim == 1:
+        if valid.shape[0] != sequence_length:
+            raise ValueError(f"token-validity sequence dimension must be {sequence_length}, got shape={valid.shape}")
+        return jnp.broadcast_to(valid[None, :], (batch_size, sequence_length))
+    if valid.ndim != 2 or valid.shape[0] not in (1, batch_size) or valid.shape[1] != sequence_length:
+        raise ValueError(
+            f"token validity must have shape [1|{batch_size}, {sequence_length}], got shape={valid.shape}"
+        )
+    return jnp.broadcast_to(valid, (batch_size, sequence_length))
+
+
 def _rotary_cache(seq_len: int, head_dim: int, rope: RotaryConfig) -> tuple[Float[Array, "S D"], Float[Array, "S D"]]:
     half_dim = head_dim // 2
     inv_freq = 1.0 / (rope.theta ** (jnp.arange(0, half_dim, dtype=jnp.float32) / half_dim))
@@ -508,4 +544,5 @@ __all__ = [
     "apply_rotary_embedding",
     "attention",
     "reference_attention",
+    "token_validity_from_attention_mask",
 ]
