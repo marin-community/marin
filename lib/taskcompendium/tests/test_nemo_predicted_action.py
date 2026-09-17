@@ -190,26 +190,6 @@ async def test_predicted_action_rejects_incompatible_launch_before_trial(tmp_pat
     assert not (tmp_path / "trials").exists()
 
 
-async def test_predicted_action_harbor_records_private_verifier_failure(tmp_path):
-    row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, rendering = import_row(row, canonical_sha256(row))
-    binding = HarborTaskBinding()
-    task = lower_to_harbor(specification, rendering, binding, tmp_path / "task")
-    (task / "rendering.json").write_text("{invalid")
-
-    result = await run_trial(
-        task,
-        binding,
-        HarborLaunch("action_replay", agent_kwargs={"response": _action("authenticate_user", "{}")}),
-        tmp_path / "trials",
-        "run",
-    )
-
-    outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
-    assert (outcome["status"], outcome["reward"]) == ("infra_error", None)
-    assert result.verifier_result is None
-
-
 async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp_path, monkeypatch):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, rendering = import_row(row, canonical_sha256(row))

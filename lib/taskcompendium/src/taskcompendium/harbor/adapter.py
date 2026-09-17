@@ -25,6 +25,7 @@ from taskcompendium.rendering import AnswerFormat
 RESPONSE_FILE = "response.txt"
 ACTION_FILE = "action.json"
 CHAT_COMPLETIONS_PATH = "/chat/completions"
+DEFAULT_REQUEST_TIMEOUT = 120
 AGENT_LOG_DIR = "/logs/agent"
 VERIFIER_LOG_DIR = "/logs/verifier"
 ARTIFACTS_LOG_DIR = "/logs/artifacts"
@@ -166,7 +167,14 @@ class ActionReplayAgent(BaseAgent):
 class DirectChatAgent(BaseAgent):
     """Send the rendered request to an OpenAI-compatible chat endpoint."""
 
-    def __init__(self, *args, api_base: str, api_key_env: str | None = None, request_timeout: float = 120, **kwargs):
+    def __init__(
+        self,
+        *args,
+        api_base: str,
+        api_key_env: str | None = None,
+        request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         if self.model_name is None:
             raise ValueError("Direct chat requires a model name")
