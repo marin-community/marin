@@ -108,7 +108,7 @@ def test_checkpoint_metadata_remote_commit_does_not_require_delete():
 
     checkpoint_module._save_metadata(checkpoint_path, 7, False, {"model": "hero"})
 
-    metadata = json.loads(StoragePath(f"{checkpoint_path}/metadata.json").read_text())
+    metadata = json.loads((StoragePath(checkpoint_path) / "metadata.json").read_text())
     assert metadata["step"] == 7
     assert metadata["is_temporary"] is False
     assert metadata["model"] == "hero"
@@ -132,7 +132,7 @@ def test_checkpoint_metadata_failed_publication_is_not_discoverable(monkeypatch)
     with pytest.raises(OSError, match="object publication failed"):
         checkpoint_module._save_metadata(checkpoint_path, 8, False)
 
-    assert not StoragePath(f"{checkpoint_path}/metadata.json").exists()
+    assert not (StoragePath(checkpoint_path) / "metadata.json").exists()
     assert discover_latest_checkpoint("delete-denied://bucket/failed-publication") is None
 
 
