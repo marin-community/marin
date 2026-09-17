@@ -29,7 +29,7 @@ from marin.datakit.download.nemotron_chat_prompts import SEED_DATASET_REVISIONS,
 from marin.datakit.download.rollout_transforms import load_parquet_batched, openai_chat_document
 from marin.execution.step_spec import StepSpec
 
-TRANSFORM_VERSION = "2026.09.17.chat-v3"
+TRANSFORM_VERSION = "2026.09.17.chat-v4"
 MAX_CONSECUTIVE_IDENTICAL_LINES = 256
 _SKIPPED_JSONL_LINES = MappingProxyType({("agentic_v2", "tool_calling"): frozenset({1095})})
 _RESTORED_CHAT_FAMILY = "instruction_following_chat_v3"
@@ -346,7 +346,7 @@ def row_to_chat_doc(row: dict, *, family: str, partition_name: str) -> list[dict
         document = openai_chat_document(
             messages,
             hf_dataset_id,
-            source_id=row.get("uuid"),
+            source_id=row.get("uuid") or None,
             chat_template_kwargs=kwargs,
         )
         normalized_messages = [Message.from_dict(message) for message in document["messages"]]
