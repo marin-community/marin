@@ -3,7 +3,7 @@
 
 import numpy as np
 
-from experiments.datakit.mixprior.search import MIXTURE_DENOMINATOR, feasible_pool, quantize, search
+from experiments.datakit.mixprior.search import MIXTURE_DENOMINATOR, feasible_pool, quantize, search, search_cooldown
 
 
 class QuadraticObjective:
@@ -41,3 +41,39 @@ def test_pool_excludes_observed_mixtures_after_training_lattice_rounding():
     unseen = np.array([[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]])
     pool = feasible_pool(np.concatenate([rounded, unseen]), observed, np.ones((2, 3)), max_epochs=2)
     np.testing.assert_array_equal(pool, unseen)
+
+
+def test_cooldown_search_preserves_main_and_accounts_for_consumed_tokens(data):
+    anchor = quantize(np.array([[0.6, 0.3, 0.1], [0.3, 0.3, 0.4]]))
+    selected = search_cooldown(
+        QuadraticObjective(),
+        anchor,
+        np.array([10.0, 20.0, 30.0]),
+        np.array([8.0, 10.0, 10.0]),
+        10.0,
+        data.weights,
+        pool_size=1024,
+        batch_size=3,
+        seed=7,
+        max_epochs=1.0,
+        radius=0.3,
+    )
+    np.testing.assert_array_equal(selected[:, 0], np.broadcast_to(anchor[0], (3, 3)))
+    assert np.all(selected[:, 1, 0] <= 0.2)
+    assert np.max(np.abs(selected[:, 1] - anchor[1]).sum(-1) / 2) <= 0.3
+    assert np.all(QuadraticObjective().acquisition(selected) > QuadraticObjective().acquisition(anchor[None])[0])
+    assert np.max((np.array([8.0, 10.0, 10.0]) + 10 * selected[:, 1]) / np.array([10.0, 20.0, 30.0])) <= 1
+    following = search_cooldown(
+        QuadraticObjective(),
+        anchor,
+        np.array([10.0, 20.0, 30.0]),
+        np.array([8.0, 10.0, 10.0]),
+        10.0,
+        np.concatenate([data.weights, selected]),
+        pool_size=1024,
+        batch_size=3,
+        seed=7,
+        max_epochs=1.0,
+        radius=0.3,
+    )
+    assert not any(np.array_equal(a, b) for a in selected for b in following)

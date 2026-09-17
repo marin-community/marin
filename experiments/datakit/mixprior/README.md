@@ -157,3 +157,49 @@ was developed using this batch; future runs are needed for independent validatio
 The exploratory benchmark package is not included in this production package.
 
 Run tests with `uv run pytest tests/datakit/mixprior`.
+
+## Tune only the final 20%
+
+The merged hero recipe is
+[`harrier_mix_2026_08_18.json`](../../grug/moe_hero_ep/harrier_mix_2026_08_18.json).
+It preserves the original initial mixture, switches to the selected main mixture,
+and starts cooldown around 80% of training (rounded to a mixture block).
+
+```bash
+uv run python -m experiments.datakit.mixprior.cooldown \
+  --model mixture-model --output cooldown-candidates \
+  --batch-size 10 --radius 0.05 --minimum-distance 0.01 --seed 111
+```
+
+`--model` is the local artifact directory written by `mixprior.train`.
+This command reads the merged recipe directly. It changes only the cooldown
+weights, within 5% total variation of the merged cooldown by default. Candidates
+must differ by at least 1% total variation from each other. The main weights sent
+to the GP stay fixed. Each cell is a domain/quality bucket. Zero-weight cooldown cells stay zero
+during multiplicative perturbation; rounding to the 1/49,152 training lattice
+can remove very small weights.
+
+The eight-epoch cap applies per cell, dividing cumulative tokens by that
+cell’s available tokens. It includes tokens consumed by both fixed earlier stages and
+3.75T cooldown tokens. These are the nominal 18.75T hero budgets, using the same
+switch fraction and constants as the recipe. The code does not modify a live run
+or submit jobs.
+
+The new output directory contains `candidates.parquet`, `summary.json`, and
+`schedule-01.json`, etc. Each schedule preserves the merged initial and main
+stages and replaces only cooldown. `summary.json` includes the original schedule,
+HF revision, search seed, scores, distances, and cumulative epochs. Candidate
+Parquet retains the two-phase swarm format: `phase0_weights` is the selected
+main mixture and `phase1_weights` is the proposed cooldown. Use the complete
+schedule JSON to retain the hero's initial stage; the Parquet alone does not
+encode that stage. Existing output directories are rejected.
+
+The metric GP remains trained on two-phase swarm observations. It conditions on
+the selected main weights but does not represent the hero's earlier mixture
+transition or its full training history. Scores are surrogate predictions;
+validate candidates from the same checkpoint at the actual cooldown boundary
+of the preserved initial/main schedule before adopting them. The
+search ranks the expected combined objective described above (higher is better).
+`predicted_gain` subtracts the merged main/cooldown anchor’s predicted score
+from each candidate’s score. Positive means predicted improvement; the search
+does not require it, so inspect the summary before selecting runs.

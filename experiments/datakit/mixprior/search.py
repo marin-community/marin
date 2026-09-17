@@ -146,3 +146,87 @@ def search(
     scores = acquisition_scores(model, pool)
     best_candidates = np.argsort(scores)[-batch_size:][::-1]
     return pool[best_candidates]
+
+
+def search_cooldown(
+    model: Acquisition,
+    anchor: np.ndarray,
+    available_tokens: np.ndarray,
+    consumed_tokens: np.ndarray,
+    cooldown_tokens: float,
+    observed: np.ndarray,
+    *,
+    pool_size: int = 65_536,
+    batch_size: int = 10,
+    seed: int = 111,
+    max_epochs: float = 8.0,
+    radius: float = 0.05,
+    minimum_distance: float = 0.01,
+) -> np.ndarray:
+    """Rank local cooldown changes while preserving the anchor's main weights.
+
+    Consumed tokens are per-component totals from all fixed earlier stages.
+    Radius and minimum distance use total variation on cooldown weights alone.
+    """
+    available_tokens = np.asarray(available_tokens)
+    consumed_tokens = np.asarray(consumed_tokens)
+    anchor = np.asarray(anchor)
+    if (
+        anchor.shape != (2, len(available_tokens))
+        or consumed_tokens.shape != available_tokens.shape
+        or not np.isfinite(available_tokens).all()
+        or not np.isfinite(consumed_tokens).all()
+        or np.any(available_tokens <= 0)
+        or np.any(consumed_tokens < 0)
+        or not np.isfinite(cooldown_tokens)
+        or cooldown_tokens <= 0
+        or not np.isfinite(max_epochs)
+        or max_epochs <= 0
+        or not 0 < minimum_distance <= radius <= 1
+        or pool_size < batch_size
+        or batch_size < 1
+    ):
+        raise ValueError("Cooldown search needs aligned positive budgets and valid search limits")
+    rounded = quantize(anchor)
+    if not np.allclose(anchor, rounded, rtol=0, atol=1e-12):
+        raise ValueError("The fixed main and cooldown anchor must lie on the training lattice")
+    if np.any(consumed_tokens / available_tokens > max_epochs):
+        raise ValueError("The fixed prefix already exceeds the cumulative epoch cap")
+    rng = np.random.default_rng(seed)
+    exposure = np.stack([np.zeros_like(available_tokens), cooldown_tokens / available_tokens])
+    excluded = np.concatenate([observed, anchor[None]])
+
+    def proposals(centers: np.ndarray, count: int) -> np.ndarray:
+        indices = rng.integers(len(centers), size=count)
+        scales = np.exp(rng.uniform(np.log(0.02), np.log(0.3), size=(count, 1)))
+        cooldown = centers[indices, 1] * np.exp(scales * rng.normal(size=(count, len(available_tokens))))
+        cooldown /= cooldown.sum(axis=-1, keepdims=True)
+        return np.stack([np.broadcast_to(anchor[0], cooldown.shape), cooldown], axis=1)
+
+    def eligible(draws: np.ndarray) -> np.ndarray:
+        pool = feasible_pool(draws, excluded, exposure, max_epochs)
+        distance = np.abs(pool[:, 1] - anchor[1]).sum(axis=-1) / 2
+        epochs = (consumed_tokens + cooldown_tokens * pool[:, 1]) / available_tokens
+        pool = pool[(distance <= radius) & (epochs.max(axis=-1) <= max_epochs)]
+        # Preserve the original main weights exactly, including harmless float roundoff.
+        pool[:, 0] = anchor[0]
+        return pool
+
+    pool = eligible(proposals(anchor[None], pool_size))
+    if len(pool) < batch_size:
+        raise ValueError("Too few feasible cooldown candidates within the requested radius")
+    scores = acquisition_scores(model, pool)
+    for _ in range(2):
+        centers = pool[np.argsort(scores)[-LOCAL_STARTS:]]
+        pool = eligible(np.concatenate([pool, proposals(centers, LOCAL_STARTS * LOCAL_DRAWS_PER_START)]))
+        scores = acquisition_scores(model, pool)
+    selected: list[int] = []
+    for index in np.argsort(scores)[::-1]:
+        if selected:
+            distance = np.abs(pool[selected, 1] - pool[index, 1]).sum(axis=-1) / 2
+            if distance.min() < minimum_distance:
+                continue
+        selected.append(int(index))
+        if len(selected) == batch_size:
+            return pool[selected]
+    raise ValueError("Too few separated cooldown candidates; reduce the batch or minimum distance")

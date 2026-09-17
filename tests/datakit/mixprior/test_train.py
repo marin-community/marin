@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -9,11 +10,13 @@ import numpy as np
 import pyarrow.parquet as pq
 from marin.execution.artifact import read_artifact
 
-from experiments.datakit.mixprior.acquisition import KernelConfig
+from experiments.datakit.mixprior.acquisition import KernelConfig, fit_additive
 from experiments.datakit.mixprior.calibration import fit_calibrated
+from experiments.datakit.mixprior.cooldown import main as cooldown
 from experiments.datakit.mixprior.generate import main as generate
 from experiments.datakit.mixprior.objective import Objective
 from experiments.datakit.mixprior.observations import group_observations
+from experiments.datakit.mixprior.search import quantize
 from experiments.datakit.mixprior.train import MetricArtifact, load_model, save_model
 
 
@@ -64,3 +67,63 @@ def test_moved_metric_artifact_preserves_acquisition_and_generates_named_candida
         [[[row[f"phase{phase}_weights"][name] for name in data.components] for phase in range(2)] for row in rows]
     )
     np.testing.assert_allclose(weights.sum(axis=-1), 1, atol=1e-12)
+
+
+def test_cooldown_cli_preserves_both_earlier_stages(tmp_path, monkeypatch, data):
+    data = replace(data, available_tokens=data.available_tokens * 1e12)
+    objective = Objective(
+        np.array([0, 1]),
+        np.array([True, False]),
+        np.full(2, 3.0),
+        np.full(2, 0.1),
+        np.eye(2) * 0.001,
+        0.0,
+    )
+    grouped = group_observations(data)
+    model = fit_additive(grouped.data, objective, grouped.counts, jax.devices("cpu")[0])
+    save_model(tmp_path / "model", model, data, objective, "revision", "previous", [])
+    anchor = quantize(data.weights[0])
+    spec = {
+        "tokenizer": "test",
+        "available_tokens": dict(zip(data.components, data.available_tokens.tolist(), strict=True)),
+        "phases": [
+            {"name": "initial", "weights": dict(zip(data.components, data.weights[2, 0].tolist(), strict=True))},
+            {
+                "name": "main",
+                "swarm_id": data.name,
+                "weights": dict(zip(data.components, anchor[0].tolist(), strict=True)),
+            },
+            {
+                "name": "cooldown",
+                "swarm_id": data.name,
+                "weights": dict(zip(data.components, anchor[1].tolist(), strict=True)),
+            },
+        ],
+    }
+    source = tmp_path / "merged.json"
+    source.write_text(json.dumps(spec))
+    monkeypatch.setattr("experiments.datakit.mixprior.cooldown.MERGED_MIXTURE", source)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "cooldown",
+            "--model",
+            str(tmp_path / "model"),
+            "--output",
+            str(tmp_path / "out"),
+            "--pool-size",
+            "128",
+            "--batch-size",
+            "2",
+        ],
+    )
+    cooldown()
+    assert json.loads(source.read_text()) == spec
+    rows = pq.read_table(tmp_path / "out/candidates.parquet").to_pylist()
+    assert len(rows) == 2
+    for i, row in enumerate(rows, 1):
+        schedule = json.loads((tmp_path / f"out/schedule-{i:02d}.json").read_text())
+        assert schedule["phases"][:2] == spec["phases"][:2]
+        assert row["phase0_weights"] == spec["phases"][1]["weights"]
+        assert schedule["phases"][2]["weights"] == row["phase1_weights"]
+        assert row["phase1_weights"] != spec["phases"][2]["weights"]

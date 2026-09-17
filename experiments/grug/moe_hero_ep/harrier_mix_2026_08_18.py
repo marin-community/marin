@@ -31,11 +31,15 @@ from experiments.grug.moe.launch_datakit_moe_mix import (
     _simulated_epoching_budgets,
     _val_component,
 )
+from experiments.grug.moe_hero_ep.harrier_mix_schedule import (
+    COOLDOWN_TOKENS,
+    MAX_COMPONENT_EPOCHS,
+    MIXTURE_SWITCH_FRACTION,
+    PRETRAIN_TOKENS,
+    TOTAL_TOKENS,
+)
 from experiments.marin_tokenizer import marin_tokenizer
 
-PRETRAIN_TOKENS = 15_000_000_000_000
-COOLDOWN_TOKENS = 3_750_000_000_000
-TOTAL_TOKENS = PRETRAIN_TOKENS + COOLDOWN_TOKENS
 HARRIER_MIX_2026_08_18_TAG = "harrier-mix-2026.08.18-to-996f4891"
 # Simulated epoching stretches a short run's mixture as if it were a larger budget. Above this analytic
 # training-FLOP budget the run is expensive enough that we want maximally-real data over a simulated
@@ -68,8 +72,6 @@ def _load_spec() -> _HarrierMixSpec:
 
 
 _SPEC = _load_spec()
-# Same relative switch for every rung; the 390251-step hero switches after checkpoint 108000.
-_MIXTURE_SWITCH_FRACTION = 108_000 / 390_251
 
 
 def _validate_spec(spec: _HarrierMixSpec) -> None:
@@ -78,7 +80,7 @@ def _validate_spec(spec: _HarrierMixSpec) -> None:
     cells = set(available_tokens)
     if len(phase_weights) != 3:
         raise ValueError("Harrier must have initial, main, and cooldown phases")
-    initial_tokens = TOTAL_TOKENS * _MIXTURE_SWITCH_FRACTION
+    initial_tokens = TOTAL_TOKENS * MIXTURE_SWITCH_FRACTION
     phase_budgets = (initial_tokens, PRETRAIN_TOKENS - initial_tokens, COOLDOWN_TOKENS)
     if spec.tokenizer != marin_tokenizer:
         raise ValueError("Harrier 2026.08.18 must use the Marin tokenizer")
@@ -94,7 +96,7 @@ def _validate_spec(spec: _HarrierMixSpec) -> None:
         )
         for cell in cells
     }
-    if max(cumulative_epochs.values()) > 8.0 + 1e-8:
+    if max(cumulative_epochs.values()) > MAX_COMPONENT_EPOCHS + 1e-8:
         raise ValueError("Harrier 2026.08.18 exceeds the eight-epoch cap")
 
 
@@ -149,7 +151,7 @@ def harrier_mix_2026_08_18_data_config(
     )
 
     step_multiple = _MIXTURE_BLOCK_SIZE // math.gcd(_MIXTURE_BLOCK_SIZE, batch_size)
-    switch_step = math.ceil(total_steps * _MIXTURE_SWITCH_FRACTION / step_multiple) * step_multiple
+    switch_step = math.ceil(total_steps * MIXTURE_SWITCH_FRACTION / step_multiple) * step_multiple
     cooldown_step = _phase_1_start_step(total_steps, batch_size)
     val_zero_weights = {name: 0.0 for name in val_components}
     # A short diagnostic can round both transitions to the same block; cooldown wins there.
