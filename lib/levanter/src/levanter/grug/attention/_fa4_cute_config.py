@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 
+SM100_BACKWARD_TILE = (128, 128)
+
+
 class Sm90BackwardSchedule(StrEnum):
     DENSE = "dense"
     CAUSAL_OR_LOCAL = "causal_or_local"

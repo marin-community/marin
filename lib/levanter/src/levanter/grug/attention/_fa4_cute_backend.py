@@ -30,7 +30,7 @@ from levanter.grug.attention._fa4_cute_kernels import (
     segmented_flash_attention_backward_sm90_preprocess_launcher,
     segmented_flash_attention_forward_launcher,
 )
-from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig
+from levanter.grug.attention._fa4_cute_config import SM100_BACKWARD_TILE, Flash4CuteKernelConfig
 
 
 @dataclass(frozen=True)
@@ -248,8 +248,10 @@ def _segmented_flash_attention_backward_sm100(
     """Match the segmented backend contract using native one-CTA SM100."""
     ratio = q.shape[2] // k.shape[2]
     modules = _import_cutlass_cute()
-    tile = (128, 128)
-    sparse = _packed_segment_backward_block_sparse_indices_with_full(lower_bounds, valid, tile_m=128, tile_n=128)
+    tile = SM100_BACKWARD_TILE
+    sparse = _packed_segment_backward_block_sparse_indices_with_full(
+        lower_bounds, valid, tile_m=tile[0], tile_n=tile[1]
+    )
     partial_count, partial_index = _broadcast_backward_block_sparse_metadata(
         q, sparse.partial_block_cnt, sparse.partial_block_idx
     )
@@ -257,7 +259,7 @@ def _segmented_flash_attention_backward_sm100(
     preprocess_inputs, preprocess_outputs = _cutlass_attention_backward_sm90_preprocess_specs(modules, vector_elems=8)
     preprocess = cutlass_call(
         segmented_flash_attention_backward_sm90_preprocess_launcher(
-            modules, dtype=q.dtype, head_dim=128, head_dim_v=128, tile_m=128
+            modules, dtype=q.dtype, head_dim=q.shape[-1], head_dim_v=v.shape[-1], tile_m=tile[0]
         ),
         output_shape_dtype=_cutlass_attention_backward_sm90_preprocess_output_shapes(q, tile),
         input_spec=preprocess_inputs,
@@ -269,7 +271,7 @@ def _segmented_flash_attention_backward_sm100(
     accum_inputs, accum_outputs = _cutlass_attention_backward_sm90_accum_specs(modules, vector_elems=8)
     backward = cutlass_call(
         segmented_flash_attention_backward_sm100_launcher(
-            modules, head_dim=128, head_dim_v=128, qhead_per_kvhead=ratio
+            modules, head_dim=q.shape[-1], head_dim_v=v.shape[-1], qhead_per_kvhead=ratio
         ),
         output_shape_dtype=_cutlass_attention_backward_sm90_backward_output_shapes(q, k, v, tile),
         input_spec=accum_inputs,
@@ -298,8 +300,8 @@ def _segmented_flash_attention_backward_sm100(
             flash_attention_backward_postprocess_launcher(
                 modules,
                 dtype=tensor.dtype,
-                head_dim=128,
-                tile_m=128,
+                head_dim=tensor.shape[-1],
+                tile_m=tile[0],
                 atom_layout_m=1,
                 arch=100,
                 num_threads=128,
