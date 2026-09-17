@@ -77,14 +77,12 @@ def read_attention_heads(model: str, revision: str | None = None) -> tuple[int, 
 
 def tool_chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None:
     """Return the tokenizer template selected when a request contains tools."""
-    try:
-        return tokenizer.get_chat_template(tools=_TOOL_TEMPLATE_PROBE)
-    except ValueError:
+    if tokenizer.chat_template is None:
         return None
+    return tokenizer.get_chat_template(tools=_TOOL_TEMPLATE_PROBE)
 
 
 def read_tool_chat_template(model: str, revision: str | None = None) -> str | None:
-    """Load the tokenizer and return its active tool-aware chat template."""
     return tool_chat_template(load_tokenizer(model, revision=revision))
 
 

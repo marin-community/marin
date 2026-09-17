@@ -1,4 +1,4 @@
-/** Static serving metadata returned by the dashboard server's /info route. */
+/** Output conventions discovered from the served model's active chat template. */
 export interface ChatTemplateProtocol {
   thinking_start: string | null
   thinking_end: string | null
@@ -7,6 +7,7 @@ export interface ChatTemplateProtocol {
   tool_call_format: 'delimited' | 'json' | null
 }
 
+/** Static serving metadata returned by the dashboard server's /info route. */
 export interface ServingInfo {
   model: string
   backend: string

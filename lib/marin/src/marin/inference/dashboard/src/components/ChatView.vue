@@ -40,7 +40,7 @@ const emit = defineEmits<{ persist: [] }>()
 const draft = ref('')
 const busy = ref(false)
 const showTools = ref(false)
-const showRawTokens = ref(false)
+const showRawStream = ref(false)
 const scroller = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
 let abort: AbortController | null = null
@@ -238,7 +238,6 @@ async function complete(
     ...templateFields,
   }
   if (tools.length) {
-    body.tools = tools
     // Permit model-native call generation without requiring vLLM auto-tool parsing.
     // The response handling below also accepts structured calls when a server emits them.
     body.tool_choice = null
@@ -317,7 +316,7 @@ async function complete(
           :key="index"
           :message="message"
           :streaming="busy && index === conversation.messages.length - 1"
-          :show-raw-tokens="showRawTokens"
+          :show-raw-stream="showRawStream"
         />
       </div>
     </div>
@@ -340,7 +339,7 @@ async function complete(
             class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted"
             title="Show the unparsed decoded content and reasoning stream"
           >
-            <input v-model="showRawTokens" type="checkbox" class="accent-accent" />
+            <input v-model="showRawStream" type="checkbox" class="accent-accent" />
             Raw stream
           </label>
         </div>

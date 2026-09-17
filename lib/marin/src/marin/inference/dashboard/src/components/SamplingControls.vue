@@ -3,8 +3,7 @@ import type { SamplingParams } from '../lib/types'
 
 defineProps<{
   params: SamplingParams
-  /** Chat mode also edits the conversation's system prompt. */
-  showSystem: boolean
+  showChatControls: boolean
 }>()
 
 const system = defineModel<string>('system', { default: '' })
@@ -36,7 +35,7 @@ const customInstructions = defineModel<string>('customInstructions', { default: 
         class="w-24 rounded-lg border border-surface-border bg-surface px-2 py-1.5 text-sm text-text"
       />
     </label>
-    <label v-if="showSystem" class="flex min-w-60 flex-1 flex-col gap-1 text-xs text-text-muted">
+    <label v-if="showChatControls" class="flex min-w-60 flex-1 flex-col gap-1 text-xs text-text-muted">
       System prompt
       <textarea
         v-model="system"
@@ -46,7 +45,7 @@ const customInstructions = defineModel<string>('customInstructions', { default: 
       ></textarea>
       <span>Sent as a <code>role: "system"</code> message in the conversation.</span>
     </label>
-    <label v-if="showSystem" class="flex min-w-44 flex-col gap-1 text-xs text-text-muted">
+    <label v-if="showChatControls" class="flex min-w-44 flex-col gap-1 text-xs text-text-muted">
       Thinking
       <select
         v-model="enableThinking"
@@ -58,7 +57,7 @@ const customInstructions = defineModel<string>('customInstructions', { default: 
       </select>
       <span>Passed to the active model template as <code>enable_thinking</code>. Templates may ignore it.</span>
     </label>
-    <label v-if="showSystem" class="flex min-w-72 flex-1 flex-col gap-1 text-xs text-text-muted">
+    <label v-if="showChatControls" class="flex min-w-72 flex-1 flex-col gap-1 text-xs text-text-muted">
       Custom template instructions
       <textarea
         v-model="customInstructions"

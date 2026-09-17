@@ -3,6 +3,8 @@ import type { ChatTemplateProtocol } from './types'
 type ThinkingDelimiters = readonly [open: string, close: string]
 
 const KNOWN_THINKING_DELIMITERS: ThinkingDelimiters[] = [
+  // Browser fallback for missing or stale /info metadata. Keep aligned with
+  // dashboard_server.py; the Python service and TypeScript bundle cannot share a runtime constant.
   ['<|start_think|>', '<|end_think|>'],
   ['<think>', '</think>'],
   ['<THINK>', '</THINK>'],
@@ -45,9 +47,10 @@ function trailingPartialTag(text: string, tags: string[]): string {
 
 /** Split accumulated model output into a thinking segment and visible text.
  *
- * Delimiters come from the served model's active chat template. The template
- * may open the block inside the prompt, leaving only a bare closing delimiter
- * in generated content. Re-run on the full accumulated text after each delta.
+ * Delimiters prefer the served model's active chat-template metadata, with
+ * known formats as a fallback. The template may open the block inside the
+ * prompt, leaving only a bare closing delimiter in generated content. Re-run
+ * on the full accumulated text after each delta.
  */
 export function splitThinking(raw: string, protocol: ChatTemplateProtocol | null): ThinkingSplit {
   const delimiters = selectThinkingDelimiters(raw, protocol)

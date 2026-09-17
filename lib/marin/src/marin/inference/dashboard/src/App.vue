@@ -153,7 +153,7 @@ function clearHistory() {
           v-model:system="active.system"
           v-model:enable-thinking="active.enableThinking"
           v-model:custom-instructions="active.customInstructions"
-          :show-system="mode === 'chat'"
+          :show-chat-controls="mode === 'chat'"
         />
         <ChatView
           v-if="mode === 'chat'"

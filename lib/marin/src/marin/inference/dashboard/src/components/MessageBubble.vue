@@ -8,7 +8,7 @@ const props = defineProps<{
   message: ChatMessage
   /** True while this message is the one currently being streamed. */
   streaming: boolean
-  showRawTokens: boolean
+  showRawStream: boolean
 }>()
 
 const rendered = computed(() =>
@@ -80,7 +80,7 @@ async function copy() {
         </details>
       </div>
       <div
-        v-if="showRawTokens && (message.rawContent !== undefined || message.rawReasoning !== undefined)"
+        v-if="showRawStream && (message.rawContent !== undefined || message.rawReasoning !== undefined)"
         class="mt-2 rounded-lg border border-surface-border bg-surface-sunken px-3 py-2 font-mono text-xs"
       >
         <div class="text-text-secondary">content</div>
