@@ -356,7 +356,11 @@ def _validated_coverage(coverage: TaskCoverage) -> TaskCoverage:
 
 
 def task_coverage_and_metrics(
-    samples: Sequence[EvalSample], *, n_benchmark: int | None = None, n_attempted: int | None = None
+    samples: Sequence[EvalSample],
+    *,
+    n_benchmark: int | None = None,
+    n_attempted: int | None = None,
+    score_from_aggregate: bool = False,
 ) -> tuple[TaskCoverage, dict[str, float]]:
     """Compute one task's coverage and metrics recovered after request failures.
 
@@ -364,17 +368,14 @@ def task_coverage_and_metrics(
     count as unanswered. For tasks with several extraction filters, coverage uses the filter chosen
     by :func:`~marin.evaluation.metric_selection.primary_filter`. Recovered metrics retain every filter.
 
-    A task whose rows carry no per-item score at all is scored by its aggregate: Evalchemy's AIME24
-    and OlympiadBench grade the whole item set at once and write only ``accuracy_avg``. Every
-    document such a task enumerated counts as scored, since the aggregate scorer graded them all,
-    and no per-item pass tally exists. lm-eval rows always carry their metric keys, so a row without
-    any is never an lm-eval grading failure.
+    When the evaluator declares an aggregate-only primary metric, every enumerated document counts
+    as scored even though the sample rows carry no per-item score. No per-item pass tally exists.
     """
     graded: dict[str, list[EvalSample]] = {}
     recovered_values: dict[str, list[float]] = {}
     recovered_doc_ids: set[str] = set()
     by_doc: dict[str, list[EvalSample]] = {}
-    aggregate_scored = bool(samples) and not any(sample.metrics for sample in samples)
+    aggregate_scored = score_from_aggregate and bool(samples) and not any(sample.metrics for sample in samples)
     for sample in samples:
         by_doc.setdefault(sample.doc_id, []).append(sample)
         if aggregate_scored:
@@ -598,10 +599,12 @@ def _write_sample_archive(
             leaf = _task_from_filename(PurePosixPath(relative).name, ".jsonl")
             benchmark = benchmarks.get(directory, {}).get(leaf)
             primary_source = None
+            score_from_aggregate = False
             if benchmark is not None:
                 primary_source = next(
                     metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric
                 )
+                score_from_aggregate = primary_source.endswith("_avg")
             samples = _add_lm_eval_rows(
                 store,
                 relative.rsplit("/", 1)[-1],
@@ -615,6 +618,7 @@ def _write_sample_archive(
                 samples,
                 n_benchmark=benchmark.n_benchmark if benchmark is not None else None,
                 n_attempted=benchmark.n_attempted if benchmark is not None else None,
+                score_from_aggregate=score_from_aggregate,
             )
             coverage[task_key] = task_coverage_result
             if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):

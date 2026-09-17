@@ -300,6 +300,35 @@ def test_aggregate_scored_task_counts_every_enumerated_document_as_scored(tmp_pa
     assert all(sample_from_archive_row(row).correct is None for row in stored)
 
 
+def test_missing_sample_metrics_do_not_imply_aggregate_scoring(tmp_path):
+    results = tmp_path / "run" / "results"
+    directory = results / "gsm8k" / "model"
+    directory.mkdir(parents=True)
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"gsm8k": {"exact_match": 0.5}},
+                **_result_contract("gsm8k", "exact_match", "exact_match", 0.5, n_benchmark=2, n_attempted=2),
+            }
+        )
+    )
+    rows = []
+    for doc_id in range(2):
+        row = _lm_eval_row(doc_id, "none", 1.0, "7")
+        del row["metrics"], row["exact_match"]
+        rows.append(row)
+    (directory / "samples_gsm8k_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    export = export_lm_eval_samples(str(results), tasks=(EvalTaskConfig("gsm8k", 0),))
+
+    assert export.coverage["gsm8k"] == TaskCoverage(
+        n_benchmark=2,
+        n_attempted=2,
+        n_scored=0,
+        errors={"ungraded": 2},
+    )
+
+
 def test_rebuild_reports_when_no_sources_were_preserved(tmp_path):
     # An archive written before source preservation must be rebuilt from the results tree; saying so
     # is what keeps a caller from reading "0 samples" as a successful rebuild.
