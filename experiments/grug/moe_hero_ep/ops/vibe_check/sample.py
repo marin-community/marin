@@ -157,9 +157,15 @@ def sample(request: SampleRequest, store_root: str) -> None:
     for prompt, ids in zip(request.spec.prompts, prompt_ids, strict=True):
         if not prompt.expected:
             raise ValueError(f"Prompt has no expected completion: {prompt.id}")
-        expected = tokenizer.encode(prompt.expected, add_special_tokens=False)
-        if not expected or len(ids) + len(expected) > request.spec.context_length:
-            raise ValueError(f"Expected completion does not fit the context: {prompt.id}")
+        combined = tokenizer.encode(prompt.text + prompt.expected, add_special_tokens=True)
+        if combined[: len(ids)] != ids:
+            raise ValueError(
+                f"Reference tokenization changes the prompt tokens: {prompt.id}. "
+                "Move shared formatting into the prompt so its tokens remain a prefix."
+            )
+        expected = combined[len(ids) :]
+        if not expected or len(ids) + len(expected) + 1 > request.spec.context_length:
+            raise ValueError(f"Expected completion with EOS does not fit the context: {prompt.id}")
         expected_ids.append(expected)
     logger.info(
         "Tokenization completed: prompt tokens=%d, expected tokens=%d, context=%d, max new tokens=%d",

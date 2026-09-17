@@ -147,6 +147,9 @@ class SampleResult(Record):
             if row.expected_scores is not None:
                 if prompt.expected is None:
                     raise ValueError("Expected token scores have no reference completion")
+                expected_ids = [token.token_id for token in row.expected_scores]
+                if not expected_ids or expected_ids[-1] != self.eos_token_id or self.eos_token_id in expected_ids[:-1]:
+                    raise ValueError("Expected token scores must end with exactly one EOS token")
                 if "".join(token.text for token in row.expected_scores) != prompt.expected:
                     raise ValueError("Expected token text does not match the reference completion")
                 if len(row.prompt_token_ids) + len(row.expected_scores) > spec.context_length:
@@ -178,10 +181,6 @@ class SampleStore:
                 raise ValueError(f"Request provenance does not match filename {path.name}")
             requests.append(request)
         return requests
-
-    def results(self, spec: SamplingSpec) -> list[SampleResult]:
-        completed = self.completed_ids()
-        return [self.result(request.sample_id) for request in self.requests(spec) if request.sample_id in completed]
 
     def completed_ids(self) -> set[str]:
         return {path.name.removesuffix(".json") for path in (self.root / "results/*.json").glob()}

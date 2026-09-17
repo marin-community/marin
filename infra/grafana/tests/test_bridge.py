@@ -22,6 +22,7 @@ from conftest import (
     make_k8s_source,
     queried_namespace,
 )
+from errors import FinelogUnavailableError
 from finelog.errors import QueryResultTooLargeError, StatsError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
@@ -47,6 +48,7 @@ from loom_alerts import (
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from relay_health import RelayNamespaceStatus, RelaySenderStatus
+from rl_producers import RL_PRODUCER_NAMESPACES
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
@@ -105,6 +107,9 @@ class FakeSource:
             raise self._raises
         return self._table
 
+    def namespaces(self) -> frozenset[str]:
+        return frozenset(RL_PRODUCER_NAMESPACES)
+
     def health(self) -> FinelogHealth:
         return self._health
 
@@ -118,6 +123,7 @@ def _client(
     k8s_fleet: K8sFleet | None = None,
     loom_alerts: LoomAlertClient | None = None,
     slack_alerts: SlackAlertClient | None = None,
+    raise_server_exceptions: bool = True,
 ) -> TestClient:
     github = GithubSource(auth=None, timeout=5.0)
     return TestClient(
@@ -130,7 +136,8 @@ def _client(
             WandbSource(timeout=5.0),
             loom_alerts,
             slack_alerts,
-        )
+        ),
+        raise_server_exceptions=raise_server_exceptions,
     )
 
 
@@ -139,11 +146,14 @@ def _get(client: TestClient, sql: str, **params):
 
 
 class NamespaceSource(FakeSource):
-    """A finelog holding only some namespaces, answering the rest the way DataFusion does."""
+    """A finelog holding only some namespaces, and failing any query naming another."""
 
     def __init__(self, present: set[str], rows: pa.Table) -> None:
         super().__init__(rows)
-        self._present = present
+        self._present = frozenset(present)
+
+    def namespaces(self) -> frozenset[str]:
+        return self._present
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
         self.queries.append(sql)
@@ -170,15 +180,15 @@ _PRODUCER_ROW = finelog_result(
 )
 
 
-def test_the_producer_census_answers_when_a_namespace_is_absent():
-    """A namespace the deployment has never held is dropped from the census rather than failing it."""
+def test_the_producer_census_never_queries_a_namespace_the_deployment_lacks():
+    """Naming an absent namespace fails the statement at plan time, so the census leaves it out."""
     source = NamespaceSource({"telemetry_v1.marinskyrl", "telemetry_v1.vllm"}, _PRODUCER_ROW)
 
     resp = _producers(_client(source))
 
     assert resp.status_code == 200
     assert len(resp.json()) == 2
-    assert any("telemetry_v1.harbor" in sql for sql in source.queries), "harbor was never attempted"
+    assert not any("telemetry_v1.harbor" in sql for sql in source.queries)
 
 
 def test_the_producer_census_reports_a_real_query_failure_rather_than_an_empty_table():
@@ -247,6 +257,29 @@ def test_oversized_result_is_a_400_with_guidance():
     resp = _get(_client(FakeSource(raises=QueryResultTooLargeError("query returned 500000 rows"))), "SELECT 1")
     assert resp.status_code == 400
     assert "narrow the time range" in resp.json()["error"]
+
+
+def test_alert_endpoints_return_non_firing_results_when_finelog_is_unavailable():
+    source = FakeSource(raises=FinelogUnavailableError("unavailable"))
+    client = _client(source)
+
+    assert client.get("/finelog/marin/alerts/query", params={"sql": "SELECT 1"}).json() == []
+    assert client.get("/finelog/marin/alerts/training_stalls").json() == [
+        {"cluster": "fleet", "job": "", "run": "", "phase": "idle", "reason": "healthy", "value": 0}
+    ]
+
+
+@pytest.mark.parametrize(
+    "path, params",
+    [
+        ("/finelog/marin/alerts/query", {"sql": "SELECT 1"}),
+        ("/finelog/marin/alerts/training_stalls", {}),
+    ],
+)
+def test_alert_endpoints_surface_invalid_finelog_results(path, params):
+    client = _client(FakeSource(raises=pa.ArrowInvalid("invalid result")), raise_server_exceptions=False)
+
+    assert client.get(path, params=params).status_code == 500
 
 
 def test_repeated_identical_panels_hit_finelog_once():
