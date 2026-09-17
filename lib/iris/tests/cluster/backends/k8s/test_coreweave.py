@@ -298,6 +298,10 @@ def test_start_controller_creates_controller_resources():
     # is provisioned so the reference resolves at admission.
     assert deploy_spec["template"]["spec"]["priorityClassName"] == "iris-system"
     assert k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-system") is not None
+    batch_priority_class = k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-batch")
+    assert batch_priority_class is not None
+    assert batch_priority_class["value"] == 0
+    assert batch_priority_class["preemptionPolicy"] == "PreemptLowerPriority"
     assert {
         name: k8s.get_json(K8sResource.WORKLOAD_PRIORITY_CLASSES, name)["value"]
         for name in (
