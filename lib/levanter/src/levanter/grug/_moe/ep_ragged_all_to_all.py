@@ -21,6 +21,7 @@ Axis names used in the shape annotations:
 
 import functools
 import logging
+import math
 from collections.abc import Callable
 from enum import auto, IntEnum
 from typing import Protocol
@@ -30,13 +31,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
-from levanter.grug._moe.common import (
-    _assignment_validity,
-    _capacity_ceiling,
-    _interleave_gate_up,
-    _scaled_capacity,
-    CapacityDrops,
-)
+from levanter.grug._moe.common import _assignment_validity, _interleave_gate_up, _scaled_capacity, CapacityDrops
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
@@ -332,7 +327,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     tokens_per_shard = x_local.shape[0]
     topk = selected_experts_local.shape[1]
     assignments_per_shard = tokens_per_shard * topk
-    physical_capacity = _capacity_ceiling(assignments_per_shard, capacity_factor=capacity_factor)
+    physical_capacity = int(math.ceil(capacity_factor * assignments_per_shard))
     physical_capacity = max(local_experts, physical_capacity)
 
     # Local experts are processed in sequential chunks so only one chunk's transport buffers
@@ -342,7 +337,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     # which also makes drop clipping per-chunk.
     chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
     chunk_experts = local_experts // chunks
-    chunk_capacity = max(chunk_experts, (physical_capacity + chunks - 1) // chunks)
+    chunk_capacity = max(chunk_experts, int(math.ceil(physical_capacity / chunks)))
     hidden_dim = x_local.shape[1]
 
     with jax.named_scope("dispatch"):
@@ -356,7 +351,6 @@ def _moe_mlp_ep_ragged_a2a_local(
         logical_capacity = _scaled_capacity(
             valid_assignments,
             capacity_factor=capacity_factor,
-            max_assignments=assignments_per_shard * ep_size,
             divisor=ep_size,
             minimum=local_experts,
             maximum=physical_capacity,

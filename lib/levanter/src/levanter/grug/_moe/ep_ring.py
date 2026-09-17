@@ -3,6 +3,7 @@
 
 """Ring expert-parallel Grug MoE backend."""
 
+import math
 from collections.abc import Callable
 
 import jax
@@ -16,7 +17,6 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
     _assignment_validity,
-    _capacity_ceiling,
     _scaled_capacity,
     CapacityDrops,
 )
@@ -58,14 +58,13 @@ def _moe_mlp_ep_ring_local(
             )
 
         ep_size = num_experts // local_experts
-        physical_capacity = _capacity_ceiling(assignments, capacity_factor=capacity_factor, divisor=ep_size)
+        physical_capacity = int(math.ceil(capacity_factor * assignments / ep_size))
         physical_capacity = min(assignments, max(local_experts, physical_capacity))
         assignment_valid = _assignment_validity(token_valid_global, tokens=tokens, topk=topk)
         valid_assignments = jnp.sum(assignment_valid, dtype=jnp.int32)
         logical_capacity = _scaled_capacity(
             valid_assignments,
             capacity_factor=capacity_factor,
-            max_assignments=assignments,
             divisor=ep_size,
             minimum=local_experts,
             maximum=physical_capacity,
