@@ -8,7 +8,10 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from taskcompendium.models import ExactAnswer, Source, TaskRequirements, TaskSpec
+import msgspec
+
+from taskcompendium.grading import validate_verifier
+from taskcompendium.models import SCHEMA_VERSION, Source, TaskRequirements, TaskSpec, VerifierSpec
 from taskcompendium.rendering import AnswerFormat, Rendering, render_instruction
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
@@ -37,10 +40,12 @@ def validate_binding(specification: TaskSpec, binding: HarborTaskBinding) -> Non
 def read_specification(path: Path) -> TaskSpec:
     """Read the private semantic record from an exported Harbor task."""
     data = json.loads(path.read_text())
-    return TaskSpec(
+    if data["schema_version"] != SCHEMA_VERSION:
+        raise ValueError(f"Unsupported TaskSpec schema: {data['schema_version']}")
+    specification = TaskSpec(
         id=data["id"],
         instructions=data["instructions"],
-        verifier=ExactAnswer(**data["verifier"]),
+        verifier=msgspec.convert(data["verifier"], type=VerifierSpec, strict=True),
         source=Source(**data["source"]),
         requirements=TaskRequirements(
             capabilities=tuple(data["requirements"]["capabilities"]),
@@ -48,6 +53,8 @@ def read_specification(path: Path) -> TaskSpec:
         ),
         schema_version=data["schema_version"],
     )
+    validate_verifier(specification.verifier)
+    return specification
 
 
 def read_binding(path: Path) -> HarborTaskBinding:
@@ -70,6 +77,7 @@ def lower_to_harbor(
 ) -> Path:
     """Write one custom-verifier task; launch agent selection remains separate."""
     validate_binding(specification, binding)
+    validate_verifier(specification.verifier)
     instruction = render_instruction(specification, rendering)
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "environment").mkdir()

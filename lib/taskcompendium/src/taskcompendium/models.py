@@ -4,8 +4,9 @@
 """Private semantics for one deterministic, single-turn answer task."""
 
 from dataclasses import dataclass
+from typing import Any
 
-SCHEMA_VERSION = "0.1"
+SCHEMA_VERSION = "0.2"
 
 
 @dataclass(frozen=True)
@@ -23,16 +24,11 @@ class Source:
 
 
 @dataclass(frozen=True)
-class ExactAnswer:
-    """An exact reference answer and its text-normalization rules."""
+class VerifierSpec:
+    """A private verifier kind and the parameters passed to its handler."""
 
-    expected: str
-    ignore_case: bool = True
-    ignore_whitespace: bool = True
-
-    def __post_init__(self) -> None:
-        if not self.expected.strip():
-            raise ValueError("An exact answer is required")
+    kind: str
+    parameters: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -54,7 +50,7 @@ class TaskSpec:
 
     id: str
     instructions: str
-    verifier: ExactAnswer
+    verifier: VerifierSpec
     source: Source
     requirements: TaskRequirements
     schema_version: str = SCHEMA_VERSION

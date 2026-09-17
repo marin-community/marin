@@ -5,6 +5,8 @@
 
 import dataclasses
 import json
+import subprocess
+import sys
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
@@ -12,9 +14,10 @@ from threading import Thread
 import pytest
 from harbor.models.task.task import Task
 
+from taskcompendium.grading import exact_answer
 from taskcompendium.harbor.runner import HarborLaunch, run_trial
-from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
-from taskcompendium.models import ExactAnswer, Source, TaskRequirements, TaskSpec
+from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor, read_specification
+from taskcompendium.models import Source, TaskRequirements, TaskSpec, VerifierSpec
 from taskcompendium.rendering import AnswerFormat, Rendering
 
 
@@ -59,7 +62,7 @@ def specification() -> TaskSpec:
     return TaskSpec(
         id="arithmetic-7-plus-5",
         instructions="What is 7 + 5?",
-        verifier=ExactAnswer("12"),
+        verifier=exact_answer("12"),
         source=Source("hand-authored", "2026-09-16", "arithmetic-7-plus-5", "1"),
         requirements=TaskRequirements(),
     )
@@ -85,6 +88,7 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
     assert not (task / "tests" / "test.sh").exists()
     assert "12" not in (task / "instruction.md").read_text()
     assert "verif" not in (task / "instruction.md").read_text().lower()
+    assert json.loads((task / "specification.json").read_text())["verifier"]["kind"] == "exact_answer"
 
     result = await run_trial(
         task, binding, HarborLaunch("replay", agent_kwargs={"response": response}), tmp_path / "trials", "run"
@@ -120,6 +124,51 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
 
     with pytest.raises(ValueError, match="cannot satisfy"):
         lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), HarborTaskBinding(), tmp_path / "task")
+
+
+@pytest.mark.parametrize(
+    "verifier,message",
+    [
+        (VerifierSpec("unknown_kind", {}), "Unknown or ambiguous verifier kind"),
+        (VerifierSpec("exact_answer", {"expected": 12}), "Invalid 'exact_answer' verifier parameters"),
+        (VerifierSpec("exact_answer", {"expected": "12", "extra": True}), "Invalid 'exact_answer' verifier parameters"),
+    ],
+)
+def test_lowering_rejects_unknown_or_invalid_verifier_before_writing(tmp_path, specification, verifier, message):
+    specification = dataclasses.replace(specification, verifier=verifier)
+
+    with pytest.raises(ValueError, match=message):
+        lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), HarborTaskBinding(), tmp_path / "task")
+    assert not (tmp_path / "task").exists()
+
+
+def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, specification):
+    task = lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), HarborTaskBinding(), tmp_path / "task")
+    script = (
+        "import json, sys; from pathlib import Path; "
+        "from taskcompendium.grading import grade_answer; "
+        "from taskcompendium.lowering import read_rendering, read_specification; "
+        "root = Path(sys.argv[1]); "
+        "result = grade_answer(read_specification(root / 'specification.json'), "
+        "read_rendering(root / 'rendering.json'), '12'); "
+        "print(json.dumps({'status': result.status, 'reward': result.reward}))"
+    )
+
+    completed = subprocess.run([sys.executable, "-c", script, str(task)], capture_output=True, text=True, check=True)
+
+    assert json.loads(completed.stdout) == {"status": "graded", "reward": 1.0}
+
+
+def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification):
+    task = lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), HarborTaskBinding(), tmp_path / "task")
+    path = task / "specification.json"
+    payload = json.loads(path.read_text())
+    payload["schema_version"] = "0.1"
+    payload["verifier"] = {"expected": "12", "ignore_case": True, "ignore_whitespace": True}
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match=r"Unsupported TaskSpec schema: 0\.1"):
+        read_specification(path)
 
 
 async def test_launch_rejects_binding_changed_after_export(tmp_path, specification):
