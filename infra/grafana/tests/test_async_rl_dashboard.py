@@ -106,7 +106,7 @@ def store():
         add("lifecycle", body={"state": "started"})
         add("terminal", body={"status": "completed", "reason": "normal_exit"})
         add("policy_step", 1)
-        add("policy_weights_published", body={"completed_update": 1})
+        add("weight_sync_completed", body={"model_version_step": 1})
         for kind, value in [("generated_token", 150), ("consumed_response_token", 100), ("consumed_loss_token", 90)]:
             add("work_completed", value, attributes={"work_kind": kind})
         for phase in (
@@ -115,52 +115,53 @@ def store():
             "run_training",
             "fwd_logprobs_values_reward",
             "train_critic_and_policy",
-            "weight_pause",
-            "weight_broadcast",
-            "weight_resume",
+            "sync_weights",
+            "init_weight_sync_state",
+            "offload_policy_model_to_cpu",
         ):
             add("phase_duration_seconds", 2, attributes={"phase": phase})
         for value in (10, 30):
             add("rollout_wait_seconds", value, attributes={"wait": "slot", "stat": "sum"})
         for value in (2, 10):
-            add("rollout_wait_count", value, attributes={"wait": "slot"})
+            add("rollout_waits", value, attributes={"wait": "slot"})
         add("rollout_wait_seconds", 18, attributes={"wait": "slot", "stat": "max"})
         for value in (1, 5, 3):
             add("rollout_queue_depth", value)
         add("rollout_capacity", 64)
-        add("rollout_buffer_dwell_seconds", 0.5, attributes={"outcome": "consumed"})
+        add("rollout_buffer_dwell_seconds", 0.5, attributes={"disposition": "consumed"})
         add("rollout_staleness_steps", 1)
         add("phase_duration_seconds", 2, attributes={"phase": "rollout_call", "outcome": "success"})
         add("phase_duration_seconds", -0.25, attributes={"phase": "rollout_call_residual", "outcome": "success"})
         add(
             "phase_duration_seconds",
             8,
-            attributes={"phase": "megatron_policy_train_total", "outcome": "success", "rank": "0"},
+            attributes={"phase": "ppo_train", "outcome": "success", "rank": "0", "backend": "megatron"},
             execution="worker",
         )
         add(
             "phase_duration_seconds",
             -0.5,
-            attributes={"phase": "megatron_policy_train_residual", "outcome": "success", "rank": "0"},
+            attributes={"phase": "ppo_train_residual", "outcome": "success", "rank": "0", "backend": "megatron"},
             execution="worker",
         )
         add("event_loop_lag_seconds", 0.1)
-        add("policy_training_interval", attributes={"outcome": "success"}, body={"started": 10, "finished": 20})
-        for call, finish, tokens, process in [
-            ("a", 15, 7, "trainer"),
-            ("b", 19, 11, "trainer"),
-            ("outside", 25, 17, "trainer"),
-            ("different-clock", 15, 999, "other"),
-        ]:
+        # The training window below spans BASE_EPOCH_MS to BASE_EPOCH_MS + 10 s; calls a and b
+        # finish inside it, "outside" finishes after it.
+        for call, finish, tokens in [("a", 5000, 7), ("b", 9000, 11), ("outside", 15000, 17)]:
             add(
                 "rollout_call",
                 attributes={"outcome": "success"},
-                body={"call_id": call, "started": 9, "finished": finish, "response_tokens": tokens},
-                process=process,
+                body={
+                    "call_id": call,
+                    "started_unix_ms": BASE_EPOCH_MS - 1000,
+                    "finished_unix_ms": BASE_EPOCH_MS + finish,
+                    "duration_seconds": (finish + 1000) / 1000,
+                    "response_tokens": tokens,
+                },
             )
-        for outcome, tokens in [("consumed", 100), ("epoch_discarded", 50)]:
-            add("rollout_group_count", 1, attributes={"outcome": outcome})
-            add("rollout_group_tokens", tokens, attributes={"outcome": outcome})
+        for disposition, tokens in [("consumed", 100), ("epoch_discarded", 50)]:
+            add("rollout_groups", 1, attributes={"disposition": disposition})
+            add("rollout_group_tokens", tokens, attributes={"disposition": disposition})
         for metric, value in [
             ("reward/avg_raw_reward", 0.5),
             ("eval/all/avg_score", 0.25),
@@ -175,15 +176,15 @@ def store():
             ("policy/raw_grad_norm", 4),
             ("consumed/length_stop_fraction", 0.25),
             ("consumed/stop_reason_coverage", 1),
-            ("policy/behavior_drift/log_ratio_mean", -0.1),
-            ("policy/behavior_drift/mean_squared_log_ratio", 0.04),
+            ("policy/mismatch/pooled/log_ratio_mean", -0.1),
+            ("policy/mismatch/pooled/log_ratio_mean_squared", 0.04),
             ("tis/batch_skipped_no_logprobs", 0),
             ("tis/skipped_fraction", 0),
-            ("policy/behavior_drift/abs_log_ratio_p99", 0.7),
-            ("policy/behavior_drift/lower_clip_pressure", 0.2),
-            ("policy/behavior_drift/upper_clip_pressure", 0.1),
-            ("policy/behavior_drift/finite_fraction", 0.75),
-            ("policy/behavior_drift/token_weight_ess_fraction", 0.8),
+            ("policy/mismatch/pooled/log_ratio_abs_p99", 0.7),
+            ("policy/mismatch/pooled/lower_clip_pressure", 0.2),
+            ("policy/mismatch/pooled/upper_clip_pressure", 0.1),
+            ("policy/mismatch/pooled/finite_fraction", 0.75),
+            ("policy/mismatch/pooled/ess_fraction", 0.8),
             ("async/performance/core_seconds", 10),
             ("async/performance/cycle_seconds", 25),
             ("async/performance/consumed_loss_tokens_per_core_second", 100),
@@ -196,7 +197,7 @@ def store():
             add(
                 "training_metric_value",
                 value,
-                attributes={"metric": metric, "phase": "eval" if metric.startswith("eval/") else "train"},
+                attributes={"metric": metric, "payload_kind": "eval" if metric.startswith("eval/") else "train"},
             )
         add(
             "cuda_memory_observation",
@@ -206,7 +207,7 @@ def store():
                 "worker_role": "policy",
                 "rank": "0",
                 "gpu_uuid": "GPU-A",
-                "phase": "ppo_forward_backward_update",
+                "phase": "ppo_train",
             },
             body={
                 "peak_allocated_bytes": 4 * 2**30,
@@ -217,7 +218,7 @@ def store():
             },
         )
         phase_start = BASE_EPOCH_MS
-        for phase, start, finish in [("training", 0, 10000), ("publication", 10000, 14000)]:
+        for phase, start, finish in [("training", 0, 10000), ("weight_sync", 10000, 14000)]:
             add(
                 "async_phase_window",
                 attributes={"phase": phase, "outcome": "success"},
@@ -228,7 +229,7 @@ def store():
                 },
             )
         # Valid 0->4s (40 tokens); counter reset 4->6s excluded; valid 6->8s (20).
-        # 8->12s crosses publication boundary: cannot attribute it to either phase.
+        # 8->12s crosses the weight-sync boundary: cannot attribute it to either phase.
         for engine, samples in [
             ("engine-A", [(0, 100), (4000, 140), (6000, 5), (8000, 25), (12000, 100)]),
             ("engine-B", [(0, 1000), (4000, 1080)]),
@@ -255,24 +256,27 @@ def store():
                 process="other",
                 attributes={"engine": "engine-A", "metric_source": "vllm", "source_temporality": "cumulative_snapshot"},
             )
-        # Two optimizer steps, both within one display bucket: do not pool their ages.
-        for step, age, tokens in [(2, 0, 10), (2, 1, 30), (2, 1, 50), (3, 0, 20), (3, 1, 70)]:
-            add("rollout_staleness_steps", age, attributes={"step": str(step)})
-            # consumed_age carries body.age and body.response_tokens; older emitters lack the event.
-            add("consumed_age", attributes={"step": str(step)}, body={"age": age, "response_tokens": tokens})
+        # Two optimizer steps, both within one display bucket: do not pool their staleness.
+        for step, staleness, tokens in [(2, 0, 10), (2, 1, 30), (2, 1, 50), (3, 0, 20), (3, 1, 70)]:
+            add("rollout_staleness_steps", staleness, attributes={"step": str(step)})
+            # consumed_staleness carries body.staleness and body.response_tokens; older emitters lack it.
+            add(
+                "consumed_staleness",
+                attributes={"step": str(step)},
+                body={"staleness": staleness, "response_tokens": tokens},
+            )
         for step, scale in [(2, 1), (3, 2)]:
             for metric, value in [
-                ("policy/mismatch/age0/abs_log_ratio_mean", 0.1),
-                ("policy/mismatch/age1/abs_log_ratio_mean", 0.3),
-                ("policy/mismatch/age0/abs_log_ratio_p999", 0.7),
-                ("policy/mismatch/age0/ess_fraction", 0.8),
-                ("policy/by_update/0/stale/abs_log_ratio_mean", 0.02),
-                ("policy/by_update/1/stale/abs_log_ratio_mean", 0.05),
-                ("policy/stale/ess_fraction", 0.9),
-                ("policy/mismatch/pooled/pos_first256/abs_log_ratio_mean", 0.12),
-                ("policy/mismatch/pooled/pos_last256/abs_log_ratio_mean", 0.23),
-                ("policy/stale/pos_first256/abs_log_ratio_mean", 0.01),
-                ("policy/stale/pos_last256/abs_log_ratio_mean", 0.04),
+                ("policy/mismatch/staleness0/log_ratio_abs_mean", 0.1),
+                ("policy/mismatch/staleness1/log_ratio_abs_mean", 0.3),
+                ("policy/mismatch/staleness0/log_ratio_abs_p999", 0.7),
+                ("policy/mismatch/staleness0/ess_fraction", 0.8),
+                ("policy/log_ratio_abs_mean", 0.05),
+                ("policy/log_ratio_ess_fraction", 0.9),
+                ("policy/mismatch/pooled/pos_first256/log_ratio_abs_mean", 0.12),
+                ("policy/mismatch/pooled/pos_last256/log_ratio_abs_mean", 0.23),
+                ("policy/log_ratio_pos_first256/log_ratio_abs_mean", 0.01),
+                ("policy/log_ratio_pos_last256/log_ratio_abs_mean", 0.04),
                 ("policy/grad_cosine", 0.2),
                 ("policy/grad_cosine_min", -0.3),
                 ("policy/grad_cosine_max", 0.4),
@@ -287,7 +291,7 @@ def store():
                 add(
                     "training_metric_value",
                     value * scale,
-                    attributes={"metric": metric, "phase": "train", "step": str(step)},
+                    attributes={"metric": metric, "payload_kind": "train", "step": str(step)},
                 )
         add("telemetry_lost_records", 0)
         add("telemetry_rejected_records", 0)
@@ -320,8 +324,8 @@ def test_wait_means_use_await_counts_and_queue_gauges_use_last_value(store):
 def test_drift_panels_preserve_signed_values_and_do_not_invent_missing_observations(store):
     drift = {row["series"]: row["value"] for row in query(store, "Pre-update model log-ratio drift")}
     assert drift == {
-        "policy/behavior_drift/log_ratio_mean · driver": -0.1,
-        "policy/behavior_drift/abs_log_ratio_p99 · driver": 0.7,
+        "policy/mismatch/pooled/log_ratio_mean · driver": -0.1,
+        "policy/mismatch/pooled/log_ratio_abs_p99 · driver": 0.7,
     }
     store.execute("DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='training_metric_value'")
     assert query(store, "Drift coverage and token-weight concentration") == []
@@ -363,14 +367,14 @@ def test_consumed_length_stops_distinguish_zero_from_incomplete_coverage(store):
     assert query(store, title) == []
 
 
-def test_overlap_joins_only_the_identical_process_clock_and_distinguishes_unknown(store):
+def test_overlap_counts_calls_finishing_inside_the_training_window_and_distinguishes_unknown(store):
     title = "Rollouts completing during policy training"
     assert query(store, title) == [
         {"execution_uid": "driver", "step": 1, "coverage": "observed", "completed_calls": 2, "returned_tokens": 18}
     ]
     store.execute(
         "DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='rollout_call' "
-        "AND CAST(json_get(body_json,'finished') AS DOUBLE)<20"
+        f"AND CAST(json_get(body_json,'finished_unix_ms') AS BIGINT)<{BASE_EPOCH_MS + 10000}"
     )
     assert query(store, title)[0]["completed_calls"] == 0
     store.execute("DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='rollout_call'")
@@ -379,14 +383,15 @@ def test_overlap_joins_only_the_identical_process_clock_and_distinguishes_unknow
     assert query(store, title)[0]["coverage"] == "no rollout records"
 
 
-def test_window_clipped_policy_interval_reports_unknown_overlap(store):
+def test_window_clipped_training_window_reports_unknown_overlap(store):
     store.execute(
-        f'UPDATE "telemetry_v1.marinskyrl" SET timestamp_ms={WINDOW_START_MS + 5000} '
-        "WHERE name='policy_training_interval'"
+        'UPDATE "telemetry_v1.marinskyrl" SET body_json=json_merge_patch(body_json, '
+        f"'{{\"started_unix_ms\": {WINDOW_START_MS - 1000}}}') "
+        "WHERE name='async_phase_window' AND json_get(attributes_json,'phase')='training'"
     )
     store.execute(
         f"UPDATE \"telemetry_v1.marinskyrl\" SET timestamp_ms={WINDOW_START_MS - 1000} WHERE name='rollout_call' "
-        "AND CAST(json_get(body_json,'finished') AS DOUBLE)<20"
+        f"AND CAST(json_get(body_json,'finished_unix_ms') AS BIGINT)<{BASE_EPOCH_MS + 10000}"
     )
     row = query(store, "Rollouts completing during policy training")[0]
     assert row["coverage"] == "partial interval"
@@ -458,10 +463,10 @@ def test_phase_service_rates_exclude_resets_boundaries_and_other_collectors(stor
     assert b["tokens_per_sampled_second"] == 20
     assert b["coverage_fraction"] == 0.4
     for engine in ["engine-A", "engine-B"]:
-        publication = selected["publication", engine]
-        assert publication["tokens_per_sampled_second"] is None
-        assert publication["coverage_fraction"] == 0
-        assert publication["intervals"] == 0
+        weight_sync = selected["weight_sync", engine]
+        assert weight_sync["tokens_per_sampled_second"] is None
+        assert weight_sync["coverage_fraction"] == 0
+        assert weight_sync["intervals"] == 0
 
 
 def test_learner_memory_keeps_interval_peak_separate_from_current_and_device_usage(store):
@@ -495,31 +500,31 @@ def test_phase_service_rates_reject_clock_adjusted_windows(store):
 
 
 @pytest.fixture
-def age_store(store):
+def staleness_store(store):
     """An empty native telemetry table for independent weighted-batch cases."""
     store.execute('DELETE FROM "telemetry_v1.marinskyrl"')
     return store
 
 
-AGE_METRICS = {
-    "age_min": "async/staleness_min",
-    "age_max": "async/staleness_max",
+STALENESS_METRICS = {
+    "staleness_min": "async/staleness_min",
+    "staleness_max": "async/staleness_max",
     "loss": "async/performance/consumed_loss_tokens",
     "tokens": "async/performance/consumed_response_tokens",
     "seqs": "consumed/sequences",
-    "mslr": "policy/behavior_drift/mean_squared_log_ratio",
-    "ess": "policy/behavior_drift/token_weight_ess_fraction",
+    "mslr": "policy/mismatch/pooled/log_ratio_mean_squared",
+    "ess": "policy/mismatch/pooled/ess_fraction",
     "reward": "reward/avg_raw_reward",
-    "finite": "policy/behavior_drift/finite_fraction",
-    "missing": "policy/behavior_drift/missing_behavior",
+    "finite": "policy/mismatch/pooled/finite_fraction",
+    "missing": "policy/mismatch/pooled/missing_behavior",
     "policy_loss": "policy/policy_loss",
 }
 
 
-def add_age_batch(database, step, *, omit=None, job="job", execution="driver", phase="train", **changes):
+def add_staleness_batch(database, step, *, omit=None, job="job", execution="driver", phase="train", **changes):
     values = dict(
-        age_min=1,
-        age_max=1,
+        staleness_min=1,
+        staleness_max=1,
         loss=100,
         tokens=200,
         seqs=2,
@@ -538,7 +543,7 @@ def add_age_batch(database, step, *, omit=None, job="job", execution="driver", p
             job=job,
             execution=execution,
             seq=step,
-            attributes={"step": str(step), "metric": AGE_METRICS[key], "phase": phase},
+            attributes={"step": str(step), "metric": STALENESS_METRICS[key], "payload_kind": phase},
         )
         for key, value in values.items()
         if key != omit
@@ -546,31 +551,33 @@ def add_age_batch(database, step, *, omit=None, job="job", execution="driver", p
     database.executemany('INSERT INTO "telemetry_v1.marinskyrl" VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', rows)
 
 
-def query_age_panels(database):
+def query_staleness_panels(database):
     return (
-        query(database, "Uniform-age batch diagnostics"),
-        query(database, "Uniform-age diagnostic token coverage")[0],
+        query(database, "Uniform-staleness batch diagnostics"),
+        query(database, "Uniform-staleness diagnostic token coverage")[0],
     )
 
 
-def test_weighting_mixed_duplicates_and_filters(age_store):
-    add_age_batch(age_store, 1)
-    add_age_batch(age_store, 1)  # duplicate delivery must not double count
-    add_age_batch(age_store, 2, loss=300, tokens=1200, seqs=3, mslr=0.3, ess=0.8, reward=0.75)
-    add_age_batch(age_store, 3, age_min=0, age_max=2, loss=600, mslr=900)  # integer mean still mixed
-    add_age_batch(age_store, 4, job="other-job", loss=10000)
-    add_age_batch(age_store, 4, execution="other-execution", loss=10000)
-    add_age_batch(age_store, 4, phase="eval", loss=10000)
-    table, c = query_age_panels(age_store)
+def test_weighting_mixed_duplicates_and_filters(staleness_store):
+    add_staleness_batch(staleness_store, 1)
+    add_staleness_batch(staleness_store, 1)  # duplicate delivery must not double count
+    add_staleness_batch(staleness_store, 2, loss=300, tokens=1200, seqs=3, mslr=0.3, ess=0.8, reward=0.75)
+    add_staleness_batch(
+        staleness_store, 3, staleness_min=0, staleness_max=2, loss=600, mslr=900
+    )  # integer mean still mixed
+    add_staleness_batch(staleness_store, 4, job="other-job", loss=10000)
+    add_staleness_batch(staleness_store, 4, execution="other-execution", loss=10000)
+    add_staleness_batch(staleness_store, 4, phase="eval", loss=10000)
+    table, c = query_staleness_panels(staleness_store)
     assert len(table) == 1
     row = table[0]
-    assert row["age"] == 1 and row["updates"] == 2
+    assert row["staleness"] == 1 and row["updates"] == 2
     assert row["mean_response_tokens"] == 280
     assert row["token_weighted_mslr"] == pytest.approx(0.25)
     assert row["minimum_ess_fraction"] == 0.8 and row["mean_update_raw_reward"] == 0.5
     assert (
-        c["uniform_age_token_fraction"] == 0.4
-        and c["mixed_age_loss_tokens"] == 600
+        c["uniform_staleness_token_fraction"] == 0.4
+        and c["mixed_staleness_loss_tokens"] == 600
         and c["observed_loss_tokens"] == 1000
     )
     assert c["uniform_updates"] == 2 and c["excluded_updates"] == 1
@@ -579,9 +586,9 @@ def test_weighting_mixed_duplicates_and_filters(age_store):
 @pytest.mark.parametrize(
     "change",
     [
-        {"age_min": 0.5, "age_max": 0.5},
-        {"age_min": -1, "age_max": -1},
-        {"omit": "age_min"},
+        {"staleness_min": 0.5, "staleness_max": 0.5},
+        {"staleness_min": -1, "staleness_max": -1},
+        {"omit": "staleness_min"},
         {"omit": "mslr"},
         {"finite": 0.9},
         {"missing": 1},
@@ -596,36 +603,38 @@ def test_weighting_mixed_duplicates_and_filters(age_store):
         {"tokens": 0.5},
     ],
 )
-def test_incomplete_or_invalid_batch_keeps_token_denominator(age_store, change):
-    add_age_batch(age_store, 1)
-    add_age_batch(age_store, 2, loss=300, **change)
-    table, c = query_age_panels(age_store)
+def test_incomplete_or_invalid_batch_keeps_token_denominator(staleness_store, change):
+    add_staleness_batch(staleness_store, 1)
+    add_staleness_batch(staleness_store, 2, loss=300, **change)
+    table, c = query_staleness_panels(staleness_store)
     assert table[0]["updates"] == 1
-    assert c["uniform_age_token_fraction"] == 0.25 and c["observed_loss_tokens"] == 400
+    assert c["uniform_staleness_token_fraction"] == 0.25 and c["observed_loss_tokens"] == 400
 
 
 @pytest.mark.parametrize("loss", [None, -1, 0.5, float("inf"), float("nan")])
-def test_invalid_loss_denominator_is_unavailable(age_store, loss):
-    add_age_batch(age_store, 1)
-    add_age_batch(age_store, 2, loss=loss)
-    _, c = query_age_panels(age_store)
-    assert c["uniform_age_token_fraction"] is None and c["observed_loss_tokens"] is None
+def test_invalid_loss_denominator_is_unavailable(staleness_store, loss):
+    add_staleness_batch(staleness_store, 1)
+    add_staleness_batch(staleness_store, 2, loss=loss)
+    _, c = query_staleness_panels(staleness_store)
+    assert c["uniform_staleness_token_fraction"] is None and c["observed_loss_tokens"] is None
 
 
-def test_conflicting_diagnostic_excluded_but_conflicting_loss_invalidates_coverage(age_store):
-    add_age_batch(age_store, 1)
-    add_age_batch(age_store, 1, mslr=0.2)
-    table, c = query_age_panels(age_store)
-    assert table[0]["age"] is None and c["uniform_age_token_fraction"] == 0 and c["observed_loss_tokens"] == 100
-    add_age_batch(age_store, 1, loss=101)
-    _, c = query_age_panels(age_store)
-    assert c["uniform_age_token_fraction"] is None
+def test_conflicting_diagnostic_excluded_but_conflicting_loss_invalidates_coverage(staleness_store):
+    add_staleness_batch(staleness_store, 1)
+    add_staleness_batch(staleness_store, 1, mslr=0.2)
+    table, c = query_staleness_panels(staleness_store)
+    assert (
+        table[0]["staleness"] is None and c["uniform_staleness_token_fraction"] == 0 and c["observed_loss_tokens"] == 100
+    )
+    add_staleness_batch(staleness_store, 1, loss=101)
+    _, c = query_staleness_panels(staleness_store)
+    assert c["uniform_staleness_token_fraction"] is None
 
 
-def test_empty_selection_is_explicit_and_unavailable(age_store):
-    table, c = query_age_panels(age_store)
-    assert table[0]["status"] == "No qualifying uniform-age batches" and table[0]["age"] is None
-    assert c["uniform_age_token_fraction"] is None and c["observed_loss_tokens"] is None
+def test_empty_selection_is_explicit_and_unavailable(staleness_store):
+    table, c = query_staleness_panels(staleness_store)
+    assert table[0]["status"] == "No qualifying uniform-staleness batches" and table[0]["staleness"] is None
+    assert c["uniform_staleness_token_fraction"] is None and c["observed_loss_tokens"] is None
 
 
 def test_evaluation_stop_panels_preserve_score_contributions_and_missing_coverage(store):
@@ -662,33 +671,33 @@ def test_periodic_evaluation_metrics_logged_in_train_phase_are_visible(store):
     # The real trainer logs the initial eval separately, then merges periodic evals into its training row.
     store.execute(
         'UPDATE "telemetry_v1.marinskyrl" SET '
-        'attributes_json=json_merge_patch(attributes_json, \'{"phase":"train"}\') '
+        'attributes_json=json_merge_patch(attributes_json, \'{"payload_kind":"train"}\') '
         "WHERE json_get(attributes_json,'metric') LIKE 'eval/%'"
     )
     assert len(query(store, "Evaluation response length and stop coverage")) == 5
     assert len(query(store, "Evaluation score contributions by stop class")) == 3
 
 
-def test_realised_age_panels_count_groups_and_sum_tokens_per_age(store):
-    groups = query(store, "Realised age — groups per step")
-    tokens = query(store, "Realised age — tokens per step")
-    assert [row["value"] for row in groups if row["series"].startswith("age 0 ·")] == [1, 1]
-    assert [row["value"] for row in groups if row["series"].startswith("age 1 ·")] == [1, 2, 1]
-    assert [row["value"] for row in tokens if row["series"].startswith("age 1 ·")] == [80, 70]
-    assert [row["value"] for row in tokens if row["series"].startswith("age 0 ·")] == [10, 20]
+def test_realised_staleness_panels_count_groups_and_sum_tokens_per_staleness(store):
+    groups = query(store, "Realised staleness — groups per step")
+    tokens = query(store, "Realised staleness — tokens per step")
+    assert [row["value"] for row in groups if row["series"].startswith("staleness 0 ·")] == [1, 1]
+    assert [row["value"] for row in groups if row["series"].startswith("staleness 1 ·")] == [1, 2, 1]
+    assert [row["value"] for row in tokens if row["series"].startswith("staleness 1 ·")] == [80, 70]
+    assert [row["value"] for row in tokens if row["series"].startswith("staleness 0 ·")] == [10, 20]
     assert tokens[0]["t"] == tokens[1]["t"] and tokens[2]["t"] == tokens[3]["t"]
     store.execute(
         'DELETE FROM "telemetry_v1.marinskyrl" WHERE '
         "(name='rollout_staleness_steps' AND value=1) OR "
-        "(name='consumed_age' AND json_get(body_json,'age')='1')"
+        "(name='consumed_staleness' AND json_get(body_json,'staleness')='1')"
     )
-    for title in ("Realised age — groups per step", "Realised age — tokens per step"):
-        assert all(row["series"].startswith("age 0 ·") for row in query(store, title))
-    store.execute("DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='consumed_age'")
-    assert query(store, "Realised age — tokens per step") == []
+    for title in ("Realised staleness — groups per step", "Realised staleness — tokens per step"):
+        assert all(row["series"].startswith("staleness 0 ·") for row in query(store, title))
+    store.execute("DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='consumed_staleness'")
+    assert query(store, "Realised staleness — tokens per step") == []
 
 
-def test_publication_stage_timeline_orders_training_and_publication_windows(store):
+def test_weight_sync_timeline_orders_training_and_sync_windows(store):
     rows = query(store, "Weight-sync stages")
     assert {row["execution"] for row in rows} == {"driver"}
     spans = {row["state"]: row for row in rows}
@@ -700,24 +709,25 @@ def test_publication_stage_timeline_orders_training_and_publication_windows(stor
     assert [row["start"] for row in rows] == sorted(row["start"] for row in rows)
 
 
-def test_two_ratio_panels_read_mismatch_and_stale_families_separately(store):
-    mismatch = query(store, "Engine mismatch \u03c1 (age-0)")
-    age = query(store, "Mismatch by realised age")
-    stale = query(store, "Staleness ratio r_stale by update index")
-    assert [row["value"] for row in mismatch if "/abs_log_ratio_mean ·" in row["series"]] == [0.1, 0.2]
-    assert [row["value"] for row in age if "/age1/" in row["series"]] == [0.3, 0.6]
-    assert [row["value"] for row in stale if "/1/stale/" in row["series"]] == [0.05, 0.1]
-    assert not any("mismatch" in row["series"] for row in stale)
+def test_ratio_panels_read_mismatch_and_learner_drift_families_separately(store):
+    mismatch = query(store, "Engine mismatch \u03c1 (staleness 0)")
+    staleness = query(store, "Mismatch by realised staleness")
+    drift = query(store, "Learner drift within the update")
+    assert [row["value"] for row in mismatch if "/log_ratio_abs_mean ·" in row["series"]] == [0.1, 0.2]
+    assert [row["value"] for row in staleness if "/staleness1/" in row["series"]] == [0.3, 0.6]
+    assert [row["value"] for row in drift if row["series"].startswith("policy/log_ratio_abs_mean ·")] == [0.05, 0.1]
+    assert not any("mismatch" in row["series"] for row in drift)
     store.execute(
-        'DELETE FROM "telemetry_v1.marinskyrl" WHERE ' "json_get(attributes_json,'metric') LIKE 'policy/mismatch/age1/%'"
+        'DELETE FROM "telemetry_v1.marinskyrl" WHERE '
+        "json_get(attributes_json,'metric') LIKE 'policy/mismatch/staleness1/%'"
     )
-    assert not any("/age1/" in row["series"] for row in query(store, "Mismatch by realised age"))
+    assert not any("/staleness1/" in row["series"] for row in query(store, "Mismatch by realised staleness"))
 
 
 def test_position_panel_keeps_ratio_families_and_positions_separate(store):
     rows = query(store, "Position dependence of |log \u03c1|")
     assert [row["value"] for row in rows if "mismatch/pooled/pos_last256" in row["series"]] == [0.23, 0.46]
-    assert [row["value"] for row in rows if "stale/pos_last256" in row["series"]] == [0.04, 0.08]
+    assert [row["value"] for row in rows if "log_ratio_pos_last256" in row["series"]] == [0.04, 0.08]
     assert not any("pos_middle" in row["series"] for row in rows)
 
 

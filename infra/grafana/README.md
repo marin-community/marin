@@ -826,17 +826,17 @@ token is attenuated to that subset even if the app holds broader grants.
 
 ### Async RL diagnostic panels
 
-The nine panels beginning with “Realised age” add per-step age distributions,
-training/weight-sync intervals, separate ratio families, gradient persistence,
-and correction activity. Bars share each optimizer step's final observation time.
+The nine panels beginning with “Realised staleness” add per-step staleness
+distributions, training/weight-sync intervals, separate ratio families, gradient
+persistence, and correction activity. Bars share each optimizer step's final observation time.
 The timeline uses explicit interval ends; its sync completion markers have a
 1 ms display width, not measured duration. The M2 reference is visible only
 alongside an M2 observation and is not a validated quality boundary.
 
-Availability follows the run's instrumentation. `consumed_age` is a per-group
-token event (`body.age`, `body.response_tokens`, role/step attributes); a run that
-does not emit it has no token-age series, and the same holds for the ratio,
-gradient and correction series. The drift panels read the consume-time
+Availability follows the run's instrumentation. `consumed_staleness` is a
+per-group token event (`body.staleness`, `body.response_tokens`, role/step
+attributes); a run that does not emit it has no token-staleness series, and the
+same holds for the ratio, gradient and correction series. The drift panels read the consume-time
 learner/vLLM ratio and fill from a wider set of runs.
 
 ## Adding a dashboard
