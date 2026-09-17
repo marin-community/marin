@@ -3,10 +3,12 @@
 
 import dataclasses
 import datetime
+import io
 import json
 import os
 import pathlib
 import tempfile
+from contextlib import contextmanager
 from datetime import timedelta
 
 import equinox
@@ -110,6 +112,28 @@ def test_checkpoint_metadata_remote_commit_does_not_require_delete():
     assert metadata["step"] == 7
     assert metadata["is_temporary"] is False
     assert metadata["model"] == "hero"
+
+
+def test_checkpoint_metadata_failed_publication_is_not_discoverable(monkeypatch):
+    fsspec.register_implementation("delete-denied", _DeleteDeniedMemoryFileSystem, clobber=True)
+    _DeleteDeniedMemoryFileSystem.clear_instance_cache()
+    checkpoint_path = "delete-denied://bucket/failed-publication/step-8"
+    StoragePath(checkpoint_path).mkdirs()
+
+    @contextmanager
+    def fail_on_close(self, mode="rb", **kwargs):
+        # Buffer the object like a remote upload, then fail before publication at close.
+        with io.StringIO() as buffer:
+            yield buffer
+            raise OSError("object publication failed")
+
+    monkeypatch.setattr(StoragePath, "open", fail_on_close)
+
+    with pytest.raises(OSError, match="object publication failed"):
+        checkpoint_module._save_metadata(checkpoint_path, 8, False)
+
+    assert not StoragePath(f"{checkpoint_path}/metadata.json").exists()
+    assert discover_latest_checkpoint("delete-denied://bucket/failed-publication") is None
 
 
 def test_checkpointer_changing_policy():
