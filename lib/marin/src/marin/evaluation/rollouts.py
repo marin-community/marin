@@ -13,13 +13,13 @@ from collections.abc import Iterable, Iterator
 from finestore.eval import (
     ARCHIVE_SAMPLES_TABLE,
     ARCHIVE_STEPS_TABLE,
+    ROLLOUT_SCHEMA_VERSION,
     ConversationType,
     EvalSample,
     EvaluationStore,
     ParticipantType,
     RolloutContentType,
     RolloutRecord,
-    ROLLOUT_SCHEMA_VERSION,
     SampleKind,
     StepRecord,
     sample_from_archive_row,
@@ -28,7 +28,7 @@ from finestore.reader import ReadView
 
 _ASSISTANT_ROLES = frozenset({"agent", "assistant", "model"})
 _SYSTEM_ROLES = frozenset({"context", "developer", "system"})
-_COMPLETE_OBJECT = "_marin/rollouts-v1-complete.json"
+_COMPLETE_OBJECT = f"_marin/rollouts-v{ROLLOUT_SCHEMA_VERSION}-complete.json"
 
 
 def _participant(role: str) -> ParticipantType:
@@ -46,10 +46,12 @@ def _participant(role: str) -> ParticipantType:
     return ParticipantType.OTHER
 
 
-def _sample_output(sample: EvalSample) -> tuple[str, str]:
+def _sample_output_and_metadata(sample: EvalSample) -> tuple[str, str]:
     if sample.kind is not SampleKind.MULTIPLE_CHOICE or sample.model_choice is None:
         return sample.output or "", "{}"
-    choice = sample.choices[sample.model_choice] if sample.choices and sample.model_choice < len(sample.choices) else None
+    choice = (
+        sample.choices[sample.model_choice] if sample.choices and sample.model_choice < len(sample.choices) else None
+    )
     if choice is None:
         return "", json.dumps({"choice_index": sample.model_choice})
     return choice.text, json.dumps({"choice_index": sample.model_choice, "choice_label": choice.label})
@@ -95,7 +97,7 @@ def rollout_records_from_sample(sample: EvalSample, *, trial_id: str = "") -> li
         )
         response_turn = 1
 
-    output, metadata_json = _sample_output(sample)
+    output, metadata_json = _sample_output_and_metadata(sample)
     records.append(
         RolloutRecord(
             task=sample.task,
@@ -178,11 +180,11 @@ def _step_rows(reader: ReadView) -> Iterator[StepRecord]:
         yield StepRecord(**{name: row.get(name) for name in fields})
 
 
-def normalize_rollouts(root: str, *, writer_id: str) -> int:
+def normalize_rollouts(root: str, *, writer_id: str) -> None:
     """Idempotently derive the shared ``rollouts`` table from an evaluation archive."""
     reader = ReadView(root)
     if reader.read_blob(_COMPLETE_OBJECT) is not None:
-        return 0
+        return
     records = itertools.chain(
         (
             record
@@ -193,17 +195,14 @@ def normalize_rollouts(root: str, *, writer_id: str) -> int:
     )
     first = next(records, None)
     if first is None:
-        return 0
-    count = 1
+        return
     with EvaluationStore.open(root, writer_id=writer_id) as store:
         store.add_rollouts((first,))
         for record in records:
             store.add_rollouts((record,))
-            count += 1
         store.add_artifact(
             _COMPLETE_OBJECT,
             json.dumps({"schema_version": ROLLOUT_SCHEMA_VERSION}).encode(),
             metadata={"content_type": "application/json"},
         )
         store.seal()
-    return count

@@ -7,8 +7,8 @@ import json
 
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
-    ROLLOUTS_MERGE_KEY,
     ROLLOUT_SCHEMA_VERSION,
+    ROLLOUTS_MERGE_KEY,
     Choice,
     EvalSample,
     EvaluationStore,
@@ -49,7 +49,7 @@ def test_evalchemy_samples_normalize_to_one_conversation_across_grading_filters(
         )
         store.seal()
 
-    assert normalize_rollouts(root, writer_id="marin-rollouts") == 3
+    normalize_rollouts(root, writer_id="marin-rollouts")
 
     reader = ReadView(root)
     rows = reader.scan(ARCHIVE_ROLLOUTS_TABLE).to_pylist()
@@ -63,7 +63,7 @@ def test_evalchemy_samples_normalize_to_one_conversation_across_grading_filters(
     assert {row["conversation_type"] for row in rows} == {"chat"}
     assert reader.read_blob("sources/evalchemy/gsm8k/native/samples.jsonl") == b'{"doc_id": 7}\n'
 
-    assert normalize_rollouts(root, writer_id="marin-rollouts-retry") == 0
+    normalize_rollouts(root, writer_id="marin-rollouts-retry")
     assert ReadView(root).scan(ARCHIVE_ROLLOUTS_TABLE).num_rows == 3
 
 
@@ -101,7 +101,7 @@ def test_harbor_steps_normalize_message_parts_and_token_data(tmp_path):
         store.add_artifact("trial-1/trajectory.json", b'{"steps": []}')
         store.seal()
 
-    assert normalize_rollouts(root, writer_id="marin-rollouts") == 4
+    normalize_rollouts(root, writer_id="marin-rollouts")
 
     reader = ReadView(root)
     rows = reader.scan(ARCHIVE_ROLLOUTS_TABLE).to_pylist()
