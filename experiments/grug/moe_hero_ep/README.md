@@ -41,6 +41,29 @@ The attention, shared-expert, language-model-head, and optimizer states use the 
 Bounded diagnostics write metrics only by default. `--save-checkpoints` writes checkpoints below
 `--checkpoint-path` and resumes from the newest complete checkpoint.
 
+## Coordinated garbage collection
+
+Set `GrugTrainerConfig.gc_interval=100` identically on every rank to opt in. The default
+`None` preserves automatic Python garbage collection. After ten training steps in each process
+(including after resume), automatic cyclic collection is disabled. All ranks then synchronize,
+collect, and synchronize again after checkpoint work at completed global steps divisible by the
+interval. Reference-count deallocation continues. The previous GC policy is restored on exit.
+
+`throughput/gc_time` includes both synchronization barriers. `throughput/checkpoint_time` includes
+the save-decision broadcast and any synchronous checkpoint work. `throughput/iteration_time`
+includes batch loading, training, callbacks, checkpoint work, and GC; use elapsed time per update
+for comparisons because the existing `throughput/duration` excludes the last two operations.
+
+The [single-rack validation](https://iris.oa.dev/#/job/%2Fmwittmann%2Fgc-sync-9205-smallbatch-20260916-coord)
+used the full model with one sequence per GPU on 64 GPUs. Across 300 measured updates after ten
+warmup steps, elapsed time fell from 799.194 to 770.273 seconds (3.62%). Across all 64 ranks, automatic GC produced 71
+full collections across 53 steps; coordinated GC produced 64 collections at each of steps 100,
+200, and 300. Shared pauses were 1.25–1.46 seconds. The largest per-rank RSS increase in the
+treatment, sampled every ten measured steps relative to the post-warmup baseline, was 6.2 MiB. This checked checkpoint decisions with writes disabled; it did not validate
+production throughput, checkpoint writes, or long-term memory growth. Cycles remain live between
+scheduled collections, and a missing rank can stall the barriers. Keep the feature opt-in pending
+a monitored production trial. See [#9205](https://github.com/marin-community/marin/issues/9205).
+
 ## Why this recipe
 
 [#8549](https://github.com/marin-community/marin/pull/8549) selected the ragged transport in a

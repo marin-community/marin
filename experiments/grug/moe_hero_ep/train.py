@@ -10,7 +10,7 @@ import logging
 import os
 import time
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
@@ -58,6 +58,7 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe_hero_ep.coordinated_gc import GC_WARMUP_STEPS, coordinated_gc
 from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, RematMode, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
@@ -272,6 +273,8 @@ class GrugTrainerConfig:
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
     data_seed: int | None = None
     log_every: int = 1
+    # None preserves automatic GC. Set identically on every rank; 100 was validated on EP64.
+    gc_interval: int | None = None
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
@@ -886,6 +889,8 @@ def _make_train_step(
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    if config.trainer.gc_interval is not None and config.trainer.gc_interval <= 0:
+        raise ValueError("GC interval must be positive")
     if config.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION:
         verify_ragged_pjrt()
     if config.tensorstore_cache_bytes is not None:
@@ -941,7 +946,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     dashboard = (
         TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
     )
-    with set_mesh(mesh), dashboard:
+    with set_mesh(mesh), dashboard, ExitStack() as gc_resources:
         batch_schedule = trainer.batch_schedule
 
         @jax.jit
@@ -1157,9 +1162,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
 
+        gc_start_step = int(state.step) + GC_WARMUP_STEPS
+        collect = None
+
         # Main optimization loop.
         try:
             while int(state.step) < stop_step:
+                if config.trainer.gc_interval is not None and int(state.step) == gc_start_step:
+                    collect = gc_resources.enter_context(coordinated_gc(config.trainer.gc_interval))
+                iteration_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 current_step = int(state.step)
@@ -1219,6 +1230,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
+                checkpoint_start = time.perf_counter()
                 if checkpointer is not None:
                     with callbacks.progress_event_scope(
                         state_callbacks.emit_event,
@@ -1226,6 +1238,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                     ):
                         checkpointer.on_step(tree=state, step=int(state.step))
+
+                checkpoint_duration = time.perf_counter() - checkpoint_start
+                gc_duration = collect(int(state.step)) if collect is not None else 0.0
+                levanter.tracker.log(
+                    {
+                        "throughput/checkpoint_time": checkpoint_duration,
+                        "throughput/gc_time": gc_duration,
+                        "throughput/iteration_time": time.perf_counter() - iteration_start,
+                    },
+                    step=step,
+                )
 
         except BaseException:
             logger.exception(
@@ -1244,6 +1267,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     checkpointer.on_step(tree=state, step=int(state.step), force=True)
                     checkpointer.wait_until_finished()
         finally:
+            gc_resources.close()
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
     levanter.tracker.current_tracker().finish()
