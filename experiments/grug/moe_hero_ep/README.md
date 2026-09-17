@@ -43,26 +43,35 @@ Bounded diagnostics write metrics only by default. `--save-checkpoints` writes c
 
 ## Coordinated garbage collection
 
-Set `GrugTrainerConfig.gc_interval=100` identically on every rank to opt in. The default
-`None` preserves automatic Python garbage collection. After ten training steps in each process
-(including after resume), automatic cyclic collection is disabled. All ranks then synchronize,
-collect, and synchronize again after checkpoint work at completed global steps divisible by the
-interval. Reference-count deallocation continues. The previous GC policy is restored on exit.
+Pass `--gc-interval 100` to `python -m experiments.grug.moe_hero_ep.launch_diagnostics`,
+or set `gc_interval=100` in `hero_grug_trainer_config`. The default `None` preserves automatic
+Python garbage collection. The launcher distributes one configuration to all ranks. After ten
+training steps in each process (including after resume), disable automatic cyclic collection
+and collect once. Then collect after checkpoint work at completed global steps divisible by the
+interval. Training collectives bound rank skew; GC adds no barriers. Collect after each evaluation
+hook as well, so cycles holding temporary eval buffers do not wait for the next periodic boundary.
+Reference-count deallocation continues. The previous GC policy is restored on exit.
 
-`throughput/gc_time` includes both synchronization barriers. `throughput/checkpoint_time` includes
-the save-decision broadcast and any synchronous checkpoint work. `throughput/iteration_time`
-includes batch loading, training, callbacks, checkpoint work, and GC; use elapsed time per update
-for comparisons because the existing `throughput/duration` excludes the last two operations.
+`throughput/gc_time` measures local startup and scheduled collection time; the `garbage_collection`
+profiler annotation also covers evaluation cleanup. Evaluation cleanup is included in callback
+and iteration time. `throughput/checkpoint_time` includes the save-decision broadcast and any
+synchronous checkpoint work. `throughput/iteration_time` includes batch loading, training,
+callbacks, checkpoint work, and GC. The existing `throughput/duration` excludes loading,
+callbacks, checkpoints, and GC. Tracker steps are zero-based: collections after completed updates
+100/200/300 appear at x=99/199/299. Use elapsed time per update for comparisons.
 
 The [single-rack validation](https://iris.oa.dev/#/job/%2Fmwittmann%2Fgc-sync-9205-smallbatch-20260916-coord)
-used the full model with one sequence per GPU on 64 GPUs. Across 300 measured updates after ten
-warmup steps, elapsed time fell from 799.194 to 770.273 seconds (3.62%). Across all 64 ranks, automatic GC produced 71
-full collections across 53 steps; coordinated GC produced 64 collections at each of steps 100,
-200, and 300. Shared pauses were 1.25–1.46 seconds. The largest per-rank RSS increase in the
-treatment, sampled every ten measured steps relative to the post-warmup baseline, was 6.2 MiB. This checked checkpoint decisions with writes disabled; it did not validate
-production throughput, checkpoint writes, or long-term memory growth. Cycles remain live between
-scheduled collections, and a missing rank can stall the barriers. Keep the feature opt-in pending
-a monitored production trial. See [#9205](https://github.com/marin-community/marin/issues/9205).
+used the full model with one sequence per GPU on 64 GPUs. It tested an earlier version with
+barriers around each collection and no startup or evaluation cleanup. Across 300 measured updates
+after ten warmup steps, elapsed time fell from 799.194 to 770.273 seconds (3.62%). Across all ranks,
+automatic GC produced 71 full collections across 53 steps; coordinated GC produced 64 collections
+at each of updates 100, 200, and 300. Shared pauses including barriers were 1.25–1.46 seconds.
+The largest per-rank RSS increase in the treatment, sampled every ten measured steps relative to
+the post-warmup baseline, was 6.2 MiB. Device-memory deltas were not recorded. This checked
+checkpoint decisions with writes disabled; it did not validate production throughput, checkpoint
+writes, evaluation, or long-term memory growth. Cycles can retain device buffers between
+collections. Keep the feature opt-in pending a production-batch trial that monitors both host
+memory and HBM, including evaluation transitions. See [#9205](https://github.com/marin-community/marin/issues/9205).
 
 ## Why this recipe
 
@@ -100,6 +109,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 
 | option | effect |
 | --- | --- |
+| `--gc-interval` | opts into cyclic GC at shared completed-step boundaries after warmup |
 | `--dp-racks` | sets the data-parallel rack count; `--batch-size` stays global |
 | `--batch-size` | sets global sequences per step and the optimizer token budget |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |

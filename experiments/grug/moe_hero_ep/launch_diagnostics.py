@@ -77,6 +77,7 @@ def build_diagnostic_run(
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
+    gc_interval: int | None = None,
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
     checkpoint_path: str | None = None,
@@ -174,6 +175,7 @@ def build_diagnostic_run(
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
+        gc_interval=gc_interval,
         master_param_mode=master_param_mode,
     )
     train_resources = ResourceConfig.with_gpu(
@@ -415,6 +417,12 @@ def build_diagnostic_run(
     help="Run the paloma suite every N steps. 0 disables eval (throughput-only run).",
 )
 @click.option(
+    "--gc-interval",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Collect cyclic garbage at shared step boundaries after warmup. Omit for automatic GC.",
+)
+@click.option(
     "--watch-interval",
     type=click.IntRange(min=0),
     default=HERO_WATCH_INTERVAL,
@@ -477,6 +485,7 @@ def main(
     checkpoint_path: str | None,
     checkpoint_debug: bool,
     eval_every: int,
+    gc_interval: int | None,
     watch_interval: int,
     watch_mode: str,
     profile_steps: int,
@@ -513,6 +522,7 @@ def main(
             else None
         ),
         eval_every=eval_every,
+        gc_interval=gc_interval,
         watch_interval=watch_interval,
         watch_mode=WatchMode(watch_mode),
         profile_steps=profile_steps,

@@ -8,33 +8,36 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
-from jax.experimental import multihost_utils
+import jax
 
 GC_WARMUP_STEPS = 10
 
 
+def collect_garbage() -> float:
+    """Collect locally and return the pause duration, without a cross-rank barrier."""
+    with jax.profiler.TraceAnnotation("garbage_collection"):
+        started = time.perf_counter()
+        gc.collect()
+        return time.perf_counter() - started
+
+
 @contextmanager
 def coordinated_gc(interval: int) -> Iterator[Callable[[int], float]]:
-    """Collect at shared completed-step numbers and restore the caller's GC policy.
+    """Collect after warmup and at shared steps; restore the caller's GC policy.
 
-    Enter after compilation warmup. Every rank must invoke the yielded function
-    with identical step numbers. Its returned time includes both barriers.
+    The caller validates a positive interval before dispatch. Training collectives
+    bound rank skew; adding GC barriers would delay ranks that could collect early.
     """
-    if interval <= 0:
-        raise ValueError("GC interval must be positive")
     was_enabled = gc.isenabled()
     gc.disable()
 
     def collect(step: int) -> float:
         if step % interval:
             return 0.0
-        started = time.perf_counter()
-        multihost_utils.sync_global_devices(f"gc-start-{step}")
-        gc.collect()
-        multihost_utils.sync_global_devices(f"gc-done-{step}")
-        return time.perf_counter() - started
+        return collect_garbage()
 
     try:
+        collect_garbage()
         yield collect
     finally:
         if was_enabled:
