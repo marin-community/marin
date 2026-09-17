@@ -716,18 +716,6 @@ class MoEMLP(eqx.Module):
     routed_moe: QBRoutedMoE
     cfg: GrugModelConfig = eqx.field(static=True)
 
-    @property
-    def router(self) -> jax.Array:
-        return self.routed_moe.router
-
-    @property
-    def router_bias(self) -> jax.Array:
-        return self.routed_moe.router_bias
-
-    @property
-    def expert_mlp(self) -> MoEExpertMlp:
-        return self.routed_moe.expert_mlp
-
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
         k_router, k_expert = random.split(key, 2)
@@ -1124,11 +1112,17 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
                 f"{layer_prefix}.post_attention_layernorm.weight": block.rms_mlp.weight,
                 f"{layer_prefix}.mlp_gated_norm.down_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_down),
                 f"{layer_prefix}.mlp_gated_norm.up_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_up),
-                f"{layer_prefix}.mlp.router.weight": _linear_inference_tensor(block.mlp.router),
-                f"{layer_prefix}.mlp.router.bias": block.mlp.router_bias,
-                f"{layer_prefix}.mlp.experts.gate_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_gate),
-                f"{layer_prefix}.mlp.experts.up_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_up),
-                f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_down),
+                f"{layer_prefix}.mlp.router.weight": _linear_inference_tensor(block.mlp.routed_moe.router),
+                f"{layer_prefix}.mlp.router.bias": block.mlp.routed_moe.router_bias,
+                f"{layer_prefix}.mlp.experts.gate_proj.weight": _linear_inference_tensor(
+                    block.mlp.routed_moe.expert_mlp.w_gate
+                ),
+                f"{layer_prefix}.mlp.experts.up_proj.weight": _linear_inference_tensor(
+                    block.mlp.routed_moe.expert_mlp.w_up
+                ),
+                f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(
+                    block.mlp.routed_moe.expert_mlp.w_down
+                ),
             }
         )
         # SConv weights are learned; export them per site so the checkpoint reconstructs an sconv model.

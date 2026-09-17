@@ -472,18 +472,6 @@ class MoEMLP(eqx.Module):
     routed_moe: QBRoutedMoE
     cfg: GrugModelConfig = eqx.field(static=True)
 
-    @property
-    def router(self) -> jax.Array:
-        return self.routed_moe.router
-
-    @property
-    def router_bias(self) -> jax.Array:
-        return self.routed_moe.router_bias
-
-    @property
-    def expert_mlp(self) -> MoEExpertMlp:
-        return self.routed_moe.expert_mlp
-
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
         k_router, k_expert = random.split(key, 2)

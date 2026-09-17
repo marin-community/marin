@@ -694,39 +694,6 @@ class DenseMLP(eqx.Module):
         return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
-def _local_routing_stats(
-    selected_experts: Int[Array, "T K"],
-    router_probs: Float[Array, "T E"],
-    router_logits: Float[Array, "T E"],
-    token_valid: jax.Array,
-    mesh: jax.sharding.AbstractMesh,
-    *,
-    num_experts: int,
-) -> dict[str, jax.Array]:
-    return moe_routing_stats_local(
-        selected_experts,
-        router_probs,
-        router_logits,
-        token_valid,
-        mesh,
-        batch_axes=_BATCH_AXES,
-        num_experts=num_experts,
-    )
-
-
-def _reduce_router_stats(
-    stacked: dict[str, jax.Array],
-    *,
-    num_experts: int,
-    num_experts_per_token: int,
-) -> dict[str, jax.Array]:
-    return reduce_moe_routing_stats(
-        stacked,
-        num_experts=num_experts,
-        num_experts_per_token=num_experts_per_token,
-    )
-
-
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
     routing_entropy = router_metrics["routing_entropy_per_layer"]
     routing_counts = router_metrics["routing_counts_per_layer"]
@@ -975,12 +942,13 @@ class MoEMLP(eqx.Module):
         combine_weights = combine_weights_f.astype(x.dtype)
         mesh = get_abstract_mesh()
         # Per-shard partials only; the cross-device reduction happens once after the layer scan.
-        router_stats = _local_routing_stats(
+        router_stats = moe_routing_stats_local(
             reshard(selected_experts, P(_BATCH_AXES, None)),
             reshard(router_probs, P(_BATCH_AXES, None)),
             reshard(router_logits, P(_BATCH_AXES, None)),
             reshard(token_valid_flat, P(_BATCH_AXES)),
             mesh,
+            batch_axes=_BATCH_AXES,
             num_experts=self.cfg.num_experts,
         )
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha`.
@@ -1300,7 +1268,7 @@ class Transformer(eqx.Module):
         )
         # One cross-device reduction for the whole stack of layers, instead of one inside every
         # scan iteration. See `_local_routing_stats`.
-        reduced_router_stats = _reduce_router_stats(
+        reduced_router_stats = reduce_moe_routing_stats(
             stacked_router_stats,
             num_experts=cfg.num_experts,
             num_experts_per_token=cfg.num_experts_per_token,
