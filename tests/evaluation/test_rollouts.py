@@ -66,6 +66,20 @@ def test_evalchemy_samples_normalize_to_one_conversation_across_grading_filters(
     normalize_rollouts(root, writer_id="marin-rollouts-retry")
     assert ReadView(root).scan(ARCHIVE_ROLLOUTS_TABLE).num_rows == 3
 
+    with EvaluationStore.open(root, writer_id="evalchemy-resume") as store:
+        store.add_sample(
+            EvalSample(
+                task="gsm8k_5shot",
+                doc_id="8",
+                kind=SampleKind.GENERATION,
+                prompt_text="3 + 3?",
+                output="6",
+            )
+        )
+        store.seal()
+    normalize_rollouts(root, writer_id="marin-rollouts-resume")
+    assert ReadView(root).scan(ARCHIVE_ROLLOUTS_TABLE).num_rows == 5
+
 
 def test_harbor_steps_normalize_message_parts_and_token_data(tmp_path):
     root = str(tmp_path / "harbor")

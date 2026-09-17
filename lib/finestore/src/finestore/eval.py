@@ -207,13 +207,13 @@ def write_sample_parquet(fs, dest: str, samples: Iterable[EvalSample]) -> None:
 # --------------------------------------------------------------------------------------------------
 # FineStore archive writer: an eval run's durable output is one FineStore archive rooted at its
 # results directory, with a ``samples`` table (one row per evaluated question), a ``steps`` table
-# (Harbor trajectories flattened for compatibility), a provider-neutral ``rollouts`` conversation
-# table, and finestore's reserved ``blobs`` table for raw artifacts.
+# (Harbor trajectories flattened for compatibility), a versioned provider-neutral rollout
+# conversation table, and finestore's reserved ``blobs`` table for raw artifacts.
 # --------------------------------------------------------------------------------------------------
 
 ARCHIVE_SAMPLES_TABLE = "samples"
 ARCHIVE_STEPS_TABLE = "steps"
-ARCHIVE_ROLLOUTS_TABLE = "rollouts"
+ARCHIVE_ROLLOUTS_TABLE = f"rollouts_v{ROLLOUT_SCHEMA_VERSION}"
 
 # Blob-name prefix for preserved evaluator-native inputs. A blob under this prefix is the verbatim
 # bytes of a file the export read, keyed by its path relative to the run's results root, so a rebuild
@@ -312,8 +312,9 @@ class EvaluationStore:
     """One eval run's FineStore archive.
 
     ``samples`` holds evaluation and grading data, ``steps`` retains the earlier flattened Harbor
-    contract, and ``rollouts`` holds provider-neutral conversation parts. Raw evaluator files and
-    trajectories remain blobs. Reads go through ``ReadView`` over the same root.
+    contract, and ``rollouts_vN`` holds provider-neutral conversation parts under its schema version.
+    Raw evaluator files and trajectories remain blobs. Reads go through ``ReadView`` over the same
+    root.
     """
 
     def __init__(self, store: DataStore) -> None:

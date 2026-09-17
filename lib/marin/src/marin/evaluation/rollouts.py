@@ -29,6 +29,7 @@ from finestore.reader import ReadView
 _ASSISTANT_ROLES = frozenset({"agent", "assistant", "model"})
 _SYSTEM_ROLES = frozenset({"context", "developer", "system"})
 _COMPLETE_OBJECT = f"_marin/rollouts-v{ROLLOUT_SCHEMA_VERSION}-complete.json"
+_SOURCE_TABLES = (ARCHIVE_SAMPLES_TABLE, ARCHIVE_STEPS_TABLE)
 
 
 def _participant(role: str) -> ParticipantType:
@@ -180,10 +181,19 @@ def _step_rows(reader: ReadView) -> Iterator[StepRecord]:
         yield StepRecord(**{name: row.get(name) for name in fields})
 
 
+def _source_snapshot(reader: ReadView) -> dict[str, int]:
+    return {table: reader.max_seq(table) for table in _SOURCE_TABLES}
+
+
 def normalize_rollouts(root: str, *, writer_id: str) -> None:
     """Idempotently derive the shared ``rollouts`` table from an evaluation archive."""
     reader = ReadView(root)
-    if reader.read_blob(_COMPLETE_OBJECT) is not None:
+    source_snapshot = _source_snapshot(reader)
+    complete = reader.read_blob(_COMPLETE_OBJECT)
+    if complete is not None and json.loads(complete) == {
+        "schema_version": ROLLOUT_SCHEMA_VERSION,
+        "source_max_seq": source_snapshot,
+    }:
         return
     records = itertools.chain(
         (
@@ -202,7 +212,13 @@ def normalize_rollouts(root: str, *, writer_id: str) -> None:
             store.add_rollouts((record,))
         store.add_artifact(
             _COMPLETE_OBJECT,
-            json.dumps({"schema_version": ROLLOUT_SCHEMA_VERSION}).encode(),
+            json.dumps(
+                {
+                    "schema_version": ROLLOUT_SCHEMA_VERSION,
+                    "source_max_seq": source_snapshot,
+                },
+                sort_keys=True,
+            ).encode(),
             metadata={"content_type": "application/json"},
         )
         store.seal()

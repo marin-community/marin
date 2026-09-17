@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 from finelog.client import FlushResult, schema_from_dataclass
 from finelog.rpc import finelog_stats_pb2
-
 from marin.rollout_catalog import (
     ROLLOUT_RUNS_NAMESPACE,
     RolloutRunKind,

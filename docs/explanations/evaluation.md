@@ -41,12 +41,12 @@ or outcomes behind a universal `do_eval` interface.
 
 Evalchemy and Harbor write their results directly into FineStore. Each evaluator preserves its native
 files as source objects and writes the normalized `samples` and `steps` tables consumed by Evaldash.
-After the evaluator seals those tables, Marin derives the shared `rollouts` table from `samples` and
+After the evaluator seals those tables, Marin derives the shared `rollouts_v1` table from `samples` and
 `steps`, then records provenance and aggregate results.
 
 ### Normalized rollout table
 
-The `rollouts` table stores one ordered conversation part per row. Its primary key is
+The versioned `rollouts_v1` table stores one ordered conversation part per row. Its primary key is
 `(task, doc_id, trial_id, turn_id, part_id)`. `task`, `doc_id`, and `trial_id` identify one model
 attempt; `turn_id` orders turns; and `part_id` orders content within a turn.
 
@@ -73,7 +73,7 @@ raw record.
 Completed and failed attempts are discoverable in Finelog's `marin.rollout_runs` table. Each row
 identifies the logical run and concrete attempt, its producer and terminal status, the model and Iris
 job when known, and the URI and format of the retained rollouts. Harbor and Evalchemy rows point to
-the FineStore archive that contains `rollouts` alongside the evaluator-owned tables and raw source
+the FineStore archive that contains `rollouts_v1` alongside the evaluator-owned tables and raw source
 objects. SkyRL rows point to the retained trajectory directory and terminal model manifest; the
 catalog contract does not depend on the trajectory storage format.
 
