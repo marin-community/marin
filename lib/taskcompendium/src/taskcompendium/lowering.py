@@ -8,10 +8,11 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+<<<<<<< HEAD
 import msgspec
 
 from taskcompendium.grading import validate_verifier
-from taskcompendium.models import SCHEMA_VERSION, Source, TaskRequirements, TaskSpec, VerifierSpec
+from taskcompendium.models import AnswerKind, SCHEMA_VERSION, Source, TaskRequirements, TaskSpec, VerifierSpec
 from taskcompendium.rendering import AnswerFormat, Rendering, render_instruction
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
@@ -51,6 +52,7 @@ def read_specification(path: Path) -> TaskSpec:
             capabilities=tuple(data["requirements"]["capabilities"]),
             action_interfaces=tuple(data["requirements"]["action_interfaces"]),
         ),
+        answer_kind=AnswerKind(data["answer_kind"]),
         schema_version=data["schema_version"],
     )
     validate_verifier(specification.verifier)
