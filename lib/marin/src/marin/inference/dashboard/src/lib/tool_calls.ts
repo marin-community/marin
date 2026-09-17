@@ -1,5 +1,7 @@
 import type { ChatTemplateProtocol, ToolCall } from './types'
 
+const TOOL_CALL_ID_PREFIX = 'call_'
+
 interface PendingToolCall {
   id: string | null
   name: string
@@ -29,7 +31,7 @@ function parseToolCall(payload: string, newId: () => string): ToolCall {
   const arguments_ = functionFields.arguments ?? functionFields.parameters ?? functionFields.args
   if (arguments_ === undefined) throw new Error('Tool call must contain function arguments')
   return {
-    id: typeof fields.id === 'string' ? fields.id : `call_${newId()}`,
+    id: typeof fields.id === 'string' ? fields.id : `${TOOL_CALL_ID_PREFIX}${newId()}`,
     name,
     arguments: toolArguments(arguments_),
   }
@@ -105,7 +107,7 @@ export function finalizeToolCalls(accumulator: ToolCallAccumulator, newId: () =>
       if (!pending.name) throw new Error('Tool call must contain a function name')
       const arguments_ = pending.argumentsObject ?? toolArguments(pending.argumentsText)
       return {
-        id: pending.id ?? `call_${newId()}`,
+        id: pending.id ?? `${TOOL_CALL_ID_PREFIX}${newId()}`,
         name: pending.name,
         arguments: arguments_,
       }

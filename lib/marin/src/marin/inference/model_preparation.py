@@ -14,16 +14,19 @@ from transformers import AutoConfig, PreTrainedTokenizerBase
 from marin.inference.vllm_server import _is_object_store_path
 
 _MODEL_CACHE_PREFIX = "quick-serve-models"
-_TOOL_TEMPLATE_PROBE = [
-    {
-        "type": "function",
-        "function": {
-            "name": "probe",
-            "description": "Probe the model's tool-aware chat template.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    }
-]
+
+
+def _tool_template_probe() -> list[dict[str, object]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "probe",
+                "description": "Probe the model's tool-aware chat template.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
 
 
 def _vllm_model_path(path: str) -> str:
@@ -79,7 +82,7 @@ def tool_chat_template(tokenizer: PreTrainedTokenizerBase) -> str | None:
     """Return the tokenizer template selected when a request contains tools."""
     if tokenizer.chat_template is None:
         return None
-    return tokenizer.get_chat_template(tools=_TOOL_TEMPLATE_PROBE)
+    return tokenizer.get_chat_template(tools=_tool_template_probe())
 
 
 def read_tool_chat_template(model: str, revision: str | None = None) -> str | None:

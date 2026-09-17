@@ -28,12 +28,7 @@ export async function fetchHealth(): Promise<HealthResult> {
 }
 
 export async function fetchToolDefinitions(source: string, signal: AbortSignal): Promise<ToolDefinition[]> {
-  const response = await fetch(api('tools'), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ source }),
-    signal,
-  })
+  const response = await postJson('tools', { source }, signal)
   if (response.ok) return response.json()
   throw new Error(`tool definitions returned ${response.status}: ${await response.text()}`)
 }
@@ -44,12 +39,7 @@ export async function invokeTool(
   arguments_: Record<string, unknown>,
   signal: AbortSignal,
 ): Promise<unknown> {
-  const response = await fetch(api(`tools/${encodeURIComponent(name)}`), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ source, arguments: arguments_ }),
-    signal,
-  })
+  const response = await postJson(`tools/${encodeURIComponent(name)}`, { source, arguments: arguments_ }, signal)
   if (response.ok) return response.json()
   throw new Error(`tool returned ${response.status}: ${await response.text()}`)
 }
@@ -62,12 +52,7 @@ export async function requestCompletion(
   signal: AbortSignal,
   onData: (data: any) => void,
 ): Promise<void> {
-  const response = await fetch(api(path), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-    signal,
-  })
+  const response = await postJson(path, body, signal)
   if (!response.ok || !response.body) {
     throw new Error(`${response.status} — ${await response.text()}`)
   }
@@ -96,4 +81,13 @@ export async function requestCompletion(
       }
     }
   }
+}
+
+function postJson(path: string, body: Record<string, unknown>, signal: AbortSignal): Promise<Response> {
+  return fetch(api(path), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  })
 }

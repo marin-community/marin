@@ -52,10 +52,6 @@ from marin.inference.python_tools import (
 logger = logging.getLogger(__name__)
 PYTHON_TOOL_TIMEOUT_SECONDS = 10
 _MAX_TOOL_ERROR_LENGTH = 4_000
-_PYTHON_TOOL_OPERATION_LABELS = {
-    PythonToolOperation.DEFINITIONS: "Python tool definition",
-    PythonToolOperation.INVOKE: "Python tool",
-}
 _THINKING_DELIMITERS = (
     ("<|start_think|>", "<|end_think|>"),
     ("<think>", "</think>"),
@@ -133,6 +129,14 @@ class _SerializedPythonToolRequest(Protocol):
     def to_json_bytes(self) -> bytes: ...
 
 
+def _python_tool_operation_label(operation: PythonToolOperation) -> str:
+    match operation:
+        case PythonToolOperation.DEFINITIONS:
+            return "Python tool definition"
+        case PythonToolOperation.INVOKE:
+            return "Python tool"
+
+
 def _run_python_tool_worker(operation: PythonToolOperation, payload: bytes) -> subprocess.CompletedProcess[bytes]:
     # Keep CPython on its posix_spawn path: forking after Levanter starts JAX threads can deadlock.
     return subprocess.run(
@@ -151,7 +155,7 @@ async def _python_tool_response(
     operation: PythonToolOperation,
     parse_payload: Callable[[object], _SerializedPythonToolRequest],
 ) -> Response:
-    label = _PYTHON_TOOL_OPERATION_LABELS[operation]
+    label = _python_tool_operation_label(operation)
     try:
         payload = await request.json()
     except json.JSONDecodeError:
@@ -173,7 +177,7 @@ async def _python_tool_response(
     return Response(result.stdout, media_type="application/json")
 
 
-async def _python_tool_definitions_request(request: Request) -> Response:
+async def _python_tool_definitions_response(request: Request) -> Response:
     return await _python_tool_response(
         request,
         operation=PythonToolOperation.DEFINITIONS,
@@ -181,7 +185,7 @@ async def _python_tool_definitions_request(request: Request) -> Response:
     )
 
 
-async def _invoke_tool_request(request: Request) -> Response:
+async def _invoke_tool_response(request: Request) -> Response:
     name = request.path_params["name"]
     return await _python_tool_response(
         request,
@@ -274,8 +278,8 @@ def build_dashboard_app(
             Route("/dashboard", index),
             Route("/info", serving_info),
             Route("/health", health),
-            Route("/tools", _python_tool_definitions_request, methods=["POST"]),
-            Route("/tools/{name}", _invoke_tool_request, methods=["POST"]),
+            Route("/tools", _python_tool_definitions_response, methods=["POST"]),
+            Route("/tools/{name}", _invoke_tool_response, methods=["POST"]),
             Route("/v1/{path:path}", proxy, methods=["GET", "POST", "OPTIONS"]),
         ],
         lifespan=lifespan,

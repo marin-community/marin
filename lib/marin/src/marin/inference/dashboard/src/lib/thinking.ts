@@ -2,13 +2,13 @@ import type { ChatTemplateProtocol } from './types'
 
 type ThinkingDelimiters = readonly [open: string, close: string]
 
-const KNOWN_THINKING_DELIMITERS: ThinkingDelimiters[] = [
+const KNOWN_THINKING_DELIMITERS: readonly ThinkingDelimiters[] = Object.freeze([
   // Browser fallback for missing or stale /info metadata. Keep aligned with
   // dashboard_server.py; the Python service and TypeScript bundle cannot share a runtime constant.
-  ['<|start_think|>', '<|end_think|>'],
-  ['<think>', '</think>'],
-  ['<THINK>', '</THINK>'],
-]
+  Object.freeze(['<|start_think|>', '<|end_think|>'] as const),
+  Object.freeze(['<think>', '</think>'] as const),
+  Object.freeze(['<THINK>', '</THINK>'] as const),
+])
 
 export interface ThinkingSplit {
   thinking: string

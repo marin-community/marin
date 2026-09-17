@@ -137,7 +137,7 @@ def python_tools_from_source(source: str) -> tuple[PythonTool, ...]:
 
 
 def python_tool_definitions(source: str) -> list[dict[str, object]]:
-    """Convert typed Python functions to the tool schema used by Datakit SFT."""
+    """Convert typed Python functions to OpenAI function tool definitions."""
     return [tool.definition() for tool in python_tools_from_source(source)]
 
 

@@ -41,7 +41,7 @@ const emit = defineEmits<{ persist: [] }>()
 const draft = ref('')
 const busy = ref(false)
 const showTools = ref(false)
-const showRawStream = ref(false)
+const showRawChat = ref(false)
 const rawChat = computed(() => plainTextChat(props.conversation))
 const scroller = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
@@ -313,7 +313,7 @@ async function complete(
         </div>
       </div>
       <pre
-        v-else-if="showRawStream"
+        v-else-if="showRawChat"
         class="mx-auto max-w-3xl whitespace-pre-wrap break-words px-4 py-5 font-mono text-xs leading-relaxed text-text-secondary md:px-6"
       >{{ rawChat }}</pre>
       <div v-else class="mx-auto max-w-3xl space-y-4 px-4 py-5 md:px-6">
@@ -344,7 +344,7 @@ async function complete(
             class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted"
             title="Show the whole chat as a plain-text transcript"
           >
-            <input v-model="showRawStream" type="checkbox" class="accent-accent" />
+            <input v-model="showRawChat" type="checkbox" class="accent-accent" />
             Raw stream
           </label>
         </div>
