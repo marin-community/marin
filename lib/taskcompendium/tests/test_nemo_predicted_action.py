@@ -168,6 +168,28 @@ async def test_predicted_action_harbor_replay_outcomes(tmp_path, response, rewar
     assert not (tmp_path / "trials/run/agent/response.txt").exists()
 
 
+@pytest.mark.parametrize(
+    "launch,message",
+    [
+        (HarborLaunch("replay", agent_kwargs={"response": "text"}), "Text replay requires"),
+        (HarborLaunch("action_replay", agent_kwargs={"response": "text"}), "Action replay requires"),
+        (HarborLaunch("action_replay", model="model", agent_kwargs={"response": {}}), "cannot select a model"),
+        (HarborLaunch("action_replay"), "requires only a response"),
+        (HarborLaunch("chat", model="model"), "requires api_base"),
+        (HarborLaunch("chat", model="model", agent_kwargs={"api_base": "url", "response": {}}), "Unsupported chat"),
+    ],
+)
+async def test_predicted_action_rejects_incompatible_launch_before_trial(tmp_path, launch, message):
+    row = json.loads((FIXTURES / "predicted-action.json").read_text())
+    specification, rendering = import_row(row, canonical_sha256(row))
+    binding = HarborTaskBinding()
+    task = lower_to_harbor(specification, rendering, binding, tmp_path / "task")
+
+    with pytest.raises(ValueError, match=message):
+        await run_trial(task, binding, launch, tmp_path / "trials", "run")
+    assert not (tmp_path / "trials").exists()
+
+
 async def test_predicted_action_harbor_records_private_verifier_failure(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, rendering = import_row(row, canonical_sha256(row))

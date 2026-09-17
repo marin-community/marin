@@ -25,6 +25,10 @@ from taskcompendium.rendering import AnswerFormat
 RESPONSE_FILE = "response.txt"
 ACTION_FILE = "action.json"
 CHAT_COMPLETIONS_PATH = "/chat/completions"
+AGENT_LOG_DIR = "/logs/agent"
+VERIFIER_LOG_DIR = "/logs/verifier"
+ARTIFACTS_LOG_DIR = "/logs/artifacts"
+TESTS_DIR = "/tests"
 
 
 def _record_answer(logs_dir: Path, instruction: str, answer: str, context: AgentContext) -> None:
@@ -100,7 +104,7 @@ class NoToolEnvironment(BaseEnvironment):
         raise ValueError("Direct chat has no shell")
 
     async def empty_dirs(self, dirs, *, chmod: bool = True) -> None:
-        if not set(map(str, dirs)).issubset({"/logs/agent", "/logs/verifier", "/logs/artifacts", "/tests"}):
+        if not set(map(str, dirs)).issubset({AGENT_LOG_DIR, VERIFIER_LOG_DIR, ARTIFACTS_LOG_DIR, TESTS_DIR}):
             raise ValueError("Direct chat has no filesystem")
 
     async def upload_file(self, source_path, target_path) -> None:
@@ -113,7 +117,7 @@ class NoToolEnvironment(BaseEnvironment):
         raise ValueError("Direct chat has no filesystem")
 
     async def download_dir(self, source_dir, target_dir) -> None:
-        if source_dir not in {"/logs/agent", "/logs/artifacts"}:
+        if source_dir not in {AGENT_LOG_DIR, ARTIFACTS_LOG_DIR}:
             raise ValueError("Direct chat has no filesystem")
 
 
