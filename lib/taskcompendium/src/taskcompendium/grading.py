@@ -119,5 +119,4 @@ def _grade_exact(payload: ExactAnswerPayload, attempt: GradingAttempt) -> GradeR
 
 
 def exact_answer_handler() -> VerifierHandler:
-    """Return the exact-answer grading handler."""
     return VerifierHandler(ExactAnswerPayload, _grade_exact)
