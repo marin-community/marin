@@ -147,6 +147,26 @@ def test_json_backspace_in_math_markup_is_restored():
     assert all("\b" not in text for text in texts)
 
 
+def test_swe_agentless_source_format_suffix_does_not_drop_issue():
+    suffix = (
+        "\n\nOutput format requirement: Please put your reasoning tokens in a separate code block, starting "
+        "with <think> and ending with </think>, and the solution tokens in a separate code block, starting with "
+        "<solution> and ending with </solution>."
+    )
+    row = {
+        "messages": [
+            {"role": "user", "content": "Fix the import error." + suffix},
+            {"role": "assistant", "reasoning_content": "The import is missing.", "content": "Add the import."},
+        ]
+    }
+
+    documents = row_to_chat_doc(row, family="swe_v2", partition_name="agentless")
+
+    assert len(documents) == 1
+    assert documents[0]["messages"][0]["content"][0]["text"] == "Fix the import error."
+    assert row["messages"][0]["content"].endswith(suffix)
+
+
 def test_opencode_tool_schema_is_available_to_chat_template():
     row = {
         "messages": [

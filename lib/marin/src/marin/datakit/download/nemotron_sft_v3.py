@@ -29,11 +29,19 @@ from marin.datakit.download.nemotron_chat_prompts import SEED_DATASET_REVISIONS,
 from marin.datakit.download.rollout_transforms import load_parquet_batched, openai_chat_document
 from marin.execution.step_spec import StepSpec
 
-TRANSFORM_VERSION = "2026.09.17.chat-v2"
+TRANSFORM_VERSION = "2026.09.17.chat-v3"
 MAX_CONSECUTIVE_IDENTICAL_LINES = 256
 _SKIPPED_JSONL_LINES = MappingProxyType({("agentic_v2", "tool_calling"): frozenset({1095})})
 _RESTORED_CHAT_FAMILY = "instruction_following_chat_v3"
 _RESTORED_CHAT_PARTITION = "chat"
+_SWE_V2_FAMILY = "swe_v2"
+_SWE_V2_AGENTLESS_PARTITION = "agentless"
+# The source response uses separate reasoning_content, so this wire-format request conflicts with Marin's template.
+_SWE_V2_AGENTLESS_FORMAT_SUFFIX = (
+    "\n\nOutput format requirement: Please put your reasoning tokens in a separate code block, starting with <think> "
+    "and ending with </think>, and the solution tokens in a separate code block, starting with <solution> "
+    "and ending with </solution>."
+)
 
 _MULTILINGUAL_V1_LANGUAGES = ("de", "es", "fr", "it", "ja", "zh")
 _MULTILINGUAL_V2_LANGUAGES = ("hi", "ja", "ko", "pt")
@@ -82,10 +90,10 @@ NEMOTRON_SFT_V3_REPOSITORIES: Mapping[str, tuple[str, str, Mapping[str, str]]] =
                     )
                 },
             ),
-            "swe_v2": (
+            _SWE_V2_FAMILY: (
                 "nvidia/Nemotron-SFT-SWE-v2",
                 "bd151f3f2d89c4804dda0083d912bd9f6a0a9fb7",
-                {"agentless": "data/agentless.jsonl", "openhands_swe": "data/swe.jsonl"},
+                {_SWE_V2_AGENTLESS_PARTITION: "data/agentless.jsonl", "openhands_swe": "data/swe.jsonl"},
             ),
             "safety_v1": (
                 "nvidia/Nemotron-SFT-Safety-v1",
@@ -310,6 +318,16 @@ def row_to_chat_doc(row: dict, *, family: str, partition_name: str) -> list[dict
         if not messages:
             counters.pipeline.update_counter(f"{counter}/empty_messages_filtered", 1)
             return []
+        if family == _SWE_V2_FAMILY and partition_name == _SWE_V2_AGENTLESS_PARTITION:
+            for message in messages:
+                content = message.get("content")
+                if (
+                    message.get("role") == "user"
+                    and isinstance(content, str)
+                    and content.endswith(_SWE_V2_AGENTLESS_FORMAT_SUFFIX)
+                ):
+                    message["content"] = content.removesuffix(_SWE_V2_AGENTLESS_FORMAT_SUFFIX)
+                    counters.pipeline.update_counter(f"{counter}/format_suffix_removed", 1)
         if family == _RESTORED_CHAT_FAMILY and partition_name == _RESTORED_CHAT_PARTITION:
             first_user = next((message for message in messages if message.get("role") == "user"), None)
             if first_user is None or not first_user.get("content"):
