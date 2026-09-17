@@ -27,8 +27,16 @@ packages = ["src/taskcompendium"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 timeout = 60
-addopts = "--import-mode=importlib -m 'not integration and not docker and not manual'"
-markers = ["integration: external service", "docker: Docker daemon", "manual: explicit validation"]
+addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
+markers = [
+    "slow: long-running test",
+    "integration: external service",
+    "data_integration: external data",
+    "cluster: live cluster",
+    "requires_cluster: live cluster",
+    "docker: Docker daemon",
+    "manual: explicit validation",
+]
 
 [tool.ruff]
 extend = "../../pyproject.toml"
