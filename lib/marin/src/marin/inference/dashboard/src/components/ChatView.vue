@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onUnmounted, ref, watch } from 'vue'
 import { fetchToolDefinitions, invokeTool, isAbortError, requestCompletion } from '../lib/api'
+import { chatTemplateRequestFields } from '../lib/chat_template'
 import { CHAT_EXAMPLES } from '../lib/examples'
 import type { ChatExample } from '../lib/examples'
 import { modelMessages } from '../lib/python_tools'
@@ -39,6 +40,7 @@ const emit = defineEmits<{ persist: [] }>()
 const draft = ref('')
 const busy = ref(false)
 const showTools = ref(false)
+const showRawTokens = ref(false)
 const scroller = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
 let abort: AbortController | null = null
@@ -129,11 +131,16 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
   let reply: AssistantMessage | null = null
   try {
     const tools = pythonTools ? await fetchToolDefinitions(pythonTools, signal) : []
+    const templateFields = chatTemplateRequestFields(
+      conversation.enableThinking,
+      conversation.customInstructions,
+      tools,
+    )
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
       const request = modelMessages(conversation)
       reply = appendAssistantReply(conversation)
 
-      await complete(reply, request, tools, signal)
+      await complete(reply, request, tools, templateFields, signal)
       const calls = reply.toolCalls ?? []
       persistConversation(conversation)
       if (!calls.length) break
@@ -159,6 +166,8 @@ function appendAssistantReply(conversation: Conversation): AssistantMessage {
     role: 'assistant',
     content: '',
     thinking: '',
+    rawContent: '',
+    rawReasoning: '',
     thinkingSeconds: null,
     error: null,
     toolCalls: [],
@@ -211,6 +220,7 @@ async function complete(
   reply: AssistantMessage,
   messages: ModelMessage[],
   tools: ToolDefinition[],
+  templateFields: ReturnType<typeof chatTemplateRequestFields>,
   signal: AbortSignal,
 ) {
   let rawContent = ''
@@ -225,6 +235,7 @@ async function complete(
     temperature: props.params.temperature,
     max_tokens: props.params.maxTokens,
     top_p: props.params.topP,
+    ...templateFields,
   }
   if (tools.length) {
     body.tools = tools
@@ -238,6 +249,8 @@ async function complete(
     const reasoning = delta.reasoning_content ?? delta.reasoning
     if (reasoning) reasoningStream += reasoning
     if (delta.content) rawContent += delta.content
+    reply.rawContent = rawContent
+    reply.rawReasoning = reasoningStream
     if (tools.length && delta.tool_calls !== undefined) appendToolCallDelta(structuredCalls, delta.tool_calls)
 
     const split = splitThinking(rawContent, props.chatTemplateProtocol)
@@ -304,23 +317,33 @@ async function complete(
           :key="index"
           :message="message"
           :streaming="busy && index === conversation.messages.length - 1"
+          :show-raw-tokens="showRawTokens"
         />
       </div>
     </div>
 
     <div class="border-t border-surface-border px-4 py-3">
       <div class="mx-auto max-w-3xl">
-        <button
-          class="mb-2 flex items-center gap-2 text-xs font-medium text-text-muted transition-colors hover:text-text-secondary"
-          :class="{ 'text-accent': conversation.pythonTools.trim() }"
-          @click="showTools = !showTools"
-        >
-          <span>{{ showTools ? '▾' : '▸' }}</span>
-          <span>Python tools</span>
-          <span v-if="conversation.pythonTools.trim()" class="rounded bg-accent/10 px-1.5 py-0.5 text-[0.65rem] uppercase tracking-wide">
-            configured
-          </span>
-        </button>
+        <div class="mb-2 flex items-center justify-between gap-4">
+          <button
+            class="flex items-center gap-2 text-xs font-medium text-text-muted transition-colors hover:text-text-secondary"
+            :class="{ 'text-accent': conversation.pythonTools.trim() }"
+            @click="showTools = !showTools"
+          >
+            <span>{{ showTools ? '▾' : '▸' }}</span>
+            <span>Python tools</span>
+            <span v-if="conversation.pythonTools.trim()" class="rounded bg-accent/10 px-1.5 py-0.5 text-[0.65rem] uppercase tracking-wide">
+              configured
+            </span>
+          </button>
+          <label
+            class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted"
+            title="Show the unparsed decoded content and reasoning stream"
+          >
+            <input v-model="showRawTokens" type="checkbox" class="accent-accent" />
+            Raw stream
+          </label>
+        </div>
         <div v-if="showTools" class="mb-3">
           <textarea
             v-model="conversation.pythonTools"

@@ -17,6 +17,7 @@ from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
 
 try:
+    from fastapi import HTTPException
     from fastapi.testclient import TestClient
     from openai.types import Completion
 
@@ -234,8 +235,10 @@ def test_chat_completion_without_a_chat_template_is_rejected(test_client, monkey
     assert "no chat template" in response.json()["detail"]
 
 
-def test_chat_completion_renders_tool_definitions(local_gpt2_tokenizer):
+def test_chat_completion_renders_template_arguments_and_tool_definitions(local_gpt2_tokenizer):
     tokenizer = local_gpt2_tokenizer.with_chat_template(
+        "{% if enable_thinking is sameas false %}thinking=disabled\n{% endif %}"
+        "{% if custom_instructions %}instructions={{ custom_instructions }}\n{% endif %}"
         "{% if tools %}tool={{ tools[0]['function']['name'] }}\n{% endif %}"
         "{% for message in messages %}{{ message['role'] }}: {{ message['content'] }}\n{% endfor %}"
         "{% if add_generation_prompt %}assistant: {% endif %}"
@@ -247,9 +250,33 @@ def test_chat_completion_renders_tool_definitions(local_gpt2_tokenizer):
         }
     ]
 
-    tokens = _compute_tokens([ChatMessage(role="user", content="Will it rain?")], tokenizer, tools)
+    tokens = _compute_tokens(
+        [ChatMessage(role="user", content="Will it rain?")],
+        tokenizer,
+        tools,
+        chat_template_kwargs={
+            "enable_thinking": False,
+            "custom_instructions": "Be concise.",
+            "tools": [{"type": "function", "function": {"name": "ignored_tool"}}],
+        },
+    )
+    rendered = tokenizer.decode(tokens)
 
-    assert "lookup_weather" in tokenizer.decode(tokens)
+    assert "thinking=disabled" in rendered
+    assert "instructions=Be concise." in rendered
+    assert "tool=lookup_weather" in rendered
+    assert "ignored_tool" not in rendered
+
+
+def test_chat_completion_rejects_rendering_argument_overrides(local_gpt2_tokenizer):
+    tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
+
+    with pytest.raises(HTTPException, match="chat_template_kwargs may not override: tokenize"):
+        _compute_tokens(
+            [ChatMessage(role="user", content="Hello")],
+            tokenizer,
+            chat_template_kwargs={"tokenize": False},
+        )
 
 
 class _OpenAITestTokenizer:

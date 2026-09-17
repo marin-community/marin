@@ -18,6 +18,27 @@ npm run dev            # local dev server (relative /v1, /info, /health fetches
 After editing anything under `src/`, rerun `npm run build` and commit the
 regenerated artifact alongside the source change.
 
+## Chat template controls
+
+The Chat view's **More settings** panel exposes two arguments to the active
+model template. **Thinking** sends `enable_thinking=true`, sends
+`enable_thinking=false`, or omits the argument for the model default. Marin's
+current template renders those boolean values as `/think` and `/nothink`.
+**Custom template instructions** sends `custom_instructions`; Marin's current
+template places it in an auxiliary system header. Other templates may interpret
+or ignore these arguments. This differs from **System prompt**, which adds a
+normal `role: "system"` message to the conversation transcript.
+
+The dashboard does not expose raw `xml_tools`, `python_tools`, or `tools`
+template arguments. Functions entered in **Python tools** are converted to the
+standard OpenAI `tools` request field so the served model's active template
+formats them.
+
+Enable **Raw stream** above the Chat composer to show the unparsed decoded text
+received in each assistant response's `content` and `reasoning_content` or
+`reasoning` fields. The OpenAI-compatible response does not include numeric
+token IDs, so the dashboard cannot display those.
+
 ## Custom Python tools
 
 Open **Python tools** above the Chat composer to define functions for the active

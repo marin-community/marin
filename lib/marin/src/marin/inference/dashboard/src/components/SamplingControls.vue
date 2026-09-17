@@ -8,6 +8,8 @@ defineProps<{
 }>()
 
 const system = defineModel<string>('system', { default: '' })
+const enableThinking = defineModel<boolean | null>('enableThinking', { default: null })
+const customInstructions = defineModel<string>('customInstructions', { default: '' })
 </script>
 
 <template>
@@ -42,6 +44,29 @@ const system = defineModel<string>('system', { default: '' })
         placeholder="(none)"
         class="resize-y rounded-lg border border-surface-border bg-surface px-2 py-1.5 font-mono text-[0.8rem] text-text"
       ></textarea>
+      <span>Sent as a <code>role: "system"</code> message in the conversation.</span>
+    </label>
+    <label v-if="showSystem" class="flex min-w-44 flex-col gap-1 text-xs text-text-muted">
+      Thinking
+      <select
+        v-model="enableThinking"
+        class="rounded-lg border border-surface-border bg-surface px-2 py-1.5 text-[0.8rem] text-text"
+      >
+        <option :value="null">Template default</option>
+        <option :value="true">Enabled</option>
+        <option :value="false">Disabled</option>
+      </select>
+      <span>Passed to the active model template as <code>enable_thinking</code>. Templates may ignore it.</span>
+    </label>
+    <label v-if="showSystem" class="flex min-w-72 flex-1 flex-col gap-1 text-xs text-text-muted">
+      Custom template instructions
+      <textarea
+        v-model="customInstructions"
+        rows="2"
+        placeholder="Optional instructions for templates that support them"
+        class="resize-y rounded-lg border border-surface-border bg-surface px-2 py-1.5 font-mono text-[0.8rem] text-text"
+      ></textarea>
+      <span>Passed to the active model template as <code>custom_instructions</code>.</span>
     </label>
   </div>
 </template>

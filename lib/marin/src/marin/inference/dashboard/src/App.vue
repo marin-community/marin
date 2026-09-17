@@ -42,6 +42,8 @@ function freshConversation(): Conversation {
     model: model.value,
     system: '',
     pythonTools: '',
+    enableThinking: null,
+    customInstructions: '',
     createdAt: Date.now(),
     updatedAt: Date.now(),
     messages: [],
@@ -136,7 +138,7 @@ function clearHistory() {
           <button
             class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors"
             :class="showParams ? 'bg-surface-sunken text-text' : 'text-text-muted hover:text-text-secondary'"
-            title="More sampling parameters"
+            title="More options"
             @click="showParams = !showParams"
           >
             <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -145,7 +147,14 @@ function clearHistory() {
             <span class="hidden sm:inline">Temperature {{ params.temperature }}</span>
           </button>
         </div>
-        <SamplingControls v-if="showParams" :params="params" v-model:system="active.system" :show-system="mode === 'chat'" />
+        <SamplingControls
+          v-if="showParams"
+          :params="params"
+          v-model:system="active.system"
+          v-model:enable-thinking="active.enableThinking"
+          v-model:custom-instructions="active.customInstructions"
+          :show-system="mode === 'chat'"
+        />
         <ChatView
           v-if="mode === 'chat'"
           :conversation="active"

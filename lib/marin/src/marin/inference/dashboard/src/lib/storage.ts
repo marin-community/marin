@@ -16,7 +16,12 @@ export function loadConversations(): Conversation[] {
     if (!raw) return []
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    return parsed.map((conversation) => ({ ...conversation, pythonTools: conversation.pythonTools ?? '' }))
+    return parsed.map((conversation) => ({
+      ...conversation,
+      pythonTools: conversation.pythonTools ?? '',
+      enableThinking: conversation.enableThinking ?? null,
+      customInstructions: conversation.customInstructions ?? '',
+    }))
   } catch {
     return []
   }

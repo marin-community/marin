@@ -8,6 +8,7 @@ const props = defineProps<{
   message: ChatMessage
   /** True while this message is the one currently being streamed. */
   streaming: boolean
+  showRawTokens: boolean
 }>()
 
 const rendered = computed(() =>
@@ -77,6 +78,15 @@ async function copy() {
             JSON.stringify(call.arguments, null, 2)
           }}</pre>
         </details>
+      </div>
+      <div
+        v-if="showRawTokens && (message.rawContent !== undefined || message.rawReasoning !== undefined)"
+        class="mt-2 rounded-lg border border-surface-border bg-surface-sunken px-3 py-2 font-mono text-xs"
+      >
+        <div class="text-text-secondary">content</div>
+        <pre class="mt-1 overflow-x-auto whitespace-pre-wrap break-words text-text-muted">{{ message.rawContent || '(empty)' }}</pre>
+        <div class="mt-2 text-text-secondary">reasoning_content / reasoning</div>
+        <pre class="mt-1 overflow-x-auto whitespace-pre-wrap break-words text-text-muted">{{ message.rawReasoning || '(empty)' }}</pre>
       </div>
       <div v-if="streaming && !message.content && !message.thinking" class="flex gap-1 py-2">
         <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-text-muted"></span>

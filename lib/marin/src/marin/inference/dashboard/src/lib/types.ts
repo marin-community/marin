@@ -37,6 +37,10 @@ export interface AssistantMessage {
   /** Visible text with any thinking segment stripped. */
   content: string
   thinking: string
+  /** Unparsed decoded text received in the response content field. */
+  rawContent?: string
+  /** Unparsed decoded text received in reasoning_content or reasoning. */
+  rawReasoning?: string
   thinkingSeconds: number | null
   error: string | null
   toolCalls?: ToolCall[]
@@ -57,6 +61,8 @@ export interface Conversation {
   model: string
   system: string
   pythonTools: string
+  enableThinking: boolean | null
+  customInstructions: string
   createdAt: number
   updatedAt: number
   messages: ChatMessage[]

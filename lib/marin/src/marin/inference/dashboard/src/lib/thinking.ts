@@ -1,10 +1,34 @@
 import type { ChatTemplateProtocol } from './types'
 
+type ThinkingDelimiters = readonly [open: string, close: string]
+
+const KNOWN_THINKING_DELIMITERS: ThinkingDelimiters[] = [
+  ['<|start_think|>', '<|end_think|>'],
+  ['<think>', '</think>'],
+  ['<THINK>', '</THINK>'],
+]
+
 export interface ThinkingSplit {
   thinking: string
   visible: string
   /** True while an opened thinking segment has not been closed yet. */
   inThinking: boolean
+}
+
+function selectThinkingDelimiters(raw: string, protocol: ChatTemplateProtocol | null): ThinkingDelimiters | null {
+  const configured = protocol?.thinking_start && protocol.thinking_end
+    ? ([protocol.thinking_start, protocol.thinking_end] as const)
+    : null
+  const candidates = configured
+    ? [configured, ...KNOWN_THINKING_DELIMITERS.filter(([open, close]) => open !== configured[0] || close !== configured[1])]
+    : KNOWN_THINKING_DELIMITERS
+  const trimmed = raw.trimStart()
+
+  for (const delimiters of candidates) {
+    const [open, close] = delimiters
+    if (raw.includes(open) || raw.includes(close) || open.startsWith(trimmed)) return delimiters
+  }
+  return configured
 }
 
 /** Longest suffix of `text` that is a strict prefix of an unfinished tag, so a
@@ -26,9 +50,9 @@ function trailingPartialTag(text: string, tags: string[]): string {
  * in generated content. Re-run on the full accumulated text after each delta.
  */
 export function splitThinking(raw: string, protocol: ChatTemplateProtocol | null): ThinkingSplit {
-  const open = protocol?.thinking_start
-  const close = protocol?.thinking_end
-  if (!open || !close) return { thinking: '', visible: raw, inThinking: false }
+  const delimiters = selectThinkingDelimiters(raw, protocol)
+  if (!delimiters) return { thinking: '', visible: raw, inThinking: false }
+  const [open, close] = delimiters
 
   const held = trailingPartialTag(raw, [open, close])
   const text = held ? raw.slice(0, raw.length - held.length) : raw

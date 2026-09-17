@@ -60,6 +60,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_MODEL_NAME = "levanter"
+RESERVED_CHAT_TEMPLATE_KWARGS = frozenset({"add_generation_prompt", "chat_template", "return_dict", "tokenize"})
 
 
 @dataclass
@@ -662,6 +663,7 @@ def _compute_tokens(
     messages: list[ChatMessage],
     tokenizer: MarinTokenizer,
     tools: list[dict[str, object]] | None = None,
+    chat_template_kwargs: dict[str, object] | None = None,
 ) -> List[int]:
     """Encode a conversation with the tokenizer's chat template.
 
@@ -675,6 +677,13 @@ def _compute_tokens(
             detail="This model has no chat template; use /v1/completions, or serve it with a chat template.",
         )
     dict_messages = [msg.model_dump(exclude_none=True) for msg in messages]
+    template_kwargs = dict(chat_template_kwargs or {})
+    overridden = sorted(RESERVED_CHAT_TEMPLATE_KWARGS.intersection(template_kwargs))
+    if overridden:
+        names = ", ".join(overridden)
+        raise HTTPException(status_code=400, detail=f"chat_template_kwargs may not override: {names}")
+    if tools is not None:
+        template_kwargs["tools"] = tools
     # return_dict=False pins the token ids to a flat list; tokenizers otherwise hand back a
     # BatchEncoding here, which is the shape the rest of this module cannot use.
     result = tokenizer.apply_chat_template(
@@ -682,7 +691,7 @@ def _compute_tokens(
         tokenize=True,
         add_generation_prompt=True,
         return_dict=False,
-        tools=tools,
+        **template_kwargs,
     )
     assert isinstance(result, list)
     return result
@@ -709,7 +718,12 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
     """Create a chat completion using OpenAI API format."""
     try:
         # Convert Pydantic models to dicts for tokenizer
-        prompt_tokens = _compute_tokens(request.messages, ctx.tokenizer, request.tools)
+        prompt_tokens = _compute_tokens(
+            request.messages,
+            ctx.tokenizer,
+            request.tools,
+            request.chat_template_kwargs,
+        )
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
 
