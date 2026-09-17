@@ -16,6 +16,7 @@ from experiments.post_training.task_curriculum.catalog import (
     CurriculumUnit,
     load_curriculum,
     load_macro_catalog,
+    load_micro_extensions,
 )
 from experiments.post_training.task_curriculum.evaluate import evaluate_catalog
 from experiments.post_training.task_curriculum.rubric import RubricConfig, UnitEvidence, evaluate_unit
@@ -93,6 +94,19 @@ def _unit(unit_id: str = "add") -> CurriculumUnit:
     )
 
 
+def _micro_extensions(tmp_path: Path, extensions: list[dict[str, object]] | None = None) -> Path:
+    return _write_json(
+        tmp_path / "micro_extensions.json",
+        {
+            "schema_version": "task-curriculum-micro-extensions-v1",
+            "version": "test-extensions",
+            "macro_snapshot": "test-v1",
+            "tasktrove_release": "test-release",
+            "extensions": extensions or [],
+        },
+    )
+
+
 def _unit_json(unit_id: str, prerequisites: list[str]) -> dict[str, object]:
     return {
         "id": unit_id,
@@ -131,6 +145,7 @@ def test_curriculum_rejects_micro_area_from_another_macro(tmp_path: Path) -> Non
             "schema_version": "task-curriculum-v1",
             "version": "test",
             "macro_snapshot": "test-v1",
+            "micro_extension_version": "test-extensions",
             "notes": [],
             "units": [
                 {
@@ -148,8 +163,9 @@ def test_curriculum_rejects_micro_area_from_another_macro(tmp_path: Path) -> Non
         },
     )
 
+    extension_catalog = load_micro_extensions(_micro_extensions(tmp_path), macro_catalog)
     with pytest.raises(CatalogError):
-        load_curriculum(curriculum_path, macro_catalog)
+        load_curriculum(curriculum_path, macro_catalog, extension_catalog)
 
 
 def test_curriculum_rejects_prerequisite_cycle(tmp_path: Path) -> None:
@@ -160,13 +176,130 @@ def test_curriculum_rejects_prerequisite_cycle(tmp_path: Path) -> None:
             "schema_version": "task-curriculum-v1",
             "version": "test",
             "macro_snapshot": "test-v1",
+            "micro_extension_version": "test-extensions",
             "notes": [],
             "units": [_unit_json("a", ["b"]), _unit_json("b", ["a"])],
         },
     )
 
+    extension_catalog = load_micro_extensions(_micro_extensions(tmp_path), macro_catalog)
     with pytest.raises(CatalogError):
-        load_curriculum(curriculum_path, macro_catalog)
+        load_curriculum(curriculum_path, macro_catalog, extension_catalog)
+
+
+def test_curriculum_accepts_evidence_backed_micro_extension(tmp_path: Path) -> None:
+    macro_catalog = load_macro_catalog(_macro_catalog(tmp_path))
+    evidence = [
+        {
+            "task_id": f"t{index}",
+            "source": f"source-{index}",
+            "path": f"task-{index}",
+            "split": "discovery",
+            "instruction_sha256": f"{index:064x}",
+            "task_archive_sha256": f"{index + 3:064x}",
+            "macro_area_id": "C01",
+            "micro_area_status": "gap",
+        }
+        for index in range(3)
+    ]
+    extension_catalog = load_micro_extensions(
+        _micro_extensions(
+            tmp_path,
+            [
+                {
+                    "id": "C01.ext.geometry",
+                    "name": "Geometry",
+                    "parent_macro_area_id": "C01",
+                    "status": "provisional",
+                    "evidence": evidence,
+                }
+            ],
+        ),
+        macro_catalog,
+    )
+    unit = _unit_json("triangles", [])
+    unit["micro_area_ids"] = ["C01.ext.geometry"]
+    curriculum_path = _write_json(
+        tmp_path / "curriculum.json",
+        {
+            "schema_version": "task-curriculum-v1",
+            "version": "test",
+            "macro_snapshot": "test-v1",
+            "micro_extension_version": "test-extensions",
+            "notes": [],
+            "units": [unit],
+        },
+    )
+
+    curriculum = load_curriculum(curriculum_path, macro_catalog, extension_catalog)
+
+    assert curriculum.units[0].micro_area_ids == ("C01.ext.geometry",)
+
+
+def test_micro_extension_rejects_untyped_evidence_split(tmp_path: Path) -> None:
+    macro_catalog = load_macro_catalog(_macro_catalog(tmp_path))
+    evidence = [
+        {
+            "task_id": "t0",
+            "source": "source",
+            "path": "task",
+            "split": "review",
+            "instruction_sha256": "0" * 64,
+            "task_archive_sha256": "1" * 64,
+            "macro_area_id": "C01",
+            "micro_area_status": "gap",
+        }
+    ]
+
+    with pytest.raises(CatalogError, match="unknown evidence split"):
+        load_micro_extensions(
+            _micro_extensions(
+                tmp_path,
+                [
+                    {
+                        "id": "C01.ext.geometry",
+                        "name": "Geometry",
+                        "parent_macro_area_id": "C01",
+                        "status": "provisional",
+                        "evidence": evidence,
+                    }
+                ],
+            ),
+            macro_catalog,
+        )
+
+
+def test_micro_extension_rejects_evidence_from_another_macro(tmp_path: Path) -> None:
+    macro_catalog = load_macro_catalog(_macro_catalog(tmp_path))
+    evidence = [
+        {
+            "task_id": "t0",
+            "source": "source",
+            "path": "task",
+            "split": "discovery",
+            "instruction_sha256": "0" * 64,
+            "task_archive_sha256": "1" * 64,
+            "macro_area_id": "C02",
+            "micro_area_status": "gap",
+        }
+    ]
+
+    with pytest.raises(CatalogError, match="evidence belongs to macro C02"):
+        load_micro_extensions(
+            _micro_extensions(
+                tmp_path,
+                [
+                    {
+                        "id": "C01.ext.geometry",
+                        "name": "Geometry",
+                        "parent_macro_area_id": "C01",
+                        "status": "provisional",
+                        "evidence": evidence,
+                    }
+                ],
+            ),
+            macro_catalog,
+        )
 
 
 @pytest.mark.parametrize(
@@ -382,6 +515,7 @@ def test_catalog_evaluation_rejects_inconsistent_macro_totals(tmp_path: Path) ->
     with pytest.raises(ValueError):
         evaluate_catalog(
             CURRICULUM_ROOT / "macro_areas.json",
+            CURRICULUM_ROOT / "micro_extensions_v0.json",
             CURRICULUM_ROOT / "math_v0.json",
             CURRICULUM_ROOT / "rubric_v1.json",
             evidence_path,
@@ -396,6 +530,7 @@ def test_catalog_evaluation_rejects_string_boolean_evidence(tmp_path: Path) -> N
     with pytest.raises(ValueError, match="difficulty_ordering_plausible must be a boolean"):
         evaluate_catalog(
             CURRICULUM_ROOT / "macro_areas.json",
+            CURRICULUM_ROOT / "micro_extensions_v0.json",
             CURRICULUM_ROOT / "math_v0.json",
             CURRICULUM_ROOT / "rubric_v1.json",
             evidence_path,

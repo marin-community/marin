@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 
@@ -49,6 +50,56 @@ class MacroCatalog:
         return {micro.id: (macro.id, micro) for macro in self.macro_areas for micro in macro.micro_areas}
 
 
+class MicroExtensionStatus(StrEnum):
+    PROVISIONAL = "provisional"
+    ACTIVE = "active"
+
+
+class EvidenceSplit(StrEnum):
+    DISCOVERY = "discovery"
+    CALIBRATION = "calibration"
+    HOLDOUT = "holdout"
+
+
+class MicroEvidenceStatus(StrEnum):
+    GAP = "gap"
+
+
+@dataclass(frozen=True)
+class ExtensionEvidence:
+    task_id: str
+    source: str
+    path: str
+    split: EvidenceSplit
+    instruction_sha256: str
+    task_archive_sha256: str
+    macro_area_id: str
+    micro_area_status: MicroEvidenceStatus
+
+
+@dataclass(frozen=True)
+class MicroExtension:
+    id: str
+    name: str
+    parent_macro_area_id: str
+    status: MicroExtensionStatus
+    evidence: tuple[ExtensionEvidence, ...]
+
+
+@dataclass(frozen=True)
+class MicroExtensionCatalog:
+    version: str
+    macro_snapshot: str
+    tasktrove_release: str
+    extensions: tuple[MicroExtension, ...]
+
+    @property
+    def extensions_by_id(self) -> dict[str, MicroExtension]:
+        """Index local micro-area extensions by identifier."""
+
+        return {extension.id: extension for extension in self.extensions}
+
+
 @dataclass(frozen=True)
 class CurriculumUnit:
     id: str
@@ -66,6 +117,7 @@ class CurriculumUnit:
 class CurriculumCatalog:
     version: str
     macro_snapshot: str
+    micro_extension_version: str
     units: tuple[CurriculumUnit, ...]
 
 
@@ -85,6 +137,13 @@ def _integer(value: object, context: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise CatalogError(f"{context} must be a nonnegative integer")
     return value
+
+
+def _sha256(value: object, context: str) -> str:
+    digest = _string(value, context)
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        raise CatalogError(f"{context} must be a lowercase SHA-256 digest")
+    return digest
 
 
 def _objects(value: object, context: str) -> list[dict[str, object]]:
@@ -213,19 +272,144 @@ def load_macro_catalog(path: Path) -> MacroCatalog:
     return catalog
 
 
-def load_curriculum(path: Path, macro_catalog: MacroCatalog) -> CurriculumCatalog:
+def load_micro_extensions(path: Path, macro_catalog: MacroCatalog) -> MicroExtensionCatalog:
+    """Load project-owned micro areas layered over a published macro snapshot."""
+
+    raw = _read_json_object(path)
+    _reject_extra_keys(
+        raw,
+        {"schema_version", "version", "macro_snapshot", "tasktrove_release", "extensions"},
+        str(path),
+    )
+    if raw.get("schema_version") != "task-curriculum-micro-extensions-v1":
+        raise CatalogError(f"{path} has an unsupported schema_version")
+    macro_snapshot = _string(raw.get("macro_snapshot"), "macro_snapshot")
+    if macro_snapshot != macro_catalog.snapshot:
+        raise CatalogError(f"extension macro snapshot {macro_snapshot} does not match {macro_catalog.snapshot}")
+
+    extensions = []
+    for extension_raw in _objects(raw.get("extensions"), "extensions"):
+        _reject_extra_keys(
+            extension_raw,
+            {"id", "name", "parent_macro_area_id", "status", "evidence"},
+            "micro extension",
+        )
+        extension_id = _string(extension_raw.get("id"), "micro extension id")
+        parent_macro_id = _string(extension_raw.get("parent_macro_area_id"), f"{extension_id}.parent_macro_area_id")
+        if parent_macro_id not in macro_catalog.macros_by_id:
+            raise CatalogError(f"micro extension {extension_id} has unknown parent macro {parent_macro_id}")
+        if not extension_id.startswith(f"{parent_macro_id}.ext."):
+            raise CatalogError(f"micro extension {extension_id} does not belong to {parent_macro_id}")
+        try:
+            status = MicroExtensionStatus(_string(extension_raw.get("status"), f"{extension_id}.status"))
+        except ValueError as error:
+            raise CatalogError(f"micro extension {extension_id} has unknown status") from error
+        evidence = []
+        for evidence_raw in _objects(extension_raw.get("evidence"), f"{extension_id}.evidence"):
+            _reject_extra_keys(
+                evidence_raw,
+                {
+                    "task_id",
+                    "source",
+                    "path",
+                    "split",
+                    "instruction_sha256",
+                    "task_archive_sha256",
+                    "macro_area_id",
+                    "micro_area_status",
+                },
+                "extension evidence",
+            )
+            try:
+                split = EvidenceSplit(_string(evidence_raw.get("split"), "extension evidence split"))
+            except ValueError as error:
+                raise CatalogError(f"micro extension {extension_id} has unknown evidence split") from error
+            evidence_macro_id = _string(evidence_raw.get("macro_area_id"), "extension evidence macro_area_id")
+            if evidence_macro_id != parent_macro_id:
+                raise CatalogError(f"micro extension {extension_id} evidence belongs to macro {evidence_macro_id}")
+            try:
+                micro_area_status = MicroEvidenceStatus(
+                    _string(evidence_raw.get("micro_area_status"), "extension evidence micro_area_status")
+                )
+            except ValueError as error:
+                raise CatalogError(f"micro extension {extension_id} has unknown micro-area evidence status") from error
+            evidence.append(
+                ExtensionEvidence(
+                    task_id=_string(evidence_raw.get("task_id"), "extension evidence task_id"),
+                    source=_string(evidence_raw.get("source"), "extension evidence source"),
+                    path=_string(evidence_raw.get("path"), "extension evidence path"),
+                    split=split,
+                    instruction_sha256=_sha256(
+                        evidence_raw.get("instruction_sha256"), "extension evidence instruction_sha256"
+                    ),
+                    task_archive_sha256=_sha256(
+                        evidence_raw.get("task_archive_sha256"), "extension evidence task_archive_sha256"
+                    ),
+                    macro_area_id=evidence_macro_id,
+                    micro_area_status=micro_area_status,
+                )
+            )
+        if not evidence:
+            raise CatalogError(f"micro extension {extension_id} requires evidence")
+        evidence_keys = [(row.source, row.path) for row in evidence]
+        if len(set(evidence_keys)) != len(evidence_keys):
+            raise CatalogError(f"micro extension {extension_id} has duplicate evidence tasks")
+        if len({row.task_id for row in evidence}) != len(evidence):
+            raise CatalogError(f"micro extension {extension_id} has duplicate evidence task IDs")
+        extensions.append(
+            MicroExtension(
+                id=extension_id,
+                name=_string(extension_raw.get("name"), f"{extension_id}.name"),
+                parent_macro_area_id=parent_macro_id,
+                status=status,
+                evidence=tuple(evidence),
+            )
+        )
+
+    catalog = MicroExtensionCatalog(
+        version=_string(raw.get("version"), "version"),
+        macro_snapshot=macro_snapshot,
+        tasktrove_release=_string(raw.get("tasktrove_release"), "tasktrove_release"),
+        extensions=tuple(extensions),
+    )
+    extension_ids = [extension.id for extension in catalog.extensions]
+    if len(set(extension_ids)) != len(extension_ids):
+        raise CatalogError("micro extension IDs must be unique")
+    collisions = sorted(set(extension_ids) & macro_catalog.micros_by_id.keys())
+    if collisions:
+        raise CatalogError(f"micro extension IDs collide with source micro areas: {', '.join(collisions)}")
+    return catalog
+
+
+def load_curriculum(
+    path: Path,
+    macro_catalog: MacroCatalog,
+    extension_catalog: MicroExtensionCatalog,
+) -> CurriculumCatalog:
     """Load a curriculum and validate its macro and prerequisite references."""
 
     raw = _read_json_object(path)
-    _reject_extra_keys(raw, {"schema_version", "version", "macro_snapshot", "notes", "units"}, str(path))
+    _reject_extra_keys(
+        raw,
+        {"schema_version", "version", "macro_snapshot", "micro_extension_version", "notes", "units"},
+        str(path),
+    )
     if raw.get("schema_version") != "task-curriculum-v1":
         raise CatalogError(f"{path} has an unsupported schema_version")
     macro_snapshot = _string(raw.get("macro_snapshot"), "macro_snapshot")
     if macro_snapshot != macro_catalog.snapshot:
         raise CatalogError(f"curriculum macro snapshot {macro_snapshot} does not match {macro_catalog.snapshot}")
+    extension_version = _string(raw.get("micro_extension_version"), "micro_extension_version")
+    if extension_version != extension_catalog.version:
+        raise CatalogError(
+            f"curriculum micro extension version {extension_version} does not match {extension_catalog.version}"
+        )
+    if extension_catalog.macro_snapshot != macro_snapshot:
+        raise CatalogError("curriculum and micro extensions use different macro snapshots")
 
     macros_by_id = macro_catalog.macros_by_id
     micros_by_id = macro_catalog.micros_by_id
+    extensions_by_id = extension_catalog.extensions_by_id
     units = []
     for unit_raw in _objects(raw.get("units"), "units"):
         _reject_extra_keys(
@@ -250,9 +434,15 @@ def load_curriculum(path: Path, macro_catalog: MacroCatalog) -> CurriculumCatalo
         micro_ids = _strings(unit_raw.get("micro_area_ids"), f"{unit_id}.micro_area_ids")
         for micro_id in micro_ids:
             parent = micros_by_id.get(micro_id)
-            if parent is None:
-                raise CatalogError(f"unit {unit_id} refers to unknown micro area {micro_id}")
-            if parent[0] != macro_id:
+            extension = extensions_by_id.get(micro_id)
+            if parent is None and extension is None:
+                raise CatalogError(f"unit {unit_id} refers to unknown micro area or extension {micro_id}")
+            if parent is not None:
+                parent_macro_id = parent[0]
+            else:
+                assert extension is not None
+                parent_macro_id = extension.parent_macro_area_id
+            if parent_macro_id != macro_id:
                 raise CatalogError(f"micro area {micro_id} does not belong to unit macro {macro_id}")
         units.append(
             CurriculumUnit(
@@ -271,6 +461,7 @@ def load_curriculum(path: Path, macro_catalog: MacroCatalog) -> CurriculumCatalo
     catalog = CurriculumCatalog(
         version=_string(raw.get("version"), "version"),
         macro_snapshot=macro_snapshot,
+        micro_extension_version=extension_version,
         units=tuple(units),
     )
     unit_ids = [unit.id for unit in catalog.units]

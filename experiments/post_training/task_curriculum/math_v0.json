@@ -1,11 +1,12 @@
 {
   "schema_version": "task-curriculum-v1",
-  "version": "math-v0",
+  "version": "math-v0.1",
   "macro_snapshot": "2026.09.03",
+  "micro_extension_version": "math-micro-extensions-v0",
   "notes": [
     "Built from 24 TaskTrove Clean discovery tasks.",
     "All units are candidates until the evidence rubric passes.",
-    "Empty micro_area_ids indicate that the broad inventory has no honest micro-area match."
+    "Geometry and combinatorics use provisional local micro-area extensions backed by reviewed task references."
   ],
   "units": [
     {
@@ -84,7 +85,7 @@
       "name": "Derive triangle measurements from equivalent descriptions",
       "outcome": "Derive a requested triangle length, area, radius, or altitude by converting the supplied coordinates or side information into an equivalent metric relation.",
       "macro_area_id": "C14",
-      "micro_area_ids": [],
+      "micro_area_ids": ["C14.ext.geometry"],
       "includes": [
         "Computing side lengths from vertex coordinates",
         "Computing triangle area from coordinates or perpendicular sides",
@@ -133,7 +134,7 @@
       "name": "Count structures built from fixed points and pairs",
       "outcome": "Count finite structures that decompose into disjoint fixed points and unordered pairs by enumerating feasible decompositions and avoiding duplicate representations.",
       "macro_area_id": "C14",
-      "micro_area_ids": [],
+      "micro_area_ids": ["C14.ext.combinatorics"],
       "includes": [
         "Choosing any unpaired or fixed elements",
         "Counting pairings of the remaining labeled elements",

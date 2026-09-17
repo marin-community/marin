@@ -1,6 +1,6 @@
 {
   "schema_version": "task-curriculum-pilot-evaluation-v1",
-  "catalog_version": "math-v0",
+  "catalog_version": "math-v0.1",
   "sample": {
     "tasktrove_release": "2026.09.10.9",
     "discovery_tasks": 24,

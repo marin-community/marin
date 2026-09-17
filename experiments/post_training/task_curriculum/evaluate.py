@@ -10,7 +10,11 @@ import json
 from dataclasses import asdict, fields
 from pathlib import Path
 
-from experiments.post_training.task_curriculum.catalog import load_curriculum, load_macro_catalog
+from experiments.post_training.task_curriculum.catalog import (
+    load_curriculum,
+    load_macro_catalog,
+    load_micro_extensions,
+)
 from experiments.post_training.task_curriculum.rubric import UnitEvidence, evaluate_unit, load_rubric
 
 PACKAGE_ROOT = Path(__file__).parent
@@ -112,6 +116,7 @@ def _validate_macro_evaluation(raw: object) -> None:
 
 def evaluate_catalog(
     macro_path: Path,
+    extension_path: Path,
     curriculum_path: Path,
     rubric_path: Path,
     evidence_path: Path,
@@ -119,7 +124,8 @@ def evaluate_catalog(
     """Validate a catalog and return its rubric results as JSON-compatible data."""
 
     macro_catalog = load_macro_catalog(macro_path)
-    curriculum = load_curriculum(curriculum_path, macro_catalog)
+    extension_catalog = load_micro_extensions(extension_path, macro_catalog)
+    curriculum = load_curriculum(curriculum_path, macro_catalog, extension_catalog)
     rubric = load_rubric(rubric_path)
     evidence_raw = json.loads(evidence_path.read_text())
     if evidence_raw.get("schema_version") != "task-curriculum-pilot-evaluation-v1":
@@ -141,6 +147,8 @@ def evaluate_catalog(
         "catalog_version": curriculum.version,
         "rubric_version": rubric.version,
         "macro_snapshot": macro_catalog.snapshot,
+        "micro_extension_version": extension_catalog.version,
+        "micro_extensions": len(extension_catalog.extensions),
         "macro_areas": len(macro_catalog.macro_areas),
         "micro_areas": len(macro_catalog.micros_by_id),
         "units": len(curriculum.units),
@@ -153,11 +161,17 @@ def evaluate_catalog(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--macro-catalog", type=Path, default=PACKAGE_ROOT / "macro_areas.json")
+    parser.add_argument("--micro-extensions", type=Path, default=PACKAGE_ROOT / "micro_extensions_v0.json")
     parser.add_argument("--curriculum", type=Path, default=PACKAGE_ROOT / "math_v0.json")
     parser.add_argument("--rubric", type=Path, default=PACKAGE_ROOT / "rubric_v1.json")
     parser.add_argument("--evidence", type=Path, default=PACKAGE_ROOT / "pilot_evaluation.json")
     args = parser.parse_args()
-    print(json.dumps(evaluate_catalog(args.macro_catalog, args.curriculum, args.rubric, args.evidence), indent=2))
+    print(
+        json.dumps(
+            evaluate_catalog(args.macro_catalog, args.micro_extensions, args.curriculum, args.rubric, args.evidence),
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

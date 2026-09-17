@@ -1,0 +1,42 @@
+{
+  "schema_version": "task-curriculum-micro-extensions-v1",
+  "version": "math-micro-extensions-v0",
+  "macro_snapshot": "2026.09.03",
+  "tasktrove_release": "2026.09.10.9",
+  "extensions": [
+    {
+      "id": "C14.ext.geometry",
+      "name": "Geometry",
+      "parent_macro_area_id": "C14",
+      "status": "provisional",
+      "evidence": [
+        {"task_id": "t001", "source": "laion__all-puzzles-v2", "path": "all_puzzles-64613", "split": "discovery", "instruction_sha256": "d530aab0c9044e87536b931c2afbe1df94d1ec3bd8039d3ea6fc65f0e3150a3a", "task_archive_sha256": "021b5ca5be4669ae8ab7e0f1b584cfbf901f864c04e70bec93f637cd9305f253", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t016", "source": "laion__all-puzzles-v2", "path": "all_puzzles-36940", "split": "holdout", "instruction_sha256": "6c2ad79c8bb03ced926ee6f29ed17a803cd7d8ab8d8e1b990e5c7338d13db15d", "task_archive_sha256": "5abea4d246fe6fb8485cd6b4284a60668f3396c6134a59e9021ba314addbdb27", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t019", "source": "laion__nemotron-gym-math-openmathreasoning-v2", "path": "Nemotron-RL-math-OpenMathReasoning-81b0be3f0568.tar.gz", "split": "discovery", "instruction_sha256": "591e4bc6ae5874883bff9802012128205c342b517c97d336c2890284032a1c9d", "task_archive_sha256": "f748cff4991b35a633bab598e94fb6df5ba67ac1ffff046ba87505b133c88fb0", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t023", "source": "laion__nemotron-gym-math-openmathreasoning-v2", "path": "Nemotron-RL-math-OpenMathReasoning-e2152f12f08a.tar.gz", "split": "discovery", "instruction_sha256": "feaca0b401ccc32930ad6849016dec234bd47831baf61c1df7b3ef535d8654fb", "task_archive_sha256": "f0f543d7879438a4b8a93e331aadd692f7c0e4b8b035f19e4100da31603410c2", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t027", "source": "laion__nemotron-gym-math-openmathreasoning-v2", "path": "Nemotron-RL-math-OpenMathReasoning-f000def9979a.tar.gz", "split": "calibration", "instruction_sha256": "392ee19e7abb9c6d69ab2db38ffa50cb2c423b37278eba2e1125073f5794f513", "task_archive_sha256": "4aa3b01dbb21ed56c6420d9a21887ba8d9721708510e29cf65bfe2744b5b6de1", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t031", "source": "laion__nemotron-gym-math-openmathreasoning-v2", "path": "Nemotron-RL-math-OpenMathReasoning-f75bcc499c56.tar.gz", "split": "holdout", "instruction_sha256": "236f8284acdcf73816a37118b3250756137d86d02d57166ea53b8ef9c4d318d0", "task_archive_sha256": "05cdb7bf5458f279cd9bc46fb62843e1090f50b3456b2b6dc4a1a2f6b8188af4", "macro_area_id": "C14", "micro_area_status": "gap"}
+      ]
+    },
+    {
+      "id": "C14.ext.combinatorics",
+      "name": "Combinatorics & discrete structures",
+      "parent_macro_area_id": "C14",
+      "status": "provisional",
+      "evidence": [
+        {"task_id": "t005", "source": "laion__all-puzzles-v2", "path": "all_puzzles-48265", "split": "discovery", "instruction_sha256": "1465d0213279359839e291c4974d4046cdf1640a022eb8ba32a4deae7d57fee2", "task_archive_sha256": "db7bf00660398ad98cdae6acdd884dc8577d36a1fdf9b0560c0303d17a398f0f", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t008", "source": "laion__all-puzzles-v2", "path": "all_puzzles-7904", "split": "discovery", "instruction_sha256": "2c46ce3a38b6f8cda1551388f33d99fcd012c6225100098b1ee9e9b07e6e9f4e", "task_archive_sha256": "ffdd710c6daa6636032b6a2c63703ad00b536509aa57300b83c8e4e8f9a9f0f3", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t013", "source": "laion__all-puzzles-v2", "path": "all_puzzles-41380", "split": "holdout", "instruction_sha256": "49e5ab73bc0ff2c60172b72c67e66ab45967a00b390aea9de6742c151020dbb8", "task_archive_sha256": "a203db05929b466088124684def449fd35ec126172852fd506c7a23e17c503eb", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t025", "source": "laion__nemotron-gym-math-openmathreasoning-v2", "path": "Nemotron-RL-math-OpenMathReasoning-a93f676b0b90.tar.gz", "split": "calibration", "instruction_sha256": "e9caa4544b10bfd29417dde9c9840ed6261e87841b1c1a97fd9db680acc3af55", "task_archive_sha256": "77ad69b2bb886659c1b3f0a3ab33e3f3f807ca370bf9b71901df23e998a6e6d6", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t030", "source": "laion__nemotron-gym-math-openmathreasoning-v2", "path": "Nemotron-RL-math-OpenMathReasoning-04d76dcfbc70.tar.gz", "split": "holdout", "instruction_sha256": "9b0449b0c68e00874d7a89dd8822f5ea275d11bdb085d4e025df8aa7004bbab0", "task_archive_sha256": "ca8f014e2602c75bd5507304f61a50cf01e6bc7dca95df52b346f96db7735362", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t032", "source": "laion__nemotron-gym-math-openmathreasoning-v2", "path": "Nemotron-RL-math-OpenMathReasoning-ea31b39b2098.tar.gz", "split": "holdout", "instruction_sha256": "f8b1f96b88c5e52c3b454539674c8e129156589edc5dc2359937d51660b9095e", "task_archive_sha256": "e1e72758c1dd8b5cc5d039775deff1467e5fc45fca581221dba5afaeec9ca95b", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t034", "source": "laion__nemotron-gym-math-stack-overflow-v3", "path": "Nemotron-RL-math-stack_overflow-d56786de8f85.tar.gz", "split": "discovery", "instruction_sha256": "1dc78132a76f391427f67203f4aef088020e4782975af200c28e77ea522a6bf0", "task_archive_sha256": "9eee27c2d487b2e869efb57f4d5866e7f5d14ae7505142ff2a8fcc074586e028", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t036", "source": "laion__nemotron-gym-math-stack-overflow-v3", "path": "Nemotron-RL-math-stack_overflow-0558594a62d2.tar.gz", "split": "discovery", "instruction_sha256": "8114b4defd54f9c97ab1793d0ca981f69acb1ba7e363cd5c462f90cca6919b95", "task_archive_sha256": "ade48d51bedcd2d84fddb3d6425651b4f1ebf0be3fa38ec52e2ebec464bf4d1e", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t040", "source": "laion__nemotron-gym-math-stack-overflow-v3", "path": "Nemotron-RL-math-stack_overflow-cb834ddac463.tar.gz", "split": "discovery", "instruction_sha256": "8995e4c561ab7098082c0f378d431b5c93ec24bdaac805227cd9dddb63d3b13c", "task_archive_sha256": "aee57e4c0e6e0d11dd86cbddef156152bf7c2179e333852cc16a8b64eacc690d", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t042", "source": "laion__nemotron-gym-math-stack-overflow-v3", "path": "Nemotron-RL-math-stack_overflow-f1e14981dbc3.tar.gz", "split": "calibration", "instruction_sha256": "7150dee954517879b8bd37c15b7fa7cc9a482ac49ad80d2c1f050ecb0cc8a584", "task_archive_sha256": "99c192a8469507dc9f3b4f388f3697f24bbac32d04bfb1ea6af28914c4bc54db", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t044", "source": "laion__nemotron-gym-math-stack-overflow-v3", "path": "Nemotron-RL-math-stack_overflow-5c96a09236e0.tar.gz", "split": "calibration", "instruction_sha256": "fb5b2e96eef36a630dd803cdadef476d2bf8ef41676f7ff63b0687cef37abf34", "task_archive_sha256": "e0c133f7bc4e4684b72429b46fda4273ff33a06e3b014fd0c04d7e8cfca0ddae", "macro_area_id": "C14", "micro_area_status": "gap"},
+        {"task_id": "t048", "source": "laion__nemotron-gym-math-stack-overflow-v3", "path": "Nemotron-RL-math-stack_overflow-e4a673b65fba.tar.gz", "split": "holdout", "instruction_sha256": "aec8506b99d5dd4cf0af24bc6b6450ab8e9baa24a26736e911087a76a8e33356", "task_archive_sha256": "0bbd2163f1155503f561580cc2baaba0f644b8c1b491749778f8a5017b6c5bc9", "macro_area_id": "C14", "micro_area_status": "gap"}
+      ]
+    }
+  ]
+}
