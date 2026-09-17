@@ -3,6 +3,7 @@
 
 """Resolve a launch separately from a task-owned Harbor binding."""
 
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,8 @@ from typing import Any
 from harbor.models.trial.config import TrialConfig
 from harbor.trial.trial import Trial
 
-from taskcompendium.lowering import HarborTaskBinding, read_binding, read_specification, validate_binding
+from taskcompendium.lowering import HarborTaskBinding, read_binding, read_rendering, read_specification, validate_binding
+from taskcompendium.rendering import AnswerFormat
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,7 @@ async def run_trial(task_dir: Path, binding: HarborTaskBinding, launch: HarborLa
     validate_binding(read_specification(task_dir / "specification.json"), binding)
     agents = {
         "replay": "taskcompendium.harbor.adapter:ReplayAgent",
+        "action_replay": "taskcompendium.harbor.adapter:ActionReplayAgent",
         "chat": "taskcompendium.harbor.adapter:DirectChatAgent",
     }
     if launch.agent not in agents:
@@ -37,7 +40,16 @@ async def run_trial(task_dir: Path, binding: HarborTaskBinding, launch: HarborLa
         raise ValueError("Chat launch requires a model")
     if "api_key" in launch.agent_kwargs:
         raise ValueError("Use api_key_env so credentials stay out of Harbor trial artifacts")
-    agent: dict[str, Any] = {"import_path": agents[launch.agent], "kwargs": launch.agent_kwargs}
+    kwargs = dict(launch.agent_kwargs)
+    if launch.agent == "chat":
+        rendering = read_rendering(task_dir / "rendering.json")
+        if rendering.answer_format == AnswerFormat.FINAL_ACTION:
+            agents["chat"] = "taskcompendium.harbor.adapter:NativeActionAgent"
+            kwargs["functions"] = [dataclasses.asdict(function) for function in rendering.functions]
+            kwargs["messages"] = [dataclasses.asdict(message) for message in rendering.messages]
+            kwargs["tool_choice"] = rendering.tool_choice
+            kwargs["parallel_tool_calls"] = rendering.parallel_tool_calls
+    agent: dict[str, Any] = {"import_path": agents[launch.agent], "kwargs": kwargs}
     if launch.model is not None:
         agent["model_name"] = launch.model
     config = TrialConfig.model_validate(

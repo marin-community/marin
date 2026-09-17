@@ -2,7 +2,7 @@
 
 `TaskSpec` holds one fixed answer task, its source provenance, semantic requirements, and a private verifier descriptor with an explicit `kind`. The core package provides an `exact_answer` handler; other packages can provide further kinds without changing the task schema or grading dispatch. A `Rendering` selects either a plain final answer or a JSON object with an `answer` string, independently of the private verifier kind. `HarborTaskBinding` selects the direct-chat environment with no tools and must satisfy the task requirements. `HarborLaunch` selects a replay agent for validation or an OpenAI-compatible chat agent for a model run.
 
-The exporter writes `instruction.md`, `task.toml`, an empty `environment/` directory, `specification.json`, `rendering.json`, and `binding.json`. The specification and rendering files remain private to the Harbor custom verifier. Launch checks the stored binding before starting Harbor. The agent receives the rendered instruction and has no filesystem or shell tools. The package requires Harbor at the revision containing [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155); exported tasks contain no `tests/test.sh`.
+The exporter writes `instruction.md`, `task.toml`, an empty `environment/` directory, `specification.json`, `rendering.json`, and `binding.json`. The specification stays private to the Harbor custom verifier; the launcher reads the rendering to configure public output functions for action tasks. Launch checks the stored binding before starting Harbor. The agent has no filesystem or shell tools. The package requires Harbor at the revision containing [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155); exported tasks contain no `tests/test.sh`.
 
 For an authenticated model run, pass the environment variable name as `HarborLaunch("chat", model="...", agent_kwargs={"api_base": "...", "api_key_env": "MODEL_API_KEY"})`. The agent reads its value at request time; Harbor trial configuration retains only the variable name. The variable must be set in the trial process environment.
 
@@ -35,3 +35,9 @@ uv run --project lib/taskcompendium --extra harbor --group test pytest lib/taskc
 ```
 
 The Harbor trial tests exercise correct, wrong, malformed, and infrastructure-failure outcomes. A malformed submission has no reward. A failed comparison has reward `0.0`. An infrastructure failure has no reward and is recorded separately in `taskcompendium-result.json`.
+
+## NeMo predicted actions
+
+`import_row` in `taskcompendium.importers.nemo_predicted_action` accepts a NeMo single-step row and its pinned canonical SHA-256 digest. It returns a private `TaskSpec` and a public final-action `Rendering`. The rendering retains source message roles, function definitions, tool choice, and parallel-call setting; the expected function calls stay in the private `nemo_predicted_action` verifier. The importer rejects nonempty request settings it cannot carry. Harbor export checks that the readable task instruction still matches the structured messages. The chat agent sends the source turns separately, records one native final action, and stops. The no-tool environment never dispatches the call.
+
+The pinned fixture records the NeMo Gym repository revision and blob SHA in `tests/fixtures/nemo/predicted-action.provenance.json`. The importer pins the dataset revision in `Source`. Imported targets must be advertised function calls. Message targets are rejected because the source comparator gives any message full credit. TaskCompendium strengthens function-call scoring: call counts, JSON types, object keys, list structure, and string values must match exactly. Numeric tolerance is available only when set explicitly on the private verifier.
