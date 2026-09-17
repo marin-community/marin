@@ -25,8 +25,8 @@ def collect_garbage() -> float:
 def coordinated_gc(interval: int) -> Iterator[Callable[[int], float]]:
     """Collect after warmup and at shared steps; restore the caller's GC policy.
 
-    The caller validates a positive interval before dispatch. Training collectives
-    bound rank skew; adding GC barriers would delay ranks that could collect early.
+    Enter after warmup with a positive interval. Invoke the yielded function at
+    each completed global step; it returns the local collection duration.
     """
     was_enabled = gc.isenabled()
     gc.disable()
@@ -34,6 +34,7 @@ def coordinated_gc(interval: int) -> Iterator[Callable[[int], float]]:
     def collect(step: int) -> float:
         if step % interval:
             return 0.0
+        # Training collectives bound rank skew; early arrivals can start collecting immediately.
         return collect_garbage()
 
     try:
