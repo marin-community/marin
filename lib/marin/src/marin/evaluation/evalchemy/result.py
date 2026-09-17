@@ -4,7 +4,7 @@
 """Typed readers for evaluation output artifacts and aggregate reports.
 
 Eval steps write backend-native output. :class:`EvalResult` subclasses parse each backend's layout.
-:class:`FineStoreEvalchemyResult` reads current Evalchemy aggregate artifacts;
+:class:`FineStoreEvalchemyResult` reads current Evalchemy results artifacts;
 :class:`EvalchemyResult` retains the historical result-tree reader. :func:`compile_eval_report`
 merges several typed results.
 """
@@ -68,9 +68,8 @@ class EvalchemyResult(EvalResult):
     """Per-task metrics from a pre-native Evalchemy result tree.
 
     Metric keys use task-config directories; group tasks append subtask names. Task-config keys keep
-    shot variants distinct. Evalchemy does not record cross-task averages. This reader remains while
-    reports may reference historical ``EvalchemyResult`` artifacts; remove it after those archives
-    have been rebuilt into FineStore or expired.
+    shot variants distinct. Evalchemy does not record cross-task averages. Historical reports persist
+    the ``EvalchemyResult`` type name, so this reader remains part of their durable decoding contract.
     """
 
     @functools.cached_property
@@ -104,7 +103,7 @@ class EvalchemyResult(EvalResult):
 
 
 class FineStoreEvalchemyResult(EvalResult):
-    """Per-task metrics from Evalchemy aggregate artifacts stored in FineStore."""
+    """Per-task metrics from Evalchemy results artifacts stored in FineStore."""
 
     @functools.cached_property
     def _task_metrics(self) -> dict[str, dict[str, float]]:
@@ -127,7 +126,7 @@ class FineStoreEvalchemyResult(EvalResult):
                 continue
             result_sources.append((name, relative.parts[0]))
         if not result_sources:
-            raise FileNotFoundError(f"no Evalchemy aggregate artifacts in FineStore archive {self.path}")
+            raise FileNotFoundError(f"no Evalchemy results artifacts in FineStore archive {self.path}")
 
         metrics: dict[str, dict[str, float]] = {}
         for name, task_dir in sorted(result_sources):

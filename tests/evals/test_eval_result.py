@@ -4,7 +4,7 @@
 """Read current FineStore and historical Evalchemy metrics into typed reports.
 
 Historical fixtures use lm-eval's ``<task_dir>/<model>/results_<ts>.json`` tree. Current fixtures
-store the same aggregate artifacts in FineStore. Both readers key metrics by the task-config
+store the same results artifacts in FineStore. Both readers key metrics by the task-config
 directory so shot variants of one task do not overwrite each other.
 """
 
@@ -47,7 +47,7 @@ def _step(name: str, kind: type, files: dict[str, object]) -> ArtifactStep:
     )
 
 
-# evalchemy's aggregated output: one results_<ts>.json per task-config, nested under <task_dir>/<model>/.
+# Evalchemy's results output: one results_<ts>.json per task-config, nested under <task_dir>/<model>/.
 # lm-eval keys its `results` block by the bare task name, so both hellaswag shot variants say "hellaswag".
 _GSM8K = {"results": {"gsm8k": {"exact_match,none": 0.3, "exact_match_stderr,none": 0.02, "alias": "gsm8k"}}}
 _ARC = {"results": {"arc_easy": {"acc,none": 0.5, "acc_norm,none": 0.66, "alias": "arc_easy"}}}
@@ -62,7 +62,7 @@ _MMLU = {
 }
 
 
-def test_finestore_evalchemy_result_reads_native_aggregate_artifacts(tmp_path):
+def test_finestore_evalchemy_result_reads_evalchemy_results_artifacts(tmp_path):
     root = str(tmp_path / "archive")
     store = EvaluationStore.open(root, writer_id="evalchemy")
     try:
