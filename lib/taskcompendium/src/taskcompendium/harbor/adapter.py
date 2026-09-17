@@ -5,6 +5,8 @@
 
 import asyncio
 import json
+import os
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -105,12 +107,12 @@ class ReplayAgent(BaseAgent):
 class DirectChatAgent(BaseAgent):
     """Send the rendered request to an OpenAI-compatible chat endpoint."""
 
-    def __init__(self, *args, api_base: str, api_key: str = "", request_timeout: float = 120, **kwargs):
+    def __init__(self, *args, api_base: str, api_key_env: str | None = None, request_timeout: float = 120, **kwargs):
         super().__init__(*args, **kwargs)
         if self.model_name is None:
             raise ValueError("Direct chat requires a model name")
         self.api_base = api_base.rstrip("/")
-        self.api_key = api_key
+        self.api_key_env = api_key_env
         self.request_timeout = request_timeout
 
     @staticmethod
@@ -126,13 +128,17 @@ class DirectChatAgent(BaseAgent):
     def _completion(self, instruction: str) -> str:
         body = {"model": self.model_name, "messages": [{"role": "user", "content": instruction}]}
         headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        if self.api_key_env is not None:
+            headers["Authorization"] = f"Bearer {os.environ[self.api_key_env]}"
         request = urllib.request.Request(
             f"{self.api_base}/chat/completions", data=json.dumps(body).encode(), headers=headers, method="POST"
         )
-        with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
-            message: dict[str, Any] = json.load(response)["choices"][0]["message"]
+        try:
+            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
+                message: dict[str, Any] = json.load(response)["choices"][0]["message"]
+        except urllib.error.HTTPError as error:
+            detail = error.read(4096).decode("utf-8", errors="replace")
+            raise RuntimeError(f"Chat completion HTTP {error.code}: {detail}") from error
         if message.get("tool_calls") or not isinstance(message.get("content"), str):
             raise ValueError("Direct chat requires a textual final answer")
         return message["content"]
