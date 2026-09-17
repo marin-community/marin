@@ -43,6 +43,7 @@ function freshConversation(): Conversation {
     model: model.value,
     system: '',
     pythonTools: '',
+    shellWorkspace: null,
     thinkingMode: ThinkingMode.TemplateDefault,
     customInstructions: '',
     createdAt: Date.now(),
@@ -54,7 +55,7 @@ function freshConversation(): Conversation {
 function persist() {
   const current = active.value
   const alreadySaved = conversations.value.some((conversation) => conversation.id === current.id)
-  if (!current.messages.length && !current.pythonTools.trim() && !alreadySaved) return
+  if (!current.messages.length && !current.pythonTools.trim() && !current.shellWorkspace && !alreadySaved) return
   if (!current.model) current.model = model.value
   if (!alreadySaved) conversations.value.push(current)
   saveConversations(conversations.value)

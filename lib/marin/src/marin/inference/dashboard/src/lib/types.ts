@@ -58,12 +58,19 @@ export interface ToolMessage {
 
 export type ChatMessage = UserMessage | AssistantMessage | ToolMessage
 
+export interface ShellWorkspace {
+  filesJson: string
+  history: string[]
+  repositoryUrl: string
+}
+
 export interface Conversation {
   id: string
   title: string
   model: string
   system: string
   pythonTools: string
+  shellWorkspace: ShellWorkspace | null
   thinkingMode: ThinkingMode
   customInstructions: string
   createdAt: number

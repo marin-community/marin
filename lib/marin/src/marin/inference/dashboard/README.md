@@ -90,6 +90,42 @@ One model response counts as one round, including a response with multiple
 calls. The UI executes calls from the eighth round, stops before another model
 request, and displays a limit error.
 
+## ShellSim agent workspaces
+
+Open **Shell workspace** above the Chat composer to give the model a
+conventional `bash` tool backed by an isolated ShellSim filesystem. Initial
+files are a JSON object whose keys are relative paths and whose values are UTF-8
+text. Enabling a workspace adds the standard function definition to the
+request's `tools` field, so the served model's active chat template controls how
+shell calls and results are rendered just like custom Python tools. The three
+agent cards on an empty chat demonstrate repairing code, investigating a log,
+and updating a configuration.
+
+ShellSim starts in `/work` with the initial files committed as a fresh Git
+baseline. The browser stores each executed command with the conversation. For
+the next call, the service reconstructs the filesystem and replays those
+commands before executing the new command, which preserves file edits and Git
+state without keeping a host process or directory alive. Editing the initial
+files or choosing **Reset commands** clears that replay history.
+
+To start from an existing project, enter a public GitHub repository URL and
+choose **Load public repo**. The dashboard service downloads the default
+branch's archive outside ShellSim, extracts bounded UTF-8 regular files, and
+passes only that file map into the simulation. It does not forward credentials,
+clone remote Git history, load submodules, or support private repositories.
+ShellSim itself has no real network access, and `git clone` is unavailable; the
+simulated repository receives a new baseline commit after import.
+
+Workspace inputs are limited to 500 files, 256 KiB per file, and 4 MiB total.
+Repository downloads are limited to 4 MiB compressed and 10,000 archive
+entries. Binary files and common generated directories such as `node_modules`,
+`.venv`, `target`, and `__pycache__` are skipped. A conversation may replay at
+most 32 commands totaling 128 KiB; each command is limited to 16 KiB. Each
+simulation is limited to 50 million CPU ticks, 64 MiB of memory, 16 MiB of disk,
+and 2 MiB of output, with the same 10-second outer worker timeout used for
+custom Python tools.
+
 After the endpoint becomes ready, `marin-serve iris` prints a capability URL.
 Possession of that URL authorizes inference and simulated Python tool calls.
-Share the URL only with trusted users and treat it as a credential.
+It also authorizes ShellSim commands and bounded public GitHub downloads. Share
+the URL only with trusted users and treat it as a credential.

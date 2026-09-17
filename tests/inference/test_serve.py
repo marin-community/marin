@@ -3,7 +3,9 @@
 
 """Tests for inference serving and the dashboard reverse proxy."""
 
+import asyncio
 import dataclasses
+import io
 import json
 import os
 import re
@@ -11,6 +13,7 @@ import socket
 import subprocess
 import sys
 import time
+import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,6 +22,7 @@ from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import click
+import httpx
 import pytest
 import requests
 from click.testing import CliRunner
@@ -62,8 +66,9 @@ from marin.inference.levanter_backend import (
     validate_levanter_dtype,
 )
 from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
-from marin.inference.python_tool_routes import PYTHON_TOOL_TIMEOUT
+from marin.inference.python_tool_routes import TOOL_WORKER_TIMEOUT
 from marin.inference.python_tools import python_tools_from_source
+from marin.inference.repository_snapshot import fetch_repository_snapshot
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from marin.inference.vllm_backend import VllmBackend, vllm_launcher
@@ -118,7 +123,7 @@ def spin() -> int:
         pass
 """
 
-DASHBOARD_REQUEST_TIMEOUT = PYTHON_TOOL_TIMEOUT + 5
+DASHBOARD_REQUEST_TIMEOUT = TOOL_WORKER_TIMEOUT + 5
 
 
 @pytest.mark.parametrize(
@@ -944,6 +949,114 @@ def test_dashboard_shellsim_enforces_cpu_limit(dashboard_tool_base_url):
 
     assert exhausted.status_code == 422
     assert "cpu_exhausted" in exhausted.json()["details"]
+
+
+def test_dashboard_shell_workspace_replays_commands_with_simulated_git(dashboard_tool_base_url):
+    files = {
+        "calculator.py": "def add(left: int, right: int) -> int:\n    return left - right\n",
+        "test_calculator.py": "from calculator import add\n\nassert add(17, 24) == 41\nprint('test passed')\n",
+    }
+    edit = "sed -i 's/left - right/left + right/' calculator.py"
+    edited = requests.post(
+        f"{dashboard_tool_base_url}/shell",
+        json={"files": files, "history": [], "command": edit},
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
+    )
+    verified = requests.post(
+        f"{dashboard_tool_base_url}/shell",
+        json={
+            "files": files,
+            "history": [edit],
+            "command": "python3.14 test_calculator.py; git diff calculator.py",
+        },
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
+    )
+
+    assert edited.status_code == 200
+    assert edited.json()["exit_code"] == 0
+    assert verified.status_code == 200
+    assert verified.json()["exit_code"] == 0
+    assert "test passed" in verified.json()["stdout"]
+    assert "+    return left + right" in verified.json()["stdout"]
+
+
+def test_dashboard_shell_workspace_rejects_parent_paths(dashboard_tool_base_url):
+    response = requests.post(
+        f"{dashboard_tool_base_url}/shell",
+        json={"files": {"../secret": "no"}, "history": [], "command": "ls"},
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
+    )
+
+    assert response.status_code == 400
+    assert "Invalid shell workspace path" in response.json()["error"]
+
+
+def test_dashboard_shell_workspace_has_no_network_clone(dashboard_tool_base_url):
+    response = requests.post(
+        f"{dashboard_tool_base_url}/shell",
+        json={
+            "files": {},
+            "history": [],
+            "command": "git clone https://github.com/rjpower/shellsim external",
+        },
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["exit_code"] != 0
+    assert "clone" in response.json()["stderr"]
+
+
+def test_dashboard_repository_import_rejects_non_github_urls(dashboard_tool_base_url):
+    response = requests.post(
+        f"{dashboard_tool_base_url}/shell/repository",
+        json={"url": "https://example.com/owner/repository"},
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
+    )
+
+    assert response.status_code == 400
+    assert "https://github.com/owner/repository" in response.json()["error"]
+
+
+def test_repository_import_extracts_bounded_text_snapshot():
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as repository_zip:
+        repository_zip.writestr("owner-repository-ref/README.md", "# Example\n")
+        repository_zip.writestr("owner-repository-ref/src/main.py", "print('hello')\n")
+        repository_zip.writestr("owner-repository-ref/image.bin", b"\xff\x00")
+        repository_zip.writestr("owner-repository-ref/node_modules/dependency.js", "ignored\n")
+
+    def github_archive(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://api.github.com/repos/owner/repository/zipball"
+        return httpx.Response(200, content=archive.getvalue())
+
+    snapshot = asyncio.run(
+        fetch_repository_snapshot(
+            "https://github.com/owner/repository.git",
+            transport=httpx.MockTransport(github_archive),
+        )
+    )
+
+    assert snapshot.files == {"README.md": "# Example\n", "src/main.py": "print('hello')\n"}
+    assert snapshot.skipped_files == 2
+
+
+def test_repository_import_does_not_follow_redirects_outside_github():
+    requests_seen: list[httpx.Request] = []
+
+    def redirect(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return httpx.Response(302, headers={"location": "http://127.0.0.1/private"})
+
+    with pytest.raises(ValueError, match="unexpected host"):
+        asyncio.run(
+            fetch_repository_snapshot(
+                "https://github.com/owner/repository",
+                transport=httpx.MockTransport(redirect),
+            )
+        )
+
+    assert len(requests_seen) == 1
 
 
 def test_dashboard_serves_ui_and_reverse_proxies_streaming():

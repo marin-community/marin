@@ -44,6 +44,37 @@ export async function invokeTool(
   throw new Error(`tool returned ${response.status}: ${await response.text()}`)
 }
 
+export interface ShellCommandResult {
+  exit_code: number
+  stdout: string
+  stderr: string
+  stop_reason: string | null
+  unsupported: string[]
+  partial_commands: string[]
+}
+
+export async function invokeShell(
+  files: Record<string, string>,
+  history: string[],
+  command: string,
+  signal: AbortSignal,
+): Promise<ShellCommandResult> {
+  const response = await postJson('shell', { files, history, command }, signal)
+  if (response.ok) return response.json()
+  throw new Error(`shell command returned ${response.status}: ${await response.text()}`)
+}
+
+export interface RepositorySnapshot {
+  files: Record<string, string>
+  skipped_files: number
+}
+
+export async function importRepository(url: string, signal: AbortSignal): Promise<RepositorySnapshot> {
+  const response = await postJson('shell/repository', { url }, signal)
+  if (response.ok) return response.json()
+  throw new Error(`repository import returned ${response.status}: ${await response.text()}`)
+}
+
 /** POST an OpenAI request and invoke onData for either buffered JSON or SSE events. */
 export async function requestCompletion(
   path: string,

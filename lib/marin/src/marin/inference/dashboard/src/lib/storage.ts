@@ -20,6 +20,9 @@ export function loadConversations(): Conversation[] {
     return parsed.map((conversation) => ({
       ...conversation,
       pythonTools: conversation.pythonTools ?? '',
+      shellWorkspace: conversation.shellWorkspace
+        ? { repositoryUrl: '', ...conversation.shellWorkspace }
+        : null,
       thinkingMode: conversation.thinkingMode ?? ThinkingMode.TemplateDefault,
       customInstructions: conversation.customInstructions ?? '',
     }))
