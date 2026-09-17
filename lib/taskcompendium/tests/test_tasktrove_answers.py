@@ -15,7 +15,7 @@ from tasktrove_verify.spec import McqSpec
 from taskcompendium.grading import Outcome, grade_answer
 from taskcompendium.harbor.runner import HarborLaunch, run_trial
 from taskcompendium.importers.tasktrove import MAX_ARCHIVE_MEMBERS, RELEASE, RELEASE_ROOT, read_archive
-from taskcompendium.importers.tasktrove_answers import import_task
+from taskcompendium.importers.tasktrove_mcqa import import_task
 from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
 from taskcompendium.models import AnswerKind, MultipleChoiceAnswer
 from taskcompendium.rendering import AnswerFormat, Rendering, render_instruction
@@ -49,7 +49,11 @@ def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(t
 
     source_contract = McqSpec(expected="C", options=10, output=str(tmp_path / "source-answer.txt"))
     rendering = Rendering("plain", AnswerFormat.PLAIN)
-    for source_response, response, reward in (("Answer: C", "C", 1.0), ("Answer: D", "D", 0.0)):
+    for source_response, response, reward in (
+        ("Answer: C", "C", 1.0),
+        ("Answer: D", "D", 0.0),
+        ("Answer: Z", "Z", 0.0),
+    ):
         (tmp_path / "source-answer.txt").write_text(source_response)
         assert source_grade(source_contract, tmp_path, tmp_path).reward == reward
         result = grade_answer(specification, rendering, response)
