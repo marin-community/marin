@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Discovery records for durable evaluation and reinforcement-learning rollouts."""
+"""Finelog discovery records for evaluation and reinforcement-learning rollouts."""
 
 import logging
 import time

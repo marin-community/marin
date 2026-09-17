@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from finelog.client import FlushResult, schema_from_dataclass
 from finelog.rpc import finelog_stats_pb2
-from marin.rollout_catalog import (
+from marin.rollouts.catalog import (
     ROLLOUT_RUNS_NAMESPACE,
     RolloutRunKind,
     RolloutRunRecord,
@@ -54,14 +54,14 @@ def test_record_rollout_run_adds_iris_attempt_identity(monkeypatch) -> None:
     table = _Table()
     client = _Client(table)
     monkeypatch.setattr(
-        "marin.rollout_catalog.runtime_telemetry.resolve",
+        "marin.rollouts.catalog.runtime_telemetry.resolve",
         lambda **_kwargs: SimpleNamespace(
             endpoint="/system/log-server",
             resolver=lambda endpoint: endpoint,
             attributes={"execution_uid": "iris-attempt", "job_id": "/job"},
         ),
     )
-    monkeypatch.setattr("marin.rollout_catalog.LogClient.connect", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr("marin.rollouts.catalog.LogClient.connect", lambda *_args, **_kwargs: client)
 
     record_rollout_run(
         rollout_run_record(
@@ -84,7 +84,7 @@ def test_record_rollout_run_adds_iris_attempt_identity(monkeypatch) -> None:
 
 
 def test_record_rollout_run_is_inert_outside_iris(monkeypatch) -> None:
-    monkeypatch.setattr("marin.rollout_catalog.runtime_telemetry.resolve", lambda **_kwargs: None)
+    monkeypatch.setattr("marin.rollouts.catalog.runtime_telemetry.resolve", lambda **_kwargs: None)
 
     record_rollout_run(
         rollout_run_record(

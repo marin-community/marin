@@ -28,7 +28,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import sanitize_job_name
 from marin.external_dependencies import MARIN_SKYRL
-from marin.rollout_catalog import RolloutRunKind, record_rollout_run, rollout_run_record
+from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 from marin.training.training import LevanterCheckpoint
 
 _EXECUTION = "skyrl_execution"
