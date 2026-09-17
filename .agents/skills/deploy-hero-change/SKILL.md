@@ -30,6 +30,10 @@ Write down, and get agreement on:
   the checkpoint tree (`launch_scaling_ladder` derives the output path from
   `--run-id`, so a new id is a fresh tree by construction). Keep the W&B project;
   dashboards, the public report, and alerts key on it.
+- The W&B fork: configure the new run's first launch with
+  `fork_from: <old-wandb-id>?_step=<N>`, using the parent W&B id and the handoff
+  checkpoint step. Record the parent id, child id, and fork value in the status
+  issue. The child run starts with inherited W&B history through `N`.
 - The gate. Common criteria: loss tracks the control step for step up to bf16
   noise (or by the amount the change is meant to improve); MFU equal or better;
   token-drop rate equal or better; the metric the change targets moves as
@@ -54,6 +58,10 @@ Write down, and get agreement on:
   restores the full state (params, optimizer, step, data position) from exactly
   that step and later restarts prefer the new run's own, newer checkpoints. The
   old run's tree is never written again.
+- The first child launch includes the configured `fork_from` value. W&B does not
+  accept `resume` and `fork_from` in the same initialization; `WandbConfig`
+  omits `resume` while `fork_from` is set. Later recovery launches remove
+  `fork_from` and use the child W&B id with `resume: allow`.
 - Inventory downstream reporting for the run id: the public W&B report's pinned
   run set (the Grafana bridge follows it), any tracker that hard-codes the id,
   metric keys the change renames (those need their own PR). Grafana hero-health
@@ -83,7 +91,8 @@ every guard as a dry run against the live cluster before the day:
   and confirm it is terminal; relaunch the old commit's `trigger_hero.sh` from
   the pristine rollback worktree under the old run id.
   The old tree resumes its own newest checkpoint; confirm that is the intended
-  anchor before launching.
+  anchor before launching. Keep the old W&B id and do not set `fork_from` for
+  this rollback launch.
 - Get an independent review of the scripts and fix or refute every finding;
   fail-open guards are the defect class to ask the reviewer for.
 

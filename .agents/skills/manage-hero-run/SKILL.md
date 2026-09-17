@@ -52,7 +52,8 @@ Before launching, print and validate:
 - Pinned durable output root. Mutable and development runs must use a caller-owned
   `users/<username>/...` path below `MARIN_PREFIX`; do not write run data below a cluster's
   `iris/` prefix.
-- Tracker mode. When W&B is enabled, record its id/name and resume policy. Bounded diagnostics may
+- Tracker mode. When W&B is enabled, record its id/name and resume policy. For a cutover that creates a child run, also record the parent W&B id, handoff step, and child `fork_from` value
+  (`<parent-wandb-id>?_step=<handoff-step>`). Use `fork_from` only for the child's first launch. Bounded diagnostics may
   disable W&B when logs and checkpoints provide the required evidence.
 - Checkpoint retention policy. Put rolling resume checkpoints under a region-local
   `marin_temp_bucket(ttl_days=30, ..., source_prefix=<output root>)` path. Keep one by default and at
@@ -123,13 +124,14 @@ For instance, it's ok to fix a logging bug or misconfiguration of evaluation cal
 
 ## Resume And Recovery
 
-Many failures can be recoverable just by relaunching using the same id. These include hardware failures, preemptions, transient cloud issues, and some classes of code bugs. Use the launch workflow for relaunches, but with special attention to checkpoint lineage and resume policy. If the lineage is intact and the resume policy is `allow`, prefer direct relaunch with the same W&B id and output root. If the lineage is compromised or the resume policy is `never`, use a new W&B id and output root, and treat it as a new run for record-keeping purposes.
+Many failures can be recoverable just by relaunching using the same id. These include hardware failures, preemptions, transient cloud issues, and some classes of code bugs. Use the launch workflow for relaunches, but with special attention to checkpoint lineage and resume policy. If the lineage is intact and the resume policy is `allow`, prefer direct relaunch with the same W&B id and output root. A child run created during a cutover must omit `fork_from` on these recovery launches and resume its child W&B id. If the lineage is compromised or the resume policy is `never`, use a new W&B id and output root, and treat it as a new run for record-keeping purposes.
 
 - Default to direct relaunch with the same run id, W&B identity, and pinned output root. Use this for controller job crashes, preemptions, hardware/low-level failures, and ordinary recoverable interruptions so the existing recovery mechanism keeps the run going.
 
 ### Launching with a new run id
 
 - Use a new run id and W&B id only when the old lineage is unsafe or semantically different, such as W&B corruption or a nontrivial code change. Nontrivial code changes should have a new W&B id. Document the reason, old and new identities, source checkpoint, output root, and code SHA in the durable run record.
+- When a new run is a cutover child, configure its first launch with `fork_from: <parent-wandb-id>?_step=<handoff-step>`. `WandbConfig` does not pass `resume` to W&B for this initialization. After the child has started, remove `fork_from` and set `resume: allow` for any recovery launch with the child W&B id.
 - Use `initialize_from` to have training pick up from a specific prior checkpoint.
 - If the user does not specify a checkpoint to use for a resume, select the newest "complete" one. Complete checkpoints have `metadata.json`. If no complete checkpoints are available, escalate to the DRI instead of guessing. If the user specifies a checkpoint that does not have `metadata.json`, block the launch and escalate instead of guessing. Do not use incomplete checkpoints for resume or relaunch.
 - Sort by parsed numeric step, not lexicographic path order.
