@@ -63,6 +63,14 @@ on the assistant message. For tools, pass the recorded definitions through
 the converter can associate results with calls before producing Harmony messages.
 Do not reconstruct tool definitions from observed arguments.
 
+Some agent datasets use a text protocol instead of API tool calls. Terminus is
+a terminal-agent protocol whose responses are JSON objects with a `commands`
+list and often `analysis`, `plan`, and `task_complete` fields. Its source exports
+record command output as user turns. Keep the source record's initial user prompt
+and train on the JSON responses as assistant text. The
+`terminus_protocol_messages` parser in `download/terminus.py` extracts the JSON
+object and keeps the command observations as user turns.
+
 For a source that constructs Harmony `Message` objects directly, use
 `chat_document` to serialize them instead.
 

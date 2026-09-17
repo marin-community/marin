@@ -34,7 +34,7 @@ from marin.datakit.download.rollout_transforms import (
     render_role_message,
     text_document,
 )
-from marin.datakit.download.terminus import TASK_DESCRIPTION_MARKER, terminus_protocol_messages
+from marin.datakit.download.terminus import terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -1147,13 +1147,6 @@ def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
             conversations, tools = recovered
             converted = opencode_protocol_messages(conversations, tools)
         else:
-            first = conversations[0]
-            content = first.get("content")
-            if first.get("role") == "user" and isinstance(content, str) and TASK_DESCRIPTION_MARKER in content:
-                conversations = [
-                    {**first, "content": content[content.index(TASK_DESCRIPTION_MARKER) :]},
-                    *conversations[1:],
-                ]
             converted = terminus_protocol_messages(conversations)
         if converted is None:
             return []
@@ -1262,7 +1255,7 @@ def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
                 }.get(dataset.cohort_name, "2026.09.05.4.explicit-tools")
             ),
             "schema_tokenizer": (OPENCODE_TOKENIZER, OPENCODE_TOKENIZER_REVISION),
-            "terminus_version": "2026.09.10.terminal-wait",
+            "terminus_version": "2026.09.17.native-json",
             "conversion_version": "2026.09.11.review-fixes",
             "teacher": dataset.teacher,
             "task_source": dataset.task_source,
