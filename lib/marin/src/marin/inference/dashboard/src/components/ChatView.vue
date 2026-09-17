@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { fetchToolDefinitions, invokeTool, isAbortError, requestCompletion } from '../lib/api'
 import { chatTemplateRequestFields } from '../lib/chat_template'
 import { CHAT_EXAMPLES } from '../lib/examples'
 import type { ChatExample } from '../lib/examples'
 import { modelMessages } from '../lib/python_tools'
 import type { ModelMessage, ToolDefinition } from '../lib/python_tools'
+import { plainTextChat } from '../lib/plain_text_chat'
 import { splitThinking } from '../lib/thinking'
 import {
   appendToolCallDelta,
@@ -41,6 +42,7 @@ const draft = ref('')
 const busy = ref(false)
 const showTools = ref(false)
 const showRawStream = ref(false)
+const rawChat = computed(() => plainTextChat(props.conversation))
 const scroller = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
 let abort: AbortController | null = null
@@ -310,13 +312,16 @@ async function complete(
           </div>
         </div>
       </div>
+      <pre
+        v-else-if="showRawStream"
+        class="mx-auto max-w-3xl whitespace-pre-wrap break-words px-4 py-5 font-mono text-xs leading-relaxed text-text-secondary md:px-6"
+      >{{ rawChat }}</pre>
       <div v-else class="mx-auto max-w-3xl space-y-4 px-4 py-5 md:px-6">
         <MessageBubble
           v-for="(message, index) in conversation.messages"
           :key="index"
           :message="message"
           :streaming="busy && index === conversation.messages.length - 1"
-          :show-raw-stream="showRawStream"
         />
       </div>
     </div>
@@ -337,7 +342,7 @@ async function complete(
           </button>
           <label
             class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted"
-            title="Show the unparsed decoded content and reasoning stream"
+            title="Show the whole chat as a plain-text transcript"
           >
             <input v-model="showRawStream" type="checkbox" class="accent-accent" />
             Raw stream

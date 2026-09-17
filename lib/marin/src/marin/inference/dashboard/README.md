@@ -34,10 +34,11 @@ template arguments. Functions entered in **Python tools** are converted to the
 standard OpenAI `tools` request field so the served model's active template
 formats them.
 
-Enable **Raw stream** above the Chat composer to show the unparsed decoded text
-received in each assistant response's `content` and `reasoning_content` or
-`reasoning` fields. The OpenAI-compatible response does not include numeric
-token IDs, so the dashboard cannot display those.
+Enable **Raw stream** above the Chat composer to replace the rendered messages
+with one plain-text transcript of the entire chat. The transcript includes the
+system and user messages, unparsed assistant `content` and reasoning fields,
+structured tool calls, tool results, and errors. The OpenAI-compatible response
+does not include numeric token IDs, so the dashboard cannot display those.
 
 ## Custom Python tools
 
