@@ -6,6 +6,7 @@
 import asyncio
 import json
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from harbor.agents.base import BaseAgent
@@ -17,6 +18,23 @@ from harbor.verifier.base import BaseVerifier
 
 from taskcompendium.grading import GradeResult, Outcome, grade_answer
 from taskcompendium.lowering import read_rendering, read_specification
+
+RESPONSE_FILE = "response.txt"
+
+
+def _record_response(logs_dir: Path, instruction: str, response: str, context: AgentContext) -> None:
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / RESPONSE_FILE).write_text(response)
+    context.metadata = {
+        "assistant_final": response,
+        "turns": 1,
+        "all_messages": [
+            {"role": "user", "content": instruction},
+            {"role": "assistant", "content": response},
+        ],
+        "summarization_count": 0,
+        "tools": [],
+    }
 
 
 class NoToolEnvironment(BaseEnvironment):
@@ -81,18 +99,7 @@ class ReplayAgent(BaseAgent):
         pass
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
-        self.logs_dir.mkdir(parents=True, exist_ok=True)
-        (self.logs_dir / "response.txt").write_text(self.response)
-        context.metadata = {
-            "assistant_final": self.response,
-            "turns": 1,
-            "all_messages": [
-                {"role": "user", "content": instruction},
-                {"role": "assistant", "content": self.response},
-            ],
-            "summarization_count": 0,
-            "tools": [],
-        }
+        _record_response(self.logs_dir, instruction, self.response, context)
 
 
 class DirectChatAgent(BaseAgent):
@@ -132,18 +139,7 @@ class DirectChatAgent(BaseAgent):
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         response = await asyncio.to_thread(self._completion, instruction)
-        self.logs_dir.mkdir(parents=True, exist_ok=True)
-        (self.logs_dir / "response.txt").write_text(response)
-        context.metadata = {
-            "assistant_final": response,
-            "turns": 1,
-            "all_messages": [
-                {"role": "user", "content": instruction},
-                {"role": "assistant", "content": response},
-            ],
-            "summarization_count": 0,
-            "tools": [],
-        }
+        _record_response(self.logs_dir, instruction, response, context)
 
 
 class SemanticVerifier(BaseVerifier):
@@ -154,7 +150,7 @@ class SemanticVerifier(BaseVerifier):
             root = self.task.paths.task_dir
             specification = read_specification(root / "specification.json")
             rendering = read_rendering(root / "rendering.json")
-            response_path = self.trial_paths.agent_dir / "response.txt"
+            response_path = self.trial_paths.agent_dir / RESPONSE_FILE
             response = response_path.read_text() if response_path.exists() else None
             result = grade_answer(specification, rendering, response)
         except Exception as error:
