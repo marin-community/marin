@@ -23,6 +23,7 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.profile import (
+    DEFAULT_PROFILE_DURATION_SECONDS,
     build_profile_row,
     profile_local_process,
 )
@@ -148,7 +149,7 @@ class Worker:
         worker_metadata: job_pb2.WorkerMetadata | None = None,
         log_client: LogClient | None = None,
         profile_interval: Duration = Duration.from_seconds(600),
-        profile_duration_seconds: int = 10,
+        profile_duration_seconds: int = DEFAULT_PROFILE_DURATION_SECONDS,
     ):
         self._config = config
         self._profile_interval = profile_interval
