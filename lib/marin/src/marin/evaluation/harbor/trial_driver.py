@@ -10,6 +10,7 @@ import importlib.metadata
 import inspect
 import json
 import os
+import shutil
 import sys
 import tempfile
 from collections.abc import Mapping
@@ -28,6 +29,7 @@ from harbor_config.errors import ErrorCategory, errors_by_category, known_error_
 from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
 from harbor_config.models.job.config import DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
+from huggingface_hub import snapshot_download  # pyrefly: ignore[missing-import]  # installed by external driver
 from pydantic import BaseModel, ConfigDict, ValidationError
 from upath import UPath  # pyrefly: ignore[missing-import]  # installed by external driver
 
@@ -48,6 +50,8 @@ _STABLE_JOBS_DIR = "/__marin_jobs__"
 _STABLE_MODEL = "__marin_model__"
 _STABLE_ENDPOINT = "http://marin.invalid/v1"
 _HF_DATASET_PREFIX = "hf://"
+# Task datasets are hundreds of small files; the default 8 workers take minutes on a cold cache.
+_HF_SNAPSHOT_WORKERS = 32
 
 
 class RuntimeOverlay(BaseModel):
@@ -333,6 +337,34 @@ def _harbor_config_commit() -> str:
     return commit
 
 
+def _preflight_dataset_path(policy_path: Path, metadata: _DatasetMetadata, workdir: Path) -> str | None:
+    """Local task directory for the placeholder job, or ``None`` for a Harbor registry dataset.
+
+    Harbor validates ``datasets[].name`` as a registry package reference, so a Hugging Face source
+    has to reach ``Job.create`` as a path, the same way the evaluation worker materializes it at run
+    time (``marin.evaluation.harbor.dataset``). The snapshot lives under the preflight's temporary
+    directory and is discarded with it; the download itself is cached under the Hugging Face cache.
+    """
+    if metadata.kind == _DatasetKind.LOCAL:
+        return str((policy_path.parent / metadata.selector).resolve())
+    if metadata.kind == _DatasetKind.HUGGING_FACE:
+        # Download into the user's Hugging Face cache so repeated launches of one policy pay for the
+        # snapshot once, then copy it out (dereferencing the cache's blob symlinks) so the job sees a
+        # plain task tree like the worker's.
+        snapshot = snapshot_download(
+            repo_id=metadata.selector,
+            repo_type="dataset",
+            revision=metadata.revision,
+            max_workers=_HF_SNAPSHOT_WORKERS,
+            token=os.environ.get("HF_TOKEN") or False,
+        )
+        root = workdir / "hf_dataset"
+        shutil.copytree(snapshot, root, symlinks=False)
+        (root / ".gitattributes").unlink(missing_ok=True)
+        return str(root)
+    return None
+
+
 def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict[str, object]:
     document = _document(path)
     config = JobConfig.model_validate(document, extra="forbid")
@@ -348,10 +380,8 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
 
     stable_config = _stable_config(config)
     stable_policy_json = _stable_policy_json(stable_config)
-    dataset_path = (
-        str((path.parent / dataset_metadata.selector).resolve()) if dataset_metadata.kind == _DatasetKind.LOCAL else None
-    )
     with tempfile.TemporaryDirectory(prefix="marin-harbor-preflight-job-") as jobs_dir:
+        dataset_path = _preflight_dataset_path(path, dataset_metadata, Path(jobs_dir))
         effective = _effective_config(
             stable_config,
             RuntimeOverlay(
