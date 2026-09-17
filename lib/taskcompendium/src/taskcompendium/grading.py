@@ -1,19 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade a decoded answer with the pinned TaskTrove exact-answer contract."""
+"""Resolve private verifier kinds to typed grading handlers."""
 
 import dataclasses
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from importlib.metadata import entry_points
 from pathlib import Path
+from typing import Any
 
+import msgspec
 from tasktrove_verify.grade import Status, grade
 from tasktrove_verify.spec import ExactSpec
 
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import TaskSpec, VerifierSpec
 from taskcompendium.rendering import Rendering, extract_answer
+
+ENTRY_POINT_GROUP = "taskcompendium.verifiers"
+EXACT_ANSWER_KIND = "exact_answer"
 
 
 class Outcome(StrEnum):
@@ -29,21 +36,103 @@ class GradeResult:
     error: str | None = None
 
 
-def grade_answer(specification: TaskSpec, rendering: Rendering, response: str | None) -> GradeResult:
-    """Keep submission errors separate from failed correctness checks."""
+@dataclass(frozen=True)
+class GradingAttempt:
+    """Submission evidence available to a registered verifier."""
+
+    rendering: Rendering
+    response: str | None
+    transcript: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class VerifierHandler:
+    payload_type: type
+    grade: Callable[[Any, GradingAttempt], GradeResult]
+
+
+_HANDLERS: dict[str, VerifierHandler] = {}
+
+
+def register_verifier(kind: str, *, payload_type: type, grade: Callable[[Any, GradingAttempt], GradeResult]) -> None:
+    """Register one kind's typed payload and grading function."""
+    if not kind or kind in _HANDLERS:
+        raise ValueError(f"Verifier kind is empty or already registered: {kind!r}")
+    _HANDLERS[kind] = VerifierHandler(payload_type, grade)
+
+
+def _handler(kind: str) -> VerifierHandler:
+    if kind in _HANDLERS:
+        return _HANDLERS[kind]
+    matches = [entry for entry in entry_points(group=ENTRY_POINT_GROUP) if entry.name == kind]
+    if len(matches) != 1:
+        raise ValueError(f"Unknown or ambiguous verifier kind: {kind!r}")
+    matches[0].load()()
+    if kind not in _HANDLERS:
+        raise ValueError(f"Verifier entry point did not register kind: {kind!r}")
+    return _HANDLERS[kind]
+
+
+def _resolved(verifier: VerifierSpec) -> tuple[VerifierHandler, Any]:
+    handler = _handler(verifier.kind)
     try:
-        candidate = extract_answer(response, rendering)
+        payload = msgspec.convert(verifier.parameters, type=handler.payload_type, strict=True)
+    except (msgspec.ValidationError, TypeError, ValueError) as error:
+        raise ValueError(f"Invalid {verifier.kind!r} verifier parameters: {error}") from error
+    return handler, payload
+
+
+def validate_verifier(verifier: VerifierSpec) -> None:
+    """Check a private verifier before export or launch, independent of rendering."""
+    _resolved(verifier)
+
+
+def grade_attempt(specification: TaskSpec, attempt: GradingAttempt) -> GradeResult:
+    """Dispatch an attempt by its private verifier kind."""
+    handler, payload = _resolved(specification.verifier)
+    return handler.grade(payload, attempt)
+
+
+def grade_answer(specification: TaskSpec, rendering: Rendering, response: str | None) -> GradeResult:
+    """Grade a direct answer through the same open verifier registry."""
+    return grade_attempt(specification, GradingAttempt(rendering, response))
+
+
+class ExactAnswerPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    expected: str
+    ignore_case: bool = True
+    ignore_whitespace: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.expected.strip():
+            raise ValueError("An exact answer is required")
+
+
+def exact_answer(expected: str, ignore_case: bool = True, ignore_whitespace: bool = True) -> VerifierSpec:
+    """Construct a pinned exact-answer verifier descriptor."""
+    payload = ExactAnswerPayload(expected, ignore_case, ignore_whitespace)
+    return VerifierSpec(EXACT_ANSWER_KIND, msgspec.to_builtins(payload))
+
+
+def _grade_exact(payload: ExactAnswerPayload, attempt: GradingAttempt) -> GradeResult:
+    try:
+        candidate = extract_answer(attempt.response, attempt.rendering)
     except (ValueError, TypeError) as error:
         return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
     with tempfile.TemporaryDirectory(prefix="taskcompendium-answer-") as temporary:
         output = Path(temporary) / "answer.txt"
         output.write_text(candidate)
         contract = ExactSpec(
-            expected=(specification.verifier.expected,),
-            ignore_case=specification.verifier.ignore_case,
-            ignore_whitespace=specification.verifier.ignore_whitespace,
+            expected=(payload.expected,),
+            ignore_case=payload.ignore_case,
+            ignore_whitespace=payload.ignore_whitespace,
         )
         result = grade(dataclasses.replace(contract, output=str(output)), output.parent, output.parent)
     if result.status != Status.SCORED:
         return GradeResult(Outcome.INFRA_ERROR, None, str(result.detail))
     return GradeResult(Outcome.GRADED, result.reward)
+
+
+def register_exact_answer() -> None:
+    """Entry point loaded when an exact-answer task is validated or graded."""
+    register_verifier(EXACT_ANSWER_KIND, payload_type=ExactAnswerPayload, grade=_grade_exact)
