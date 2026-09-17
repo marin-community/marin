@@ -93,6 +93,7 @@ class XtokSelectionRule(StrEnum):
     AVG_LOGITS = "avg_logits"
     AVG_PROBS = "avg_probs"
     UNNORMALIZED_ADD = "unnormalized_add"
+    ONE_SIDED_LOGPROB_AVG = "one_sided_logprob_avg"
 
 
 @dataclass(frozen=True)
@@ -360,6 +361,13 @@ def _sampling_logprobs(
     a_values = [a_logits.get(token_id, a_floor) for token_id in union]
     b_values = [b_logits.get(token_id, b_floor) for token_id in union]
 
+    if rule == XtokSelectionRule.ONE_SIDED_LOGPROB_AVG:
+        log_a = _log_softmax(a_values, temperature)
+        log_b = _log_softmax(b_values, temperature)
+        scores = [lp_a + advisor_weight * min(0.0, lp_b - lp_a) for lp_a, lp_b in zip(log_a, log_b, strict=True)]
+        # Temperature is already applied to each model's log probabilities.
+        return dict(zip(union, _log_softmax(scores, 1.0), strict=True))
+
     if rule == XtokSelectionRule.AVG_PROBS:
         log_a = _log_softmax(a_values, temperature)
         log_b = _log_softmax(b_values, temperature)
@@ -486,7 +494,11 @@ def _token_path_row(raw: Any, path: str, rule: XtokSelectionRule) -> TokenPathRo
     weight = raw.get("advisor_weight")
     if not isinstance(weight, int | float) or isinstance(weight, bool):
         raise TypeError(f"Token-path advisor_weight must be a number: {path}")
-    if not math.isfinite(weight) or weight < 0.0 or (rule is not XtokSelectionRule.UNNORMALIZED_ADD and weight > 1.0):
+    if (
+        not math.isfinite(weight)
+        or weight < 0.0
+        or (rule not in (XtokSelectionRule.UNNORMALIZED_ADD, XtokSelectionRule.ONE_SIDED_LOGPROB_AVG) and weight > 1.0)
+    ):
         raise ValueError(f"Invalid advisor_weight={weight} for {rule.value}: {path}")
     return TokenPathRow(
         id=raw["id"],
@@ -1080,14 +1092,15 @@ def run_joint_decode_replay(config: JointDecodeReplayStepConfig) -> None:
             key=lambda record: record["id"],
             reducer=functools.partial(_aggregate_statistic_row, metadata=metadata),
             sort_by=lambda record: record["completion_index"],
-            num_output_shards=1,
+            num_output_shards=4,
         )
+        .reshard(1)
         .write_jsonl(path, skip_existing=True)
     )
     ZephyrContext(
         name="joint-decode-replay-aggregate",
         max_workers=config.aggregate_workers,
-        resources=ResourceConfig(cpu=1, ram="4g", preemptible=True),
+        resources=ResourceConfig(cpu=1, ram="8g", preemptible=True),
         coordinator_resources=ResourceConfig(cpu=0.1, ram="1g", preemptible=True),
     ).execute(pipeline)
 

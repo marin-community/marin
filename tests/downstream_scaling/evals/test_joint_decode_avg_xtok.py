@@ -5,6 +5,7 @@ import gzip
 import json
 import math
 import random
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -52,6 +53,24 @@ class PromptRecordingDecoder:
     def generate(self, prompts_a, prompts_b):
         self.batches.append((prompts_a, prompts_b))
         return [SimpleNamespace(text=f"completion for {prompt}", finish_reason="stop") for prompt in prompts_a]
+
+
+class ScriptedRandom:
+    def __init__(self, tokens, draws=()):
+        self.tokens = iter(tokens)
+        self.draws = iter(draws)
+        self.probabilities = []
+
+    def choices(self, population, weights, *, k):
+        total = sum(weights)
+        probabilities = {token: weight / total for token, weight in zip(population, weights, strict=True)}
+        self.probabilities.append(probabilities)
+        chosen = [next(self.tokens) for _ in range(k)]
+        assert all(probabilities[token] > 0.0 for token in chosen)
+        return chosen
+
+    def random(self):
+        return next(self.draws)
 
 
 def make_vocab(pieces: dict[int, bytes], eos_id: int) -> xtok_selection.Vocab:
@@ -218,7 +237,15 @@ def test_child_config_json_round_trip(tmp_path):
     assert _child_config_from_file(str(path)) == config
 
 
-def test_v2_child_config_json_round_trip_preserves_advisor_prompts_path(tmp_path):
+@pytest.mark.parametrize(
+    ("rule", "advisor_weights", "temperature"),
+    [
+        (joint_decode_avg_v2.XtokSelectionRule.BYTES_UNION, (0.5,), 0.0),
+        (joint_decode_avg_v2.XtokSelectionRule.PROB_CAP, (0.0, 1.0, 3.0), 0.4),
+        (joint_decode_avg_v2.XtokSelectionRule.HARMONIC_AVG, (0.0, 0.5, 1.0), 0.4),
+    ],
+)
+def test_v2_child_config_json_round_trip_preserves_advisor_prompts_path(tmp_path, rule, advisor_weights, temperature):
     config = joint_decode_avg_v2.JointDecodeLocalWorkerConfig(
         decoder_model_path="/decoder",
         advisor_model_path="/advisor",
@@ -231,9 +258,9 @@ def test_v2_child_config_json_round_trip_preserves_advisor_prompts_path(tmp_path
             top_k_a=4,
             top_k_b=4,
             seed=0,
-            selection_rule=joint_decode_avg_v2.XtokSelectionRule.BYTES_UNION,
-            advisor_weights=(0.5,),
-            temperature=0.0,
+            selection_rule=rule,
+            advisor_weights=advisor_weights,
+            temperature=temperature,
         ),
         decoder_model=joint_decode_avg_v2.JointDecodeModelConfig(max_model_len=16384),
         advisor_model=joint_decode_avg_v2.JointDecodeModelConfig(max_model_len=8192),
@@ -294,6 +321,338 @@ def test_one_sided_logprob_avg_partial_overlap_uses_floors_and_temperature(stren
     total = sum(weights)
     probabilities = {token_id: weight / total for token_id, weight in zip(tokens, weights, strict=True)}
     assert probabilities == pytest.approx(expected, rel=1e-12, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("rule", "alpha", "expected"),
+    [
+        (joint_decode_avg_v2.XtokSelectionRule.PROB_CAP, 0.0, {1: 0.5, 2: 0.25, 3: 0.25}),
+        (joint_decode_avg_v2.XtokSelectionRule.PROB_CAP, 1.0, {1: 4 / 13, 2: 5 / 13, 3: 4 / 13}),
+        (joint_decode_avg_v2.XtokSelectionRule.PROB_CAP, 2.0, {1: 2 / 9, 2: 5 / 9, 3: 2 / 9}),
+        (joint_decode_avg_v2.XtokSelectionRule.PROB_CAP, 3.0, {1: 0.2, 2: 0.6, 3: 0.2}),
+        (joint_decode_avg_v2.XtokSelectionRule.PROB_CAP, 1e14, {1: 0.2, 2: 0.6, 3: 0.2}),
+        (joint_decode_avg_v2.XtokSelectionRule.HARMONIC_AVG, 0.0, {1: 0.5, 2: 0.25, 3: 0.25}),
+        (joint_decode_avg_v2.XtokSelectionRule.HARMONIC_AVG, 0.5, {1: 153 / 461, 2: 189 / 461, 3: 119 / 461}),
+        (joint_decode_avg_v2.XtokSelectionRule.HARMONIC_AVG, 2 / 3, {1: 77 / 269, 2: 126 / 269, 3: 66 / 269}),
+        (joint_decode_avg_v2.XtokSelectionRule.HARMONIC_AVG, 1.0, {1: 0.2, 2: 0.6, 3: 0.2}),
+    ],
+)
+@pytest.mark.parametrize("shifts", [(0.0, 0.0), (1000.0, -1000.0)])
+def test_probability_caps_match_floor_filled_probabilities(rule, alpha, expected, shifts):
+    # At T=0.4, the floor-filled union has p_a=(1/2, 1/4, 1/4), p_b=(1/5, 3/5, 1/5).
+    # max(p_b / p_a)=2.4: alpha=3 caps every token.
+    a_topk = [entry(1, 0.4 * math.log(2) + shifts[0]), entry(2, shifts[0])]
+    b_topk = [entry(2, 0.4 * math.log(3) - 1.0 + shifts[1]), entry(3, -1.0 + shifts[1])]
+    tokens, weights = joint_decode_avg_v2._capped_logprob_weights(
+        a_topk, b_topk, selection_rule=rule, advisor_weight=alpha, temperature=0.4
+    )
+
+    total = sum(weights)
+    probabilities = {token_id: weight / total for token_id, weight in zip(tokens, weights, strict=True)}
+    assert probabilities == pytest.approx(expected, rel=1e-12, abs=1e-12)
+
+    if rule is joint_decode_avg_v2.XtokSelectionRule.PROB_CAP and alpha == 1.0:
+        old_tokens, old_weights = joint_decode_avg_v2._one_sided_logprob_weights(
+            a_topk, b_topk, advisor_weight=1.0, temperature=0.4
+        )
+        old_total = sum(old_weights)
+        old_probabilities = {
+            token_id: weight / old_total for token_id, weight in zip(old_tokens, old_weights, strict=True)
+        }
+        assert probabilities == pytest.approx(old_probabilities, rel=1e-12, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("rule", "advisor_weight"),
+    [(joint_decode_avg_v2.XtokSelectionRule.PROB_CAP, 2.0), (joint_decode_avg_v2.XtokSelectionRule.HARMONIC_AVG, 2 / 3)],
+)
+def test_probability_caps_remain_finite_for_large_logprob_differences(rule, advisor_weight):
+    tokens, weights = joint_decode_avg_v2._capped_logprob_weights(
+        [entry(1, 0.0), entry(2, -1000.0)],
+        [entry(1, -1000.0), entry(2, 0.0)],
+        selection_rule=rule,
+        advisor_weight=advisor_weight,
+        temperature=0.4,
+    )
+
+    total = sum(weights)
+    probabilities = {token_id: weight / total for token_id, weight in zip(tokens, weights, strict=True)}
+    assert probabilities == pytest.approx({1: 1 / 3, 2: 2 / 3}, rel=1e-12, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("rule", "advisor_weight"),
+    [(joint_decode_avg_v2.XtokSelectionRule.PROB_CAP, 2.0), (joint_decode_avg_v2.XtokSelectionRule.HARMONIC_AVG, 0.5)],
+)
+@pytest.mark.parametrize("token_id", [1, 9])
+def test_probability_caps_record_same_token_and_terminal_steps(rule, advisor_weight, token_id):
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=1,
+        top_k_b=1,
+        seed=0,
+        selection_rule=rule,
+        advisor_weights=(advisor_weight,),
+        temperature=0.4,
+    )
+    vocab = make_vocab({1: b"a"}, eos_id=9)
+    state = joint_decode_avg_v2._SweepState(advisor_weight=advisor_weight, token_paths={})
+    select_token = joint_decode_avg_v2._make_select_token(sampling, vocab, vocab, state)
+
+    tokens_a, tokens_b = select_token(
+        [entry(token_id, 0.0)], [entry(token_id, 0.0)], rng=random.Random(0), request_index=5
+    )
+
+    assert (tokens_a, tokens_b) == ([token_id], [token_id])
+    assert state.token_paths == {
+        5: [
+            joint_decode_avg_v2.XtokPathStep(
+                bytes_hex=b"a".hex() if token_id == 1 else "", tokens_a=[token_id], tokens_b=[token_id]
+            )
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    "rule", [joint_decode_avg_v2.XtokSelectionRule.PROB_CAP, joint_decode_avg_v2.XtokSelectionRule.HARMONIC_AVG]
+)
+@pytest.mark.parametrize(
+    ("alpha", "temperature"),
+    [(-0.1, 0.4), (math.inf, 0.4), (math.nan, 0.4), (1.0, 0.0), (1.0, math.inf), (1.0, math.nan)],
+)
+def test_probability_caps_reject_invalid_sampling_parameters(rule, alpha, temperature):
+    with pytest.raises(ValueError):
+        joint_decode_avg_v2.JointDecodeSamplingConfig(
+            n_samples=1,
+            max_tokens=8,
+            advisor_max_tokens=8,
+            top_k_a=1,
+            top_k_b=1,
+            seed=0,
+            selection_rule=rule,
+            advisor_weights=(alpha,),
+            temperature=temperature,
+        )
+
+
+def test_harmonic_avg_rejects_weight_above_one():
+    with pytest.raises(ValueError):
+        joint_decode_avg_v2.JointDecodeSamplingConfig(
+            n_samples=1,
+            max_tokens=8,
+            advisor_max_tokens=8,
+            top_k_a=1,
+            top_k_b=1,
+            seed=0,
+            selection_rule=joint_decode_avg_v2.XtokSelectionRule.HARMONIC_AVG,
+            advisor_weights=(1.1,),
+            temperature=0.4,
+        )
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [joint_decode_avg_v2.XtokSelectionRule.TAU_FILTER_STUDENT, joint_decode_avg_v2.XtokSelectionRule.TAU_FILTER_ADVISOR],
+)
+@pytest.mark.parametrize("tau", [0.0, 0.01, 10.0])
+@pytest.mark.parametrize("shifts", [(0.0, 0.0), (1000.0, -1000.0)])
+def test_tau_filter_matches_floor_filled_probabilities(rule, tau, shifts):
+    # At T=0.4, the floor-filled union has S=(1/2, 1/4, 1/4), T=(1/5, 3/5, 1/5).
+    a_topk = [entry(1, 0.4 * math.log(2) + shifts[0]), entry(2, shifts[0])]
+    b_topk = [entry(2, 0.4 * math.log(3) - 1.0 + shifts[1]), entry(3, -1.0 + shifts[1])]
+    base = {1: 0.5, 2: 0.25, 3: 0.25}
+    other = {1: 0.2, 2: 0.6, 3: 0.2}
+    if rule is joint_decode_avg_v2.XtokSelectionRule.TAU_FILTER_ADVISOR:
+        base, other = other, base
+    raw = {token_id: probability * other[token_id] / (other[token_id] + tau) for token_id, probability in base.items()}
+    expected = {token_id: weight / sum(raw.values()) for token_id, weight in raw.items()}
+
+    tokens, weights = joint_decode_avg_v2._tau_filter_weights(
+        a_topk, b_topk, selection_rule=rule, tau=tau, temperature=0.4
+    )
+
+    total = sum(weights)
+    probabilities = {token_id: weight / total for token_id, weight in zip(tokens, weights, strict=True)}
+    assert probabilities == pytest.approx(expected, rel=1e-12, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("rule", "expected"),
+    [
+        (joint_decode_avg_v2.XtokSelectionRule.TAU_FILTER_STUDENT, {1: 0.75, 2: 0.25}),
+        (joint_decode_avg_v2.XtokSelectionRule.TAU_FILTER_ADVISOR, {1: 0.25, 2: 0.75}),
+    ],
+)
+def test_tau_filter_remains_finite_for_large_logprob_differences(rule, expected):
+    tokens, weights = joint_decode_avg_v2._tau_filter_weights(
+        [entry(1, 0.0), entry(2, -1000.0)],
+        [entry(1, -1000.0), entry(2, 0.0)],
+        selection_rule=rule,
+        tau=0.5,
+        temperature=0.4,
+    )
+
+    assert all(math.isfinite(weight) for weight in weights)
+    total = sum(weights)
+    assert total > 0.0
+    probabilities = {token_id: weight / total for token_id, weight in zip(tokens, weights, strict=True)}
+    assert probabilities == pytest.approx(expected, rel=1e-12, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [joint_decode_avg_v2.XtokSelectionRule.TAU_FILTER_STUDENT, joint_decode_avg_v2.XtokSelectionRule.TAU_FILTER_ADVISOR],
+)
+def test_tau_filter_large_tau_approaches_normalized_product(rule):
+    tokens, weights = joint_decode_avg_v2._tau_filter_weights(
+        [entry(1, 0.4 * math.log(2)), entry(2, 0.0)],
+        [entry(2, 0.4 * math.log(3) - 1.0), entry(3, -1.0)],
+        selection_rule=rule,
+        tau=1e14,
+        temperature=0.4,
+    )
+
+    total = sum(weights)
+    probabilities = {token_id: weight / total for token_id, weight in zip(tokens, weights, strict=True)}
+    assert probabilities == pytest.approx({1: 1 / 3, 2: 1 / 2, 3: 1 / 6}, rel=1e-12, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [joint_decode_avg_v2.XtokSelectionRule.TAU_FILTER_STUDENT, joint_decode_avg_v2.XtokSelectionRule.TAU_FILTER_ADVISOR],
+)
+@pytest.mark.parametrize("token_id", [1, 9])
+def test_tau_filter_records_same_token_and_terminal_steps(rule, token_id):
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=1,
+        top_k_b=1,
+        seed=0,
+        selection_rule=rule,
+        advisor_weights=(10.0,),
+        temperature=0.4,
+    )
+    vocab = make_vocab({1: b"a"}, eos_id=9)
+    state = joint_decode_avg_v2._SweepState(advisor_weight=10.0, token_paths={})
+    select_token = joint_decode_avg_v2._make_select_token(sampling, vocab, vocab, state)
+
+    tokens_a, tokens_b = select_token(
+        [entry(token_id, 0.0)], [entry(token_id, 0.0)], rng=random.Random(0), request_index=5
+    )
+
+    assert (tokens_a, tokens_b) == ([token_id], [token_id])
+    assert state.token_paths == {
+        5: [
+            joint_decode_avg_v2.XtokPathStep(
+                bytes_hex=b"a".hex() if token_id == 1 else "", tokens_a=[token_id], tokens_b=[token_id]
+            )
+        ]
+    }
+
+
+@pytest.fixture
+def token_dropout_selector():
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=3,
+        top_k_b=3,
+        seed=0,
+        selection_rule=joint_decode_avg_v2.XtokSelectionRule.TOKEN_DROPOUT,
+        advisor_weights=(0.0, 0.25, 0.5, 0.75, 1.0),
+        temperature=0.4,
+    )
+    vocab = make_vocab({1: b"a", 2: b"b"}, eos_id=9)
+    state = joint_decode_avg_v2._SweepState(advisor_weight=0.5, token_paths={})
+    return sampling, state, joint_decode_avg_v2._make_select_token(sampling, vocab, vocab, state)
+
+
+@pytest.mark.parametrize(
+    ("dropout", "expected"),
+    [(0.0, {1: 0.5, 2: 0.25, 9: 0.25}), (1.0, {1: 0.2, 2: 0.6, 9: 0.2})],
+)
+def test_token_dropout_endpoints_use_union_floors_and_temperature(token_dropout_selector, dropout, expected):
+    _, state, select_token = token_dropout_selector
+    state.advisor_weight = dropout
+    rng = ScriptedRandom(tokens=(9,))
+
+    tokens = select_token(
+        [entry(1, 0.4 * math.log(2)), entry(2, 0.0)],
+        [entry(2, 0.4 * math.log(3) - 1.0), entry(9, -1.0)],
+        rng=rng,
+        request_index=5,
+    )
+
+    assert rng.probabilities == [pytest.approx(expected, rel=1e-12, abs=1e-12)]
+    assert tokens == ([9], [9])
+    assert state.token_paths == {5: [joint_decode_avg_v2.XtokPathStep(bytes_hex="", tokens_a=[9], tokens_b=[9])]}
+
+
+@pytest.mark.parametrize(
+    ("dropout", "draws", "expected_student"),
+    [
+        (0.25, (0.1, 0.1), {9: 1.0}),
+        (0.5, (0.9, 0.9), {1: 4 / 7, 2: 2 / 7, 9: 1 / 7}),
+        (0.75, (0.5, 0.9), {2: 2 / 3, 9: 1 / 3}),
+    ],
+)
+def test_token_dropout_preserves_teacher_and_conditions_student(
+    token_dropout_selector, dropout, draws, expected_student
+):
+    _, state, select_token = token_dropout_selector
+    state.advisor_weight = dropout
+    output_token = min(expected_student)
+    rng = ScriptedRandom(tokens=(9, output_token), draws=draws)
+
+    tokens = select_token(
+        [entry(1, 0.4 * math.log(4)), entry(2, 0.4 * math.log(2)), entry(9, 0.0)],
+        [entry(1, 0.4 * math.log(3)), entry(2, 0.0), entry(9, 0.0)],
+        rng=rng,
+        request_index=5,
+    )
+
+    assert rng.probabilities == [
+        pytest.approx({1: 0.6, 2: 0.2, 9: 0.2}, rel=1e-12, abs=1e-12),
+        pytest.approx(expected_student, rel=1e-12, abs=1e-12),
+    ]
+    assert tokens == ([output_token], [output_token])
+    assert state.token_paths == {
+        5: [
+            joint_decode_avg_v2.XtokPathStep(
+                bytes_hex={1: "61", 2: "62", 9: ""}[output_token], tokens_a=[output_token], tokens_b=[output_token]
+            )
+        ]
+    }
+
+
+def test_token_dropout_recenters_student_logits_after_masking(token_dropout_selector):
+    _, _, select_token = token_dropout_selector
+    rng = ScriptedRandom(tokens=(9, 2), draws=(0.1, 0.9))
+
+    tokens = select_token(
+        [entry(1, 0.0), entry(2, -1000.0), entry(9, -1000.0 - 0.4 * math.log(2))],
+        [entry(9, 0.0)],
+        rng=rng,
+        request_index=5,
+    )
+
+    assert rng.probabilities[-1] == pytest.approx({2: 2 / 3, 9: 1 / 3}, rel=1e-12, abs=1e-12)
+    assert tokens == ([2], [2])
+
+
+@pytest.mark.parametrize(
+    ("dropout", "temperature"),
+    [(-0.1, 0.4), (1.1, 0.4), (math.nan, 0.4), (math.inf, 0.4), (0.5, 0.0), (0.5, math.nan), (0.5, math.inf)],
+)
+def test_token_dropout_rejects_invalid_sampling_parameters(token_dropout_selector, dropout, temperature):
+    sampling, _, _ = token_dropout_selector
+    with pytest.raises(ValueError):
+        replace(sampling, advisor_weights=(dropout,), temperature=temperature)
 
 
 def test_sweep_chunk_specs_tile_each_weight_exactly_once():

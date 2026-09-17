@@ -23,6 +23,15 @@ selector live in ``xtok_selection``:
 - ``one_sided_logprob_avg``: penalize student probabilities where the advisor
   assigns lower probability, normalized over the raw-token union for
   same-tokenizer pairs.
+- ``prob_cap``: cap student probabilities at advisor probability / alpha.
+- ``harmonic_avg``: take a weighted harmonic average of student and advisor probabilities.
+  Both rules temperature-scale each side over the raw-token union and
+  require same-tokenizer pairs.
+- ``token_dropout``: retain an advisor-sampled token, independently drop other
+  candidates, then sample from the student over the survivors; same-tokenizer only.
+- ``tau_filter_student`` / ``tau_filter_advisor``: multiply the selected base
+  distribution by ``p_other / (p_other + tau)`` over the temperature-normalized
+  raw-token union; same-tokenizer only.
 
 Scale-out shape is cloned from ``joint_decode_avg_xregion``: the executor
 step is a CPU coordinator that fans out single-VM TPU worker pools via
@@ -125,6 +134,11 @@ class XtokSelectionRule(StrEnum):
     AVG_PROBS = "avg_probs"
     UNNORMALIZED_ADD = "unnormalized_add"
     ONE_SIDED_LOGPROB_AVG = "one_sided_logprob_avg"
+    PROB_CAP = "prob_cap"
+    HARMONIC_AVG = "harmonic_avg"
+    TOKEN_DROPOUT = "token_dropout"
+    TAU_FILTER_STUDENT = "tau_filter_student"
+    TAU_FILTER_ADVISOR = "tau_filter_advisor"
 
 
 @dataclass(frozen=True)
@@ -170,8 +184,28 @@ class JointDecodeSamplingConfig:
                 raise ValueError(
                     f"one-sided logprob strengths must all be finite and nonnegative (got {self.advisor_weights})"
                 )
+        elif self.selection_rule is XtokSelectionRule.PROB_CAP:
+            if any(not math.isfinite(alpha) or alpha < 0.0 for alpha in self.advisor_weights):
+                raise ValueError(
+                    f"{self.selection_rule.value} alphas must all be finite and nonnegative (got {self.advisor_weights})"
+                )
+        elif self.selection_rule in (XtokSelectionRule.TAU_FILTER_STUDENT, XtokSelectionRule.TAU_FILTER_ADVISOR):
+            if any(not math.isfinite(tau) or tau < 0.0 for tau in self.advisor_weights):
+                raise ValueError(
+                    f"{self.selection_rule.value} taus must all be finite and nonnegative (got {self.advisor_weights})"
+                )
         elif any(not 0.0 <= weight <= 1.0 for weight in self.advisor_weights):
             raise ValueError(f"advisor_weights must all be in [0, 1] (got {self.advisor_weights})")
+        if self.selection_rule in (
+            XtokSelectionRule.PROB_CAP,
+            XtokSelectionRule.HARMONIC_AVG,
+            XtokSelectionRule.TOKEN_DROPOUT,
+            XtokSelectionRule.TAU_FILTER_STUDENT,
+            XtokSelectionRule.TAU_FILTER_ADVISOR,
+        ) and (not math.isfinite(self.temperature) or self.temperature <= 0.0):
+            raise ValueError(
+                f"{self.selection_rule.value} temperature must be finite and positive (got {self.temperature})"
+            )
         if len(set(self.advisor_weights)) != len(self.advisor_weights):
             raise ValueError(f"advisor_weights must be distinct (got {self.advisor_weights})")
         if not 0.0 <= self.prefix_credit <= 1.0:
@@ -574,6 +608,98 @@ def _one_sided_logprob_weights(
     return union, [math.exp(score - maximum) for score in scores]
 
 
+def _capped_logprob_weights(
+    a_topk: list[dict[str, Any]],
+    b_topk: list[dict[str, Any]],
+    *,
+    selection_rule: XtokSelectionRule,
+    advisor_weight: float,
+    temperature: float,
+) -> tuple[list[int], list[float]]:
+    """Return the raw-token union and proportional cap or harmonic-average weights."""
+    a_logits = {int(item["token_id"]): float(item["logit"]) for item in a_topk}
+    b_logits = {int(item["token_id"]): float(item["logit"]) for item in b_topk}
+    if not a_logits or not b_logits:
+        raise ValueError("both sides must provide at least one top-k logit")
+
+    union = list(set(a_logits) | set(b_logits))
+
+    def logprobs(logits: dict[int, float]) -> list[float]:
+        floor = min(logits.values())
+        maximum = max(logits.values())
+        shifted = [(logits.get(token_id, floor) - maximum) / temperature for token_id in union]
+        log_total = math.log(sum(math.exp(value) for value in shifted))
+        return [value - log_total for value in shifted]
+
+    a_logprobs = logprobs(a_logits)
+    b_logprobs = logprobs(b_logits)
+    if advisor_weight == 0.0:
+        scores = a_logprobs
+    elif selection_rule is XtokSelectionRule.HARMONIC_AVG:
+        if advisor_weight == 1.0:
+            scores = b_logprobs
+        else:
+            log_student_weight = math.log1p(-advisor_weight)
+            log_advisor_weight = math.log(advisor_weight)
+            scores = []
+            for log_p, log_a in zip(a_logprobs, b_logprobs, strict=True):
+                # log(1 / ((1 - w) / p_a + w / p_b)), using stable logsumexp.
+                student_term = log_student_weight - log_p
+                advisor_term = log_advisor_weight - log_a
+                scores.append(-max(student_term, advisor_term) - math.log1p(math.exp(-abs(student_term - advisor_term))))
+    else:
+        log_alpha = math.log(advisor_weight)
+        scores = []
+        for log_p, log_a in zip(a_logprobs, b_logprobs, strict=True):
+            difference = log_alpha + log_p - log_a
+            penalty = max(0.0, difference)
+            scores.append(log_p - penalty)
+    maximum = max(scores)
+    return union, [math.exp(score - maximum) for score in scores]
+
+
+def _tau_filter_weights(
+    a_topk: list[dict[str, Any]],
+    b_topk: list[dict[str, Any]],
+    *,
+    selection_rule: XtokSelectionRule,
+    tau: float,
+    temperature: float,
+) -> tuple[list[int], list[float]]:
+    """Return the raw-token union and proportional tau-filter sampling weights."""
+    a_logits = {int(item["token_id"]): float(item["logit"]) for item in a_topk}
+    b_logits = {int(item["token_id"]): float(item["logit"]) for item in b_topk}
+    if not a_logits or not b_logits:
+        raise ValueError("both sides must provide at least one top-k logit")
+
+    union = list(set(a_logits) | set(b_logits))
+
+    def logprobs(logits: dict[int, float]) -> list[float]:
+        floor = min(logits.values())
+        maximum = max(logits.values())
+        shifted = [(logits.get(token_id, floor) - maximum) / temperature for token_id in union]
+        log_total = math.log(sum(math.exp(value) for value in shifted))
+        return [value - log_total for value in shifted]
+
+    base_logprobs = logprobs(a_logits)
+    other_logprobs = logprobs(b_logits)
+    if selection_rule is XtokSelectionRule.TAU_FILTER_ADVISOR:
+        base_logprobs, other_logprobs = other_logprobs, base_logprobs
+
+    if tau == 0.0:
+        scores = base_logprobs
+    else:
+        log_tau = math.log(tau)
+        scores = []
+        for log_base, log_other in zip(base_logprobs, other_logprobs, strict=True):
+            # log(p_base / (1 + tau / p_other)), using stable softplus.
+            difference = log_tau - log_other
+            penalty = max(difference, 0.0) + math.log1p(math.exp(-abs(difference)))
+            scores.append(log_base - penalty)
+    maximum = max(scores)
+    return union, [math.exp(score - maximum) for score in scores]
+
+
 def _make_select_token(
     sampling: JointDecodeSamplingConfig,
     vocab_a: xtok_selection.Vocab,
@@ -590,6 +716,81 @@ def _make_select_token(
                 temperature=sampling.temperature,
             )
             token = rng.choices(union, weights=weights, k=1)[0]
+            tokens_a = [token]
+            tokens_b = [token]
+            state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b))
+            return tokens_a, tokens_b
+
+        return select_token
+
+    if sampling.selection_rule in (XtokSelectionRule.PROB_CAP, XtokSelectionRule.HARMONIC_AVG):
+
+        def select_token(a_topk, b_topk, *, rng, request_index: int):
+            union, weights = _capped_logprob_weights(
+                a_topk,
+                b_topk,
+                selection_rule=sampling.selection_rule,
+                advisor_weight=state.advisor_weight,
+                temperature=sampling.temperature,
+            )
+            token = rng.choices(union, weights=weights, k=1)[0]
+            tokens_a = [token]
+            tokens_b = [token]
+            state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b))
+            return tokens_a, tokens_b
+
+        return select_token
+
+    if sampling.selection_rule in (XtokSelectionRule.TAU_FILTER_STUDENT, XtokSelectionRule.TAU_FILTER_ADVISOR):
+
+        def select_token(a_topk, b_topk, *, rng, request_index: int):
+            union, weights = _tau_filter_weights(
+                a_topk,
+                b_topk,
+                selection_rule=sampling.selection_rule,
+                tau=state.advisor_weight,
+                temperature=sampling.temperature,
+            )
+            token = rng.choices(union, weights=weights, k=1)[0]
+            tokens_a = [token]
+            tokens_b = [token]
+            state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b))
+            return tokens_a, tokens_b
+
+        return select_token
+
+    if sampling.selection_rule is XtokSelectionRule.TOKEN_DROPOUT:
+
+        def sample_token(logits: dict[int, float], candidates: list[int], rng) -> int:
+            floor = min(logits.values())
+            values = [logits.get(token_id, floor) for token_id in candidates]
+            # Recenter after masking so even a low-probability survivor has weight 1.
+            maximum = max(values)
+            weights = [math.exp((value - maximum) / sampling.temperature) for value in values]
+            return rng.choices(candidates, weights=weights, k=1)[0]
+
+        def select_token(a_topk, b_topk, *, rng, request_index: int):
+            a_logits = {int(item["token_id"]): float(item["logit"]) for item in a_topk}
+            b_logits = {int(item["token_id"]): float(item["logit"]) for item in b_topk}
+            if not a_logits or not b_logits:
+                raise ValueError("both sides must provide at least one top-k logit")
+
+            union = list(set(a_logits) | set(b_logits))
+            dropout_probability = state.advisor_weight
+            if dropout_probability == 0.0:
+                token = sample_token(a_logits, union, rng)
+            else:
+                teacher_token = sample_token(b_logits, union, rng)
+                if dropout_probability == 1.0:
+                    token = teacher_token
+                else:
+                    retained = [
+                        token_id
+                        for token_id in union
+                        if token_id == teacher_token or rng.random() >= dropout_probability
+                    ]
+                    token = sample_token(a_logits, retained, rng)
+
             tokens_a = [token]
             tokens_b = [token]
             state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b))

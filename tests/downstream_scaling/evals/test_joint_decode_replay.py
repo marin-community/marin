@@ -16,6 +16,7 @@ from experiments.downstream_scaling.evals import (
     run_delphi_gsm8k_joint_decode_avg_kl_unnormalized_add_llama as legacy_runner,
 )
 from experiments.downstream_scaling.evals import run_delphi_gsm8k_joint_decode_replay_unnormalized_add_llama as runner
+from experiments.downstream_scaling.evals.algorithms import joint_decode_avg_v2
 from experiments.downstream_scaling.evals.algorithms.xtok_selection import Vocab
 from experiments.downstream_scaling.evals.measurements import joint_decode_replay as replay
 
@@ -63,6 +64,9 @@ def read_jsonl(path):
         (replay.XtokSelectionRule.AVG_LOGITS, 0.5, {0: 1 / 3, 1: 1 / 2, 2: 1 / 6}),
         (replay.XtokSelectionRule.BYTES_UNION, 0.5, {b"a": 1 / 3, b"b": 1 / 2, b"c": 1 / 6}),
         (replay.XtokSelectionRule.UNNORMALIZED_ADD, 2.0, {0: 4 / 86, 1: 81 / 86, 2: 1 / 86}),
+        (replay.XtokSelectionRule.ONE_SIDED_LOGPROB_AVG, 0.0, {0: 4 / 6, 1: 1 / 6, 2: 1 / 6}),
+        (replay.XtokSelectionRule.ONE_SIDED_LOGPROB_AVG, 1.0, {0: 6 / 23, 1: 11 / 23, 2: 6 / 23}),
+        (replay.XtokSelectionRule.ONE_SIDED_LOGPROB_AVG, 2.0, {0: 9 / 166, 1: 121 / 166, 2: 36 / 166}),
         (replay.XtokSelectionRule.AVG_PROBS, 0.5, {0: 50 / 132, 1: 65 / 132, 2: 17 / 132}),
         (replay.XtokSelectionRule.AVG_PROBS, 0.0, {0: 4 / 6, 1: 1 / 6, 2: 1 / 6}),
         (replay.XtokSelectionRule.AVG_PROBS, 1.0, {0: 1 / 11, 1: 9 / 11, 2: 1 / 11}),
@@ -84,6 +88,27 @@ def test_sampling_logprobs_matches_hand_calculated_distribution(rule, weight, ex
         prefix_credit=1.0,
     )
     assert actual == pytest.approx({key: math.log(probability) for key, probability in expected.items()}, abs=1e-12)
+
+
+@pytest.mark.parametrize("weight", [0.0, 0.5, 1.0, 2.0])
+@pytest.mark.parametrize("temperature", [0.4, 1.0, 2.0])
+def test_one_sided_replay_matches_completion_sampling(weight, temperature):
+    tokens, weights = joint_decode_avg_v2._one_sided_logprob_weights(
+        A_TOPK, B_TOPK, advisor_weight=weight, temperature=temperature
+    )
+    total = sum(weights)
+    expected = {token: math.log(value / total) for token, value in zip(tokens, weights, strict=True)}
+    actual = replay._sampling_logprobs(
+        replay.XtokSelectionRule.ONE_SIDED_LOGPROB_AVG.value,
+        A_TOPK,
+        B_TOPK,
+        advisor_weight=weight,
+        temperature=temperature,
+        vocab_a=VOCAB_A,
+        vocab_b=VOCAB_B,
+        prefix_credit=1.0,
+    )
+    assert actual == pytest.approx(expected, abs=1e-12)
 
 
 def test_anchored_logprobs_uses_prefix_mass_and_missing_mass_floor():
@@ -281,14 +306,32 @@ def test_replay_mismatch_does_not_write_chunk(tmp_path, order, text):
         (replay.XtokSelectionRule.AVG_LOGITS, {"advisor_weight": math.nan}, ValueError),
         (replay.XtokSelectionRule.AVG_LOGITS, {"advisor_weight": 1.5}, ValueError),
         (replay.XtokSelectionRule.UNNORMALIZED_ADD, {"advisor_weight": -0.1}, ValueError),
+        (replay.XtokSelectionRule.ONE_SIDED_LOGPROB_AVG, {"advisor_weight": -0.1}, ValueError),
+        (replay.XtokSelectionRule.ONE_SIDED_LOGPROB_AVG, {"advisor_weight": math.nan}, ValueError),
     ],
-    ids=["missing", "nonfinite", "averaging-out-of-range", "negative-alpha"],
+    ids=[
+        "missing",
+        "nonfinite",
+        "averaging-out-of-range",
+        "negative-alpha",
+        "one-sided-negative",
+        "one-sided-nonfinite",
+    ],
 )
 def test_token_path_reader_rejects_invalid_recorded_weight(tmp_path, rule, fields, error):
     path = tmp_path / replay.TOKEN_PATHS_FILENAME
     write_jsonl(path, [{"id": "p0", "completion_index": 0, "steps": [PATH_STEP], **fields}])
     with pytest.raises(error):
         list(replay.read_token_path_rows(str(path), rule))
+
+
+def test_token_path_reader_preserves_one_sided_alpha_above_one(tmp_path):
+    path = tmp_path / replay.TOKEN_PATHS_FILENAME
+    write_jsonl(path, [{"id": "p0", "completion_index": 0, "advisor_weight": 2.0, "steps": [PATH_STEP]}])
+    rows = list(replay.read_token_path_rows(str(path), replay.XtokSelectionRule.ONE_SIDED_LOGPROB_AVG))
+    assert rows == [
+        replay.TokenPathRow(id="p0", completion_index=0, advisor_weight=2.0, steps=[replay.XtokPathStep(**PATH_STEP)])
+    ]
 
 
 @pytest.mark.parametrize("indices", [(0, 0, 1), (0,)], ids=["duplicate", "missing-final-completion"])
