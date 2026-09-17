@@ -22,6 +22,56 @@
     "holdout_confident_wrong": 0,
     "contrast_false_assignments": 0
   },
+  "macro_assignment": {
+    "blind_reference": {
+      "labeler": "independent model agent",
+      "exact_macro": 58,
+      "ambiguous_macro": 1,
+      "inventory_gap": 5,
+      "micro_vocabulary_gap": 24,
+      "micro_vocabulary_gap_slices": {
+        "mathematics": 20,
+        "domain_workflow_overlap": 2,
+        "legal_and_sequence_interpretation": 2
+      },
+      "inventory_gap_slices": {
+        "chemistry": 3,
+        "physics_and_materials_science": 1,
+        "ecology": 1
+      }
+    },
+    "embedding_model": "text-embedding-3-small",
+    "embedding_comparison": {
+      "hardest_part": {"exact_top_one": 35, "exact_top_three": 50, "exact_total": 58},
+      "hardest_part_math": {"exact_top_one": 32, "exact_top_three": 45, "exact_total": 48},
+      "subject_and_hardest_part": {"exact_top_one": 42, "exact_top_three": 54, "exact_total": 58},
+      "semantic_composite": {"exact_top_one": 45, "exact_top_three": 54, "exact_total": 58},
+      "semantic_composite_math": {"exact_top_one": 40, "exact_top_three": 48, "exact_total": 48},
+      "semantic_composite_contrast": {"exact_top_one": 5, "exact_top_three": 6, "exact_total": 10}
+    },
+    "conservative_threshold": {
+      "selection_rule": "Maximize correct calibration classifications subject to at most one confident wrong assignment.",
+      "maximum_distance": 0.5761681795120239,
+      "minimum_margin": 0.11568248271942139,
+      "calibration": {
+        "tasks": 44,
+        "exact_macro": 41,
+        "exact_confident_correct": 18,
+        "exact_confident_wrong": 1,
+        "ambiguous_or_gap": 3,
+        "correct_abstentions": 3
+      },
+      "holdout": {
+        "tasks": 20,
+        "exact_macro": 17,
+        "exact_confident_correct": 2,
+        "exact_confident_wrong": 0,
+        "ambiguous_or_gap": 3,
+        "correct_abstentions": 3
+      }
+    },
+    "interpretation": "The composite key improves ranking, but label-name anchors do not support useful zero-shot macro thresholds. Broad routing needs richer reviewed anchors or a cached classifier."
+  },
   "task_validity": {
     "all_puzzles_math": {"valid": 16, "wrong_gold": 0, "ambiguous": 0, "underdetermined": 0},
     "open_math_reasoning": {"valid": 11, "wrong_gold": 3, "ambiguous": 1, "underdetermined": 1},

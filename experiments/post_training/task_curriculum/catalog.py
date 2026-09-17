@@ -110,6 +110,32 @@ def _reject_extra_keys(value: dict[str, object], allowed: set[str], context: str
         raise CatalogError(f"{context} has unknown fields: {', '.join(extras)}")
 
 
+def _validate_prerequisite_graph(units: tuple[CurriculumUnit, ...]) -> None:
+    units_by_id = {unit.id: unit for unit in units}
+    known_units = set(units_by_id)
+    for unit in units:
+        unknown = sorted(set(unit.prerequisites) - known_units)
+        if unknown:
+            raise CatalogError(f"unit {unit.id} has unknown prerequisites: {', '.join(unknown)}")
+
+    visited: set[str] = set()
+    visiting: set[str] = set()
+
+    def visit(unit_id: str) -> None:
+        if unit_id in visiting:
+            raise CatalogError(f"curriculum prerequisite cycle includes {unit_id}")
+        if unit_id in visited:
+            return
+        visiting.add(unit_id)
+        for prerequisite in units_by_id[unit_id].prerequisites:
+            visit(prerequisite)
+        visiting.remove(unit_id)
+        visited.add(unit_id)
+
+    for unit_id in units_by_id:
+        visit(unit_id)
+
+
 def load_macro_catalog(path: Path) -> MacroCatalog:
     """Load the versioned macro-area inventory and validate its hierarchy."""
 
@@ -246,11 +272,5 @@ def load_curriculum(path: Path, macro_catalog: MacroCatalog) -> CurriculumCatalo
     unit_ids = [unit.id for unit in catalog.units]
     if len(set(unit_ids)) != len(unit_ids):
         raise CatalogError("curriculum unit IDs must be unique")
-    known_units = set(unit_ids)
-    for unit in catalog.units:
-        unknown = sorted(set(unit.prerequisites) - known_units)
-        if unknown:
-            raise CatalogError(f"unit {unit.id} has unknown prerequisites: {', '.join(unknown)}")
-        if unit.id in unit.prerequisites:
-            raise CatalogError(f"unit {unit.id} cannot require itself")
+    _validate_prerequisite_graph(catalog.units)
     return catalog

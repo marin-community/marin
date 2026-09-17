@@ -76,7 +76,8 @@ def _margin(candidates: Sequence[Candidate]) -> float:
 
 
 def assign_hierarchically(
-    task_vector: Vector,
+    macro_vector: Vector,
+    unit_vector: Vector,
     macro_anchors: Mapping[str, Sequence[Vector]],
     unit_anchors: Mapping[str, Sequence[Vector]],
     units_by_id: Mapping[str, CurriculumUnit],
@@ -84,7 +85,7 @@ def assign_hierarchically(
 ) -> CurriculumAssignment:
     """Assign a task through macro inventory, local coverage, and unit boundaries."""
 
-    macro_candidates = rank_anchors(task_vector, macro_anchors)
+    macro_candidates = rank_anchors(macro_vector, macro_anchors)
     if not macro_candidates:
         raise ValueError("macro anchors are required")
     nearest_macro = macro_candidates[0]
@@ -119,7 +120,7 @@ def assign_hierarchically(
             (),
         )
 
-    unit_candidates = rank_anchors(task_vector, macro_units)
+    unit_candidates = rank_anchors(unit_vector, macro_units)
     nearest_unit = unit_candidates[0]
     if nearest_unit.distance > thresholds.max_unit_distance:
         return CurriculumAssignment(

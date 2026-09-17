@@ -79,6 +79,15 @@ def load_rubric(path: Path) -> RubricConfig:
 def evaluate_unit(evidence: UnitEvidence, config: RubricConfig) -> UnitRubricResult:
     """Score one unit on six criteria and apply readiness gates."""
 
+    if evidence.reviewed_examples < 0:
+        raise ValueError("reviewed_examples must be nonnegative")
+    if not 0 <= evidence.source_count <= evidence.reviewed_examples:
+        raise ValueError("source_count must be between zero and reviewed_examples")
+    if evidence.generated_total < 0 or not 0 <= evidence.generated_valid <= evidence.generated_total:
+        raise ValueError("generated_valid must be between zero and generated_total")
+    if evidence.solve_attempts < 0 or not 0 <= evidence.solve_successes <= evidence.solve_attempts:
+        raise ValueError("solve_successes must be between zero and solve_attempts")
+
     observable = _review_score(evidence.observable_outcome, "observable_outcome")
     boundary = _review_score(evidence.distinct_boundary, "distinct_boundary")
     generation_feasible = _review_score(evidence.generation_feasible, "generation_feasible")
@@ -95,7 +104,7 @@ def evaluate_unit(evidence: UnitEvidence, config: RubricConfig) -> UnitRubricRes
     else:
         support = 0
 
-    if evidence.generated_total <= 0 or evidence.generated_valid < 0:
+    if evidence.generated_total == 0:
         generation_validity = 0
     else:
         validity = evidence.generated_valid / evidence.generated_total
@@ -105,7 +114,7 @@ def evaluate_unit(evidence: UnitEvidence, config: RubricConfig) -> UnitRubricRes
             else 1 if validity >= config.partial_generation_validity else 0
         )
 
-    if evidence.solve_attempts <= 0 or not 0 <= evidence.solve_successes <= evidence.solve_attempts:
+    if evidence.solve_attempts == 0:
         difficulty_gradient = 0
     elif evidence.solve_successes in {0, evidence.solve_attempts}:
         difficulty_gradient = 0

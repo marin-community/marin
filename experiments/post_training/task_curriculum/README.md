@@ -4,10 +4,12 @@ This directory contains the first task-level curriculum catalog and the code use
 
 1. `macro_areas.json` is the broad coverage inventory. It vendors the active hierarchy from the September 3 TaskTrove competency audit: 34 active macro areas and 151 active micro areas. The source vocabulary has 35 macros; one has no active child in the published chart. Credited task counts are source-level, overlap across competencies, and are not task labels.
 2. `math_v0.json` contains six candidate units derived from 24 TaskTrove Clean discovery tasks. A unit states an observable outcome, its boundaries, and representative examples. It does not select a verifier.
-3. A semantic task key contains the task's hardest operation and its cached embedding. This remains independent of any curriculum version. TaskCompendium's `TaskSpec` remains the owner of task semantics and private correctness contracts.
+3. A semantic task key contains a summary, subject hint, hardest operation, required operations, and answer form. This remains independent of any curriculum version. TaskCompendium's `TaskSpec` remains the owner of task semantics and private correctness contracts.
 4. A versioned assignment records macro and unit candidates, distances, thresholds, and status. Changing a curriculum re-embeds changed unit text and searches the cached task vectors. It does not rerun task annotation.
 
 The broad inventory is a navigation layer. Macro and micro names seed coverage work; they are not trainable units. `math_v0.json` maps every unit to a macro area and uses a micro area only when the published label fits. Triangle metrics and pairing/involution counting intentionally have no micro mapping because the current mathematics vocabulary has no geometry or combinatorics label.
+
+Broad and local assignment use different projections of the same semantic key. Macro routing embeds subject, summary, and hardest operation. Unit routing embeds the hardest operation alone. In the pilot, adding subject and summary improved macro top-one accuracy from 35/58 to 45/58 and mathematics top-one accuracy from 32/48 to 40/48. Mathematics reached 48/48 top-three recall. A conservative threshold assigned only 2 of 17 exact-macro holdout tasks, so label-name anchors are not adequate for production macro routing.
 
 ## Assignment states
 
@@ -19,6 +21,8 @@ The broad inventory is a navigation layer. Macro and micro names seed coverage w
 - `outside_inventory`: no macro anchor is close enough.
 
 The distinction between `coverage_gap` and `outside_inventory` matters. Most held-out mathematics tasks missed by the six-unit pilot are evidence that the local catalog is incomplete, not evidence that they lie outside a global curriculum.
+
+The blind macro review found 24 micro-vocabulary gaps in 64 tasks. Twenty were mathematics tasks involving geometry, combinatorics, number theory, or abstract algebra. Five contrast tasks exposed macro gaps for chemistry, physics/materials science, and ecology. The inventory also mixes domain and workflow axes: `Knowledge Application & QA` overlaps clinical and scientific reasoning. Keep these as explicit gaps until a broader sample supports additions.
 
 ## Rubric
 
