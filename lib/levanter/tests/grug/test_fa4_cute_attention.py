@@ -362,3 +362,58 @@ def test_real_gpu_fa4_cute_zeroes_padding_tiles_before_reusing_query_storage(sli
     expected_gradients = jax.jit(jax.grad(reference_loss, argnums=(0, 1, 2)))(*short_qkv)
     for actual, expected in zip(gradients, expected_gradients, strict=True):
         np.testing.assert_allclose(actual[:1, :40], expected, atol=7e-2, rtol=7e-2)
+
+
+@pytest.mark.parametrize("kv_heads", [6, 12])
+@pytest.mark.parametrize(("sequence_length", "sliding_window"), [(257, None), (257, 31), (2305, 2048)])
+@pytest.mark.timeout(300)
+def test_real_gpu_fa4_cute_sm100_gradients_with_changing_packed_segments(kv_heads, sequence_length, sliding_window):
+    if jax.default_backend() != "gpu" or fa4_cute.gpu_compute_capability() != 100:
+        pytest.skip("Native SM100 backward correctness requires an SM100 GPU.")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_sm100")
+
+    def output_and_gradients(q, k, v, cotangent, ids, *, implementation):
+        mask = AttentionMask.causal(sliding_window=sliding_window).with_segment_ids(ids)
+
+        def loss(q, k, v):
+            output = attention(q, k, v, mask, implementation=implementation)
+            # Reference attention uses a finite softmax sentinel for fully masked
+            # rows. Zero those outputs to match the packed attention contract.
+            if implementation == "reference":
+                output = jnp.where((ids >= 0)[..., None, None], output, 0)
+            return jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32)), output
+
+        (_, output), gradients = jax.value_and_grad(loss, argnums=(0, 1, 2), has_aux=True)(q, k, v)
+        return (output, *gradients)
+
+    actual_call = jax.jit(lambda *args: output_and_gradients(*args, implementation="gpu_fa4_cute"))
+    reference_call = jax.jit(lambda *args: output_and_gradients(*args, implementation="reference"))
+    batch = 2 if sequence_length == 257 else 1
+    for iteration in range(3):
+        positions = np.arange(sequence_length)
+        boundaries = np.array([101] if sequence_length > 2048 else [31, 129, 193])
+        ids = np.stack([np.searchsorted(boundaries + iteration + row * 7, positions) for row in range(batch)])
+        ids[:, : 19 + iteration] = -1
+        ids[:, -17:] = -1
+        if batch == 2 and iteration == 2:
+            ids[1, :] = -1
+        query_shape = (batch, sequence_length, 48, 128)
+        kv_shape = (batch, sequence_length, kv_heads, 128)
+        keys = jax.random.split(jax.random.key(20260916 + iteration), 4)
+        q, k, v, cotangent = (
+            jax.random.normal(key, shape, dtype=jnp.bfloat16)
+            for key, shape in zip(keys, (query_shape, kv_shape, kv_shape, query_shape), strict=True)
+        )
+        # Reuse each executable with changed masks and nonzero padded cotangents
+        # to expose stale accumulator contents between invocations.
+        args = (q, k, v, cotangent, jnp.asarray(ids, dtype=jnp.int32))
+        actual = actual_call(*args)
+        expected = reference_call(*args)
+        for name, got, want in zip(("out", "dq", "dk", "dv"), actual, expected, strict=True):
+            got = np.asarray(got, dtype=np.float32)
+            want = np.asarray(want, dtype=np.float32)
+            difference = np.abs(got - want)
+            error = f"{name}: max absolute error {difference.max()}, mean {difference.mean()}"
+            np.testing.assert_allclose(got, want, atol=7e-2, rtol=7e-2, err_msg=error)
+            np.testing.assert_array_equal(got[ids < 0], 0, err_msg=name)

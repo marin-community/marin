@@ -21,10 +21,11 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 
-from levanter.cutlass_kernel_cache import cutlass_call
+from levanter.cutlass_kernel_cache import cutlass_call, gpu_compute_capability
 from levanter.grug.attention._fa4_cute_kernels import (
     flash_attention_backward_postprocess_launcher,
     segmented_flash_attention_backward_launcher,
+    segmented_flash_attention_backward_sm100_launcher,
     segmented_flash_attention_backward_sm90_launcher,
     segmented_flash_attention_backward_sm90_preprocess_launcher,
     segmented_flash_attention_forward_launcher,
@@ -162,6 +163,19 @@ def segmented_flash_attention_backward(
         raise _optional_dependency_error() from exc
 
     qhead_per_kvhead = q.shape[2] // k.shape[2]
+    # Keep the native path within the BF16 D128 GQA shapes validated on GB200.
+    if (
+        q.dtype == jnp.bfloat16
+        and q.shape[-1] == 128
+        and v.shape[-1] == 128
+        and qhead_per_kvhead in (4, 8)
+        and kernel_config.backward_arch == 120
+        and gpu_compute_capability() == 100
+    ):
+        return _segmented_flash_attention_backward_sm100(
+            q, k, v, out, dout, lse, lower_bounds, valid, softmax_scale=softmax_scale
+        )
+
     if kernel_config.sm90_backward is not None and qhead_per_kvhead > 1 and q.shape[-1] == 128:
         sm90_config = kernel_config.sm90_backward
         sparse_metadata = _packed_segment_backward_block_sparse_indices_with_full(
@@ -217,6 +231,90 @@ def segmented_flash_attention_backward(
     )
     dq, dk, dv, *_scratch = call(q, k, v, out, dout, lse, lower_bounds, valid.astype(jnp.int32))
     return dq, dk, dv
+
+
+def _segmented_flash_attention_backward_sm100(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    out: jax.Array,
+    dout: jax.Array,
+    lse: jax.Array,
+    lower_bounds: jax.Array,
+    valid: jax.Array,
+    *,
+    softmax_scale: float,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Match the segmented backend contract using native one-CTA SM100."""
+    ratio = q.shape[2] // k.shape[2]
+    modules = _import_cutlass_cute()
+    tile = (128, 128)
+    sparse = _packed_segment_backward_block_sparse_indices_with_full(lower_bounds, valid, tile_m=128, tile_n=128)
+    partial_count, partial_index = _broadcast_backward_block_sparse_metadata(
+        q, sparse.partial_block_cnt, sparse.partial_block_idx
+    )
+    full_count, full_index = _broadcast_backward_block_sparse_metadata(q, sparse.full_block_cnt, sparse.full_block_idx)
+    preprocess_inputs, preprocess_outputs = _cutlass_attention_backward_sm90_preprocess_specs(modules, vector_elems=8)
+    preprocess = cutlass_call(
+        segmented_flash_attention_backward_sm90_preprocess_launcher(
+            modules, dtype=q.dtype, head_dim=128, head_dim_v=128, tile_m=128
+        ),
+        output_shape_dtype=_cutlass_attention_backward_sm90_preprocess_output_shapes(q, tile),
+        input_spec=preprocess_inputs,
+        output_spec=preprocess_outputs,
+        use_static_tensors=True,
+        softmax_scale=softmax_scale,
+    )
+    dpsum, lse_log2, _ = preprocess(out, dout, lse)
+    accum_inputs, accum_outputs = _cutlass_attention_backward_sm90_accum_specs(modules, vector_elems=8)
+    backward = cutlass_call(
+        segmented_flash_attention_backward_sm100_launcher(
+            modules, head_dim=128, head_dim_v=128, qhead_per_kvhead=ratio
+        ),
+        output_shape_dtype=_cutlass_attention_backward_sm90_backward_output_shapes(q, k, v, tile),
+        input_spec=accum_inputs,
+        output_spec=accum_outputs,
+        use_static_tensors=True,
+        softmax_scale=softmax_scale,
+    )
+    accumulators = backward(
+        q,
+        k,
+        v,
+        dout,
+        lse_log2,
+        dpsum,
+        lower_bounds,
+        valid.astype(jnp.int32),
+        partial_count,
+        partial_index,
+        full_count,
+        full_index,
+    )
+    post_inputs, post_outputs = _cutlass_attention_backward_sm90_postprocess_specs(modules, vector_elems=8)
+    gradients = []
+    for tensor, accum, scale in zip((q, k, v), accumulators, (softmax_scale, softmax_scale, 1.0), strict=True):
+        postprocess = cutlass_call(
+            flash_attention_backward_postprocess_launcher(
+                modules,
+                dtype=tensor.dtype,
+                head_dim=128,
+                tile_m=128,
+                atom_layout_m=1,
+                arch=100,
+                num_threads=128,
+                cluster_size=1,
+                use_2cta_instrs=False,
+                accum_is_gmem=True,
+            ),
+            output_shape_dtype=(jax.ShapeDtypeStruct(tensor.shape, tensor.dtype),),
+            input_spec=post_inputs,
+            output_spec=post_outputs,
+            use_static_tensors=True,
+            softmax_scale=scale,
+        )
+        gradients.append(postprocess(accum)[0])
+    return gradients[0], gradients[1], gradients[2]
 
 
 def segmented_flash_attention_backward_sm90_native(
