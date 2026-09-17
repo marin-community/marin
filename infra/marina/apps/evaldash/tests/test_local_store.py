@@ -143,7 +143,7 @@ def test_api_surface_over_fixtures(client):
     detail = client.get("/runs/snowball-2026.07.20-mmlu").json()
     assert detail["status"] == "succeeded"
     # The detail endpoint attaches the rolled-up headline grade and the captured timing window.
-    assert detail["headline"]["metric"] == "acc,none"
+    assert detail["headline"]["metric"] == "accuracy"
     assert detail["headline"]["value"] == pytest.approx(0.741)
     assert detail["timing"]["started_at"] and detail["timing"]["finished_at"]
     # Serving params round-trip through the record and reach the detail response.
@@ -208,6 +208,8 @@ def test_api_panel_rejects_an_unusable_query_rather_than_answering_a_different_o
 
     assert client.get("/panel", params={"min_coverage": "ninety"}).status_code == 400
     assert client.get("/panel", params={"min_coverage": "90"}).status_code == 400
+    assert client.get("/panel", params={"min_benchmark_coverage": "ninety"}).status_code == 400
+    assert client.get("/panel", params={"min_benchmark_coverage": "90"}).status_code == 400
 
 
 def test_api_agentic_artifact_is_run_local(client):

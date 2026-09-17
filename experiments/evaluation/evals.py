@@ -128,10 +128,18 @@ class HarborDefinition:
         return MappingProxyType(secret_env)
 
     def record_ref_for(self, config: ValidatedHarborConfig, runtime_task_limit: int | None) -> EvalRef:
+        benchmark = config.benchmark_for(runtime_task_limit)
         return EvalRef(
             name=self.name,
             mechanism="harbor",
             family=self.family,
+            tasks=(
+                EvalTaskRef(
+                    name=config.record_dataset,
+                    num_fewshot=None,
+                    benchmark=benchmark,
+                ),
+            ),
             harbor=HarborRef(
                 dataset=config.record_dataset,
                 version=config.record_revision,

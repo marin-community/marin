@@ -25,9 +25,10 @@ from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_PYTHON_VERSION,
     EVALCHEMY_REQUIREMENT,
 )
-from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
 from marin.evaluation.lm_eval_samples import export_lm_eval_samples
-from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, RunStatus, TaskCoverage
+from marin.evaluation.metric_selection import declared_metric
+from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalTaskRef, RunStatus, TaskCoverage
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
@@ -119,6 +120,8 @@ class EvalchemyOutcome:
     result: EvalchemyResult
     coverage: dict[str, TaskCoverage]
     recovered_metrics: dict[str, dict[str, float]]
+    canonical_metrics: dict[str, dict[str, float]]
+    tasks: tuple[EvalTaskRef, ...]
 
 
 def _apply_recovered_metrics(
@@ -138,10 +141,27 @@ def _apply_recovered_metrics(
             metrics.pop(aggregate, None)
 
 
-def _task_dir(task: EvalTaskConfig) -> str:
-    """Return the durable subdirectory identity for one task configuration."""
-    shots = "default" if task.num_fewshot is None else str(task.num_fewshot)
-    return task.task_alias or f"{task.name}_{shots}shot"
+def _apply_recovered_canonical_metrics(
+    canonical_metrics: dict[str, dict[str, float]],
+    recovered_metrics: Mapping[str, dict[str, float]],
+    tasks: tuple[EvalTaskRef, ...],
+) -> None:
+    """Project recovered source metrics through the evaluator-recorded vocabulary."""
+    benchmarks = {task.benchmark.task: task.benchmark for task in tasks if task.benchmark is not None}
+    for task_key, recovered in recovered_metrics.items():
+        benchmark = benchmarks.get(task_key.rsplit("/", 1)[-1])
+        if benchmark is None:
+            canonical_metrics.pop(task_key, None)
+            continue
+        normalized: dict[str, float] = {}
+        for metric in benchmark.metrics:
+            picked = declared_metric(recovered, metric.source_name)
+            if picked is not None:
+                normalized[metric.name] = picked[1]
+        if normalized:
+            canonical_metrics[task_key] = normalized
+        else:
+            canonical_metrics.pop(task_key, None)
 
 
 def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir: str) -> str:
@@ -160,7 +180,7 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
                 {
                     "name": task.name,
                     "num_fewshot": task.num_fewshot,
-                    "dir": _task_dir(task),
+                    "dir": eval_task_directory(task.name, task.num_fewshot, task.task_alias),
                     "generation": task.generation,
                     "unsafe_code": task.unsafe_code,
                     "completion_only": task.completion_only,
@@ -271,7 +291,10 @@ def run_evalchemy(
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
     try:
         _verify_durable_artifacts(output_dir)
-        export = export_lm_eval_samples(output_dir)
+        export = export_lm_eval_samples(
+            output_dir,
+            tasks=config.tasks,
+        )
     except Exception as exc:
         raise EvalPipelineError(
             str(exc),
@@ -291,6 +314,8 @@ def run_evalchemy(
         result=EvalchemyResult(path=output_dir),
         coverage=export.coverage,
         recovered_metrics=export.recovered_metrics,
+        canonical_metrics=export.canonical_metrics,
+        tasks=export.tasks,
     )
 
 
@@ -318,6 +343,8 @@ class EvalchemyExecutor:
             ) from exc
         metrics = outcome.result.task_metrics()
         _apply_recovered_metrics(metrics, outcome.recovered_metrics)
+        canonical_metrics = dict(outcome.canonical_metrics)
+        _apply_recovered_canonical_metrics(canonical_metrics, outcome.recovered_metrics, outcome.tasks)
         if not metrics:
             infrastructure_failures = sum(
                 coverage.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for coverage in outcome.coverage.values()
@@ -335,4 +362,10 @@ class EvalchemyExecutor:
                 jobs=outcome.jobs,
                 coverage=outcome.coverage,
             )
-        return EvaluationOutcome(metrics=metrics, jobs=outcome.jobs, coverage=outcome.coverage)
+        return EvaluationOutcome(
+            metrics=metrics,
+            canonical_metrics=canonical_metrics,
+            tasks=outcome.tasks,
+            jobs=outcome.jobs,
+            coverage=outcome.coverage,
+        )
