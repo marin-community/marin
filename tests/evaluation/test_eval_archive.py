@@ -94,7 +94,7 @@ def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
         )
         store.add_sample(
             EvalSample(
-                task="gsm8k",
+                task="gsm8k_5shot",
                 doc_id="0",
                 kind=SampleKind.GENERATION,
                 output="4",
@@ -112,6 +112,38 @@ def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
 
     assert summary.samples == 1
     assert summary.coverage == {"gsm8k_5shot": TaskCoverage(n_attempted=1, n_scored=1, n_correct=1, n_unanswered=0)}
+
+
+def test_native_summary_partitions_repeated_task_configurations(tmp_path):
+    root = str(tmp_path / "run" / "results")
+    store = EvaluationStore.open(root, writer_id="evalchemy")
+    try:
+        for task, score in (("hellaswag_0shot", 0.0), ("hellaswag_10shot", 1.0)):
+            store.add_source_artifact(
+                f"evalchemy/{task}/native/samples_hellaswag_native.jsonl",
+                b'{"doc_id": 0}\n',
+                content_type="application/x-ndjson",
+            )
+            store.add_sample(
+                EvalSample(
+                    task=task,
+                    doc_id="0",
+                    kind=SampleKind.MULTIPLE_CHOICE,
+                    grading=Grading(method="lm-eval:acc", metric="acc", score=score, passed=bool(score)),
+                    metrics={"acc": score},
+                    correct=bool(score),
+                )
+            )
+        store.seal()
+    finally:
+        store.close()
+
+    summary = summarize_native_eval_samples(root)
+
+    assert summary.coverage == {
+        "hellaswag_0shot": TaskCoverage(n_attempted=1, n_scored=1, n_correct=0, n_unanswered=0),
+        "hellaswag_10shot": TaskCoverage(n_attempted=1, n_scored=1, n_correct=1, n_unanswered=0),
+    }
 
 
 def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):

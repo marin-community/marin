@@ -201,6 +201,7 @@ def _write_evalchemy_output(
             content_type="application/json",
         )
         for task, rows in samples.items():
+            normalized_task = task_dir if len(samples) == 1 else f"{task_dir}/{task}"
             payload = ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
             store.add_source_artifact(
                 f"evalchemy/{task_dir}/native/samples_{task}_native.jsonl",
@@ -208,7 +209,7 @@ def _write_evalchemy_output(
                 content_type="application/x-ndjson",
             )
             for row in rows:
-                for sample in samples_from_lm_eval(task, row):
+                for sample in samples_from_lm_eval(normalized_task, row):
                     store.add_sample(sample)
         store.seal()
     finally:

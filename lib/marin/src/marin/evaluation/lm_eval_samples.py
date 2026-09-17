@@ -534,8 +534,7 @@ def summarize_native_eval_samples(out_path: str) -> SampleSummary:
 
     summary = _SampleSummaryBuilder.for_sources(sources)
     for name in sources:
-        task = _task_from_filename(PurePosixPath(name).name, ".jsonl")
-        summary.add_samples(name, by_task.get(task, []))
+        summary.add_samples(name, by_task.get(summary.task_keys[name], []))
     return summary.build()
 
 
