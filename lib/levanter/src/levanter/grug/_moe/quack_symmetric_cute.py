@@ -43,8 +43,8 @@ def _cute_dtype(dt):
     return _JAX_TO_CUTE[jnp.dtype(dt)]
 
 
-def _transpose_mn(mD):
-    """aux = D^T (same storage): swap matrix axes of batch-first [L, M, M]."""
+def _transpose_batch_matrix(mD):
+    """Return ``D.mT`` in Quack's batch-first caller layout ``[L, N, M]``."""
     return cute.make_tensor(mD.iterator, cute.select(mD.layout, mode=[0, 2, 1]))
 
 
@@ -66,9 +66,11 @@ def _build_launcher(*, arch_family, a_dtype, mma_tiler_mnk, cluster_mnk, mac, ma
         # Static persistence (use_clc_persistence=False): no tile-count semaphore, deterministic
         # tile scheduling. The dynamic CLC path raced and corrupted tiny/square outputs.
         gemm = gemm_type(_ACC, a_dtype, mma_tiler_mnk, cluster_mnk, use_clc_persistence=False)
-        # aux = D.mT (transposed view of the single output): the kernel writes each lower tile to D
-        # and its mirror to D.mT, so D is fully symmetric. alpha/beta must be set (D = a*acc + b*C).
-        epi_args = GemmSymmetricMixin.EpilogueArguments(_transpose_mn(mD), alpha=Float32(1.0), beta=Float32(1.0))
+        # Quack accepts batch-first tensors and rotates them to batch-last kernel order. The aux
+        # view therefore swaps the caller's two matrix modes; Quack rotates both D and D.mT once.
+        epi_args = GemmSymmetricMixin.EpilogueArguments(
+            _transpose_batch_matrix(mD), alpha=Float32(1.0), beta=Float32(1.0)
+        )
         scheduler_args = make_scheduler_args(mac, max_swizzle, None)
         gemm(mA, mB, mD, None, epi_args, scheduler_args, None, stream)
 
@@ -84,7 +86,8 @@ def quack_symmetric_gemm(
 ) -> jax.Array:
     """Batched symmetric GEMM: ``X[L, M, K] -> X @ X^T [L, M, M]`` (full symmetric, bit-exact).
 
-    ``X`` must be device-local (no cross-device sharding on any axis) — call inside a shard_map.
+    ``X`` must be device-local (no cross-device sharding on any axis) and use batch-first
+    ``[L, M, K]`` order. Call this function inside a shard map.
     """
     L, M, K = X.shape
     arch_family, default_mma_tiler = _symmetric_gemm_config(gpu_compute_capability())

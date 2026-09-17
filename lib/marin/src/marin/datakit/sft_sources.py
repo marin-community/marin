@@ -11,6 +11,8 @@ from marin.datakit.chat_render import render_chat_step
 from marin.datakit.download.agenttrove import agenttrove_chat_normalize_steps
 from marin.datakit.download.coderforge import coderforge_chat_normalize_steps
 from marin.datakit.download.davinci_dev import davinci_dev_env_native_chat_normalize_steps
+from marin.datakit.download.glm53_compaction import glm53_compaction_chat_normalize_steps
+from marin.datakit.download.glm53_format_following import glm53_format_following_chat_normalize_steps
 from marin.datakit.download.glm_kernelgym_rollouts import glm_kernelgym_rollouts_chat_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_chat_normalize_steps
 from marin.datakit.download.massive import massive_chat_normalize_steps
@@ -72,6 +74,8 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     nemotron_steps = cache(nemotron_sft_chat_normalize_steps)
     rows: list[_ChatSourceRow] = [
         ("agenttrove", agenttrove_chat_normalize_steps),
+        ("agenttrove-glm53-compactions", glm53_compaction_chat_normalize_steps),
+        ("wildchat-glm53-format-completions", glm53_format_following_chat_normalize_steps),
         ("coderforge", coderforge_chat_normalize_steps),
         ("davinci-dev/env-native", davinci_dev_env_native_chat_normalize_steps),
         ("glm-5.2-kernelgym-rollouts", glm_kernelgym_rollouts_chat_normalize_steps),
@@ -101,6 +105,9 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     # This chat-only source has 3,341,347,579 completion tokens in its pinned
     # manifest. The rough weight excludes repeated prompts.
     token_counts["openthoughts4-code-glm-5.2-n4"] = 3.341347579
+    # Initial sharding estimates; token-store preparation measures the actual mixture sizes.
+    token_counts["agenttrove-glm53-compactions"] = 0.25
+    token_counts["wildchat-glm53-format-completions"] = 0.01
     return {
         name: DatakitChatSource(
             name=name,

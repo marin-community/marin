@@ -442,7 +442,7 @@ copying EvalDash code:
 
 ```python
 from finestore.reader import ReadView
-from marin.evaluation.archive import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
+from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 
 def read_samples(results_path: str):
     table = ReadView(results_path).scan(ARCHIVE_SAMPLES_TABLE)

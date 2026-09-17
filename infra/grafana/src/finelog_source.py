@@ -40,6 +40,8 @@ class MetricSource(Protocol):
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table: ...
 
+    def namespaces(self) -> frozenset[str]: ...
+
     def health(self) -> FinelogHealth: ...
 
     def relay_status(self) -> tuple[RelaySenderStatus, ...]: ...
@@ -88,6 +90,10 @@ class FinelogSource:
             raise
         except (InstanceResolutionError, OSError) as err:
             raise FinelogUnavailableError(str(err)) from err
+
+    def namespaces(self) -> frozenset[str]:
+        """Return the namespaces this deployment holds."""
+        return frozenset(info.namespace for info in self._client.list_namespaces())
 
     def health(self) -> FinelogHealth:
         """Probe the query path and return a dashboard-safe health row."""

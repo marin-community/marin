@@ -208,6 +208,38 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     expected = checked_policies[path.name]
     assert all(result["stable_policy_json"] == expected["stable_policy_json"] for result in seeded)
     assert all(result["digest"] == expected["digest"] for result in seeded)
+    assert expected["trials_per_task"] == 3
+
+
+def test_preflight_reports_only_verifier_host_environment_dependencies(tmp_path):
+    policy_path = tmp_path / "external-judge.yaml"
+    policy_path.write_text(
+        """
+environment:
+  type: daytona
+agents:
+  - name: terminus-2
+datasets:
+  - name: simpleqa
+    version: "1.0"
+verifier:
+  env:
+    OPENAI_API_KEY: "${TOGETHER_API_KEY}"
+    OPENAI_BASE_URL: "https://api.together.xyz/v1"
+    MODEL_NAME: "openai/gpt-oss-120b"
+"""
+    )
+
+    payload = json.loads(_preflight(tmp_path, [(policy_path, {})]).stdout)[0]
+    stable_policy = json.loads(payload["stable_policy_json"])
+
+    assert payload["verifier_env_keys"] == ["TOGETHER_API_KEY"]
+    assert stable_policy["verifier"]["env"] == {
+        "MODEL_NAME": "openai/gpt-oss-120b",
+        "OPENAI_API_KEY": "${TOGETHER_API_KEY}",
+        "OPENAI_BASE_URL": "https://api.together.xyz/v1",
+    }
+    assert stable_policy["agents"][0]["env"] == {}
 
 
 def test_preflight_exports_pinned_harbor_error_taxonomy(checked_policies):
@@ -237,7 +269,7 @@ def test_preflight_reports_agent_context_resolved_from_the_served_model(tmp_path
 def test_preflight_keeps_a_policy_agent_context_below_the_served_window(tmp_path):
     served = {"model_info": {"max_input_tokens": 65536}}
 
-    (result,) = json.loads(_preflight(tmp_path, [(_POLICIES / "grug-opencode-id.yaml", served)]).stdout)
+    (result,) = json.loads(_preflight(tmp_path, [(_POLICIES / "ot-tblite.yaml", served)]).stdout)
 
     assert result["max_input_tokens"] == 64512
 
@@ -245,7 +277,7 @@ def test_preflight_keeps_a_policy_agent_context_below_the_served_window(tmp_path
 def test_preflight_rejects_a_policy_agent_context_above_the_served_window(tmp_path):
     served = {"model_info": {"max_input_tokens": 32768}}
 
-    completed = _preflight(tmp_path, [(_POLICIES / "grug-opencode-id.yaml", served)], check=False)
+    completed = _preflight(tmp_path, [(_POLICIES / "ot-tblite.yaml", served)], check=False)
 
     assert completed.returncode == 2
     assert "64512" in completed.stderr
@@ -404,9 +436,13 @@ datasets:
   - path: tasks
 """
         )
-        (launch_dir / "tasks").mkdir()
+        task_dir = launch_dir / "tasks" / "task-one"
+        task_dir.mkdir(parents=True)
+        (task_dir / "task.toml").write_text('version = "1.0"\n[task]\nname = "task-one"\n[environment]\n')
+        (task_dir / "instruction.md").write_text("Solve the task.")
 
         (config,) = preflight_harbor_configs([(policy_path, {})])
+        assert config.benchmark.n_benchmark == 1
 
         worker_workspace = tmp_path / "worker"
         worker_dataset = worker_workspace / launch_dir.relative_to(_ROOT) / "tasks"

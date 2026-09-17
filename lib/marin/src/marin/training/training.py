@@ -7,7 +7,6 @@ import json
 import logging
 import math
 import os
-import urllib.parse
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -142,45 +141,23 @@ def _cli_helpers_module():
     return importlib.import_module("levanter.infra.cli_helpers")
 
 
-def _output_path_temp_component(output_path: str) -> str:
-    parsed = urllib.parse.urlparse(output_path)
-    if parsed.scheme and parsed.netloc:
-        return f"{parsed.netloc}{parsed.path}".strip("/")
-    if parsed.scheme:
-        return f"{parsed.scheme}{parsed.path}".strip("/")
-    return output_path.strip("/")
-
-
-def temporary_storage_base_path(output_path: str, *, ttl_days: int, category: str) -> str:
-    """Return region-local temporary storage keyed by an executor output path."""
-    output_component = _output_path_temp_component(output_path)
-    return marin_temp_bucket(
-        ttl_days=ttl_days,
-        prefix=os.path.join(category, output_component),
-        source_prefix=output_path,
-    )
+def _temporary_checkpoint_key(output_path: str) -> str:
+    path = StoragePath(output_path)
+    return str(StoragePath(path.bucket) / path.key) if path.bucket else path.key
 
 
 def temporary_checkpoint_base_path(output_path: str) -> str:
     """Return the region-local temporary checkpoint base for an executor output path."""
-    temporary_root = temporary_storage_base_path(
-        output_path,
-        ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        category=TEMPORARY_CHECKPOINTS_PATH,
-    )
-    return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
-
-
-def data_local_temporary_checkpoint_base_path(output_path: str) -> str:
-    """Return the legacy data-local checkpoint path, bypassing the cluster temp override."""
-    output_component = _output_path_temp_component(output_path)
     temporary_root = marin_temp_bucket(
         ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        prefix=os.path.join(TEMPORARY_CHECKPOINTS_PATH, output_component),
         source_prefix=output_path,
-        use_env_override=False,
     )
-    return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
+    return str(
+        StoragePath(temporary_root)
+        / TEMPORARY_CHECKPOINTS_PATH
+        / _temporary_checkpoint_key(output_path)
+        / DEFAULT_CHECKPOINTS_PATH
+    )
 
 
 def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_path: str) -> CheckpointerConfig:

@@ -47,10 +47,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from marin.training.training import (
-    data_local_temporary_checkpoint_base_path,
-    temporary_checkpoint_base_path,
-)
+from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -249,8 +246,7 @@ def build_ladder_run(
     def build_config(ctx: StepContext) -> GrugRunConfig:
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
-        data_local_checkpoint_path = data_local_temporary_checkpoint_base_path(ctx.output_path)
-        load_checkpoint_path = [permanent_checkpoint_path, temporary_checkpoint_path, data_local_checkpoint_path]
+        load_checkpoint_path = [permanent_checkpoint_path, temporary_checkpoint_path]
         if initialize_from_checkpoint is not None:
             load_checkpoint_path.append(initialize_from_checkpoint)
         trainer = hero_trainer_config(
@@ -283,7 +279,6 @@ def build_ladder_run(
                 process_timeout=HERO_PROCESS_STALL_TIMEOUT,
                 startup_timeout=HERO_STARTUP_TIMEOUT,
             ),
-            # Existing 02A temporaries remain valid resume candidates for this lineage.
             load_checkpoint_path=load_checkpoint_path,
             # load_checkpoint stays None: the trainer resumes from the newest checkpoint that
             # exists, so a retry after a hardware or memory fault continues the run. Continuing

@@ -110,6 +110,7 @@ from iris.cluster.runtime.env import (
 )
 from iris.cluster.runtime.output_capture import task_output_storage_failure
 from iris.cluster.runtime.profile import (
+    DEFAULT_PROFILE_DURATION_SECONDS,
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
     build_profile_row,
@@ -2643,7 +2644,7 @@ class K8sTaskProvider:
         """
         attempt_id = target.attempt_id
         pod_name = self._live_pod_name(target)
-        duration = request.duration_seconds or 10
+        duration = request.duration_seconds or DEFAULT_PROFILE_DURATION_SECONDS
         dispatch = _K8sProfileDispatch(self.kubectl, pod_name)
         profile_type = job_pb2.ProfileType()
         profile_type.CopyFrom(request.profile_type)
