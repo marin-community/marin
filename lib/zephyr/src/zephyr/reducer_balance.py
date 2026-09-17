@@ -46,9 +46,7 @@ class ReduceTarget:
             raise ValueError("slice_index must be in [0, slice_count)")
 
 
-def plan_reduce_targets(
-    target_bytes: Sequence[int], policy: ReducerBalancePolicy | None
-) -> list[ReduceTarget]:
+def plan_reduce_targets(target_bytes: Sequence[int], policy: ReducerBalancePolicy | None) -> list[ReduceTarget]:
     """Plan ordered reduce tasks from the payload bytes of each scatter target."""
     if any(size < 0 for size in target_bytes):
         raise ValueError("target bytes must be non-negative")

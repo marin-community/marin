@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from zephyr.reducer_balance import ReduceTarget, ReducerBalancePolicy, plan_reduce_targets
+from zephyr.reducer_balance import ReducerBalancePolicy, ReduceTarget, plan_reduce_targets
 
 
 def test_plan_reduce_targets_splits_only_oversized_targets_in_order():
