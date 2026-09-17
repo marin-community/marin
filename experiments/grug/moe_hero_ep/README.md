@@ -60,18 +60,21 @@ callbacks, checkpoint work, and GC. The existing `throughput/duration` excludes 
 callbacks, checkpoints, and GC. Tracker steps are zero-based: collections after completed updates
 100/200/300 appear at x=99/199/299. Use elapsed time per update for comparisons.
 
-The [single-rack validation](https://iris.oa.dev/#/job/%2Fmwittmann%2Fgc-sync-9205-smallbatch-20260916-coord)
-used the full model with one sequence per GPU on 64 GPUs. It tested an earlier version with
-barriers around each collection and no startup or evaluation cleanup. Across 300 measured updates
-after ten warmup steps, elapsed time fell from 799.194 to 770.273 seconds (3.62%). Across all ranks,
-automatic GC produced 71 full collections across 53 steps; coordinated GC produced 64 collections
-at each of updates 100, 200, and 300. Shared pauses including barriers were 1.25–1.46 seconds.
-The largest per-rank RSS increase in the treatment, sampled every ten measured steps relative to
-the post-warmup baseline, was 6.2 MiB. Device-memory deltas were not recorded. This checked
-checkpoint decisions with writes disabled; it did not validate production throughput, checkpoint
-writes, evaluation, or long-term memory growth. Cycles can retain device buffers between
-collections. Keep the feature opt-in pending a production-batch trial that monitors both host
-memory and HBM, including evaluation transitions. See [#9205](https://github.com/marin-community/marin/issues/9205).
+The [single-rack validation](https://iris.oa.dev/#/job/%2Fmwittmann%2Fgc-sync-9205-nobarrier-20260917-coord)
+used the full model with one sequence per GPU on 64 GPUs. Across 300 measured updates after ten
+warmup steps, elapsed time including the initial collection fell from 789.279 to 770.634 seconds
+(2.36%; 2.631 to 2.569 seconds/update). Across all ranks, automatic GC produced 66 full collections
+across 40 steps; coordinated GC produced one collection per rank after warmup and at updates 100,
+200, and 300. The slowest rank's scheduled collections took 1.27–1.48 seconds.
+
+Both arms had identical sampled live HBM (35.094 GiB per rank) and allocator peaks (111.840 GiB),
+with no increase above their post-warmup baselines. Live memory was sampled every ten measured
+steps; the allocator peak includes warmup. The largest per-rank RSS increase in treatment was
+8.8 MiB above its post-warmup baseline. This single pair exercised checkpoint decisions with writes
+and evaluation disabled. The result supports the mechanism and short-term memory behavior at this
+batch size. Cycles can still retain device buffers between collections; keep the feature opt-in
+pending a production-batch trial that includes evaluation transitions and longer memory tracking.
+See [#9205](https://github.com/marin-community/marin/issues/9205).
 
 ## Why this recipe
 
