@@ -51,7 +51,7 @@ from levanter.grug.grug_moe import (
     resolve_moe_implementation,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import unshard
+from levanter.grug.sharding import _mesh_axis_size, unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
@@ -713,6 +713,9 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
 class MoEMLP(eqx.Module):
     """QB-routed MoE with sigmoid combine weights."""
 
+    router: jax.Array
+    router_bias: jax.Array
+    expert_mlp: MoEExpertMlp
     routed_moe: QBRoutedMoE
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -720,27 +723,29 @@ class MoEMLP(eqx.Module):
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
         k_router, k_expert = random.split(key, 2)
         mesh = get_abstract_mesh()
+        expert_axis_size = _mesh_axis_size(mesh, "expert")
+        if cfg.num_experts % expert_axis_size != 0:
+            raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         return MoEMLP(
-            routed_moe=QBRoutedMoE.init(
-                hidden_dim=cfg.hidden_dim,
+            router=reshard(
+                _init_weight(k_router, (cfg.hidden_dim, cfg.num_experts), cfg.initializer_std),
+                _small_param_spec(cfg.small_param_sharding, shard_dim=0),
+            ),
+            router_bias=jnp.zeros((cfg.num_experts,)),
+            expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
-                num_experts_per_token=cfg.num_experts_per_token,
+                hidden_dim=cfg.hidden_dim,
+                intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
-                expert_mlp=MoEExpertMlp.init(
-                    num_experts=cfg.num_experts,
-                    hidden_dim=cfg.hidden_dim,
-                    intermediate_dim=cfg.intermediate_dim,
-                    initializer_std=cfg.initializer_std,
-                    key=k_expert,
-                    implementation=cfg.moe_implementation,
-                    activation=ActivationFunctionEnum.silu,
-                    capacity_factor=cfg.capacity_factor,
-                    expert_chunks=cfg.expert_chunks,
-                ),
-                mesh=mesh,
-                key=k_router,
-                router_pspec=_small_param_spec(cfg.small_param_sharding, shard_dim=0),
+                key=k_expert,
+                implementation=cfg.moe_implementation,
+                activation=ActivationFunctionEnum.silu,
+                capacity_factor=cfg.capacity_factor,
+                expert_chunks=cfg.expert_chunks,
+            ),
+            routed_moe=QBRoutedMoE(
+                num_experts_per_token=cfg.num_experts_per_token,
                 batch_axes=_BATCH_AXES,
             ),
             cfg=cfg,
@@ -758,6 +763,9 @@ class MoEMLP(eqx.Module):
         routed_flat, router_stats = self.routed_moe(
             x_flat,
             token_valid_flat,
+            router=self.router,
+            router_bias=self.router_bias,
+            expert_mlp=self.expert_mlp,
             mesh=get_abstract_mesh(),
             report_capacity_overflow=self.cfg.report_capacity_overflow,
         )
@@ -1112,17 +1120,11 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
                 f"{layer_prefix}.post_attention_layernorm.weight": block.rms_mlp.weight,
                 f"{layer_prefix}.mlp_gated_norm.down_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_down),
                 f"{layer_prefix}.mlp_gated_norm.up_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_up),
-                f"{layer_prefix}.mlp.router.weight": _linear_inference_tensor(block.mlp.routed_moe.router),
-                f"{layer_prefix}.mlp.router.bias": block.mlp.routed_moe.router_bias,
-                f"{layer_prefix}.mlp.experts.gate_proj.weight": _linear_inference_tensor(
-                    block.mlp.routed_moe.expert_mlp.w_gate
-                ),
-                f"{layer_prefix}.mlp.experts.up_proj.weight": _linear_inference_tensor(
-                    block.mlp.routed_moe.expert_mlp.w_up
-                ),
-                f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(
-                    block.mlp.routed_moe.expert_mlp.w_down
-                ),
+                f"{layer_prefix}.mlp.router.weight": _linear_inference_tensor(block.mlp.router),
+                f"{layer_prefix}.mlp.router.bias": block.mlp.router_bias,
+                f"{layer_prefix}.mlp.experts.gate_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_gate),
+                f"{layer_prefix}.mlp.experts.up_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_up),
+                f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_down),
             }
         )
         # SConv weights are learned; export them per site so the checkpoint reconstructs an sconv model.

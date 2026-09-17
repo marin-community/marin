@@ -41,7 +41,7 @@ from levanter.grug.grug_moe import (
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
+from levanter.grug.sharding import Pembed_vocab, Plm_head, _mesh_axis_size, unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -469,6 +469,9 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
 class MoEMLP(eqx.Module):
     """QB-routed MoE with sigmoid combine weights."""
 
+    router: jax.Array
+    router_bias: jax.Array
+    expert_mlp: MoEExpertMlp
     routed_moe: QBRoutedMoE
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -476,28 +479,30 @@ class MoEMLP(eqx.Module):
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
         k_router, k_expert = random.split(key, 2)
         mesh = get_abstract_mesh()
+        expert_axis_size = _mesh_axis_size(mesh, "expert")
+        if cfg.num_experts % expert_axis_size != 0:
+            raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         if not cfg.split_w_gate_up:
             raise ValueError("the current Levanter MoE API only supports split w_gate and w_up weights")
 
         return MoEMLP(
-            routed_moe=QBRoutedMoE.init(
-                hidden_dim=cfg.hidden_dim,
+            router=reshard(
+                _init_weight(k_router, (cfg.hidden_dim, cfg.num_experts), cfg.initializer_std), P(None, None)
+            ),
+            router_bias=jnp.zeros((cfg.num_experts,)),
+            expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
-                num_experts_per_token=cfg.num_experts_per_token,
+                hidden_dim=cfg.hidden_dim,
+                intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
-                expert_mlp=MoEExpertMlp.init(
-                    num_experts=cfg.num_experts,
-                    hidden_dim=cfg.hidden_dim,
-                    intermediate_dim=cfg.intermediate_dim,
-                    initializer_std=cfg.initializer_std,
-                    key=k_expert,
-                    implementation=cfg.moe_implementation,
-                    activation=ActivationFunctionEnum.silu,
-                    capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
-                ),
-                mesh=mesh,
-                key=k_router,
+                key=k_expert,
+                implementation=cfg.moe_implementation,
+                activation=ActivationFunctionEnum.silu,
+                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+            ),
+            routed_moe=QBRoutedMoE(
+                num_experts_per_token=cfg.num_experts_per_token,
                 batch_axes=_BATCH_AXES,
             ),
             cfg=cfg,
@@ -512,7 +517,14 @@ class MoEMLP(eqx.Module):
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         token_valid_flat = rearrange(token_valid, "b s -> (b s)")
-        routed_flat, router_stats = self.routed_moe(x_flat, token_valid_flat, mesh=get_abstract_mesh())
+        routed_flat, router_stats = self.routed_moe(
+            x_flat,
+            token_valid_flat,
+            router=self.router,
+            router_bias=self.router_bias,
+            expert_mlp=self.expert_mlp,
+            mesh=get_abstract_mesh(),
+        )
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())

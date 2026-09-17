@@ -246,48 +246,17 @@ def estimate_qb_beta_topk(
 class QBRoutedMoE(eqx.Module):
     """QB router and expert MLP composition for flat token batches.
 
-    Model variants own their block wiring and any topology-specific work around
-    this component (for example, latent projections or scan-reduced metrics).
-    This module owns the common router parameters, top-k selection, QB update
-    estimate, routing statistics, and expert dispatch.
+    Model variants retain parameter ownership so checkpoint paths remain
+    stable. This component owns the common top-k selection, QB update estimate,
+    routing statistics, and expert dispatch.
     """
 
-    router: jax.Array
-    router_bias: jax.Array
-    expert_mlp: "MoEExpertMlp"
     num_experts_per_token: int = eqx.field(static=True)
-    # This is part of the QB routing recipe, rather than an independently tuned
-    # model hyperparameter: selected sigmoid weights are normalized to this sum.
-    routing_renorm_sum: float = eqx.field(static=True)
     # The batch-sharded axes used for QB's local statistic and its deferred reduction.
     batch_axes: tuple[str, ...] = eqx.field(static=True)
-
-    @staticmethod
-    def init(
-        *,
-        hidden_dim: int,
-        num_experts: int,
-        num_experts_per_token: int,
-        initializer_std: float,
-        expert_mlp: "MoEExpertMlp",
-        mesh: jax.sharding.AbstractMesh,
-        key: jax.Array,
-        router_pspec: P = P(None, None),
-        routing_renorm_sum: float = 2.5,
-        batch_axes: tuple[str, ...] = ("replica_dcn", "data", "expert"),
-    ) -> "QBRoutedMoE":
-        """Initialize the router around an already-configured expert MLP."""
-        expert_axis_size = _mesh_axis_size(mesh, "expert")
-        if num_experts % expert_axis_size != 0:
-            raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
-        return QBRoutedMoE(
-            router=reshard(_init_weight(key, (hidden_dim, num_experts), initializer_std), router_pspec),
-            router_bias=jnp.zeros((num_experts,)),
-            expert_mlp=expert_mlp,
-            num_experts_per_token=num_experts_per_token,
-            routing_renorm_sum=routing_renorm_sum,
-            batch_axes=batch_axes,
-        )
+    # This is part of the QB routing recipe, rather than an independently tuned
+    # model hyperparameter: selected sigmoid weights are normalized to this sum.
+    routing_renorm_sum: float = eqx.field(static=True, default=2.5)
 
     @named_call
     def __call__(
@@ -295,6 +264,9 @@ class QBRoutedMoE(eqx.Module):
         x: Float[Array, "T D"],
         token_valid: Bool[Array, "T"],
         *,
+        router: Float[Array, "D E"],
+        router_bias: Float[Array, "E"],
+        expert_mlp: "MoEExpertMlp",
         mesh: jax.sharding.AbstractMesh,
         report_capacity_overflow: bool = True,
     ) -> tuple[Float[Array, "T D"], dict[str, jax.Array]]:
@@ -312,8 +284,8 @@ class QBRoutedMoE(eqx.Module):
             raise ValueError(f"token_valid must have shape [{x.shape[0]}], got shape={token_valid.shape}")
 
         with jax.named_scope("moe_route"):
-            router_logits = jnp.einsum("td,de->te", x, reshard(self.router, P(None, None))).astype(jnp.float32)
-            biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
+            router_logits = jnp.einsum("td,de->te", x, reshard(router, P(None, None))).astype(jnp.float32)
+            biased_logits = router_logits + jax.lax.stop_gradient(router_bias)
             router_probs = jax.nn.softmax(router_logits, axis=-1)
             topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
             qb_alpha = topk_logits[:, -1:]
@@ -329,7 +301,7 @@ class QBRoutedMoE(eqx.Module):
                 router_probs,
                 router_logits,
                 token_valid,
-                num_experts=self.router.shape[1],
+                num_experts=router.shape[1],
                 num_experts_per_token=self.num_experts_per_token,
             )
 
@@ -341,11 +313,11 @@ class QBRoutedMoE(eqx.Module):
                 mesh,
                 batch_axes=self.batch_axes,
                 num_experts_per_token=self.num_experts_per_token,
-                num_experts=self.router.shape[1],
+                num_experts=router.shape[1],
             )
 
         with jax.named_scope("moe_experts"):
-            moe_out = self.expert_mlp(
+            moe_out = expert_mlp(
                 x,
                 selected_experts.astype(jnp.int32),
                 combine_weights,

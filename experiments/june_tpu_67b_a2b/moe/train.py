@@ -335,7 +335,7 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     new_biases = new_biases - jnp.mean(new_biases, axis=-1, keepdims=True)
     if model.stacked_blocks is not None:
         return eqx.tree_at(
-            lambda t: t.stacked_blocks.stacked.mlp.routed_moe.router_bias,
+            lambda t: t.stacked_blocks.stacked.mlp.router_bias,
             model,
             new_biases,
         )
@@ -344,7 +344,7 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     for i, block in enumerate(model.blocks):
         if not isinstance(block, Block) or block.mlp is None:
             continue
-        new_mlp = eqx.tree_at(lambda m: m.routed_moe.router_bias, block.mlp, new_biases[i])
+        new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_biases[i])
         new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 

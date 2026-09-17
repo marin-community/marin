@@ -266,7 +266,7 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
             continue
         new_bias = -qb_betas[moe_idx]
         new_bias = new_bias - jnp.mean(new_bias)
-        new_mlp = eqx.tree_at(lambda m: m.routed_moe.router_bias, block.mlp, new_bias)
+        new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_bias)
         new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
         moe_idx += 1
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
