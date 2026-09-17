@@ -3,6 +3,7 @@
 
 import gc
 import weakref
+from contextlib import nullcontext
 
 import jax.numpy as jnp
 import pytest
@@ -20,9 +21,9 @@ class CyclicNode:
 def test_scheduled_collection_reclaims_cycles_at_global_step_boundary():
     runner = StateCallbackRunner(
         step_getter=lambda step: jnp.asarray(step),
-        model_getter=lambda step: None,
-        eval_model_getter=lambda step: None,
-        opt_state_getter=lambda step: None,
+        model_getter=lambda _: None,
+        eval_model_getter=lambda _: None,
+        opt_state_getter=lambda _: None,
     )
     with coordinated_gc() as collect:
         runner.add_hook(collect, every=100)
@@ -48,15 +49,13 @@ def test_gc_policy_restored_after_training_exit(enabled, fail):
     original = gc.isenabled()
     try:
         gc.enable() if enabled else gc.disable()
-        try:
+        with pytest.raises(RuntimeError) if fail else nullcontext():
             with coordinated_gc():
                 assert not gc.isenabled()
                 # A callback may change the process-global policy during training.
                 gc.enable()
                 if fail:
                     raise RuntimeError("training failed")
-        except RuntimeError as error:
-            assert str(error) == "training failed"
         assert gc.isenabled() == enabled
     finally:
         gc.enable() if original else gc.disable()

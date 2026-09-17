@@ -58,7 +58,7 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe_hero_ep.coordinated_gc import GC_WARMUP_STEPS, collect_garbage, coordinated_gc
+from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
 from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, RematMode, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
@@ -1191,7 +1191,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     gc_start = time.perf_counter()
                     gc_hook = gc_resources.enter_context(coordinated_gc())
                     state_callbacks.add_hook(gc_hook, every=config.trainer.gc_interval)
-                    levanter.tracker.log({"throughput/gc_time": time.perf_counter() - gc_start}, step=current_step)
+                    levanter.tracker.log({GC_TIME_METRIC: time.perf_counter() - gc_start}, step=current_step)
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 watch_due = (

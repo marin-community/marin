@@ -13,6 +13,7 @@ import levanter.tracker
 from levanter.callbacks import StepInfo
 
 GC_WARMUP_STEPS = 10
+GC_TIME_METRIC = "throughput/gc_time"
 
 
 def collect_garbage() -> float:
@@ -35,7 +36,7 @@ def coordinated_gc() -> Iterator[Callable[[StepInfo], None]]:
 
     def collect(info: StepInfo) -> None:
         # Training collectives bound rank skew; early arrivals can start collecting immediately.
-        levanter.tracker.log({"throughput/gc_time": collect_garbage()}, step=info.step)
+        levanter.tracker.log({GC_TIME_METRIC: collect_garbage()}, step=info.step)
 
     try:
         collect_garbage()
