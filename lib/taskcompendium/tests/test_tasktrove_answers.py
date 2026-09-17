@@ -14,7 +14,7 @@ from tasktrove_verify.spec import McqSpec
 
 from taskcompendium.grading import Outcome, grade_answer
 from taskcompendium.harbor.runner import HarborLaunch, run_trial
-from taskcompendium.importers.tasktrove import MAX_ARCHIVE_MEMBERS, RELEASE, RELEASE_ROOT, read_archive
+from taskcompendium.importers.tasktrove import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove_mcqa import import_task
 from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
 from taskcompendium.models import AnswerKind, MultipleChoiceAnswer
@@ -23,18 +23,20 @@ from taskcompendium.rendering import AnswerFormat, Rendering, render_instruction
 FIXTURE = Path(__file__).parent / "fixtures/tasktrove/mcq-1961bdb52b5a.tar.gz"
 TASKTROVE_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
 TASKTROVE_PATH = "Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz"
+RELEASE_URI = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9"
+RELEASE_REVISION = "2026.09.10.9"
 
 
 def _archive():
-    return read_archive(FIXTURE.read_bytes(), TASKTROVE_SOURCE, TASKTROVE_PATH)
+    return read_archive(FIXTURE.read_bytes(), TASKTROVE_SOURCE, TASKTROVE_PATH, RELEASE_URI, RELEASE_REVISION)
 
 
 def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(tmp_path):
     archive = _archive()
     specification = import_task(archive)
 
-    assert specification.source.dataset == RELEASE_ROOT
-    assert specification.source.revision == RELEASE
+    assert specification.source.dataset == RELEASE_URI
+    assert specification.source.revision == RELEASE_REVISION
     assert specification.source.row == f"{TASKTROVE_SOURCE}:{TASKTROVE_PATH}"
     assert "/" not in specification.id
     assert specification.requirements.capabilities == ()
@@ -74,7 +76,7 @@ def test_import_rejects_non_mcqa_source_before_lowering():
 
 def test_archive_rejects_caller_identity_that_disagrees_with_metadata():
     with pytest.raises(ValueError, match="source identity"):
-        read_archive(FIXTURE.read_bytes(), "other_source", TASKTROVE_PATH)
+        read_archive(FIXTURE.read_bytes(), "other_source", TASKTROVE_PATH, RELEASE_URI, RELEASE_REVISION)
 
 
 def test_archive_rejects_excessive_empty_members():
@@ -84,7 +86,7 @@ def test_archive_rejects_excessive_empty_members():
             archive.addfile(tarfile.TarInfo(f"empty-{index}"), io.BytesIO())
 
     with pytest.raises(ValueError, match="member limit"):
-        read_archive(data.getvalue(), TASKTROVE_SOURCE, TASKTROVE_PATH)
+        read_archive(data.getvalue(), TASKTROVE_SOURCE, TASKTROVE_PATH, RELEASE_URI, RELEASE_REVISION)
 
 
 async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
