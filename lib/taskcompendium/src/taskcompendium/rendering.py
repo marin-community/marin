@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import AnswerKind, TaskSpec
 
 
 class AnswerFormat(StrEnum):
@@ -41,10 +41,16 @@ def _object_with_unique_fields(pairs: list[tuple[str, object]]) -> dict[str, obj
 
 def render_instruction(specification: TaskSpec, rendering: Rendering) -> str:
     """Return the public request with only its answer convention attached."""
+    if specification.answer_kind is AnswerKind.OPTION_LETTER:
+        answer = "the selected option letter"
+    elif specification.answer_kind is AnswerKind.TEXT:
+        answer = "your answer"
+    else:
+        raise ValueError(f"Unsupported answer kind: {specification.answer_kind}")
     if rendering.answer_format == AnswerFormat.PLAIN:
-        suffix = "Give your answer as plain text."
+        suffix = f"Return {answer} as plain text."
     elif rendering.answer_format == AnswerFormat.JSON:
-        suffix = 'Give your answer as a JSON object with an "answer" field.'
+        suffix = f'Return a JSON object with an "answer" field containing {answer}.'
     else:
         raise ValueError(f"Unsupported answer format: {rendering.answer_format}")
     return f"{specification.instructions.rstrip()}\n\n{suffix}\n"
