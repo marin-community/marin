@@ -3,11 +3,12 @@
 
 """Turn eval run records into measurements the statistics engine can work with.
 
-This is the only place that knows the shape of a harness's output: how lm-eval names a task's stderr
-and item count, how a group task's subtask rows roll up, how evalchemy can write the same task twice,
-and where a mechanism records the items it attempted. :mod:`marin.evaluation.eval_stats` holds the
+This module and :mod:`marin.evaluation.metric_selection` are the only places that know the shape of
+a harness's output: how lm-eval and Evalchemy name a task's score and stderr, how a task reports its
+item count, how a group task's subtask rows roll up, how evalchemy can write the same task twice, and
+where a mechanism records the items it attempted. :mod:`marin.evaluation.eval_stats` holds the
 statistics and the selection rules and knows nothing about any of it, so a new harness is a change
-here alone.
+in these two modules alone.
 """
 
 from __future__ import annotations
@@ -25,7 +26,13 @@ from marin.evaluation.eval_stats import (
     ResultFlag,
 )
 from marin.evaluation.evaluation_config import eval_task_directory
-from marin.evaluation.metric_selection import base_metric, declared_metric
+from marin.evaluation.metric_selection import (
+    LM_EVAL_STDERR_SUFFIX,
+    REPEAT_MEAN_SUFFIX,
+    REPEAT_STDERR_SUFFIX,
+    base_metric,
+    declared_metric,
+)
 from marin.evaluation.records import EvalRunRecord, EvalTaskRef, MetricKind
 from marin.evaluation.records import TaskCoverage as RecordTaskCoverage
 
@@ -48,13 +55,18 @@ class _TaskScore:
 
 
 def stderr_for(metrics: Mapping[str, float], metric_key: str) -> float | None:
-    """The standard error paired with ``metric_key``: its ``<base>_stderr,<filter>`` value, or None.
+    """The standard error paired with ``metric_key``, or None when the task recorded none.
 
     lm-eval names the stderr for ``acc,none`` as ``acc_stderr,none``; a filterless ``acc`` pairs with
-    ``acc_stderr``.
+    ``acc_stderr``. Evalchemy's repeated-sample tasks pair ``accuracy_avg`` with ``accuracy_std_err``.
     """
     base, _, metric_filter = metric_key.partition(",")
-    key = f"{base}_stderr,{metric_filter}" if metric_filter else f"{base}_stderr"
+    if base.endswith(REPEAT_MEAN_SUFFIX):
+        key = base.removesuffix(REPEAT_MEAN_SUFFIX) + REPEAT_STDERR_SUFFIX
+    else:
+        key = base + LM_EVAL_STDERR_SUFFIX
+    if metric_filter:
+        key = f"{key},{metric_filter}"
     value = metrics.get(key)
     return float(value) if value is not None else None
 
