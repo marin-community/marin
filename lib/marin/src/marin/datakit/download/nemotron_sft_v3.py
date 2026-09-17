@@ -29,7 +29,7 @@ from marin.datakit.download.nemotron_chat_prompts import SEED_DATASET_REVISIONS,
 from marin.datakit.download.rollout_transforms import load_parquet_batched, openai_chat_document
 from marin.execution.step_spec import StepSpec
 
-TRANSFORM_VERSION = "2026.09.17.chat-v1"
+TRANSFORM_VERSION = "2026.09.17.chat-v2"
 MAX_CONSECUTIVE_IDENTICAL_LINES = 256
 _SKIPPED_JSONL_LINES = MappingProxyType({("agentic_v2", "tool_calling"): frozenset({1095})})
 _RESTORED_CHAT_FAMILY = "instruction_following_chat_v3"
@@ -205,6 +205,17 @@ def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _restore_backslash_b(value: object) -> object:
+    """Undo source JSON's accidental backspace decoding in LaTeX text."""
+    if isinstance(value, str):
+        return value.replace("\b", r"\b")
+    if isinstance(value, list):
+        return [_restore_backslash_b(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _restore_backslash_b(item) for key, item in value.items()}
+    return value
+
+
 def _has_pathological_line_repetition(text: str) -> bool:
     previous = None
     run_length = 0
@@ -236,6 +247,7 @@ def _parse_messages(value: object) -> list[dict]:
         parsed = dict(message)
         if isinstance(parsed.get("tool_calls"), str):
             parsed["tool_calls"] = json.loads(parsed["tool_calls"])
+        parsed = {key: _restore_backslash_b(value) for key, value in parsed.items()}
         content = parsed.get("content")
         if content is not None and not isinstance(content, str):
             parsed["content"] = _canonical_json(content)

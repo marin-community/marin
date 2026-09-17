@@ -130,6 +130,23 @@ def test_repeated_source_lines_are_filtered():
     assert row_to_chat_doc(row, family="instruction_following_chat_v2", partition_name="reasoning_off") == []
 
 
+def test_json_backspace_in_math_markup_is_restored():
+    row = {
+        "messages": [
+            json.loads(r'{"role":"user","content":"Put it in \boxed{}."}'),
+            json.loads(r'{"role":"assistant","reasoning_content":"Use \boxed{}.","content":"Done."}'),
+        ]
+    }
+
+    documents = row_to_chat_doc(row, family="math_v4", partition_name="train")
+
+    assert len(documents) == 1
+    texts = [part["text"] for message in documents[0]["messages"] for part in message["content"]]
+    assert r"\boxed{}" in texts[0]
+    assert r"\boxed{}" in texts[1]
+    assert all("\b" not in text for text in texts)
+
+
 def test_opencode_tool_schema_is_available_to_chat_template():
     row = {
         "messages": [
