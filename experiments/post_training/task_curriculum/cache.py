@@ -29,7 +29,7 @@ class EmbeddingCache(AbstractContextManager["EmbeddingCache"]):
             "(cache_key TEXT PRIMARY KEY, dimensions INTEGER NOT NULL, value BLOB NOT NULL)"
         )
 
-    def __exit__(self, *args: object) -> None:
+    def __exit__(self, *_args: object) -> None:
         self._connection.close()
 
     def embedding(self, cache_key: str) -> np.ndarray | None:
