@@ -11,6 +11,7 @@ dependencies = ["msgspec>=0.18", "tasktrove-verify[answer]"]
 
 [project.entry-points."taskcompendium.verifiers"]
 exact_answer = "taskcompendium.grading:exact_answer_handler"
+tasktrove_mcqa = "taskcompendium.verifiers.tasktrove_mcqa:tasktrove_mcqa_handler"
 
 [project.optional-dependencies]
 harbor = ["harbor"]

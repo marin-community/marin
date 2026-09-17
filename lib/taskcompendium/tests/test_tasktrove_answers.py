@@ -5,6 +5,8 @@
 
 import io
 import json
+import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -17,7 +19,7 @@ from taskcompendium.harbor.runner import HarborLaunch, run_trial
 from taskcompendium.importers.tasktrove import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove_mcqa import import_task
 from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
-from taskcompendium.models import AnswerKind, MultipleChoiceAnswer
+from taskcompendium.models import AnswerKind
 from taskcompendium.rendering import AnswerFormat, Rendering, render_instruction
 
 FIXTURE = Path(__file__).parent / "fixtures/tasktrove/mcq-1961bdb52b5a.tar.gz"
@@ -41,7 +43,6 @@ def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(t
     assert "/" not in specification.id
     assert specification.requirements.capabilities == ()
     assert specification.answer_kind is AnswerKind.OPTION_LETTER
-    assert isinstance(specification.verifier, MultipleChoiceAnswer)
     assert "verifier" not in specification.instructions.lower()
     assert "/app/answer.txt" not in specification.instructions
     assert "theranostics clinical trials" in specification.instructions
@@ -105,3 +106,25 @@ async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
     outcome = json.loads((tmp_path / "trials/mcqa/verifier/taskcompendium-result.json").read_text())
     assert result.exception_info is None, result.exception_info
     assert outcome == {"status": "graded", "reward": 1.0, "error": None}
+
+
+def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
+    task = lower_to_harbor(
+        import_task(_archive()),
+        Rendering("plain", AnswerFormat.PLAIN),
+        HarborTaskBinding(),
+        tmp_path / "task",
+    )
+    script = (
+        "import json, sys; from pathlib import Path; "
+        "from taskcompendium.grading import grade_answer; "
+        "from taskcompendium.lowering import read_rendering, read_specification; "
+        "root = Path(sys.argv[1]); "
+        "result = grade_answer(read_specification(root / 'specification.json'), "
+        "read_rendering(root / 'rendering.json'), 'C'); "
+        "print(json.dumps({'status': result.status, 'reward': result.reward}))"
+    )
+
+    completed = subprocess.run([sys.executable, "-c", script, str(task)], capture_output=True, text=True, check=True)
+
+    assert json.loads(completed.stdout) == {"status": "graded", "reward": 1.0}

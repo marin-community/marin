@@ -11,7 +11,7 @@ from pathlib import Path
 import msgspec
 
 from taskcompendium.grading import validate_verifier
-from taskcompendium.models import AnswerKind, SCHEMA_VERSION, Source, TaskRequirements, TaskSpec, VerifierSpec
+from taskcompendium.models import SCHEMA_VERSION, AnswerKind, Source, TaskRequirements, TaskSpec, VerifierSpec
 from taskcompendium.rendering import AnswerFormat, Rendering, render_instruction
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
