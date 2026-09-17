@@ -24,7 +24,11 @@ class TaskTroveMcqaPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=Tr
     options: int
 
     def __post_init__(self) -> None:
-        if not 1 <= self.options <= 26 or len(self.expected) != 1 or not "A" <= self.expected <= "Z":
+        if (
+            not 1 <= self.options <= 26
+            or len(self.expected) != 1
+            or not "A" <= self.expected < chr(ord("A") + self.options)
+        ):
             raise ValueError("MCQA verifier requires an option letter and option count")
 
 
@@ -52,5 +56,4 @@ def _grade_tasktrove_mcqa(payload: TaskTroveMcqaPayload, attempt: GradingAttempt
 
 
 def tasktrove_mcqa_handler() -> VerifierHandler:
-    """Return the TaskTrove MCQA grading handler for entry-point discovery."""
     return VerifierHandler(TaskTroveMcqaPayload, _grade_tasktrove_mcqa)

@@ -29,8 +29,8 @@ RELEASE_URI = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9"
 RELEASE_REVISION = "2026.09.10.9"
 
 
-def _archive():
-    return read_archive(FIXTURE.read_bytes(), TASKTROVE_SOURCE, TASKTROVE_PATH, RELEASE_URI, RELEASE_REVISION)
+def _archive(release_revision: str = RELEASE_REVISION):
+    return read_archive(FIXTURE.read_bytes(), TASKTROVE_SOURCE, TASKTROVE_PATH, RELEASE_URI, release_revision)
 
 
 def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(tmp_path):
@@ -49,6 +49,9 @@ def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(t
     public = render_instruction(specification, Rendering("plain", AnswerFormat.PLAIN))
     assert "Return the selected option letter as plain text." in public
     assert "verifier" not in public.lower()
+
+    later_release = import_task(_archive("2026.09.10.10"))
+    assert later_release.id != specification.id
 
     source_contract = McqSpec(expected="C", options=10, output=str(tmp_path / "source-answer.txt"))
     rendering = Rendering("plain", AnswerFormat.PLAIN)
