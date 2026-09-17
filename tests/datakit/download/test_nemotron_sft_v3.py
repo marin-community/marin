@@ -72,7 +72,7 @@ def test_v3_chat_enrichment_joins_seed_conversations(tmp_path, monkeypatch):
     monkeypatch.setattr(
         nemotron_chat_prompts,
         "load_dataset",
-        lambda *args, **kwargs: [
+        lambda _dataset, **_kwargs: [
             {"conversation": [{"role": "system", "content": "Help with coding."}, {"role": "user", "content": prompt}]}
         ],
     )

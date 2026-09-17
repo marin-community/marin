@@ -187,9 +187,10 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
         if name.startswith("nemotron_sft/")
     )
 
-    rows.extend(
-        (name, lambda source_name=name: nemotron_v3_steps()[source_name]) for name in NEMOTRON_SFT_V3_TOKEN_COUNTS_B
-    )
+    v3_chains = nemotron_v3_steps()
+    if set(v3_chains) != set(NEMOTRON_SFT_V3_TOKEN_COUNTS_B):
+        raise ValueError("Nemotron v3 token counts must cover every registered chat partition")
+    rows.extend((name, lambda source_name=name: v3_chains[source_name]) for name in v3_chains)
 
     token_counts = {name: source.rough_token_count_b for name, source in all_sources().items()}
     token_counts.update(NEMOTRON_SFT_V3_TOKEN_COUNTS_B)

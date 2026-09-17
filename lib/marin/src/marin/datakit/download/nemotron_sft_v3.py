@@ -32,6 +32,8 @@ from marin.execution.step_spec import StepSpec
 TRANSFORM_VERSION = "2026.09.17.chat-v1"
 MAX_CONSECUTIVE_IDENTICAL_LINES = 256
 _SKIPPED_JSONL_LINES = MappingProxyType({("agentic_v2", "tool_calling"): frozenset({1095})})
+_RESTORED_CHAT_FAMILY = "instruction_following_chat_v3"
+_RESTORED_CHAT_PARTITION = "chat"
 
 _MULTILINGUAL_V1_LANGUAGES = ("de", "es", "fr", "it", "ja", "zh")
 _MULTILINGUAL_V2_LANGUAGES = ("hi", "ja", "ko", "pt")
@@ -49,143 +51,149 @@ _ARC_AGI_CONFIGS = (
 # Each entry holds the HF dataset ID, pinned revision, and partition file globs.
 NEMOTRON_SFT_V3_REPOSITORIES: Mapping[str, tuple[str, str, Mapping[str, str]]] = MappingProxyType(
     {
-        "agentic_v1": (
-            "nvidia/Nemotron-Agentic-v1",
-            "650d590978ca35c8f1ecea2faf136e5fac421b62",
-            {split: f"data/{split}.jsonl" for split in ("interactive_agent", "tool_calling")},
-        ),
-        "agentic_v2": (
-            "nvidia/Nemotron-SFT-Agentic-v2",
-            "49e79a3be5ab8cf7511a12958b95cfd6408cd8db",
-            {
-                "interactive_agent": "data/interactive_agent.jsonl",
-                "search": "data/search.jsonl",
-                "tool_calling": "data/tool_calling.jsonl",
-            },
-        ),
-        "opencode_v1": (
-            "nvidia/Nemotron-SFT-OpenCode-v1",
-            "556d5237acff203f3e1a0be49428634c3606cda2",
-            {
-                split: f"{split}/data.jsonl"
-                for split in (
-                    "bash_only_tool_skills",
-                    "bash_only_tool",
-                    "general",
-                    "question_tool",
-                    "agent_skills",
-                    "agent_skills_question_tool",
-                )
-            },
-        ),
-        "swe_v2": (
-            "nvidia/Nemotron-SFT-SWE-v2",
-            "bd151f3f2d89c4804dda0083d912bd9f6a0a9fb7",
-            {"agentless": "data/agentless.jsonl", "openhands_swe": "data/swe.jsonl"},
-        ),
-        "safety_v1": (
-            "nvidia/Nemotron-SFT-Safety-v1",
-            "913fd7c803a9378dab0ce4fef80297ce115781f6",
-            {"train": "data/train.jsonl"},
-        ),
-        "competitive_programming_v2": (
-            "nvidia/Nemotron-SFT-Competitive-Programming-v2",
-            "778afc98a9e027e10b3cd78020c120e93e142ef2",
-            {
-                "exercism": "data/exercism.jsonl",
-                "text_to_sql": "data/text_to_sql.jsonl",
-                "competitive_coding_cpp": "data/competitive_programming_cpp_*.jsonl",
-                "competitive_coding_python": "data/competitive_programming_python_*.jsonl",
-            },
-        ),
-        "instruction_following_chat_v2": (
-            "nvidia/Nemotron-SFT-Instruction-Following-Chat-v2",
-            "1a9454ed054b8544503ab8d8c0a519d141a44c5b",
-            {split: f"data/{split}.jsonl" for split in ("reasoning_off", "reasoning_on")},
-        ),
-        "multilingual_v1": (
-            "nvidia/Nemotron-SFT-Multilingual-v1",
-            "22c86505762a7c595abee309d720084351c9f4ba",
-            {
-                f"{domain}_{language}": (
-                    f"data/super-v3_{domain}_{language}_translated"
-                    f"{'_postedit' if domain == 'stem' else ''}_final.jsonl"
-                )
-                for domain in ("code", "math", "stem")
-                for language in _MULTILINGUAL_V1_LANGUAGES
-            },
-        ),
-        "arc_agi_v1": (
-            "nvidia/Nemotron-SFT-ARC-AGI-v1",
-            "92837449e198007b76830b75508cc6946795cd11",
-            {config: f"data/{config}/*.jsonl" for config in _ARC_AGI_CONFIGS},
-        ),
-        "cuda_v1": (
-            "nvidia/Nemotron-SFT-CUDA-v1",
-            "1a06167a6e1e90d928094184173898cbb9bf42de",
-            {"train": "data/train.jsonl"},
-        ),
-        "instruction_following_chat_v3": (
-            "nvidia/Nemotron-SFT-Instruction-Following-Chat-v3",
-            "be3b3e04ef605ac9d3f8f35b9d5a632f4a3a3402",
-            {"chat": "data/chat.jsonl", "instruction_following": "data/instruction_following.jsonl"},
-        ),
-        "math_v4": (
-            "nvidia/Nemotron-SFT-Math-v4",
-            "a94e56aeddcf6e75d28c8bd210f40fa62309288d",
-            {"train": "data/train.jsonl"},
-        ),
-        "math_v2": (
-            "nvidia/Nemotron-Math-v2",
-            "8e793210e175b6406c752a870f585f62de98c0d3",
-            {"high": "data/high_part*.parquet", "medium": "data/medium.parquet", "low": "data/low.parquet"},
-        ),
-        "math_proofs_v1": (
-            "nvidia/Nemotron-Math-Proofs-v1",
-            "97229c590831adfe96202f5cd071d444d535bf91",
-            {"lean": "data/lean.jsonl"},
-        ),
-        "math_proofs_v2": (
-            "nvidia/Nemotron-Math-Proofs-v2",
-            "7665d7f1d006fd89aa852a9dab8060c60b63f814",
-            {"train": "data/train.jsonl"},
-        ),
-        "multilingual_v2": (
-            "nvidia/Nemotron-SFT-Multilingual-v2",
-            "971a252224b75414b1b67c55dbe0446d8b6606a0",
-            {
-                f"{domain}_{language}": (
-                    f"ultra-v3_{domain}_{language}_translated{('_postedit' if domain == 'stem' else '')}_final.jsonl"
-                )
-                for domain in ("code", "math", "stem")
-                for language in _MULTILINGUAL_V2_LANGUAGES
-            },
-        ),
-        "safety_v2": (
-            "nvidia/Nemotron-SFT-Safety-v2",
-            "8a40a63c9a1a340874b874f980953be53bff0a07",
-            {"train": "data/train.jsonl"},
-        ),
-        "science_v2": (
-            "nvidia/Nemotron-SFT-Science-v2",
-            "6536a5021222a94126968e8c92f29ee47fc8a7df",
-            {config: f"{config}.jsonl" for config in ("rqa", "so", "syn_mcq", "vendor")},
-        ),
-        "finance_v1": (
-            "nvidia/Nemotron-SpecializedDomains-Finance-v1",
-            "5a21b106168facb96ced11b883c2a9b4788ee939",
-            {"train": "data/train.jsonl"},
-        ),
-        "swe_v1": (
-            "nvidia/Nemotron-SWE-v1",
-            "0fe17a965b297a9c943a59050a14c42d5f0083ce",
-            {"r2e_gym": "data/r2e_gym.jsonl"},
-        ),
-        "math_v3": (
-            "nvidia/Nemotron-SFT-Math-v3",
-            "ff4439c1073c87e006ab7ee5f1e5e28c4790dab3",
-            {"train": "data/train.jsonl"},
-        ),
+        family: (hf_dataset_id, revision, MappingProxyType(partitions))
+        for family, (hf_dataset_id, revision, partitions) in {
+            "agentic_v1": (
+                "nvidia/Nemotron-Agentic-v1",
+                "650d590978ca35c8f1ecea2faf136e5fac421b62",
+                {split: f"data/{split}.jsonl" for split in ("interactive_agent", "tool_calling")},
+            ),
+            "agentic_v2": (
+                "nvidia/Nemotron-SFT-Agentic-v2",
+                "49e79a3be5ab8cf7511a12958b95cfd6408cd8db",
+                {
+                    "interactive_agent": "data/interactive_agent.jsonl",
+                    "search": "data/search.jsonl",
+                    "tool_calling": "data/tool_calling.jsonl",
+                },
+            ),
+            "opencode_v1": (
+                "nvidia/Nemotron-SFT-OpenCode-v1",
+                "556d5237acff203f3e1a0be49428634c3606cda2",
+                {
+                    split: f"{split}/data.jsonl"
+                    for split in (
+                        "bash_only_tool_skills",
+                        "bash_only_tool",
+                        "general",
+                        "question_tool",
+                        "agent_skills",
+                        "agent_skills_question_tool",
+                    )
+                },
+            ),
+            "swe_v2": (
+                "nvidia/Nemotron-SFT-SWE-v2",
+                "bd151f3f2d89c4804dda0083d912bd9f6a0a9fb7",
+                {"agentless": "data/agentless.jsonl", "openhands_swe": "data/swe.jsonl"},
+            ),
+            "safety_v1": (
+                "nvidia/Nemotron-SFT-Safety-v1",
+                "913fd7c803a9378dab0ce4fef80297ce115781f6",
+                {"train": "data/train.jsonl"},
+            ),
+            "competitive_programming_v2": (
+                "nvidia/Nemotron-SFT-Competitive-Programming-v2",
+                "778afc98a9e027e10b3cd78020c120e93e142ef2",
+                {
+                    "exercism": "data/exercism.jsonl",
+                    "text_to_sql": "data/text_to_sql.jsonl",
+                    "competitive_coding_cpp": "data/competitive_programming_cpp_*.jsonl",
+                    "competitive_coding_python": "data/competitive_programming_python_*.jsonl",
+                },
+            ),
+            "instruction_following_chat_v2": (
+                "nvidia/Nemotron-SFT-Instruction-Following-Chat-v2",
+                "1a9454ed054b8544503ab8d8c0a519d141a44c5b",
+                {split: f"data/{split}.jsonl" for split in ("reasoning_off", "reasoning_on")},
+            ),
+            "multilingual_v1": (
+                "nvidia/Nemotron-SFT-Multilingual-v1",
+                "22c86505762a7c595abee309d720084351c9f4ba",
+                {
+                    f"{domain}_{language}": (
+                        f"data/super-v3_{domain}_{language}_translated"
+                        f"{'_postedit' if domain == 'stem' else ''}_final.jsonl"
+                    )
+                    for domain in ("code", "math", "stem")
+                    for language in _MULTILINGUAL_V1_LANGUAGES
+                },
+            ),
+            "arc_agi_v1": (
+                "nvidia/Nemotron-SFT-ARC-AGI-v1",
+                "92837449e198007b76830b75508cc6946795cd11",
+                {config: f"data/{config}/*.jsonl" for config in _ARC_AGI_CONFIGS},
+            ),
+            "cuda_v1": (
+                "nvidia/Nemotron-SFT-CUDA-v1",
+                "1a06167a6e1e90d928094184173898cbb9bf42de",
+                {"train": "data/train.jsonl"},
+            ),
+            _RESTORED_CHAT_FAMILY: (
+                "nvidia/Nemotron-SFT-Instruction-Following-Chat-v3",
+                "be3b3e04ef605ac9d3f8f35b9d5a632f4a3a3402",
+                {
+                    _RESTORED_CHAT_PARTITION: "data/chat.jsonl",
+                    "instruction_following": "data/instruction_following.jsonl",
+                },
+            ),
+            "math_v4": (
+                "nvidia/Nemotron-SFT-Math-v4",
+                "a94e56aeddcf6e75d28c8bd210f40fa62309288d",
+                {"train": "data/train.jsonl"},
+            ),
+            "math_v2": (
+                "nvidia/Nemotron-Math-v2",
+                "8e793210e175b6406c752a870f585f62de98c0d3",
+                {"high": "data/high_part*.parquet", "medium": "data/medium.parquet", "low": "data/low.parquet"},
+            ),
+            "math_proofs_v1": (
+                "nvidia/Nemotron-Math-Proofs-v1",
+                "97229c590831adfe96202f5cd071d444d535bf91",
+                {"lean": "data/lean.jsonl"},
+            ),
+            "math_proofs_v2": (
+                "nvidia/Nemotron-Math-Proofs-v2",
+                "7665d7f1d006fd89aa852a9dab8060c60b63f814",
+                {"train": "data/train.jsonl"},
+            ),
+            "multilingual_v2": (
+                "nvidia/Nemotron-SFT-Multilingual-v2",
+                "971a252224b75414b1b67c55dbe0446d8b6606a0",
+                {
+                    f"{domain}_{language}": (
+                        f"ultra-v3_{domain}_{language}_translated{('_postedit' if domain == 'stem' else '')}_final.jsonl"
+                    )
+                    for domain in ("code", "math", "stem")
+                    for language in _MULTILINGUAL_V2_LANGUAGES
+                },
+            ),
+            "safety_v2": (
+                "nvidia/Nemotron-SFT-Safety-v2",
+                "8a40a63c9a1a340874b874f980953be53bff0a07",
+                {"train": "data/train.jsonl"},
+            ),
+            "science_v2": (
+                "nvidia/Nemotron-SFT-Science-v2",
+                "6536a5021222a94126968e8c92f29ee47fc8a7df",
+                {config: f"{config}.jsonl" for config in ("rqa", "so", "syn_mcq", "vendor")},
+            ),
+            "finance_v1": (
+                "nvidia/Nemotron-SpecializedDomains-Finance-v1",
+                "5a21b106168facb96ced11b883c2a9b4788ee939",
+                {"train": "data/train.jsonl"},
+            ),
+            "swe_v1": (
+                "nvidia/Nemotron-SWE-v1",
+                "0fe17a965b297a9c943a59050a14c42d5f0083ce",
+                {"r2e_gym": "data/r2e_gym.jsonl"},
+            ),
+            "math_v3": (
+                "nvidia/Nemotron-SFT-Math-v3",
+                "ff4439c1073c87e006ab7ee5f1e5e28c4790dab3",
+                {"train": "data/train.jsonl"},
+            ),
+        }.items()
     }
 )
 
@@ -290,7 +298,7 @@ def row_to_chat_doc(row: dict, *, family: str, partition_name: str) -> list[dict
         if not messages:
             counters.pipeline.update_counter(f"{counter}/empty_messages_filtered", 1)
             return []
-        if family == "instruction_following_chat_v3" and partition_name == "chat":
+        if family == _RESTORED_CHAT_FAMILY and partition_name == _RESTORED_CHAT_PARTITION:
             first_user = next((message for message in messages if message.get("role") == "user"), None)
             if first_user is None or not first_user.get("content"):
                 counters.pipeline.update_counter(f"{counter}/withheld_prompt_filtered", 1)
@@ -396,7 +404,7 @@ def _processed_chat_step(download: StepSpec, *, family: str, partition_name: str
 
 def _restored_chat_step(download: StepSpec) -> StepSpec:
     return StepSpec(
-        name="restored-chat/nemotron_sft_v3/instruction_following_chat_v3",
+        name=f"restored-chat/nemotron_sft_v3/{_RESTORED_CHAT_FAMILY}",
         deps=[download],
         fn=lambda output_path: restore_chat_prompts(download.output_path, output_path),
         hash_attrs={"version": "2026.09.17", "seed_revisions": dict(SEED_DATASET_REVISIONS)},
@@ -411,7 +419,7 @@ def nemotron_sft_v3_chat_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
         download = download_nemotron_sft_v3_step(family)
         for partition_name in partitions:
             inputs = (download,)
-            if family == "instruction_following_chat_v3" and partition_name == "chat":
+            if family == _RESTORED_CHAT_FAMILY and partition_name == _RESTORED_CHAT_PARTITION:
                 inputs = download, _restored_chat_step(download)
             processed = _processed_chat_step(inputs[-1], family=family, partition_name=partition_name)
             normalized = normalize_chat_step(
