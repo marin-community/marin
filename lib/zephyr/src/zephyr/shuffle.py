@@ -29,9 +29,9 @@ Write-side memory is bounded by buffer estimated size: when the sum of
 flushed together into one combined file. See ``zephyr/memory_budget.py`` for
 the shared model behind both thresholds.
 
-Routing columns (``__zephyr_shard__``, ``__zephyr_sort_key__``) are added
-in ``_items_to_dataframe``; ``__zephyr_shard__`` is stripped on read,
-``__zephyr_sort_key__`` is consumed by the merge and stripped after.
+Routing columns (``__zephyr_shard__``, ``__zephyr_key_hash__``) and the sort
+key are added in ``_items_to_dataframe``. Readers strip the routing columns;
+the merge consumes the sort key.
 """
 
 import concurrent.futures
@@ -57,6 +57,7 @@ from rigging.timing import RateLimiter, log_time
 
 from zephyr import memory_budget
 from zephyr.parquet_scan import scan_parquet
+from zephyr.reducer_balance import ReduceTarget
 from zephyr.shard_keys import encode_key, hash_encoded_key
 from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
@@ -113,10 +114,10 @@ _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
 # read multi-megabyte footers from every mapper chunk before it can read data.
 _SCATTER_MAX_ROW_GROUPS_PER_CHUNK = 512
 
-# Helper column names injected by _items_to_dataframe and stripped before
-# writing to disk.  Both are internal implementation details; user schemas must
-# not collide with these names.
+# Internal columns injected by _items_to_dataframe. Routing columns are stripped
+# by ScatterReader, and the sort key is consumed by the merge.
 _SHARD_COL = "__zephyr_shard__"
+_KEY_HASH_COL = "__zephyr_key_hash__"
 _SORT_KEY_COL = "__zephyr_sort_key__"
 # A cloudpickle-serialized Python object representing the item
 _PAYLOAD_COL = "__payload__"
@@ -153,6 +154,7 @@ def _columns_to_dataframe(
     payloads: list[bytes],
     shards: list[int],
     key_bytes: list[bytes],
+    key_hashes: list[int],
     sort_values: list[Any],
 ) -> pl.DataFrame:
     """Build the scatter DataFrame from pre-computed flat columns.
@@ -171,12 +173,14 @@ def _columns_to_dataframe(
             {
                 _PAYLOAD_COL: pl.Series(payloads, dtype=pl.Binary),
                 _SHARD_COL: pl.Series(shards, dtype=pl.Int32),
+                _KEY_HASH_COL: pl.Series(key_hashes, dtype=pl.UInt64),
                 _KEY_TMP_COL: pl.Series(key_bytes, dtype=pl.Binary),
                 _SORT_VALUE_TMP_COL: sort_values,
             }
         ).select(
             _PAYLOAD_COL,
             _SHARD_COL,
+            _KEY_HASH_COL,
             pl.struct(
                 pl.col(_KEY_TMP_COL).alias("key"),
                 pl.col(_SORT_VALUE_TMP_COL).alias("sort_value"),
@@ -198,7 +202,7 @@ def _items_to_dataframe(
     """Convert a list of Python items to a DataFrame with routing columns.
 
     Cloudpickle-serializes items into ``_PAYLOAD_COL`` and adds ``_SHARD_COL``
-    (int32 target shard index) and ``_SORT_KEY_COL``. This is the adapter
+    (int32 target shard index), ``_KEY_HASH_COL``, and ``_SORT_KEY_COL``. This is the adapter
     between Python-item pipelines and the DataFrame-based
     :class:`ScatterWriter`; DataFrame-native pipelines can feed the writer
     directly.
@@ -209,6 +213,7 @@ def _items_to_dataframe(
     """
     shards: list[int] = []
     key_bytes: list[bytes] = []
+    key_hashes: list[int] = []
     sort_values: list[Any] = []
     for item in items:
         key = key_fn(item)
@@ -218,11 +223,13 @@ def _items_to_dataframe(
             raise ValueError(f"key_fn must return a msgpack-serializable object; got {type(key).__name__!r}.") from err
         # Route from the bytes we just encoded: deterministic_hash(key) would
         # msgpack-encode the same key a second time for every scattered item.
-        shards.append(hash_encoded_key(kb) % num_output_shards if num_output_shards > 0 else 0)
+        key_hash = hash_encoded_key(kb)
+        shards.append(key_hash % num_output_shards if num_output_shards > 0 else 0)
         key_bytes.append(kb)
+        key_hashes.append(key_hash)
         sort_values.append(sort_fn(item) if sort_fn is not None else None)
     payloads = [cloudpickle.dumps(item) for item in items]
-    return _columns_to_dataframe(payloads, shards, key_bytes, sort_values)
+    return _columns_to_dataframe(payloads, shards, key_bytes, key_hashes, sort_values)
 
 
 class _SidecarFilesystem(Protocol):
@@ -341,6 +348,17 @@ class _Sidecar:
             for fut in concurrent.futures.as_completed(futures):
                 ordered[futures[fut]] = fut.result()
         return [s for s in ordered if s is not None]
+
+
+def target_bytes_from_sidecars(scatter_paths: list[str], num_targets: int) -> list[int]:
+    """Sum mapper sidecar payload bytes for every scatter target."""
+    totals = [0] * num_targets
+    for sidecar in _Sidecar.read_all(scatter_paths):
+        for target, size in sidecar.shard_bytes.items():
+            if not 0 <= target < num_targets:
+                raise ValueError(f"sidecar target {target} is outside [0, {num_targets})")
+            totals[target] += size
+    return totals
 
 
 def _unify_frame_schemas(frames: list[_FrameWithSchema]) -> list[pl.LazyFrame]:
@@ -466,25 +484,26 @@ class ScatterReader:
     def __init__(
         self,
         chunk_files: list[_ChunkFile],
-        target_shard: int,
+        reduce_target: ReduceTarget,
         avg_item_bytes: float,
         shard_payload_bytes: float = 0.0,
         shard_payload_rows: int = 0,
         contributing_sidecars: int = 0,
     ) -> None:
         self._chunk_files = chunk_files
-        self._target_shard = target_shard
+        self._reduce_target = reduce_target
+        self._target_shard = reduce_target.target
         self.avg_item_bytes = avg_item_bytes
         self.shard_payload_bytes = shard_payload_bytes
         self.shard_payload_rows = shard_payload_rows
         self.contributing_sidecars = contributing_sidecars
 
     @classmethod
-    def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> "ScatterReader":
+    def from_sidecars(cls, scatter_paths: list[str], reduce_target: ReduceTarget) -> "ScatterReader":
         """Build a ScatterReader by reading per-mapper sidecars directly.
 
         Each reducer reads every mapper's ``metadata.msgpack`` sidecar in parallel
-        and filters for its own ``target_shard``. No coordinator-written manifest
+        and filters for its own target and key-hash slice. No coordinator-written manifest
         is needed, which eliminates a serialization bottleneck when there are
         thousands of mappers.
         """
@@ -493,13 +512,13 @@ class ScatterReader:
         shard_payload_rows = 0
 
         with log_time(
-            f"Building ScatterReader for target shard {target_shard} "
+            f"Building ScatterReader for target shard {reduce_target.target} "
             f"from {len(scatter_paths)} sidecars (concurrency={_SIDECAR_READ_CONCURRENCY})"
         ):
             sidecars = _Sidecar.read_all(scatter_paths)
             contributing_sidecars = 0
             for sidecar in sidecars:
-                target_rows = sidecar.target_rows(target_shard)
+                target_rows = sidecar.target_rows(reduce_target.target)
                 if target_rows == 0:
                     # No row routed here, so this mapper's files hold none. Skipping
                     # them drops a footer read and a merge input per file, and keeps
@@ -507,8 +526,13 @@ class ScatterReader:
                     continue
                 contributing_sidecars += 1
                 chunk_files.extend(sidecar.files)
-                shard_payload_bytes += sidecar.target_bytes(target_shard)
+                shard_payload_bytes += sidecar.target_bytes(reduce_target.target)
                 shard_payload_rows += target_rows
+
+        if reduce_target.slice_count > 1:
+            shard_payload_bytes //= reduce_target.slice_count
+            if shard_payload_rows > 0:
+                shard_payload_rows = max(1, shard_payload_rows // reduce_target.slice_count)
 
         # Computed from this target's own exact bytes and row count, not a
         # mapper-wide average, so row width that varies by target (e.g. a
@@ -518,7 +542,7 @@ class ScatterReader:
         logger.info(
             "ScatterReader for shard %d: %d of %d source shards contribute, %d total chunks, "
             "avg_item_bytes=%.1f, shard_payload_bytes=%.0f",
-            target_shard,
+            reduce_target.target,
             contributing_sidecars,
             len(sidecars),
             len(chunk_files),
@@ -527,7 +551,7 @@ class ScatterReader:
         )
         return cls(
             chunk_files=chunk_files,
-            target_shard=target_shard,
+            reduce_target=reduce_target,
             avg_item_bytes=avg_item_bytes,
             shard_payload_bytes=shard_payload_bytes,
             shard_payload_rows=shard_payload_rows,
@@ -537,12 +561,18 @@ class ScatterReader:
     def get_frames(self) -> list[pl.LazyFrame]:
         frames: list[_FrameWithSchema] = []
         for chunk_file in self._chunk_files:
-            frame = (
-                scan_parquet(chunk_file.path, schema=chunk_file.schema)
-                .filter(pl.col(_SHARD_COL) == self._target_shard)
-                .drop(_SHARD_COL)
+            frame = scan_parquet(chunk_file.path, schema=chunk_file.schema).filter(
+                pl.col(_SHARD_COL) == self._target_shard
             )
-            schema = pl.Schema({name: dtype for name, dtype in chunk_file.schema.items() if name != _SHARD_COL})
+            if self._reduce_target.slice_count > 1:
+                frame = frame.filter(
+                    (pl.col(_KEY_HASH_COL) // (1 << 32)) % self._reduce_target.slice_count
+                    == self._reduce_target.slice_index
+                )
+            frame = frame.drop(_SHARD_COL, _KEY_HASH_COL)
+            schema = pl.Schema(
+                {name: dtype for name, dtype in chunk_file.schema.items() if name not in {_SHARD_COL, _KEY_HASH_COL}}
+            )
             frames.append(_FrameWithSchema(frame=frame, schema=schema))
         return _unify_frame_schemas(frames)
 

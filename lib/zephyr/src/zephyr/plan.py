@@ -46,6 +46,7 @@ from zephyr.dataset import (
 from zephyr.expr import Expr, referenced_columns
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import compute_parquet_splits, load_file, load_file_batch
+from zephyr.reducer_balance import ReduceTarget
 from zephyr.shuffle import ScatterReader
 from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
@@ -718,6 +719,7 @@ class StageContext:
     shard_idx: int
     total_shards: int
     aux_shards: dict[int, Iterable[Any]] = field(default_factory=dict)
+    reduce_target: ReduceTarget | None = None
 
     def get_right_shard(self, op_index: int) -> Iterable[Any]:
         """Get right shard for join at given op index.
@@ -792,7 +794,9 @@ def run_stage(
             # The shard holds every mapper's scatter-data path. The reducer
             # reads all per-mapper sidecars in parallel, filters for its own
             # target shard, then merges the sorted chunks and reduces per key.
-            reader = ScatterReader.from_sidecars(list(ctx.shard), ctx.shard_idx)
+            if ctx.reduce_target is None:
+                raise ValueError("Reduce stage requires a reduce target")
+            reader = ScatterReader.from_sidecars(list(ctx.shard), ctx.reduce_target)
             stage_counters = counters.current_stage()
             stage_counters.set_counter(counters.SHUFFLE_INPUT_ROWS, reader.shard_payload_rows)
             stage_counters.set_counter(counters.SHUFFLE_PAYLOAD_BYTES, reader.shard_payload_bytes)

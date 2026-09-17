@@ -6,6 +6,7 @@
 import enum
 import logging
 import re
+import statistics
 import sys
 import threading
 import time
@@ -39,7 +40,8 @@ from zephyr.dashboard.app import (
 from zephyr.dashboard.coordinator import CoordinatorDashboard
 from zephyr.memory_store import MemoryTableRegistration
 from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Reduce, Scatter, SourceItem, StageType
-from zephyr.shuffle import ListShard, MemChunk
+from zephyr.reducer_balance import DEFAULT_REDUCER_BALANCE, ReducerBalancePolicy, ReduceTarget, plan_reduce_targets
+from zephyr.shuffle import ListShard, MemChunk, target_bytes_from_sidecars
 from zephyr.stage_io import (
     ShardTask,
     StageRunner,
@@ -1218,6 +1220,7 @@ class ZephyrCoordinator:
         pipeline_name: str,
         map_cost: ZephyrTaskResources,
         reduce_cost: ZephyrTaskResources,
+        reducer_balance: ReducerBalancePolicy | None = DEFAULT_REDUCER_BALANCE,
     ) -> None:
         """Run one pipeline, blocking until done. The result goes to storage.
 
@@ -1282,22 +1285,28 @@ class ZephyrCoordinator:
             with self._lock:
                 run.plan_stages = list(plan.stages)
 
+            reduce_targets: list[ReduceTarget] | None = None
             for stage_idx, stage in enumerate(plan.stages):
                 node_id = stage_node_id(ROOT_PLAN_PREFIX, stage_idx)
                 if stage.stage_type == StageType.RESHARD:
                     with self._track_plan_node(run, node_id):
                         shards = _reshard_refs(shards, stage.output_shards or len(shards))
+                        reduce_targets = None
                     continue
 
                 aux_per_shard = self._compute_join_aux(run, stage.operations, shards, stage_idx)
                 with self._track_plan_node(run, node_id):
-                    shards = self._run_worker_stage(
+                    next_stage = plan.stages[stage_idx + 1] if stage_idx + 1 < len(plan.stages) else None
+                    shards, reduce_targets = self._run_worker_stage(
                         run,
                         stage,
                         shards,
                         stage_label=f"stage{stage_idx}-{stage.stage_name(max_length=40)}",
                         stage_index_for_state=stage_idx,
                         aux_per_shard=aux_per_shard,
+                        reduce_targets=reduce_targets,
+                        next_stage=next_stage,
+                        reducer_balance=reducer_balance,
                         is_last_stage=(stage_idx == last_worker_stage_idx),
                     )
 
@@ -1420,8 +1429,11 @@ class ZephyrCoordinator:
         stage_label: str,
         stage_index_for_state: int,
         aux_per_shard: list[dict[int, ListShard]] | None = None,
+        reduce_targets: list[ReduceTarget] | None = None,
+        next_stage: PhysicalStage | None = None,
+        reducer_balance: ReducerBalancePolicy | None = None,
         is_last_stage: bool = False,
-    ) -> list[ListShard]:
+    ) -> tuple[list[ListShard], list[ReduceTarget] | None]:
         """Submit a worker stage, wait for completion, return regrouped output shards.
 
         ``stage_index_for_state`` is the index reported in coordinator state for
@@ -1434,6 +1446,7 @@ class ZephyrCoordinator:
             stage,
             stage_name=stage_label,
             aux_per_shard=aux_per_shard,
+            reduce_targets=reduce_targets,
             cost=cost,
         )
         logger.info(
@@ -1446,8 +1459,10 @@ class ZephyrCoordinator:
                     ZephyrShuffleStat(
                         execution_id=run.execution_id,
                         stage_name=stage_label,
-                        target_shard=task.shard_idx,
-                        num_targets=task.total_shards,
+                        target_shard=task.reduce_target.target,
+                        num_targets=task.num_reduce_targets,
+                        slice_index=task.reduce_target.slice_index,
+                        slice_count=task.reduce_target.slice_count,
                         attempt=0,
                         input_rows=None,
                         payload_bytes=None,
@@ -1456,6 +1471,7 @@ class ZephyrCoordinator:
                         job_id=self._job_id,
                     )
                     for task in tasks
+                    if task.reduce_target is not None and task.num_reduce_targets is not None
                 ]
             )
         self._start_stage(run, stage_label, stage_index_for_state, tasks, is_last_stage=is_last_stage)
@@ -1469,8 +1485,30 @@ class ZephyrCoordinator:
         result_refs = self._collect_results(run)
 
         if any(isinstance(op, Scatter) for op in stage.operations):
-            return _regroup_scatter_refs(result_refs, len(shards), stage.output_shards)
-        return _regroup_map_refs(result_refs, len(shards))
+            num_targets = stage.output_shards if stage.output_shards is not None else len(shards)
+            scatter_paths = [path for result in result_refs.values() for path in result.shard]
+            eligible = next_stage is not None and any(isinstance(op, Reduce) for op in next_stage.operations)
+            eligible = eligible and not any(isinstance(op, Join) for op in next_stage.operations)
+            target_bytes = target_bytes_from_sidecars(scatter_paths, num_targets) if eligible else [0] * num_targets
+            next_reduce_targets = plan_reduce_targets(target_bytes, reducer_balance if eligible else None)
+            extra_tasks = len(next_reduce_targets) - num_targets
+            if extra_tasks:
+                median = statistics.median(size for size in target_bytes if size > 0)
+                for target in next_reduce_targets:
+                    if target.slice_index == 0 and target.slice_count > 1:
+                        logger.info(
+                            "[%s] Splitting reduce target %d: bytes=%d median=%.0f slices=%d",
+                            run.execution_id,
+                            target.target,
+                            target_bytes[target.target],
+                            median,
+                            target.slice_count,
+                        )
+                run.completed_totals[(stage_label, "zephyr/reducer_splits", Aggregation.SUM)] = CounterEntry(
+                    extra_tasks, Aggregation.SUM, stage_label, 1
+                )
+            return _regroup_scatter_refs(result_refs, next_reduce_targets), next_reduce_targets
+        return _regroup_map_refs(result_refs, len(shards)), None
 
     def _compute_join_aux(
         self,
@@ -1487,20 +1525,28 @@ class ZephyrCoordinator:
                 continue
 
             right_refs = _build_source_shards(op.right_plan.source_items)
+            right_reduce_targets: list[ReduceTarget] | None = None
             prefix = join_right_prefix(stage_node_id(ROOT_PLAN_PREFIX, parent_stage_idx), i)
 
             for stage_idx, right_stage in enumerate(op.right_plan.stages):
                 with self._track_plan_node(run, stage_node_id(prefix, stage_idx)):
                     if right_stage.stage_type == StageType.RESHARD:
                         right_refs = _reshard_refs(right_refs, right_stage.output_shards or len(right_refs))
+                        right_reduce_targets = None
                         continue
 
-                    right_refs = self._run_worker_stage(
+                    next_stage = (
+                        op.right_plan.stages[stage_idx + 1] if stage_idx + 1 < len(op.right_plan.stages) else None
+                    )
+                    right_refs, right_reduce_targets = self._run_worker_stage(
                         run,
                         right_stage,
                         right_refs,
                         stage_label=f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}",
                         stage_index_for_state=parent_stage_idx,
+                        reduce_targets=right_reduce_targets,
+                        next_stage=next_stage,
+                        reducer_balance=None,
                     )
 
             if len(shard_refs) != len(right_refs):
@@ -1599,27 +1645,19 @@ class ZephyrCoordinator:
 
 def _regroup_scatter_refs(
     result_refs: dict[int, TaskResult],
-    input_shard_count: int,
-    output_shard_count: int | None,
+    reduce_targets: list[ReduceTarget],
 ) -> list[ListShard]:
     """Fan a scatter stage's outputs out to its reducers without loading data.
-
-    Scatter routes records into exactly ``output_shard_count`` buckets via
-    ``hash(key) % output_shard_count``; spawning more reduce tasks than that
-    produces empty output files for shard indices that no record hashes to.
-    When ``output_shard_count`` is None (group_by auto-detect), inherit the
-    input shard count.
 
     Every reducer receives the full list of scatter data-file paths and reads
     the per-mapper ``metadata.msgpack`` sidecars in parallel to build its own
     ``ScatterReader`` — the coordinator never consolidates a manifest.
     """
-    num_output = output_shard_count if output_shard_count is not None else input_shard_count
     all_paths: list[str] = []
     for result in result_refs.values():
         all_paths.extend(result.shard)
     shared_refs = MemChunk(items=all_paths)
-    return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
+    return [ListShard(refs=[shared_refs]) for _ in reduce_targets]
 
 
 def _regroup_map_refs(result_refs: dict[int, TaskResult], input_shard_count: int) -> list[ListShard]:
@@ -1715,9 +1753,15 @@ def _compute_tasks_from_shards(
     stage_name: str,
     aux_per_shard: list[dict[int, ListShard]] | None,
     cost: ZephyrTaskResources,
+    reduce_targets: list[ReduceTarget] | None = None,
 ) -> list[ShardTask]:
     """Convert shard references into ShardTasks for the coordinator."""
     total = len(shard_refs)
+    if reduce_targets is not None and len(reduce_targets) != total:
+        raise ValueError("reduce target count must match input shard count")
+    num_reduce_targets = (
+        max((target.target for target in reduce_targets), default=-1) + 1 if reduce_targets is not None else None
+    )
     tasks = []
 
     for i, shard in enumerate(shard_refs):
@@ -1734,6 +1778,8 @@ def _compute_tasks_from_shards(
                 stage_name=stage_name,
                 aux_shards=aux_shards,
                 cost=cost,
+                reduce_target=reduce_targets[i] if reduce_targets is not None else None,
+                num_reduce_targets=num_reduce_targets if reduce_targets is not None else None,
             )
         )
 

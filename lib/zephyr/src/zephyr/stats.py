@@ -181,6 +181,8 @@ class ZephyrShuffleStat:
     stage_name: str
     target_shard: int
     num_targets: int
+    slice_index: int | None
+    slice_count: int | None
     attempt: int
     input_rows: int | None
     payload_bytes: int | None

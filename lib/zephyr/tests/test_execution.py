@@ -37,6 +37,7 @@ from zephyr.coordinator import (
 )
 from zephyr.dataset import Dataset
 from zephyr.plan import compute_plan
+from zephyr.reducer_balance import ReduceTarget
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import (
     PickleDiskChunk,
@@ -933,6 +934,30 @@ def test_report_error_requeues_until_max_shard_failures(coordinator):
     assert run.fatal_error is not None
     assert "Shard 0" in run.fatal_error
     assert "final-error" in run.fatal_error
+
+
+def test_retry_preserves_reduce_target_slice(coordinator):
+    reduce_target = ReduceTarget(target=7, slice_index=2, slice_count=4)
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="reduce",
+        cost=TEST_TASK_COST,
+        reduce_target=reduce_target,
+        num_reduce_targets=8,
+    )
+    start_test_stage(coordinator, [task])
+    coordinator.register_worker("worker-0", MagicMock())
+
+    _, first = coordinator.pull_task("worker-0", TEST_WORKER_AVAILABLE)
+    assert first is not None
+    coordinator.report_error("worker-0", TEST_EXECUTION_ID, 0, first.attempt, "retry", 1)
+    _, retry = coordinator.pull_task("worker-0", TEST_WORKER_AVAILABLE)
+
+    assert retry is not None
+    assert retry.task.reduce_target == reduce_target
 
 
 def test_heartbeat_timeouts_do_not_count_toward_shard_failures(coordinator):
