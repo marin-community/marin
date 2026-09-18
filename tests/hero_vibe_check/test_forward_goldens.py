@@ -2,8 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
+import pytest
 
-from experiments.grug.moe_hero_ep.ops.forward_goldens import GoldenRequest, build_inputs, golden_spec
+from experiments.grug.moe_hero_ep.ops.forward_goldens import (
+    GoldenRequest,
+    _validate_authoritative_weights,
+    build_inputs,
+    golden_spec,
+)
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import Checkpoint
 
 
@@ -63,3 +69,14 @@ def test_smoke_input_bank_keeps_full_hero_batch_with_short_sequences() -> None:
     assert arrays["tokens"].shape == (32, 64)
     assert len(cases) == 32
     assert arrays["token_validity"].all()
+
+
+def test_authoritative_checkpoint_weights_require_fp32_params_or_master_tree() -> None:
+    model = {"weight": np.ones((2,), dtype=np.float32)}
+
+    assert _validate_authoritative_weights(model, "params") == ("float32",)
+    assert _validate_authoritative_weights(model, "master_params") == ("float32",)
+    with pytest.raises(ValueError, match="must be FP32"):
+        _validate_authoritative_weights({"weight": np.ones((2,), dtype=np.float16)}, "params")
+    with pytest.raises(ValueError, match="Unsupported checkpoint weight tree"):
+        _validate_authoritative_weights(model, "weights")

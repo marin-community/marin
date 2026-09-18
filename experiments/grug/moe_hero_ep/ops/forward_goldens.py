@@ -80,6 +80,7 @@ TOKENIZER = "marin-community/marin-tokenizer"
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 NATIVE_OUTPUT_BOUND = 1e-4
 GOLDEN_MODES = ("smoke", "required")
+AUTHORITATIVE_WEIGHT_KEYS = ("master_params", "params")
 
 
 class GoldenCaseSpec(Record):
@@ -402,6 +403,15 @@ def _runtime_versions() -> dict[str, str]:
     return {package: importlib.metadata.version(package) for package in packages}
 
 
+def _validate_authoritative_weights(model, weights_key: str) -> tuple[str, ...]:
+    if weights_key not in AUTHORITATIVE_WEIGHT_KEYS:
+        raise ValueError(f"Unsupported checkpoint weight tree: {weights_key}")
+    dtypes = tuple(sorted({str(leaf.dtype) for leaf in jax.tree.leaves(model) if eqx.is_inexact_array(leaf)}))
+    if dtypes != ("float32",):
+        raise ValueError(f"Authoritative checkpoint weights must be FP32, found {dtypes}")
+    return dtypes
+
+
 def _upload_bundle(local: Path, remote_root: str) -> None:
     root = StoragePath(remote_root)
     manifest_target = conditional_object(str(root / MANIFEST_FILENAME))
@@ -430,10 +440,7 @@ def produce(request: GoldenRequest, store_root: str) -> None:
     with jax.set_mesh(mesh):
         with log_time("Checkpoint restore"):
             restored = restore_model_state(request, mesh)
-        if restored.weights_key != "master_params":
-            raise ValueError(
-                f"Selected Hero checkpoint did not restore authoritative master weights: {restored.weights_key}"
-            )
+        weight_dtypes = _validate_authoritative_weights(restored.model, restored.weights_key)
         pending_qb_betas = np.asarray(jax.sharding.reshard(restored.pending_qb_betas, P()))
         with log_time("BF16 weight conversion"):
             model = COMPUTE_POLICY.cast_to_compute(restored.model)
@@ -509,8 +516,13 @@ def produce(request: GoldenRequest, store_root: str) -> None:
             "writer_run_version": "2026.08.19.2",
             "retention": "permanent checkpoint metadata has is_temporary=false",
             "restored_weights": restored.weights_key,
+            "restored_weight_dtypes": list(weight_dtypes),
+            "master_parameter_layout": (
+                "Hero used MasterParamMode.DEVICE: the authoritative FP32 master copy is stored directly under "
+                "params; this checkpoint has no separate master_params tree"
+            ),
             "checkpoint_wrapped": restored.wrapped,
-            "weight_conversion": "authoritative FP32 master parameters cast once to BF16 compute parameters",
+            "weight_conversion": "authoritative FP32 params cast once to BF16 compute parameters",
             "pending_query_bias": "pending_qb_betas applied once with the native restore rule, then held fixed",
             "training_model": request.spec.training_model,
             "training_model_digest": CHECKPOINT_WRITER_MODEL_DIGEST,

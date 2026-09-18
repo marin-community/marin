@@ -86,9 +86,11 @@ it never excuses the mismatch. The expert parameters remain in the checkpoint.
 
 ## Reproduce a reviewed baseline
 
-The producer restores authoritative FP32 master parameters, applies the checkpoint's pending query-bias values
-once with the native restore rule, casts to BF16 compute parameters, and then freezes that effective bias. Its
-only intentional model override is the existing `sonic_cute` dropless MoE implementation.
+Hero trained with `MasterParamMode.DEVICE`. This checkpoint therefore stores its authoritative FP32 master copy
+directly under `params`; it has no separate `master_params` tree. The producer validates that layout and dtype,
+applies the checkpoint's pending query-bias values once with the native restore rule, casts the result to BF16,
+and then freezes that effective bias. Its only intentional model override is the existing `sonic_cute` dropless
+MoE implementation.
 
 The 8,192- and 16,384-token diagnostics are deliberately skipped. The checkpoint-writing configuration fixes
 `max_seq_len=4096`; either run would require changing model semantics rather than exercising this fixed model.
