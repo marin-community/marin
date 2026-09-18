@@ -21,7 +21,7 @@ export function loadConversations(): Conversation[] {
       ...conversation,
       pythonTools: conversation.pythonTools ?? '',
       shellWorkspace: conversation.shellWorkspace
-        ? { repositoryUrl: '', ...conversation.shellWorkspace }
+        ? { repositoryUrl: '', commits: [], ...conversation.shellWorkspace }
         : null,
       thinkingMode: conversation.thinkingMode ?? ThinkingMode.TemplateDefault,
       customInstructions: conversation.customInstructions ?? '',
