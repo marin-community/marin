@@ -28,6 +28,7 @@ import numpy as np
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
 from iris.rpc.proto_display import priority_band_value
+from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.distributed import DistributedConfig
@@ -488,6 +489,9 @@ def produce(request: GoldenRequest, store_root: str) -> None:
             jax.block_until_ready(traced)
 
     if jax.process_index() != 0:
+        # Keep every rank alive while process zero materializes, validates, compresses, and uploads
+        # the replicated route trace. Otherwise early clean-exit shutdown can abort the coordinator.
+        multihost_utils.sync_global_devices("hero-forward-bundle-written")
         return
     first_host = jax.tree.map(np.asarray, first)
     second_host = jax.tree.map(np.asarray, second)
@@ -629,6 +633,7 @@ def produce(request: GoldenRequest, store_root: str) -> None:
         with log_time("CW object-storage upload"):
             _upload_bundle(local, remote_root)
     logger.info("Golden bundle completed in %.1f seconds: %s", timer.elapsed_seconds(), remote_root)
+    multihost_utils.sync_global_devices("hero-forward-bundle-written")
 
 
 def submit(mode: str, store_root: str) -> None:
