@@ -240,6 +240,7 @@ def test_holistic_review_rejects_inconsistent_status() -> None:
         HolisticReview.model_validate(review)
 
     review.update(blockers=[], confidence="low")
+    # Low evidence confidence is advisory; structural score and blockers determine readiness.
     HolisticReview.model_validate(review)
 
     review.update(
