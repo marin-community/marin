@@ -1,4 +1,4 @@
-catalog_version: wave5-1
+catalog_version: wave6-1
 curricula:
 - routing_facet: subject_domain
   curriculum:
@@ -7,6 +7,7 @@ curricula:
     subject_name: Shell & Systems Administration
     sections:
     - id: c03.reliable-shell-automation
+      kind: capability
       parent_id: null
       name: Build reliable shell data automations
       outcome: Turn a file or text operation into a rerunnable shell workflow that
@@ -32,6 +33,7 @@ curricula:
           input was malformed.
         kind: representative
     - id: c03.shell-data-semantics
+      kind: capability
       parent_id: c03.reliable-shell-automation
       name: Preserve values through shell evaluation
       outcome: Predict and control how shell variables, quoting, expansion, splitting,
@@ -58,6 +60,7 @@ curricula:
           exactly.
         kind: representative
     - id: c03.file-record-transforms
+      kind: capability
       parent_id: c03.reliable-shell-automation
       name: Transform files and records safely
       outcome: Select, rename, filter, join, sort, or aggregate files and records
@@ -83,6 +86,7 @@ curricula:
           and rejecting malformed records instead of silently miscounting them.
         kind: representative
     - id: c03.shell-execution-control
+      kind: capability
       parent_id: c03.reliable-shell-automation
       name: Control shell job execution
       outcome: Structure a repeated shell job so sequencing, exit status, retries,
@@ -109,6 +113,7 @@ curricula:
           the last verified snapshot.
         kind: representative
     - id: c03.runtime-provisioning
+      kind: capability
       parent_id: null
       name: Provision a reproducible host runtime
       outcome: Prepare a host command or service to run predictably by selecting the
@@ -135,6 +140,7 @@ curricula:
           to observe each change.
         kind: representative
     - id: c03.package-lifecycle
+      kind: capability
       parent_id: c03.runtime-provisioning
       name: Select and maintain packaged software
       outcome: Resolve a requested capability to the correct package and perform or
@@ -159,6 +165,7 @@ curricula:
           and retain the current version if the preview violates the stated constraint.
         kind: representative
     - id: c03.process-environment
+      kind: capability
       parent_id: c03.runtime-provisioning
       name: Scope process environments and locales
       outcome: Configure environment variables, search paths, and locale behavior
@@ -183,6 +190,7 @@ curricula:
           and verify the executable selected after starting a new service process.
         kind: representative
     - id: c03.system-time
+      kind: capability
       parent_id: c03.runtime-provisioning
       name: Configure system time and timezone
       outcome: Set and verify the host timezone, clock, and synchronization source
@@ -208,6 +216,7 @@ curricula:
           changing the display zone.
         kind: representative
     - id: c03.service-incident-control
+      kind: capability
       parent_id: null
       name: Diagnose and control service incidents
       outcome: Restore a failing or degraded service by correlating process lifecycle
@@ -235,6 +244,7 @@ curricula:
           and define client checks plus a rollback trigger.
         kind: representative
     - id: c03.process-lifecycle-resources
+      kind: capability
       parent_id: c03.service-incident-control
       name: Control processes and diagnose resource use
       outcome: Start, wait for, signal, and terminate related processes without races
@@ -259,6 +269,7 @@ curricula:
           sequence that leaves no workers behind.
         kind: representative
     - id: c03.operational-streams-logs
+      kind: capability
       parent_id: c03.service-incident-control
       name: Trace process streams and logs
       outcome: Determine where operational messages went and reconstruct the defensible
@@ -285,6 +296,7 @@ curricula:
           the earliest causal error rather than later shutdown symptoms.
         kind: representative
     - id: c03.persistent-service-operation
+      kind: capability
       parent_id: c03.service-incident-control
       name: Configure and operate persistent services
       outcome: Translate a service topology into valid manager and daemon configuration,
@@ -308,6 +320,7 @@ curricula:
           and using an explicit rollback point if client requests fail.
         kind: representative
     - id: c03.host-access-policy
+      kind: capability
       parent_id: null
       name: Implement least-privilege host access
       outcome: Translate an access policy into accounts, group and file permissions,
@@ -334,6 +347,7 @@ curricula:
           argument restrictions, and revocation.
         kind: representative
     - id: c03.identity-file-permissions
+      kind: capability
       parent_id: c03.host-access-policy
       name: Administer identities and file permissions
       outcome: Create and retire users and groups and configure ownership, mode bits,
@@ -358,6 +372,7 @@ curricula:
           path.
         kind: representative
     - id: c03.authentication-privilege
+      kind: capability
       parent_id: c03.host-access-policy
       name: Constrain authentication and privileged actions
       outcome: Configure authentication and privilege delegation so a named identity
@@ -383,6 +398,7 @@ curricula:
           administrators.
         kind: representative
     - id: c03.network-connectivity
+      kind: capability
       parent_id: null
       name: Establish and verify host connectivity
       outcome: Make a named remote endpoint reachable by coordinating route and source-address
@@ -408,6 +424,7 @@ curricula:
           policy without breaking failover.
         kind: representative
     - id: c03.route-selection
+      kind: capability
       parent_id: c03.network-connectivity
       name: Select and verify network paths
       outcome: Predict and configure the interface, gateway, and source address used
@@ -431,6 +448,7 @@ curricula:
           for both directions and correct the return-path selection.
         kind: representative
     - id: c03.name-endpoint-diagnosis
+      kind: capability
       parent_id: c03.network-connectivity
       name: Diagnose names and transport endpoints
       outcome: Determine whether a connectivity failure arises in name resolution,
@@ -456,6 +474,7 @@ curricula:
           boundary without changing routes.
         kind: representative
     - id: c03.storage-recoverability
+      kind: capability
       parent_id: null
       name: Maintain recoverable storage
       outcome: Change or recover storage without losing service data by coordinating
@@ -482,6 +501,7 @@ curricula:
           reversal.'
         kind: representative
     - id: c03.filesystem-capacity
+      kind: capability
       parent_id: c03.storage-recoverability
       name: Operate filesystems and capacity
       outcome: Inspect, mount, extend, and repair storage while accounting for device
@@ -506,6 +526,7 @@ curricula:
           behavior after an unmount and mount cycle.
         kind: representative
     - id: c03.backup-restoration
+      kind: capability
       parent_id: c03.storage-recoverability
       name: Create and prove recoverable backups
       outcome: Choose and execute backup, snapshot, retention, and restore procedures
@@ -536,6 +557,7 @@ curricula:
     subject_name: Mathematics & Formal Reasoning
     sections:
     - id: arithmetic-algebra
+      kind: capability
       parent_id: null
       name: Exact and discrete algebraic reasoning
       outcome: Evaluate exact expressions, transform and solve algebraic relations,
@@ -560,6 +582,7 @@ curricula:
           the arithmetic progressions symbolically, then evaluate it for N = 500.
         kind: representative
     - id: arithmetic-algebra.exact-computation
+      kind: capability
       parent_id: arithmetic-algebra
       name: Exact expression evaluation
       outcome: Evaluate multi-step numerical expressions exactly by applying operation
@@ -579,6 +602,7 @@ curricula:
           any denominator.
         kind: representative
     - id: arithmetic-algebra.equations-identities
+      kind: capability
       parent_id: arithmetic-algebra
       name: Algebraic equivalence and equation solving
       outcome: Transform algebraic expressions into equivalent forms and solve equations
@@ -598,6 +622,7 @@ curricula:
           to solve x^4 - 5x^2 + 4 = 0.
         kind: representative
     - id: arithmetic-algebra.recurrences
+      kind: capability
       parent_id: arithmetic-algebra
       name: Recurrence and sequence derivation
       outcome: Derive explicit terms, closed forms, or generating relations for sequences
@@ -618,6 +643,7 @@ curricula:
           and b_1 = 4, and check the first four terms.
         kind: representative
     - id: arithmetic-algebra.integer-enumeration
+      kind: capability
       parent_id: arithmetic-algebra
       name: Integer and divisibility enumeration
       outcome: Count or identify integers satisfying prime, divisor, congruence, or
@@ -640,6 +666,7 @@ curricula:
           = 1, using the prime factors of 60 rather than listing all candidates.
         kind: representative
     - id: arithmetic-algebra.combinatorial-enumeration
+      kind: capability
       parent_id: arithmetic-algebra
       name: Finite combinatorial enumeration
       outcome: Count finite configurations by decomposing cases and applying bijections,
@@ -662,6 +689,7 @@ curricula:
           no two 1s adjacent, giving a combinatorial justification.
         kind: representative
     - id: analysis-proof
+      kind: capability
       parent_id: null
       name: Mathematical analysis and proof construction
       outcome: Prove or derive exact properties of real functions, geometric configurations,
@@ -686,6 +714,7 @@ curricula:
           a geometric distance inequality with a tree exchange argument.
         kind: representative
     - id: analysis-proof.convergence-bounds
+      kind: capability
       parent_id: analysis-proof
       name: Convergence, inequalities, and asymptotic bounds
       outcome: Establish convergence, divergence, inequalities, or growth bounds for
@@ -705,6 +734,7 @@ curricula:
           at an arbitrary real number a, making the delta choice explicit.
         kind: representative
     - id: analysis-proof.differential-integral
+      kind: capability
       parent_id: analysis-proof
       name: Differential and integral analysis
       outcome: Use derivatives, integrals, or the fundamental theorem of calculus
@@ -726,6 +756,7 @@ curricula:
           integration by parts, and verify the antiderivative by differentiation.
         kind: representative
     - id: analysis-proof.geometric-deduction
+      kind: capability
       parent_id: analysis-proof
       name: Geometric relation and locus deduction
       outcome: Derive exact lengths, angles, areas, incidences, or loci from geometric
@@ -747,6 +778,7 @@ curricula:
           and are tangent to y = x^2 at a second point, deriving the tangency conditions.
         kind: representative
     - id: analysis-proof.structural-proof
+      kind: capability
       parent_id: analysis-proof
       name: Structural and abstract proof
       outcome: Use definitions, invariants, and structure-preserving maps to prove
@@ -766,6 +798,7 @@ curricula:
           least two leaves without appealing to a drawing.
         kind: representative
     - id: probability-statistics
+      kind: capability
       parent_id: null
       name: Probability modeling and statistical inference
       outcome: Construct and analyze probability models with known or unknown parameters,
@@ -792,6 +825,7 @@ curricula:
           next time interval of length s.
         kind: representative
     - id: probability-statistics.probabilistic-modeling
+      kind: capability
       parent_id: probability-statistics
       name: Known-parameter probabilistic modeling
       outcome: Construct and analyze a probability model with specified parameters
@@ -813,6 +847,7 @@ curricula:
           number of heads.
         kind: representative
     - id: probability-statistics.statistical-inference
+      kind: capability
       parent_id: probability-statistics
       name: Inference under an explicit sampling model
       outcome: Derive and compare estimators, tests, and uncertainty procedures when
@@ -834,6 +869,7 @@ curricula:
           distribution.
         kind: representative
     - id: optimization-operations
+      kind: capability
       parent_id: null
       name: Optimization modeling and solution
       outcome: Formulate decision problems as variables, objectives, and constraints
@@ -860,6 +896,7 @@ curricula:
           certifying optimality.
         kind: representative
     - id: optimization-operations.model-formulation
+      kind: capability
       parent_id: optimization-operations
       name: Optimization model formulation
       outcome: Represent a decision problem with explicit variables, objective, constraints,
@@ -881,6 +918,7 @@ curricula:
           solving an instance.
         kind: representative
     - id: optimization-operations.solution-certification
+      kind: capability
       parent_id: optimization-operations
       name: Solution of specified optimization models
       outcome: Find candidate optima for an explicitly specified objective and feasible
@@ -904,6 +942,7 @@ curricula:
           argument.
         kind: representative
     - id: numerical-methods
+      kind: capability
       parent_id: null
       name: Numerical approximation and systems
       outcome: Approximate scalar quantities or solve coupled algebraic and differential
@@ -929,6 +968,7 @@ curricula:
           time-discretization error.
         kind: representative
     - id: numerical-methods.approximation-error
+      kind: capability
       parent_id: numerical-methods
       name: Scalar approximation and error control
       outcome: Approximate scalar quantities, roots, derivatives, or integrals while
@@ -948,6 +988,7 @@ curricula:
           Simpson's rule and derive an error bound from the fourth derivative.
         kind: representative
     - id: numerical-methods.iterative-systems
+      kind: capability
       parent_id: numerical-methods
       name: Iterative solution and stability of systems
       outcome: Solve coupled linear, nonlinear, or differential systems numerically
@@ -968,6 +1009,7 @@ curricula:
           scheme and derive the time-step condition required for stability.
         kind: representative
     - id: logic-verification
+      kind: capability
       parent_id: null
       name: Formal logic and system verification
       outcome: Translate declarative claims or operational behavior into formal logic
@@ -1000,6 +1042,7 @@ curricula:
           for every execution.'
         kind: representative
     - id: logic-verification.logical-deduction
+      kind: capability
       parent_id: logic-verification
       name: Formal logical deduction
       outcome: Translate declarative statements into a logical language and determine
@@ -1020,6 +1063,7 @@ curricula:
           construct a natural-deduction proof of exists x Q(x).
         kind: representative
     - id: logic-verification.system-verification
+      kind: capability
       parent_id: logic-verification
       name: Invariant and contract verification
       outcome: Formulate behavioral properties of programs or transition systems and
@@ -1050,6 +1094,7 @@ curricula:
     subject_name: Office Productivity & Documents
     sections:
     - id: c21.spreadsheets
+      kind: capability
       parent_id: null
       name: Build decision-ready spreadsheet models
       outcome: Given operational data and a decision need, design or revise a spreadsheet
@@ -1075,6 +1120,7 @@ curricula:
           and see warnings for duplicate shifts or totals that do not reconcile.
         kind: representative
     - id: c21.spreadsheets.structure
+      kind: capability
       parent_id: c21.spreadsheets
       name: Structure data for spreadsheet models
       outcome: Arrange source data, assumptions, and output regions into consistent
@@ -1105,6 +1151,7 @@ curricula:
           added next.
         kind: representative
     - id: c21.spreadsheets.calculate
+      kind: capability
       parent_id: c21.spreadsheets
       name: Compute and check spreadsheet results
       outcome: Translate business rules into maintainable spreadsheet calculations,
@@ -1132,6 +1179,7 @@ curricula:
           assumptions.
         kind: representative
     - id: c21.records
+      kind: capability
       parent_id: null
       name: Capture and maintain usable office records
       outcome: Create and maintain records that collect the required facts consistently,
@@ -1159,6 +1207,7 @@ curricula:
           to require the metadata the cleanup found missing.
         kind: representative
     - id: c21.records.capture
+      kind: capability
       parent_id: c21.records
       name: Design reliable forms and intake flows
       outcome: Turn an information need into a concise form or intake sequence that
@@ -1186,6 +1235,7 @@ curricula:
           a final review step.
         kind: representative
     - id: c21.records.organize
+      kind: capability
       parent_id: c21.records
       name: Organize and retrieve controlled records
       outcome: Apply consistent classification, naming, status, version, and index
@@ -1212,6 +1262,7 @@ curricula:
           pending, or superseded.
         kind: representative
     - id: c21.documents
+      kind: capability
       parent_id: null
       name: Produce polished workplace documents
       outcome: Draft, revise, structure, and format workplace documents so their content
@@ -1237,6 +1288,7 @@ curricula:
           document with a concise contents aid.
         kind: representative
     - id: c21.documents.compose
+      kind: capability
       parent_id: c21.documents
       name: Draft and revise purpose-driven documents
       outcome: Transform requirements, notes, and source material into coherent document
@@ -1264,6 +1316,7 @@ curricula:
           the two escalation conditions.
         kind: representative
     - id: c21.documents.finalize
+      kind: capability
       parent_id: c21.documents
       name: Format and finalize readable documents
       outcome: Apply consistent styles, layout, navigation, and final-quality checks
@@ -1289,6 +1342,7 @@ curricula:
           a final visual and accessibility check.
         kind: representative
     - id: c21.presentations
+      kind: capability
       parent_id: null
       name: Develop audience-ready presentations
       outcome: Turn a communication goal and supporting material into a coherent presentation
@@ -1315,6 +1369,7 @@ curricula:
           the slides accessible for projection.
         kind: representative
     - id: c21.presentations.plan
+      kind: capability
       parent_id: c21.presentations
       name: Plan persuasive presentation narratives
       outcome: Define the audience, decision or learning goal, evidence, and slide-by-slide
@@ -1340,6 +1395,7 @@ curricula:
           correctly.
         kind: representative
     - id: c21.presentations.produce
+      kind: capability
       parent_id: c21.presentations
       name: Build and refine effective slides
       outcome: Convert an established presentation plan into consistent, legible slides
@@ -1367,6 +1423,7 @@ curricula:
           for two presenter handoffs.
         kind: representative
     - id: c21.coordination
+      kind: capability
       parent_id: null
       name: Coordinate correspondence and time commitments
       outcome: Maintain clear workplace communication and feasible schedules by extracting
@@ -1396,6 +1453,7 @@ curricula:
           event.
         kind: representative
     - id: c21.coordination.correspondence
+      kind: capability
       parent_id: c21.coordination
       name: Compose and manage actionable correspondence
       outcome: Read communication context and produce concise messages that preserve
@@ -1422,6 +1480,7 @@ curricula:
           action with owner and deadline, and draft the two highest-priority responses.
         kind: representative
     - id: c21.coordination.scheduling
+      kind: capability
       parent_id: c21.coordination
       name: Maintain calendars under evolving constraints
       outcome: Create, revise, cancel, and restore calendar state across successive
@@ -1460,6 +1519,7 @@ curricula:
     subject_name: Software Engineering
     sections:
     - id: c01
+      kind: capability
       parent_id: null
       name: Software Engineering
       outcome: Produce correct, maintainable software changes from bounded function
@@ -1487,6 +1547,7 @@ curricula:
           declare and build the optional package extra, and integrate the change on
           a topic branch after resolving a conflicting upstream edit.'
     - id: c01.6
+      kind: capability
       parent_id: c01
       name: Standalone Function Synthesis
       outcome: Translate a self-contained behavioral contract into an executable function
@@ -1510,6 +1571,7 @@ curricula:
           for conflicting identifiers, aggregates numeric readings by normalized label,
           orders the groups deterministically, and returns a compact textual summary.
     - id: c01.6.1
+      kind: capability
       parent_id: c01.6
       name: Search and Predicate Functions
       outcome: Implement boolean functions that decide a stated property by examining
@@ -1532,6 +1594,7 @@ curricula:
           either a repeated token within a configurable window or a forbidden adjacent
           pair, handling empty streams and exact window boundaries.
     - id: c01.6.2
+      kind: capability
       parent_id: c01.6
       name: Collection Transformation and Aggregation
       outcome: Implement functions that select, transform, group, aggregate, or order
@@ -1555,6 +1618,7 @@ curricula:
           and returns records ordered by descending total with a deterministic tie
           break.
     - id: c01.6.3
+      kind: capability
       parent_id: c01.6
       name: Constructive String Functions
       outcome: Implement functions that inspect string structure and construct the
@@ -1577,6 +1641,7 @@ curricula:
           valid representation under the supplied escaping rules and correctly handles
           digits, escape characters, and single-character runs.
     - id: c01.1
+      kind: capability
       parent_id: c01
       name: Repository Investigation and Behavioral Evidence
       outcome: Trace observable behavior through an unfamiliar repository and establish
@@ -1600,6 +1665,7 @@ curricula:
           then create a focused test at the responsible boundary and a command-level
           test that exposes the manifest defect.
     - id: c01.1.1
+      kind: capability
       parent_id: c01.1
       name: Behavior Tracing and Fault Localization
       outcome: Follow a public symptom through entry points, dispatch, state transitions,
@@ -1622,6 +1688,7 @@ curricula:
           dispatch, callbacks, and persistence, and identify the smallest boundary
           at which execution diverges from the documented contract.
     - id: c01.1.2
+      kind: capability
       parent_id: c01.1
       name: Behavioral Test Authoring
       outcome: Write focused and integrated tests that distinguish compliant behavior
@@ -1644,6 +1711,7 @@ curricula:
           to write a focused test for its state transition and a public command test
           for the resulting output file and persisted state.
     - id: c01.1.2.1
+      kind: capability
       parent_id: c01.1.2
       name: Focused Regression Tests
       outcome: Create small deterministic tests that isolate one semantic rule or
@@ -1666,6 +1734,7 @@ curricula:
           covering containment, partial overlap, touching endpoints, reversed input
           order, empty windows, and disjoint windows.
     - id: c01.1.2.2
+      kind: capability
       parent_id: c01.1.2
       name: Integrated Workflow Tests
       outcome: Test contracts that emerge across public APIs, callbacks, commands,
@@ -1688,6 +1757,7 @@ curricula:
           command, crosses configuration and persistence boundaries, and verifies
           returned data, emitted output, generated files, and final repository state.
     - id: c01.2.1.1
+      kind: capability
       parent_id: c01
       name: Boundary and Predicate Contract Repair
       outcome: Diagnose and correct a deterministic predicate or boundary convention
@@ -1714,6 +1784,7 @@ curricula:
           touching endpoints, empty windows, reversed operands, and disjoint windows,
           then repair the predicate without changing neighboring scheduling behavior.
     - id: c01.2.1.2
+      kind: capability
       parent_id: c01
       name: Identity and Mutable-State Contract Repair
       outcome: Restore intended object identity and mutation visibility across accessors,
@@ -1740,6 +1811,7 @@ curricula:
           contract so changes persist through command execution without leaking between
           independent contexts.
     - id: c01.2.1.3
+      kind: capability
       parent_id: c01
       name: Evaluation Context Repair
       outcome: Restore correct compilation and evaluation behavior while preserving
@@ -1766,6 +1838,7 @@ curricula:
           functions, and invalid statements, then restore expression evaluation without
           changing namespace precedence.
     - id: c01.2.1.4
+      kind: capability
       parent_id: c01
       name: Collection Ordering Contract Repair
       outcome: Restore one documented traversal order consistently across direct iteration
@@ -1791,6 +1864,7 @@ curricula:
           values, and items, and repair the shared ordering mechanism so every view
           remains consistent.
     - id: c01.2.4
+      kind: capability
       parent_id: c01
       name: Public API Contract Restoration
       outcome: Restore a removed or broken public parameter, return shape, or formatting
@@ -1816,6 +1890,7 @@ curricula:
           values plus a public formatting workflow, and restore both forms while leaving
           default output byte-for-byte unchanged.
     - id: c01.2.2
+      kind: capability
       parent_id: c01
       name: Input and Resolution Pipeline Repair
       outcome: Repair a staged input path so extraction, representation detection,
@@ -1841,6 +1916,7 @@ curricula:
           decoding, handler dispatch, and final object lookup, then repair the inconsistent
           stages so the public import resolves the intended resource.
     - id: c01.2.2.1
+      kind: capability
       parent_id: c01.2.2
       name: Structured Parsing Repair
       outcome: Correct tokenization or field extraction so structured text produces
@@ -1866,6 +1942,7 @@ curricula:
           titles, whitespace variants, and multiple definitions, and repair the parser
           without consuming unrelated text.
     - id: c01.2.2.2
+      kind: capability
       parent_id: c01.2.2
       name: Format Detection and Dispatch Repair
       outcome: Restore correct recognition and dispatch of supported inputs across
@@ -1891,6 +1968,7 @@ curricula:
           dispatch and end-to-end fixtures, and repair the path while retaining clear
           rejection of unsupported inputs.
     - id: c01.2.2.3
+      kind: capability
       parent_id: c01.2.2
       name: Encoding and Resolver Consistency
       outcome: Align identifier generation, decoding, type lookup, and object resolution
@@ -1916,6 +1994,7 @@ curricula:
           types and identifiers plus executable public queries, and repair the shared
           contract.
     - id: c01.2.3.1
+      kind: capability
       parent_id: c01
       name: Lifecycle Event Restoration
       outcome: Reconnect missing logs, signals, or callbacks to the correct processing
@@ -1941,6 +2020,7 @@ curricula:
           event order and multiplicity, and restore reporting without changing request
           handling.
     - id: c01.3.1.2
+      kind: capability
       parent_id: c01
       name: Heterogeneous Operation APIs
       outcome: Design and implement a public API that normalizes multiple selection
@@ -1966,6 +2046,7 @@ curricula:
           named outputs, string operations, and callables with deterministic naming
           and result shape.
     - id: c01.3.1.1
+      kind: capability
       parent_id: c01
       name: Declarative Code-Generation Extensions
       outcome: Add a bounded declarative attribute and propagate it through syntax
@@ -1992,6 +2073,7 @@ curricula:
           emitter, then implement it with focused expansion tests and a public generation
           test while preserving unannotated fields.
     - id: c01.3.2
+      kind: capability
       parent_id: c01
       name: Schema-Driven Serialization Features
       outcome: Extend a schema and its generated artifacts so field metadata selects
@@ -2015,6 +2097,7 @@ curricula:
           generated bindings and configuration loading, then add default, structured-text,
           and JSON forms that route nested values through the corresponding serializers.
     - id: c01.3.3
+      kind: capability
       parent_id: c01
       name: Asynchronous Coordination Protocols
       outcome: Implement asynchronous client adaptation and reusable lease-based ownership
@@ -2041,6 +2124,7 @@ curricula:
           ownership, handles contention and loss, invokes transition callbacks once,
           and relinquishes ownership during shutdown.
     - id: c01.3.3.1
+      kind: capability
       parent_id: c01.3.3
       name: Asynchronous Client Adaptation
       outcome: Adapt a stateful client operation to an awaitable interface without
@@ -2066,6 +2150,7 @@ curricula:
           exception, cancellation, and release paths into a nonblocking asynchronous
           interface with deterministic focused and public tests.
     - id: c01.3.3.2
+      kind: capability
       parent_id: c01.3.3
       name: Lease-Based Ownership Protocols
       outcome: Build a reusable asynchronous ownership state machine on a cancellable
@@ -2091,6 +2176,7 @@ curricula:
           leader component that handles contention, renewal, expiration, callback
           ordering, lease loss, and shutdown without retaining ownership after cancellation.
     - id: c01.3.4
+      kind: capability
       parent_id: c01
       name: Multi-Module System Synthesis
       outcome: Implement a cohesive small system whose modules have explicit dependency
@@ -2117,6 +2203,7 @@ curricula:
           collection transformations, and an orchestration module that applies permissions
           and returns reports through explicit one-way imports.
     - id: c01.4
+      kind: capability
       parent_id: c01
       name: Refactoring and Code Migration
       outcome: Change software structure or interfaces while preserving intended behavior
@@ -2143,6 +2230,7 @@ curricula:
           and generated artifact, remove the superseded path, and preserve the same
           public workflow.
     - id: c01.4.1
+      kind: capability
       parent_id: c01.4
       name: Structure-Preserving Refactoring
       outcome: Improve function, module, or dependency structure while preserving
@@ -2168,6 +2256,7 @@ curricula:
           into acyclic modules, remove duplicate implementations, and preserve results
           and side effects.
     - id: c01.4.2
+      kind: capability
       parent_id: c01.4
       name: Cross-Layer Interface Migration
       outcome: Migrate an intentional interface change consistently through declarations,
@@ -2193,6 +2282,7 @@ curricula:
           behavioral baselines, then replace it with a typed representation and remove
           the superseded path.
     - id: c01.5.1
+      kind: capability
       parent_id: c01
       name: Optional Dependency Boundaries
       outcome: Keep a package importable and accurately feature-gated when an optional
@@ -2218,6 +2308,7 @@ curricula:
           tests with and without the extra, and repair the boundary so absence fails
           only when the feature is used.
     - id: c01.5.2
+      kind: capability
       parent_id: c01
       name: Version-Control-Aware Application Behavior
       outcome: Make repository-manipulating application commands create, modify, and
@@ -2244,6 +2335,7 @@ curricula:
           tests, and ensure enabled and disabled modes preserve unrelated staged entries
           across new, modified, and repeated runs.
     - id: c01.7
+      kind: capability
       parent_id: c01
       name: Build, Packaging, and Dependency Management
       outcome: Produce reproducible installable artifacts whose build metadata, dependency
@@ -2267,6 +2359,7 @@ curricula:
           resolved lock, build its wheel and source archive, and confirm the artifacts
           expose the same metadata and installable contents.'
     - id: c01.7.1
+      kind: capability
       parent_id: c01.7
       name: Build and Release Artifacts
       outcome: Configure and inspect package builds so distributable artifacts contain
@@ -2289,6 +2382,7 @@ curricula:
           source archive contain the intended modules, templates, license metadata,
           and executable entry point, with no development-only files.
     - id: c01.7.2
+      kind: capability
       parent_id: c01.7
       name: Dependency Constraints and Lockfiles
       outcome: Express dependency requirements and produce a consistent resolved environment
@@ -2311,6 +2405,7 @@ curricula:
           a resolution conflict across two supported interpreter versions, regenerate
           the lock, and keep unrelated resolved packages unchanged.
     - id: c01.8
+      kind: capability
       parent_id: c01
       name: Version Control Operations
       outcome: Use branches, commits, merges, rebases, and history inspection to integrate
@@ -2342,6 +2437,7 @@ curricula:
     subject_name: Databases & Data Engineering
     sections:
     - id: c06.databases_data_engineering
+      kind: capability
       parent_id: null
       name: Databases and Data Engineering
       outcome: Design, build, query, evolve, and recover data systems that turn heterogeneous
@@ -2367,6 +2463,7 @@ curricula:
           analytical pipelines, maintains document and graph views, and meets stated
           migration, backup, partition, and consistency requirements.
     - id: c06.structured_data
+      kind: capability
       parent_id: c06.databases_data_engineering
       name: Schema-Governed Structured Data
       outcome: Interpret schemas, construct records from supplied or generated values,
@@ -2390,6 +2487,7 @@ curricula:
           reconcile repeated entities, and serialize the same dataset as JSON, YAML,
           XML, and flattened CSV.
     - id: c06.schema_governed_records
+      kind: capability
       parent_id: c06.structured_data
       name: Schema-Governed Record Construction
       outcome: Apply structural and scalar constraints while constructing valid records
@@ -2411,6 +2509,7 @@ curricula:
           audit every constraint, map all supported facts, and generate only the missing
           values the request explicitly authorizes.
     - id: c06.schema_constraints
+      kind: capability
       parent_id: c06.schema_governed_records
       name: Schema Constraint Interpretation
       outcome: Determine whether record shapes and values satisfy explicit structural,
@@ -2432,6 +2531,7 @@ curricula:
           type, enum, numeric-bound, pattern, date-time, array-cardinality, and nullability
           constraints, reporting every violation.
     - id: c06.grounded_record_mapping
+      kind: capability
       parent_id: c06.schema_governed_records
       name: Grounded Record Mapping
       outcome: Map explicitly supported facts from prose or simple tables into the
@@ -2454,6 +2554,7 @@ curricula:
           nested location, numeric, status, amenity, financing, and contact fields
           while retaining only supported facts and satisfying every constraint.
     - id: c06.schema_instance_generation
+      kind: capability
       parent_id: c06.schema_governed_records
       name: Schema-Constrained Instance Generation
       outcome: Create plausible, internally coherent records that satisfy a supplied
@@ -2476,6 +2577,7 @@ curricula:
           junction arrays, concurrency sections, enums, nullable values, numeric bounds,
           and no undeclared properties after validating every applicable schema rule.
     - id: c06.format_serialization
+      kind: capability
       parent_id: c06.structured_data
       name: Structured Format Serialization
       outcome: Serialize equivalent typed data accurately in hierarchical and tabular
@@ -2497,6 +2599,7 @@ curricula:
           then produce a parseable CSV projection of that same dataset using a stated
           flattening policy.
     - id: c06.json_serialization
+      kind: capability
       parent_id: c06.format_serialization
       name: JSON Serialization
       outcome: Represent nested typed records as syntactically correct JSON without
@@ -2516,6 +2619,7 @@ curricula:
           endpoint objects, junction arrays, escaped text, booleans, numbers, and
           null values without adding undeclared fields.
     - id: c06.yaml_serialization
+      kind: capability
       parent_id: c06.format_serialization
       name: YAML Serialization
       outcome: Represent nested typed records as unambiguous, parseable YAML with
@@ -2537,6 +2641,7 @@ curricula:
           text, date-like strings, ambiguous boolean-like strings, arrays of objects,
           nulls, and punctuation while preserving every intended scalar type.
     - id: c06.xml_serialization
+      kind: capability
       parent_id: c06.format_serialization
       name: XML Serialization
       outcome: Represent nested records and repeated entities as one well-formed XML
@@ -2557,6 +2662,7 @@ curricula:
           records, nested metrics, repeated components, assessments, attributes requested
           by the structure, and correctly escaped text.
     - id: c06.csv_reshaping
+      kind: capability
       parent_id: c06.format_serialization
       name: CSV Flattening and Escaping
       outcome: Convert structured records into parseable CSV using an explicit, consistent
@@ -2578,6 +2684,7 @@ curricula:
           punctuation-rich text, a multiline field, and repeated footnotes into parseable
           CSV with stable columns and a documented cell convention.
     - id: c06.complex_document_integration
+      kind: capability
       parent_id: c06.structured_data
       name: Complex Document Integration
       outcome: Reconcile related facts from multiple prose sections and heterogeneous
@@ -2600,6 +2707,7 @@ curricula:
           rankings, standings, recruiting, and schedule tables into one nested dataset
           with consistent team identities and correctly typed values.
     - id: c06.relational_databases
+      kind: capability
       parent_id: c06.databases_data_engineering
       name: Relational Databases
       outcome: Design, query, tune, modify, diagnose, migrate, and recover relational
@@ -2623,6 +2731,7 @@ curricula:
           constraint failure, implement safe concurrent changes, and plan a reversible
           schema deployment with verified backup restoration.
     - id: c06.sql_querying
+      kind: capability
       parent_id: c06.relational_databases
       name: SQL Querying
       outcome: Write SQL that filters, relates, summarizes, composes, ranks, and recursively
@@ -2647,6 +2756,7 @@ curricula:
           totals, filters through a CTE, and returns deterministic results with stated
           null and duplicate behavior.
     - id: c06.single_table_queries
+      kind: capability
       parent_id: c06.sql_querying
       name: Single-Table SQL Queries
       outcome: Retrieve and reshape rows from one table using precise projection,
@@ -2665,6 +2775,7 @@ curricula:
         instruction: Return the latest twenty eligible products with computed discounted
           prices, explicit null handling, deduplication, and deterministic ordering.
     - id: c06.join_queries
+      kind: capability
       parent_id: c06.sql_querying
       name: Relational Join Queries
       outcome: Combine related tables without unintended row loss, multiplication,
@@ -2685,6 +2796,7 @@ curricula:
           while retaining unmatched customers, preventing assignment fan-out, and
           returning exactly one correctly matched row per order.
     - id: c06.grouped_aggregation
+      kind: capability
       parent_id: c06.sql_querying
       name: Grouped SQL Aggregation
       outcome: Compute grouped summaries with correct null, duplicate, conditional,
@@ -2705,6 +2817,7 @@ curricula:
           counts, distinct-customer counts, conditional revenue, and average completed-order
           value, retaining only groups that meet a stated HAVING rule.
     - id: c06.query_composition
+      kind: capability
       parent_id: c06.sql_querying
       name: Compositional SQL and Set Operations
       outcome: Structure multistage relational logic with subqueries, nonrecursive
@@ -2726,6 +2839,7 @@ curricula:
           set operators, exclude blocked accounts through a correlated predicate,
           and organize the remaining business rules into named CTE stages.
     - id: c06.window_analytics
+      kind: capability
       parent_id: c06.sql_querying
       name: SQL Window Analytics
       outcome: Express row-relative analysis with partitioned ranking, navigation,
@@ -2746,6 +2860,7 @@ curricula:
           running revenue, prior-month change, a three-month moving average, and tied
           regional rank with explicit window frames.
     - id: c06.recursive_queries
+      kind: capability
       parent_id: c06.sql_querying
       name: Recursive Relational Queries
       outcome: Use recursive SQL to traverse hierarchical or graph-like relational
@@ -2767,6 +2882,7 @@ curricula:
           retain depth and path evidence, detect malformed cycles, stop at a stated
           bound, and return deterministic ancestor-to-descendant results.
     - id: c06.relational_schema_design
+      kind: capability
       parent_id: c06.relational_databases
       name: Relational Schema and Access Design
       outcome: Translate integrity and workload requirements into logical tables,
@@ -2788,6 +2904,7 @@ curricula:
           and constraints, choose a minimal index set, then inspect a supplied slow
           execution plan and revise the query or access paths without weakening integrity.
     - id: c06.logical_schema_design
+      kind: capability
       parent_id: c06.relational_schema_design
       name: Logical Schema and Database Constraints
       outcome: Model entities and relationships as normalized tables with suitable
@@ -2808,6 +2925,7 @@ curricula:
           supplier prices as normalized tables with cardinalities and database constraints
           that prevent invalid states.
     - id: c06.physical_index_design
+      kind: capability
       parent_id: c06.relational_schema_design
       name: Index and Access-Path Design
       outcome: Choose relational indexes from concrete query, write, selectivity,
@@ -2828,6 +2946,7 @@ curricula:
           rates, propose a minimal index set and explain the predicates, joins, orderings,
           and coverage each index serves.
     - id: c06.query_performance_diagnosis
+      kind: capability
       parent_id: c06.relational_schema_design
       name: Query Plan and Performance Diagnosis
       outcome: Interpret execution evidence to identify cardinality, access, join,
@@ -2850,6 +2969,7 @@ curricula:
           spill evidence, then propose and evaluate the smallest justified rewrite,
           statistics, or index change.
     - id: c06.reliable_data_changes
+      kind: capability
       parent_id: c06.relational_databases
       name: Reliable Relational Data Changes
       outcome: Apply multi-record changes atomically while preserving database invariants
@@ -2871,6 +2991,7 @@ curricula:
           whose atomic writes, request deduplication, concurrent interleavings, deadlock
           handling, and retries preserve stock and payment invariants.
     - id: c06.transactional_mutation
+      kind: capability
       parent_id: c06.reliable_data_changes
       name: Transactional Mutation
       outcome: Implement constraint-preserving multi-record mutations with atomic
@@ -2890,6 +3011,7 @@ curricula:
           durable request key, rollback on any invalid balance, and a result that
           distinguishes replay from a new transfer.
     - id: c06.concurrency_control
+      kind: capability
       parent_id: c06.reliable_data_changes
       name: Concurrency and Isolation
       outcome: Choose and implement concurrency controls that prevent specified anomalies
@@ -2914,6 +3036,7 @@ curricula:
           isolation, locking, versioning, and retry rules that preserve every stated
           invariant.
     - id: c06.database_operations
+      kind: capability
       parent_id: c06.relational_databases
       name: Database Connectivity and Incident Diagnosis
       outcome: Establish database connectivity, capture executed commands, and trace
@@ -2936,6 +3059,7 @@ curricula:
           context, and diagnose the observed unique-constraint failure using runtime
           schema, trigger, mapping, and concurrency evidence.
     - id: c06.connection_configuration
+      kind: capability
       parent_id: c06.database_operations
       name: Driver and Connection Configuration
       outcome: Construct and troubleshoot database connection settings for a selected
@@ -2959,6 +3083,7 @@ curricula:
           distinguish provider, DNS, routing, firewall, listener, encryption, and
           authentication failures.
     - id: c06.statement_observability
+      kind: capability
       parent_id: c06.database_operations
       name: Executed-Statement Observability
       outcome: Capture database command text, bound parameters, timing, transaction
@@ -2979,6 +3104,7 @@ curricula:
           with executed SQL, redacted parameters, transaction boundaries, durations,
           affected rows, and server errors across client and server evidence.
     - id: c06.integrity_failure_diagnosis
+      kind: capability
       parent_id: c06.database_operations
       name: Integrity Failure Diagnosis
       outcome: Explain an observed database constraint failure by tracing the executed
@@ -3003,6 +3129,7 @@ curricula:
           triggers, computed columns, identity mapping, transaction behavior, and
           concurrent changes.
     - id: c06.database_lifecycle
+      kind: capability
       parent_id: c06.relational_databases
       name: Database Change and Recovery Lifecycle
       outcome: Evolve database schemas safely and prove that database state can be
@@ -3024,6 +3151,7 @@ curricula:
           changes, resumable backfill, application cutover, pre-change backup, point-in-time
           restore drill, recovery objectives, and evidence for rollback or roll-forward.
     - id: c06.schema_migrations
+      kind: capability
       parent_id: c06.database_lifecycle
       name: Relational Schema Migrations
       outcome: Plan and execute compatible, observable schema and data migrations
@@ -3045,6 +3173,7 @@ curricula:
           schema changes, chunked resumable backfill, dual-compatible application
           releases, validation, cutover, and explicit rollback or roll-forward criteria.
     - id: c06.backup_restore_recovery
+      kind: capability
       parent_id: c06.database_lifecycle
       name: Backup, Restore, and Database Recovery
       outcome: Design and validate backup and restoration procedures that meet stated
@@ -3067,6 +3196,7 @@ curricula:
           readiness, and demonstrate that the measured recovery meets its RPO and
           RTO.
     - id: c06.data_pipelines
+      kind: capability
       parent_id: c06.databases_data_engineering
       name: ETL and Data Pipelines
       outcome: Build repeatable pipelines that ingest changing sources, standardize
@@ -3090,6 +3220,7 @@ curricula:
           gates, evolves a source contract compatibly, loads an analytical model idempotently,
           and monitors and recovers partial runs.
     - id: c06.data_ingestion
+      kind: capability
       parent_id: c06.data_pipelines
       name: Data Ingestion
       outcome: Acquire bounded and changing source data while preserving provenance,
@@ -3111,6 +3242,7 @@ curricula:
           detection, tombstones, atomic checkpoints, late-change handling, and safe
           replay.
     - id: c06.batch_ingestion
+      kind: capability
       parent_id: c06.data_ingestion
       name: Batch Ingestion
       outcome: Load bounded files or snapshots completely and repeatably while retaining
@@ -3132,6 +3264,7 @@ curricula:
           a manifest, reject malformed rows, detect duplicate files and records, verify
           completeness, and publish the bounded batch atomically.
     - id: c06.incremental_ingestion
+      kind: capability
       parent_id: c06.data_ingestion
       name: Incremental and Change-Data Ingestion
       outcome: Capture new, changed, and deleted records incrementally with correct
@@ -3153,6 +3286,7 @@ curricula:
           updates, and deletes in order, persists offsets atomically with output,
           handles late events, and replays safely after consumer failure.
     - id: c06.transformation_quality
+      kind: capability
       parent_id: c06.data_pipelines
       name: Transformation and Data Quality
       outcome: Canonicalize heterogeneous values, resolve duplicate entities, and
@@ -3176,6 +3310,7 @@ curricula:
           rules, then apply field, relational, and aggregate acceptance gates with
           quarantine and reconciliation.
     - id: c06.data_cleaning
+      kind: capability
       parent_id: c06.transformation_quality
       name: Value Cleaning and Standardization
       outcome: Convert inconsistent field values into canonical typed representations
@@ -3196,6 +3331,7 @@ curricula:
           formats, currencies, units, categories, and missing-value markers while
           retaining original values and rule-level provenance.
     - id: c06.record_linkage
+      kind: capability
       parent_id: c06.transformation_quality
       name: Record Linkage and Survivorship
       outcome: Identify records that refer to the same entity and construct a defensible
@@ -3217,6 +3353,7 @@ curricula:
           fuzzy evidence, explicit match thresholds, no-match and review outcomes,
           conflict-aware survivorship, and lineage to every contributing record.
     - id: c06.data_quality_controls
+      kind: capability
       parent_id: c06.transformation_quality
       name: Pipeline Data Quality Controls
       outcome: Define and apply field, record, relational, and aggregate checks that
@@ -3238,6 +3375,7 @@ curricula:
           batch uniqueness, customer references, temporal consistency, amount reconciliation,
           anomaly thresholds, and accepted-versus-rejected counts.
     - id: c06.pipeline_orchestration
+      kind: capability
       parent_id: c06.data_pipelines
       name: Pipeline Orchestration and Recovery
       outcome: Coordinate dependent pipeline stages so partitioned, repeated, and
@@ -3258,6 +3396,7 @@ curricula:
           scheduling, idempotent publication, freshness and volume monitoring, and
           a lineage-scoped recovery from a partial upstream failure.
     - id: c06.dependency_scheduling
+      kind: capability
       parent_id: c06.pipeline_orchestration
       name: Dependency and Partition Scheduling
       outcome: Express pipeline dependencies, schedules, readiness conditions, partition
@@ -3279,6 +3418,7 @@ curricula:
           daily outputs with readiness conditions, partition mappings, concurrency
           limits, and a dependency-correct backfill for a missed week.
     - id: c06.idempotent_execution
+      kind: capability
       parent_id: c06.pipeline_orchestration
       name: Idempotent Pipeline Execution
       outcome: Make repeated or resumed pipeline executions converge on the same target
@@ -3300,6 +3440,7 @@ curricula:
           keys, publishes atomically, records completion state, and converges correctly
           after failures before, during, and after publication.
     - id: c06.pipeline_monitoring
+      kind: capability
       parent_id: c06.pipeline_orchestration
       name: Pipeline Monitoring and Alerting
       outcome: Measure data-pipeline health and delivery so failures and degradations
@@ -3320,6 +3461,7 @@ curricula:
           and deduplicated alerts for a partitioned pipeline whose failures may affect
           freshness, volume, latency, quality, or publication completeness.
     - id: c06.pipeline_recovery
+      kind: capability
       parent_id: c06.pipeline_orchestration
       name: Pipeline Failure Recovery
       outcome: Diagnose failed or partial pipeline execution and restore the affected
@@ -3342,6 +3484,7 @@ curricula:
           replay, rollback, and selective recomputation, and specify validation before
           republishing.
     - id: c06.analytical_delivery
+      kind: capability
       parent_id: c06.data_pipelines
       name: Analytical Modeling and Loading
       outcome: Shape transformed data into analytical models and load them while preserving
@@ -3363,6 +3506,7 @@ curricula:
           with declared grains and history rules, then incrementally load changes,
           late events, and corrections while resolving keys and reconciling measures.
     - id: c06.dimensional_modeling
+      kind: capability
       parent_id: c06.analytical_delivery
       name: Dimensional Modeling
       outcome: Design fact and dimension tables whose grain, keys, measures, and historical
@@ -3384,6 +3528,7 @@ curricula:
           conformed dimensions, appropriate fact types, additive measures, role-playing
           dates, and historical customer segments.
     - id: c06.warehouse_loading
+      kind: capability
       parent_id: c06.analytical_delivery
       name: Incremental Warehouse Loading
       outcome: Load supplied analytical facts and dimensions incrementally while preserving
@@ -3405,6 +3550,7 @@ curricula:
           dimension updates, assigning surrogate keys, handling early and late facts,
           correcting prior rows, and reconciling source counts and measures.
     - id: c06.schema_evolution
+      kind: capability
       parent_id: c06.data_pipelines
       name: Data Contract and Pipeline Schema Evolution
       outcome: Evolve source and target data contracts without silently dropping,
@@ -3427,6 +3573,7 @@ curricula:
           drift alerts, dual-read rollout, historical backfill, cutover, and rollback
           criteria.
     - id: c06.nosql_graph_data
+      kind: capability
       parent_id: c06.databases_data_engineering
       name: NoSQL, Graph, and Distributed Data Systems
       outcome: Design document, key-value, wide-column, and graph models and choose
@@ -3449,6 +3596,7 @@ curricula:
           graph, then specify physical partitions, replica topology, read guarantees,
           and invariant-preserving cross-record writes.
     - id: c06.nonrelational_models
+      kind: capability
       parent_id: c06.nosql_graph_data
       name: Document, Key-Value, and Wide-Column Modeling
       outcome: Model denormalized aggregates and key-addressed records around concrete
@@ -3471,6 +3619,7 @@ curricula:
           wide-column rows supporting inbox, conversation, pagination, retention,
           and unread access patterns.
     - id: c06.document_modeling
+      kind: capability
       parent_id: c06.nonrelational_models
       name: Document Data Modeling
       outcome: Define document aggregates, embedding boundaries, references, identities,
@@ -3492,6 +3641,7 @@ curricula:
           choosing embedding or references for each relationship while accounting
           for growth, atomic updates, duplication, and required queries.
     - id: c06.key_value_modeling
+      kind: capability
       parent_id: c06.nonrelational_models
       name: Key-Value Data Modeling
       outcome: Design stable keys and values for direct lookup, conditional update,
@@ -3512,6 +3662,7 @@ curricula:
           assignments, and idempotency tokens with namespaces, TTLs, conditional updates,
           value versions, and any explicitly justified duplicate lookup keys.
     - id: c06.wide_column_modeling
+      kind: capability
       parent_id: c06.nonrelational_models
       name: Wide-Column Access-Path Modeling
       outcome: Design logical partition keys, clustering order, buckets, and materialized
@@ -3533,6 +3684,7 @@ curricula:
           and regional alerts with bounded logical partitions, clustering order, time
           buckets, retention, pagination, sparse fields, and explicit write fan-out.
     - id: c06.graph_data
+      kind: capability
       parent_id: c06.nosql_graph_data
       name: Graph Data Modeling and Querying
       outcome: Represent relationship-rich domains as graphs and express bounded paths,
@@ -3555,6 +3707,7 @@ curricula:
           paths with cycle control, retained path evidence, endpoint aggregation,
           and deterministic ranking.
     - id: c06.graph_modeling
+      kind: capability
       parent_id: c06.graph_data
       name: Graph Schema Modeling
       outcome: Choose nodes, edges, direction, properties, labels, identities, and
@@ -3577,6 +3730,7 @@ curricula:
           edge direction, properties, cardinalities, constraints, and indexed entry
           points.
     - id: c06.graph_queries
+      kind: capability
       parent_id: c06.graph_data
       name: Graph Traversal Queries
       outcome: Write queries over a supplied graph model that return intended paths,
@@ -3599,6 +3753,7 @@ curricula:
           or payment instruments, exclude repeated nodes, retain path evidence, aggregate
           risk by endpoint, and return deterministic ranked results.
     - id: c06.distributed_data_systems
+      kind: capability
       parent_id: c06.nosql_graph_data
       name: Distributed Data Placement and Consistency
       outcome: Choose physical partitioning, replica topology, read guarantees, and
@@ -3622,6 +3777,7 @@ curricula:
           for profiles and orders, and coordinate inventory and balance writes through
           lag, partitions, retries, and failover.
     - id: c06.data_partitioning
+      kind: capability
       parent_id: c06.distributed_data_systems
       name: Physical Data Partitioning and Rebalancing
       outcome: Distribute records across physical shards to balance load, preserve
@@ -3643,6 +3799,7 @@ curricula:
           skew and query fan-out, mitigate hot shards, define split thresholds, and
           plan online rebalancing as tenants and traffic grow.
     - id: c06.replica_topology
+      kind: capability
       parent_id: c06.distributed_data_systems
       name: Replica Placement and Failover Topology
       outcome: Place and promote replicas to meet locality, durability, availability,
@@ -3665,6 +3822,7 @@ curricula:
           failover, promotion safety, rebuild capacity, and behavior during replica
           lag.
     - id: c06.replicated_read_consistency
+      kind: capability
       parent_id: c06.distributed_data_systems
       name: Replicated Read Consistency
       outcome: Select and implement read guarantees that match stated freshness, session,
@@ -3687,6 +3845,7 @@ curricula:
           identifying which reads require strong, causal, session, bounded-stale,
           or eventual behavior.
     - id: c06.distributed_write_coordination
+      kind: capability
       parent_id: c06.distributed_data_systems
       name: Distributed Transactions and Conflict Handling
       outcome: Preserve named cross-record or cross-partition invariants through concurrency,
@@ -3715,6 +3874,7 @@ curricula:
     subject_name: Data Analysis & Visualization
     sections:
     - id: c07.data-foundations
+      kind: capability
       parent_id: null
       name: Analytical Data Preparation and Exploration
       outcome: Transform heterogeneous records into analysis-ready tables and characterize
@@ -3738,6 +3898,7 @@ curricula:
           summarize its variables and groups, and investigate relationships relevant
           to customer retention.
     - id: c07.data-foundations.preparation
+      kind: capability
       parent_id: c07.data-foundations
       name: Analytical Data Preparation
       outcome: Clean, transform, combine, and reshape tabular records into analysis-ready
@@ -3762,6 +3923,7 @@ curricula:
           joining at the correct grain, reshaping repeated monthly fields, and documenting
           justified missing-value treatment.
     - id: c07.data-foundations.preparation.table-transformation
+      kind: capability
       parent_id: c07.data-foundations.preparation
       name: Tabular Cleaning and Feature Construction
       outcome: Normalize analytical variables and apply justified row selection, recoding,
@@ -3787,6 +3949,7 @@ curricula:
           treating missing values according to their meanings, and deriving analysis
           variables at the original row grain.
     - id: c07.data-foundations.preparation.integration-reshape
+      kind: capability
       parent_id: c07.data-foundations.preparation
       name: Table Integration and Reshaping
       outcome: Join, aggregate, and reshape normalized tables at an explicit observational
@@ -3813,6 +3976,7 @@ curricula:
           customer-month row per observation while reconciling unmatched keys, duplicated
           totals, and leakage-prone fields.
     - id: c07.data-foundations.eda
+      kind: capability
       parent_id: c07.data-foundations
       name: Exploratory Data Analysis
       outcome: Diagnose data quality and use descriptive and relationship analysis
@@ -3837,6 +4001,7 @@ curricula:
           customer groups, and investigating whether apparent outcome relationships
           persist across relevant strata and after checking artifacts.
     - id: c07.data-foundations.eda.data-quality
+      kind: capability
       parent_id: c07.data-foundations.eda
       name: Data Quality Diagnosis
       outcome: Detect and characterize missingness, invalid values, duplicates, inconsistent
@@ -3860,6 +4025,7 @@ curricula:
           entities, inconsistent units, temporal coverage gaps, and systematic missingness,
           and explain how each problem could alter the intended analysis.
     - id: c07.data-foundations.eda.summaries
+      kind: capability
       parent_id: c07.data-foundations.eda
       name: Distribution and Group Summaries
       outcome: Select and compute summaries that accurately describe central tendency,
@@ -3883,6 +4049,7 @@ curricula:
           segments, choosing measures that expose skew, dispersion, rare categories,
           and within-group variation while retaining relevant group sizes.
     - id: c07.data-foundations.eda.relationships
+      kind: capability
       parent_id: c07.data-foundations.eda
       name: Exploratory Relationship Analysis
       outcome: Characterize associations while distinguishing form, direction, strength,
@@ -3910,6 +4077,7 @@ curricula:
           associations, stratify by a relevant group, examine interaction and imbalance,
           and determine whether outliers or conditioning explain the initial pattern.
     - id: c07.probability-statistics
+      kind: capability
       parent_id: null
       name: Probability and Statistical Inference
       outcome: Represent uncertainty with probability models and use sample evidence
@@ -3935,6 +4103,7 @@ curricula:
           use a sample to estimate and test the population completion rate, and obtain
           a separate tail bound when only moments are trusted.
     - id: c07.probability-statistics.probability
+      kind: capability
       parent_id: c07.probability-statistics
       name: Probability Modeling
       outcome: Represent random events, information updates, and long-run quantities
@@ -3958,6 +4127,7 @@ curricula:
           an imperfect signal, and calculating the expected number and variance of
           inspections until acceptance.
     - id: c07.probability-statistics.probability.events
+      kind: capability
       parent_id: c07.probability-statistics.probability
       name: Events and Repeated Trials
       outcome: Construct sample spaces and calculate probabilities of simple, compound,
@@ -3981,6 +4151,7 @@ curricula:
           limit, derive the probabilities of early completion, failure by the limit,
           and eventual completion, including all boundary parameter values.
     - id: c07.probability-statistics.probability.updating
+      kind: capability
       parent_id: c07.probability-statistics.probability
       name: Conditional Probability and Updating
       outcome: Update probability assignments from observations or reports while making
@@ -4007,6 +4178,7 @@ curricula:
           each posterior and explaining how their distinct information states produce
           different answers.
     - id: c07.probability-statistics.probability.expectation
+      kind: capability
       parent_id: c07.probability-statistics.probability
       name: Expectation and Stopping Quantities
       outcome: Compute and interpret expectations, variances, and waiting times from
@@ -4033,6 +4205,7 @@ curricula:
           and derive the expected completion time and its variance when stages can
           repeat.
     - id: c07.probability-statistics.inference
+      kind: capability
       parent_id: c07.probability-statistics
       name: Statistical Inference
       outcome: Use sampling behavior and stated assumptions to estimate population
@@ -4057,6 +4230,7 @@ curricula:
           behavior, report a point estimate and interval, test a directional claim,
           and derive a separate tail-count bound using only the supplied moments.
     - id: c07.probability-statistics.inference.sampling-distributions
+      kind: capability
       parent_id: c07.probability-statistics.inference
       name: Sampling Distributions and Standard Errors
       outcome: Relate a sampling design and repeated-sample variation to an estimator's
@@ -4080,6 +4254,7 @@ curricula:
           simple random, clustered, and stratified sampling, assessing bias, shape,
           standard error, and effective sample size.
     - id: c07.probability-statistics.inference.estimation
+      kind: capability
       parent_id: c07.probability-statistics.inference
       name: Estimation and Confidence Intervals
       outcome: Define estimands, compute point estimates and standard errors, and
@@ -4106,6 +4281,7 @@ curricula:
           a confidence interval, and explain its repeated-sampling coverage and design
           assumptions.
     - id: c07.probability-statistics.inference.hypothesis-tests
+      kind: capability
       parent_id: c07.probability-statistics.inference
       name: Hypothesis Testing
       outcome: Formulate hypotheses, select and compute an appropriate test, check
@@ -4133,6 +4309,7 @@ curricula:
           sizes, and report a contextual decision without treating non-rejection as
           proof.
     - id: c07.probability-statistics.inference.moment-bounds
+      kind: capability
       parent_id: c07.probability-statistics.inference
       name: Moment-Based Probability Bounds
       outcome: Use means, second moments, and variances to derive justified one-sided
@@ -4157,6 +4334,7 @@ curricula:
           derive the variance, choose the strongest justified moment inequality, and
           convert its tail-probability bound into a valid integer count bound.
     - id: c07.experiments-health
+      kind: capability
       parent_id: null
       name: Experiments and Population Health
       outcome: Design controlled comparisons and analyze biomedical or population-health
@@ -4182,6 +4360,7 @@ curricula:
           biomarker and event-time outcomes, estimate population disease associations,
           and state a decision that accounts for uncertainty and bias.
     - id: c07.experiments-health.experimental-design
+      kind: capability
       parent_id: c07.experiments-health
       name: Controlled Experiments and A/B Analysis
       outcome: Validate measurements, design randomized comparisons, and analyze experimental
@@ -4207,6 +4386,7 @@ curricula:
           validate exposure and outcomes, estimate the treatment effect with a prespecified
           test, assess guardrails, and apply the decision rule.
     - id: c07.experiments-health.experimental-design.controlled-validation
+      kind: capability
       parent_id: c07.experiments-health.experimental-design
       name: Controlled Measurement Validation
       outcome: Design matched controls and complementary measurements that distinguish
@@ -4231,6 +4411,7 @@ curricula:
           matched live and killed controls, localization, an independent viability
           measure, and explicit interpretation criteria.
     - id: c07.experiments-health.experimental-design.randomized-design
+      kind: capability
       parent_id: c07.experiments-health.experimental-design
       name: Randomized Experiment Design
       outcome: Specify assignment units, randomization, blocking, outcomes, sample
@@ -4256,6 +4437,7 @@ curricula:
           primary and guardrail outcomes, planning sample size, checking exposure,
           and prespecifying stopping and multiplicity rules.
     - id: c07.experiments-health.experimental-design.ab-analysis
+      kind: capability
       parent_id: c07.experiments-health.experimental-design
       name: A/B Experiment Analysis
       outcome: Integrate randomized-design and hypothesis-testing decisions to estimate
@@ -4287,6 +4469,7 @@ curricula:
           effects with assumption-aware tests and intervals; and applying the prespecified
           launch rule.
     - id: c07.experiments-health.population-health
+      kind: capability
       parent_id: c07.experiments-health
       name: Biostatistics and Epidemiology
       outcome: Analyze biomedical and population data using outcome-appropriate statistical
@@ -4311,6 +4494,7 @@ curricula:
           and censored event times, estimating disease frequency and exposure association,
           and assessing confounding, selection, measurement bias, and clinical relevance.
     - id: c07.experiments-health.population-health.biostatistics
+      kind: capability
       parent_id: c07.experiments-health.population-health
       name: Biostatistical Outcome Analysis
       outcome: Analyze correlated longitudinal measurements and censored event times
@@ -4336,6 +4520,7 @@ curricula:
           checking method assumptions, and reporting uncertainty and clinical relevance
           for both outcomes.
     - id: c07.experiments-health.population-health.biostatistics.longitudinal
+      kind: capability
       parent_id: c07.experiments-health.population-health.biostatistics
       name: Paired and Longitudinal Outcome Analysis
       outcome: Analyze paired or repeated biomedical measurements while accounting
@@ -4365,6 +4550,7 @@ curricula:
           and dependence assumptions, addressing missing follow-up, and interpreting
           time-by-treatment differences.
     - id: c07.experiments-health.population-health.biostatistics.survival
+      kind: capability
       parent_id: c07.experiments-health.population-health.biostatistics
       name: Survival and Event-Time Analysis
       outcome: Estimate and compare time-to-event outcomes while handling censoring,
@@ -4389,6 +4575,7 @@ curricula:
           with uncertainty, checking proportionality and competing-event assumptions,
           and interpreting absolute and relative differences.
     - id: c07.experiments-health.population-health.epidemiology
+      kind: capability
       parent_id: c07.experiments-health.population-health
       name: Epidemiologic Measures and Bias
       outcome: Use study design, disease-frequency measures, association estimates,
@@ -4413,6 +4600,7 @@ curricula:
           assessing effect modification, and explaining the likely direction of selection
           and measurement biases.
     - id: c07.models-time
+      kind: capability
       parent_id: null
       name: Model Assessment, Econometrics, and Forecasting
       outcome: Assess empirical models and claims, estimate economic relationships
@@ -4438,6 +4626,7 @@ curricula:
           designs, construct and backtest a forecast, and separate the decision-relevant
           evidence from claims the analysis does not support.
     - id: c07.models-time.model-assessment
+      kind: capability
       parent_id: c07.models-time
       name: Model and Evidence Assessment
       outcome: Use empirical discrepancies to diagnose where supplied assumptions
@@ -4463,6 +4652,7 @@ curricula:
           or boundaries, state the defensible validity domain, and distinguish the
           supported empirical conclusion from causal or mechanistic alternatives.
     - id: c07.models-time.model-assessment.assumptions
+      kind: capability
       parent_id: c07.models-time.model-assessment
       name: Assumption and Validity-Regime Diagnostics
       outcome: Relate empirical residual and association patterns to explicit model
@@ -4492,6 +4682,7 @@ curricula:
           and omitted-process assumptions to state the model's defensible validity
           regime.
     - id: c07.models-time.model-assessment.evidence-claims
+      kind: capability
       parent_id: c07.models-time.model-assessment
       name: Empirical Evidence and Claim Calibration
       outcome: State what a completed analysis supports while distinguishing descriptive,
@@ -4516,6 +4707,7 @@ curricula:
           compare compatible alternatives, and explain which additional design or
           evidence would distinguish them.
     - id: c07.models-time.econometrics
+      kind: capability
       parent_id: c07.models-time
       name: Econometric Analysis
       outcome: Estimate economically meaningful relationships and evaluate causal
@@ -4542,6 +4734,7 @@ curricula:
           evidence tied to that same policy question before stating the most credible
           effect claim.
     - id: c07.models-time.econometrics.estimation
+      kind: capability
       parent_id: c07.models-time.econometrics
       name: Econometric Estimation and Diagnostics
       outcome: Specify, estimate, and interpret regression models while checking functional
@@ -4572,6 +4765,7 @@ curricula:
           intervals; and diagnose functional form, dependence, heteroskedasticity,
           and influence without making an unsupported causal claim.
     - id: c07.models-time.econometrics.identification
+      kind: capability
       parent_id: c07.models-time.econometrics
       name: Quasi-Experimental Identification
       outcome: Choose and assess difference-in-differences, instrumental-variable,
@@ -4598,6 +4792,7 @@ curricula:
           and regression-discontinuity analyses, test each design's central assumptions,
           and select the most credible estimate while explaining remaining threats.
     - id: c07.models-time.econometrics.identification.did
+      kind: capability
       parent_id: c07.models-time.econometrics.identification
       name: Difference-in-Differences Designs
       outcome: Estimate effects from differential treatment timing while assessing
@@ -4625,6 +4820,7 @@ curricula:
           examine pre-trends, anticipation, composition, dynamics, and heterogeneous
           timing, and report the causal claim warranted by those checks.
     - id: c07.models-time.econometrics.identification.iv
+      kind: capability
       parent_id: c07.models-time.econometrics.identification
       name: Instrumental-Variable Designs
       outcome: Estimate local causal effects from an instrument while assessing relevance,
@@ -4653,6 +4849,7 @@ curricula:
           relevance, exclusion, independence, monotonicity, and weak-instrument risk,
           and interpret the resulting local estimand.
     - id: c07.models-time.econometrics.identification.rd
+      kind: capability
       parent_id: c07.models-time.econometrics.identification
       name: Regression-Discontinuity Designs
       outcome: Estimate local cutoff effects while assessing assignment continuity,
@@ -4680,6 +4877,7 @@ curricula:
           and covariate continuity, assess bandwidth and functional-form sensitivity,
           use placebo cutoffs, and interpret the effect as local to the threshold.
     - id: c07.models-time.forecasting
+      kind: capability
       parent_id: c07.models-time
       name: Time-Series Forecasting
       outcome: Diagnose temporal structure, construct probabilistic forecasts without
@@ -4704,6 +4902,7 @@ curricula:
           compare them with baselines using rolling origins, calibration, subgroup
           errors, and operational loss.
     - id: c07.models-time.forecasting.temporal-structure
+      kind: capability
       parent_id: c07.models-time.forecasting
       name: Temporal Structure Analysis
       outcome: Identify time indexing, trend, seasonality, autocorrelation, structural
@@ -4728,6 +4927,7 @@ curricula:
           break, and plausible external-event effects, and state the implications
           for forecasting.
     - id: c07.models-time.forecasting.predictive-modeling
+      kind: capability
       parent_id: c07.models-time.forecasting
       name: Forecast and Predictive-Uncertainty Construction
       outcome: Construct point and distributional forecasts from temporal features
@@ -4752,6 +4952,7 @@ curricula:
           and windows and explaining how parameter, innovation, and horizon uncertainty
           enter the prediction intervals.
     - id: c07.models-time.forecasting.evaluation
+      kind: capability
       parent_id: c07.models-time.forecasting
       name: Forecast Backtesting and Selection
       outcome: Evaluate fully constructed probabilistic forecasts against suitable
@@ -4779,6 +4980,7 @@ curricula:
           over rolling origins, assess interval calibration and subgroup errors, and
           select a model using the stated operational loss.
     - id: c07.visualization-reporting
+      kind: capability
       parent_id: null
       name: Visualization, Dashboards, and Reports
       outcome: Turn one analysis into faithful visual explanations, interactive monitoring
@@ -4803,6 +5005,7 @@ curricula:
           and a concise analytical report that use consistent metrics, uncertainty,
           limitations, and recommendations.
     - id: c07.visualization-reporting.visualization
+      kind: capability
       parent_id: c07.visualization-reporting
       name: Chart and Infographic Production
       outcome: Produce statistical charts and explanatory infographic compositions
@@ -4828,6 +5031,7 @@ curricula:
           that chart with concise annotations and supporting facts into an accessible
           infographic.
     - id: c07.visualization-reporting.visualization.chart-design
+      kind: capability
       parent_id: c07.visualization-reporting.visualization
       name: Statistical Chart Design
       outcome: Select and construct chart encodings that faithfully reveal a stated
@@ -4852,6 +5056,7 @@ curricula:
           relationships, temporal change, and uncertainty without misleading scales
           or clutter.
     - id: c07.visualization-reporting.visualization.infographic
+      kind: capability
       parent_id: c07.visualization-reporting.visualization
       name: Infographic Composition
       outcome: Combine a faithful quantitative chart, calibrated claims, annotations,
@@ -4880,6 +5085,7 @@ curricula:
           wording against alternative explanations and design limitations, and compose
           the charts, headline, annotations, and notes into a clear infographic.
     - id: c07.visualization-reporting.reporting
+      kind: capability
       parent_id: c07.visualization-reporting
       name: Dashboard and Analytical Report Building
       outcome: Organize the same validated metrics and findings into an interactive
@@ -4903,6 +5109,7 @@ curricula:
           monitoring and a report explaining the same metrics, trends, segments, uncertainty,
           limitations, exceptions, and recommended action.
     - id: c07.visualization-reporting.reporting.dashboard
+      kind: capability
       parent_id: c07.visualization-reporting.reporting
       name: Dashboard Design
       outcome: Design dashboards whose faithful charts, validated metrics, hierarchy,
@@ -4929,6 +5136,7 @@ curricula:
           trend and segment views, useful filters and drill-downs, explicit freshness
           and missing-data states, and decision-linked alert thresholds.
     - id: c07.visualization-reporting.reporting.analytical-report
+      kind: capability
       parent_id: c07.visualization-reporting.reporting
       name: Analytical Report Writing
       outcome: Write a self-contained report connecting a question, data, methods,
@@ -4967,6 +5175,7 @@ curricula:
     subject_name: Technical Writing & Documentation
     sections:
     - id: c23
+      kind: capability
       parent_id: null
       name: Technical Writing & Documentation
       outcome: Create accurate, usable, and maintainable technical documentation by
@@ -4996,6 +5205,7 @@ curricula:
           a key task, record the governing design decision, and revise the affected
           material under the supplied documentation standard and product change.'
     - id: c23.planning
+      kind: capability
       parent_id: c23
       name: Documentation Planning
       outcome: Plan documentation around defined readers and tasks, controlled technical
@@ -5020,6 +5230,7 @@ curricula:
           from assumptions and unresolved questions, selects suitable document forms,
           and organizes the resulting pages into one navigable structure.
     - id: c23.planning.audience
+      kind: capability
       parent_id: c23.planning
       name: Audience and Task Analysis
       outcome: Translate reader roles, prior knowledge, operating constraints, and
@@ -5043,6 +5254,7 @@ curricula:
           defining each group's goals, prior knowledge, constraints, risks, and information
           needs before, during, and after its tasks.
     - id: c23.planning.evidence
+      kind: capability
       parent_id: c23.planning
       name: Content Evidence and Claim Control
       outcome: Distinguish established facts, permitted inferences, author choices,
@@ -5067,6 +5279,7 @@ curricula:
           and author choices, identifies contradictions and gaps, and lists the questions
           that must be resolved before publication.
     - id: c23.planning.structure
+      kind: capability
       parent_id: c23.planning
       name: Information Architecture
       outcome: Organize technical content into discoverable document units whose sequence,
@@ -5093,6 +5306,7 @@ curricula:
           then design page boundaries, heading hierarchies, navigation, progressive
           disclosure, and cross-references around their tasks.
     - id: c23.reference
+      kind: capability
       parent_id: c23
       name: API and Reference Documentation
       outcome: Produce precise, consistently structured lookup documentation for callable
@@ -5122,6 +5336,7 @@ curricula:
           event model returned by that operation, and the device characteristics and
           limits needed to use both correctly.
     - id: c23.reference.operations
+      kind: capability
       parent_id: c23.reference
       name: API Operation Reference
       outcome: Document callable operations so readers can identify their purpose,
@@ -5152,6 +5367,7 @@ curricula:
           invocation, parameters, authentication, side effects, response behavior,
           errors, limits, and a minimal example.
     - id: c23.reference.data-models
+      kind: capability
       parent_id: c23.reference
       name: Data Model Reference
       outcome: Document structured data contracts with unambiguous field semantics,
@@ -5179,6 +5395,7 @@ curricula:
           every field, required status, type, format, enumeration, relationship, cross-field
           invariant, and invalid or unavailable value representation.
     - id: c23.reference.product-specifications
+      kind: capability
       parent_id: c23.reference
       name: Product Specifications
       outcome: Turn verified facts about an existing product into a complete, consistently
@@ -5208,6 +5425,7 @@ curricula:
           ports, environmental limits, and supported media, qualifying inferences
           and marking unavailable values.
     - id: c23.guides
+      kind: capability
       parent_id: c23
       name: Instructional and Support Documentation
       outcome: Create coordinated task-oriented and learning-oriented documentation
@@ -5238,6 +5456,7 @@ curricula:
           to a focused operational how-to, and a troubleshooting section diagnoses
           failures of that same workflow using consistent terminology and cross-references.
     - id: c23.guides.how-to
+      kind: capability
       parent_id: c23.guides
       name: How-To Guides
       outcome: Write concise procedures that help a prepared reader accomplish a specific
@@ -5266,6 +5485,7 @@ curricula:
           a consequential warning, and checks confirming that the intended file was
           produced.
     - id: c23.guides.tutorials
+      kind: capability
       parent_id: c23.guides
       name: Tutorials
       outcome: Guide a learner through a complete, achievable experience that builds
@@ -5297,6 +5517,7 @@ curricula:
           inspected, and modified through progressive explanations, checkpoints, and
           a final transfer exercise.
     - id: c23.guides.explanations
+      kind: capability
       parent_id: c23.guides
       name: Technical Explanations
       outcome: Explain supported technical behavior, distinctions, and tradeoffs so
@@ -5327,6 +5548,7 @@ curricula:
           or unknown; then explain the mechanisms and tradeoffs and give a qualified
           recommendation for the stated operating context.
     - id: c23.guides.troubleshooting
+      kind: capability
       parent_id: c23.guides
       name: Troubleshooting Guides
       outcome: Lead readers from an observable symptom through discriminating checks
@@ -5360,6 +5582,7 @@ curricula:
           and response-order checks, cause-specific remedies, recovery verification,
           and escalation evidence.
     - id: c23.design
+      kind: capability
       parent_id: c23
       name: Specifications and Design Documents
       outcome: Document what a proposed system must accomplish, evaluate how it could
@@ -5388,6 +5611,7 @@ curricula:
           requirements, comparison of candidate architectures, and a decision record
           preserving the selected architecture, rationale, and consequences.
     - id: c23.design.requirements
+      kind: capability
       parent_id: c23.design
       name: Technical Requirements
       outcome: Convert supported stakeholder and operational needs into atomic, unambiguous,
@@ -5418,6 +5642,7 @@ curricula:
           and operational constraints, with atomic statements and verifiable acceptance
           criteria.
     - id: c23.design.proposals
+      kind: capability
       parent_id: c23.design
       name: Design Proposals
       outcome: Present a technical problem, constraints, candidate designs, tradeoffs,
@@ -5444,6 +5669,7 @@ curricula:
           architectures, tradeoffs, the recommended design, failure handling, migration,
           observability, and unresolved questions.
     - id: c23.design.decisions
+      kind: capability
       parent_id: c23.design
       name: Architecture Decision Records
       outcome: Preserve a settled technical decision with enough context, alternatives,
@@ -5474,6 +5700,7 @@ curricula:
           record preserving the governing requirements, rejected alternatives, rationale,
           status, consequences, and reconsideration conditions.
     - id: c23.quality
+      kind: capability
       parent_id: c23
       name: Documentation Quality and Maintenance
       outcome: Deliver documentation that follows documentation-specific publishing
@@ -5503,6 +5730,7 @@ curricula:
           for clarity and consistency, render it under the supplied publishing template,
           and propagate the rename through its version notice, navigation, and cross-references.
     - id: c23.quality.constraints
+      kind: capability
       parent_id: c23.quality
       name: Documentation Format and Delivery Compliance
       outcome: Transform technically complete documentation into a required documentation
@@ -5531,6 +5759,7 @@ curricula:
           code-fence placement, link syntax, cross-reference convention, and file-boundary
           requirements without altering the guide's technical meaning.
     - id: c23.quality.revision
+      kind: capability
       parent_id: c23.quality
       name: Technical Revision
       outcome: Revise technical prose and structure to improve correctness, clarity,
@@ -5562,6 +5791,7 @@ curricula:
           terminology conflicts, removing redundancy, clarifying conditions and warnings,
           and reorganizing the supported material around the readers' tasks.
     - id: c23.quality.maintenance
+      kind: capability
       parent_id: c23.quality
       name: Documentation Maintenance
       outcome: Update a versioned documentation set after system changes while preserving
@@ -5599,6 +5829,7 @@ curricula:
     subject_name: Knowledge Application & QA
     sections:
     - id: c25
+      kind: capability
       parent_id: null
       name: Knowledge Application & QA
       outcome: Answer applied and factual questions, ground answers in relevant evidence
@@ -5627,6 +5858,7 @@ curricula:
           the relevant passages, assess whether the cited evidence and reasoning support
           the answer, correct any defect, and explain the conclusion to the learner.'
     - id: c25.1
+      kind: capability
       parent_id: c25
       name: Applied Question Answering
       outcome: Select or recall relevant knowledge and transform it through quantitative,
@@ -5656,6 +5888,7 @@ curricula:
           the acceptance rule, and identify one observation that distinguishes the
           two proposed causes before making a single disposition decision.'
     - id: c25.1.1
+      kind: capability
       parent_id: c25.1
       name: Context-Supplied Knowledge Selection
       outcome: Identify the supplied fact, definition, property, or principle that
@@ -5680,6 +5913,7 @@ curricula:
           answer a conceptual question by selecting the governing property, rejecting
           the nearest distractor, and stating its immediate implication.
     - id: c25.1.2
+      kind: capability
       parent_id: c25.1
       name: Quantitative Relation Application
       outcome: Select and combine stated or elementary quantitative relations to calculate
@@ -5708,6 +5942,7 @@ curricula:
           the required intermediate calculations, respecting resource constraints,
           and interpreting the final value.
     - id: c25.1.3
+      kind: capability
       parent_id: c25.1
       name: Mechanistic Process Inference
       outcome: Use a supplied causal or process model to trace how components, conditions,
@@ -5734,6 +5969,7 @@ curricula:
           and explain the observed output by tracing the affected component, intermediate
           states, feedback response, and final system change.
     - id: c25.1.4
+      kind: capability
       parent_id: c25.1
       name: Conditional Rule Application
       outcome: Apply supplied definitions, thresholds, exceptions, and interacting
@@ -5760,6 +5996,7 @@ curricula:
           applying its definitions, interacting thresholds, priority rule, and exception
           while explaining which case facts trigger each provision.
     - id: c25.1.5
+      kind: capability
       parent_id: c25.1
       name: Competing-Hypothesis Discrimination
       outcome: Trace the distinct predictions of specified causal hypotheses and design
@@ -5788,6 +6025,7 @@ curricula:
           derive each mechanism's predicted observations, specify the shared control,
           and state which result would discriminate between them.
     - id: c25.1.6
+      kind: capability
       parent_id: c25.1
       name: Closed-Book Factual and Conceptual QA
       outcome: Retrieve facts, definitions, conventions, and governing principles
@@ -5815,6 +6053,7 @@ curricula:
           governing principle, while marking any item for which the requested precision
           cannot be recalled reliably.
     - id: c25.1.7
+      kind: capability
       parent_id: c25.1
       name: Model Transformation and Approximation
       outcome: Transform a quantitative model by choosing a useful representation,
@@ -5844,6 +6083,7 @@ curricula:
           required order, combining coefficients, justifying every discarded term,
           and interpreting the simplified dynamics.
     - id: c25.2
+      kind: capability
       parent_id: c25
       name: Source-Grounded Question Answering
       outcome: Locate information in one or more provided sources, connect complementary
@@ -5871,6 +6111,7 @@ curricula:
           and independence of the decisive records, and stating the evidence-bounded
           conclusion.
     - id: c25.2.1
+      kind: capability
       parent_id: c25.2
       name: Targeted Evidence Retrieval
       outcome: Find the passage or record that directly supplies a requested fact,
@@ -5898,6 +6139,7 @@ curricula:
           one narrowly scoped question and explain why records concerning neighboring
           entities, dates, or conditions do not apply.
     - id: c25.2.2
+      kind: capability
       parent_id: c25.2
       name: Cross-Source Inference
       outcome: Retrieve and combine complementary facts from multiple sources into
@@ -5926,6 +6168,7 @@ curricula:
           effective dates, applying an exception, and preserving an unresolved qualification
           in the answer.
     - id: c25.2.3
+      kind: capability
       parent_id: c25.2
       name: Source Quality and Corroboration
       outcome: Assess how provenance, expertise, recency, independence, and primary
@@ -5954,6 +6197,7 @@ curricula:
           expertise, recency, scope, and dependence among them before ranking the
           evidence.
     - id: c25.3
+      kind: capability
       parent_id: c25
       name: Claim and Reasoning Verification
       outcome: Determine whether evidence and reasoning support a claim, distinguish
@@ -5983,6 +6227,7 @@ curricula:
           quality, trace the reasoning, identify the first consequential defects,
           and issue one calibrated corrected verdict.'
     - id: c25.3.1
+      kind: capability
       parent_id: c25.3
       name: Evidence-to-Claim Checking
       outcome: Determine whether retrieved evidence entails, contradicts, or fails
@@ -6012,6 +6257,7 @@ curricula:
           and scope differences, and give a qualified support classification for every
           part.
     - id: c25.3.2
+      kind: capability
       parent_id: c25.3
       name: Reasoning-Chain Audit
       outcome: Check whether each step of an applied argument follows from its premises,
@@ -6043,6 +6289,7 @@ curricula:
           consequential error, trace how it changes the final decision, and construct
           the minimally changed valid conclusion.
     - id: c25.3.3
+      kind: capability
       parent_id: c25.3
       name: Corroborated Claim Verification
       outcome: Combine evidence-to-claim relations with source-quality judgments to
@@ -6073,6 +6320,7 @@ curricula:
           sources for expertise, recency, scope, and independence, reconciling credible
           conflicts, and issuing a calibrated overall verdict.
     - id: c25.4
+      kind: capability
       parent_id: c25
       name: Explanation and Tutoring
       outcome: Turn correct supplied knowledge and reasoning into transparent explanations
@@ -6099,6 +6347,7 @@ curricula:
           the learner''s misconception, tailor graduated hints to that misconception,
           and ask a nearby transfer question that checks understanding.'
     - id: c25.4.1
+      kind: capability
       parent_id: c25.4
       name: Transparent Worked Explanation
       outcome: Transform a supplied correct answer or solution into a coherent explanation
@@ -6127,6 +6376,7 @@ curricula:
           model, justifies one non-obvious approximation, rejects the nearest alternative,
           and interprets the result.
     - id: c25.4.2
+      kind: capability
       parent_id: c25.4
       name: Adaptive Misconception Repair
       outcome: Infer the conceptual error behind a learner's response and adapt a
@@ -6163,6 +6413,7 @@ curricula:
     subject_name: Finance, Accounting & Audit
     sections:
     - id: minan
+      kind: capability
       parent_id: null
       name: Finance, Accounting & Audit Integration
       outcome: Turn financial events, records, disclosures, risks, and market evidence
@@ -6194,6 +6445,7 @@ curricula:
           near-term collections and supplier payments, filing cash flows, assurance
           risks, project value, and any portfolio trades.
     - id: minan.accounting
+      kind: capability
       parent_id: minan
       name: Accounting Records, Reporting & Analysis
       outcome: Convert economic events into reconciled financial statements and analyze
@@ -6223,6 +6475,7 @@ curricula:
           by locating the relevant disclosures, calculating ratios, and reconciling
           the principal drivers.
     - id: minan.accounting.entries
+      kind: capability
       parent_id: minan.accounting
       name: Transaction Analysis & Journal Entries
       outcome: Identify the economic substance of routine transactions and record
@@ -6249,6 +6502,7 @@ curricula:
           recognition and period assignment of each without performing the period-end
           close.
     - id: minan.accounting.ledger
+      kind: capability
       parent_id: minan.accounting
       name: Ledger Posting & Trial-Balance Integrity
       outcome: Post valid journal entries to general and subsidiary ledgers, calculate
@@ -6275,6 +6529,7 @@ curricula:
           subsidiary ledgers, produce a trial balance, and correct posting errors and
           inconsistent control-account totals.
     - id: minan.accounting.reconciliation
+      kind: capability
       parent_id: minan.accounting
       name: Account Reconciliation & Discrepancy Resolution
       outcome: Compare book records with independent evidence, distinguish timing
@@ -6304,6 +6559,7 @@ curricula:
           to its subsidiary records, distinguish timing items from errors, and prepare
           supported corrections and an outstanding-item schedule.
     - id: minan.accounting.close
+      kind: capability
       parent_id: minan.accounting
       name: Period-End Close & Financial Statements
       outcome: Complete a period-end close by deriving closing adjustments from posted
@@ -6334,6 +6590,7 @@ curricula:
           balance, derive supported period-end adjustments, and prepare linked income,
           balance-sheet, cash-flow, and equity statements.
     - id: minan.accounting.disclosures
+      kind: capability
       parent_id: minan.accounting
       name: Financial Statement & Disclosure Extraction
       outcome: Locate, classify, and interpret explicitly presented financial amounts
@@ -6360,6 +6617,7 @@ curricula:
           or absent items, and report each amount with its classification, period,
           unit, sign, and supporting disclosure context.
     - id: minan.accounting.ratios
+      kind: capability
       parent_id: minan.accounting
       name: Financial Ratio & Trend Analysis
       outcome: Select and calculate comparable financial ratios and trends from correctly
@@ -6389,6 +6647,7 @@ curricula:
           and efficiency ratios across periods, and identify material trends without
           attributing causes not supported by the disclosures.
     - id: minan.accounting.variance
+      kind: capability
       parent_id: minan.accounting
       name: Historical Performance & Driver Analysis
       outcome: Reconcile changes in reported revenue, expenses, margins, cash flow,
@@ -6419,6 +6678,7 @@ curricula:
           bridge explaining the period's changes in revenue, operating margin, and
           operating cash flow from disclosed business and accounting drivers.
     - id: minan.billing
+      kind: capability
       parent_id: minan
       name: Billing, Receivables, Payables & Payment Operations
       outcome: Translate commercial and fulfillment evidence into accurate customer
@@ -6447,6 +6707,7 @@ curricula:
           applies receipts, validates supplier obligations, schedules approved payments,
           and resolves exceptions affecting projected cash.
     - id: minan.billing.invoices
+      kind: capability
       parent_id: minan.billing
       name: Customer Invoice & Credit-Document Production
       outcome: Create and validate customer invoices and credit documents whose quantities,
@@ -6473,6 +6734,7 @@ curricula:
           order with tiered discounts, freight, tax, payment terms, and references,
           then issue the required credit document for a documented return.
     - id: minan.billing.receivables
+      kind: capability
       parent_id: minan.billing
       name: Receivables Aging & Collections
       outcome: Maintain accurate customer receivable status, age open balances, prioritize
@@ -6501,6 +6763,7 @@ curricula:
           evidence-based collection actions without pursuing amounts that are not
           yet due.
     - id: minan.billing.payments
+      kind: capability
       parent_id: minan.billing
       name: Customer Receipt Application
       outcome: Match customer receipts to receivables, allocate exact, partial, aggregated,
@@ -6527,6 +6790,7 @@ curricula:
           discounts, partial payments, and one unexplained short payment, then document
           every receivable update and unapplied amount.
     - id: minan.billing.receipt_exceptions
+      kind: capability
       parent_id: minan.billing
       name: Customer Refund, Reversal & Chargeback Resolution
       outcome: Reconstruct and resolve customer-payment exceptions by determining
@@ -6553,6 +6817,7 @@ curricula:
           positions, determine recovery or write-off actions, and document the approvals
           and customer communication.
     - id: minan.billing.payables
+      kind: capability
       parent_id: minan.billing
       name: Supplier Payables & Disbursement Operations
       outcome: Validate supplier obligations, maintain payable status, and release
@@ -6580,6 +6845,7 @@ curricula:
           its approval and payment date, execute the disbursement record, and resolve
           any return or reversal.
     - id: minan.billing.payables.invoices
+      kind: capability
       parent_id: minan.billing.payables
       name: Supplier Invoice Validation & Approval
       outcome: Determine whether a supplier invoice represents an authorized, received,
@@ -6606,6 +6872,7 @@ curricula:
           tolerances, and approvals, then route each item for payment, correction,
           or dispute.
     - id: minan.billing.payables.aging
+      kind: capability
       parent_id: minan.billing.payables
       name: Payables Aging & Payment Scheduling
       outcome: Maintain an accurate supplier-payables schedule and prioritize approved
@@ -6631,6 +6898,7 @@ curricula:
           and disputed items, then select a payment plan that respects due dates,
           valuable discounts, critical suppliers, and a stated cash limit.
     - id: minan.billing.payables.disbursements
+      kind: capability
       parent_id: minan.billing.payables
       name: Supplier Disbursement & Exception Resolution
       outcome: Prepare and control supplier payment runs and resolve rejected, duplicated,
@@ -6657,6 +6925,7 @@ curricula:
           item, a duplicate disbursement, and a returned or reversed payment with
           traceable recovery actions.
     - id: minan.tax
+      kind: capability
       parent_id: minan
       name: Tax & Regulatory Filing Preparation
       outcome: Determine filing obligations and transaction treatments, calculate
@@ -6684,6 +6953,7 @@ curricula:
           calculate the liability or refund, populate the required schedules, reconcile
           the package to the books, and identify unresolved filing controls.
     - id: minan.tax.scope
+      kind: capability
       parent_id: minan.tax
       name: Filing Obligations & Jurisdiction
       outcome: Apply supplied rules to entity, location, activity, and period facts
@@ -6710,6 +6980,7 @@ curricula:
           rules, evaluate its activities and thresholds, and identify every required
           return, registration, filing period, and frequency with a fact-based explanation.
     - id: minan.tax.treatment
+      kind: capability
       parent_id: minan.tax
       name: Transaction Tax Treatment
       outcome: Apply supplied rules to classify book transactions as taxable, exempt,
@@ -6736,6 +7007,7 @@ curricula:
           transactions under supplied treatment rules, identifying taxable amounts,
           exemptions, deductions, timing categories, and credit eligibility with reasons.
     - id: minan.tax.computation
+      kind: capability
       parent_id: minan.tax
       name: Tax-Base & Liability Computation
       outcome: Determine applicable filing scope and transaction treatments, then
@@ -6767,6 +7039,7 @@ curricula:
           tax base, rates, limitations, credits, payments, penalties if applicable,
           and resulting liability or refund.
     - id: minan.tax.filing
+      kind: capability
       parent_id: minan.tax
       name: Return Assembly, Reconciliation & Filing Controls
       outcome: Reconcile source records, determine and compute reportable amounts,
@@ -6798,6 +7071,7 @@ curricula:
           or refund, populate and cross-foot the required forms and schedules, and
           produce a filing-readiness record of controls and unresolved items.
     - id: minan.audit
+      kind: capability
       parent_id: minan
       name: Audit & Internal Controls
       outcome: Assess financial-process risks, design and test controls and substantive
@@ -6825,6 +7099,7 @@ curricula:
           and balances using the same transaction population, and issue a supported
           conclusion with prioritized remediation.'
     - id: minan.audit.risk
+      kind: capability
       parent_id: minan.audit
       name: Risk, Assertions & Materiality
       outcome: Translate process and financial-statement facts into scoped risks,
@@ -6850,6 +7125,7 @@ curricula:
           identify and rank account- and process-level misstatement risks, connect
           each to assertions, and define the areas requiring further work.
     - id: minan.audit.controls
+      kind: capability
       parent_id: minan.audit
       name: Control Design & Walkthrough Evaluation
       outcome: Assess financial risks and design or evaluate controls that address
@@ -6880,6 +7156,7 @@ curricula:
           risks, and redesign gaps with clear objectives, owners, evidence, frequency,
           precision, and segregation.
     - id: minan.audit.control_testing
+      kind: capability
       parent_id: minan.audit
       name: Control Operating-Effectiveness Testing
       outcome: Design relevant controls and perform evidence-based tests that determine
@@ -6909,6 +7186,7 @@ curricula:
           test items, evaluate supplied operating evidence and exceptions, and conclude
           whether reliance is supported.
     - id: minan.audit.substantive
+      kind: capability
       parent_id: minan.audit
       name: Substantive Financial Testing
       outcome: Assess risks and design and evaluate analytical and detail procedures
@@ -6940,6 +7218,7 @@ curricula:
           documents, cutoff items, estimates, and exceptions, and quantify detected
           and projected misstatement.
     - id: minan.audit.reporting
+      kind: capability
       parent_id: minan.audit
       name: Audit Conclusions, Findings & Remediation
       outcome: Perform and integrate control and substantive testing, assess exceptions
@@ -6973,6 +7252,7 @@ curricula:
           supported conclusions, classified findings, and prioritized remediation
           with follow-up criteria.
     - id: minan.modeling
+      kind: capability
       parent_id: minan
       name: Financial Modeling & Valuation
       outcome: Build transparent cash-flow and financial-statement models, test their
@@ -7001,6 +7281,7 @@ curricula:
           financing alternatives, estimate enterprise and equity value, and make one
           acquisition-and-funding recommendation from the shared model.
     - id: minan.modeling.cashflows
+      kind: capability
       parent_id: minan.modeling
       name: Cash Flows & Time Value of Money
       outcome: Place financial cash flows on a timeline and consistently compute present
@@ -7027,6 +7308,7 @@ curricula:
           cash flows under stated compounding conventions, solve for its yield, and
           reconcile the result using an equivalent effective rate.
     - id: minan.modeling.forecast
+      kind: capability
       parent_id: minan.modeling
       name: Forecasting, Scenarios & Sensitivities
       outcome: Translate operating and financing assumptions into linked financial
@@ -7055,6 +7337,7 @@ curricula:
           base, downside, and upside scenarios, and identify the assumptions driving
           funding needs and break-even performance.
     - id: minan.modeling.capital
+      kind: capability
       parent_id: minan.modeling
       name: Capital Budgeting & Financing Decisions
       outcome: Construct and evaluate incremental project and financing cash flows
@@ -7086,6 +7369,7 @@ curricula:
           yield calculations, compare NPV, IRR, payback, funding constraints, and
           downside cases, reconcile conflicting metrics, and recommend one alternative.
     - id: minan.modeling.valuation
+      kind: capability
       parent_id: minan.modeling
       name: Enterprise & Equity Valuation
       outcome: Estimate enterprise and equity value from operating assumptions using
@@ -7116,6 +7400,7 @@ curricula:
           validate the discount-rate convention, bridge enterprise value to equity
           value, cross-check market multiples, and present a sensitivity-based range.
     - id: minan.investments
+      kind: capability
       parent_id: minan
       name: Trading & Portfolio Analytics
       outcome: Measure positions and performance, value fixed-income exposures, analyze
@@ -7144,6 +7429,7 @@ curricula:
           and factor risks, attribute active return, and produce one rebalance decision
           that meets return, risk, liquidity, cost, and exposure constraints.
     - id: minan.investments.returns
+      kind: capability
       parent_id: minan.investments
       name: Position Valuation, Gains & Single-Period Returns
       outcome: Convert trades, holdings, prices, income, and corporate actions into
@@ -7171,6 +7457,7 @@ curricula:
           and a corporate action, then calculate ending exposure, adjusted cost basis,
           realized and unrealized gain, and single-period total return for each position.
     - id: minan.investments.performance
+      kind: capability
       parent_id: minan.investments
       name: Investor Return Measurement
       outcome: Measure and reconcile multi-period portfolio performance under external
@@ -7199,6 +7486,7 @@ curricula:
           performance, gross and net returns, and local- and base-currency results
           across multiple periods.
     - id: minan.investments.fixed_income
+      kind: capability
       parent_id: minan.investments
       name: Fixed-Income Valuation & Interest-Rate Exposure
       outcome: Apply time-value methods to fixed-income cash flows and measure how
@@ -7230,6 +7518,7 @@ curricula:
           and convexity, and estimate separate price effects from benchmark-rate and
           credit-spread changes.
     - id: minan.investments.risk
+      kind: capability
       parent_id: minan.investments
       name: Portfolio Volatility, Covariance & Diversification
       outcome: Aggregate asset weights and return relationships into portfolio volatility,
@@ -7258,6 +7547,7 @@ curricula:
           then compare feasible diversification changes under stated weight and liquidity
           constraints.
     - id: minan.investments.factor_risk
+      kind: capability
       parent_id: minan.investments
       name: Beta & Factor Exposure Analysis
       outcome: Estimate or apply market and multi-factor sensitivities to explain
@@ -7285,6 +7575,7 @@ curricula:
           identify unintended concentrations, and size a stated hedge to reduce one
           exposure while reporting residual risks.
     - id: minan.investments.attribution
+      kind: capability
       parent_id: minan.investments
       name: Benchmark Performance Attribution
       outcome: Decompose the difference between portfolio and benchmark returns into
@@ -7313,6 +7604,7 @@ curricula:
           effects as applicable, link the periods, reconcile contributions to active
           return, and explain the material drivers.
     - id: minan.investments.trades
+      kind: capability
       parent_id: minan.investments
       name: Trade & Rebalancing Decisions
       outcome: Perform portfolio risk and attribution analysis and turn the combined
@@ -7353,6 +7645,7 @@ curricula:
     subject_name: Security & Adversarial Analysis
     sections:
     - id: c19.0
+      kind: capability
       parent_id: null
       name: Security and adversarial analysis
       outcome: Reach an evidence-bounded security decision about a system or artifact by relating attack
@@ -7375,6 +7668,7 @@ curricula:
           from the update, and evidence about the signing key, decide whether the update is safe to distribute
           and identify the single evidence gap most likely to reverse that decision.
     - id: c19.1
+      kind: capability
       parent_id: c19.0
       name: Vulnerability research and penetration testing
       outcome: Decide whether a software weakness creates a realizable attack path by connecting mechanism-specific
@@ -7397,6 +7691,7 @@ curricula:
           candidate patch, make one release decision that ties the flaw's root cause to demonstrated attacker
           impact and to an adversarial regression result.
     - id: c19.1.1
+      kind: capability
       parent_id: c19.1
       name: Analyze authorization and isolation flaws
       outcome: Identify and explain how an identity, state, or resource-boundary error permits an unauthorized
@@ -7419,6 +7714,7 @@ curricula:
           trace an unauthorized action to the missing or misplaced security decision and state the violated
           isolation property.
     - id: c19.1.2
+      kind: capability
       parent_id: c19.1
       name: Analyze injection and data-interpretation flaws
       outcome: Trace attacker-controlled data across transformations to an unintended interpreter or resource
@@ -7441,6 +7737,7 @@ curricula:
           or file-resolution trace, identify an injection or traversal flaw and explain the exact interpretation
           mismatch that violates the security boundary.
     - id: c19.1.3
+      kind: capability
       parent_id: c19.1
       name: Analyze bounds and size-flow flaws
       outcome: Trace attacker-influenced sizes through arithmetic, allocation, indexing, and copying to
@@ -7464,6 +7761,7 @@ curricula:
           and a sanitizer trace, reconstruct the arithmetic-to-allocation-to-copy mismatch and explain
           which adjacent security-relevant data an attacker can plausibly influence.
     - id: c19.1.6
+      kind: capability
       parent_id: c19.1
       name: Analyze lifetime and ownership flaws
       outcome: Trace aliases, ownership transfers, and allocation-state changes to identify an invalid
@@ -7486,6 +7784,7 @@ curricula:
           path, and a heap trace, reconstruct the use-after-free window and explain how replacement object
           contents can influence a security-relevant indirect call or field.
     - id: c19.1.4
+      kind: capability
       parent_id: c19.1
       name: Validate exploits and characterize impact
       outcome: Convert a supplied vulnerability hypothesis into a safe, reproducible test that distinguishes
@@ -7508,6 +7807,7 @@ curricula:
           traces, construct a reproducible exploit validation and state the strongest attacker-impact
           claim supported without exceeding scope.
     - id: c19.1.5
+      kind: capability
       parent_id: c19.1
       name: Verify vulnerability remediations
       outcome: Determine whether a proposed remediation closes the supplied attack path without introducing
@@ -7530,6 +7830,7 @@ curricula:
           adversarial regression cases, assess plausible bypasses, and decide whether the remediation
           closes the causal path.
     - id: c19.3
+      kind: capability
       parent_id: c19.0
       name: Malware and threat analysis
       outcome: Reach a defensible threat decision by combining evidence about suspicious artifact structure,
@@ -7552,6 +7853,7 @@ curricula:
           intrusion observations, decide the containment and detection priority for one threat and justify
           it with a single coherent behavior hypothesis and confidence bound.
     - id: c19.3.1
+      kind: capability
       parent_id: c19.3
       name: Infer malware behavior from static artifacts
       outcome: Reconstruct security-relevant capabilities and execution logic from a suspicious artifact's
@@ -7574,6 +7876,7 @@ curricula:
           information, reconstruct the execution path that implements a security-relevant capability and
           grade each inference by evidence strength.
     - id: c19.3.2
+      kind: capability
       parent_id: c19.3
       name: Reconstruct malicious runtime behavior
       outcome: Correlate host, process, memory, and network events into a causal account of a suspicious
@@ -7596,6 +7899,7 @@ curricula:
           the malicious execution chain, distinguish causes from coincident events, and state the observed
           persistence or evasion mechanism.
     - id: c19.3.3
+      kind: capability
       parent_id: c19.3
       name: Design behavior-grounded detections
       outcome: Translate supplied malicious behavior and telemetry into durable detection or hunting logic
@@ -7618,6 +7922,7 @@ curricula:
           and two evasion variants, design detection or hunting logic and explain its coverage and false-positive
           boundary.
     - id: c19.3.4
+      kind: capability
       parent_id: c19.3
       name: Correlate threat evidence
       outcome: Assess whether heterogeneous observations belong to the same threat activity by comparing
@@ -7640,6 +7945,7 @@ curricula:
           for several incidents, group the observations into the best-supported activity clusters and
           compare the leading linkage hypothesis with one plausible alternative.
     - id: c19.4
+      kind: capability
       parent_id: c19.0
       name: Applied cryptography
       outcome: Decide whether a cryptographic construction or operational design achieves its stated security
@@ -7664,6 +7970,7 @@ curricula:
           constraints, decide whether existing releases remain trustworthy and name the first action required
           to re-establish trust.
     - id: c19.4.1
+      kind: capability
       parent_id: c19.4
       name: Compute cryptographic encodings and identifiers
       outcome: Derive and verify structured cryptographic values by applying supplied serialization, prefix,
@@ -7686,6 +7993,7 @@ curricula:
           derive the canonical serialization, digest, checksum, and encoded identifier and show an independent
           verification path.
     - id: c19.4.2
+      kind: capability
       parent_id: c19.4
       name: Evaluate key generation and entropy
       outcome: Determine whether a supplied key-generation process produces unpredictable, unbiased, and
@@ -7708,6 +8016,7 @@ curricula:
           steps, and reset or cloning scenarios, determine which pipeline preserves unpredictability and
           identify the decisive failure mode in the other.
     - id: c19.4.3
+      kind: capability
       parent_id: c19.4
       name: Evaluate key custody and access isolation
       outcome: Assess whether storage, isolation, authorization, and signing or decryption interfaces
@@ -7730,6 +8039,7 @@ curricula:
           and host or operator compromise scenarios, compare unauthorized-use and disclosure paths and
           choose the design with the strongest defensible user control.
     - id: c19.4.4
+      kind: capability
       parent_id: c19.4
       name: Validate cryptographic authentication and protocol trust
       outcome: Determine whether certificate, signature, host-key, algorithm-negotiation, or signed-artifact
@@ -7752,6 +8062,7 @@ curricula:
           evidence, and an explicit trust policy, determine why trust establishment succeeds or fails
           and reject any compatibility change that would invalidate the intended property.
     - id: c19.4.5
+      kind: capability
       parent_id: c19.4
       name: Evaluate password-based cryptographic protection
       outcome: Choose and assess password-hashing or password-based key-derivation parameters by relating
@@ -7775,6 +8086,7 @@ curricula:
           attacker hardware assumptions, and migration limits, recommend parameter and migration choices
           and quantify the security-versus-service-cost boundary.
     - id: c19.4.6
+      kind: capability
       parent_id: c19.4
       name: Design key backup and recovery
       outcome: Design and test a key-backup and recovery procedure that preserves confidentiality, integrity,
@@ -7797,6 +8109,7 @@ curricula:
           constraints, design a recoverable backup scheme and a test that demonstrates restoration without
           exposing key material to an unauthorized party.
     - id: c19.4.7
+      kind: capability
       parent_id: c19.4
       name: Respond to cryptographic key compromise
       outcome: Limit harm after suspected or confirmed key compromise by choosing detection, containment,
@@ -7818,3 +8131,1121 @@ curricula:
         instruction: Given a compromised key's uses, certificate or token dependencies, encrypted data,
           replacement capabilities, and attacker window, order the revocation, rotation, re-encryption,
           and trust-recovery actions and justify the residual exposure after each step.
+- routing_facet: subject_domain
+  curriculum:
+    version: wave6-1
+    subject_id: C09
+    subject_name: NLP & Language Technology
+    sections:
+    - id: c09
+      parent_id: null
+      name: Goal-directed language operations
+      kind: group
+      scope: Language-processing capabilities that transform or interpret supplied natural language to
+        produce structured records, labels, compressed or reformulated text, dialogue, or cross-language
+        renderings.
+      includes:
+      - Structured information extraction from supplied language
+      - Text classification and sentiment assessment
+      - Summarization and same-language rewriting
+      - Dialogue management, multi-turn composition, and supplied-policy response
+      - Machine translation in explicitly declared language directions
+      excludes:
+      - Domain-specific factual recall when no language operation is required
+      - Shell, file, or verifier mechanics that merely deliver an answer
+      - Arbitrary formatting constraints with no substantive language-processing goal
+      - Implementation or training of NLP software and models
+    - id: c09.1
+      parent_id: c09
+      name: Extract information into a supplied schema
+      kind: capability
+      outcome: Given unstructured or semi-structured language and a supplied schema, a learner can locate
+        requested entities, attributes, relations, and events; normalize them to the schema's types and
+        labels; preserve uncertainty and missingness; and emit a source-supported structured record.
+      includes:
+      - Entity and attribute extraction
+      - Relation and event extraction
+      - Schema-constrained normalization of dates, numbers, labels, and nested values
+      - Explicit handling of missing, ambiguous, and conflicting source values
+      excludes:
+      - Free-form summaries without independently addressable fields
+      - Assigning one overall topic, intent, stance, or sentiment label
+      - Inferring values not supported by the supplied text
+      - Designing or modifying the schema itself
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a short return-request paragraph and a supplied four-field schema, fill the
+          customer name, order identifier, purchase date, and return reason, using null for any unsupported
+          field.
+      - kind: representative
+        instruction: Given a long incident report containing prose, a table, aliases, uncertain times,
+          and two conflicting dates, populate a supplied nested JSON schema for people, organizations,
+          events, and temporal relations; normalize typed values, retain source-supported alternatives
+          with confidence labels, and use null for every requested value the report does not state.
+    - id: c09.2
+      parent_id: c09
+      name: Same-language text transformation
+      kind: group
+      scope: Transformations that preserve grounding in supplied source text while either compressing
+        its informational scope or reformulating substantially the same propositions within the same language.
+      includes:
+      - Purpose- and audience-conditioned summarization
+      - Tone-, register-, audience-, and clarity-controlled rewriting
+      - Preservation of source claims, qualifications, and constraints
+      excludes:
+      - Translation into a different natural language
+      - Extraction into independently keyed schema fields
+      - Generation of claims not supported by the source
+      - Dialogue tasks whose decisive operation is conversation-state management
+    - id: c09.2.summary
+      parent_id: c09.2
+      name: Summarize source text
+      kind: capability
+      outcome: Given source text, a target audience, and a length or format constraint, a learner can
+        select the material points, compress and organize them, and produce a source-faithful summary
+        that retains qualifications important to the stated purpose.
+      includes:
+      - Abstractive and extractive summarization
+      - Single-sentence, paragraph, and bullet summaries
+      - Audience-conditioned salience selection
+      - Retention of material caveats, uncertainty, and attribution
+      excludes:
+      - Restyling the full informational content without meaningful compression
+      - Field-by-field schema extraction
+      - Adding background facts absent from the source
+      - Producing a separate rewritten message in addition to the requested summary
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Reduce a supplied two-sentence passage to one sentence that states its central claim
+          and preserves its explicit qualification.
+      - kind: representative
+        instruction: Given a supplied 1,200-word policy memo, produce five bullets for regional managers
+          that preserve the decision, effective date, affected groups, two exceptions, and stated uncertainty
+          while omitting examples that do not change implementation.
+    - id: c09.2.rewrite
+      parent_id: c09.2
+      name: Rewrite text for audience and purpose
+      kind: capability
+      outcome: Given source text and a specified audience, tone, register, or clarity goal, a learner
+        can reformulate the text within the same language while preserving its substantive propositions,
+        conditions, and degree of certainty.
+      includes:
+      - Tone- and register-controlled rewriting
+      - Plain-language and audience-appropriate reformulation
+      - Polite revision and constraint-preserving paraphrase
+      - Reorganization for clarity without intentional information loss
+      excludes:
+      - Compression whose primary goal is to select only the most salient points
+      - Translation into a different language
+      - Inventing supporting facts or changing the speaker's commitment
+      - Interactive response planning that depends on conversation state
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Rewrite a supplied blunt two-sentence request as a polite message to a colleague
+          without removing either requested action or changing its deadline.
+      - kind: representative
+        instruction: Rewrite a supplied legal-service notice for a general public audience in plain language,
+          preserving every eligibility condition, prohibition, deadline, exception, and expression of
+          uncertainty while following the requested neutral tone and paragraph structure.
+    - id: c09.3
+      parent_id: c09
+      name: Classify text and assess sentiment
+      kind: capability
+      outcome: Given text, a supplied label set with decision criteria, and any requested target or aspect,
+        a learner can select the best-supported topic, intent, stance, emotion, or sentiment label; distinguish
+        close alternatives; and ground the decision in textual evidence.
+      includes:
+      - Topic and intent classification
+      - Sentiment polarity and intensity
+      - Emotion and stance classification
+      - Aspect- and target-level sentiment
+      - Evidence-grounded resolution of borderline labels
+      excludes:
+      - Open-ended explanation with no classification decision
+      - Extracting many independent fields into a record
+      - Inferring affect from facts not present in the text or label definitions
+      - Choosing a dialogue action when no label is requested
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given one customer sentence and three supplied intent labels with definitions, select
+          the best label and quote the shortest phrase that rules out its closest alternative.
+      - kind: representative
+        instruction: Given supplied reviews that praise product quality but criticize delivery, apply
+          a supplied taxonomy to assign an intent plus polarity and intensity for each named aspect, and
+          explain each borderline choice using only the review text and label criteria.
+    - id: c09.4
+      parent_id: c09
+      name: Dialogue and assistant behavior
+      kind: group
+      scope: Capabilities whose requested artifact is a context-sensitive next turn, a globally coherent
+        multi-turn exchange, or a response governed by a supplied assistance or safety policy.
+      includes:
+      - Conversation-state tracking and next-turn selection
+      - Complete multi-turn roleplay, interview, and simulation composition
+      - Supplied-policy allow, refuse, clarify, limit, and redirect responses
+      excludes:
+      - One-shot rewriting with no conversational state or speaker interaction
+      - Intent or sentiment classification without a dialogue deliverable
+      - External action execution not represented in the requested utterance
+      - Safety judgments based on an unstated private policy
+    - id: c09.4.manage
+      parent_id: c09.4
+      name: Manage the next turn of an ongoing dialogue
+      kind: capability
+      outcome: Given conversation history, a current user goal, and interaction constraints, a learner
+        can update the dialogue state, resolve relevant references, choose an appropriate next conversational
+        act, and produce a response or focused clarifying question that advances the exchange without
+        losing prior constraints.
+      includes:
+      - Conversation-state and goal tracking
+      - Context-sensitive next-turn response
+      - Clarifying-question and interview-question selection
+      - Honest communication of uncertainty or missing information
+      excludes:
+      - Writing a complete fictional or simulated transcript from scratch
+      - Policy-based safety adjudication as the decisive operation
+      - One-shot tone revision without conversation state
+      - Executing an external tool action
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a supplied two-turn booking exchange that lacks one required date, ask exactly
+          one question that obtains the missing date without repeating information already supplied.
+      - kind: representative
+        instruction: Given a supplied multi-turn support conversation in which the user's requested product,
+          budget, and delivery deadline change over time, write the next assistant turn that uses the
+          latest constraints, resolves one ambiguous pronoun from context, states one remaining uncertainty,
+          and asks only the question needed to continue.
+    - id: c09.4.compose
+      parent_id: c09.4
+      name: Compose a coherent multi-turn dialogue
+      kind: capability
+      outcome: Given a scenario, speaker roles, an interaction arc, and content or style constraints,
+        a learner can generate a complete multi-turn dialogue whose turns respond locally, maintain consistent
+        speaker knowledge and voice, and collectively realize the requested progression.
+      includes:
+      - Roleplay and scene dialogue
+      - Interview and training-simulation transcripts
+      - Speaker-consistent voice and knowledge
+      - Turn-by-turn coherence toward a supplied interaction arc
+      excludes:
+      - Selecting only the next action in an already active exchange
+      - Narrative prose with no meaningful speaker interaction
+      - Safety-policy adjudication as the central task
+      - Inventing domain facts not supplied by the scenario
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given two supplied speaker roles and a three-step interaction arc, write a four-turn
+          exchange in which each reply addresses the preceding turn and the final turn completes the stated
+          arc.
+      - kind: representative
+        instruction: Given a supplied fictional setting, three character briefs with unequal knowledge,
+          and a six-beat scene outline, write a ten-turn script that preserves each voice and knowledge
+          boundary, incorporates every beat in order, and ends with the specified unresolved decision.
+    - id: c09.4.safety
+      parent_id: c09.4
+      name: Respond under a supplied safety policy
+      kind: capability
+      outcome: Given a user request, relevant conversation context, and a supplied safety or assistance
+        policy, a learner can identify the applicable policy boundary and produce the allowed response,
+        including a concise refusal, limitation statement, clarification, or safe redirection when required.
+      includes:
+      - Policy-grounded allow, refuse, or redirect decisions
+      - Minimal explanation of the relevant limitation
+      - Helpful safe alternatives consistent with the user's benign goal
+      - Context-sensitive handling of ambiguous-risk requests
+      excludes:
+      - Safety judgments based on an unstated private policy
+      - Generic next-turn helpfulness when no policy boundary is implicated
+      - Long moralizing explanations unrelated to the supplied policy
+      - External enforcement or moderation actions
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a short request and a supplied three-rule response policy, identify the one
+          rule that applies and write either the allowed answer or a one-sentence refusal.
+      - kind: representative
+        instruction: Given a supplied multi-turn conversation containing a mixed benign and disallowed
+          request plus a response policy, write the next assistant turn that answers the allowed portion,
+          refuses only the prohibited assistance with the policy-relevant reason, and offers one concrete
+          safe alternative that advances the benign goal.
+    - id: c09.5
+      parent_id: c09
+      name: Translate across a declared language direction
+      kind: capability
+      outcome: Given source text, a declared source-target language direction, and any supplied terminology,
+        register, or formatting requirements, a learner can render the source meaning in the target language
+        while preserving entities, modality, discourse relations, ambiguity, and communicative force appropriate
+        to that direction.
+      includes:
+      - Sentence, paragraph, document, and dialogue translation across declared language directions
+      - Terminology- and glossary-constrained translation
+      - Preservation of register, politeness, modality, and discourse relations
+      - Direction-stratified training and evaluation rather than assuming cross-direction transfer
+      excludes:
+      - Treating mastery of one source-target direction as evidence of mastery in another
+      - Summarization or same-language paraphrase
+      - Transliteration or language identification without translation
+      - Adding cultural explanation not requested by the task
+      - Assessing translation quality without producing a translation
+      prerequisites: []
+      sampling_facets:
+      - id: language_direction
+        description: The ordered source_language-to-target_language pair. Sample and evaluate each declared
+          direction as its own stratum, using reusable values such as en-to-zh, zh-to-en, en-to-es, es-to-en,
+          en-to-ar, and ar-to-en; do not pool directions when estimating mastery.
+      sample_tasks:
+      - kind: entry
+        instruction: For language_direction=en-to-zh, translate one supplied English sentence into Chinese
+          while preserving its named entity, negation, tense, and degree of certainty.
+      - kind: representative
+        instruction: For language_direction=en-to-zh, translate a supplied English customer-support exchange
+          into Chinese using a provided English-to-Chinese glossary, preserving speaker turns, politeness,
+          technical terms, conditions, paragraph structure, and one deliberately unresolved ambiguity.
+- routing_facet: subject_domain
+  curriculum:
+    version: wave6-3
+    subject_id: C15
+    subject_name: Computational Science & Simulation
+    sections:
+    - id: c15
+      parent_id: null
+      name: Computational science and simulation
+      kind: group
+      scope: Computational representations, numerical operations, execution regimes, and validation evidence
+        used to answer scientific questions.
+      includes:
+      - Continuum, high-performance, sampled-data, Earth-system, quantum, molecular, mesoscale, and numerical-fitting
+        work represented by the child capabilities.
+      excludes:
+      - Pure scientific recall, generic software work without a scientific-computing constraint, and answer-delivery
+        wrappers.
+    - id: c15.7
+      parent_id: c15
+      name: Numerical fitting and error diagnosis
+      kind: capability
+      outcome: Fit a supplied quantitative model with numerical optimization, compare appropriate objectives,
+        and diagnose residual, outlier, conditioning, and implementation error using reproducible calculations
+        and plots.
+      includes:
+      - Array-based least-squares and robust fitting, optimizer diagnostics, residual analysis, conditioning
+        checks, and reproducible visualization.
+      excludes:
+      - Calibration whose decisive operation is evolving a domain-specific state model, domain-specific
+        PDE or particle simulation, and general statistical inference without numerical fitting.
+      prerequisites: []
+      sampling_facets:
+      - id: objective_family
+        description: Sample quadratic and robust residual objectives while holding the central fit-and-diagnose
+          operation fixed.
+      sample_tasks:
+      - kind: entry
+        instruction: Given paired scalar observations and an array API, compute a least-squares line,
+          plot its residuals, and report one conditioning check.
+      - kind: representative
+        instruction: Given a design matrix with leverage points and response outliers, implement quadratic-
+          and absolute-residual fits, compare optimizer and residual diagnostics, and select the objective
+          justified by a supplied measurement-error model.
+    - id: c15.1
+      parent_id: c15
+      name: Continuum mechanics, flow, and field simulation
+      kind: group
+      scope: 'Continuum discretizations separated by the decisive numerical operation: linear finite-element
+        solution, nonlinear incremental finite-element equilibrium, conservative scalar or compressible
+        flux advancement, incompressible pressure-velocity solution, stationary elliptic solution, explicit
+        diffusion integration, stiff split reaction-diffusion integration, and wave propagation.'
+      includes:
+      - Linear and nonlinear finite-element mechanics, conservation-law fluxes, incompressible flow, stationary
+        elliptic fields, explicit transient diffusion, stiff split reaction-diffusion, and standalone
+        wave propagation.
+      excludes:
+      - Particle trajectories, electronic wavefunctions, parallel execution as the primary problem, and
+        conceptual PDE classification without a numerical solve.
+    - id: c15.1.1
+      parent_id: c15.1
+      name: Linear finite-element mechanics
+      kind: capability
+      outcome: Assemble and solve a small-strain linear finite-element mechanics system, then assess constraints,
+        rigid modes, conditioning, equilibrium, mesh convergence, and stress or displacement observables.
+      includes:
+      - Small-strain linear elasticity, linear element and constitutive matrices, global assembly, loads,
+        constraints, one constrained linear solve, reactions, and mesh refinement.
+      excludes:
+      - Finite-strain or material-nonlinear residual and tangent iteration, load stepping, contact, fluid
+        conservation-law fluxes, generic stationary fields, and molecular force fields.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a small triangular linear-elasticity mesh, constitutive matrix, loads, and
+          fixed nodes, assemble the constrained stiffness system and state one rigid-mode check.
+      - kind: representative
+        instruction: For a supplied small-strain elastic bracket with mixed loads and constraints, assemble
+          and solve the linear finite-element system and use reaction balance, rigid-mode checks, conditioning,
+          and mesh refinement to judge peak displacement and stress.
+    - id: c15.1.7
+      parent_id: c15.1
+      name: Nonlinear incremental finite-element equilibrium
+      kind: capability
+      outcome: Solve a finite-strain or materially nonlinear finite-element mechanics problem through
+        incremental residual and consistent-tangent equilibrium iterations, then assess convergence, step
+        sensitivity, and path-dependent stress or displacement observables.
+      includes:
+      - Hyperelastic or supplied nonlinear constitutive response, internal-force residuals, consistent
+        tangents, Newton iterations, load increments, convergence norms, and increment refinement without
+        contact.
+      excludes:
+      - A single small-strain linear assembly and solve, contact or fracture as the decisive operation,
+        fluid coupling, and molecular force integration.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a nonlinear element residual, consistent tangent, current displacement, and
+          one load increment, compute one Newton correction and the updated residual norm.
+      - kind: representative
+        instruction: For a supplied finite-strain hyperelastic body and load path, assemble residuals
+          and consistent tangents, converge every load increment with Newton iterations, and use equilibrium,
+          increment refinement, and force-displacement measurements to diagnose convergence and validate
+          the response.
+    - id: c15.1.2
+      parent_id: c15.1
+      name: Conservative scalar and compressible-flux advancement
+      kind: capability
+      outcome: Discretize and advance a scalar conservation law or compressible conservation-law system
+        with numerical and boundary fluxes, then assess conservation, shock or wave resolution, stability,
+        and convergence.
+      includes:
+      - Scalar advection, nonlinear scalar conservation laws, compressible Euler-like systems, finite-volume
+        or conservative finite-difference updates, Riemann or upwind fluxes, limiters, and CFL reasoning.
+      excludes:
+      - Incompressible pressure projection or velocity-pressure coupling, pure diffusion or reaction,
+        stationary elliptic potentials, standalone wave propagation judged by phase error, and solid mechanics.
+      prerequisites: []
+      sampling_facets:
+      - id: conservation_system_family
+        description: Cover scalar and compressible systems while retaining conservative numerical-flux
+          construction, CFL control, and balance diagnostics.
+      sample_tasks:
+      - kind: entry
+        instruction: Given a one-dimensional scalar advection law, grid, inflow data, timestep, and numerical-flux
+          formula, compute one conservative update and check its CFL condition and total balance.
+      - kind: representative
+        instruction: Advance a supplied one-dimensional compressible shock-tube system, choose a Riemann
+          flux and limiter, and use total conservation, positivity, shock location, and grid refinement
+          to judge the result.
+    - id: c15.1.6
+      parent_id: c15.1
+      name: Incompressible pressure-velocity flow solution
+      kind: capability
+      outcome: Solve an incompressible flow problem by coupling velocity and pressure, enforcing boundary
+        compatibility, and assessing discrete divergence, pressure or force observables, stability, and
+        grid-timestep convergence.
+      includes:
+      - Pressure projection, pressure-correction and saddle-point formulations, velocity-pressure compatibility,
+        divergence-free constraints, incompressible boundary conditions, and mass-balance diagnostics.
+      excludes:
+      - Scalar or compressible Riemann-flux advancement, standalone pressure-wave propagation, pure diffusion
+        or reaction, and stationary potentials not coupled to incompressible velocity.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a provisional velocity field, pressure-Poisson stencil, boundary data, and
+          timestep, solve one projection step, correct the velocity, and compute the discrete-divergence
+          norm.
+      - kind: representative
+        instruction: Simulate a supplied two-dimensional incompressible channel-flow case, choose a pressure-velocity
+          coupling and boundary treatment, and use divergence, mass imbalance, pressure-drop error, and
+          grid-timestep refinement to judge the solution.
+    - id: c15.1.3
+      parent_id: c15.1
+      name: Stationary elliptic field simulation
+      kind: capability
+      outcome: Assemble and solve a stationary elliptic boundary-value problem, then use residual, boundary,
+        solver, and mesh-convergence evidence to validate field observables.
+      includes:
+      - Poisson, Laplace, steady conduction, and other variable-coefficient elliptic fields solved with
+        finite differences, finite elements, or spectral discretizations.
+      excludes:
+      - Time integration, constitutive solid mechanics, fluid momentum-pressure coupling, advective flux
+        systems, and wave dispersion.
+      prerequisites: []
+      sampling_facets:
+      - id: elliptic_model_family
+        description: Cover potential, steady-conduction, and steady-diffusion models whose central operation
+          remains a stationary boundary-value solve.
+      sample_tasks:
+      - kind: entry
+        instruction: Given a rectangular electrostatic domain, a five-point Poisson stencil, source values,
+          and Dirichlet data, assemble the interior linear equations and compute their residual for a
+          supplied candidate solution.
+      - kind: representative
+        instruction: Solve a supplied variable-coefficient steady-conduction problem with mixed boundary
+          conditions, choose a sparse-solver stopping rule, and use boundary-flux balance plus mesh refinement
+          to validate a requested temperature and heat-flux observable.
+    - id: c15.1.4
+      parent_id: c15.1
+      name: Explicit transient diffusion integration
+      kind: capability
+      outcome: Advance a non-advective linear diffusion field with an explicit spatial stencil and timestep
+        update, then assess the diffusion stability number, conservation or maximum-principle behavior,
+        and temporal-spatial convergence.
+      includes:
+      - Transient heat or mass diffusion with explicit finite-difference or finite-volume updates, variable
+        supplied diffusivity, boundary fluxes, diffusion stability limits, and dissipative-field observables.
+      excludes:
+      - Nonlinear or stiff reaction solves, operator splitting, implicit diffusion as the decisive solve,
+        advective numerical fluxes, stationary elliptic solves, and wave propagation.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a one-dimensional heat equation, grid, initial field, diffusivity, and explicit
+          update, compute one timestep and determine whether the diffusion stability limit is satisfied.
+      - kind: representative
+        instruction: Advance a supplied two-dimensional variable-diffusivity heat field with an explicit
+          conservative stencil, choose a stable timestep, and use heat balance, maximum-principle checks,
+          and grid and timestep refinement to judge a temperature observable.
+    - id: c15.1.8
+      parent_id: c15.1
+      name: Stiff split reaction-diffusion integration
+      kind: capability
+      outcome: Integrate a stiff reaction-diffusion system by composing diffusion and implicit nonlinear
+        reaction substeps, then assess nonlinear convergence, positivity, splitting error, spatial-temporal
+        convergence, and coupled-field observables.
+      includes:
+      - Multiple reacting fields, stiff supplied reaction Jacobians, implicit local reaction solves, Lie
+        or Strang operator splitting, positivity control, and splitting-error diagnosis.
+      excludes:
+      - Pure explicit linear diffusion, advective numerical fluxes, monolithic fluid pressure-velocity
+        coupling, stationary elliptic solves, and wave propagation.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given two reaction-diffusion fields, supplied diffusion and implicit-reaction substep
+          formulas, a reaction Jacobian, and one timestep, perform one Lie-split step and report nonlinear
+          residual and positivity checks.
+      - kind: representative
+        instruction: Integrate a supplied stiff two-species reaction-diffusion model with Strang splitting
+          and an implicit reaction solve, then separate nonlinear-solver, splitting, timestep, and spatial
+          error in the onset time of a pattern while preserving positivity.
+    - id: c15.1.5
+      parent_id: c15.1
+      name: Wave-field propagation
+      kind: capability
+      outcome: Propagate a standalone wave field through a spatial medium and assess stability, numerical
+        phase and amplitude error, boundary reflection, and grid-timestep convergence.
+      includes:
+      - Scalar acoustic, elastic-wave, and electromagnetic-style propagation when the decisive operation
+        is resolving wave travel, phase, and reflection rather than fluid transport.
+      excludes:
+      - Compressible-flow shocks or material transport governed by fluid fluxes, quantum-state propagation,
+        stationary fields, and diffusive decay.
+      prerequisites: []
+      sampling_facets:
+      - id: wave_model_family
+        description: Cover acoustic, elastic, and electromagnetic-style supplied wave models with the
+          same propagation and dispersion diagnostics.
+      sample_tasks:
+      - kind: entry
+        instruction: Given a one-dimensional wave equation, centered update, wavespeed, grid, and timestep,
+          compute one update and check the stated stability limit and phase-speed error for one wavelength.
+      - kind: representative
+        instruction: Propagate a supplied pulse through a heterogeneous medium with an absorbing boundary,
+          then use grid and timestep refinement, measured phase speed, amplitude loss, and reflected energy
+          to validate the simulation.
+    - id: c15.2
+      parent_id: c15
+      name: High-performance and parallel computing
+      kind: group
+      scope: Execution architectures for scientific workloads, separated by memory model, device-kernel
+        operation, streaming synthesis, host-device movement, or live timing constraints.
+      includes:
+      - Shared-memory threads, distributed message passing, GPU kernels, FPGA dataflow, heterogeneous
+        offload, and real-time pipeline synchronization.
+      excludes:
+      - Deriving the scientific model, generic deployment, and media operations with no parallel, throughput,
+        or deadline constraint.
+    - id: c15.2.1
+      parent_id: c15.2
+      name: Distributed-memory decomposition and execution
+      kind: capability
+      outcome: Decompose a scientific computation across distributed-memory processes, implement communication
+        and synchronization, and evaluate numerical agreement, load balance, scalability, and communication
+        cost.
+      includes:
+      - Domain and task decomposition, message passing, collectives, halo exchange, strong and weak scaling,
+        distributed load balance, and reproducibility.
+      excludes:
+      - Shared-memory race and cache behavior as the central problem, device-kernel tuning, host-device
+        transfer scheduling, and real-time control deadlines.
+      prerequisites: []
+      sampling_facets:
+      - id: decomposition_regime
+        description: Cover regular spatial and irregular work-balanced decompositions while holding explicit
+          inter-process communication and scaling diagnosis fixed.
+      sample_tasks:
+      - kind: entry
+        instruction: Given a serial two-dimensional stencil and a four-process topology, partition the
+          domain, identify halo messages and synchronization points, and state a numerical-equivalence
+          check.
+      - kind: representative
+        instruction: Parallelize a supplied irregular particle-neighbor calculation across cluster processes
+          and use scaling, load-imbalance, communication, and reproducibility measurements to choose between
+          spatial and work-queue decomposition.
+    - id: c15.2.6
+      parent_id: c15.2
+      name: Shared-memory parallel execution
+      kind: capability
+      outcome: Parallelize a scientific workload within shared memory, preserving race-free semantics
+        while improving scheduling, cache locality, reduction behavior, and NUMA scaling.
+      includes:
+      - Threaded loops and tasks, synchronization, race detection, reductions, false sharing, cache locality,
+        affinity, NUMA placement, and shared-memory scaling.
+      excludes:
+      - Explicit inter-process messages and halos, accelerator kernels, host-device copies, and hard real-time
+        coordination.
+      prerequisites: []
+      sampling_facets:
+      - id: shared_parallel_pattern
+        description: Cover loop-reduction and irregular task-scheduling models while retaining shared-state
+          correctness and memory-locality diagnosis.
+      sample_tasks:
+      - kind: entry
+        instruction: Given a threaded array reduction with a race and per-thread counters on adjacent
+          cache lines, repair the reduction and identify a false-sharing check.
+      - kind: representative
+        instruction: Parallelize a supplied irregular mesh traversal on a multisocket shared-memory machine,
+          choose task scheduling and data placement, and use race, cache-miss, NUMA-traffic, load-balance,
+          and scaling evidence to validate it.
+    - id: c15.2.2
+      parent_id: c15.2
+      name: GPU and data-parallel kernel optimization
+      kind: capability
+      outcome: Map a data-parallel scientific kernel to a GPU-like accelerator and improve it through
+        thread decomposition, memory hierarchy, occupancy, divergence, profiling, and numerical-agreement
+        reasoning.
+      includes:
+      - SIMD or SIMT execution, coalescing, shared memory, occupancy, divergence, profiler counters, throughput,
+        and floating-point validation.
+      excludes:
+      - FPGA pipeline synthesis, whole-application offload partitioning, distributed message passing,
+        and CPU threading as the primary operation.
+      prerequisites: []
+      sampling_facets:
+      - id: kernel_bottleneck_regime
+        description: Cover bandwidth-, occupancy-, and divergence-limited kernels while retaining profile-guided
+          SIMT mapping and validation.
+      sample_tasks:
+      - kind: entry
+        instruction: Given a reference matrix stencil and GPU memory layout, assign outputs to threads
+          and identify one uncoalesced access and one numerical-agreement tolerance.
+      - kind: representative
+        instruction: Optimize a supplied GPU pairwise-interaction kernel from profiler counters, choose
+          between tiling, layout, and occupancy revisions, and verify speedup and numerical error against
+          the CPU reference.
+    - id: c15.2.3
+      parent_id: c15.2
+      name: FPGA streaming dataflow design
+      kind: capability
+      outcome: Design and assess an FPGA-oriented streaming computation by choosing numeric representation,
+        pipeline stages, initiation interval, buffering, and resource allocation under throughput and
+        latency constraints.
+      includes:
+      - Streaming dataflow, pipelining, fixed-point error, on-chip buffers, initiation interval, logic
+        and memory resources, and synthesis evidence.
+      excludes:
+      - GPU occupancy tuning, distributed decomposition, whole-application offload, and generic digital-logic
+        recall.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a three-stage streaming numerical filter and an FPGA resource table, compute
+          the bottleneck initiation interval and identify the buffer required between two stages.
+      - kind: representative
+        instruction: Design an FPGA pipeline for a supplied low-latency numerical filter, choose fixed-point
+          widths and stage replication, and use synthesis resource, latency, throughput, and error reports
+          to judge the specification.
+    - id: c15.2.4
+      parent_id: c15.2
+      name: Heterogeneous offload and memory movement
+      kind: capability
+      outcome: Partition a scientific application between host and accelerator, schedule transfers and
+        kernels, and use dependency and profiling evidence to reduce movement and overlap costs without
+        changing numerical results.
+      includes:
+      - Host-device partitioning, transfer boundaries, asynchronous copies, kernel overlap, persistent
+        device data, batching, and end-to-end profiling.
+      excludes:
+      - Optimizing the internal device kernel, synthesizing FPGA logic, cluster message passing, and independently
+        timed live sensory coordination.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a host timeline with two dependent kernels and three arrays, mark necessary
+          transfer boundaries and one legal copy-compute overlap.
+      - kind: representative
+        instruction: Profile a supplied CPU-accelerator simulation loop, choose stages and persistent
+          data to offload, and show from an end-to-end timeline that the partition reduces transfer overhead
+          while preserving results.
+    - id: c15.2.5
+      parent_id: c15.2
+      name: Real-time heterogeneous pipeline synchronization
+      kind: capability
+      outcome: Coordinate independently timed computational stages under a latency budget using timestamps,
+        buffering, scheduling, and stale-data policy, then validate latency, jitter, consistency, and
+        safe degradation.
+      includes:
+      - CPU, GPU, or FPGA coordination across rendering, sensing, simulation, and force-feedback stages;
+        deadline analysis; buffering; and failure recovery.
+      excludes:
+      - Offline throughput optimization, host-device movement without a live deadline, and media filtering
+        based only on a recorded timeline.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given timestamped producer-consumer traces and a latency budget, select a buffer
+          and stale-sample policy and calculate the worst observed end-to-end delay.
+      - kind: representative
+        instruction: Design synchronization for a supplied visuo-haptic simulator with mismatched rendering,
+          tissue-solve, and servo rates, then use latency and jitter traces to choose prediction, buffering,
+          or dropped updates while preserving force-data consistency.
+    - id: c15.3
+      parent_id: c15
+      name: Signal and image processing
+      kind: group
+      scope: Sampled-signal, audio, video, and scientific-image operations separated by the invariant
+        or transformation that determines correctness.
+      includes:
+      - Signal filtering, audio representation conversion, video geometry and timed filtering, image calibration,
+        and quantitative image measurement.
+      excludes:
+      - Graphics rendering performance, live haptic synchronization, and generative image content.
+    - id: c15.3.1
+      parent_id: c15.3
+      name: Sampled-signal analysis and filtering
+      kind: capability
+      outcome: Analyze and transform a sampled one-dimensional signal with spectral or time-domain operations,
+        accounting for aliasing, filter response, edge handling, and quantitative detection or reconstruction
+        error.
+      includes:
+      - Fourier analysis, convolution, digital filtering, spectral estimation, sampling, aliasing, windowing,
+        and signal-to-noise measurements.
+      excludes:
+      - Audio container and channel conversion, video geometry, image segmentation, and live multi-rate
+        synchronization.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a sampled sinusoid mixture and sample rate, locate aliased components and choose
+          a cutoff for a supplied low-pass filter.
+      - kind: representative
+        instruction: Given a noisy transient sensor trace, design a filtering and spectral-analysis procedure
+          and quantify detection error and sensitivity to window, cutoff, and boundary handling.
+    - id: c15.3.2
+      parent_id: c15.3
+      name: Audio resampling and representation conversion
+      kind: capability
+      outcome: Convert sampled audio between rates, channel layouts, and numeric representations while
+        preserving duration and signal meaning and verifying samples and metadata.
+      includes:
+      - Resampling, antialias filtering, channel mixing, integer and floating-point conversion, clipping
+        and quantization checks, and metadata validation.
+      excludes:
+      - General signal analysis without a representation-conversion target, codec implementation, and
+        video transforms.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a 48 kHz stereo floating-point recording and a 16 kHz mono integer target,
+          specify resampling, mixing, scaling, and clipping checks.
+      - kind: representative
+        instruction: Convert a supplied multichannel recording to a stated archival representation and
+          validate duration, channel semantics, passband preservation, quantization error, peak levels,
+          and metadata.
+    - id: c15.3.3
+      parent_id: c15.3
+      name: Video geometry and aspect correction
+      kind: capability
+      outcome: Transform video pixel dimensions and aspect metadata so displayed geometry is correct across
+        outputs, choosing resampling and validating proportions from sample and display aspect ratios.
+      includes:
+      - Sample, storage, and display aspect ratios; square-pixel conversion; scaling; interlaced geometry;
+        and output metadata.
+      excludes:
+      - Timestamp-selective effects, scientific-image physical calibration, and content segmentation.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a 352 by 576 frame with sample aspect ratio 24:11 and display aspect ratio
+          4:3, compute square-pixel output dimensions for a maximum width of 200.
+      - kind: representative
+        instruction: Repair a supplied anamorphic interlaced clip for square-pixel image export and encoded-video
+          delivery, choosing scaling and aspect metadata and validating circular and frame-proportion
+          references.
+    - id: c15.3.4
+      parent_id: c15.3
+      name: Time-selective video filtering
+      kind: capability
+      outcome: Apply and validate video transformations over selected timeline intervals by reasoning
+        about timestamps, time bases, filter enablement, boundaries, and frame-accurate output behavior.
+      includes:
+      - Timestamp expressions, constant- and variable-frame-rate timelines, interval boundaries, filter
+        state, and decoded-frame verification.
+      excludes:
+      - Video aspect correction, live cross-device deadlines, and untimed image processing.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a constant-frame-rate clip and start and end timestamps, write the enable interval
+          for a horizontal-flip filter and identify the first affected frame.
+      - kind: representative
+        instruction: For a supplied variable-frame-rate clip, apply one transform only between two presentation
+          timestamps and validate both boundaries using decoded timestamps rather than frame counts.
+    - id: c15.3.5
+      parent_id: c15.3
+      name: Scientific-image geometry and calibration
+      kind: capability
+      outcome: Map scientific-image pixels to corrected physical coordinates using calibration metadata,
+        distortion or aspect models, interpolation, and landmark error measurements.
+      includes:
+      - Anisotropic pixel scales, stage calibration, affine and nonlinear distortion correction, interpolation,
+        landmarks, and physical-length validation.
+      excludes:
+      - Display-only video aspect metadata, region segmentation, and image generation.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given unequal horizontal and vertical pixel scales and three calibration landmarks,
+          map one pixel coordinate to physical units and compute its reference error.
+      - kind: representative
+        instruction: Correct a supplied microscopy image using stage calibration and a distortion model,
+          choose interpolation, and quantify landmark and measured-length error before and after correction.
+    - id: c15.3.6
+      parent_id: c15.3
+      name: Computational image measurement and segmentation
+      kind: capability
+      outcome: Extract and quantify specified image structure with segmentation or feature measurements
+        and assess accuracy and sensitivity against annotations or physical references.
+      includes:
+      - Thresholding, morphology, connected regions, feature extraction, overlap metrics, physical measurements,
+        and parameter sensitivity.
+      excludes:
+      - Coordinate calibration as the central operation, display geometry, and generative image editing.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given one calibrated grayscale image and a reference mask, apply a supplied threshold
+          rule and compute intersection-over-union and area error.
+      - kind: representative
+        instruction: Measure a particle-size distribution in supplied noisy micrographs, choose segmentation
+          and connected-region operations, and report accuracy and distribution sensitivity across preprocessing
+          and thresholds.
+    - id: c15.4
+      parent_id: c15
+      name: Earth and climate systems modeling
+      kind: group
+      scope: Earth-system computations that either propagate supplied scenarios through explicit impact
+        rules or evolve and calibrate process states.
+      includes:
+      - Climate-scenario arithmetic and classification, Earth-system process simulation, calibration,
+        hindcasts, spatial residuals, and ensemble sensitivity.
+      excludes:
+      - Earth-science recall without a computation, cosmological simulation, and generic fitting detached
+        from an Earth-system representation.
+    - id: c15.4.1
+      parent_id: c15.4
+      name: Climate scenario propagation and impact classification
+      kind: capability
+      outcome: Apply supplied climate-change scenarios to baseline variables and map projected values
+        through an explicit impact, biome, hazard, or regime rule while reporting threshold sensitivity.
+      includes:
+      - Scenario deltas or factors, regional baselines, supplied lookup or threshold models, classifications,
+        and uncertainty near regime boundaries.
+      excludes:
+      - Calibrating or integrating a process model, unsupported biome recall, and causal attribution not
+        encoded in the supplied rule.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Apply a 20 percent precipitation decrease and 4 degree temperature increase to a
+          supplied baseline, then use a provided biome table to identify the projected class.
+      - kind: representative
+        instruction: Using supplied regional baselines, three climate scenarios, and a drought-impact
+          threshold model, compute projected classifications and determine which conclusions are stable
+          to threshold and scenario uncertainty.
+    - id: c15.4.2
+      parent_id: c15.4
+      name: Process-based Earth-system simulation and calibration
+      kind: capability
+      outcome: Configure, evolve, calibrate, and evaluate a spatial or temporal Earth-system process model
+        using forcing, state, boundary, observation, and uncertainty information.
+      includes:
+      - Hydrologic, land-surface, atmospheric, ecosystem, and coupled process models; parameter calibration;
+        hindcasts; residuals; and ensemble projections.
+      excludes:
+      - Direct application of a supplied scenario classification rule and generic regression whose decisive
+        operation does not evolve Earth-system state.
+      prerequisites: []
+      sampling_facets:
+      - id: spatial_model_regime
+        description: Cover lumped and gridded process models while retaining state evolution, observation
+          comparison, and uncertainty-aware calibration.
+      sample_tasks:
+      - kind: entry
+        instruction: Given a one-box soil-moisture balance, daily forcing, and one unknown drainage parameter,
+          compute a short trajectory and identify the observation used to calibrate the parameter.
+      - kind: representative
+        instruction: Calibrate a supplied gridded watershed or land-surface model against held-out streamflow
+          or soil-moisture observations and use spatial residuals plus ensemble sensitivity to assess
+          one projected response.
+    - id: c15.5
+      parent_id: c15
+      name: Electronic-structure and quantum simulation
+      kind: group
+      scope: Quantum computations separated into linear stationary eigenproblem solution, nonlinear self-consistent
+        stationary electronic structure, real-time propagation, imaginary-time stochastic sampling, and
+        semiclassical phase-weighted trajectory approximation.
+      includes:
+      - Linear stationary spectra, self-consistent electronic structure, quantum dynamics, path integrals,
+        and semiclassical trajectory methods.
+      excludes:
+      - Classical molecular simulation, continuum wave propagation, quantum recall without a computation,
+        and quantum hardware programming.
+    - id: c15.5.1
+      parent_id: c15.5
+      name: Stationary linear quantum eigenproblems
+      kind: capability
+      outcome: Represent and solve a stationary linear quantum eigenproblem using a supplied Hamiltonian,
+        basis or grid, and direct or iterative eigensolver, then assess spectral residuals, orthogonality,
+        representation convergence, and static observables.
+      includes:
+      - Finite or sparse Hermitian Hamiltonians, low eigenpairs, direct and iterative eigensolvers, basis
+        and grid convergence, residual norms, orthogonality, energies, and static observables.
+      excludes:
+      - Density-dependent Hamiltonian construction and self-consistent iteration, real-time propagation,
+        imaginary-time path sampling, semiclassical trajectories, and continuum wave travel.
+      prerequisites: []
+      sampling_facets:
+      - id: eigensolver_regime
+        description: Cover direct dense and iterative sparse eigensolvers while retaining linear spectral
+          solution, residual, orthogonality, and representation-convergence validation.
+      sample_tasks:
+      - kind: entry
+        instruction: Given a finite Hamiltonian matrix, compute its two lowest eigenpairs and evaluate
+          each residual norm.
+      - kind: representative
+        instruction: Using a supplied sparse grid Hamiltonian and iterative eigensolver interface, obtain
+          the lowest stationary states and use residual norms, orthogonality, and grid refinement to judge
+          an energy gap and static-density observable.
+    - id: c15.5.5
+      parent_id: c15.5
+      name: Self-consistent stationary electronic-structure iteration
+      kind: capability
+      outcome: Construct and converge a stationary electronic-structure fixed point with a density- or
+        potential-dependent Hamiltonian, choosing occupations, mixing, and stopping criteria and validating
+        energy, density, and representation convergence.
+      includes:
+      - Self-consistent-field loops, density or potential updates, occupation handling, damping or mixing,
+        charge-sloshing diagnosis, basis or grid convergence, and stationary electronic observables.
+      excludes:
+      - One-shot linear eigenproblems with a fixed Hamiltonian, real-time quantum propagation, imaginary-time
+        path sampling, and semiclassical trajectories.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given an initial density, a density-dependent Hamiltonian rule, occupations, and
+          a linear-mixing parameter, perform one self-consistent iteration and compute the density residual.
+      - kind: representative
+        instruction: Configure a supplied molecular self-consistent electronic-structure calculation,
+          diagnose charge sloshing from convergence traces, choose a mixing and stopping rule, and use
+          basis, energy, and density convergence to judge an energy difference and charge feature.
+    - id: c15.5.2
+      parent_id: c15.5
+      name: Real-time quantum-state propagation
+      kind: capability
+      outcome: Propagate a wavefunction or density operator in real time with a specified Hamiltonian
+        and assess norm or trace, phase, timestep, spatial-discretization, and observable error.
+      includes:
+      - Unitary or controlled open-system updates, wavepacket dynamics, timestep and grid convergence,
+        norm or trace diagnostics, and dynamical observables.
+      excludes:
+      - Stationary eigensolution as the target, imaginary-time sampling, classical waves, and semiclassical
+        phase sums.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a discretized wavefunction, Hamiltonian, and supplied unitary update, perform
+          one timestep and compute norm drift.
+      - kind: representative
+        instruction: Propagate a supplied wavepacket through a one-dimensional barrier and use timestep
+          and grid refinement, norm conservation, and transmitted probability to validate the result.
+    - id: c15.5.3
+      parent_id: c15.5
+      name: Quantum path-integral sampling
+      kind: capability
+      outcome: Estimate finite-temperature or imaginary-time quantum observables by constructing and sampling
+        a discretized path integral and diagnosing time-slice, sampling, and autocorrelation error.
+      includes:
+      - Imaginary-time paths, bead updates, Euclidean action, Monte Carlo acceptance, estimator uncertainty,
+        effective sample size, and time-slice convergence.
+      excludes:
+      - Real-time unitary dynamics, stationary eigenproblems, and classical stochastic lattice models.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a discretized imaginary-time harmonic-oscillator path and a Metropolis proposal,
+          calculate the action change and acceptance probability for one bead update.
+      - kind: representative
+        instruction: Estimate a supplied finite-temperature quantum position variance with path-integral
+          Monte Carlo and use bead-count convergence, effective sample size, and estimator uncertainty
+          to judge the result.
+    - id: c15.5.4
+      parent_id: c15.5
+      name: Semiclassical trajectory and stationary-phase methods
+      kind: capability
+      outcome: Approximate a quantum amplitude or observable with classical trajectories and phase information,
+        identifying stationary contributions and assessing phase cancellation, caustics, and semiclassical
+        validity.
+      includes:
+      - Classical actions, stationary phase, trajectory ensembles, prefactors, interference, caustic treatments,
+        and asymptotic-regime checks.
+      excludes:
+      - Pure conceptual recall, exact real-time quantum propagation, path-integral Monte Carlo, and classical
+        molecular dynamics without phase information.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given three candidate paths with supplied actions and second derivatives, identify
+          stationary contributions and compute their leading phase factors.
+      - kind: representative
+        instruction: Approximate a supplied one-dimensional transition amplitude from a classical trajectory
+          ensemble, account for phase cancellation and a stated caustic treatment, and compare results
+          across decreasing semiclassical parameters.
+    - id: c15.6
+      parent_id: c15
+      name: Molecular dynamics and mesoscale simulation
+      kind: group
+      scope: Discrete matter and population simulations separated by atomistic force integration, coarse-particle
+        mapping, stochastic lattice transitions, or autonomous-agent decisions.
+      includes:
+      - Atomistic and coarse-grained particles, stochastic lattice models, and agent-based simulation.
+      excludes:
+      - Continuum field solves, electronic-structure calculations, and generic discrete-event systems
+        without a scientific model.
+    - id: c15.6.1
+      parent_id: c15.6
+      name: Atomistic molecular dynamics
+      kind: capability
+      outcome: Construct and analyze an atomistic trajectory using force fields, integration, ensembles,
+        and boundaries, then assess stability, equilibration, sampling, and structural or transport observables.
+      includes:
+      - Atom-level force fields, neighbor handling, time integration, thermostats, periodic boundaries,
+        equilibration, and trajectory estimators.
+      excludes:
+      - Coarse bead mapping, quantum electronic dynamics, lattice transitions, and agent decisions.
+      prerequisites: []
+      sampling_facets:
+      - id: ensemble_regime
+        description: Cover energy-conserving and thermostatted ensembles while retaining atomistic force
+          integration and trajectory validation.
+      sample_tasks:
+      - kind: entry
+        instruction: Given atoms, Lennard-Jones parameters, positions, velocities, and a timestep, compute
+          one velocity-Verlet update and the change in total energy.
+      - kind: representative
+        instruction: Design and analyze an atomistic liquid simulation, choosing cutoff, timestep, ensemble,
+          and equilibration window, then assess a diffusion coefficient using energy stability and block-averaged
+          uncertainty.
+    - id: c15.6.2
+      parent_id: c15.6
+      name: Coarse-grained particle simulation
+      kind: capability
+      outcome: Construct and validate a particle simulation whose beads aggregate microscopic degrees
+        of freedom, including mapping, effective interactions, integration, and scale-appropriate observables.
+      includes:
+      - Atom-to-bead mapping, effective potentials, bead dynamics, parameter fitting to structural or
+        thermodynamic targets, and scale consistency.
+      excludes:
+      - Fully atomistic force fields, site-state lattice models, and autonomous agents.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given an atom-to-bead mapping and target radial distribution, compute one effective
+          pair-force update and identify the structural discrepancy used to tune it.
+      - kind: representative
+        instruction: Build a supplied bead-spring polymer simulation, select coarse interactions and integration
+          scale, and use structure and diffusion comparisons to judge whether the mapping preserves requested
+          behavior.
+    - id: c15.6.3
+      parent_id: c15.6
+      name: Stochastic lattice simulation
+      kind: capability
+      outcome: Implement and analyze a lattice-state model with local transition or sampling rules, boundary
+        conditions, and finite-size or autocorrelation diagnostics for collective observables.
+      includes:
+      - Spin, lattice-gas, occupancy, or cellular state models; local stochastic updates; equilibration;
+        repeated seeds; autocorrelation; and finite-size scaling.
+      excludes:
+      - Continuous particle integration, quantum imaginary-time paths, and heterogeneous agent decision
+        rules.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given a small Ising lattice, temperature, and proposed spin flip, compute the energy
+          change and Metropolis acceptance probability.
+      - kind: representative
+        instruction: Simulate a supplied lattice-gas transition and use equilibration, autocorrelation,
+          repeated seeds, and finite-size scaling to assess the estimated transition point.
+    - id: c15.6.4
+      parent_id: c15.6
+      name: Agent-based simulation
+      kind: capability
+      outcome: Construct and evaluate a simulation of heterogeneous autonomous agents by specifying state,
+        decision and interaction rules, scheduling, environment, stochasticity, and emergent-outcome validation.
+      includes:
+      - Heterogeneous agent state, local decisions, interactions, synchronous or asynchronous scheduling,
+        environment coupling, repeated seeds, and emergent summaries.
+      excludes:
+      - Homogeneous lattice transition rules, continuous particle mechanics, and generic workflow agents
+        without a scientific population model.
+      prerequisites: []
+      sampling_facets: []
+      sample_tasks:
+      - kind: entry
+        instruction: Given two agent states and local interaction rules, execute one asynchronous update
+          and identify how a synchronous update could change the outcome.
+      - kind: representative
+        instruction: Construct a supplied evacuation-agent model with heterogeneous speeds and route choices,
+          then use repeated seeds and observed flow summaries to decide whether a claimed bottleneck is
+          a mechanism rather than a scheduling artifact.

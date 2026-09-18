@@ -15,19 +15,24 @@ from experiments.post_training.task_curriculum.mapping import (
     section_anchors,
 )
 from experiments.post_training.task_curriculum.models import (
+    AnchorKind,
+    AssignmentAnchor,
+    CapabilitySection,
     CatalogCurriculum,
     Curriculum,
     CurriculumCatalog,
-    CurriculumSection,
+    GroupSection,
     RoutingFacet,
     SampleTask,
+    SamplingFacet,
     SemanticKey,
     TaskAnnotation,
 )
 
 
-def _section(section_id: str, parent_id: str | None, task_texts: tuple[str, str]) -> CurriculumSection:
-    return CurriculumSection(
+def _section(section_id: str, parent_id: str | None, task_texts: tuple[str, str]) -> CapabilitySection:
+    return CapabilitySection(
+        kind="capability",
         id=section_id,
         parent_id=parent_id,
         name=section_id,
@@ -42,19 +47,31 @@ def _section(section_id: str, parent_id: str | None, task_texts: tuple[str, str]
     )
 
 
+def _group(section_id: str) -> GroupSection:
+    return GroupSection(
+        kind="group",
+        id=section_id,
+        parent_id=None,
+        name=section_id,
+        scope=f"Organize {section_id} capabilities",
+        includes=[f"inside {section_id}"],
+        excludes=[f"outside {section_id}"],
+    )
+
+
 def _curriculum(subject_id: str = "C00", prefix: str = "") -> Curriculum:
     return Curriculum(
         version="pilot-1",
         subject_id=subject_id,
         subject_name="Pilot",
         sections=[
-            _section(f"{prefix}files", None, ("find a file", "rename a file")),
+            _group(f"{prefix}files"),
             _section(
                 f"{prefix}files.search",
                 f"{prefix}files",
                 ("search file contents", "filter matching lines"),
             ),
-            _section(f"{prefix}processes", None, ("inspect a process", "stop a process")),
+            _group(f"{prefix}processes"),
             _section(
                 f"{prefix}processes.logs",
                 f"{prefix}processes",
@@ -100,7 +117,8 @@ def test_curriculum_contract_rejects_incomplete_probe_pair() -> None:
         subject_id="C00",
         subject_name="Pilot",
         sections=[
-            CurriculumSection(
+            CapabilitySection(
+                kind="capability",
                 id="files",
                 parent_id=None,
                 name="files",
@@ -117,6 +135,34 @@ def test_curriculum_contract_rejects_incomplete_probe_pair() -> None:
         curriculum.check_generation_contract(maximum_depth=2)
 
 
+def test_curriculum_rejects_group_prerequisite() -> None:
+    with pytest.raises(ValueError, match="non-capability prerequisites"):
+        Curriculum(
+            version="pilot-1",
+            subject_id="C00",
+            subject_name="Pilot",
+            sections=[
+                _group("files"),
+                CapabilitySection(
+                    **(
+                        _section("files.search", "files", ("find a file", "filter matching lines")).model_dump()
+                        | {"prerequisites": ["files"]}
+                    ),
+                ),
+            ],
+        )
+
+
+def test_sampling_facets_are_unique_within_capability() -> None:
+    section = _section("translate", None, ("translate a greeting", "translate a short letter"))
+    duplicate = SamplingFacet(id="language_direction", description="Source and target language pair")
+    section_data = section.model_dump()
+    section_data["sampling_facets"] = [duplicate, duplicate]
+
+    with pytest.raises(ValueError, match="sampling facet IDs must be unique"):
+        CapabilitySection.model_validate(section_data)
+
+
 def test_curriculum_contract_rejects_depth_above_limit() -> None:
     with pytest.raises(ValueError):
         _curriculum().check_generation_contract(maximum_depth=1)
@@ -127,26 +173,40 @@ def test_mapping_ranks_sections_independently_inside_each_graph() -> None:
     graph_anchor_rows = graph_anchors(catalog)
     section_anchor_rows = section_anchors(catalog)
     section_ids = [anchor.section_id for anchor in section_anchor_rows]
+    assert set(section_ids) == {
+        "files.search",
+        "processes.logs",
+        "practice.files.search",
+        "practice.processes.logs",
+    }
+    with pytest.raises(ValueError, match="unknown section"):
+        section_anchors(
+            catalog,
+            [
+                AssignmentAnchor(
+                    kind=AnchorKind.SECTION,
+                    subject_id="C00",
+                    section_id="files",
+                    text="A group must not receive task assignments.",
+                )
+            ],
+        )
     annotations = [_annotation("file-task"), _annotation("log-task"), _annotation("process-task")]
     graph_vectors = np.asarray([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]], dtype=np.float32)
     membership_vectors = {
         RoutingFacet.SUBJECT_DOMAIN: np.asarray([[1.0, 0.0]] * 3, dtype=np.float32),
         RoutingFacet.TASK_MECHANIC: np.asarray([[0.0, 1.0]] * 3, dtype=np.float32),
     }
-    section_vectors = np.zeros((len(section_ids), 3), dtype=np.float32)
+    section_vectors = np.zeros((len(section_ids), 2), dtype=np.float32)
     target_vectors = {
-        "files": [1.0, 0.0, 0.0],
-        "files.search": [0.8, 0.2, 0.0],
-        "processes": [0.0, 1.0, 0.0],
-        "processes.logs": [0.0, 0.0, 1.0],
-        "practice.files": [1.0, 0.0, 0.0],
-        "practice.files.search": [0.8, 0.2, 0.0],
-        "practice.processes": [0.0, 1.0, 0.0],
-        "practice.processes.logs": [0.0, 0.0, 1.0],
+        "files.search": [1.0, 0.0],
+        "processes.logs": [0.0, 1.0],
+        "practice.files.search": [1.0, 0.0],
+        "practice.processes.logs": [0.0, 1.0],
     }
     for index, section_id in enumerate(section_ids):
         section_vectors[index] = target_vectors[section_id]
-    task_vectors = np.asarray([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+    task_vectors = np.asarray([[1.0, 0.0], [0.0, 1.0], [0.0, 1.0]], dtype=np.float32)
 
     mappings = map_task_vectors(
         MappingInputs(
@@ -167,9 +227,9 @@ def test_mapping_ranks_sections_independently_inside_each_graph() -> None:
     for subject_id, prefix in (("C00", ""), ("C01", "practice.")):
         graph_rows = [next(graph for graph in mapping.graphs if graph.subject_id == subject_id) for mapping in mappings]
         assert [graph.candidates[0].section_id for graph in graph_rows] == [
-            f"{prefix}files",
+            f"{prefix}files.search",
             f"{prefix}processes.logs",
-            f"{prefix}processes",
+            f"{prefix}processes.logs",
         ]
         assert all(len(graph.candidates) == 2 for graph in graph_rows)
 

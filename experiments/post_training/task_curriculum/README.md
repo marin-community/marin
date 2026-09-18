@@ -5,9 +5,9 @@ keeps curriculum design separate from task correctness:
 TaskCompendium owns model-visible task semantics and private verifier contracts; a curriculum describes observable
 capabilities, boundaries, examples, and prerequisites.
 
-`curriculum.yaml` is the canonical catalog. It contains ten reviewed curriculum graphs and 313 globally unique
-sections. The Markdown reports under `pilot/` and `wave2/` preserve the experimental evidence; runtime assignment
-loads only the YAML catalog.
+`curriculum.yaml` is the canonical catalog. It contains 12 reviewed curriculum graphs and 363 globally unique nodes:
+353 trainable capabilities and 10 organizational groups. The Markdown reports under `pilot/` and `wave2/` preserve
+the experimental evidence; runtime assignment loads only the YAML catalog.
 
 ## Inputs
 
@@ -39,6 +39,17 @@ into the canonical YAML. For each selected macro area:
    when the numeric score is high. Revise the rubric or generation instructions only for problems that recur, then
    generate another version.
 
+The hierarchy has two node kinds. A `capability` is a trainable outcome and the only kind that may receive task
+assignments, declare prerequisites, or carry entry and representative probes. A `group` is an organizational scope;
+it has no outcome, probes, or prerequisite edges. Use a group when a parent would otherwise be a routing menu or an
+artificial bundle of child deliverables. Capabilities may still contain narrower capabilities when their
+representative probe exercises a natural cross-child synthesis.
+
+Reusable knowledge dimensions belong in a capability's `sampling_facets`. A facet declares an axis such as language
+direction, jurisdiction, or scientific-model family; its concrete value is recorded with task annotations outside
+the catalog. The effective task set is a capability plus fixed facet values. This makes mutual self-confidence
+testable under one knowledge regime without creating one curriculum node per language pair or jurisdiction.
+
 The checked-in `pilot/` and `wave2/` reports summarize the one-off results. Promote reviewed changes into
 `curriculum.yaml`; do not add another runtime curriculum or check in task-level experiment artifacts.
 
@@ -53,14 +64,15 @@ Task mapping uses a curriculum-independent semantic key and two routing stages:
 ```text
 model-visible TaskSpec -> semantic key -> cached domain, mechanic, and operation embeddings
 curriculum graph       -> declared membership facet -> zero or more graph candidates
-selected graph         -> operation embedding       -> section candidates within that graph
+selected graph         -> operation embedding       -> capability candidates within that graph
 ```
 
 The key records `subject_domain`, `task_mechanic`, requested result, hardest operation, required operations, and
 answer form. `subject_domain` is the broad knowledge or tool environment required by the decisive operation.
 Narrative content and output format do not belong in it. `task_mechanic` is a domain-neutral operation family such as
 implementation, repair, supplied-context extraction, calculation, explanation, recall, or tool-state mutation. The
-hardest and required operations rank sections after graph selection.
+hardest and required operations rank capabilities after graph selection. Groups never receive assignment anchors or
+task mappings.
 
 Annotate each task once in model batches of 8–16. Persist the task-content hash, annotation prompt version, and model.
 Do not include curriculum labels in the prompt. `cli.py` caches each embedding by text and model, derives bootstrap
@@ -162,9 +174,29 @@ boundaries are legible, but they are easier than held-out data and do not overri
 examples permitted by the [evaluation policy](https://github.com/marin-community/marin/issues/9193) should supply a
 second held-out coverage view. Out-of-distribution evaluations contribute metadata only under that policy.
 
-Before broad scale-out, the procedure needs a structured representation for parameterized knowledge regimes and a
-decision on organizational parents. A parent with no natural cross-child synthesis should not receive an artificial
-omnibus task. Under the current schema it must be flattened or replaced by a genuine capability node.
+These failures motivated the capability/group distinction and structured sampling facets added in wave six.
+
+## Wave-six schema and repair test
+
+Wave six added hierarchy-only groups and reusable sampling facets, then regenerated NLP and computational science.
+The NLP curriculum uses eight capabilities, three groups, and one `language_direction` facet. Its independent review
+scored 92 with no blockers. The computational-science curriculum needed three complete reviews. Scores moved from
+81 to 86 to 92 as facets that concealed different solver operations were replaced by separate capabilities. The
+final graph contains 32 capabilities, seven groups, and ten facets.
+
+The C15 repairs split conservative-flux updates from incompressible pressure-velocity coupling, fixed-Hamiltonian
+eigensolution from nonlinear self-consistency, linear finite-element solution from nonlinear incremental equilibrium,
+and ordinary diffusion integration from stiff split reaction-diffusion. This yields 32 capabilities for one macro
+area. The rubric sets density from transfer and epsilon continuity; it has no fixed per-subject target.
+
+Blinded Luna placement scored 12/12 for NLP and for all three C15 versions. The two failed C15 versions therefore
+show that placement clarity does not establish mutual self-confidence or entry-to-representative continuity. The
+independent whole-subject review remains the acceptance gate. A sampling facet must also pass a distant-value test;
+it cannot hide a different solver loop, state transition, or evaluation contract.
+
+Both final reviews have medium confidence because the sampled tasks reach only part of each graph and no applicable
+held-out evaluation examples were available. In-distribution examples permitted by the evaluation policy should be
+added as coverage evidence during scale-out. They need not become curriculum nodes or source-specific mapping rules.
 
 ## Provenance
 

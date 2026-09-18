@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from enum import StrEnum
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -28,15 +29,51 @@ class SampleTask(StrictModel):
     instruction: str = Field(min_length=1)
 
 
-class CurriculumSection(StrictModel):
+class CurriculumNodeKind(StrEnum):
+    CAPABILITY = "capability"
+    GROUP = "group"
+
+
+class SamplingFacet(StrictModel):
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    description: str = Field(min_length=1)
+
+
+class CurriculumNodeBase(StrictModel):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")
     parent_id: str | None
     name: str = Field(min_length=1)
-    outcome: str = Field(min_length=1)
     includes: list[str] = Field(min_length=1)
     excludes: list[str] = Field(min_length=1)
+
+
+class CapabilitySection(CurriculumNodeBase):
+    kind: Literal[CurriculumNodeKind.CAPABILITY]
+    outcome: str = Field(min_length=1)
     prerequisites: list[str]
+    sampling_facets: list[SamplingFacet] = Field(default_factory=list)
     sample_tasks: list[SampleTask]
+
+    @model_validator(mode="after")
+    def validate_sampling_facets(self) -> CapabilitySection:
+        facet_ids = [facet.id for facet in self.sampling_facets]
+        if len(facet_ids) != len(set(facet_ids)):
+            raise ValueError(f"section {self.id} sampling facet IDs must be unique")
+        return self
+
+    def scope_text(self) -> str:
+        return self.outcome
+
+
+class GroupSection(CurriculumNodeBase):
+    kind: Literal[CurriculumNodeKind.GROUP]
+    scope: str = Field(min_length=1)
+
+    def scope_text(self) -> str:
+        return self.scope
+
+
+CurriculumNode = Annotated[CapabilitySection | GroupSection, Field(discriminator="kind")]
 
 
 def _reject_cycles(edges: dict[str, Iterable[str]], label: str) -> None:
@@ -62,7 +99,7 @@ class Curriculum(StrictModel):
     version: str
     subject_id: str
     subject_name: str
-    sections: list[CurriculumSection] = Field(min_length=1)
+    sections: list[CurriculumNode] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_graph(self) -> Curriculum:
@@ -71,17 +108,31 @@ class Curriculum(StrictModel):
             raise ValueError("section IDs must be unique")
 
         known = set(ids)
+        capabilities = {section.id for section in self.sections if isinstance(section, CapabilitySection)}
+        if not capabilities:
+            raise ValueError("curriculum must contain at least one capability section")
         parent_edges: dict[str, list[str]] = {}
         prerequisite_edges: dict[str, list[str]] = {}
         for section in self.sections:
             parent_edges[section.id] = [] if section.parent_id is None else [section.parent_id]
-            prerequisite_edges[section.id] = section.prerequisites
-            references = set(parent_edges[section.id]) | set(section.prerequisites)
+            prerequisites = section.prerequisites if isinstance(section, CapabilitySection) else []
+            prerequisite_edges[section.id] = prerequisites
+            references = set(parent_edges[section.id]) | set(prerequisites)
             unknown = sorted(references - known)
             if unknown:
                 raise ValueError(f"section {section.id} has unknown references: {unknown}")
             if section.id in references:
                 raise ValueError(f"section {section.id} refers to itself")
+            invalid_prerequisites = sorted(set(prerequisites) - capabilities)
+            if invalid_prerequisites:
+                raise ValueError(f"section {section.id} has non-capability prerequisites: {invalid_prerequisites}")
+
+        parents = {section.parent_id for section in self.sections if section.parent_id is not None}
+        empty_groups = sorted(
+            section.id for section in self.sections if isinstance(section, GroupSection) and section.id not in parents
+        )
+        if empty_groups:
+            raise ValueError(f"group sections must contain at least one child: {empty_groups}")
 
         _reject_cycles(parent_edges, "parent")
         _reject_cycles(prerequisite_edges, "prerequisite")
@@ -108,10 +159,15 @@ class Curriculum(StrictModel):
         wrong_probes = [
             section.id
             for section in self.sections
+            if isinstance(section, CapabilitySection)
             if tuple(task.kind for task in section.sample_tasks) != EXPECTED_PROBE_KINDS
         ]
         if wrong_probes:
             raise ValueError(f"sections must have one entry and one representative probe in order: {wrong_probes}")
+
+    def capability_sections(self) -> list[CapabilitySection]:
+        """Return trainable sections that may receive task assignments."""
+        return [section for section in self.sections if isinstance(section, CapabilitySection)]
 
 
 class RoutingFacet(StrEnum):

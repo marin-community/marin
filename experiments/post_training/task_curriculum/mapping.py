@@ -65,7 +65,7 @@ def graph_anchors(
                 GraphAnchor(
                     subject_id=curriculum.subject_id,
                     facet=entry.routing_facet,
-                    text=f"{curriculum.subject_name}. {root.name}. {root.outcome} "
+                    text=f"{curriculum.subject_name}. {root.name}. {root.scope_text()} "
                     f"Includes: {'; '.join(root.includes)}.",
                 )
             )
@@ -87,7 +87,7 @@ def section_anchors(
     anchors: list[SectionAnchor] = []
     for entry in catalog.curricula:
         curriculum = entry.curriculum
-        for section in curriculum.sections:
+        for section in curriculum.capability_sections():
             base = f"{section.name}. {section.outcome}"
             for included in section.includes:
                 anchors.append(
@@ -98,7 +98,9 @@ def section_anchors(
                     )
                 )
     subject_by_section = {
-        section.id: entry.curriculum.subject_id for entry in catalog.curricula for section in entry.curriculum.sections
+        section.id: entry.curriculum.subject_id
+        for entry in catalog.curricula
+        for section in entry.curriculum.capability_sections()
     }
     for anchor in assignment_anchors:
         if anchor.kind != AnchorKind.SECTION:
