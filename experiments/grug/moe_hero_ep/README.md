@@ -78,15 +78,16 @@ experiments/grug/moe_hero_ep/trigger_hero.sh launch
 ```
 
 `fork-wandb` fetches `origin/main`, requires a clean checkout at that exact
-commit, and records the SHA on the child. `launch` requires the same clean SHA,
-no live parent or child coordinator under any user namespace, and the child's
-recorded handoff. A parent coordinator row that the controller has already
-pruned counts as terminal. Recovery stays on the accepted SHA even after main
-advances. `launch` submits training, which resumes that W&B child without
-`fork_from`. Iris retries also resume the child. If fork creation succeeds but
-submission fails, inspect the child and use `launch` again only after
-confirming no coordinator is live. Do not repeat `fork-wandb` for recovery or
-rollback. Rollback uses the old run ID and old revision's launcher.
+commit, checks that the fork `_step` precedes the checkpoint step, and records
+the SHA on the child. `launch` requires the same clean SHA, no live parent or
+child coordinator under any user namespace, and the child's recorded handoff.
+A parent coordinator row that the controller has already pruned counts as
+terminal. Recovery stays on the accepted SHA even after main advances. `launch`
+submits training, which resumes that W&B child without `fork_from`. Iris
+retries also resume the child. If fork creation succeeds but submission fails,
+inspect the child and use `launch` again only after confirming no coordinator
+is live. Do not repeat `fork-wandb` for recovery or rollback. Rollback uses the
+old run ID and old revision's launcher.
 
 Keep one operator as the submission owner; the coordinator checks do not
 serialize launches across machines. After submission, verify exactly one live

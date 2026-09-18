@@ -51,6 +51,7 @@ import sys
 
 import wandb
 from iris.cluster.types import TERMINAL_JOB_STATES
+from levanter.tracker.wandb import _WANDB_FORK_FROM_PATTERN
 
 mode, run_id, project, fork_from, checkpoint, launch_commit = sys.argv[1:]
 entity = "marin-community"
@@ -59,11 +60,24 @@ lineage = {
     "hero_wandb_fork_from": fork_from,
     "hero_launch_commit": launch_commit,
 }
-parent_id = fork_from.split("?_step=", 1)[0]
+fork = _WANDB_FORK_FROM_PATTERN.fullmatch(fork_from)
+if fork is None:
+    raise ValueError(f"WANDB_FORK_FROM must have the form '<parent-run-id>?_step=<step>': {fork_from}")
+parent_id = fork["run_id"]
+if parent_id == run_id:
+    raise ValueError("WANDB_FORK_FROM must name a different run from RUN_ID")
+checkpoint_step = re.fullmatch(r"step-(\d+)", checkpoint.rstrip("/").rsplit("/", 1)[-1])
+if checkpoint_step is None:
+    raise ValueError(f"HANDOFF_CHECKPOINT must end in step-<N>: {checkpoint}")
+# The child resumes at checkpoint step N and logs training step N first; W&B starts a fork at
+# _step + 1, so any fork point at or past N makes the child's rows fail step monotonicity.
+if int(fork["step"]) >= int(checkpoint_step[1]):
+    raise ValueError(f"W&B fork _step {fork['step']} must precede checkpoint step {checkpoint_step[1]}")
 if not re.fullmatch(r"[A-Za-z0-9_.-]+", run_id) or not re.fullmatch(r"[A-Za-z0-9_.-]+", parent_id):
     raise ValueError("Run IDs may contain only letters, digits, '_', '.', and '-'")
-api = wandb.Api()
+
 if mode == "fork-wandb":
+    api = wandb.Api()
     if list(api.runs(f"{entity}/{project}", filters={"name": run_id}, per_page=1)):
         raise ValueError(f"W&B child {run_id} already exists; inspect it before using launch")
     with wandb.init(
@@ -90,7 +104,7 @@ else:
     for row in reader:
         if int(row["state"]) not in TERMINAL_JOB_STATES:
             raise ValueError(f"Coordinator is not terminal: {row['job_id']}")
-    child = api.run(f"{entity}/{project}/{run_id}")
+    child = wandb.Api().run(f"{entity}/{project}/{run_id}")
     for key, expected in lineage.items():
         if child.config.get(key) != expected:
             raise ValueError(f"W&B child {run_id} has a different {key}")
