@@ -357,7 +357,7 @@ def test_generation_resumes_saved_batches_after_interruption(tmp_path, sample_re
     def decode(ids):
         return "".join(str(token) for token in ids if token != 0)
 
-    def logprobs(tokens, positions, targets):
+    def logprobs(_tokens, _positions, targets):
         return BatchLogprobs(
             np.full(targets.shape, -np.log(7)),
             np.broadcast_to(np.arange(5), (*targets.shape, 5)),
@@ -369,7 +369,7 @@ def test_generation_resumes_saved_batches_after_interruption(tmp_path, sample_re
     )
     store.save_reference_scores(request.sample_id, reference)
 
-    def logits(tokens, positions):
+    def logits(tokens, _positions):
         return np.tile(np.array([-1000, 1, 2, 1, 2, 1, 2]), (tokens.shape[0], 1))
 
     uninterrupted = generate(spec, prompt_ids, eos_token_id=0, logits=logits, decode=decode)
