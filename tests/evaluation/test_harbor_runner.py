@@ -12,8 +12,7 @@ from marin.evaluation.harbor.agent_context import (
     reconciled_model_info,
     served_model_info,
 )
-from marin.evaluation.harbor.dataset import materialize_harbor_dataset
-from marin.evaluation.harbor.dataset_layout import dataset_task_count
+from marin.evaluation.harbor.dataset import local_harbor_dataset_path
 from marin.evaluation.harbor.driver_config import (
     HarborBackendsUnavailable,
     HarborDatasetKind,
@@ -87,7 +86,7 @@ def _validated_config(
         max_output_tokens=8192,
         benchmark=BenchmarkMetadataRef(
             schema_version=1,
-            task=dataset_selector,
+            task=f"hf://{dataset_selector}" if dataset_kind == HarborDatasetKind.HUGGING_FACE else dataset_selector,
             primary_metric="reward",
             metric_kind=MetricKind.CONTINUOUS,
             metrics=(
@@ -161,49 +160,7 @@ def _write_job_record(job_dir: Path, n_total_trials: int, config: ValidatedHarbo
     )
 
 
-def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_path, monkeypatch):
-    monkeypatch.delenv("HF_TOKEN", raising=False)
-    snapshot = tmp_path / "snapshot"
-    snapshot.mkdir()
-    (snapshot / ".gitattributes").write_text("*.gz filter=lfs")
-    task = snapshot / "task-one"
-    task.mkdir()
-    (task / "task.toml").write_text('[task]\nname = "task-one"\n')
-    (snapshot / ".cache" / "huggingface").mkdir(parents=True)
-    calls: list[dict] = []
-
-    def download(**kwargs):
-        calls.append(kwargs)
-        return str(snapshot)
-
-    monkeypatch.setattr("marin.evaluation.harbor.dataset.snapshot_download", download)
-
-    path = materialize_harbor_dataset(
-        _validated_config(
-            dataset_kind=HarborDatasetKind.HUGGING_FACE,
-            dataset_selector="DCAgent2/terminal_bench_2",
-            dataset_revision="main",
-        ),
-        tmp_path / "workdir",
-        hf_token=None,
-    )
-
-    assert path == Path(snapshot)
-    assert calls == [
-        {
-            "repo_id": "DCAgent2/terminal_bench_2",
-            "repo_type": "dataset",
-            "revision": "main",
-            "local_dir": str(tmp_path / "workdir" / "hf_dataset"),
-            "cache_dir": str(tmp_path / "workdir" / "hf_cache"),
-            "token": False,
-        }
-    ]
-    assert not (snapshot / ".gitattributes").exists()
-    assert dataset_task_count(path) == 1
-
-
-def test_materialize_harbor_dataset_rebases_local_path_onto_worker_workspace(tmp_path, monkeypatch):
+def test_local_harbor_dataset_path_rebases_onto_worker_workspace(tmp_path, monkeypatch):
     worker_workspace = tmp_path / "worker"
     dataset = worker_workspace / "policies" / "tasks"
     dataset.mkdir(parents=True)
@@ -218,14 +175,7 @@ def test_materialize_harbor_dataset_rebases_local_path_onto_worker_workspace(tmp
         lambda: worker_workspace,
     )
 
-    assert (
-        materialize_harbor_dataset(
-            config,
-            tmp_path / "workdir",
-            hf_token=None,
-        )
-        == dataset
-    )
+    assert local_harbor_dataset_path(config) == dataset
 
 
 def test_read_trials_reads_every_result(tmp_path):
@@ -532,7 +482,8 @@ def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_p
         )
 
 
-def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_path, monkeypatch):
+@pytest.mark.parametrize("dataset_kind", [HarborDatasetKind.HARBOR_REGISTRY, HarborDatasetKind.HUGGING_FACE])
+def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_path, monkeypatch, dataset_kind):
     captured: dict = {}
 
     def run_driver(config, overlay, driver_env, _backend_state) -> None:
@@ -556,18 +507,25 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     session = _inference_session()
     model = session.model
 
+    selector = (
+        f"toy-{tmp_path.name}" if dataset_kind == HarborDatasetKind.HARBOR_REGISTRY else f"example/{tmp_path.name}"
+    )
     executor = HarborExecutor(
         _validated_config(
-            dataset_selector=f"toy-{tmp_path.name}",
+            dataset_kind=dataset_kind,
+            dataset_selector=selector,
         ),
         task_limit=7,
         model_agent_kwargs={"extra_body": "{}"},
         secret_env_keys=("DAYTONA_API_KEY",),
     )
+    env_vars = {"DAYTONA_API_KEY": "daytona-key"}
+    if dataset_kind == HarborDatasetKind.HUGGING_FACE:
+        env_vars["HF_TOKEN"] = "hf-key"
     outcome = executor(
         session,
         str(tmp_path),
-        {"DAYTONA_API_KEY": "daytona-key"},
+        env_vars,
     )
 
     assert captured["config"] is executor.config
@@ -576,10 +534,13 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     assert captured["overlay"].task_limit == 7
     assert captured["overlay"].model_agent_kwargs == {"extra_body": "{}"}
     assert captured["overlay"].archive_root == str(tmp_path)
-    assert captured["overlay"].archive_dataset == f"toy-{tmp_path.name}"
+    assert captured["overlay"].archive_dataset == executor.config.record_dataset
+    assert captured["overlay"].dataset_path is None
     assert captured["env"]["DAYTONA_API_KEY"] == "daytona-key"
+    if dataset_kind == HarborDatasetKind.HUGGING_FACE:
+        assert captured["env"]["HF_TOKEN"] == "hf-key"
     assert "OPENAI_API_KEY" not in captured["env"]
-    assert outcome.canonical_metrics[f"toy-{tmp_path.name}"]["reward"] == 1.0
+    assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 1.0
 
 
 def _harbor_executor(dataset: str, *, n_benchmark: int = 1, trials_per_task: int = 1) -> HarborExecutor:

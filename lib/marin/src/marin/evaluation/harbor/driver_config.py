@@ -30,7 +30,7 @@ _BACKEND_POLL_SECONDS = 5.0
 _DRIVER_TERMINATION_GRACE_SECONDS = 30.0
 _DRIVER_SYSTEM_ENV_KEYS = (
     "CURL_CA_BUNDLE",
-    # The preflight downloads Hugging Face dataset snapshots; gated repositories need the token.
+    # Harbor downloads gated Hugging Face datasets in preflight and on workers.
     "HF_TOKEN",
     "HOME",
     "HTTP_PROXY",
