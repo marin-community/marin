@@ -24,6 +24,7 @@ from zephyr.context import (
     _NON_RETRYABLE_ERRORS,
     MAX_IRIS_WORKER_REPLICAS,
     ZephyrContext,
+    ZephyrContextClosed,
     _distributed_worker_limit,
 )
 from zephyr.coordinator import (
@@ -1476,6 +1477,130 @@ def test_execute_does_not_retry_worker_errors(local_client, tmp_path):
 
     # Should fail fast — no retries for application errors
     assert elapsed < 15.0, f"Took {elapsed:.1f}s, expected fast failure (no retries)"
+
+
+class _NeverReadyWorkerGroup:
+    """Worker group whose job never schedules, as when no accelerators are free.
+
+    Mirrors the Iris group: ``wait_ready`` for a count blocks until its timeout,
+    and fails once ``shutdown`` cancels the job. Enumerating workers yields none.
+    """
+
+    def __init__(self):
+        self.waiting = threading.Event()
+        self._cancelled = threading.Event()
+
+    def wait_ready(self, count=None, timeout=300.0):
+        if count is None:
+            return []
+        self.waiting.set()
+        if self._cancelled.wait(timeout):
+            raise RuntimeError("Actor job finished before all actors registered")
+        raise TimeoutError(f"Only 0/{count} actors ready after {timeout}s")
+
+    def discover_new(self, target=None):
+        return []
+
+    def is_done(self):
+        return False
+
+    def shutdown(self):
+        self._cancelled.set()
+
+
+@pytest.fixture
+def never_ready_workers(monkeypatch):
+    """Make every coordinator's worker job hang in scheduling."""
+    group = _NeverReadyWorkerGroup()
+
+    def start_workers(self, *args, **kwargs):
+        self._worker_group = group
+
+    monkeypatch.setattr(ZephyrCoordinator, "start_workers", start_workers)
+    monkeypatch.setenv("ZEPHYR_WORKERS_READY_WAIT", "3600")
+    return group
+
+
+def _count_coordinator_launches(client: LocalClient) -> list[int]:
+    """Return a one-element list that counts coordinator groups as the client creates them."""
+    launches = [0]
+    original = client.create_actor_group
+
+    def counting_create_actor_group(actor_class, *args, **kwargs):
+        if actor_class is ZephyrCoordinator:
+            launches[0] += 1
+        return original(actor_class, *args, **kwargs)
+
+    client.create_actor_group = counting_create_actor_group
+    return launches
+
+
+def _run_in_thread(fn) -> tuple[threading.Thread, list[BaseException]]:
+    failures: list[BaseException] = []
+
+    def run():
+        try:
+            fn()
+        except BaseException as error:
+            failures.append(error)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread, failures
+
+
+def test_shutdown_cancels_execute_waiting_for_workers(never_ready_workers, tmp_path):
+    """shutdown() from another thread releases an execute() blocked on its first worker. #8594"""
+    client = LocalClient()
+    launches = _count_coordinator_launches(client)
+    ctx = ZephyrContext(
+        client=client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        max_execution_retries=3,
+        name=f"test-cancel-{uuid.uuid4().hex[:8]}",
+    )
+    thread, failures = _run_in_thread(lambda: ctx.execute(Dataset.from_list([1, 2, 3]).map(lambda x: x)))
+    try:
+        assert never_ready_workers.waiting.wait(10.0), "execute() never reached the worker wait"
+        ctx.shutdown()
+        thread.join(10.0)
+        assert not thread.is_alive(), "execute() stayed blocked after shutdown()"
+        assert len(failures) == 1 and isinstance(failures[0], ZephyrContextClosed), failures
+        assert launches[0] == 1, "execute() started a new pool after shutdown()"
+        with pytest.raises(ZephyrContextClosed):
+            ctx.execute(Dataset.from_list([1]))
+    finally:
+        never_ready_workers.shutdown()
+        thread.join(10.0)
+        client.shutdown(wait=True)
+
+
+def test_shutdown_cancels_start_waiting_for_workers(never_ready_workers, tmp_path):
+    """shutdown() releases a start() blocked on its first worker instead of deadlocking. #8594"""
+    client = LocalClient()
+    ctx = ZephyrContext(
+        client=client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"test-cancel-{uuid.uuid4().hex[:8]}",
+    )
+    thread, failures = _run_in_thread(ctx.start)
+    try:
+        assert never_ready_workers.waiting.wait(10.0), "start() never reached the worker wait"
+        shutdown_thread, shutdown_failures = _run_in_thread(ctx.shutdown)
+        shutdown_thread.join(10.0)
+        assert not shutdown_thread.is_alive(), "shutdown() blocked behind start()"
+        assert not shutdown_failures, shutdown_failures
+        thread.join(10.0)
+        assert not thread.is_alive(), "start() stayed blocked after shutdown()"
+        assert len(failures) == 1 and isinstance(failures[0], ZephyrContextClosed), failures
+    finally:
+        never_ready_workers.shutdown()
+        thread.join(10.0)
+        client.shutdown(wait=True)
 
 
 def test_stage_index_correct_with_join(local_client, tmp_path):
