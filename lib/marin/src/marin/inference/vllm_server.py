@@ -905,6 +905,10 @@ _VLLM_ENV_DEFAULTS: tuple[tuple[str, str], ...] = (
     # RunAI otherwise writes no internal logs. WARNING is its default level, so this exposes the
     # final S3 exception without enabling per-request debug output.
     ("RUNAI_STREAMER_LOG_TO_STDERR", "1"),
+    # Large object-store checkpoints can legitimately take longer than vLLM's 600-second default
+    # to stream on a busy cluster. Keep the frontend alive through load and initialization; Marin's
+    # outer inference readiness timeout remains the whole-server failure boundary.
+    ("VLLM_ENGINE_READY_TIMEOUT_S", "1500"),
 )
 
 
