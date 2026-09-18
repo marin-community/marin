@@ -63,7 +63,12 @@ class InferenceWorker:
         )
         try:
             with (
-                httpx.Client(timeout=self._request_timeout_seconds) as client,
+                # httpx defaults to a 100-connection pool, which would cap the
+                # forwarding pool below max_in_flight and stall its threads.
+                httpx.Client(
+                    timeout=self._request_timeout_seconds,
+                    limits=httpx.Limits(max_connections=max_in_flight, max_keepalive_connections=max_in_flight),
+                ) as client,
                 ThreadPoolExecutor(max_workers=max_in_flight, thread_name_prefix="inference-worker-request") as pool,
             ):
                 while not stop_event.is_set():
@@ -74,7 +79,9 @@ class InferenceWorker:
                         for leased_request in leased_requests:
                             in_flight.add(pool.submit(self._forward_one, client, leased_request))
                         if leased_requests:
-                            logger.info(
+                            # DEBUG for the same reason as the proxy's per-request lines: at load
+                            # this fires many times a second and the id formatting is real work.
+                            logger.debug(
                                 "InferenceWorker fetched requests count=%d in_flight=%d/%d request_ids=%s",
                                 len(leased_requests),
                                 len(in_flight),
@@ -98,12 +105,16 @@ class InferenceWorker:
                     if done:
                         responses = [future.result() for future in done]
                         self._broker.submit_responses(responses)
-                        logger.info(
+                        statuses = dict(Counter(response.response.status_code for response in responses))
+                        # All-200 batches are routine and log at DEBUG; a batch carrying any error
+                        # status is the line someone will actually be looking for.
+                        log = logger.info if any(code != 200 for code in statuses) else logger.debug
+                        log(
                             "InferenceWorker submitted responses count=%d in_flight=%d/%d statuses=%s request_ids=%s",
                             len(responses),
                             len(in_flight),
                             max_in_flight,
-                            dict(Counter(response.response.status_code for response in responses)),
+                            statuses,
                             format_request_ids([response.response.request_id for response in responses]),
                         )
                         backoff.reset()
@@ -205,8 +216,13 @@ def _inference_error_response(
     detail: str | None = None,
     exc_info: bool = False,
 ) -> InferenceResponse:
+    """Build the standard brokered error envelope, ``{"error": {"message": ...}}``.
+
+    Every path out of the forwarding worker returns one, so a client sees the same error shape
+    whether the request was refused, timed out, or failed upstream.
+    """
     logger.warning(
-        "InferenceWorker returning error response request_id=%s method=%s path=%s status_code=%d error=%s detail=%s",
+        "Returning brokered error response request_id=%s method=%s path=%s status_code=%d error=%s detail=%s",
         request.request_id,
         request.method,
         request.path,
