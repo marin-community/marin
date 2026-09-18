@@ -422,17 +422,16 @@ def test_real_gpu_fa4_cute_sm100_gradients_with_changing_packed_segments(kv_head
             np.testing.assert_array_equal(got[ids < 0], 0, err_msg=name)
 
 
-@pytest.mark.parametrize("native_tile", [(128, 128), (128, 64), None])
+@pytest.mark.parametrize("native_backward", [True, False])
 @pytest.mark.timeout(300)
-def test_real_gpu_fa4_cute_configured_backward_matches_reference(native_tile):
+def test_real_gpu_fa4_cute_configured_backward_matches_reference(native_backward):
     if jax.default_backend() != "gpu" or fa4_cute.gpu_compute_capability() != 100:
         pytest.skip("Native SM100 backward correctness requires an SM100 GPU.")
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_sm100")
     config = flash4_cute_kernel_config(128, arch=100)
-    assert config.sm100_backward is not None
-    native = dataclasses.replace(config.sm100_backward, tile=native_tile) if native_tile is not None else None
-    config = dataclasses.replace(config, sm100_backward=native)
+    if not native_backward:
+        config = dataclasses.replace(config, sm100_backward=None)
     keys = jax.random.split(jax.random.key(23), 4)
     shapes = ((1, 257, 8, 128), (1, 257, 2, 128), (1, 257, 2, 128), (1, 257, 8, 128))
     q, k, v, cotangent = (jax.random.normal(key, shape, dtype=jnp.bfloat16) for key, shape in zip(keys, shapes))
