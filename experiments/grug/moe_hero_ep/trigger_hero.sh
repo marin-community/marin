@@ -82,10 +82,9 @@ else:
     reader = csv.DictReader(io.StringIO(result.stdout))
     if reader.fieldnames != ["job_id", "state"]:
         raise ValueError("Unknown coordinator state: unexpected Iris query response")
-    rows = list(reader)
-    if not any(f"/{parent_id}-coord-" in row["job_id"] for row in rows):
-        raise ValueError("Unknown parent coordinator state; refusing launch")
-    for row in rows:
+    # Terminal parent rows age out of the controller after its job retention window, so an
+    # absent coordinator is the safe state; only a live one blocks the launch.
+    for row in reader:
         if int(row["state"]) not in TERMINAL_JOB_STATES:
             raise ValueError(f"Coordinator is not terminal: {row['job_id']}")
     child = api.run(f"{entity}/{project}/{run_id}")
