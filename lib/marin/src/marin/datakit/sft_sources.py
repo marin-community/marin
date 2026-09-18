@@ -22,6 +22,7 @@ from marin.datakit.download.nemotron_terminal import nemotron_terminal_chat_norm
 from marin.datakit.download.nemotron_v2 import nemotron_sft_chat_normalize_steps
 from marin.datakit.download.numinamath_tir import numinamath_tir_chat_normalize_steps
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_chat_normalize_steps
+from marin.datakit.download.open_swe_traces import OPEN_SWE_TRACES_PARTITIONS, open_swe_traces_chat_normalize_steps
 from marin.datakit.download.openthoughts4_code import openthoughts4_code_chat_normalize_steps
 from marin.datakit.download.penfever_rollouts import penfever_rollouts_chat_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_chat_normalize_steps
@@ -186,6 +187,10 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
         for name in all_sources()
         if name.startswith("nemotron_sft/")
     )
+    rows.extend(
+        (name, lambda source_name=name: open_swe_traces_chat_normalize_steps(source_name))
+        for name in OPEN_SWE_TRACES_PARTITIONS
+    )
 
     v3_chains = nemotron_v3_steps()
     if set(v3_chains) != set(NEMOTRON_SFT_V3_TOKEN_COUNTS_B):
@@ -194,6 +199,7 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
 
     token_counts = {name: source.rough_token_count_b for name, source in all_sources().items()}
     token_counts.update(NEMOTRON_SFT_V3_TOKEN_COUNTS_B)
+    token_counts.update({name: size for name, (_, size) in OPEN_SWE_TRACES_PARTITIONS.items()})
     # This chat-only source has 3,341,347,579 completion tokens in its pinned
     # manifest. The rough weight excludes repeated prompts.
     token_counts["openthoughts4-code-glm-5.2-n4"] = 3.341347579
