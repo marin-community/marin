@@ -49,7 +49,8 @@ manifest record the clean launch commit used to build the pipeline.
 | `templates` | `task_templates.py` | exemplars plus converter coverage for retained sources |
 | `converted` | `convert.py` | normalized task binaries, optional solution archives, metadata, and row status |
 | `filtered` | `verify.py` | within-source exact deduplication and fail-closed verifier checks |
-| `release` | `publish.py` | one task Parquet plus the ledger, manifest, and report |
+| `routed` | `routing_cleanup.py` | verified rows looked up by task ID in the canonical MCQA routing JSONL |
+| `release` | `publish.py` | Harbor tasks, MCQA RL/SFT splits, ledger, manifest, and report |
 
 ## Release layout
 
@@ -72,18 +73,26 @@ columns before reading the packed task payloads.
 | `task_binary` | gzip-compressed Harbor task archive |
 | `solution_binary` | optional gzip-compressed oracle solution archive |
 
-The physical path is `tasks/part-00000.parquet`. Source-specific files can be materialized from
-the `source` column when needed; the canonical release stays single-shard so it has one immutable
-object, one footer, and one row-count contract.
+The routing stage loads the complete canonical `route-mappings.jsonl` into memory and applies it as
+a map-side lookup. MCQA rows routed to RL remain in the main Harbor task set. SFT rows are removed
+from the main set but retain their task and solution archives in the separate SFT Parquet. Garbage
+rows and mechanically valid MCQA rows absent from the mapping are rejected without payloads.
+Non-MCQA rows are unaffected.
+
+Each physical split is a single Parquet file. Source-specific files can be materialized from the
+`source` column when needed; the canonical release stays single-shard per split so each has one
+immutable object, one footer, and one row-count contract.
 
 The current release is under
-`s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9/`:
+`s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.1/`:
 
 | path | contents |
 |---|---|
-| `tasks/part-00000.parquet` | retained tasks and selection columns |
+| `tasks/part-00000.parquet` | retained Harbor tasks: all retained non-MCQA rows plus MCQA routed to RL |
+| `rl/part-00000.parquet` | MCQA rows routed to RL, including route provenance |
+| `sft/part-00000.parquet` | MCQA rows routed to SFT, including route provenance and task payloads |
 | `ledger.parquet` | rejected source and row decisions |
-| `manifest.json` | counts by source, status, converter, grader, tag, and environment |
+| `manifest.json` | counts by route, source, status, converter, grader, tag, and environment |
 | `report.md` | tables generated from the manifest |
 
 The authenticated browser at <https://marina.oa.dev/tasktrove/> uses a paginated Marina API. The
