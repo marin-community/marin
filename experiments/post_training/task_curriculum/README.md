@@ -5,7 +5,7 @@ keeps curriculum design separate from task correctness:
 TaskCompendium owns model-visible task semantics and private verifier contracts; a curriculum describes observable
 capabilities, boundaries, examples, and prerequisites.
 
-`curriculum.yaml` is the canonical catalog. It contains nine reviewed curriculum graphs and 292 globally unique
+`curriculum.yaml` is the canonical catalog. It contains ten reviewed curriculum graphs and 313 globally unique
 sections. The Markdown reports under `pilot/` and `wave2/` preserve the experimental evidence; runtime assignment
 loads only the YAML catalog.
 
@@ -25,13 +25,17 @@ loads only the YAML catalog.
 One-off agent runs produce curricula and reviews. Their reports record the evidence, and reviewed changes are promoted
 into the canonical YAML. For each selected macro area:
 
-1. Give the generator the inventory area, rubric, a maximum tree depth, and representative tasks. The generator uses
-   as many levels and sections as the learning criteria require. Every section includes an `entry` probe that isolates
-   the smallest prerequisite delta and a `representative` probe for the full outcome.
+1. Give a high-reasoning generator the inventory area, rubric, a maximum tree depth, and representative tasks. Before
+   emitting the curriculum, it enumerates operation families, tests the most distant permitted pair for every leaf,
+   and audits proposed prerequisites with the completed-artifact counterfactual. Every section includes an `entry`
+   probe that isolates the smallest prerequisite delta and a `representative` probe for the full outcome.
 2. Validate the JSON with `Curriculum` and `Curriculum.check_generation_contract`.
-3. Give the curriculum and rubric to an independent reviewer. The reviewer returns a score, verdict, concrete
-   findings, and proposed rubric changes in one call for the complete subject curriculum.
-4. Compare findings across subjects. Mutual self-confidence and prerequisite continuity are blocking criteria even
+3. Give the curriculum and rubric to an independent high-reasoning reviewer. The reviewer returns a score, verdict,
+   concrete findings, and proposed rubric changes in one call for the complete subject curriculum.
+4. When an uncertain boundary or difficulty claim could change the review, the reviewer may generate focused tasks
+   and send them to a blinded Luna model in batches of 8–16. These diagnostics are optional and do not replace the
+   whole-subject judgment.
+5. Compare findings across subjects. Mutual self-confidence and prerequisite continuity are blocking criteria even
    when the numeric score is high. Revise the rubric or generation instructions only for problems that recur, then
    generate another version.
 
@@ -39,8 +43,8 @@ The checked-in `pilot/` and `wave2/` reports summarize the one-off results. Prom
 `curriculum.yaml`; do not add another runtime curriculum or check in task-level experiment artifacts.
 
 The detailed rubric is a development tool for a small subject sample. Routine scale-out uses its compact five-part
-score in one Luna call per curriculum version. Sampled Luna failures provide a difficulty proxy; this workflow does
-not run model-training experiments.
+score in one high-reasoning call per curriculum version. Sampled Luna placements and failures provide optional
+boundary and difficulty evidence; this workflow does not run model-training experiments.
 
 ## Task mapping
 
@@ -135,10 +139,36 @@ The recurring defects were one-leaf-per-guidepost generation, broad specialist l
 and parent probes that bundled independent child deliverables. The stricter reviewer also tended toward recursive
 splitting based only on different tools or subfields. A blocking split must now cite two concrete probes with distinct
 central operations and explain how the split changes sampling or evaluation. None of the three provisional curricula
-is promoted into `curriculum.yaml` yet.
+was promoted during wave four.
+
+## Wave-five scale-out test
+
+Wave five used Sol/high for one complete-subject generation and one independent complete-subject review of NLP,
+computational science, and security. Generation first enumerated operation families, challenged every leaf with a
+counterexample pair, and audited candidate prerequisites. The first reviews scored 90, 87, and 87. Each found one
+blocker. Targeted repairs then scored 79, 83, and 90. Security passed with no blockers and is promoted into the
+canonical catalog.
+
+The two failed repairs expose scale-out problems. Restricting translation to the one observed English-to-Chinese
+direction restored mutual confidence but lost guidepost coverage. Knowledge-dependent capabilities need an explicit
+sampling and evaluation facet, such as language direction, when the central operation transfers but background
+knowledge does not. Adding one general-PDE leaf closed a coverage gap but combined elliptic, diffusion, reaction, and
+wave operations and created ambiguous boundaries with transport simulation. A repair must receive another complete
+subject review; closing the named blocker is insufficient.
+
+The independent reviewers generated 12 boundary tasks per subject and hid their intended sections from Luna. Luna
+placed all 36 into an accepted leaf or justified alternative. These curriculum-derived probes confirm that the named
+boundaries are legible, but they are easier than held-out data and do not override structural blockers. In-distribution
+examples permitted by the [evaluation policy](https://github.com/marin-community/marin/issues/9193) should supply a
+second held-out coverage view. Out-of-distribution evaluations contribute metadata only under that policy.
+
+Before broad scale-out, the procedure needs a structured representation for parameterized knowledge regimes and a
+decision on organizational parents. A parent with no natural cross-child synthesis should not receive an artificial
+omnibus task. Under the current schema it must be flattened or replaced by a genuine capability node.
 
 ## Provenance
 
 - [TaskTrove competency coverage audit](https://storage.googleapis.com/marin-public/benjaminfeuer/tasktrove-competency-coverage/2026.09.03/index.html)
 - [Coverage issue #8879](https://github.com/marin-community/marin/issues/8879)
+- [Evaluation policy #9193](https://github.com/marin-community/marin/issues/9193)
 - [TaskCompendium PR #9187](https://github.com/marin-community/marin/pull/9187)

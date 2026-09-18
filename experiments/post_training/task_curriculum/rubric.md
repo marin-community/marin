@@ -6,13 +6,13 @@ for each judgment and name changes that would apply beyond the current subject.
 ## Review modes
 
 Use this detailed rubric while developing the generator and review procedure on sampled subjects. It diagnoses
-section boundaries, prerequisite edges, probes, and evidence failures. It may generate counterexample tasks and run
-Luna on small samples in batches of 8–16.
+section boundaries, prerequisite edges, probes, and evidence failures.
 
-Routine scale-out uses one Luna review call for one complete subject curriculum version. The call reads the subject
-guideposts, curriculum, and a small evidence summary, then returns a score, status, evidence confidence, blockers,
-and the highest-risk sections. It does not spawn a reviewer per section or edge. A repair creates a new curriculum
-version and receives one new review call.
+Routine scale-out uses one high-reasoning review call for one complete subject curriculum version. Sol/high is the
+current reference. The call reads the subject guideposts, curriculum, and a small evidence summary, then returns a
+score, status, evidence confidence, blockers, and the highest-risk sections. It does not spawn a reviewer per section
+or edge. A repair creates a new curriculum version and receives another complete-subject review. The reviewer may
+request targeted blinded Luna probes when their result could change a finding.
 
 1. **Coverage:** The leaves jointly cover the important capabilities represented by the subject guideposts,
    discovery tasks, and permitted evaluation probes. Record plausible omissions; do not add a section for every
@@ -48,13 +48,19 @@ version and receives one new review call.
    knowledge regime: supplied context, broadly expected background, or specialist closed-book recall. A blocking
    split recommendation must cite two concrete, instantiable task probes, explain why their central operations do not
    transfer, and state how the split changes training sampling or evaluation. Different tools or subfields alone do
-   not justify a split.
+   not justify a split. When the central operation transfers but required background knowledge varies, declare the
+   knowledge regime as a sampling and evaluation facet. Language direction, jurisdiction, protocol family, and
+   scientific model family are examples. Hold the facet fixed for the mutual-confidence test, cover the intended
+   facet values instead of narrowing to the one observed example, and split the section only when changing the facet
+   also changes the central operation.
 6. **Generation probes:** Every section has one `entry` instruction and one `representative` instruction. The entry
    probe isolates the prerequisite-to-section delta. The representative probe exercises the full outcome and differs
    in substance from the entry probe. Internal-node representative probes exercise cross-child synthesis. Both must
    be instantiable as tasks. When the outcome is transformation, explanation, revision, or documentation rather than
    domain expertise, the probe supplies the facts, interface, measurements, or completed solution it operates on.
-   Solutions and correctness contracts are outside the curriculum.
+   Solutions and correctness contracts are outside the curriculum. An internal node remains a trainable section only
+   when it supports a natural cross-child synthesis task. A routing menu or omnibus bundle is not synthesis; flatten
+   or restructure that node under the current schema.
 7. **Mapping:** Assignment is multi-label across curriculum graphs and single-ranking within each selected graph.
    Each graph declares one membership projection. `subject_domain` is the broad body of knowledge or tool environment
    required by the decisive operation; it excludes narrative subject and answer format. `task_mechanic` is a
@@ -94,7 +100,16 @@ coverage. It must not infer one leaf per guidepost. High confidence requires dir
 every leaf and sampled prerequisite edges. A complete structural scan with sparse task evidence is medium confidence;
 missing evidence for major branches is low confidence.
 
-## Luna difficulty proxy
+After any repair, repeat the complete-subject review. A local check that the named blocker disappeared cannot detect
+coverage loss, new catch-all sections, or shifted sibling boundaries.
+
+## Optional Luna probes
+
+For a boundary diagnostic, the subject reviewer generates 8–16 concrete tasks concentrated on close siblings and
+coverage gaps. Hide the intended section, ask Luna for one leaf or `out_of_scope`, and accept an alternative only with
+a recorded rationale. About 70% reasonable placement is sufficient during initial scale-out. Curriculum-derived
+tasks are a weak diagnostic because their wording tends to mirror the section definitions; held-out TaskTrove and
+permitted in-distribution evaluation examples provide stronger evidence.
 
 Model-training experiments are outside this curriculum workflow. During development or a periodic audit, use Luna
 failures as a rough proxy on two prerequisite representatives, two dependent entries, and two dependent
