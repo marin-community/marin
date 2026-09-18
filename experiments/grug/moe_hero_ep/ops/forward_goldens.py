@@ -175,7 +175,6 @@ def golden_spec(mode: str) -> GoldenSpec:
         dataclasses.replace(
             hero_recipe.HERO_MODEL_CONFIG,
             moe_implementation=DEFAULT_DROPLESS_MOE_IMPLEMENTATION,
-            expert_chunks=1,
         )
     )
     changes = {
@@ -583,7 +582,11 @@ def produce(request: GoldenRequest, store_root: str) -> None:
             "score": (
                 "target_token_ids[i] is predicted from hidden state " "[score_case_indices[i], prediction_positions[i]]"
             ),
-            "full_logit": "full_logits[row, vocabulary_token_id]",
+            "full_logit": (
+                "full_logits[i, vocabulary_token_id] comes from hidden state "
+                "[full_logit_case_indices[i], full_logit_prediction_positions[i]] and predicts the token at "
+                "full_logit_prediction_positions[i] + 1"
+            ),
             "route": "route_expert_ids[layer, case, token_position, ordered_route_slot]",
         },
         "scoring": {
@@ -593,7 +596,7 @@ def produce(request: GoldenRequest, store_root: str) -> None:
             "cross_backend_tolerances": "not yet qualified; consumers must provide explicit provisional bounds",
         },
         "routing": {
-            "expert_ids": "ordered global expert IDs selected from biased router logits",
+            "expert_ids": "global expert IDs ordered by descending biased router logit, as emitted by top_k",
             "combine_weights": "actual BF16 expert-combine values, widened to float32 for storage",
             "cutoff_gap": "float32 biased Kth score minus biased (K+1)th score",
             "padding": {"expert_id": -1, "combine_weight": 0, "cutoff_gap": 0},

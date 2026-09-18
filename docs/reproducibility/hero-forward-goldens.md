@@ -79,7 +79,8 @@ All indices are zero-based.
   `[score_case_indices[i], prediction_positions[i]]`. In other words, token position `p` is predicted at
   position `p - 1`.
 - `target_logprobs` and `top_logprobs` are float32 full-vocabulary `log_softmax` values. `full_logits` contains
-  a small set of float32 pre-softmax vocabulary rows for diagnosis.
+  a small set of float32 pre-softmax vocabulary rows for diagnosis. Each `full_logit_prediction_positions[i]`
+  follows the same convention as a score position: that hidden state predicts the token at position `p + 1`.
 
 The backend observation archive must contain every array named by `REQUIRED_OBSERVATIONS`. Missing arrays and
 shape or index shifts are errors, not partial passes.
@@ -87,9 +88,10 @@ shape or index shifts are errors, not partial passes.
 ## Route alignment
 
 `route_expert_ids[layer, case, token_position, route_slot]` contains ordered global expert IDs for every valid
-token and every MoE layer. `route_combine_weights` contains the BF16 values passed to expert computation,
-widened to float32 for storage. `route_cutoff_gaps[layer, case, token_position]` is the biased Kth routing score
-minus the biased (K+1)th score.
+token and every MoE layer. Route slots follow descending biased router score, exactly as emitted by JAX `top_k`;
+another backend must reorder its routes to that convention before comparison. `route_combine_weights` contains
+the BF16 values passed to expert computation, widened to float32 for storage.
+`route_cutoff_gaps[layer, case, token_position]` is the biased Kth routing score minus the biased (K+1)th score.
 
 Padding uses expert ID `-1`, combine weight `0`, and gap `0`. A small cutoff gap is reported when a route differs;
 it never excuses the mismatch. The expert parameters remain in the checkpoint.
