@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -13,29 +14,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class SubjectGuidepost(StrictModel):
-    id: str
-    name: str
-
-
-class SubjectArea(StrictModel):
-    id: str
-    name: str
-    guideposts: list[SubjectGuidepost]
-
-
-class SubjectInventory(StrictModel):
-    version: str
-    source_url: str
-    areas: list[SubjectArea]
-
-    def area(self, area_id: str) -> SubjectArea:
-        matches = [area for area in self.areas if area.id == area_id]
-        if len(matches) != 1:
-            raise ValueError(f"expected one subject area {area_id}, found {len(matches)}")
-        return matches[0]
 
 
 class SampleTask(StrictModel):
@@ -129,54 +107,73 @@ class Curriculum(StrictModel):
             raise ValueError(f"sections must have one entry and one representative probe in order: {wrong_probes}")
 
 
-class CurriculumReview(StrictModel):
-    score: int = Field(ge=0, le=100)
-    verdict: str = Field(min_length=1)
-    findings: list[str]
-    rubric_changes: list[str]
+class RoutingFacet(StrEnum):
+    SUBJECT_DOMAIN = "subject_domain"
+    TASK_MECHANIC = "task_mechanic"
 
 
-class CurriculumReviewV2(StrictModel):
-    score: int = Field(ge=0, le=100)
-    verdict: str = Field(min_length=1)
-    blocking_findings: list[str]
-    mutual_confidence_findings: list[str]
-    continuity_findings: list[str]
-    other_findings: list[str]
-    rubric_changes: list[str]
+class AnchorKind(StrEnum):
+    GRAPH = "graph"
+    SECTION = "section"
 
 
-class EvaluationProbe(StrictModel):
-    task_id: str
-    benchmark: str
-    source_revision: str
-    split: str
-    item_id: str
-    task_hash: str
-    applicable_subject_ids: list[str] = Field(min_length=1)
+class CatalogCurriculum(StrictModel):
+    routing_facet: RoutingFacet
+    curriculum: Curriculum
 
 
-class EvaluationPolicySource(StrictModel):
-    benchmark: str
-    policy_class: Literal["in_distribution", "out_of_distribution"]
-    allowed_use: Literal["held_out_examples", "metadata_only"]
-    source_url: str
-    source_revision: str | None
+class CurriculumCatalog(StrictModel):
+    catalog_version: str
+    curricula: list[CatalogCurriculum] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_catalog(self) -> CurriculumCatalog:
+        subject_ids = [entry.curriculum.subject_id for entry in self.curricula]
+        if len(subject_ids) != len(set(subject_ids)):
+            raise ValueError("subject IDs must be unique across curricula")
+        section_ids = [section.id for entry in self.curricula for section in entry.curriculum.sections]
+        if len(section_ids) != len(set(section_ids)):
+            raise ValueError("section IDs must be unique across curricula")
+        return self
+
+
+class AssignmentAnchor(StrictModel):
+    kind: AnchorKind
+    subject_id: str
+    section_id: str | None
+    text: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> AssignmentAnchor:
+        if self.kind == AnchorKind.GRAPH and self.section_id is not None:
+            raise ValueError("graph anchors cannot name a section")
+        if self.kind == AnchorKind.SECTION and self.section_id is None:
+            raise ValueError("section anchors must name a section")
+        return self
 
 
 class SemanticKey(StrictModel):
-    subject: str = Field(
+    subject_domain: str = Field(
         min_length=1,
         description="Operational knowledge domain needed to solve the task, excluding narrative subject matter",
+    )
+    task_mechanic: str = Field(
+        min_length=1,
+        description="Domain-independent transformation or reasoning action required by the task",
     )
     summary: str = Field(min_length=1, description="Requested result without source or curriculum labels")
     hardest_operation: str = Field(min_length=1)
     required_operations: list[str] = Field(min_length=1)
     answer_form: str = Field(min_length=1)
 
-    def embedding_text(self) -> str:
+    def membership_text(self, facet: RoutingFacet) -> str:
+        if facet == RoutingFacet.SUBJECT_DOMAIN:
+            return f"Subject domain: {self.subject_domain}."
+        return f"Task mechanic: {self.task_mechanic}."
+
+    def operation_text(self) -> str:
         return (
-            f"Subject: {self.subject}. Task: {self.summary}. "
+            f"Task: {self.summary}. "
             f"Hardest operation: {self.hardest_operation}. "
             f"Required operations: {'; '.join(self.required_operations)}. "
             f"Answer form: {self.answer_form}."
@@ -191,17 +188,16 @@ class TaskAnnotation(StrictModel):
     key: SemanticKey
 
 
-class TaskMechanicAnnotation(StrictModel):
-    task_id: str
-    task_hash: str
-    model: str
-    prompt_version: str
-    task_mechanic: str = Field(min_length=1)
-
-
 class MappingCandidate(StrictModel):
     section_id: str
     similarity: float = Field(ge=-1.0, le=1.0)
+
+
+class GraphMapping(StrictModel):
+    subject_id: str
+    routing_facet: RoutingFacet
+    membership_similarity: float = Field(ge=-1.0, le=1.0)
+    candidates: list[MappingCandidate]
 
 
 class TaskMapping(StrictModel):
@@ -209,21 +205,6 @@ class TaskMapping(StrictModel):
     task_hash: str
     annotation_model: str
     annotation_prompt_version: str
-    curriculum_versions: dict[str, str]
+    catalog_version: str
     embedding_model: str
-    candidates: list[MappingCandidate]
-
-
-class MappingReference(StrictModel):
-    task_id: str
-    status: Literal["exact", "ambiguous", "out_of_scope"]
-    acceptable_section_ids: list[str]
-    rationale: str
-
-    @model_validator(mode="after")
-    def validate_sections(self) -> MappingReference:
-        if self.status == "out_of_scope" and self.acceptable_section_ids:
-            raise ValueError("out-of-scope references cannot name acceptable sections")
-        if self.status != "out_of_scope" and not self.acceptable_section_ids:
-            raise ValueError("in-scope references must name an acceptable section")
-        return self
+    graphs: list[GraphMapping]

@@ -25,7 +25,10 @@ for each judgment and name changes that would apply beyond the current subject.
    in the entry task. If the dependent task remains solvable when a completed prerequisite artifact is supplied to a
    learner who cannot produce it, that is pipeline ordering rather than capability dependence. Internal-node
    representative tasks require coherent cross-child synthesis around one natural artifact, question, or decision;
-   concatenating unrelated child deliverables does not qualify.
+   concatenating unrelated child deliverables does not qualify. For sampled edges, write a second prerequisite
+   representative, dependent entry, and dependent representative. An independent reviewer checks both variants
+   against prerequisite-to-entry transfer, material added capability, and the completed-artifact counterfactual. One
+   failing variant blocks the edge. Passing this structural audit does not establish training transfer.
 5. **Mutual self-confidence:** Mastery of one representative task in a section should predict success on most other
    representative tasks in that section after changing surface form, data, and tools that are not part of the claimed
    outcome. Test composite leaves with a counterexample pair drawn from different included operation families. Split
@@ -38,9 +41,17 @@ for each judgment and name changes that would apply beyond the current subject.
    be instantiable as tasks. When the outcome is transformation, explanation, revision, or documentation rather than
    domain expertise, the probe supplies the facts, interface, measurements, or completed solution it operates on.
    Solutions and correctness contracts are outside the curriculum.
-7. **Mapping:** When held-out mapping evidence is available, tasks that exercise the same capability should
-   retrieve the same section, while close non-members should expose real boundary errors. Treat low similarity and
-   unstable neighbors as evidence about anchors or missing coverage. Do not add source-specific rules.
+7. **Mapping:** Assignment is multi-label across curriculum graphs and single-ranking within each selected graph.
+   Each graph declares one membership projection. `subject_domain` is the broad body of knowledge or tool environment
+   required by the decisive operation; it excludes narrative subject and answer format. `task_mechanic` is a
+   domain-neutral operation family such as implementation, repair, supplied-context extraction, calculation,
+   explanation, recall, or tool-state mutation. It excludes domain nouns and source identity. The hardest operation
+   and required operations rank sections only after graph selection. Use separate mapping anchors from generation
+   probes. When held-out evidence is available, members should outrank close non-members and tasks that exercise the
+   same capability should retrieve the same section. Calibrate membership independently per graph; scores from
+   different projections are not directly comparable. Treat low similarity and unstable neighbors as evidence about
+   annotation quality, anchors, boundaries, or missing coverage. Do not add source-specific rules or per-task
+   exceptions.
 8. **Adaptive size:** Section count and depth follow the preceding criteria. There is no target density per macro
    area. Flag broad catch-alls when mutual self-confidence is implausible, and flag distinctions that would not change
    sampling, transfer, or evaluation.

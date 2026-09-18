@@ -8,10 +8,13 @@ import numpy as np
 import pytest
 
 from experiments.post_training.task_curriculum.cache import EmbeddingCache, cached_embeddings
-from experiments.post_training.task_curriculum.mapping import curriculum_anchors, map_task_vectors
+from experiments.post_training.task_curriculum.mapping import graph_anchors, map_task_vectors, section_anchors
 from experiments.post_training.task_curriculum.models import (
+    CatalogCurriculum,
     Curriculum,
+    CurriculumCatalog,
     CurriculumSection,
+    RoutingFacet,
     SampleTask,
     SemanticKey,
     TaskAnnotation,
@@ -34,16 +37,37 @@ def _section(section_id: str, parent_id: str | None, task_texts: tuple[str, str]
     )
 
 
-def _curriculum() -> Curriculum:
+def _curriculum(subject_id: str = "C00", prefix: str = "") -> Curriculum:
     return Curriculum(
         version="pilot-1",
-        subject_id="C00",
+        subject_id=subject_id,
         subject_name="Pilot",
         sections=[
-            _section("files", None, ("find a file", "rename a file")),
-            _section("files.search", "files", ("search file contents", "filter matching lines")),
-            _section("processes", None, ("inspect a process", "stop a process")),
-            _section("processes.logs", "processes", ("read service logs", "filter log entries")),
+            _section(f"{prefix}files", None, ("find a file", "rename a file")),
+            _section(
+                f"{prefix}files.search",
+                f"{prefix}files",
+                ("search file contents", "filter matching lines"),
+            ),
+            _section(f"{prefix}processes", None, ("inspect a process", "stop a process")),
+            _section(
+                f"{prefix}processes.logs",
+                f"{prefix}processes",
+                ("read service logs", "filter log entries"),
+            ),
+        ],
+    )
+
+
+def _catalog() -> CurriculumCatalog:
+    return CurriculumCatalog(
+        catalog_version="catalog-1",
+        curricula=[
+            CatalogCurriculum(routing_facet=RoutingFacet.SUBJECT_DOMAIN, curriculum=_curriculum()),
+            CatalogCurriculum(
+                routing_facet=RoutingFacet.TASK_MECHANIC,
+                curriculum=_curriculum("C01", "practice."),
+            ),
         ],
     )
 
@@ -55,7 +79,8 @@ def _annotation(task_id: str) -> TaskAnnotation:
         model="annotation-model",
         prompt_version="key-v1",
         key=SemanticKey(
-            subject="systems",
+            subject_domain="systems",
+            task_mechanic="inspect and select an operating-system object",
             summary="inspect an operating-system object",
             hardest_operation="identify the relevant object",
             required_operations=["inspect", "select"],
@@ -92,70 +117,57 @@ def test_curriculum_contract_rejects_depth_above_limit() -> None:
         _curriculum().check_generation_contract(maximum_depth=1)
 
 
-def test_mapping_uses_best_anchor_per_section_across_row_batches() -> None:
-    curriculum = _curriculum()
-    anchor_ids, _ = curriculum_anchors([curriculum])
+def test_mapping_ranks_sections_independently_inside_each_graph() -> None:
+    catalog = _catalog()
+    graph_subject_ids, graph_facets, _ = graph_anchors(catalog)
+    section_subject_ids, section_ids, _ = section_anchors(catalog)
     annotations = [_annotation("file-task"), _annotation("log-task"), _annotation("process-task")]
-    anchor_vectors = np.asarray(
-        [
-            [1.0, 0.0, 0.0],
-            [0.9, 0.1, 0.0],
-            [0.8, 0.2, 0.0],
-            [0.7, 0.3, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.9, 0.1],
-            [0.0, 0.8, 0.2],
-            [0.0, 0.0, 1.0],
-        ],
-        dtype=np.float32,
-    )
+    graph_vectors = np.asarray([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]], dtype=np.float32)
+    membership_vectors = {
+        RoutingFacet.SUBJECT_DOMAIN: np.asarray([[1.0, 0.0]] * 3, dtype=np.float32),
+        RoutingFacet.TASK_MECHANIC: np.asarray([[0.0, 1.0]] * 3, dtype=np.float32),
+    }
+    section_vectors = np.zeros((len(section_ids), 3), dtype=np.float32)
+    target_vectors = {
+        "files": [1.0, 0.0, 0.0],
+        "files.search": [0.8, 0.2, 0.0],
+        "processes": [0.0, 1.0, 0.0],
+        "processes.logs": [0.0, 0.0, 1.0],
+        "practice.files": [1.0, 0.0, 0.0],
+        "practice.files.search": [0.8, 0.2, 0.0],
+        "practice.processes": [0.0, 1.0, 0.0],
+        "practice.processes.logs": [0.0, 0.0, 1.0],
+    }
+    for index, section_id in enumerate(section_ids):
+        section_vectors[index] = target_vectors[section_id]
     task_vectors = np.asarray([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]], dtype=np.float32)
 
     mappings = map_task_vectors(
         annotations,
+        membership_vectors,
         task_vectors,
-        [curriculum],
-        anchor_ids,
-        anchor_vectors,
+        catalog,
+        graph_subject_ids,
+        graph_facets,
+        graph_vectors,
+        section_subject_ids,
+        section_ids,
+        section_vectors,
         embedding_model="embed-v1",
         top_k=2,
         row_batch_size=1,
     )
 
-    assert [mapping.candidates[0].section_id for mapping in mappings] == ["files", "processes.logs", "processes"]
-    assert all(len(mapping.candidates) == 2 for mapping in mappings)
+    for subject_id, prefix in (("C00", ""), ("C01", "practice.")):
+        graph_rows = [next(graph for graph in mapping.graphs if graph.subject_id == subject_id) for mapping in mappings]
+        assert [graph.candidates[0].section_id for graph in graph_rows] == [
+            f"{prefix}files",
+            f"{prefix}processes.logs",
+            f"{prefix}processes",
+        ]
+        assert all(len(graph.candidates) == 2 for graph in graph_rows)
     assert {mapping.embedding_model for mapping in mappings} == {"embed-v1"}
-    assert {tuple(mapping.curriculum_versions) for mapping in mappings} == {("C00",)}
-
-
-def test_mapping_ranks_sections_across_curricula() -> None:
-    first = Curriculum(
-        version="first-1",
-        subject_id="C01",
-        subject_name="First",
-        sections=[_section("first.files", None, ("find a file", "rename files"))],
-    )
-    second = Curriculum(
-        version="second-1",
-        subject_id="C02",
-        subject_name="Second",
-        sections=[_section("second.processes", None, ("inspect a process", "stop processes"))],
-    )
-    anchor_ids, _ = curriculum_anchors([first, second])
-
-    mappings = map_task_vectors(
-        [_annotation("process-task")],
-        np.asarray([[0.0, 1.0]], dtype=np.float32),
-        [first, second],
-        anchor_ids,
-        np.asarray([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]], dtype=np.float32),
-        embedding_model="embed-v1",
-        top_k=2,
-        row_batch_size=1,
-    )
-
-    assert [candidate.section_id for candidate in mappings[0].candidates] == ["second.processes", "first.files"]
-    assert mappings[0].curriculum_versions == {"C01": "first-1", "C02": "second-1"}
+    assert {mapping.catalog_version for mapping in mappings} == {"catalog-1"}
 
 
 def test_embedding_cache_reuses_vectors_by_text_and_model(tmp_path: Path) -> None:

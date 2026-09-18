@@ -25,14 +25,13 @@ The first review round found the same two structural problems in different subje
   task.
 
 `rubric.md` now makes those tests explicit. It also requires a routing rule for overlapping sections and preserves
-the original mutual-predictiveness test for leaf granularity. The first-round rubric is retained as
-`rubric_v1.md`.
+the original mutual-predictiveness test for leaf granularity.
 
-| area | review sequence | final checked curriculum | remaining weakness |
+| area | review sequence | sections in `curriculum.yaml` | remaining weakness |
 |---|---:|---|---|
-| C03 Shell & Systems Administration | 78 → 86 | `C03/curriculum_v2.json` | process/resource and authentication leaves still combine weakly predictive operations |
-| C14 Mathematics & Formal Reasoning | 72 → 79 → 89 → 95 | `C14/curriculum_v4.json` | integer enumeration and structural proof remain broad; discovery evidence covers few leaves |
-| C21 Office Productivity & Documents | 84 → 88 | `C21/curriculum_v2.json` | calendar placement and calendar lifecycle/state restoration may warrant separate leaves |
+| C03 Shell & Systems Administration | 78 → 86 | 21 | process/resource and authentication leaves still combine weakly predictive operations |
+| C14 Mathematics & Formal Reasoning | 72 → 79 → 89 → 95 | 23 | integer enumeration and structural proof remain broad; discovery evidence covers few leaves |
+| C21 Office Productivity & Documents | 84 → 88 | 15 | calendar placement and calendar lifecycle/state restoration may warrant separate leaves |
 
 Mathematics needed a third generation pass because defining internal nodes as synthesis-only made their children no
 longer refinements of the parent. The revised rule is: the parent outcome contains the child outcomes, while the
@@ -74,31 +73,8 @@ requested maximum plus upper-bound certificate to optimization or structural pro
 either anchors that express the decisive operation more directly or a curriculum revision that makes this
 cross-cutting boundary reproducible.
 
-## Artifacts
+## Artifact disposition
 
-Each area directory contains the generated curricula and independent reviews. The final mapping inputs and results
-are:
-
-- `mapping_manifest.jsonl`: TaskTrove source and path identities for the eight mapping tasks;
-- `task_annotations.jsonl`: Luna semantic keys and content/model identities;
-- `mapping_references.jsonl`: blind acceptable-section labels;
-- `mappings.jsonl`: top-three candidates, cosine scores, curriculum version, annotation identity, and embedding
-  model.
-
-The source release is `s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9/`. C21 holdouts use SHA-256 ordering
-over `curriculum-mapping-holdout-v1\0 + source + \0 + path` after excluding discovery paths. Exact source/path rows
-are retained for all cohorts, so the selection can be reconstructed without checking in raw tasks or the Parquet.
-
-## Next evaluation
-
-1. Build one candidate index across several curricula plus reviewed null cases. Calibrate similarity and margin only
-   after freezing balanced member, close-neighbor, ambiguous, and out-of-scope fixtures.
-2. Test whether embedding decisive-operation anchors or restricting assignment to leaves improves Shell top-one and
-   the Mathematics extremal boundary. Do not add source-specific rules.
-3. Expand discovery and mapping evidence to unsupported leaves before splitting broad sections. Review findings
-   propose hypotheses; transfer has not been measured.
-4. Once key and assignment behavior stabilizes, annotate TaskTrove in 8–16-row model batches, persist keys by task
-   content and annotation identity, and embed each key once in sharded artifacts. Curriculum revisions then rebuild
-   only section anchors and assignments.
-5. Generate complete TaskSpecs and correctness contracts separately. The two instructions per section are cheap
-   curriculum probes. Verifier design and task-validity measurement remain separate.
+The reviewed graphs now live in the canonical `../curriculum.yaml`. The task identities, semantic keys, blind
+references, embeddings, and assignments were experimental data products and are not runtime configuration. The
+parent README describes the wave-three multi-label architecture and the external artifact contract for future runs.

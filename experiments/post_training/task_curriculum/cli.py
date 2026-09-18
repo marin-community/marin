@@ -14,8 +14,9 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from experiments.post_training.task_curriculum.cache import EmbeddingCache, cached_embeddings
-from experiments.post_training.task_curriculum.mapping import curriculum_anchors, map_task_vectors
-from experiments.post_training.task_curriculum.models import Curriculum, TaskAnnotation
+from experiments.post_training.task_curriculum.catalog import load_catalog
+from experiments.post_training.task_curriculum.mapping import graph_anchors, map_task_vectors, section_anchors
+from experiments.post_training.task_curriculum.models import AssignmentAnchor, RoutingFacet, TaskAnnotation
 
 
 def _read_jsonl[ModelT: BaseModel](path: Path, model: type[ModelT]) -> list[ModelT]:
@@ -41,7 +42,8 @@ def _openai_embeddings(model: str, batch_size: int) -> Callable[[Sequence[str]],
 
 @click.command()
 @click.option("--annotations", type=click.Path(path_type=Path, exists=True), required=True, multiple=True)
-@click.option("--curriculum", type=click.Path(path_type=Path, exists=True), required=True, multiple=True)
+@click.option("--catalog", type=click.Path(path_type=Path, exists=True), required=True)
+@click.option("--assignment-anchors", type=click.Path(path_type=Path, exists=True), multiple=True)
 @click.option("--cache", type=click.Path(path_type=Path), required=True)
 @click.option("--embedding-model", required=True)
 @click.option("--embedding-batch-size", type=click.IntRange(min=1), default=128, show_default=True)
@@ -50,7 +52,8 @@ def _openai_embeddings(model: str, batch_size: int) -> Callable[[Sequence[str]],
 @click.option("--output", type=click.Path(path_type=Path), required=True)
 def main(
     annotations: tuple[Path, ...],
-    curriculum: tuple[Path, ...],
+    catalog: Path,
+    assignment_anchors: tuple[Path, ...],
     cache: Path,
     embedding_model: str,
     embedding_batch_size: int,
@@ -58,21 +61,42 @@ def main(
     top_k: int,
     output: Path,
 ) -> None:
-    """Rank annotated tasks against one or more reviewed curricula."""
+    """Rank annotated tasks within each graph in the canonical curriculum catalog."""
     task_rows = [row for path in annotations for row in _read_jsonl(path, TaskAnnotation)]
-    curriculum_rows = [Curriculum.model_validate_json(path.read_text()) for path in curriculum]
-    anchor_ids, anchor_texts = curriculum_anchors(curriculum_rows)
-    task_texts = [row.key.embedding_text() for row in task_rows]
+    anchor_rows = [row for path in assignment_anchors for row in _read_jsonl(path, AssignmentAnchor)]
+    catalog_row = load_catalog(catalog)
+    graph_subject_ids, graph_facets, graph_texts = graph_anchors(catalog_row, anchor_rows)
+    section_subject_ids, section_ids, section_texts = section_anchors(catalog_row, anchor_rows)
     embed = _openai_embeddings(embedding_model, embedding_batch_size)
     with EmbeddingCache(cache) as local_cache:
-        task_vectors = cached_embeddings(local_cache, task_texts, embedding_model, embed)
-        anchor_vectors = cached_embeddings(local_cache, anchor_texts, embedding_model, embed)
+        membership_vectors = {
+            facet: cached_embeddings(
+                local_cache,
+                [row.key.membership_text(facet) for row in task_rows],
+                embedding_model,
+                embed,
+            )
+            for facet in RoutingFacet
+        }
+        operation_vectors = cached_embeddings(
+            local_cache,
+            [row.key.operation_text() for row in task_rows],
+            embedding_model,
+            embed,
+        )
+        graph_vectors = cached_embeddings(local_cache, graph_texts, embedding_model, embed)
+        section_vectors = cached_embeddings(local_cache, section_texts, embedding_model, embed)
     mappings = map_task_vectors(
         task_rows,
-        task_vectors,
-        curriculum_rows,
-        anchor_ids,
-        anchor_vectors,
+        membership_vectors,
+        operation_vectors,
+        catalog_row,
+        graph_subject_ids,
+        graph_facets,
+        graph_vectors,
+        section_subject_ids,
+        section_ids,
+        section_vectors,
         embedding_model,
         top_k,
         mapping_batch_size,

@@ -36,8 +36,8 @@ beyond its prerequisites and a representative task for the full outcome.
 Independent reviewers then checked every prerequisite edge, internal-node synthesis task, and composite-leaf transfer
 claim. Their first pass found omitted capabilities, discovery tasks routed by output format even when the decisive
 operation differed, broad sections whose task families did not transfer, and prerequisites that merely described
-pipeline order. A repair pass produced `curriculum_v2.json`; a fresh reviewer audited the repair. The repository retains both
-curriculum versions and both reviews.
+pipeline order. A repair pass produced a second version and a fresh reviewer audited it. This report records the
+scores and remaining blockers; the canonical catalog contains the reviewed result.
 
 The repaired rubric now requires:
 
@@ -142,27 +142,12 @@ boundary; C06 has schema-validation/data-quality and record-integration/linkage 
 experimental-design, longitudinal, and survival leaves; C25's closed-book factual QA leaf spans unrelated specialist
 knowledge; and C27 retains composite tax, performance, factor-risk, and disbursement leaves.
 
-## Next scale-out gate
+## Wave-three disposition
 
-Before annotating all TaskTrove rows:
+Wave three completed the multi-label relabeling, split semantic keys into domain, mechanic, and operation projections,
+tested graph and section anchors separately, and audited six prerequisite edges. The reviewed curricula are in
+`../curriculum.yaml`; the current architecture and results are summarized in the parent README.
 
-1. Revise the semantic-key schema and catalog assignment contract for multi-label, faceted routing. Re-label this
-   frozen 63-task sample independently for membership and section within every applicable graph, then rerun the cached
-   comparison. Do not tune around individual misses.
-2. Add 3–8 mapping examples per reviewed leaf, separate from entry and representative generation probes. Freeze a
-   balanced member, close-neighbor, overlap, and out-of-scope holdout before selecting thresholds.
-3. Repair the remaining v2 blockers, prioritizing recurring transfer and artifact-dependence failures over score.
-4. Select a small edge sample from several areas. For each edge, generate two prerequisite representatives, two
-   dependent entry tasks, and two dependent representative tasks. Run Luna in 8–16-task batches as a cheap
-   falsification: passing prerequisites while failing every entry task rejects epsilon continuity; solving every
-   representative task suggests the section adds too little. Actual proof requires model snapshots or a training
-   trial.
-5. Add the next areas in mixed batches—one formal, one procedural, one knowledge-heavy—while keeping the same frozen
-   review and mapping fixtures. Re-estimate total size from observed sections. Do not impose a macro quota.
-
-## Artifacts
-
-Each `Cxx/` directory contains discovery and mapping manifests, Luna annotations, both curricula, and both reviews.
-`global/` contains the flat mappings, blind references, evaluation summary, task-mechanic annotations, and facet
-experiment summary. Raw task text and embedding caches remain local; manifests retain release identities and content
-hashes.
+Task-level JSON and JSONL files are data products rather than source configuration, so they are not retained in the
+repository. Future annotations, anchors, vectors, calibration labels, and assignments belong in versioned Parquet
+artifacts in GCS, with curated public snapshots on Hugging Face when useful.
