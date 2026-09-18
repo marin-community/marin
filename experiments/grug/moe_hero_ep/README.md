@@ -48,8 +48,10 @@ Bounded diagnostics write metrics only by default. `--save-checkpoints` writes c
 land them on main. The checkpoint must have `metadata.json` and remain retained
 through the trial and rollback window. Use a new run ID and checkpoint tree.
 
-`fork-wandb` clears `WANDB_RESUME` and `WANDB_RESUME_FROM` from its environment
-because W&B rejects them alongside `fork_from`.
+Both commands need `WANDB_API_KEY` and a GitHub CLI (`gh`; agent sessions set
+`HERO_GH_CLI=agent-gh`). `fork-wandb` clears `WANDB_RESUME` and
+`WANDB_RESUME_FROM` from its environment because W&B rejects them alongside
+`fork_from`.
 
 W&B forks use `<parent-run-id>?_step=<history-step>`. Inspect parent history to
 choose the boundary before the first replayed update. The checkpoint records
