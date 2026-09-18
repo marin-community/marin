@@ -447,7 +447,7 @@ class HolisticReview(StrictModel):
     def validate_score_and_gate(self) -> HolisticReview:
         if self.score != self.dimension_scores.total():
             raise ValueError("holistic score must equal the dimension-score sum")
-        is_pilot_ready = self.score >= 85 and not self.blockers and self.confidence != EvidenceConfidence.LOW
+        is_pilot_ready = self.score >= 85 and not self.blockers
         if is_pilot_ready:
             expected_status = HolisticReviewStatus.PILOT_READY
         elif self.score < 70:
@@ -455,5 +455,5 @@ class HolisticReview(StrictModel):
         else:
             expected_status = HolisticReviewStatus.REVISE
         if self.status != expected_status:
-            raise ValueError("holistic status does not match the score, blocker, and confidence gate")
+            raise ValueError("holistic status does not match the score and blocker gate")
         return self

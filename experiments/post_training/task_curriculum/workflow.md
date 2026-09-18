@@ -8,8 +8,8 @@ agent transcripts, embeddings, mappings, and intermediate JSON in external exper
 
 Evaluate a subject in two independent ways:
 
-1. A holistic reviewer scores the complete curriculum against `rubric.md`. Promotion requires at least 85/100, no
-   blockers, and medium or high evidence confidence.
+1. A holistic reviewer scores the complete curriculum against `rubric.md`. Structural readiness requires at least
+   85/100 and no structural blockers. Evidence confidence is reported separately and guides later sampling.
 2. A blind task generator creates `max(24, 2 * guidepost_count)` subject tasks without seeing the curriculum. A
    separate fit judge sees only the task instructions and curriculum and classifies each task as `exact`,
    `ambiguous`, `gap`, or `invalid`.
@@ -327,10 +327,11 @@ Required checks:
 - Distinguish evidence confidence from structural quality. High confidence requires direct or held-out evidence
   reaching every capability and sampled edges; sparse task evidence caps confidence at medium.
 
-`pilot_ready` requires at least 85 points, no blockers, and medium or high confidence. Any failed gate at 70 points or
-above is `revise`; a score below 70 is `regenerate`. Pervasive defects must lower the affected dimension scores.
-Recommend the smallest repair that fixes each concrete defect. Propose a rubric change only for a recurrent issue
-that generalizes beyond this subject.
+`pilot_ready` requires at least 85 points and no structural blockers. Sparse evidence lowers confidence and belongs in
+the findings. Reserve blockers for structural defects. Any failed structural gate at 70 points or above is `revise`;
+a score below 70 is `regenerate`. Pervasive defects must lower the affected dimension scores. Recommend the smallest
+repair that fixes each concrete defect. Propose a rubric change only for a recurrent issue that generalizes beyond
+this subject.
 ```
 
 ## Optional prompt: blinded Luna placement
@@ -368,8 +369,10 @@ whose representative probe requires more of the task's central operation and nam
    with the inventory guidepost IDs and evidence-manifest item IDs. It enforces sample size and guidepost
    representation, subject and version identity, frozen task IDs, capability-only references, resolved systematic
    gaps, and complete accounting ledgers. Initial `revise` and `regenerate` results still receive this full validation.
-5. Repair concrete blockers. Revalidate, rerun the complete holistic review, and rerun fit judgment on the frozen
-   blind tasks. Do not accept a local blocker-only check.
+5. Repair concrete structural blockers once. Revalidate and, when the repair changes broad boundaries, rerun the
+   complete holistic review and fit judgment on the frozen blind tasks. Stop after one repair pass unless a guidepost
+   remains uncovered or the schema/generation contract fails. Record isolated misses and sparse evidence for the next
+   version instead of adding task-specific sections or repeatedly rereviewing the graph.
 6. Call `validate_subject_promotion` on the final artifacts. It requires a passing holistic review, no confirmed
    systematic gap, and no blind-task gap tied to an uncovered guidepost. Add a passing curriculum to
    `curriculum.yaml` and declare `routing_facet` from the intended

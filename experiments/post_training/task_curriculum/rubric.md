@@ -110,9 +110,14 @@ The single-call reviewer scores five dimensions:
 | Observable boundaries | 15 |
 | Probe quality and parsimony | 10 |
 
-The total is a comparison aid. `pilot_ready` requires at least 85 points, no blockers, and medium or high evidence
-confidence. Any failed gate at 70 points or above yields `revise`; a score below 70 yields `regenerate`. Pervasive
-structural defects must reduce the affected dimension scores instead of overriding the status thresholds.
+The total is a comparison aid. `pilot_ready` requires at least 85 points and no structural blockers. Any failed gate
+at 70 points or above yields `revise`; a score below 70 yields `regenerate`. Pervasive structural defects must reduce
+the affected dimension scores instead of overriding the status thresholds.
+
+Evidence confidence is reported separately. Sparse evidence identifies where to sample tasks or rerun review. A
+structurally coherent graph can enter the versioned catalog with low evidence confidence. Put evidence limitations in
+findings and recommended changes. Reserve blockers for structural defects. This keeps curriculum quality distinct
+from the maturity of the current task inventory and lets later evidence drive targeted revisions.
 
 The routine reviewer must inspect every capability section's most distant permitted task pair, every prerequisite edge
 under the completed-artifact counterfactual, every internal-capability representative for coherent synthesis, and

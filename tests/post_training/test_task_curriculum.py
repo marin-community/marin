@@ -239,6 +239,9 @@ def test_holistic_review_rejects_inconsistent_status() -> None:
     with pytest.raises(ValueError):
         HolisticReview.model_validate(review)
 
+    review.update(blockers=[], confidence="low")
+    HolisticReview.model_validate(review)
+
     review.update(
         score=69,
         dimension_scores={

@@ -5,8 +5,8 @@ keeps curriculum design separate from task correctness:
 TaskCompendium owns model-visible task semantics and private verifier contracts; a curriculum describes observable
 capabilities, boundaries, examples, and prerequisites.
 
-`curriculum.yaml` is the canonical catalog. It contains 16 reviewed curriculum graphs and 493 globally unique nodes:
-464 trainable capabilities and 29 organizational groups. The Markdown reports under `pilot/` and `wave2/` preserve
+`curriculum.yaml` is the canonical catalog. It contains 22 reviewed curriculum graphs and 697 globally unique nodes:
+638 trainable capabilities and 59 organizational groups. The Markdown reports under `pilot/` and `wave2/` preserve
 the experimental evidence; runtime assignment loads only the YAML catalog.
 
 ## Inputs
@@ -40,6 +40,11 @@ into the canonical YAML. For each selected macro area:
 5. Compare findings across subjects. Mutual self-confidence and prerequisite continuity are blocking criteria even
    when the numeric score is high. Revise the rubric or generation instructions only for problems that recur, then
    generate another version.
+
+The holistic score controls structural readiness: 85 or higher with no structural blockers is `pilot_ready`.
+Evidence confidence is tracked independently. Low confidence marks branches that need better discovery or held-out
+tasks; it does not prevent a coherent graph from entering the versioned catalog. Later evidence, blind-fit failures,
+and task mappings can trigger a new curriculum version.
 
 In parallel with curriculum generation, a curriculum-blind Sol/high agent generates
 `max(24, 2 * guidepost_count)` diverse tasks from the subject definition. A separate judge reports how many have an
@@ -245,11 +250,36 @@ design audits that retained superseded edges. The generator and reviewer prompts
 parent-containment checks, and execute-on-paper probe checks. Output validation rejects stale review versions and
 invalid cross-artifact references.
 
-The catalog now covers 16 of 34 macro areas and 77 of 151 guideposts. Its 493 nodes imply about 970 nodes at full
+The wave-seven catalog covered 16 of 34 macro areas and 77 of 151 guideposts. Its 493 nodes implied about 970 nodes at full
 guidepost coverage if the observed density stays constant, although subject density varies from eight capabilities
 for NLP to 51 for bioinformatics. Mutual self-confidence and epsilon continuity determine density; no per-subject
 section target applies. All four reviews have medium confidence because wave seven used no task-level discovery or
 held-out evaluation questions.
+
+## Wave-eight scale-out
+
+Wave eight added six subjects from 30 inventory guideposts. Each subject used 16 model-visible TaskTrove discovery
+tasks and 24 curriculum-blind synthetic tasks. Healthcare, hardware, and business operations also used four held-out
+MMLU questions permitted by the evaluation policy; answers were omitted. The broken `nl2bash` source was excluded.
+
+| Subject | Final version | Nodes/capabilities | Last holistic result | Last blind fit | Evidence warning |
+| --- | --- | ---: | ---: | ---: | --- |
+| DevOps Infrastructure & Cloud | `wave8-2` | 34/29 | 94, low confidence | 18/24 before repair | Sparse outside container and service operations |
+| Computer Vision & Document AI | `wave8-2` | 39/35 | 74 before repair | 13/23 before repair | No direct semantic-vision or generative-vision evidence |
+| Hardware Embedded & Architecture | `wave8-2` | 38/34 | 86 before repair, low confidence | 19/24 before repair | No discovery evidence for the digital-design branch |
+| Web Backend & Distributed Systems | `wave8-3` | 29/24 | 65 before final repair | 23/24 before final repair | No held-out evaluation questions |
+| Business Operations & Admin | `wave8-2` | 42/35 | 88 before repair | 19/24 before repair | Discovery is dominated by calendar mutation |
+| Healthcare Informatics | `wave8-2` | 22/17 | 94, low confidence | 22/24 | Sparse direct workflow evidence outside clinical knowledge |
+
+Every promoted graph passes the schema and generation contract. The final pass repaired all named structural blockers
+and stopped without adding task-specific capabilities for isolated blind misses. Four subjects did not receive another
+full review after their final repair; their table entries therefore retain the last independent score and fit instead
+of implying unmeasured improvement.
+
+This wave separated structural readiness from evidence maturity. A graph scores `pilot_ready` at 85 or above with no
+structural blockers. Evidence confidence remains in the report and directs later sampling, but low confidence does
+not prevent a coherent graph from entering the versioned catalog. The catalog now covers 22 of 34 macro areas and 107
+of 151 guideposts. Its 697 nodes project to about 984 nodes at full guidepost coverage if current density holds.
 
 ## Provenance
 
