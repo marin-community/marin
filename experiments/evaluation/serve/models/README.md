@@ -89,22 +89,3 @@ Dry runs show per-task hardware and serving geometry. `record.json` retains requ
 and reports resolved settings under `serving` after endpoint startup; `serving.effective` is false
 when startup did not produce an endpoint. Multi-node support and context capacity depend on the
 pinned vLLM version and model architecture and must be checked on the target hardware.
-
-### GLM-5.2 AWQ INT4
-
-The `glm-5.2-awq-int4-pp2-1m` entry pins the checkpoint and requests two H100x8 tasks
-with PP2, TP8, DP1, FP8 KV, and a 1,048,576-token context limit. Its
-`gpu_memory_utilization: 0.85` setting passed startup and a two-example GSM8K evaluation
-in [this Iris run](https://iris.oa.dev/#/job/%2Fkaran%2Feval-20260918-152852-glm-5.2-awq-int4-pp2-1m-67da).
-At 0.83, the limiting stage had 25.59 GiB available for KV against 26.14 GiB required;
-at 0.85 it had 27.17 GiB. This is a measured configuration, not a universal minimum.
-Actual full-length prompts and sustained concurrency remain unvalidated.
-
-```bash
-uv run python -m experiments.evaluation.cli launch \
-  --model glm-5.2-awq-int4-pp2-1m --evals gsm8k-0shot --limit 2 --dry-run
-```
-
-Removing `--dry-run` reserves 16 H100s and may mirror roughly 474 GB from Hugging Face
-if the regional cache is missing. Obtain approval for that transfer before a cold-cache launch.
-The model generation cap is 131,072 tokens; this GSM8K definition caps it at 512.
