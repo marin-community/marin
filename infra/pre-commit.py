@@ -46,7 +46,7 @@ MARIN_LICENSE = ROOT_DIR / "etc/license_header.txt"
 LEVANTER_BLACK_CONFIG = ROOT_DIR / "lib/levanter/pyproject.toml"
 HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
 MARIN_RUFF_CONFIG = ROOT_DIR / "lib/marin/pyproject.toml"
-LARGE_DATA_FILES = {ROOT_DIR / "experiments/post_training/task_curriculum/curriculum.yaml"}
+LARGE_DATA_FILES = frozenset({ROOT_DIR / "experiments/post_training/task_curriculum/curriculum.yaml"})
 
 EXCLUDE_PATTERNS = [
     ".git/**",
