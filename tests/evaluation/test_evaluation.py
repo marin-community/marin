@@ -773,6 +773,7 @@ def test_registry_family_travels_into_the_record_the_launcher_writes(monkeypatch
         (128, 8192, 128, 1),
         (8192, 2048, 2048, 0),
         (None, 8192, 8192, 0),
+        (None, None, None, 0),
     ],
 )
 def test_evalchemy_generation_budget_preserves_benchmark_protocol(
@@ -895,7 +896,6 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         ],
         "evalchemy": {
             "apply_chat_template": True,
-            "max_gen_toks": 2048,
             "max_eval_instances": 2,
             "num_concurrent": 16,
             "batch_size": "1",

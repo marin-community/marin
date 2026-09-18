@@ -211,6 +211,15 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     assert expected["trials_per_task"] == 3
 
 
+def test_preflight_materializes_hugging_face_datasets(tmp_path):
+    # Harbor validates datasets[].name as a registry package, so the preflight must hand it the
+    # downloaded snapshot as a path (the worker does the same at run time) and count its tasks.
+    (result,) = json.loads(_preflight(tmp_path, [(_POLICIES / "swebench-recovery.yaml", {})]).stdout)
+    assert result["dataset_kind"] == "hugging_face"
+    assert result["dataset_selector"] == "DCAgent2/swebench-verified-random-100-folders"
+    assert result["benchmark_metadata"]["n_benchmark"] == 100
+
+
 def test_preflight_reports_only_verifier_host_environment_dependencies(tmp_path):
     policy_path = tmp_path / "external-judge.yaml"
     policy_path.write_text(
