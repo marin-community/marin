@@ -110,7 +110,15 @@ from hero_health import (
     telemetry_alert_rows,
     watched_runs,
 )
-from hero_runs import HeroRun, RunIdentity, active_hero_runs, phase_enrollment_query, task_state_query
+from hero_runs import (
+    HeroRun,
+    RunIdentity,
+    active_hero_runs,
+    phase_execution_query,
+    recent_phase_query,
+    root_job_for,
+    task_state_query,
+)
 from iris_source import IrisSource
 from k8s_source import K8sFleet, K8sSource
 from loom_alerts import (
@@ -588,8 +596,25 @@ def create_app(
 
     def hero_watched_runs(target: ClusterTarget, now: datetime) -> tuple[WatchedRun, ...]:
         """Hero roots either Iris or Levanter still reports, for the run-health rules."""
-        phase_runs = hero_query("hero_phase_enrollment", now, target, lambda: phase_enrollment_query(now))
-        return watched_runs(hero_task_states(target, now), phase_runs, now)
+        task_states = hero_task_states(target, now)
+        active_runs = active_hero_runs(task_states, now)
+        recent_phase = hero_query("hero_recent_phase", now, target, lambda: recent_phase_query(now))
+        recent_roots = {
+            (str(row["cluster"]), root_job)
+            for row in recent_phase.to_pylist()
+            if (root_job := root_job_for(str(row["telemetry_job"]))) is not None
+        }
+        missing_phase = tuple(run for run in active_runs if (run.cluster, run.root_job) not in recent_roots)
+        if not missing_phase:
+            return watched_runs(task_states, recent_phase, now)
+
+        phase_history = hero_query(
+            "hero_phase_execution",
+            now,
+            target,
+            lambda: phase_execution_query(now, missing_phase),
+        )
+        return watched_runs(task_states, pa.concat_tables((recent_phase, phase_history)), now)
 
     def hero_signals(target: ClusterTarget, now: datetime, runs: tuple[WatchedRun, ...]) -> Signals:
         """One telemetry scan behind every run-health rule."""

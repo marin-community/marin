@@ -25,7 +25,7 @@
           "type": "yesoreyeram-infinity-datasource",
           "uid": "finelog-marin"
         },
-        "definition": "WITH telemetry AS (SELECT * FROM \"levanter.metrics\") SELECT run_id AS value FROM telemetry WHERE step IS NOT NULL",
+        "definition": "WITH telemetry AS (SELECT * FROM \"levanter.metrics\") SELECT run_id AS value FROM telemetry WHERE name = 'phase' AND process_index = 0 AND step IS NOT NULL",
         "query": {
           "queryType": "infinity",
           "refId": "variable-run",
@@ -41,7 +41,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "WITH telemetry AS (SELECT * FROM \"levanter.metrics\") SELECT run_id AS value FROM telemetry WHERE step IS NOT NULL AND run_id IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '12 hours') * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) GROUP BY run_id ORDER BY CASE WHEN run_id LIKE 'hero-%' THEN 0 ELSE 1 END, MAX(timestamp_ms) DESC"
+                  "value": "WITH telemetry AS (SELECT * FROM \"levanter.metrics\") SELECT run_id AS value FROM telemetry WHERE name = 'phase' AND process_index = 0 AND step IS NOT NULL AND run_id IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '12 hours') * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) GROUP BY run_id ORDER BY CASE WHEN run_id LIKE 'hero-%' THEN 0 ELSE 1 END, MAX(timestamp_ms) DESC"
                 }
               ]
             },
