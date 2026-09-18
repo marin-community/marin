@@ -125,19 +125,26 @@ def normalized(vectors: np.ndarray) -> np.ndarray:
     return values / norms
 
 
-def _maximum_scores(
-    task_vectors: np.ndarray,
-    anchor_vectors: np.ndarray,
+def _maximum_by_group(
+    similarities: np.ndarray,
     anchor_groups: Sequence[str],
 ) -> tuple[list[str], np.ndarray]:
     groups = list(dict.fromkeys(anchor_groups))
     anchor_ids = np.asarray(anchor_groups)
-    similarities = normalized(task_vectors) @ normalized(anchor_vectors).T
     scores = np.stack(
         [similarities[:, anchor_ids == group].max(axis=1) for group in groups],
         axis=1,
     )
     return groups, scores
+
+
+def _grouped_cosine_scores(
+    task_vectors: np.ndarray,
+    anchor_vectors: np.ndarray,
+    anchor_groups: Sequence[str],
+) -> tuple[list[str], np.ndarray]:
+    similarities = normalized(task_vectors) @ normalized(anchor_vectors).T
+    return _maximum_by_group(similarities, anchor_groups)
 
 
 def _validate_mapping_inputs(inputs: MappingInputs) -> None:
@@ -169,7 +176,7 @@ def _graph_membership_scores(
     scores: dict[RoutingFacet, tuple[list[str], np.ndarray]] = {}
     for facet in {anchor.facet for anchor in anchor_rows}:
         indices = [index for index, anchor in enumerate(anchor_rows) if anchor.facet == facet]
-        scores[facet] = _maximum_scores(
+        scores[facet] = _grouped_cosine_scores(
             membership_vectors[facet],
             anchor_vectors[indices],
             [anchor_rows[index].subject_id for index in indices],
@@ -218,8 +225,8 @@ def map_task_vectors(inputs: MappingInputs) -> list[TaskMapping]:
     )
     task_operations = normalized(inputs.operation_vectors)
     section_values = normalized(inputs.section_anchor_vectors)
-    anchor_section_ids = np.asarray([anchor.section_id for anchor in inputs.section_anchor_rows])
-    unique_section_ids = list(dict.fromkeys(anchor.section_id for anchor in inputs.section_anchor_rows))
+    anchor_section_ids = [anchor.section_id for anchor in inputs.section_anchor_rows]
+    unique_section_ids = list(dict.fromkeys(anchor_section_ids))
     subject_by_section = {anchor.section_id: anchor.subject_id for anchor in inputs.section_anchor_rows}
     section_positions = {
         entry.curriculum.subject_id: [
@@ -234,10 +241,8 @@ def map_task_vectors(inputs: MappingInputs) -> list[TaskMapping]:
     for start in range(0, task_count, inputs.row_batch_size):
         stop = min(start + inputs.row_batch_size, task_count)
         anchor_scores = task_operations[start:stop] @ section_values.T
-        section_scores = np.stack(
-            [anchor_scores[:, anchor_section_ids == section_id].max(axis=1) for section_id in unique_section_ids],
-            axis=1,
-        )
+        batch_section_ids, section_scores = _maximum_by_group(anchor_scores, anchor_section_ids)
+        assert batch_section_ids == unique_section_ids
         for row, annotation in enumerate(inputs.annotations[start:stop]):
             graph_mappings = [
                 _rank_graph_sections(
