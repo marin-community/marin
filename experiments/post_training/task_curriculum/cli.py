@@ -18,10 +18,6 @@ from experiments.post_training.task_curriculum.mapping import curriculum_anchors
 from experiments.post_training.task_curriculum.models import Curriculum, TaskAnnotation
 
 
-def _read_model[ModelT: BaseModel](path: Path, model: type[ModelT]) -> ModelT:
-    return model.model_validate_json(path.read_text())
-
-
 def _read_jsonl[ModelT: BaseModel](path: Path, model: type[ModelT]) -> list[ModelT]:
     return [model.model_validate_json(line) for line in path.read_text().splitlines() if line.strip()]
 
@@ -62,9 +58,9 @@ def main(
     top_k: int,
     output: Path,
 ) -> None:
-    """Embed semantic keys once and rank curriculum sections in row batches."""
+    """Rank annotated tasks against one or more reviewed curricula."""
     task_rows = [row for path in annotations for row in _read_jsonl(path, TaskAnnotation)]
-    curriculum_rows = [_read_model(path, Curriculum) for path in curriculum]
+    curriculum_rows = [Curriculum.model_validate_json(path.read_text()) for path in curriculum]
     anchor_ids, anchor_texts = curriculum_anchors(curriculum_rows)
     task_texts = [row.key.embedding_text() for row in task_rows]
     embed = _openai_embeddings(embedding_model, embedding_batch_size)
