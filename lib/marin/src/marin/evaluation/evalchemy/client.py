@@ -21,11 +21,18 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from importlib.util import find_spec
 from pathlib import Path
 
 import fsspec
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
+
+# Without a configured cap, an lm-eval-native generation task gets the served context minus this
+# prompt reserve, so the model config's context window sets its budget the way Evalchemy's own
+# derivation does for its chat benchmarks. Few-shot prompts on these tasks (5-shot TriviaQA, 3-shot
+# DROP) stay well inside it; lm-eval would otherwise fall back to its 256-token API default.
+_NATIVE_PROMPT_RESERVE = 4096
 
 # vLLM returns HTTP 400 when prompt_tokens + max_tokens exceeds the served context window. Reserve
 # this many tokens for the prompt when shrinking a generation budget to fit a small served context.
@@ -49,6 +56,25 @@ def generation_budget(max_gen_toks: int | None, max_length: int | None) -> int |
     if max_gen_toks is None or max_length is None or max_gen_toks + _CONTEXT_PROMPT_RESERVE <= max_length:
         return max_gen_toks
     return max(256, max_length - _CONTEXT_PROMPT_RESERVE)
+
+
+def is_evalchemy_benchmark(task_name: str) -> bool:
+    """Whether ``task_name`` is one of Evalchemy's own chat benchmarks rather than an lm-eval task.
+
+    Evalchemy registers each chat benchmark from a directory of the same name under
+    ``eval/chat_benchmarks``; everything else on ``--tasks`` resolves through lm-eval's registry.
+    """
+    spec = find_spec("eval")
+    if spec is None or not spec.submodule_search_locations:
+        raise RuntimeError("the evalchemy package (`eval`) is not installed beside this client")
+    return any((Path(root) / "chat_benchmarks" / task_name).is_dir() for root in spec.submodule_search_locations)
+
+
+def native_generation_budget(max_length: int | None) -> int | None:
+    """The served-context budget for an lm-eval-native generation task with no configured cap."""
+    if max_length is None:
+        return None
+    return max(256, max_length - _NATIVE_PROMPT_RESERVE)
 
 
 def served_max_length(base_url: str) -> int | None:
@@ -127,8 +153,10 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
     # Model-level extra sampler kwargs (skip_special_tokens, repetition_penalty, ...) ride on the same
     # --gen_kwargs list as the generation budget; lm-eval forwards them on both the completions and chat
     # routes (MCQ tasks ignore gen_kwargs). A per-model value overrides the max_gen_toks default only if
-    # it keys "max_gen_toks", which the registry does not. Without a configured cap neither the
-    # gen_kwargs budget nor --max_tokens is sent, so Evalchemy sizes the response budget itself.
+    # it keys "max_gen_toks", which the registry does not. Without a configured cap, an Evalchemy
+    # chat benchmark gets neither the gen_kwargs budget nor --max_tokens and sizes its own responses
+    # from the served context and its stored longest prompt; an lm-eval-native generation task gets
+    # the served context minus a prompt reserve as max_gen_toks.
     gen_kwargs = [f"{key}={value}" for key, value in config.get("extra_gen_kwargs", {}).items()]
     budget_args: list[str] = []
     if gen_budget is not None:
@@ -136,6 +164,13 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         # Chat-native benchmarks (MATH500-style) size their generations from --max_tokens, not
         # gen_kwargs; lm-eval-native tasks ignore it.
         budget_args = ["--max_tokens", str(gen_budget)]
+    elif task["generation"] and not is_evalchemy_benchmark(task["name"]):
+        native_budget = native_generation_budget(max_length)
+        if native_budget is not None:
+            print(
+                f"native task {task['name']}: max_gen_toks={native_budget} from served context {max_length}", flush=True
+            )
+            gen_kwargs.insert(0, f"max_gen_toks={native_budget}")
     cmd = [
         str(Path(python).with_name("evalchemy")),
         "--model",

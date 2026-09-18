@@ -158,11 +158,12 @@ def test_no_extra_gen_kwargs_leaves_gen_kwargs_at_budget_only():
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"
 
 
-def test_unset_budget_sends_no_generation_cap():
-    # Without a configured cap Evalchemy sizes the response budget from the served context and the
-    # benchmark's stored longest prompt; an explicit max_gen_toks or --max_tokens would override that.
-    config = _payload(_config(max_gen_toks=None))
-    cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", 40960)
+def test_unset_budget_lets_evalchemy_size_its_own_benchmark(monkeypatch):
+    # Without a configured cap Evalchemy sizes a chat benchmark's responses from the served context
+    # and its stored longest prompt; an explicit max_gen_toks or --max_tokens would override that.
+    monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: name == "AIME24")
+    config = _payload(_config(max_gen_toks=None, tasks=(EvalTaskConfig("AIME24", 0, generation=True),)))
+    cmd = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 40960)
 
     assert "--max_tokens" not in cmd
     assert "--gen_kwargs" not in cmd
@@ -170,11 +171,32 @@ def test_unset_budget_sends_no_generation_cap():
     assert model_args["max_length"] == "40960"
 
 
-def test_unset_budget_keeps_extra_gen_kwargs():
+def test_unset_budget_sizes_native_generation_task_from_served_context(monkeypatch):
+    # lm-eval-native tasks only read max_gen_toks (default 256), so the client hands them the served
+    # context minus a prompt reserve; --max_tokens stays off because it is an Evalchemy-only knob.
+    monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: False)
+    config = _payload(_config(max_gen_toks=None, extra_gen_kwargs={"skip_special_tokens": "false"}))
+    cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", 40960)
+
+    assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=36864,skip_special_tokens=false"
+    assert "--max_tokens" not in cmd
+
+
+def test_unset_budget_without_served_context_sends_only_extra_gen_kwargs(monkeypatch):
+    monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: False)
     config = _payload(_config(max_gen_toks=None, extra_gen_kwargs={"skip_special_tokens": "false"}))
     cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", None)
 
     assert cmd[cmd.index("--gen_kwargs") + 1] == "skip_special_tokens=false"
+    assert "--max_tokens" not in cmd
+
+
+def test_unset_budget_loglikelihood_task_gets_no_gen_kwargs(monkeypatch):
+    monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: False)
+    config = _payload(_config(max_gen_toks=None))
+    cmd = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 40960)  # arc_easy, loglikelihood
+
+    assert "--gen_kwargs" not in cmd
     assert "--max_tokens" not in cmd
 
 
