@@ -159,6 +159,7 @@ worker reads its assigned Parquet row groups and writes to a separate `worker-NN
 
 ```bash
 uv run python -m experiments.post_training.tasktrove.mcqa_routing_pipeline \
+  generate \
   --run-id <unique-run-id> \
   --sample-size 50000 \
   --sample-seed <stable-sample-name> \
@@ -168,7 +169,10 @@ uv run python -m experiments.post_training.tasktrove.mcqa_routing_pipeline \
   --run
 ```
 
-The module resolves its output with `marin_temp_bucket` under a lifecycle-managed S3 TTL prefix.
+`--run-id` resolves the output with `marin_temp_bucket` under a lifecycle-managed S3 TTL prefix.
+Use `--output-path` instead for an explicit permanent artifact root; the two options are mutually
+exclusive. The canonical full routing artifact is
+`s3://marin-us-east-02a/marin/tasktrove/routing/mcqa-glm53-v1/full`.
 `--sample-size` is the total across workers. Zero routes every mechanical survivor. Each chat-completion
 request contains at most `--request-batch-size` questions. A worker submits all of its requests as one GLM
 Batch API job. Each completion forces one `submit_routes` tool call with a strict JSON Schema. The client
@@ -181,6 +185,18 @@ the same config. Workers with `summary.json` return immediately; unfinished work
 their `batch-state.json`. This permits recovery after coordinator, worker, or transport failure without
 reclassifying completed work. Use a new run ID when the input, sample, rubric, model, or batch settings
 change.
+
+Promote a completed temporary artifact without rerunning inference:
+
+```bash
+uv run python -m experiments.post_training.tasktrove.mcqa_routing_pipeline promote \
+  s3://<temporary-artifact> \
+  s3://marin-us-east-02a/marin/tasktrove/routing/mcqa-glm53-v1/full
+```
+
+Promotion is resumable. It copies missing or changed objects, records `promotion.json`, and rewrites
+`run-config.json` plus root and worker summaries to the permanent location. A later generation with
+the same `--output-path` therefore reuses completed workers at the promoted path.
 
 The artifact root contains combined `decisions.jsonl`, `route-mappings.jsonl`, and `summary.json` files.
 Each worker also writes:

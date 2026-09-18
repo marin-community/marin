@@ -20,6 +20,7 @@ from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from marin.execution.remote import remote
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
+from rigging.fsutil.transfer import execute_sync, sync_plan
 from rigging.provenance import launch_provenance
 
 from experiments.post_training.tasktrove.mcqa_routing import (
@@ -32,6 +33,7 @@ from experiments.post_training.tasktrove.mcqa_routing import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_INPUT = "s3://marin-us-east-02a/marin/tasktrove/routing/mcqa-glm53-v1/input/mechanical-ledger.parquet"
+CANONICAL_FULL_OUTPUT = "s3://marin-us-east-02a/marin/tasktrove/routing/mcqa-glm53-v1/full"
 DEFAULT_RELAY_JOB = "/muchanem/glm53-relay-08a"
 ARTIFACT_VERSION = "2026.09.18.1"
 DEFAULT_TTL_DAYS = 7
@@ -40,6 +42,7 @@ DEFAULT_REQUEST_BATCH_SIZE = 20
 DEFAULT_WORKER_CPU = 2
 DEFAULT_WORKER_RAM = "4g"
 DEFAULT_WORKER_DISK = "8g"
+PROMOTION_FILE = "promotion.json"
 
 
 @dataclass(frozen=True)
@@ -144,6 +147,54 @@ def _write_or_check_run_config(config: RoutingArtifactConfig) -> None:
     path.write_text(expected)
 
 
+def promote_routing_artifact(source_path: str, output_path: str) -> dict:
+    """Copy a completed routing artifact and rebase its location metadata."""
+    source = StoragePath(source_path)
+    output = StoragePath(output_path)
+    if source == output:
+        raise ValueError("source and output paths must differ")
+
+    required = ("run-config.json", "summary.json", "decisions.jsonl", "route-mappings.jsonl")
+    missing = [name for name in required if not (source / name).exists()]
+    if missing:
+        raise FileNotFoundError(f"routing artifact {source} is missing {missing}")
+
+    source_config = json.loads((source / "run-config.json").read_text())
+    source_summary = json.loads((source / "summary.json").read_text())
+    marker = {
+        "source": str(source),
+        "output": str(output),
+        "git_revision": source_summary["git_revision"],
+        "policy_version": source_summary["policy_version"],
+        "routed_rows": source_summary["routed_rows"],
+    }
+    marker_text = json.dumps(marker, indent=2, sort_keys=True) + "\n"
+    marker_path = output / PROMOTION_FILE
+    if marker_path.exists() and marker_path.read_text() != marker_text:
+        raise ValueError(f"{marker_path} belongs to a different promotion")
+    output.mkdirs()
+    marker_path.write_text(marker_text)
+
+    execute_sync(sync_plan(str(source), str(output), delete=False, checksum=False))
+    marker_path.write_text(marker_text)
+
+    promoted_config = {**source_config, "output_path": str(output)}
+    (output / "run-config.json").write_text(json.dumps(promoted_config, indent=2, sort_keys=True) + "\n")
+
+    worker_summaries = []
+    for worker_index in range(source_config["worker_count"]):
+        worker_summary_path = output / f"worker-{worker_index:03d}" / "summary.json"
+        worker_summary = json.loads(worker_summary_path.read_text())
+        worker_summary["output"] = str(output / f"worker-{worker_index:03d}")
+        worker_summary_path.write_text(json.dumps(worker_summary, indent=2, sort_keys=True) + "\n")
+        worker_summaries.append(worker_summary)
+
+    promoted_summary = {**source_summary, "output": str(output), "workers": worker_summaries}
+    (output / "summary.json").write_text(json.dumps(promoted_summary, indent=2, sort_keys=True) + "\n")
+    logger.info("promoted %d routing decisions from %s to %s", promoted_summary["routed_rows"], source, output)
+    return promoted_summary
+
+
 def run_routing_artifact(config: RoutingArtifactConfig) -> None:
     """Run the worker gang and assemble its complete route ledger."""
     _write_or_check_run_config(config)
@@ -223,8 +274,18 @@ def _launch_commit() -> str:
     return provenance.base_commit
 
 
-@click.command(help=__doc__)
-@click.option("--run-id", required=True, help="Unique path component for this routing run")
+@click.group(help=__doc__)
+def main() -> None:
+    """Generate or promote an MCQA routing artifact."""
+    pass
+
+
+@main.command("generate")
+@click.option("--run-id", help="Unique path component for a temporary routing run")
+@click.option(
+    "--output-path",
+    help=f"Explicit artifact root for a permanent routing run, such as {CANONICAL_FULL_OUTPUT}",
+)
 @click.option("--input-path", default=DEFAULT_INPUT, show_default=True)
 @click.option("--sample-size", type=click.IntRange(min=0), default=50_000, show_default=True)
 @click.option("--sample-seed", default="tasktrove-mcqa-glm53-smoke-50k-v1", show_default=True)
@@ -237,8 +298,9 @@ def _launch_commit() -> str:
 )
 @click.option("--ttl-days", type=click.IntRange(min=1), default=DEFAULT_TTL_DAYS, show_default=True)
 @click.option("--run", "do_run", is_flag=True, help="Build the artifact; the default prints its plan")
-def main(
-    run_id: str,
+def generate(
+    run_id: str | None,
+    output_path: str | None,
     input_path: str,
     sample_size: int,
     sample_seed: str,
@@ -247,11 +309,15 @@ def main(
     ttl_days: int,
     do_run: bool,
 ) -> None:
-    output_path = marin_temp_bucket(
-        ttl_days=ttl_days,
-        prefix=f"tasktrove/mcqa-routing/{run_id}",
-        source_prefix=input_path,
-    )
+    if (run_id is None) == (output_path is None):
+        raise click.UsageError("provide exactly one of --run-id or --output-path")
+    if output_path is None:
+        assert run_id is not None
+        output_path = marin_temp_bucket(
+            ttl_days=ttl_days,
+            prefix=f"tasktrove/mcqa-routing/{run_id}",
+            source_prefix=input_path,
+        )
     step = routing_step(
         input_path=input_path,
         output_path=output_path,
@@ -266,6 +332,15 @@ def main(
         run(step)
     else:
         click.echo(lower(step))
+
+
+@main.command("promote")
+@click.argument("source_path")
+@click.argument("output_path")
+def promote(source_path: str, output_path: str) -> None:
+    """Copy a completed artifact to a permanent location and rebase its metadata."""
+    summary = promote_routing_artifact(source_path, output_path)
+    click.echo(json.dumps({key: summary[key] for key in ("output", "routed_rows", "route_counts")}, indent=2))
 
 
 if __name__ == "__main__":

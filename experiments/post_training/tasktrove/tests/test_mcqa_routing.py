@@ -26,6 +26,7 @@ from experiments.post_training.tasktrove.mcqa_routing import (
 from experiments.post_training.tasktrove.mcqa_routing_pipeline import (
     RoutingArtifactConfig,
     aggregate_worker_outputs,
+    promote_routing_artifact,
 )
 
 
@@ -290,6 +291,42 @@ def test_aggregate_worker_outputs_writes_complete_sorted_ledger(tmp_path):
         "task-a",
         "task-b",
     ]
+
+
+def test_promote_routing_artifact_copies_files_and_rebases_metadata(tmp_path):
+    source = tmp_path / "temporary"
+    output = tmp_path / "permanent"
+    worker = source / "worker-000"
+    worker.mkdir(parents=True)
+    source_config = {
+        "input_path": "input.parquet",
+        "output_path": str(source),
+        "worker_count": 1,
+    }
+    worker_summary = {"worker_index": 0, "output": str(worker), "requests": 1}
+    summary = {
+        "output": str(source),
+        "git_revision": "abc123",
+        "policy_version": "v1",
+        "routed_rows": 1,
+        "route_counts": {"rl": 1},
+        "workers": [worker_summary],
+    }
+    (source / "run-config.json").write_text(json.dumps(source_config))
+    (source / "summary.json").write_text(json.dumps(summary))
+    (source / "decisions.jsonl").write_text('{"task_id":"task-a"}\n')
+    (source / "route-mappings.jsonl").write_text('{"task_id":"task-a","route":"rl"}\n')
+    (worker / "summary.json").write_text(json.dumps(worker_summary))
+    (worker / "raw-output.jsonl").write_text("raw\n")
+
+    promoted = promote_routing_artifact(str(source), str(output))
+
+    assert promoted["output"] == str(output)
+    assert json.loads((output / "run-config.json").read_text())["output_path"] == str(output)
+    assert json.loads((output / "summary.json").read_text())["workers"][0]["output"] == str(output / "worker-000")
+    assert json.loads((output / "worker-000" / "summary.json").read_text())["output"] == str(output / "worker-000")
+    assert (output / "worker-000" / "raw-output.jsonl").read_text() == "raw\n"
+    assert json.loads((output / "promotion.json").read_text())["source"] == str(source)
 
 
 @pytest.mark.parametrize(
