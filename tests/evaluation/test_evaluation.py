@@ -5,7 +5,6 @@
 
 import hashlib
 import json
-import logging
 from collections.abc import Mapping
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -17,7 +16,9 @@ from click.testing import CliRunner
 from finestore.eval import EvaluationStore
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
-from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
+from marin.evaluation.evalchemy.client import build_command
+from marin.evaluation.evalchemy.config import load_evalchemy_config
+from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig, _run_config_json
 from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
@@ -768,28 +769,25 @@ def test_registry_family_travels_into_the_record_the_launcher_writes(monkeypatch
 
 
 @pytest.mark.parametrize(
-    ("benchmark_limit", "model_limit", "expected_limit", "expected_warnings"),
+    ("benchmark_limit", "model_limit", "expected_limit"),
     [
-        (128, 8192, 128, 1),
-        (8192, 2048, 2048, 0),
-        (None, 8192, 8192, 0),
+        (128, 8192, 8192),
+        (8192, 2048, 2048),
+        (None, 8192, 8192),
     ],
 )
-def test_evalchemy_generation_budget_preserves_benchmark_protocol(
+def test_evalchemy_model_generation_budget_wins_over_benchmark_defaults(
     tmp_path,
     monkeypatch,
-    caplog,
     benchmark_limit,
     model_limit,
     expected_limit,
-    expected_warnings,
 ):
     config_path = tmp_path / "generation.yaml"
     max_tokens = "" if benchmark_limit is None else f"max_tokens: {benchmark_limit}\n"
     config_path.write_text(f"tasks: [triviaqa]\n{max_tokens}")
     model = replace(models()["qwen3-8b"], generation=GenerationConfig(max_gen_toks=model_limit))
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-    caplog.set_level(logging.WARNING, logger="experiments.evaluation.evals")
     spec = LaunchSpec(
         model=model,
         evals=(),
@@ -809,8 +807,25 @@ def test_evalchemy_generation_budget_preserves_benchmark_protocol(
     evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
     assert evalchemy is not None
     assert evalchemy.max_gen_toks == expected_limit
-    warnings = [record for record in caplog.records if record.name == "experiments.evaluation.evals"]
-    assert len(warnings) == expected_warnings
+
+
+@pytest.mark.parametrize(
+    "name",
+    sorted(name for name, definition in EVALS.items() if isinstance(definition, EvalchemyDefinition)),
+)
+def test_model_generation_budget_wins_across_registered_evalchemy_benchmarks(name):
+    definition = EVALS[name]
+    source = load_evalchemy_config(definition.config_path)
+    model = replace(models()["qwen3-8b"], generation=GenerationConfig(max_gen_toks=65536))
+    config = definition.config_for(source, model, limit=None)
+    running = RunningModel(endpoint=OpenAIEndpoint(base_url="http://example/v1", model="served"), tokenizer="served")
+    payload = json.loads(_run_config_json(running, config, "s3://bucket/results"))
+    command = build_command(payload, payload["tasks"][0], "/tmp/results", "/opt/python", None)
+    generation_args = dict(item.split("=", 1) for item in command[command.index("--gen_kwargs") + 1].split(","))
+
+    assert config.max_gen_toks == 65536
+    assert command[command.index("--max_tokens") + 1] == "65536"
+    assert generation_args["max_gen_toks"] == "65536"
 
 
 def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
