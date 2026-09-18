@@ -17,6 +17,7 @@ RUN_ID=hero-main-step121638
 HANDOFF_CHECKPOINT=s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/hero-nopdl-step108k/2026.08.19.2/checkpoints/step-121638
 WANDB_FORK_FROM='hero-nopdl-step108k?_step=121637'
 WANDB_PROJECT=marin_moe
+IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
 # Agent sessions set HERO_GH_CLI=agent-gh so the launch record carries the agent identity.
 hero_gh_cli=${HERO_GH_CLI:-gh}
@@ -48,7 +49,7 @@ fi
 
 # Create the tracker lineage once, outside the coordinator and training retry loops.
 # launch verifies the same child and lets training resume it without fork_from.
-uv run python - "$mode" "$RUN_ID" "$WANDB_PROJECT" "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" "$launch_commit" <<'PYTHON'
+uv run python - "$mode" "$RUN_ID" "$WANDB_PROJECT" "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" "$launch_commit" "$IRIS_CONFIG" <<'PYTHON'
 import csv
 import io
 import os
@@ -60,7 +61,7 @@ import wandb
 from iris.cluster.types import TERMINAL_JOB_STATES
 from levanter.tracker.wandb import _WANDB_FORK_FROM_PATTERN
 
-mode, run_id, project, fork_from, checkpoint, launch_commit = sys.argv[1:]
+mode, run_id, project, fork_from, checkpoint, launch_commit, iris_config = sys.argv[1:]
 entity = "marin-community"
 lineage = {
     "hero_handoff_checkpoint": checkpoint,
@@ -103,7 +104,7 @@ else:
         f"(job_id LIKE '%/{parent_id}-coord-%' OR job_id LIKE '%/{run_id}-coord-%')"
     )
     result = subprocess.run(
-        ["uv", "run", "iris", "--config", "lib/iris/config/marin.yaml", "query", "-f", "csv", coordinator_sql],
+        ["uv", "run", "iris", "--config", iris_config, "query", "-f", "csv", coordinator_sql],
         check=True, capture_output=True, text=True,
     )
     reader = csv.DictReader(io.StringIO(result.stdout))
@@ -144,7 +145,7 @@ printf '%sHero launch requested.\n\n- Run ID: `%s`\n- Commit: `%s`\n- Coordinato
 "$hero_gh_cli" issue comment "$HERO_ISSUE" --body-file "$launch_record_file"
 echo "Launching hero from commit ${launch_commit}"
 
-IRIS_USER=marin uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
+IRIS_USER=marin uv run iris --config "$IRIS_CONFIG" job run --no-wait --enable-extra-resources \
   --target-cluster "$TARGET_CLUSTER" \
   --priority system \
   --system-reason "hero run" \
