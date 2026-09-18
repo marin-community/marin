@@ -149,3 +149,47 @@ uv run pytest experiments/post_training/tasktrove/tests lib/tasktrove-verify/tes
 uv run python -m experiments.post_training.tasktrove.publish export \
   s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9/tasks <task-path> --dest /tmp/tasktrove-task
 ```
+
+## Route MCQA tasks
+
+`mcqa_routing.py` assigns mechanically valid MCQA rows to `rl`, `sft`, or `garbage` with GLM-5.3.
+Run it as an Iris job with one or more replicas and provide `GLM_BULK_TOKEN` through the job's secret
+environment. Each replica reads the Parquet row groups whose indexes belong to that replica and writes
+to a separate `worker-NNN` output prefix.
+
+```bash
+uv run python -m experiments.post_training.tasktrove.mcqa_routing \
+  --input s3://marin-us-east-02a/marin/tasktrove/routing/mcqa-glm53-v1/input/mechanical-ledger.parquet \
+  --output s3://marin-us-east-02a/marin/tasktrove/routing/<run> \
+  --git-revision <bundled-marin-revision> \
+  --sample-size 10000 \
+  --sample-seed <stable-sample-name> \
+  --request-batch-size 20
+```
+
+`--sample-size` is the total across replicas. Zero routes every mechanical survivor. Each chat-completion
+request contains at most `--request-batch-size` questions. A replica submits all of its requests as one
+GLM Batch API job. Each completion forces one `submit_routes` tool call with a strict JSON Schema. The
+client also checks each returned row ID and model field. Missing or invalid rows are routed to SFT with
+an explicit fallback reason; valid rows from the same response are retained. A failed or expired server-side
+batch produces SFT fallback mappings for its missing rows. Batch state is written before polling, so an Iris
+retry after a transport failure resumes the same server-side batch without paying for a second pass.
+
+Use a new output prefix when the input, sample, rubric, model, or batch settings change. Existing batch
+state is resumed without comparing those settings.
+
+Each worker writes:
+
+| path | contents |
+|---|---|
+| `decisions.jsonl` | model fields, the raw model route, and the fail-closed final route |
+| `route-mappings.jsonl` | compact task-to-route records for downstream selection |
+| `summary.json` | counts, provenance, timings, and GLM batch identifiers |
+| `requests.jsonl` | submitted Batch API request bodies |
+| `raw-output.jsonl` | raw Batch API responses |
+| `batch-state.json` | persistent file and batch identifiers used for resume |
+| `degraded-requests.json` | request IDs with one or more SFT fallback rows |
+
+The final policy forces material defects, ties, answer mismatches, and key conflicts to `garbage`. An RL
+route also requires high confidence, a matching derived choice, chained or multi-constraint reasoning,
+prompt-contained evidence, and no defect. All other coherent rows go to SFT.
