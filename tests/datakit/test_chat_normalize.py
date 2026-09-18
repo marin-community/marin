@@ -63,7 +63,9 @@ def test_extracted_conversation_mode_matches_reasoning_and_rendering(reasoning, 
     normalized = _normalize_chat_record(source, "messages", "id")
 
     assert json.loads(source["chat_template_kwargs"])["enable_thinking"] is expected_mode
-    assert expected_instruction in render_chat_record(normalized)["text"]
+    rendered = render_chat_record(normalized)["text"]
+    assert expected_instruction in rendered
+    assert ("<|start_think|>" in rendered) is expected_mode
 
 
 @pytest.mark.parametrize("mode", [None, "true", True, False])
