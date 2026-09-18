@@ -1,7 +1,7 @@
 # Curriculum review rubric
 
-Score the curriculum as a training plan, not as a subject encyclopedia. State the evidence for each judgment and
-name changes that would apply beyond the current subject.
+Score the curriculum by its usefulness for training. Encyclopedic completeness is outside scope. State the evidence
+for each judgment and name changes that would apply beyond the current subject.
 
 1. **Coverage:** The leaves jointly cover the important capabilities represented by the subject guideposts and
    discovery tasks. Record plausible omissions; do not add a section for every observed task.
@@ -18,7 +18,7 @@ name changes that would apply beyond the current subject.
    and can be instantiated as tasks. Their solutions and correctness contracts are outside the curriculum.
 7. **Mapping:** When held-out mapping evidence is available, tasks that exercise the same capability should
    retrieve the same section, while close non-members should expose real boundary errors. Treat low similarity and
-   unstable neighbors as evidence about anchors or missing coverage, not as cases for source-specific rules.
+   unstable neighbors as evidence about anchors or missing coverage. Source-specific rules are prohibited.
 8. **Size:** The hierarchy uses no more sections or levels than needed for the preceding criteria. Flag both broad
    catch-alls and distinctions that would not change sampling, generation, or evaluation.
 

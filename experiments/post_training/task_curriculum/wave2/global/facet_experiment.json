@@ -1,0 +1,40 @@
+{
+  "schema_version": "curriculum-wave2-facet-experiment-v1",
+  "sample_size": 63,
+  "in_scope": 61,
+  "out_of_scope": 2,
+  "baseline_full_key_two_probe_anchors": {
+    "acceptable_top_1": 15,
+    "acceptable_top_3": 19,
+    "acceptable_top_5": 22,
+    "correct_subject_top_1": 30
+  },
+  "variants": {
+    "domain_only": {
+      "in_scope": 61,
+      "top_1": 12,
+      "top_3": 16,
+      "top_5": 23,
+      "correct_subject_top_1": 25
+    },
+    "mechanic_only": {
+      "in_scope": 61,
+      "top_1": 18,
+      "top_3": 30,
+      "top_5": 31,
+      "correct_subject_top_1": 34
+    },
+    "faceted": {
+      "in_scope": 61,
+      "top_1": 13,
+      "top_3": 18,
+      "top_5": 26,
+      "correct_subject_top_1": 33
+    }
+  },
+  "practice_projection_subjects": [
+    "C23",
+    "C25"
+  ],
+  "conclusion": "A separate task-mechanic projection improves retrieval but does not make one global primary-section label well posed. The catalog mixes overlapping domain and practice curricula, and scores from distinct projections are not calibrated. Future assignment should be multi-label by curriculum graph, then section-local."
+}

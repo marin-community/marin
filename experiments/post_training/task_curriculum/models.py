@@ -39,6 +39,7 @@ class SubjectInventory(StrictModel):
 
 
 class SampleTask(StrictModel):
+    kind: Literal["entry", "representative"]
     instruction: str = Field(min_length=1)
 
 
@@ -115,13 +116,17 @@ class Curriculum(StrictModel):
             depth(section_id)
         return depths
 
-    def check_generation_contract(self, depth: int, tasks_per_section: int) -> None:
+    def check_generation_contract(self, maximum_depth: int) -> None:
         actual_depth = max(self.depths().values())
-        if actual_depth != depth:
-            raise ValueError(f"requested depth {depth}, generated depth {actual_depth}")
-        wrong_counts = [section.id for section in self.sections if len(section.sample_tasks) != tasks_per_section]
-        if wrong_counts:
-            raise ValueError(f"sections have the wrong sample-task count: {wrong_counts}")
+        if actual_depth > maximum_depth:
+            raise ValueError(f"maximum depth {maximum_depth}, generated depth {actual_depth}")
+        wrong_probes = [
+            section.id
+            for section in self.sections
+            if [task.kind for task in section.sample_tasks] != ["entry", "representative"]
+        ]
+        if wrong_probes:
+            raise ValueError(f"sections must have one entry and one representative probe in order: {wrong_probes}")
 
 
 class CurriculumReview(StrictModel):
@@ -129,6 +134,34 @@ class CurriculumReview(StrictModel):
     verdict: str = Field(min_length=1)
     findings: list[str]
     rubric_changes: list[str]
+
+
+class CurriculumReviewV2(StrictModel):
+    score: int = Field(ge=0, le=100)
+    verdict: str = Field(min_length=1)
+    blocking_findings: list[str]
+    mutual_confidence_findings: list[str]
+    continuity_findings: list[str]
+    other_findings: list[str]
+    rubric_changes: list[str]
+
+
+class EvaluationProbe(StrictModel):
+    task_id: str
+    benchmark: str
+    source_revision: str
+    split: str
+    item_id: str
+    task_hash: str
+    applicable_subject_ids: list[str] = Field(min_length=1)
+
+
+class EvaluationPolicySource(StrictModel):
+    benchmark: str
+    policy_class: Literal["in_distribution", "out_of_distribution"]
+    allowed_use: Literal["held_out_examples", "metadata_only"]
+    source_url: str
+    source_revision: str | None
 
 
 class SemanticKey(StrictModel):
@@ -158,6 +191,14 @@ class TaskAnnotation(StrictModel):
     key: SemanticKey
 
 
+class TaskMechanicAnnotation(StrictModel):
+    task_id: str
+    task_hash: str
+    model: str
+    prompt_version: str
+    task_mechanic: str = Field(min_length=1)
+
+
 class MappingCandidate(StrictModel):
     section_id: str
     similarity: float = Field(ge=-1.0, le=1.0)
@@ -168,7 +209,7 @@ class TaskMapping(StrictModel):
     task_hash: str
     annotation_model: str
     annotation_prompt_version: str
-    curriculum_version: str
+    curriculum_versions: dict[str, str]
     embedding_model: str
     candidates: list[MappingCandidate]
 

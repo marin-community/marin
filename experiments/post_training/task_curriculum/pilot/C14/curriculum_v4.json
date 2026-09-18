@@ -19,10 +19,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Let a_n be the number of length-n strings over {0, 1, 2} with no equal adjacent symbols. Derive and justify a recurrence from the string structure, solve it for a closed form, and evaluate a_10 exactly."
+          "instruction": "Let a_n be the number of length-n strings over {0, 1, 2} with no equal adjacent symbols. Derive and justify a recurrence from the string structure, solve it for a closed form, and evaluate a_10 exactly.",
+          "kind": "entry"
         },
         {
-          "instruction": "For a positive integer N, derive a closed formula for the sum of all integers at most N that are divisible by 6 or 15 but not both, simplifying the arithmetic progressions symbolically, then evaluate it for N = 500."
+          "instruction": "For a positive integer N, derive a closed formula for the sum of all integers at most N that are divisible by 6 or 15 but not both, simplifying the arithmetic progressions symbolically, then evaluate it for N = 500.",
+          "kind": "representative"
         }
       ]
     },
@@ -42,10 +44,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Evaluate -18 - 3(7 - 11) + 5^2/10 exactly and express the result as a reduced fraction."
+          "instruction": "Evaluate -18 - 3(7 - 11) + 5^2/10 exactly and express the result as a reduced fraction.",
+          "kind": "entry"
         },
         {
-          "instruction": "Simplify sqrt(72) - 2sqrt(8) + 3/sqrt(2) exactly, rationalizing any denominator."
+          "instruction": "Simplify sqrt(72) - 2sqrt(8) + 3/sqrt(2) exactly, rationalizing any denominator.",
+          "kind": "representative"
         }
       ]
     },
@@ -65,10 +69,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Solve (x - 2)/(x + 3) = (2x + 1)/(x - 1), state all excluded values, and check every proposed solution in the original equation."
+          "instruction": "Solve (x - 2)/(x + 3) = (2x + 1)/(x - 1), state all excluded values, and check every proposed solution in the original equation.",
+          "kind": "entry"
         },
         {
-          "instruction": "Factor x^4 - 5x^2 + 4 over the integers and use the factorization to solve x^4 - 5x^2 + 4 = 0."
+          "instruction": "Factor x^4 - 5x^2 + 4 over the integers and use the factorization to solve x^4 - 5x^2 + 4 = 0.",
+          "kind": "representative"
         }
       ]
     },
@@ -88,10 +94,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Find a closed form for a_0 = 4 and a_(n+1) = 3a_n - 2, then verify both the initial value and recurrence."
+          "instruction": "Find a closed form for a_0 = 4 and a_(n+1) = 3a_n - 2, then verify both the initial value and recurrence.",
+          "kind": "entry"
         },
         {
-          "instruction": "Solve b_n = 5b_(n-1) - 6b_(n-2) for n at least 2 with b_0 = 1 and b_1 = 4, and check the first four terms."
+          "instruction": "Solve b_n = 5b_(n-1) - 6b_(n-2) for n at least 2 with b_0 = 1 and b_1 = 4, and check the first four terms.",
+          "kind": "representative"
         }
       ]
     },
@@ -111,10 +119,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Determine exactly how many primes lie from 1200 through 1500, and explain a reproducible sieve or candidate-elimination procedure that produces the count."
+          "instruction": "Determine exactly how many primes lie from 1200 through 1500, and explain a reproducible sieve or candidate-elimination procedure that produces the count.",
+          "kind": "entry"
         },
         {
-          "instruction": "Count the integers n with 1 <= n <= 1000 for which gcd(n, 60) = 1, using the prime factors of 60 rather than listing all candidates."
+          "instruction": "Count the integers n with 1 <= n <= 1000 for which gcd(n, 60) = 1, using the prime factors of 60 rather than listing all candidates.",
+          "kind": "representative"
         }
       ]
     },
@@ -134,10 +144,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "How many six-digit numbers have strictly increasing digits and contain exactly two even digits? Separate the cases affected by a leading zero."
+          "instruction": "How many six-digit numbers have strictly increasing digits and contain exactly two even digits? Separate the cases affected by a leading zero.",
+          "kind": "entry"
         },
         {
-          "instruction": "Count the binary strings of length 12 with exactly five 1s and no two 1s adjacent, giving a combinatorial justification."
+          "instruction": "Count the binary strings of length 12 with exactly five 1s and no two 1s adjacent, giving a combinatorial justification.",
+          "kind": "representative"
         }
       ]
     },
@@ -157,10 +169,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Using exact chord lengths and a limit argument, prove that the perimeters of regular n-gons inscribed in a unit circle converge to 2 pi, including an explicit bound that tends to zero."
+          "instruction": "Using exact chord lengths and a limit argument, prove that the perimeters of regular n-gons inscribed in a unit circle converge to 2 pi, including an explicit bound that tends to zero.",
+          "kind": "entry"
         },
         {
-          "instruction": "Prove that a minimum-total-length straight-line spanning tree on finitely many points in the plane has no crossing edges by combining a geometric distance inequality with a tree exchange argument."
+          "instruction": "Prove that a minimum-total-length straight-line spanning tree on finitely many points in the plane has no crossing edges by combining a geometric distance inequality with a tree exchange argument.",
+          "kind": "representative"
         }
       ]
     },
@@ -180,10 +194,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Determine whether n(sqrt(n^2 + 1) - n) converges and justify the limit using exact inequalities rather than decimal approximations."
+          "instruction": "Determine whether n(sqrt(n^2 + 1) - n) converges and justify the limit using exact inequalities rather than decimal approximations.",
+          "kind": "entry"
         },
         {
-          "instruction": "Prove from the epsilon-delta definition that f(x) = x^2 is continuous at an arbitrary real number a, making the delta choice explicit."
+          "instruction": "Prove from the epsilon-delta definition that f(x) = x^2 is continuous at an arbitrary real number a, making the delta choice explicit.",
+          "kind": "representative"
         }
       ]
     },
@@ -203,10 +219,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Prove that ln x <= x - 1 for every positive x by analyzing derivatives, and determine exactly when equality holds."
+          "instruction": "Prove that ln x <= x - 1 for every positive x by analyzing derivatives, and determine exactly when equality holds.",
+          "kind": "entry"
         },
         {
-          "instruction": "Evaluate the integral from 0 to 1 of x ln(1 + x) exactly using integration by parts, and verify the antiderivative by differentiation."
+          "instruction": "Evaluate the integral from 0 to 1 of x ln(1 + x) exactly using integration by parts, and verify the antiderivative by differentiation.",
+          "kind": "representative"
         }
       ]
     },
@@ -226,10 +244,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "In a regular octagon of side length 2, derive the exact distance between two vertices separated by three edges."
+          "instruction": "In a regular octagon of side length 2, derive the exact distance between two vertices separated by three edges.",
+          "kind": "entry"
         },
         {
-          "instruction": "Find all circles above the x-axis that pass through the origin and are tangent to y = x^2 at a second point, deriving the tangency conditions."
+          "instruction": "Find all circles above the x-axis that pass through the origin and are tangent to y = x^2 at a second point, deriving the tangency conditions.",
+          "kind": "representative"
         }
       ]
     },
@@ -249,10 +269,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Classify, up to isomorphism, the group generated by a and b with a^4 = 1, b^2 = a^2, and b^(-1)ab = a^(-1), justifying each structural claim."
+          "instruction": "Classify, up to isomorphism, the group generated by a and b with a^4 = 1, b^2 = a^2, and b^(-1)ab = a^(-1), justifying each structural claim.",
+          "kind": "entry"
         },
         {
-          "instruction": "Prove that every finite tree with at least two vertices has at least two leaves without appealing to a drawing."
+          "instruction": "Prove that every finite tree with at least two vertices has at least two leaves without appealing to a drawing.",
+          "kind": "representative"
         }
       ]
     },
@@ -272,10 +294,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "A screening test has known sensitivity and specificity, while disease prevalence p is unknown. Derive the distribution of the number of positive results in an independent sample, obtain the maximum-likelihood estimator of p, and state when it is identifiable."
+          "instruction": "A screening test has known sensitivity and specificity, while disease prevalence p is unknown. Derive the distribution of the number of positive results in an independent sample, obtain the maximum-likelihood estimator of p, and state when it is identifiable.",
+          "kind": "entry"
         },
         {
-          "instruction": "Events follow a Poisson process with unknown rate, but observation stops at a fixed time T. Derive the likelihood from the process model, estimate the rate, and give the plug-in probability of at least one event in the next time interval of length s."
+          "instruction": "Events follow a Poisson process with unknown rate, but observation stops at a fixed time T. Derive the likelihood from the process model, estimate the rate, and give the plug-in probability of at least one event in the next time interval of length s.",
+          "kind": "representative"
         }
       ]
     },
@@ -295,10 +319,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Two cards are drawn without replacement from a standard deck. Compute the conditional probability that both are aces given that at least one is an ace."
+          "instruction": "Two cards are drawn without replacement from a standard deck. Compute the conditional probability that both are aces given that at least one is an ace.",
+          "kind": "entry"
         },
         {
-          "instruction": "A coin with known head probability p is tossed until the first tail. Derive the probability generating function and expectation of the number of heads."
+          "instruction": "A coin with known head probability p is tossed until the first tail. Derive the probability generating function and expectation of the number of heads.",
+          "kind": "representative"
         }
       ]
     },
@@ -320,10 +346,12 @@
       ],
       "sample_tasks": [
         {
-          "instruction": "For n independent Poisson observations with unknown rate lambda, derive the maximum-likelihood estimator and determine its bias and variance."
+          "instruction": "For n independent Poisson observations with unknown rate lambda, derive the maximum-likelihood estimator and determine its bias and variance.",
+          "kind": "entry"
         },
         {
-          "instruction": "For an independent normal sample with unknown mean and variance, derive a 95% confidence interval for the mean and justify the reference distribution."
+          "instruction": "For an independent normal sample with unknown mean and variance, derive a 95% confidence interval for the mean and justify the reference distribution.",
+          "kind": "representative"
         }
       ]
     },
@@ -343,10 +371,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "A square sheet has equal squares cut from its corners and is folded into an open box. Formulate the volume and feasible interval in terms of the cut size, find the maximizing box, and certify global optimality."
+          "instruction": "A square sheet has equal squares cut from its corners and is folded into an open box. Formulate the volume and feasible interval in terms of the cut size, find the maximizing box, and certify global optimality.",
+          "kind": "entry"
         },
         {
-          "instruction": "Given six workers, their shift availability, and required coverage for three shifts, formulate a minimum-cost integer assignment, solve the stated small instance, and provide a lower bound or structural argument certifying optimality."
+          "instruction": "Given six workers, their shift availability, and required coverage for three shifts, formulate a minimum-cost integer assignment, solve the stated small instance, and provide a lower bound or structural argument certifying optimality.",
+          "kind": "representative"
         }
       ]
     },
@@ -366,10 +396,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Formulate a mixed-integer program that assigns nurses to shifts while meeting coverage, rest, and weekly-hour requirements; define every variable and constraint."
+          "instruction": "Formulate a mixed-integer program that assigns nurses to shifts while meeting coverage, rest, and weekly-hour requirements; define every variable and constraint.",
+          "kind": "entry"
         },
         {
-          "instruction": "Express the shortest path from a source to a destination as a linear optimization problem using flow-conservation constraints, without solving an instance."
+          "instruction": "Express the shortest path from a source to a destination as a linear optimization problem using flow-conservation constraints, without solving an instance.",
+          "kind": "representative"
         }
       ]
     },
@@ -389,10 +421,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Minimize x^2 + 4y^2 subject to x + y = 6, and certify that the solution is globally optimal."
+          "instruction": "Minimize x^2 + 4y^2 subject to x + y = 6, and certify that the solution is globally optimal.",
+          "kind": "entry"
         },
         {
-          "instruction": "Given weighted unit-time jobs with deadlines, derive an algorithm that maximizes total scheduled weight and prove its optimality by an exchange argument."
+          "instruction": "Given weighted unit-time jobs with deadlines, derive an algorithm that maximizes total scheduled weight and prove its optimality by an exchange argument.",
+          "kind": "representative"
         }
       ]
     },
@@ -412,10 +446,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Discretize -u'' = 1 on [0, 1] with u(0) = u(1) = 0 by centered differences, solve the resulting linear system iteratively, and bound the combined discretization and algebraic-solve error."
+          "instruction": "Discretize -u'' = 1 on [0, 1] with u(0) = u(1) = 0 by centered differences, solve the resulting linear system iteratively, and bound the combined discretization and algebraic-solve error.",
+          "kind": "entry"
         },
         {
-          "instruction": "Apply the implicit trapezoidal method to a stiff nonlinear initial-value problem for two steps, use Newton iteration for each implicit equation, and choose a stopping tolerance so nonlinear-solve error does not dominate time-discretization error."
+          "instruction": "Apply the implicit trapezoidal method to a stiff nonlinear initial-value problem for two steps, use Newton iteration for each implicit equation, and choose a stopping tolerance so nonlinear-solve error does not dominate time-discretization error.",
+          "kind": "representative"
         }
       ]
     },
@@ -435,10 +471,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Apply bisection to locate a root of x^3 - x - 1 in [1, 2] within absolute error 0.001, and determine the required iteration count."
+          "instruction": "Apply bisection to locate a root of x^3 - x - 1 in [1, 2] within absolute error 0.001, and determine the required iteration count.",
+          "kind": "entry"
         },
         {
-          "instruction": "Approximate the integral of exp(-x^2) from 0 to 1 with composite Simpson's rule and derive an error bound from the fourth derivative."
+          "instruction": "Approximate the integral of exp(-x^2) from 0 to 1 with composite Simpson's rule and derive an error bound from the fourth derivative.",
+          "kind": "representative"
         }
       ]
     },
@@ -458,10 +496,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Perform three Gauss-Seidel iterations for a specified diagonally dominant 3 by 3 linear system and justify convergence from the coefficient matrix."
+          "instruction": "Perform three Gauss-Seidel iterations for a specified diagonally dominant 3 by 3 linear system and justify convergence from the coefficient matrix.",
+          "kind": "entry"
         },
         {
-          "instruction": "Discretize a one-dimensional heat equation with an explicit finite-difference scheme and derive the time-step condition required for stability."
+          "instruction": "Discretize a one-dimensional heat equation with an explicit finite-difference scheme and derive the time-step condition required for stability.",
+          "kind": "representative"
         }
       ]
     },
@@ -481,10 +521,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Let a two-bit state (x, y) start at (0, 0), and at each step either toggle x or, when x = 1, toggle y. Build both a truth-table disjunctive encoding and an implication-based conjunctive encoding of executions of exactly three transitions, prove the encodings equivalent, decide whether y = 1 holds in the final state after exactly three transitions, and translate a satisfying assignment into a three-transition trace."
+          "instruction": "Let a two-bit state (x, y) start at (0, 0), and at each step either toggle x or, when x = 1, toggle y. Build both a truth-table disjunctive encoding and an implication-based conjunctive encoding of executions of exactly three transitions, prove the encodings equivalent, decide whether y = 1 holds in the final state after exactly three transitions, and translate a satisfying assignment into a three-transition trace.",
+          "kind": "entry"
         },
         {
-          "instruction": "For the loop while i < n: s := s + i + 1; i := i + 1 over integers, use the precondition n >= 0, i = 0, and s = 0, the invariant 0 <= i <= n and 2s = i(i + 1), and the final postcondition 2s = n(n + 1). Derive the weakest precondition of the loop body, translate initialization, preservation, and exit into quantified formulas, prove them with explicit logical inference rules, and explain how the derivations establish the final postcondition for every execution."
+          "instruction": "For the loop while i < n: s := s + i + 1; i := i + 1 over integers, use the precondition n >= 0, i = 0, and s = 0, the invariant 0 <= i <= n and 2s = i(i + 1), and the final postcondition 2s = n(n + 1). Derive the weakest precondition of the loop body, translate initialization, preservation, and exit into quantified formulas, prove them with explicit logical inference rules, and explain how the derivations establish the final postcondition for every execution.",
+          "kind": "representative"
         }
       ]
     },
@@ -504,10 +546,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Convert (p implies q) and (r implies not q) and (p or r) into conjunctive normal form and determine whether the formula is satisfiable."
+          "instruction": "Convert (p implies q) and (r implies not q) and (p or r) into conjunctive normal form and determine whether the formula is satisfiable.",
+          "kind": "entry"
         },
         {
-          "instruction": "Given premises forall x (P(x) implies Q(x)) and exists x P(x), construct a natural-deduction proof of exists x Q(x)."
+          "instruction": "Given premises forall x (P(x) implies Q(x)) and exists x P(x), construct a natural-deduction proof of exists x Q(x).",
+          "kind": "representative"
         }
       ]
     },
@@ -527,10 +571,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Give preconditions, a loop invariant, and a postcondition for an in-place array-reversal loop, and prove initialization, preservation, and the postcondition at termination."
+          "instruction": "Give preconditions, a loop invariant, and a postcondition for an in-place array-reversal loop, and prove initialization, preservation, and the postcondition at termination.",
+          "kind": "entry"
         },
         {
-          "instruction": "For a specified two-process mutual-exclusion protocol, formalize the safety property and either prove it inductive over reachable states or provide a reachable counterexample trace."
+          "instruction": "For a specified two-process mutual-exclusion protocol, formalize the safety property and either prove it inductive over reachable states or provide a reachable counterexample trace.",
+          "kind": "representative"
         }
       ]
     }

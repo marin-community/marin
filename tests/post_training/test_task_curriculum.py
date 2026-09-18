@@ -27,7 +27,10 @@ def _section(section_id: str, parent_id: str | None, task_texts: tuple[str, str]
         includes=[f"inside {section_id}"],
         excludes=[f"outside {section_id}"],
         prerequisites=[],
-        sample_tasks=[SampleTask(instruction=text) for text in task_texts],
+        sample_tasks=[
+            SampleTask(kind="entry", instruction=task_texts[0]),
+            SampleTask(kind="representative", instruction=task_texts[1]),
+        ],
     )
 
 
@@ -61,21 +64,37 @@ def _annotation(task_id: str) -> TaskAnnotation:
     )
 
 
-def test_curriculum_contract_rejects_missing_requested_level() -> None:
+def test_curriculum_contract_rejects_incomplete_probe_pair() -> None:
     curriculum = Curriculum(
         version="pilot-1",
         subject_id="C00",
         subject_name="Pilot",
-        sections=[_section("files", None, ("find a file", "rename a file"))],
+        sections=[
+            CurriculumSection(
+                id="files",
+                parent_id=None,
+                name="files",
+                outcome="Complete file work",
+                includes=["file work"],
+                excludes=["process work"],
+                prerequisites=[],
+                sample_tasks=[SampleTask(kind="representative", instruction="rename a file")],
+            )
+        ],
     )
 
     with pytest.raises(ValueError):
-        curriculum.check_generation_contract(depth=2, tasks_per_section=2)
+        curriculum.check_generation_contract(maximum_depth=2)
+
+
+def test_curriculum_contract_rejects_depth_above_limit() -> None:
+    with pytest.raises(ValueError, match="maximum depth 1, generated depth 2"):
+        _curriculum().check_generation_contract(maximum_depth=1)
 
 
 def test_mapping_uses_best_anchor_per_section_across_row_batches() -> None:
     curriculum = _curriculum()
-    anchor_ids, _ = curriculum_anchors(curriculum)
+    anchor_ids, _ = curriculum_anchors([curriculum])
     annotations = [_annotation("file-task"), _annotation("log-task"), _annotation("process-task")]
     anchor_vectors = np.asarray(
         [
@@ -95,7 +114,7 @@ def test_mapping_uses_best_anchor_per_section_across_row_batches() -> None:
     mappings = map_task_vectors(
         annotations,
         task_vectors,
-        curriculum,
+        [curriculum],
         anchor_ids,
         anchor_vectors,
         embedding_model="embed-v1",
@@ -106,6 +125,37 @@ def test_mapping_uses_best_anchor_per_section_across_row_batches() -> None:
     assert [mapping.candidates[0].section_id for mapping in mappings] == ["files", "processes.logs", "processes"]
     assert all(len(mapping.candidates) == 2 for mapping in mappings)
     assert {mapping.embedding_model for mapping in mappings} == {"embed-v1"}
+    assert {tuple(mapping.curriculum_versions) for mapping in mappings} == {("C00",)}
+
+
+def test_mapping_ranks_sections_across_curricula() -> None:
+    first = Curriculum(
+        version="first-1",
+        subject_id="C01",
+        subject_name="First",
+        sections=[_section("first.files", None, ("find a file", "rename files"))],
+    )
+    second = Curriculum(
+        version="second-1",
+        subject_id="C02",
+        subject_name="Second",
+        sections=[_section("second.processes", None, ("inspect a process", "stop processes"))],
+    )
+    anchor_ids, _ = curriculum_anchors([first, second])
+
+    mappings = map_task_vectors(
+        [_annotation("process-task")],
+        np.asarray([[0.0, 1.0]], dtype=np.float32),
+        [first, second],
+        anchor_ids,
+        np.asarray([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]], dtype=np.float32),
+        embedding_model="embed-v1",
+        top_k=2,
+        row_batch_size=1,
+    )
+
+    assert [candidate.section_id for candidate in mappings[0].candidates] == ["second.processes", "first.files"]
+    assert mappings[0].curriculum_versions == {"C01": "first-1", "C02": "second-1"}
 
 
 def test_embedding_cache_reuses_vectors_by_text_and_model(tmp_path: Path) -> None:

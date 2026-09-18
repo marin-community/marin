@@ -1,0 +1,144 @@
+{
+  "schema_version": "curriculum-wave2-mapping-evaluation-v1",
+  "catalog": {
+    "curricula": {
+      "C03": "pilot-2",
+      "C14": "pilot-4",
+      "C21": "pilot-2",
+      "C01": "wave2-2",
+      "C06": "wave2-2",
+      "C07": "wave2-2",
+      "C23": "wave2-2",
+      "C25": "wave2-2",
+      "C27": "wave2-2"
+    },
+    "section_count": 292
+  },
+  "embedding_model": "text-embedding-3-small",
+  "overall": {
+    "total": 63,
+    "exact": 61,
+    "ambiguous": 0,
+    "out_of_scope": 2,
+    "acceptable_top_1": 15,
+    "acceptable_top_3": 19,
+    "acceptable_top_5": 22,
+    "in_scope": 61,
+    "top_1_correct_subject": 30,
+    "wrong_top_1_hierarchy_related": 3,
+    "wrong_top_1_same_subject": 15,
+    "wrong_top_1_cross_subject": 31,
+    "out_of_scope_top_similarity": {
+      "minimum": 0.45128846168518066,
+      "maximum": 0.5195115804672241
+    }
+  },
+  "groups": {
+    "C01": {
+      "total": 8,
+      "exact": 8,
+      "ambiguous": 0,
+      "out_of_scope": 0,
+      "acceptable_top_1": 2,
+      "acceptable_top_3": 3,
+      "acceptable_top_5": 4,
+      "in_scope": 8,
+      "top_1_correct_subject": 4,
+      "wrong_top_1_hierarchy_related": 0,
+      "wrong_top_1_same_subject": 2,
+      "wrong_top_1_cross_subject": 4
+    },
+    "C06": {
+      "total": 8,
+      "exact": 8,
+      "ambiguous": 0,
+      "out_of_scope": 0,
+      "acceptable_top_1": 3,
+      "acceptable_top_3": 3,
+      "acceptable_top_5": 3,
+      "in_scope": 8,
+      "top_1_correct_subject": 6,
+      "wrong_top_1_hierarchy_related": 1,
+      "wrong_top_1_same_subject": 3,
+      "wrong_top_1_cross_subject": 2
+    },
+    "C07": {
+      "total": 8,
+      "exact": 8,
+      "ambiguous": 0,
+      "out_of_scope": 0,
+      "acceptable_top_1": 1,
+      "acceptable_top_3": 1,
+      "acceptable_top_5": 1,
+      "in_scope": 8,
+      "top_1_correct_subject": 2,
+      "wrong_top_1_hierarchy_related": 0,
+      "wrong_top_1_same_subject": 1,
+      "wrong_top_1_cross_subject": 6
+    },
+    "C23": {
+      "total": 8,
+      "exact": 8,
+      "ambiguous": 0,
+      "out_of_scope": 0,
+      "acceptable_top_1": 0,
+      "acceptable_top_3": 1,
+      "acceptable_top_5": 2,
+      "in_scope": 8,
+      "top_1_correct_subject": 5,
+      "wrong_top_1_hierarchy_related": 2,
+      "wrong_top_1_same_subject": 5,
+      "wrong_top_1_cross_subject": 3
+    },
+    "C25": {
+      "total": 8,
+      "exact": 6,
+      "ambiguous": 0,
+      "out_of_scope": 2,
+      "acceptable_top_1": 1,
+      "acceptable_top_3": 1,
+      "acceptable_top_5": 1,
+      "in_scope": 6,
+      "top_1_correct_subject": 2,
+      "wrong_top_1_hierarchy_related": 0,
+      "wrong_top_1_same_subject": 1,
+      "wrong_top_1_cross_subject": 4,
+      "out_of_scope_top_similarity": {
+        "minimum": 0.45128846168518066,
+        "maximum": 0.5195115804672241
+      }
+    },
+    "C27": {
+      "total": 8,
+      "exact": 8,
+      "ambiguous": 0,
+      "out_of_scope": 0,
+      "acceptable_top_1": 0,
+      "acceptable_top_3": 0,
+      "acceptable_top_5": 0,
+      "in_scope": 8,
+      "top_1_correct_subject": 2,
+      "wrong_top_1_hierarchy_related": 0,
+      "wrong_top_1_same_subject": 2,
+      "wrong_top_1_cross_subject": 6
+    },
+    "eval": {
+      "total": 15,
+      "exact": 15,
+      "ambiguous": 0,
+      "out_of_scope": 0,
+      "acceptable_top_1": 8,
+      "acceptable_top_3": 10,
+      "acceptable_top_5": 11,
+      "in_scope": 15,
+      "top_1_correct_subject": 9,
+      "wrong_top_1_hierarchy_related": 0,
+      "wrong_top_1_same_subject": 1,
+      "wrong_top_1_cross_subject": 6
+    }
+  },
+  "reference_status_counts": {
+    "out_of_scope": 2,
+    "exact": 61
+  }
+}

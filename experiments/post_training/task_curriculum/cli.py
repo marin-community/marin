@@ -44,8 +44,8 @@ def _openai_embeddings(model: str, batch_size: int) -> Callable[[Sequence[str]],
 
 
 @click.command()
-@click.option("--annotations", type=click.Path(path_type=Path, exists=True), required=True)
-@click.option("--curriculum", type=click.Path(path_type=Path, exists=True), required=True)
+@click.option("--annotations", type=click.Path(path_type=Path, exists=True), required=True, multiple=True)
+@click.option("--curriculum", type=click.Path(path_type=Path, exists=True), required=True, multiple=True)
 @click.option("--cache", type=click.Path(path_type=Path), required=True)
 @click.option("--embedding-model", required=True)
 @click.option("--embedding-batch-size", type=click.IntRange(min=1), default=128, show_default=True)
@@ -53,8 +53,8 @@ def _openai_embeddings(model: str, batch_size: int) -> Callable[[Sequence[str]],
 @click.option("--top-k", type=click.IntRange(min=1), required=True)
 @click.option("--output", type=click.Path(path_type=Path), required=True)
 def main(
-    annotations: Path,
-    curriculum: Path,
+    annotations: tuple[Path, ...],
+    curriculum: tuple[Path, ...],
     cache: Path,
     embedding_model: str,
     embedding_batch_size: int,
@@ -63,9 +63,9 @@ def main(
     output: Path,
 ) -> None:
     """Embed semantic keys once and rank curriculum sections in row batches."""
-    task_rows = _read_jsonl(annotations, TaskAnnotation)
-    curriculum_row = _read_model(curriculum, Curriculum)
-    anchor_ids, anchor_texts = curriculum_anchors(curriculum_row)
+    task_rows = [row for path in annotations for row in _read_jsonl(path, TaskAnnotation)]
+    curriculum_rows = [_read_model(path, Curriculum) for path in curriculum]
+    anchor_ids, anchor_texts = curriculum_anchors(curriculum_rows)
     task_texts = [row.key.embedding_text() for row in task_rows]
     embed = _openai_embeddings(embedding_model, embedding_batch_size)
     with EmbeddingCache(cache) as local_cache:
@@ -74,7 +74,7 @@ def main(
     mappings = map_task_vectors(
         task_rows,
         task_vectors,
-        curriculum_row,
+        curriculum_rows,
         anchor_ids,
         anchor_vectors,
         embedding_model,

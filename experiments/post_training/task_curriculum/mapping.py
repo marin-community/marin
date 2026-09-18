@@ -17,15 +17,25 @@ from experiments.post_training.task_curriculum.models import (
 )
 
 
-def curriculum_anchors(curriculum: Curriculum) -> tuple[list[str], list[str]]:
-    """Return section IDs and model-independent anchor sentences."""
+def curriculum_anchors(curricula: Sequence[Curriculum]) -> tuple[list[str], list[str]]:
+    """Return globally unique section IDs and model-independent anchor sentences."""
+    subject_ids = [curriculum.subject_id for curriculum in curricula]
+    if len(subject_ids) != len(set(subject_ids)):
+        raise ValueError("subject IDs must be unique across curricula")
     section_ids: list[str] = []
     anchors: list[str] = []
-    for section in curriculum.sections:
-        base = f"{curriculum.subject_name}. {section.name}. {section.outcome}"
-        for task in section.sample_tasks:
-            section_ids.append(section.id)
-            anchors.append(f"{base}. Example task: {task.instruction}")
+    for curriculum in curricula:
+        for section in curriculum.sections:
+            base = f"{curriculum.subject_name}. {section.name}. {section.outcome}"
+            for task in section.sample_tasks:
+                section_ids.append(section.id)
+                anchors.append(f"{base}. Example task: {task.instruction}")
+
+    section_curricula = {
+        section.id: curriculum.subject_id for curriculum in curricula for section in curriculum.sections
+    }
+    if len(section_curricula) != sum(len(curriculum.sections) for curriculum in curricula):
+        raise ValueError("section IDs must be globally unique across curricula")
     return section_ids, anchors
 
 
@@ -43,7 +53,7 @@ def normalized(vectors: np.ndarray) -> np.ndarray:
 def map_task_vectors(
     annotations: Sequence[TaskAnnotation],
     task_vectors: np.ndarray,
-    curriculum: Curriculum,
+    curricula: Sequence[Curriculum],
     anchor_section_ids: Sequence[str],
     anchor_vectors: np.ndarray,
     embedding_model: str,
@@ -53,6 +63,9 @@ def map_task_vectors(
     """Rank curriculum sections by each section's closest anchor."""
     if len(annotations) != len(task_vectors):
         raise ValueError("task annotation and vector counts differ")
+    task_ids = [annotation.task_id for annotation in annotations]
+    if len(task_ids) != len(set(task_ids)):
+        raise ValueError("task annotation IDs must be unique")
     if len(anchor_section_ids) != len(anchor_vectors):
         raise ValueError("anchor ID and vector counts differ")
 
@@ -88,7 +101,7 @@ def map_task_vectors(
                     task_hash=annotation.task_hash,
                     annotation_model=annotation.model,
                     annotation_prompt_version=annotation.prompt_version,
-                    curriculum_version=curriculum.version,
+                    curriculum_versions={curriculum.subject_id: curriculum.version for curriculum in curricula},
                     embedding_model=embedding_model,
                     candidates=candidates,
                 )

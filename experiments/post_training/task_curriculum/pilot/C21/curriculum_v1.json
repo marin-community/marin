@@ -21,10 +21,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Create a quarterly program-budget workbook from the supplied transactions. Separate assumptions from calculated results, compute actual-versus-budget amounts by category, flag categories over budget, and add a compact summary that a director can audit back to the source rows."
+          "instruction": "Create a quarterly program-budget workbook from the supplied transactions. Separate assumptions from calculated results, compute actual-versus-budget amounts by category, flag categories over budget, and add a compact summary that a director can audit back to the source rows.",
+          "kind": "entry"
         },
         {
-          "instruction": "Revise a volunteer-hours workbook so coordinators can enter shifts once, calculate each volunteer's total and remaining commitment automatically, and see warnings for duplicate shifts or totals that do not reconcile."
+          "instruction": "Revise a volunteer-hours workbook so coordinators can enter shifts once, calculate each volunteer's total and remaining commitment automatically, and see warnings for duplicate shifts or totals that do not reconcile.",
+          "kind": "representative"
         }
       ]
     },
@@ -46,10 +48,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Restructure a worksheet of purchase requests whose departments, vendors, dates, and line items are mixed across repeated header blocks. Produce one extensible transaction table, a separate assumptions area, and a clear list of any ambiguous source entries."
+          "instruction": "Restructure a worksheet of purchase requests whose departments, vendors, dates, and line items are mixed across repeated header blocks. Produce one extensible transaction table, a separate assumptions area, and a clear list of any ambiguous source entries.",
+          "kind": "entry"
         },
         {
-          "instruction": "Design the sheet structure for tracking room reservations across three sites. Specify the fields and stable identifiers needed for filtering by site, organizer, date, and status while preventing one reservation's details from being repeated inconsistently."
+          "instruction": "Design the sheet structure for tracking room reservations across three sites. Specify the fields and stable identifiers needed for filtering by site, organizer, date, and status while preventing one reservation's details from being repeated inconsistently.",
+          "kind": "representative"
         }
       ]
     },
@@ -73,10 +77,12 @@
       ],
       "sample_tasks": [
         {
-          "instruction": "Add formulas to a staffing-cost model to select each employee's pay rate from a role table, calculate regular and overtime cost, and flag missing roles. Include control totals that reconcile employee detail to the departmental summary."
+          "instruction": "Add formulas to a staffing-cost model to select each employee's pay rate from a role table, calculate regular and overtime cost, and flag missing roles. Include control totals that reconcile employee detail to the departmental summary.",
+          "kind": "entry"
         },
         {
-          "instruction": "Repair a loan-comparison sheet in which copied formulas use the wrong rate cells and blank fees produce errors. Make the calculations robust, show total cost for three scenarios, and add checks that expose incomplete assumptions."
+          "instruction": "Repair a loan-comparison sheet in which copied formulas use the wrong rate cells and blank fees produce errors. Make the calculations robust, show total cost for three scenarios, and add checks that expose incomplete assumptions.",
+          "kind": "representative"
         }
       ]
     },
@@ -98,10 +104,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Design an intake and filing workflow for community-partner agreements. Capture the parties, effective dates, renewal status, owner, approvals, and supporting files, and explain how staff should update and retrieve a record without creating duplicates."
+          "instruction": "Design an intake and filing workflow for community-partner agreements. Capture the parties, effective dates, renewal status, owner, approvals, and supporting files, and explain how staff should update and retrieve a record without creating duplicates.",
+          "kind": "entry"
         },
         {
-          "instruction": "Clean up a shared collection of equipment inspection records. Define a consistent naming and folder scheme, identify missing or conflicting metadata, distinguish current from superseded inspections, and produce an index for authorized staff."
+          "instruction": "Clean up a shared collection of equipment inspection records. Define a consistent naming and folder scheme, identify missing or conflicting metadata, distinguish current from superseded inspections, and produce an index for authorized staff.",
+          "kind": "representative"
         }
       ]
     },
@@ -123,10 +131,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Create a facilities-incident intake form for employees. Collect only the information needed to route and investigate an incident, use conditional questions for injury or equipment damage, and specify validation that prevents unusable dates, locations, and contact details."
+          "instruction": "Create a facilities-incident intake form for employees. Collect only the information needed to route and investigate an incident, use conditional questions for injury or equipment damage, and specify validation that prevents unusable dates, locations, and contact details.",
+          "kind": "entry"
         },
         {
-          "instruction": "Revise a volunteer registration form that currently asks duplicate questions and allows free-text availability. Produce a shorter field sequence with consistent time-slot choices, emergency-contact checks, consent, and a final review step."
+          "instruction": "Revise a volunteer registration form that currently asks duplicate questions and allows free-text availability. Produce a shorter field sequence with consistent time-slot choices, emergency-contact checks, consent, and a final review step.",
+          "kind": "representative"
         }
       ]
     },
@@ -148,10 +158,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Given a mixed folder of signed contracts, drafts, amendments, and scans, propose and apply a filing plan that preserves the contract relationship, identifies the authoritative version, and lets staff retrieve active agreements by partner and renewal date."
+          "instruction": "Given a mixed folder of signed contracts, drafts, amendments, and scans, propose and apply a filing plan that preserves the contract relationship, identifies the authoritative version, and lets staff retrieve active agreements by partner and renewal date.",
+          "kind": "entry"
         },
         {
-          "instruction": "Create a records index for a training program whose attendance sheets and certificates use inconsistent participant names. Reconcile likely duplicates, retain evidence of uncertainty, and mark which records are complete, pending, or superseded."
+          "instruction": "Create a records index for a training program whose attendance sheets and certificates use inconsistent participant names. Reconcile likely duplicates, retain evidence of uncertainty, and mark which records are complete, pending, or superseded.",
+          "kind": "representative"
         }
       ]
     },
@@ -173,10 +185,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Turn the supplied meeting notes and policy decisions into a staff procedure. Resolve repeated points, organize the steps and exceptions, add a revision summary, and format the result for quick use during daily operations."
+          "instruction": "Turn the supplied meeting notes and policy decisions into a staff procedure. Resolve repeated points, organize the steps and exceptions, add a revision summary, and format the result for quick use during daily operations.",
+          "kind": "entry"
         },
         {
-          "instruction": "Revise a five-page grant narrative for a mixed technical and community audience. Preserve the approved facts, strengthen the problem-to-impact argument, standardize headings and terminology, and prepare a clean final document with a concise contents aid."
+          "instruction": "Revise a five-page grant narrative for a mixed technical and community audience. Preserve the approved facts, strengthen the problem-to-impact argument, standardize headings and terminology, and prepare a clean final document with a concise contents aid.",
+          "kind": "representative"
         }
       ]
     },
@@ -198,10 +212,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Draft a two-page decision memo from the supplied project notes. State the decision, compare the three options using only the provided evidence, identify risks and unresolved questions, and recommend next steps for an executive reader."
+          "instruction": "Draft a two-page decision memo from the supplied project notes. State the decision, compare the three options using only the provided evidence, identify risks and unresolved questions, and recommend next steps for an executive reader.",
+          "kind": "entry"
         },
         {
-          "instruction": "Rewrite a confusing onboarding procedure so a new employee can complete it without oral guidance. Put actions in dependency order, define unfamiliar terms, separate required steps from optional tips, and surface the two escalation conditions."
+          "instruction": "Rewrite a confusing onboarding procedure so a new employee can complete it without oral guidance. Put actions in dependency order, define unfamiliar terms, separate required steps from optional tips, and surface the two escalation conditions.",
+          "kind": "representative"
         }
       ]
     },
@@ -223,10 +239,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Format the supplied employee handbook so heading levels, lists, callout boxes, page numbering, and the table of contents behave consistently. Fix stranded headings and inaccessible tables without changing the approved wording."
+          "instruction": "Format the supplied employee handbook so heading levels, lists, callout boxes, page numbering, and the table of contents behave consistently. Fix stranded headings and inaccessible tables without changing the approved wording.",
+          "kind": "entry"
         },
         {
-          "instruction": "Prepare a print-ready version of a committee report assembled from several contributors. Standardize typography and captions, keep wide tables readable, add consistent headers and section starts, and complete a final visual and accessibility check."
+          "instruction": "Prepare a print-ready version of a committee report assembled from several contributors. Standardize typography and captions, keep wide tables readable, add consistent headers and section starts, and complete a final visual and accessibility check.",
+          "kind": "representative"
         }
       ]
     },
@@ -248,10 +266,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Develop a ten-minute board presentation from the supplied budget tables and program update. Lead to a specific funding decision, choose only the evidence needed for that decision, create a consistent slide sequence, and add speaker notes for the transitions and ask."
+          "instruction": "Develop a ten-minute board presentation from the supplied budget tables and program update. Lead to a specific funding decision, choose only the evidence needed for that decision, create a consistent slide sequence, and add speaker notes for the transitions and ask.",
+          "kind": "entry"
         },
         {
-          "instruction": "Rework a crowded training deck for first-time supervisors. Establish a clear learning arc, replace dense paragraphs with usable examples and visuals, add an opening objective and closing practice prompt, and make the slides accessible for projection."
+          "instruction": "Rework a crowded training deck for first-time supervisors. Establish a clear learning arc, replace dense paragraphs with usable examples and visuals, add an opening objective and closing practice prompt, and make the slides accessible for projection.",
+          "kind": "representative"
         }
       ]
     },
@@ -273,10 +293,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Create a slide-by-slide outline for persuading a city committee to approve a pilot recycling program. Use the supplied costs, resident feedback, and operational risks; identify the purpose of each slide and the final decision request."
+          "instruction": "Create a slide-by-slide outline for persuading a city committee to approve a pilot recycling program. Use the supplied costs, resident feedback, and operational risks; identify the purpose of each slide and the final decision request.",
+          "kind": "entry"
         },
         {
-          "instruction": "Plan a 20-minute orientation presentation for new volunteers. Sequence the mission, safety rules, example shift, and escalation process so the audience first understands why the work matters and then can act correctly."
+          "instruction": "Plan a 20-minute orientation presentation for new volunteers. Sequence the mission, safety rules, example shift, and escalation process so the audience first understands why the work matters and then can act correctly.",
+          "kind": "representative"
         }
       ]
     },
@@ -300,10 +322,12 @@
       ],
       "sample_tasks": [
         {
-          "instruction": "Build slides from the approved fundraising-pitch outline and asset folder. Use a consistent visual system, turn the impact figures into readable displays, keep citations attached to claims, and add concise notes that fit an eight-minute delivery."
+          "instruction": "Build slides from the approved fundraising-pitch outline and asset folder. Use a consistent visual system, turn the impact figures into readable displays, keep citations attached to claims, and add concise notes that fit an eight-minute delivery.",
+          "kind": "entry"
         },
         {
-          "instruction": "Polish a nearly complete quarterly-review deck whose charts, fonts, and spacing are inconsistent. Repair visual hierarchy and accessibility, simplify overloaded slides without removing required facts, and add cues for two presenter handoffs."
+          "instruction": "Polish a nearly complete quarterly-review deck whose charts, fonts, and spacing are inconsistent. Repair visual hierarchy and accessibility, simplify overloaded slides without removing required facts, and add cues for two presenter handoffs.",
+          "kind": "representative"
         }
       ]
     },
@@ -325,10 +349,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Review the supplied email thread about a vendor demonstration, identify the commitments and unanswered question, draft the next reply, and update the proposed meeting time so it respects every participant's stated availability."
+          "instruction": "Review the supplied email thread about a vendor demonstration, identify the commitments and unanswered question, draft the next reply, and update the proposed meeting time so it respects every participant's stated availability.",
+          "kind": "entry"
         },
         {
-          "instruction": "Coordinate a rescheduled staff workshop after the facilitator becomes unavailable. Preserve the room and attendee constraints, find a conflict-free replacement slot, and draft concise notices that distinguish the new arrangement from the canceled one."
+          "instruction": "Coordinate a rescheduled staff workshop after the facilitator becomes unavailable. Preserve the room and attendee constraints, find a conflict-free replacement slot, and draft concise notices that distinguish the new arrangement from the canceled one.",
+          "kind": "representative"
         }
       ]
     },
@@ -350,10 +376,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Read the supplied procurement email thread and draft a reply that confirms the accepted quantity and delivery window, asks only for the missing tax document, assigns the internal approval step, and uses an appropriately firm but cooperative tone."
+          "instruction": "Read the supplied procurement email thread and draft a reply that confirms the accepted quantity and delivery window, asks only for the missing tax document, assigns the internal approval step, and uses an appropriately firm but cooperative tone.",
+          "kind": "entry"
         },
         {
-          "instruction": "Triage twelve incoming messages for a program director. Group related threads, identify which require a reply today, summarize each requested action with owner and deadline, and draft the two highest-priority responses."
+          "instruction": "Triage twelve incoming messages for a program director. Group related threads, identify which require a reply today, summarize each requested action with owner and deadline, and draft the two highest-priority responses.",
+          "kind": "representative"
         }
       ]
     },
@@ -375,10 +403,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Maintain a workday calendar through a sequence of additions and changes. Keep all events between 09:00 and 17:00, preserve each duration and previously stated time window, automatically move flexible events to prevent overlap, and return the complete current schedule after each change."
+          "instruction": "Maintain a workday calendar through a sequence of additions and changes. Keep all events between 09:00 and 17:00, preserve each duration and previously stated time window, automatically move flexible events to prevent overlap, and return the complete current schedule after each change.",
+          "kind": "entry"
         },
         {
-          "instruction": "Starting from the supplied conversation history, restore the calendar snapshot that followed the third scheduling request, add a 45-minute review meeting, then apply a new latest-finish constraint to one restored event without changing event identities or losing earlier constraints."
+          "instruction": "Starting from the supplied conversation history, restore the calendar snapshot that followed the third scheduling request, add a 45-minute review meeting, then apply a new latest-finish constraint to one restored event without changing event identities or losing earlier constraints.",
+          "kind": "representative"
         }
       ]
     }

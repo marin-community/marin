@@ -19,10 +19,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Simplify (3x - 2)/(x + 1) + (x + 5)/(x + 1), state the excluded value of x, and solve when the simplified expression equals 7."
+          "instruction": "Simplify (3x - 2)/(x + 1) + (x + 5)/(x + 1), state the excluded value of x, and solve when the simplified expression equals 7.",
+          "kind": "entry"
         },
         {
-          "instruction": "Count the positive integers below 500 that are divisible by 6 or 15 but not by both."
+          "instruction": "Count the positive integers below 500 that are divisible by 6 or 15 but not by both.",
+          "kind": "representative"
         }
       ]
     },
@@ -42,10 +44,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Evaluate -18 - 3(7 - 11) + 5^2/10 exactly."
+          "instruction": "Evaluate -18 - 3(7 - 11) + 5^2/10 exactly.",
+          "kind": "entry"
         },
         {
-          "instruction": "Simplify (7/12 - 5/18) divided by (11/9) and give the result as a reduced fraction."
+          "instruction": "Simplify (7/12 - 5/18) divided by (11/9) and give the result as a reduced fraction.",
+          "kind": "representative"
         }
       ]
     },
@@ -65,10 +69,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Solve (x - 2)/(x + 3) = (2x + 1)/(x - 1), including all restrictions on x."
+          "instruction": "Solve (x - 2)/(x + 3) = (2x + 1)/(x - 1), including all restrictions on x.",
+          "kind": "entry"
         },
         {
-          "instruction": "Find a closed form for a sequence with a_0 = 4 and a_(n+1) = 3a_n - 2, and verify it satisfies the recurrence."
+          "instruction": "Find a closed form for a sequence with a_0 = 4 and a_(n+1) = 3a_n - 2, and verify it satisfies the recurrence.",
+          "kind": "representative"
         }
       ]
     },
@@ -88,10 +94,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Determine how many primes lie between 1200 and 1500 inclusive, explaining a systematic way to eliminate composites."
+          "instruction": "Determine how many primes lie between 1200 and 1500 inclusive, explaining a systematic way to eliminate composites.",
+          "kind": "entry"
         },
         {
-          "instruction": "How many six-digit numbers have strictly increasing digits and contain exactly two even digits?"
+          "instruction": "How many six-digit numbers have strictly increasing digits and contain exactly two even digits?",
+          "kind": "representative"
         }
       ]
     },
@@ -111,10 +119,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Prove that every bounded monotone real sequence converges, clearly identifying where completeness is used."
+          "instruction": "Prove that every bounded monotone real sequence converges, clearly identifying where completeness is used.",
+          "kind": "entry"
         },
         {
-          "instruction": "A circle is tangent to one side of a triangle and passes through the opposite vertex. Derive a relation between its radius and the relevant side lengths."
+          "instruction": "A circle is tangent to one side of a triangle and passes through the opposite vertex. Derive a relation between its radius and the relevant side lengths.",
+          "kind": "representative"
         }
       ]
     },
@@ -134,10 +144,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Determine whether the sequence n(sqrt(n^2 + 1) - n) converges and justify the limit without relying on decimal approximations."
+          "instruction": "Determine whether the sequence n(sqrt(n^2 + 1) - n) converges and justify the limit without relying on decimal approximations.",
+          "kind": "entry"
         },
         {
-          "instruction": "Prove that ln x is less than or equal to x - 1 for every positive x, and determine when equality holds."
+          "instruction": "Prove that ln x is less than or equal to x - 1 for every positive x, and determine when equality holds.",
+          "kind": "representative"
         }
       ]
     },
@@ -157,10 +169,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "In a regular octagon of side length 2, derive the exact distance between two vertices separated by three edges."
+          "instruction": "In a regular octagon of side length 2, derive the exact distance between two vertices separated by three edges.",
+          "kind": "entry"
         },
         {
-          "instruction": "Find all circles above the x-axis that pass through the origin and are tangent to the parabola y = x^2 at a second point."
+          "instruction": "Find all circles above the x-axis that pass through the origin and are tangent to the parabola y = x^2 at a second point.",
+          "kind": "representative"
         }
       ]
     },
@@ -180,10 +194,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Classify, up to isomorphism, the group generated by a and b with a^4 = 1, b^2 = a^2, and b^(-1)ab = a^(-1), justifying the classification."
+          "instruction": "Classify, up to isomorphism, the group generated by a and b with a^4 = 1, b^2 = a^2, and b^(-1)ab = a^(-1), justifying the classification.",
+          "kind": "entry"
         },
         {
-          "instruction": "Prove that every finite tree with at least two vertices has at least two leaves."
+          "instruction": "Prove that every finite tree with at least two vertices has at least two leaves.",
+          "kind": "representative"
         }
       ]
     },
@@ -203,10 +219,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "A fair die is rolled until the same face appears twice consecutively. Derive the expected number of rolls."
+          "instruction": "A fair die is rolled until the same face appears twice consecutively. Derive the expected number of rolls.",
+          "kind": "entry"
         },
         {
-          "instruction": "For an independent normal sample with unknown mean and variance, derive a 95% confidence interval for the mean and state the assumptions used."
+          "instruction": "For an independent normal sample with unknown mean and variance, derive a 95% confidence interval for the mean and state the assumptions used.",
+          "kind": "representative"
         }
       ]
     },
@@ -226,10 +244,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Two cards are drawn without replacement from a standard deck. Compute the conditional probability that both are aces given that at least one is an ace."
+          "instruction": "Two cards are drawn without replacement from a standard deck. Compute the conditional probability that both are aces given that at least one is an ace.",
+          "kind": "entry"
         },
         {
-          "instruction": "A biased coin with head probability p is tossed until the first tail. Derive the probability generating function and expectation of the number of heads."
+          "instruction": "A biased coin with head probability p is tossed until the first tail. Derive the probability generating function and expectation of the number of heads.",
+          "kind": "representative"
         }
       ]
     },
@@ -249,10 +269,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "For n independent Poisson observations, derive the maximum-likelihood estimator of the rate and determine whether it is unbiased."
+          "instruction": "For n independent Poisson observations, derive the maximum-likelihood estimator of the rate and determine whether it is unbiased.",
+          "kind": "entry"
         },
         {
-          "instruction": "Construct a level-0.05 likelihood-ratio test for the success probability of a binomial sample and describe how its power changes with sample size."
+          "instruction": "Construct a level-0.05 likelihood-ratio test for the success probability of a binomial sample and describe how its power changes with sample size.",
+          "kind": "representative"
         }
       ]
     },
@@ -272,10 +294,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Formulate and solve a production plan that maximizes profit subject to two resource capacities and nonnegative integer quantities."
+          "instruction": "Formulate and solve a production plan that maximizes profit subject to two resource capacities and nonnegative integer quantities.",
+          "kind": "entry"
         },
         {
-          "instruction": "Find the maximum of (x + 2y)(3x + y) over nonnegative x and y with x + y = 1, and justify global optimality."
+          "instruction": "Find the maximum of (x + 2y)(3x + y) over nonnegative x and y with x + y = 1, and justify global optimality.",
+          "kind": "representative"
         }
       ]
     },
@@ -295,10 +319,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Formulate a mixed-integer program that assigns nurses to shifts while meeting coverage, rest, and weekly-hour requirements."
+          "instruction": "Formulate a mixed-integer program that assigns nurses to shifts while meeting coverage, rest, and weekly-hour requirements.",
+          "kind": "entry"
         },
         {
-          "instruction": "Express the shortest path from a source to a destination as a linear optimization problem using flow-conservation constraints."
+          "instruction": "Express the shortest path from a source to a destination as a linear optimization problem using flow-conservation constraints.",
+          "kind": "representative"
         }
       ]
     },
@@ -318,10 +344,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Minimize x^2 + 4y^2 subject to x + y = 6, and certify that the solution is globally optimal."
+          "instruction": "Minimize x^2 + 4y^2 subject to x + y = 6, and certify that the solution is globally optimal.",
+          "kind": "entry"
         },
         {
-          "instruction": "Given weighted jobs with deadlines and unit processing times, derive an algorithm for maximum total weight and prove its optimality."
+          "instruction": "Given weighted jobs with deadlines and unit processing times, derive an algorithm for maximum total weight and prove its optimality.",
+          "kind": "representative"
         }
       ]
     },
@@ -341,10 +369,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Use Newton's method to approximate the positive root of cos x = x to six decimal places and bound the residual."
+          "instruction": "Use Newton's method to approximate the positive root of cos x = x to six decimal places and bound the residual.",
+          "kind": "entry"
         },
         {
-          "instruction": "Select a numerical method for a stiff initial-value problem, explain the stability requirement, and carry out two time steps."
+          "instruction": "Select a numerical method for a stiff initial-value problem, explain the stability requirement, and carry out two time steps.",
+          "kind": "representative"
         }
       ]
     },
@@ -364,10 +394,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Apply bisection to locate a root of x^3 - x - 1 in [1, 2] within an absolute error of 0.001, and determine the required iteration count."
+          "instruction": "Apply bisection to locate a root of x^3 - x - 1 in [1, 2] within an absolute error of 0.001, and determine the required iteration count.",
+          "kind": "entry"
         },
         {
-          "instruction": "Approximate the integral of exp(-x^2) from 0 to 1 with composite Simpson's rule and derive an error bound."
+          "instruction": "Approximate the integral of exp(-x^2) from 0 to 1 with composite Simpson's rule and derive an error bound.",
+          "kind": "representative"
         }
       ]
     },
@@ -387,10 +419,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Perform three Gauss-Seidel iterations for a diagonally dominant 3 by 3 linear system and assess convergence from the coefficient matrix."
+          "instruction": "Perform three Gauss-Seidel iterations for a diagonally dominant 3 by 3 linear system and assess convergence from the coefficient matrix.",
+          "kind": "entry"
         },
         {
-          "instruction": "Discretize a one-dimensional heat equation with an explicit finite-difference scheme and derive the time-step condition for stability."
+          "instruction": "Discretize a one-dimensional heat equation with an explicit finite-difference scheme and derive the time-step condition for stability.",
+          "kind": "representative"
         }
       ]
     },
@@ -410,10 +444,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Translate a quantified argument about students and courses into first-order logic and determine whether its conclusion is valid."
+          "instruction": "Translate a quantified argument about students and courses into first-order logic and determine whether its conclusion is valid.",
+          "kind": "entry"
         },
         {
-          "instruction": "State a loop invariant for Euclid's algorithm and use it to prove partial correctness and termination."
+          "instruction": "State a loop invariant for Euclid's algorithm and use it to prove partial correctness and termination.",
+          "kind": "representative"
         }
       ]
     },
@@ -433,10 +469,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Convert (p implies q) and (r implies not q) and (p or r) into conjunctive normal form and determine whether the formula is satisfiable."
+          "instruction": "Convert (p implies q) and (r implies not q) and (p or r) into conjunctive normal form and determine whether the formula is satisfiable.",
+          "kind": "entry"
         },
         {
-          "instruction": "Either construct a natural-deduction proof of forall x (P(x) implies Q(x)) from the supplied premises or give a countermodel."
+          "instruction": "Either construct a natural-deduction proof of forall x (P(x) implies Q(x)) from the supplied premises or give a countermodel.",
+          "kind": "representative"
         }
       ]
     },
@@ -456,10 +494,12 @@
       "prerequisites": [],
       "sample_tasks": [
         {
-          "instruction": "Give preconditions, a loop invariant, and a postcondition that verify an in-place array-reversal loop."
+          "instruction": "Give preconditions, a loop invariant, and a postcondition that verify an in-place array-reversal loop.",
+          "kind": "entry"
         },
         {
-          "instruction": "For a two-process mutual-exclusion protocol, formalize the safety property and either prove it invariant or provide a reachable counterexample trace."
+          "instruction": "For a two-process mutual-exclusion protocol, formalize the safety property and either prove it invariant or provide a reachable counterexample trace.",
+          "kind": "representative"
         }
       ]
     }
