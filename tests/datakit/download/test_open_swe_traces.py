@@ -3,11 +3,10 @@
 
 import json
 
-from openai_harmony import Message
-
 from marin.datakit.chat_normalize import validate_chat_messages, validate_tool_definitions
 from marin.datakit.chat_render import render_chat_record
 from marin.datakit.download.open_swe_traces import row_to_chat_doc
+from openai_harmony import Message
 
 
 def test_open_swe_traces_renders_prompt_reasoning_and_parallel_tool_calls():
@@ -31,8 +30,16 @@ def test_open_swe_traces_renders_prompt_reasoning_and_parallel_tool_calls():
                 "content": "I will inspect both files.",
                 "reasoning_content": "Check the failing assertion first.",
                 "tool_calls": [
-                    {"id": "call-1", "type": "function", "function": {"name": "bash", "arguments": '{"command":"cat test.py"}'}},
-                    {"id": "call-2", "type": "function", "function": {"name": "bash", "arguments": '{"command":"cat src.py"}'}},
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": '{"command":"cat test.py"}'},
+                    },
+                    {
+                        "id": "call-2",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": '{"command":"cat src.py"}'},
+                    },
                 ],
             },
             {"role": "tool", "content": "TEST_OUTPUT_SENTINEL"},
