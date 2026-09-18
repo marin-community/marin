@@ -22,6 +22,8 @@ class ProbeKind(StrEnum):
 
 
 EXPECTED_PROBE_KINDS = (ProbeKind.ENTRY, ProbeKind.REPRESENTATIVE)
+MIN_COSINE_SIMILARITY = -1.0
+MAX_COSINE_SIMILARITY = 1.0
 
 
 class SampleTask(StrictModel):
@@ -253,13 +255,13 @@ class TaskAnnotation(StrictModel):
 
 class MappingCandidate(StrictModel):
     section_id: str
-    similarity: float = Field(ge=-1.0, le=1.0)
+    similarity: float = Field(ge=MIN_COSINE_SIMILARITY, le=MAX_COSINE_SIMILARITY)
 
 
 class GraphMapping(StrictModel):
     subject_id: str
     routing_facet: RoutingFacet
-    membership_similarity: float = Field(ge=-1.0, le=1.0)
+    membership_similarity: float = Field(ge=MIN_COSINE_SIMILARITY, le=MAX_COSINE_SIMILARITY)
     candidates: list[MappingCandidate]
 
 

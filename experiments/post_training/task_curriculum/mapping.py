@@ -11,6 +11,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from experiments.post_training.task_curriculum.models import (
+    MAX_COSINE_SIMILARITY,
+    MIN_COSINE_SIMILARITY,
     AnchorKind,
     AssignmentAnchor,
     CurriculumCatalog,
@@ -203,11 +205,13 @@ def _rank_graph_sections(
     return GraphMapping(
         subject_id=subject_id,
         routing_facet=routing_facet,
-        membership_similarity=float(np.clip(membership_scores[task_index, graph_index], -1.0, 1.0)),
+        membership_similarity=float(
+            np.clip(membership_scores[task_index, graph_index], MIN_COSINE_SIMILARITY, MAX_COSINE_SIMILARITY)
+        ),
         candidates=[
             MappingCandidate(
                 section_id=section_ids[position],
-                similarity=float(np.clip(section_scores[position], -1.0, 1.0)),
+                similarity=float(np.clip(section_scores[position], MIN_COSINE_SIMILARITY, MAX_COSINE_SIMILARITY)),
             )
             for position in winners
         ],

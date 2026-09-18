@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -34,7 +35,12 @@ from experiments.post_training.task_curriculum.models import (
     SystematicGapDisposition,
     TaskAnnotation,
 )
-from experiments.post_training.task_curriculum.validation import validate_subject_promotion, validate_subject_run
+from experiments.post_training.task_curriculum.validation import (
+    SubjectEvidenceIds,
+    SubjectRunArtifacts,
+    validate_subject_promotion,
+    validate_subject_run,
+)
 
 
 def _section(section_id: str, parent_id: str | None, task_texts: tuple[str, str]) -> CapabilitySection:
@@ -259,7 +265,7 @@ def test_holistic_review_rejects_inconsistent_status() -> None:
         HolisticReview.model_validate(review)
 
 
-def test_subject_run_validation_checks_cross_artifact_references() -> None:
+def _subject_run() -> tuple[SubjectRunArtifacts, SubjectEvidenceIds]:
     curriculum = Curriculum(
         version="pilot-1",
         subject_id="C00",
@@ -335,56 +341,95 @@ def test_subject_run_validation_checks_cross_artifact_references() -> None:
         }
     )
 
-    validate_subject_run(curriculum, blind_tasks, fit_review, holistic_review, [], {"C00.1"}, set(), set())
-    validate_subject_promotion(blind_tasks, fit_review, holistic_review, [])
-    not_ready_review = holistic_review.model_copy(
+    return (
+        SubjectRunArtifacts(
+            curriculum=curriculum,
+            blind_tasks=blind_tasks,
+            fit_review=fit_review,
+            holistic_review=holistic_review,
+            gap_dispositions=(),
+        ),
+        SubjectEvidenceIds(
+            guideposts=frozenset({"C00.1"}),
+            discovery_items=frozenset(),
+            evaluation_items=frozenset(),
+        ),
+    )
+
+
+def test_subject_run_validation_accepts_consistent_artifacts() -> None:
+    artifacts, evidence_ids = _subject_run()
+
+    validate_subject_run(artifacts, evidence_ids)
+    validate_subject_promotion(artifacts)
+
+
+def test_subject_promotion_rejects_non_ready_review() -> None:
+    artifacts, evidence_ids = _subject_run()
+    not_ready_review = artifacts.holistic_review.model_copy(
         update={
             "score": 84,
-            "dimension_scores": holistic_review.dimension_scores.model_copy(update={"coverage": 21}),
+            "dimension_scores": artifacts.holistic_review.dimension_scores.model_copy(update={"coverage": 21}),
             "status": HolisticReviewStatus.REVISE,
         }
     )
-    validate_subject_run(curriculum, blind_tasks, fit_review, not_ready_review, [], {"C00.1"}, set(), set())
-    with pytest.raises(ValueError):
-        validate_subject_promotion(blind_tasks, fit_review, not_ready_review, [])
-    stale_fit = fit_review.model_copy(update={"curriculum_version": "pilot-0"})
-    with pytest.raises(ValueError):
-        validate_subject_run(curriculum, blind_tasks, stale_fit, holistic_review, [], {"C00.1"}, set(), set())
-    invalid_fit = fit_review.model_copy(deep=True)
-    invalid_fit.judgments[0].acceptable_capability_ids = ["c00.unknown"]
-    with pytest.raises(ValueError):
-        validate_subject_run(curriculum, blind_tasks, invalid_fit, holistic_review, [], {"C00.1"}, set(), set())
+    not_ready_artifacts = replace(artifacts, holistic_review=not_ready_review)
 
-    fit_with_gap = fit_review.model_copy(update={"systematic_gaps": ["missing operation"]})
+    validate_subject_run(not_ready_artifacts, evidence_ids)
+    with pytest.raises(ValueError):
+        validate_subject_promotion(not_ready_artifacts)
+
+
+def test_subject_run_validation_rejects_stale_fit_version() -> None:
+    artifacts, evidence_ids = _subject_run()
+    stale_fit = artifacts.fit_review.model_copy(update={"curriculum_version": "pilot-0"})
+
+    with pytest.raises(ValueError):
+        validate_subject_run(replace(artifacts, fit_review=stale_fit), evidence_ids)
+
+
+def test_subject_run_validation_rejects_unknown_capability_reference() -> None:
+    artifacts, evidence_ids = _subject_run()
+    invalid_fit = artifacts.fit_review.model_copy(deep=True)
+    invalid_fit.judgments[0].acceptable_capability_ids = ["c00.unknown"]
+
+    with pytest.raises(ValueError):
+        validate_subject_run(replace(artifacts, fit_review=invalid_fit), evidence_ids)
+
+
+def test_subject_promotion_rejects_confirmed_systematic_gap() -> None:
+    artifacts, evidence_ids = _subject_run()
+    fit_with_gap = artifacts.fit_review.model_copy(update={"systematic_gaps": ["missing operation"]})
     blocking_gap = SystematicGapDisposition(
         gap="missing operation",
         status=GapDispositionStatus.BLOCKING,
         rationale="Two blind tasks require the same uncovered operation.",
     )
-    validate_subject_run(
-        curriculum,
-        blind_tasks,
-        fit_with_gap,
-        holistic_review,
-        [blocking_gap],
-        {"C00.1"},
-        set(),
-        set(),
+    artifacts_with_gap = replace(
+        artifacts,
+        fit_review=fit_with_gap,
+        gap_dispositions=(blocking_gap,),
     )
-    with pytest.raises(ValueError):
-        validate_subject_promotion(blind_tasks, fit_with_gap, holistic_review, [blocking_gap])
 
-    uncovered_fit_data = fit_review.model_dump()
+    validate_subject_run(artifacts_with_gap, evidence_ids)
+    with pytest.raises(ValueError):
+        validate_subject_promotion(artifacts_with_gap)
+
+
+def test_subject_promotion_rejects_gap_in_uncovered_guidepost() -> None:
+    artifacts, _ = _subject_run()
+    uncovered_fit_data = artifacts.fit_review.model_dump()
     uncovered_fit_data["judgments"][0].update(status="gap", acceptable_capability_ids=[])
     uncovered_fit_data.update(
         counts={"exact": 23, "ambiguous": 0, "gap": 1, "invalid": 0},
         fit_numerator=23,
     )
     uncovered_fit = BlindFitReview.model_validate(uncovered_fit_data)
-    uncovered_review = holistic_review.model_copy(deep=True)
+    uncovered_review = artifacts.holistic_review.model_copy(deep=True)
     uncovered_review.guidepost_accounting[0].section_ids = []
+
     with pytest.raises(ValueError):
-        validate_subject_promotion(blind_tasks, uncovered_fit, uncovered_review, [])
+        validate_subject_promotion(replace(artifacts, fit_review=uncovered_fit, holistic_review=uncovered_review))
 
 
 def test_mapping_ranks_sections_independently_inside_each_graph() -> None:

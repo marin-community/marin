@@ -4,6 +4,8 @@
 """Cross-artifact validation for one curriculum generation run."""
 
 from collections import Counter
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 from experiments.post_training.task_curriculum.models import (
     BlindFitReview,
@@ -17,6 +19,29 @@ from experiments.post_training.task_curriculum.models import (
     HolisticReviewStatus,
     SystematicGapDisposition,
 )
+
+MIN_BLIND_TASK_COUNT = 24
+MIN_BLIND_TASKS_PER_GUIDEPOST = 2
+
+
+@dataclass(frozen=True)
+class SubjectRunArtifacts:
+    """Artifacts produced by the four isolated roles for one subject version."""
+
+    curriculum: Curriculum
+    blind_tasks: BlindTaskSet
+    fit_review: BlindFitReview
+    holistic_review: HolisticReview
+    gap_dispositions: Sequence[SystematicGapDisposition]
+
+
+@dataclass(frozen=True)
+class SubjectEvidenceIds:
+    """Expected inventory and evidence identifiers for one subject run."""
+
+    guideposts: frozenset[str]
+    discovery_items: frozenset[str]
+    evaluation_items: frozenset[str]
 
 
 def _accounting_ids(rows: list[EvidenceAccounting], label: str) -> set[str]:
@@ -51,14 +76,16 @@ def _validate_identities(
 
 
 def _validate_blind_sample(blind_tasks: BlindTaskSet, guidepost_ids: set[str]) -> None:
-    expected_task_count = max(24, 2 * len(guidepost_ids))
+    expected_task_count = max(MIN_BLIND_TASK_COUNT, MIN_BLIND_TASKS_PER_GUIDEPOST * len(guidepost_ids))
     if len(blind_tasks.tasks) != expected_task_count:
         raise ValueError(f"expected {expected_task_count} blind tasks, found {len(blind_tasks.tasks)}")
     guidepost_counts = Counter(guidepost for task in blind_tasks.tasks for guidepost in set(task.guidepost_basis))
     unknown_guideposts = set(guidepost_counts) - guidepost_ids
     if unknown_guideposts:
         raise ValueError(f"blind tasks name unknown guideposts: {sorted(unknown_guideposts)}")
-    underrepresented = sorted(guidepost for guidepost in guidepost_ids if guidepost_counts[guidepost] < 2)
+    underrepresented = sorted(
+        guidepost for guidepost in guidepost_ids if guidepost_counts[guidepost] < MIN_BLIND_TASKS_PER_GUIDEPOST
+    )
     if underrepresented:
         raise ValueError(f"guideposts need at least two blind tasks: {underrepresented}")
 
@@ -157,49 +184,54 @@ def _validate_review_accounting(
 
 
 def validate_subject_run(
-    curriculum: Curriculum,
-    blind_tasks: BlindTaskSet,
-    fit_review: BlindFitReview,
-    holistic_review: HolisticReview,
-    gap_dispositions: list[SystematicGapDisposition],
-    guidepost_ids: set[str],
-    discovery_item_ids: set[str],
-    evaluation_item_ids: set[str],
+    artifacts: SubjectRunArtifacts,
+    evidence_ids: SubjectEvidenceIds,
 ) -> None:
     """Validate references and accounting across one subject's artifacts."""
-    _validate_identities(curriculum, blind_tasks, fit_review, holistic_review)
-    _validate_blind_sample(blind_tasks, guidepost_ids)
-    _validate_fit_references(curriculum, blind_tasks, fit_review, gap_dispositions)
+    _validate_identities(
+        artifacts.curriculum,
+        artifacts.blind_tasks,
+        artifacts.fit_review,
+        artifacts.holistic_review,
+    )
+    _validate_blind_sample(artifacts.blind_tasks, set(evidence_ids.guideposts))
+    _validate_fit_references(
+        artifacts.curriculum,
+        artifacts.blind_tasks,
+        artifacts.fit_review,
+        list(artifacts.gap_dispositions),
+    )
     _validate_review_accounting(
-        curriculum,
-        holistic_review,
-        guidepost_ids,
-        discovery_item_ids,
-        evaluation_item_ids,
+        artifacts.curriculum,
+        artifacts.holistic_review,
+        set(evidence_ids.guideposts),
+        set(evidence_ids.discovery_items),
+        set(evidence_ids.evaluation_items),
     )
 
 
-def validate_subject_promotion(
-    blind_tasks: BlindTaskSet,
-    fit_review: BlindFitReview,
-    holistic_review: HolisticReview,
-    gap_dispositions: list[SystematicGapDisposition],
-) -> None:
+def validate_subject_promotion(artifacts: SubjectRunArtifacts) -> None:
     """Validate score and blind-gap gates before promoting a subject."""
-    if holistic_review.status != HolisticReviewStatus.PILOT_READY:
+    if artifacts.holistic_review.status != HolisticReviewStatus.PILOT_READY:
         raise ValueError("holistic review does not pass the promotion gate")
 
     blocking_gaps = [
-        disposition.gap for disposition in gap_dispositions if disposition.status == GapDispositionStatus.BLOCKING
+        disposition.gap
+        for disposition in artifacts.gap_dispositions
+        if disposition.status == GapDispositionStatus.BLOCKING
     ]
     if blocking_gaps:
         raise ValueError(f"blocking systematic gaps prevent promotion: {blocking_gaps}")
 
-    gap_task_ids = {judgment.task_id for judgment in fit_review.judgments if judgment.status == BlindFitStatus.GAP}
-    uncovered_guideposts = {row.guidepost_id for row in holistic_review.guidepost_accounting if not row.section_ids}
+    gap_task_ids = {
+        judgment.task_id for judgment in artifacts.fit_review.judgments if judgment.status == BlindFitStatus.GAP
+    }
+    uncovered_guideposts = {
+        row.guidepost_id for row in artifacts.holistic_review.guidepost_accounting if not row.section_ids
+    }
     uncovered_guidepost_gaps = [
         task.id
-        for task in blind_tasks.tasks
+        for task in artifacts.blind_tasks.tasks
         if task.id in gap_task_ids and uncovered_guideposts.intersection(task.guidepost_basis)
     ]
     if uncovered_guidepost_gaps:
