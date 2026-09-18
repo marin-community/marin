@@ -1,4 +1,5 @@
 import type { ServingInfo } from './types'
+import type { ToolDefinition } from './python_tools'
 
 /** Resolve a path relative to the page URL. The dashboard is served under the
  * Iris controller proxy at /proxy/<name>/, and the proxy does not rewrite
@@ -16,10 +17,54 @@ export interface HealthResult {
   model: string | null
 }
 
+export function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
 export async function fetchHealth(): Promise<HealthResult> {
   const response = await fetch(api('health'))
   const body = await response.json().catch(() => ({}))
   return { ok: response.ok, model: body.model ?? null }
+}
+
+export async function fetchToolDefinitions(source: string, signal: AbortSignal): Promise<ToolDefinition[]> {
+  return postJsonResult('tools', { source }, signal, 'tool definitions')
+}
+
+export async function invokeTool(
+  name: string,
+  source: string,
+  arguments_: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<unknown> {
+  return postJsonResult(`tools/${encodeURIComponent(name)}`, { source, arguments: arguments_ }, signal, 'tool')
+}
+
+export interface ShellCommandResult {
+  exit_code: number
+  stdout: string
+  stderr: string
+  stop_reason: string | null
+  unsupported: string[]
+  partial_commands: string[]
+}
+
+export async function invokeShell(
+  files: Record<string, string>,
+  history: string[],
+  command: string,
+  signal: AbortSignal,
+): Promise<ShellCommandResult> {
+  return postJsonResult('shell', { files, history, command }, signal, 'shell command')
+}
+
+export interface RepositorySnapshot {
+  files: Record<string, string>
+  skipped_files: number
+}
+
+export async function importRepository(url: string, signal: AbortSignal): Promise<RepositorySnapshot> {
+  return postJsonResult('shell/repository', { url }, signal, 'repository import')
 }
 
 /** POST an OpenAI request and invoke onData for either buffered JSON or SSE events. */
@@ -30,12 +75,7 @@ export async function requestCompletion(
   signal: AbortSignal,
   onData: (data: any) => void,
 ): Promise<void> {
-  const response = await fetch(api(path), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-    signal,
-  })
+  const response = await postJson(path, body, signal)
   if (!response.ok || !response.body) {
     throw new Error(`${response.status} — ${await response.text()}`)
   }
@@ -64,4 +104,24 @@ export async function requestCompletion(
       }
     }
   }
+}
+
+function postJson(path: string, body: Record<string, unknown>, signal: AbortSignal): Promise<Response> {
+  return fetch(api(path), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  })
+}
+
+async function postJsonResult<T>(
+  path: string,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+  label: string,
+): Promise<T> {
+  const response = await postJson(path, body, signal)
+  if (response.ok) return response.json()
+  throw new Error(`${label} returned ${response.status}: ${await response.text()}`)
 }
