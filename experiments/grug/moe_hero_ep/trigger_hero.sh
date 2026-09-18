@@ -11,11 +11,11 @@ fi
 mode=$1
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
-# Fill these together after the single-rack A/B and d768 validation pass.
-# Verify the parent W&B _step at the checkpoint boundary before choosing the fork point.
-RUN_ID=hero-main-stepREPLACE_BEFORE_DEPLOYMENT
-HANDOFF_CHECKPOINT=REPLACE_BEFORE_DEPLOYMENT
-WANDB_FORK_FROM='hero-nopdl-step108k?_step=REPLACE_BEFORE_DEPLOYMENT'
+# Checkpoint 121638 resumes at global_step 121638; parent W&B _step 121637
+# was verified to record global_step 121637 before the replayed window.
+RUN_ID=hero-main-step121638
+HANDOFF_CHECKPOINT=s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/hero-nopdl-step108k/2026.08.19.2/checkpoints/step-121638
+WANDB_FORK_FROM='hero-nopdl-step108k?_step=121637'
 WANDB_PROJECT=marin_moe
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
 # Agent sessions set HERO_GH_CLI=agent-gh so the launch record carries the agent identity.

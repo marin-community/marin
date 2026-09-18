@@ -43,13 +43,14 @@ Bounded diagnostics write metrics only by default. `--save-checkpoints` writes c
 
 ## Hero cutovers and W&B lineage
 
-`trigger_hero.sh` is the launch record. After validation passes, replace its
-`RUN_ID`, `HANDOFF_CHECKPOINT`, and `WANDB_FORK_FROM` placeholders together and
-land them on main. The checkpoint must have `metadata.json` and remain retained
-through the trial and rollback window. Use a new run ID and checkpoint tree.
-While the placeholders are present the launcher refuses to run, so the live
-run's launch record is the last commit that carried its values, `8f6f33bebe`.
-Relaunch `hero-nopdl-step108k` from that commit's launcher
+`trigger_hero.sh` is the launch record. It configures `hero-main-step121638`
+from the retained `hero-nopdl-step108k` checkpoint `step-121638`. For a later
+cutover, update `RUN_ID`, `HANDOFF_CHECKPOINT`, and `WANDB_FORK_FROM` together
+and land them on main. The checkpoint must have `metadata.json` and remain
+retained through the trial and rollback window. Use a new run ID and checkpoint
+tree. Unresolved placeholders block launch.
+
+For rollback, relaunch `hero-nopdl-step108k` from commit `8f6f33bebe`'s launcher
 (`git show 8f6f33bebe:experiments/grug/moe_hero_ep/trigger_hero.sh`) with
 `IRIS_USER=marin`.
 
