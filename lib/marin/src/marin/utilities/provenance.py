@@ -13,7 +13,7 @@ from rigging.filesystem.storage_path import StoragePath
 logger = logging.getLogger(__name__)
 
 
-def write_provenance_json(output_path, metadata: dict[str, Any]) -> None:
+def write_provenance_json(output_path: str, metadata: dict[str, Any]) -> None:
     logger.info("Writing Dataset `.provenance.json` to `%s`", output_path)
     metadata["access_time"] = datetime.now(UTC).isoformat()
 
