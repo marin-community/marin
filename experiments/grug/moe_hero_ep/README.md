@@ -54,8 +54,8 @@ For rollback, relaunch `hero-nopdl-step108k` from commit `8f6f33bebe`'s launcher
 (`git show 8f6f33bebe:experiments/grug/moe_hero_ep/trigger_hero.sh`) with
 `IRIS_USER=marin`.
 
-Both commands need `WANDB_API_KEY` and a GitHub CLI (`gh`; agent sessions set
-`HERO_GH_CLI=agent-gh`). `fork-wandb` clears `WANDB_RESUME` and
+Both commands need `WANDB_API_KEY` and the GitHub CLI (`gh`).
+`fork-wandb` clears `WANDB_RESUME` and
 `WANDB_RESUME_FROM` from its environment because W&B rejects them alongside
 `fork_from`.
 

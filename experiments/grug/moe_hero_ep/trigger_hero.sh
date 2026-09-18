@@ -19,16 +19,14 @@ WANDB_FORK_FROM='hero-nopdl-step108k?_step=121637'
 WANDB_PROJECT=marin_moe
 IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
-# Agent sessions set HERO_GH_CLI=agent-gh so the launch record carries the agent identity.
-hero_gh_cli=${HERO_GH_CLI:-gh}
 
 if [[ "$RUN_ID $HANDOFF_CHECKPOINT $WANDB_FORK_FROM" == *REPLACE_BEFORE_DEPLOYMENT* ]]; then
   echo "Handoff is not finalized: replace the run ID, checkpoint, and W&B fork point." >&2
   exit 1
 fi
 : "${WANDB_API_KEY:?Set WANDB_API_KEY before you start the hero.}"
-if ! command -v "$hero_gh_cli" >/dev/null; then
-  echo "GitHub CLI '$hero_gh_cli' is not installed; the launch record cannot be posted." >&2
+if ! command -v gh >/dev/null; then
+  echo "GitHub CLI 'gh' is not installed; the launch record cannot be posted." >&2
   exit 1
 fi
 tree_status=$(git status --porcelain --untracked-files=all)
@@ -131,18 +129,14 @@ TARGET_DESCRIPTION='11 x NVL72'
 short_uuid=$(uuidgen | tr '[:upper:]' '[:lower:]')
 short_uuid=${short_uuid:0:8}
 launch_job_name="${RUN_ID}-coord-${short_uuid}"
-record_marker=''
-if [[ "$hero_gh_cli" == agent-gh ]]; then
-  record_marker='🤖 '
-fi
 
 echo "Recording hero launch on ${HERO_ISSUE}"
 launch_record_file=$(mktemp)
 trap 'rm -f "$launch_record_file"' EXIT
-printf '%sHero launch requested.\n\n- Run ID: `%s`\n- Commit: `%s`\n- Coordinator job: `%s`\n- Target: `%s` (%s)\n\nW&B fork: `%s`; handoff checkpoint: `%s`.\n' \
-  "$record_marker" "$RUN_ID" "$launch_commit" "$launch_job_name" "$TARGET_CLUSTER" "$TARGET_DESCRIPTION" \
+printf 'Hero launch requested.\n\n- Run ID: `%s`\n- Commit: `%s`\n- Coordinator job: `%s`\n- Target: `%s` (%s)\n\nW&B fork: `%s`; handoff checkpoint: `%s`.\n' \
+  "$RUN_ID" "$launch_commit" "$launch_job_name" "$TARGET_CLUSTER" "$TARGET_DESCRIPTION" \
   "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" > "$launch_record_file"
-"$hero_gh_cli" issue comment "$HERO_ISSUE" --body-file "$launch_record_file"
+gh issue comment "$HERO_ISSUE" --body-file "$launch_record_file"
 echo "Launching hero from commit ${launch_commit}"
 
 IRIS_USER=marin uv run iris --config "$IRIS_CONFIG" job run --no-wait --enable-extra-resources \
