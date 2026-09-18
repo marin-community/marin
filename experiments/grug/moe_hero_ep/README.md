@@ -47,6 +47,11 @@ Bounded diagnostics write metrics only by default. `--save-checkpoints` writes c
 `RUN_ID`, `HANDOFF_CHECKPOINT`, and `WANDB_FORK_FROM` placeholders together and
 land them on main. The checkpoint must have `metadata.json` and remain retained
 through the trial and rollback window. Use a new run ID and checkpoint tree.
+While the placeholders are present the launcher refuses to run, so the live
+run's launch record is the last commit that carried its values, `8f6f33bebe`.
+Relaunch `hero-nopdl-step108k` from that commit's launcher
+(`git show 8f6f33bebe:experiments/grug/moe_hero_ep/trigger_hero.sh`) with
+`IRIS_USER=marin`.
 
 Both commands need `WANDB_API_KEY` and a GitHub CLI (`gh`; agent sessions set
 `HERO_GH_CLI=agent-gh`). `fork-wandb` clears `WANDB_RESUME` and
