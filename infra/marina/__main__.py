@@ -56,6 +56,7 @@ CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
 HOST_APPS = {"echo.oa.dev": "echo", "evaldash.oa.dev": "evaldash"}
 MARINA_HOST = "marina.oa.dev"
 APPLET_HOST = "applets.marina.oa.dev"
+APPLET_HOSTS = {"zephyr.marina.oa.dev": "6c2b0dc9-9a31-4777-82d4-e759c0292aa3"}
 GRANTS_SCRIPT = Path(__file__).parent / "database_grants.py"
 APPS_DIR = Path(__file__).parent / "apps"
 DATABASE_SETUP_SCRIPT = Path(__file__).parent / "src" / "marina" / "database_setup.py"
@@ -254,6 +255,7 @@ def main() -> None:
                 "MARINA_HOST_APPS": ",".join(f"{host}={app}" for host, app in HOST_APPS.items()),
                 "MARINA_CANONICAL_ORIGIN": f"https://{MARINA_HOST}",
                 "MARINA_APPLET_ORIGIN": f"https://{APPLET_HOST}",
+                "MARINA_APPLET_HOSTS": ",".join(f"{host}={applet_id}" for host, applet_id in APPLET_HOSTS.items()),
                 "MARINA_APPLET_OPERATORS": ",".join(applet_operators),
                 "MARINA_AGENT_ORIGIN": "https://loom.oa.dev",
                 **DATABASE_ENV,
@@ -281,7 +283,7 @@ def main() -> None:
     # server-set metadata, so those fields are ignored. Set marin-marina:dns_zone_id to enable.
     dns_zone_id = config.get("dns_zone_id")
     if dns_zone_id:
-        for host in (MARINA_HOST, APPLET_HOST, *HOST_APPS):
+        for host in (MARINA_HOST, APPLET_HOST, *HOST_APPS, *APPLET_HOSTS):
             slug = host.split(".")[0]
             gcp.cloudrun.DomainMapping(
                 f"{slug}-domain",

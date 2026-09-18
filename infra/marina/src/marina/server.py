@@ -43,7 +43,8 @@ from rigging.server_auth import (
     scope_headers,
 )
 from starlette.concurrency import run_in_threadpool
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from marina.applets import (
     MAX_ARCHIVE_BYTES,
@@ -82,6 +83,7 @@ HOST_APPS_ENV = "MARINA_HOST_APPS"
 # space holds the apps and a link from one app to another resolves against this origin.
 CANONICAL_ORIGIN_ENV = "MARINA_CANONICAL_ORIGIN"
 APPLET_ORIGIN_ENV = "MARINA_APPLET_ORIGIN"
+APPLET_HOSTS_ENV = "MARINA_APPLET_HOSTS"
 APPLET_OPERATORS_ENV = "MARINA_APPLET_OPERATORS"
 AGENT_ORIGIN_ENV = "MARINA_AGENT_ORIGIN"
 DATA_PREFIX = "data/"
@@ -118,6 +120,7 @@ class MarinaConfig:
     canonical_origin: str | None = None
     # A separate IAP-gated origin that exposes only /a/* applet routes.
     applet_origin: str | None = None
+    applet_hosts: dict[str, uuid.UUID] = field(default_factory=dict)
     applet_operators: frozenset[str] = frozenset()
     agent_panel: AgentPanelService | None = None
 
@@ -136,9 +139,13 @@ class MarinaConfig:
             data_root=data_root,
             iap_audience=audience,
             database=database_from_env(os.environ),
-            host_apps=parse_host_apps(os.environ.get(HOST_APPS_ENV, "")),
+            host_apps=parse_host_mapping(os.environ.get(HOST_APPS_ENV, ""), HOST_APPS_ENV),
             canonical_origin=(os.environ.get(CANONICAL_ORIGIN_ENV) or "").rstrip("/") or None,
             applet_origin=(os.environ.get(APPLET_ORIGIN_ENV) or "").rstrip("/") or None,
+            applet_hosts={
+                host: uuid.UUID(applet_id)
+                for host, applet_id in parse_host_mapping(os.environ.get(APPLET_HOSTS_ENV, ""), APPLET_HOSTS_ENV).items()
+            },
             applet_operators=frozenset(
                 item.strip() for item in os.environ.get(APPLET_OPERATORS_ENV, "").split(",") if item.strip()
             ),
@@ -150,16 +157,50 @@ class MarinaConfig:
         )
 
 
-def parse_host_apps(spec: str) -> dict[str, str]:
-    """Parse ``host=app,host=app``; blank means no aliases."""
+def parse_host_mapping(spec: str, env_name: str) -> dict[str, str]:
+    """Parse comma-separated host assignments; blank means no assignments."""
     pairs = [item.strip() for item in spec.split(",") if item.strip()]
     result: dict[str, str] = {}
     for pair in pairs:
-        host, sep, app = pair.partition("=")
-        if not sep or not host or not app:
-            raise ValueError(f"{HOST_APPS_ENV} entry {pair!r} is not host=app")
-        result[host.strip().lower()] = app.strip()
+        host, sep, target = pair.partition("=")
+        if not sep or not host or not target:
+            raise ValueError(f"{env_name} entry {pair!r} is not host=target")
+        result[host.strip().lower()] = target.strip()
     return result
+
+
+def named_applet_hosts(app: ASGIApp, hosts: dict[str, uuid.UUID]) -> ASGIApp:
+    """Route each named host to one applet before route authentication runs."""
+
+    async def serve(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            return await app(scope, receive, send)
+        host_header = scope_headers(scope).get("host", "")
+        applet_id = hosts.get(host_header.split(":", 1)[0].lower())
+        if applet_id is None:
+            return await app(scope, receive, send)
+        if scope["path"] == "/a" or scope["path"].startswith("/a/"):
+            return await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
+        prefix = f"/a/{applet_id}"
+        rewritten = {
+            **scope,
+            "path": prefix + scope["path"],
+            "raw_path": prefix.encode() + scope.get("raw_path", scope["path"].encode()),
+        }
+
+        async def send_response(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                location = headers.get("location")
+                if location is not None:
+                    target = urlparse(location)
+                    if target.netloc in ("", host_header) and target.path.startswith(prefix + "/"):
+                        headers["location"] = target._replace(path=target.path.removeprefix(prefix)).geturl()
+            await send(message)
+
+        return await app(rewritten, receive, send_response)
+
+    return serve
 
 
 def validate_agent_panel(service: AgentPanelService | None, iap_audience: str | None) -> None:
@@ -537,8 +578,19 @@ def install_agent_panel_config_route(
         )
 
 
-def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
+def validate_applet_hosts(config: MarinaConfig) -> None:
+    """Reject named applet hosts that overlap other Marina origins."""
+    reserved_hosts = set(config.host_apps)
+    reserved_hosts.update(
+        urlparse(origin).hostname for origin in (config.canonical_origin, config.applet_origin) if origin
+    )
+    if reserved_hosts.intersection(config.applet_hosts):
+        raise ValueError(f"{APPLET_HOSTS_ENV} must not reuse a Marina or legacy app host")
+
+
+def create_app(config: MarinaConfig) -> ASGIApp:
     validate_agent_panel(config.agent_panel, config.iap_audience)
+    validate_applet_hosts(config)
     apps = discover_apps(config.apps_dir)
     shadowed = sorted(app.name for app in apps if app.name in KERNEL_PREFIXES)
     if shadowed:
@@ -851,6 +903,8 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
         async def isolate_applet_host(request: Request, call_next):
             host = request.headers.get("host", "").split(":", 1)[0].lower()
             path = request.url.path
+            if host in config.applet_hosts:
+                return await call_next(request)
             is_applet_path = path == "/a" or path.startswith("/a/")
             if host == applet_host:
                 if not is_applet_path:
@@ -903,4 +957,5 @@ def create_app(config: MarinaConfig) -> RouteAuthMiddleware:
             api.mount(app.path.rstrip("/") + API_PREFIX, AuthenticatedMount(registered_apis[app.name].app, policy))
         install_app_routes(api, app, config.data_root, config.agent_panel)
 
-    return RouteAuthMiddleware(api, policy)
+    authenticated = RouteAuthMiddleware(api, policy)
+    return named_applet_hosts(authenticated, config.applet_hosts) if config.applet_hosts else authenticated
