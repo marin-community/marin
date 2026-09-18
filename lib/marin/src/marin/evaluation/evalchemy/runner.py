@@ -92,6 +92,7 @@ class EvalchemyRuntimeConfig:
     cpu: float = 8.0
     memory: str = "32g"
     disk: str = "50g"
+    workdir_files: dict[str, bytes] = field(default_factory=dict, repr=False)
 
 
 @dataclass(frozen=True)
@@ -227,7 +228,7 @@ def _run_evalchemy_child(
     uvx_command = shlex.join(_evalchemy_client_command(config.runtime))
     command = f'exec {uvx_command} "$IRIS_WORKDIR/{_EVAL_CLIENT_SCRIPT}"'
     eval_job = client.submit(
-        entrypoint=Entrypoint.from_command("bash", "-c", command),
+        entrypoint=Entrypoint(command=["bash", "-c", command], workdir_files=config.runtime.workdir_files),
         name=f"eval-{config.name.replace('.', '-')}-{child_id}",
         resources=ResourceSpec(
             cpu=config.runtime.cpu,
@@ -239,7 +240,7 @@ def _run_evalchemy_child(
                 env_vars,
                 JAX_PLATFORMS="cpu",
                 HF_ALLOW_CODE_EVAL="1",
-                OPENAI_API_KEY="local-endpoint",
+                OPENAI_API_KEY=model.endpoint.api_key or "local-endpoint",
                 TQDM_MININTERVAL="30",
                 **{CONFIG_ENV_KEY: _run_config_json(model, config, output_dir)},
             )

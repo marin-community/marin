@@ -12,9 +12,11 @@ serving, the eval itself) is exercised by the cluster smoke.
 
 import json
 import os
+from io import BytesIO
+from urllib.error import HTTPError
 
 import pytest
-from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
+from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results, served_max_length
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     _run_config_json,
@@ -30,6 +32,23 @@ _MODEL = RunningModel(
     ),
     tokenizer="Qwen/Qwen3-0.6B",
 )
+
+
+@pytest.mark.parametrize("api_key", [None, "eval-test-token"])
+def test_model_metadata_uses_configured_endpoint_auth(monkeypatch, api_key):
+    if api_key is None:
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("OPENAI_API_KEY", api_key)
+    expected_auth = None if api_key is None else f"Bearer {api_key}"
+
+    def models_endpoint(request, timeout):
+        if request.get_header("Authorization") != expected_auth:
+            raise HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+        return BytesIO(b'{"data": [{"id": "test-model", "max_model_len": 32768}]}')
+
+    monkeypatch.setattr("urllib.request.urlopen", models_endpoint)
+    assert served_max_length("https://example.com/v1") == 32768
 
 
 def _config(**overrides) -> EvalchemyRunConfig:

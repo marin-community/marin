@@ -56,8 +56,11 @@ def served_max_length(base_url: str) -> int | None:
     left-truncating longer prompts -- which silently drops few-shot examples on tasks like 25-shot
     arc_challenge. Returns None when the server does not report a length (the lm-eval default stands).
     """
+    request = urllib.request.Request(f"{base_url.rstrip('/')}/models")
+    if api_key := os.environ.get("OPENAI_API_KEY"):
+        request.add_header("Authorization", f"Bearer {api_key}")
     try:
-        with urllib.request.urlopen(f"{base_url.rstrip('/')}/models", timeout=30) as resp:
+        with urllib.request.urlopen(request, timeout=30) as resp:
             payload = json.load(resp)
     except Exception as exc:
         print(f"could not read {base_url}/models for max_model_len: {exc}", flush=True)

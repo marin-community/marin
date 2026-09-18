@@ -88,6 +88,40 @@ the Evalchemy process starts. The record keeps the normalized launch-time task r
 counts, generation arguments, concurrency, context limit, and instance limit under `eval.tasks` and
 `eval.evalchemy`. Its provenance stores the exact Evalchemy requirement and optional runtime extras.
 
+### MMLU biology
+
+`experiments/evaluation/configs/evalchemy/mmlu-biology.yaml` selects college biology,
+high-school biology, and medical genetics: 554 questions using the five-shot MMLU protocol.
+It records seed 42, batch size 1, and the 73,664-token context allowance from Marin's
+evaluation policy. Use this file with `--evalchemy-config` for registered models.
+
+For an existing GLM-5.3 endpoint, run the following inside an Iris CPU job whose network
+can reach the endpoint. Supply the URL, credentials, storage prefix, and source revision
+through your execution environment:
+
+```bash
+python -m experiments.evaluation.glm53_mmlu_biology \
+  --base-url "$OPENAI_BASE_URL" \
+  --run-id "$EVAL_RUN_ID" \
+  --records-prefix "$EVAL_RECORDS_PREFIX" \
+  --git-sha "$EVAL_SOURCE_REVISION"
+```
+
+Set `OPENAI_API_KEY` in that job's environment. The driver reuses the existing model
+endpoint and submits a CPU evaluator child. It pins the public tokenizer revision,
+exports tokenizer assets compatible with the pinned evaluator, and checks tokenization
+parity before evaluation. It writes native results, an item-level score audit, and a
+canonical Eval Dash record. Keep runtime logs and artifacts within the intended access
+boundary; the evaluator's logs can contain its runtime endpoint URL.
+
+The audit retains the evaluator's normal finite-score tie handling. It reports likelihood
+floor values and rejects questions whose four choices are all at the floor. The driver
+expects the complete 554-question selection. The served weights revision and hardware are
+recorded as unreported because the driver cannot establish them from its connection.
+
+Eval Dash averages these three subject accuracies equally. Report `total correct / 554`
+separately when a question-weighted accuracy is useful.
+
 ### Command recipes
 
 Run a capped Evalchemy smoke on the smallest registered Qwen model:

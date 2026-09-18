@@ -1,0 +1,9 @@
+tasks:
+  - mmlu_college_biology
+  - mmlu_high_school_biology
+  - mmlu_medical_genetics
+num_fewshot: 5
+max_tokens: 256
+seed: 42
+batch_size: 1
+max_length: 73664
