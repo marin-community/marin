@@ -232,8 +232,8 @@ function calls use `<tool_call>` JSON blocks, and named tool replies use
 `<tool_response>` blocks. The template also accepts `reasoning_content` from
 inference clients and serializes structured tool definitions as JSON. API tool
 reply IDs are resolved to function names; the rendered text omits the IDs. Reasoning
-from earlier turns is retained, including records ending in analysis or unanswered
-tool calls. Supported per-record `chat_template_kwargs` are `tools` (a list of
+from earlier turns is retained, and records may end with unanswered tool calls.
+Supported per-record `chat_template_kwargs` are `tools` (a list of
 recorded function definitions), `enable_thinking` (a boolean), and
 `custom_instructions` (a string). `enable_thinking` adds a `/think` or `/nothink`
 system instruction; omitting it adds neither. It does not remove reasoning.
