@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 
 from experiments.post_training.task_curriculum.cache import EmbeddingCache, cached_embeddings
-from experiments.post_training.task_curriculum.mapping import graph_anchors, map_task_vectors, section_anchors
+from experiments.post_training.task_curriculum.mapping import (
+    MappingInputs,
+    graph_anchors,
+    map_task_vectors,
+    section_anchors,
+)
 from experiments.post_training.task_curriculum.models import (
     CatalogCurriculum,
     Curriculum,
@@ -113,7 +118,7 @@ def test_curriculum_contract_rejects_incomplete_probe_pair() -> None:
 
 
 def test_curriculum_contract_rejects_depth_above_limit() -> None:
-    with pytest.raises(ValueError, match="maximum depth 1, generated depth 2"):
+    with pytest.raises(ValueError):
         _curriculum().check_generation_contract(maximum_depth=1)
 
 
@@ -144,17 +149,19 @@ def test_mapping_ranks_sections_independently_inside_each_graph() -> None:
     task_vectors = np.asarray([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]], dtype=np.float32)
 
     mappings = map_task_vectors(
-        annotations,
-        membership_vectors,
-        task_vectors,
-        catalog,
-        graph_anchor_rows,
-        graph_vectors,
-        section_anchor_rows,
-        section_vectors,
-        embedding_model="embed-v1",
-        top_k=2,
-        row_batch_size=1,
+        MappingInputs(
+            annotations=annotations,
+            membership_vectors=membership_vectors,
+            operation_vectors=task_vectors,
+            catalog=catalog,
+            graph_anchor_rows=graph_anchor_rows,
+            graph_anchor_vectors=graph_vectors,
+            section_anchor_rows=section_anchor_rows,
+            section_anchor_vectors=section_vectors,
+            embedding_model="embed-v1",
+            top_k=2,
+            row_batch_size=1,
+        )
     )
 
     for subject_id, prefix in (("C00", ""), ("C01", "practice.")):

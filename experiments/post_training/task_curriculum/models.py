@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from enum import StrEnum
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -16,8 +15,16 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ProbeKind(StrEnum):
+    ENTRY = "entry"
+    REPRESENTATIVE = "representative"
+
+
+EXPECTED_PROBE_KINDS = (ProbeKind.ENTRY, ProbeKind.REPRESENTATIVE)
+
+
 class SampleTask(StrictModel):
-    kind: Literal["entry", "representative"]
+    kind: ProbeKind
     instruction: str = Field(min_length=1)
 
 
@@ -101,7 +108,7 @@ class Curriculum(StrictModel):
         wrong_probes = [
             section.id
             for section in self.sections
-            if [task.kind for task in section.sample_tasks] != ["entry", "representative"]
+            if tuple(task.kind for task in section.sample_tasks) != EXPECTED_PROBE_KINDS
         ]
         if wrong_probes:
             raise ValueError(f"sections must have one entry and one representative probe in order: {wrong_probes}")

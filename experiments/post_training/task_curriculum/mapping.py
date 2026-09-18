@@ -36,6 +36,21 @@ class SectionAnchor:
     text: str
 
 
+@dataclass(frozen=True)
+class MappingInputs:
+    annotations: Sequence[TaskAnnotation]
+    membership_vectors: Mapping[RoutingFacet, np.ndarray]
+    operation_vectors: np.ndarray
+    catalog: CurriculumCatalog
+    graph_anchor_rows: Sequence[GraphAnchor]
+    graph_anchor_vectors: np.ndarray
+    section_anchor_rows: Sequence[SectionAnchor]
+    section_anchor_vectors: np.ndarray
+    embedding_model: str
+    top_k: int
+    row_batch_size: int
+
+
 def graph_anchors(
     catalog: CurriculumCatalog,
     assignment_anchors: Sequence[AssignmentAnchor] = (),
@@ -123,34 +138,24 @@ def _maximum_scores(
     return groups, scores
 
 
-def _validate_mapping_inputs(
-    annotations: Sequence[TaskAnnotation],
-    membership_vectors: Mapping[RoutingFacet, np.ndarray],
-    operation_vectors: np.ndarray,
-    graph_anchor_rows: Sequence[GraphAnchor],
-    graph_anchor_vectors: np.ndarray,
-    section_anchor_rows: Sequence[SectionAnchor],
-    section_anchor_vectors: np.ndarray,
-    top_k: int,
-    row_batch_size: int,
-) -> None:
-    task_count = len(annotations)
-    if len(operation_vectors) != task_count:
+def _validate_mapping_inputs(inputs: MappingInputs) -> None:
+    task_count = len(inputs.annotations)
+    if len(inputs.operation_vectors) != task_count:
         raise ValueError("task annotation and operation-vector counts differ")
-    if any(len(vectors) != task_count for vectors in membership_vectors.values()):
+    if any(len(vectors) != task_count for vectors in inputs.membership_vectors.values()):
         raise ValueError("task annotation and membership-vector counts differ")
-    if set(membership_vectors) != set(RoutingFacet):
+    if set(inputs.membership_vectors) != set(RoutingFacet):
         raise ValueError("membership vectors must cover every routing facet")
-    task_ids = [annotation.task_id for annotation in annotations]
+    task_ids = [annotation.task_id for annotation in inputs.annotations]
     if len(task_ids) != len(set(task_ids)):
         raise ValueError("task annotation IDs must be unique")
-    if top_k < 1:
+    if inputs.top_k < 1:
         raise ValueError("top_k must be positive")
-    if row_batch_size < 1:
+    if inputs.row_batch_size < 1:
         raise ValueError("row_batch_size must be positive")
-    if len(graph_anchor_rows) != len(graph_anchor_vectors):
+    if len(inputs.graph_anchor_rows) != len(inputs.graph_anchor_vectors):
         raise ValueError("graph anchor metadata and vector counts differ")
-    if len(section_anchor_rows) != len(section_anchor_vectors):
+    if len(inputs.section_anchor_rows) != len(inputs.section_anchor_vectors):
         raise ValueError("section anchor metadata and vector counts differ")
 
 
@@ -200,56 +205,38 @@ def _rank_graph_sections(
     )
 
 
-def map_task_vectors(
-    annotations: Sequence[TaskAnnotation],
-    membership_vectors: Mapping[RoutingFacet, np.ndarray],
-    operation_vectors: np.ndarray,
-    catalog: CurriculumCatalog,
-    graph_anchor_rows: Sequence[GraphAnchor],
-    graph_anchor_vectors: np.ndarray,
-    section_anchor_rows: Sequence[SectionAnchor],
-    section_anchor_vectors: np.ndarray,
-    embedding_model: str,
-    top_k: int,
-    row_batch_size: int,
-) -> list[TaskMapping]:
+def map_task_vectors(inputs: MappingInputs) -> list[TaskMapping]:
     """Rank graph membership and sections independently for each curriculum."""
-    _validate_mapping_inputs(
-        annotations,
-        membership_vectors,
-        operation_vectors,
-        graph_anchor_rows,
-        graph_anchor_vectors,
-        section_anchor_rows,
-        section_anchor_vectors,
-        top_k,
-        row_batch_size,
+    _validate_mapping_inputs(inputs)
+    task_count = len(inputs.annotations)
+    graph_scores = _graph_membership_scores(
+        inputs.membership_vectors,
+        inputs.graph_anchor_rows,
+        inputs.graph_anchor_vectors,
     )
-    task_count = len(annotations)
-    graph_scores = _graph_membership_scores(membership_vectors, graph_anchor_rows, graph_anchor_vectors)
-    task_operations = normalized(operation_vectors)
-    section_values = normalized(section_anchor_vectors)
-    anchor_section_ids = np.asarray([anchor.section_id for anchor in section_anchor_rows])
-    unique_section_ids = list(dict.fromkeys(anchor.section_id for anchor in section_anchor_rows))
-    subject_by_section = {anchor.section_id: anchor.subject_id for anchor in section_anchor_rows}
+    task_operations = normalized(inputs.operation_vectors)
+    section_values = normalized(inputs.section_anchor_vectors)
+    anchor_section_ids = np.asarray([anchor.section_id for anchor in inputs.section_anchor_rows])
+    unique_section_ids = list(dict.fromkeys(anchor.section_id for anchor in inputs.section_anchor_rows))
+    subject_by_section = {anchor.section_id: anchor.subject_id for anchor in inputs.section_anchor_rows}
     section_positions = {
         entry.curriculum.subject_id: [
             index
             for index, section_id in enumerate(unique_section_ids)
             if subject_by_section[section_id] == entry.curriculum.subject_id
         ]
-        for entry in catalog.curricula
+        for entry in inputs.catalog.curricula
     }
 
     mappings: list[TaskMapping] = []
-    for start in range(0, task_count, row_batch_size):
-        stop = min(start + row_batch_size, task_count)
+    for start in range(0, task_count, inputs.row_batch_size):
+        stop = min(start + inputs.row_batch_size, task_count)
         anchor_scores = task_operations[start:stop] @ section_values.T
         section_scores = np.stack(
             [anchor_scores[:, anchor_section_ids == section_id].max(axis=1) for section_id in unique_section_ids],
             axis=1,
         )
-        for row, annotation in enumerate(annotations[start:stop]):
+        for row, annotation in enumerate(inputs.annotations[start:stop]):
             graph_mappings = [
                 _rank_graph_sections(
                     entry.curriculum.subject_id,
@@ -259,9 +246,9 @@ def map_task_vectors(
                     section_scores[row],
                     section_positions,
                     unique_section_ids,
-                    top_k,
+                    inputs.top_k,
                 )
-                for entry in catalog.curricula
+                for entry in inputs.catalog.curricula
             ]
             graph_mappings.sort(key=lambda graph: graph.membership_similarity, reverse=True)
             mappings.append(
@@ -270,8 +257,8 @@ def map_task_vectors(
                     task_hash=annotation.task_hash,
                     annotation_model=annotation.model,
                     annotation_prompt_version=annotation.prompt_version,
-                    catalog_version=catalog.catalog_version,
-                    embedding_model=embedding_model,
+                    catalog_version=inputs.catalog.catalog_version,
+                    embedding_model=inputs.embedding_model,
                     graphs=graph_mappings,
                 )
             )

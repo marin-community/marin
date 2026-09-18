@@ -15,7 +15,12 @@ from pydantic import BaseModel
 
 from experiments.post_training.task_curriculum.cache import EmbeddingCache, cached_embeddings
 from experiments.post_training.task_curriculum.catalog import load_catalog
-from experiments.post_training.task_curriculum.mapping import graph_anchors, map_task_vectors, section_anchors
+from experiments.post_training.task_curriculum.mapping import (
+    MappingInputs,
+    graph_anchors,
+    map_task_vectors,
+    section_anchors,
+)
 from experiments.post_training.task_curriculum.models import AssignmentAnchor, RoutingFacet, TaskAnnotation
 
 
@@ -97,17 +102,19 @@ def main(
             embed,
         )
     mappings = map_task_vectors(
-        task_rows,
-        membership_vectors,
-        operation_vectors,
-        catalog_row,
-        graph_anchor_rows,
-        graph_vectors,
-        section_anchor_rows,
-        section_vectors,
-        embedding_model,
-        top_k,
-        mapping_batch_size,
+        MappingInputs(
+            annotations=task_rows,
+            membership_vectors=membership_vectors,
+            operation_vectors=operation_vectors,
+            catalog=catalog_row,
+            graph_anchor_rows=graph_anchor_rows,
+            graph_anchor_vectors=graph_vectors,
+            section_anchor_rows=section_anchor_rows,
+            section_anchor_vectors=section_vectors,
+            embedding_model=embedding_model,
+            top_k=top_k,
+            row_batch_size=mapping_batch_size,
+        )
     )
     _write_jsonl(output, mappings)
 
