@@ -59,6 +59,7 @@ EXCLUDE_PATTERNS = [
     "**/*.index",
     "**/*.ico",
     "**/*.npy",
+    "**/*.npz",
     "**/*.lock",
     "**/*.png",
     "**/*.jpg",
