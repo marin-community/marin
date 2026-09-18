@@ -259,7 +259,7 @@ def swe_zero_12m_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/swe-zero-12m-trajectories",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.10.preserve-system-instructions"},
+        hash_attrs={"chat_document_version": "2026.09.18.1", "version": "2026.09.10.preserve-system-instructions"},
     )
     return processed, normalize_chat_step(
         output_schema=CHAT_SCHEMA, name="normalized-chat/swe-zero-12m", download=processed

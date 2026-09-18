@@ -118,7 +118,7 @@ def superior_reasoning_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/superior-reasoning-sft",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.05.2.harmony-arrow"},
+        hash_attrs={"chat_document_version": "2026.09.18.1", "version": "2026.09.05.2.harmony-arrow"},
     )
     return processed, normalize_chat_step(
         output_schema=CHAT_SCHEMA, name="normalized-chat/superior-reasoning", download=processed

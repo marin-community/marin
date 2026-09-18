@@ -132,7 +132,7 @@ def open_swe_traces_chat_normalize_steps(source_name: str) -> tuple[StepSpec, ..
         name=f"processed-chat/{source_name}",
         deps=[raw],
         fn=lambda output_path: transform_chat(raw.output_path, output_path),
-        hash_attrs={"version": TRANSFORM_VERSION},
+        hash_attrs={"chat_document_version": "2026.09.18.1", "version": TRANSFORM_VERSION},
     )
     return processed, normalize_chat_step(
         name=f"normalized-chat/{source_name}", download=processed, output_schema=SOURCE_CHAT_SCHEMA

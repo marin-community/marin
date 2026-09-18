@@ -331,6 +331,7 @@ def nemotron_sft_chat_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
                 prefix_join(download.output_path, source_dir), output_path, source_subset
             ),
             hash_attrs={
+                "chat_document_version": "2026.09.18.1",
                 "version": "2026.09.09.adjacent-speakers" if subset == "sft_general" else "2026.09.05.2.harmony-arrow",
                 "subset": subset,
             },

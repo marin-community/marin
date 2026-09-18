@@ -146,7 +146,7 @@ def gpt_oss_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/gpt-oss-20b-rollouts",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.11.review-fixes"},
+        hash_attrs={"chat_document_version": "2026.09.18.1", "version": "2026.09.11.review-fixes"},
     )
     return processed, normalize_chat_step(
         output_schema=CHAT_SCHEMA, name="normalized-chat/gpt-oss-rollouts", download=processed

@@ -428,7 +428,12 @@ def _processed_chat_step(download: StepSpec, *, family: str, partition_name: str
         fn=lambda output_path: _transform_chat(
             download.output_path, output_path, family=family, partition_name=partition_name
         ),
-        hash_attrs={"family": family, "partition": partition_name, "version": TRANSFORM_VERSION},
+        hash_attrs={
+            "chat_document_version": "2026.09.18.1",
+            "family": family,
+            "partition": partition_name,
+            "version": TRANSFORM_VERSION,
+        },
     )
 
 

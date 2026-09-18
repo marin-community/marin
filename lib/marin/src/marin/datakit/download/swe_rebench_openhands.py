@@ -173,7 +173,7 @@ def swe_rebench_openhands_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/swe-rebench-openhands-trajectories",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.09.quarantine"},
+        hash_attrs={"chat_document_version": "2026.09.18.1", "version": "2026.09.09.quarantine"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/swe-rebench-openhands", download=processed

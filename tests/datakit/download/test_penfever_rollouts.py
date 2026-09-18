@@ -81,8 +81,9 @@ def test_terminal_protocol_keeps_json_responses_and_observations(cohort):
         "commands": [],
         "task_complete": True,
     }
-    assert "chat_template_kwargs" not in document
+    assert json.loads(document["chat_template_kwargs"])["enable_thinking"] is False
     rendered = render_chat_record(_normalize_chat_record(document, "messages", "id"))["text"]
+    assert "Reasoning: /nothink" in rendered
     assert "Respond with JSON containing analysis, plan, commands, and task_complete." in rendered
     assert '"task_complete": true' in rendered
     assert "<tool_call>" not in rendered

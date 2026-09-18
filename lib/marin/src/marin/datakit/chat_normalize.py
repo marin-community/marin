@@ -31,8 +31,9 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.18"
+CHAT_NORMALIZE_VERSION = "2026.09.18.1"
 MAX_REJECTED_RECORD_FRACTION = 0.05
+THINK_TOKENS = ("<|start_think|>", "<|end_think|>")
 
 
 _SAFE_TOOL_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]+")
@@ -255,6 +256,21 @@ def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field
     if not isinstance(raw_kwargs, dict):
         raise ValueError("chat_template_kwargs must be a JSON object")
     kwargs = dict(raw_kwargs)
+    enable_thinking = kwargs.get("enable_thinking")
+    if not isinstance(enable_thinking, bool):
+        raise ValueError("chat_template_kwargs must explicitly set boolean enable_thinking")
+    has_analysis = any(
+        message.author.role == Role.ASSISTANT and message.channel == ChatChannel.ANALYSIS for message in messages
+    )
+    if enable_thinking != has_analysis:
+        raise ValueError("enable_thinking must match assistant analysis in the conversation")
+    if any(
+        token in message_text(message)
+        for message in messages
+        if message.author.role == Role.ASSISTANT
+        for token in THINK_TOKENS
+    ):
+        raise ValueError("Assistant content must not contain literal think tokens")
     tools = kwargs.get("tools", [])
     if not isinstance(tools, list):
         raise ValueError("tools must be a list of function definitions")

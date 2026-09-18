@@ -861,7 +861,7 @@ def massive_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/massive_function_calling",
         deps=[staged],
         fn=lambda output_path: transform_staged_massive_chat(staged.output_path, output_path),
-        hash_attrs={"version": "2026.09.11.review-fixes"},
+        hash_attrs={"chat_document_version": "2026.09.18.1", "version": "2026.09.11.review-fixes"},
     )
     return (
         staged,

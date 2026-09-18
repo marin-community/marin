@@ -126,6 +126,7 @@ def glm53_format_following_chat_normalize_steps() -> tuple[StepSpec, ...]:
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
         hash_attrs={
+            "chat_document_version": "2026.09.18.1",
             "version": "2026.09.13",
             "source_revision": SOURCE_REVISION,
             "split": "train",

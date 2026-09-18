@@ -249,11 +249,18 @@ def chat_document(messages: list[Message], source: str, **metadata: object) -> d
     """Serialize canonical Harmony messages into a source artifact."""
     serialized = [message.to_dict() for message in messages]
     encoded = json.dumps(serialized, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    chat_template_kwargs = metadata.get("chat_template_kwargs")
-    if isinstance(chat_template_kwargs, dict):
-        metadata["chat_template_kwargs"] = json.dumps(
-            chat_template_kwargs, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        )
+    chat_template_kwargs = metadata.get("chat_template_kwargs") or {}
+    if isinstance(chat_template_kwargs, str):
+        chat_template_kwargs = json.loads(chat_template_kwargs)
+    if not isinstance(chat_template_kwargs, dict):
+        raise ValueError("chat_template_kwargs must be a JSON object")
+    chat_template_kwargs = dict(chat_template_kwargs)
+    chat_template_kwargs["enable_thinking"] = any(
+        message.author.role == Role.ASSISTANT and message.channel == ChatChannel.ANALYSIS for message in messages
+    )
+    metadata["chat_template_kwargs"] = json.dumps(
+        chat_template_kwargs, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     return {"id": hashlib.sha256(encoded).hexdigest(), "messages": serialized, "source": source, **metadata}
 
 

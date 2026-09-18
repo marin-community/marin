@@ -1250,6 +1250,7 @@ def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
         deps=[download],
         fn=lambda output_path: transform_chat(dataset, download.output_path, output_path),
         hash_attrs={
+            "chat_document_version": "2026.09.18.1",
             "version": (
                 {
                     "qwen35-122b-131k-opencode": "2026.09.09.continuations",
