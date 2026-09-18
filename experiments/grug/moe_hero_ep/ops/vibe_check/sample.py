@@ -103,10 +103,6 @@ def restore_model_state(request: SampleRequest, mesh: jax.sharding.Mesh) -> Rest
     )
 
 
-def restore_model(request: SampleRequest, mesh: jax.sharding.Mesh) -> Transformer:
-    return restore_model_state(request, mesh).model
-
-
 @eqx.filter_jit
 def next_logits(model: Transformer, tokens: jax.Array, positions: jax.Array) -> jax.Array:
     hidden, _ = model(tokens)
@@ -199,7 +195,7 @@ def sample(request: SampleRequest, store_root: str) -> None:
     with jax.set_mesh(mesh):
         logger.info("Load checkpoint step %d from %s", request.checkpoint.step, request.checkpoint.uri)
         with log_time("Checkpoint restore"):
-            model = restore_model(request, mesh)
+            model = restore_model_state(request, mesh).model
         logger.info("Convert weights to the compute dtype: %s", COMPUTE_POLICY.compute_dtype)
         with log_time("Weight conversion"):
             model = COMPUTE_POLICY.cast_to_compute(model)

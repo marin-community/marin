@@ -165,7 +165,7 @@ class NativeDiagnostic(NamedTuple):
         return self._asdict()
 
 
-def golden_spec(mode: str) -> GoldenSpec:
+def _validated_model_configs() -> tuple[dict, dict]:
     training_model = draccus.encode(hero_recipe.HERO_MODEL_CONFIG)
     training_model_digest = digest(training_model)
     if training_model_digest != CHECKPOINT_WRITER_MODEL_DIGEST:
@@ -187,7 +187,10 @@ def golden_spec(mode: str) -> GoldenSpec:
     }
     if changes != {"moe_implementation": (hero_recipe.RAGGED_MOE_IMPLEMENTATION, DEFAULT_DROPLESS_MOE_IMPLEMENTATION)}:
         raise ValueError(f"Unexpected inference model overrides: {changes}")
+    return training_model, inference_model
 
+
+def _mode_cases(mode: str) -> tuple[str, tuple[tuple[str, str, int], ...]]:
     if mode == "smoke":
         base_cases = (("short-fixed-continuation", "add-two-numbers", 64),)
         release = SMOKE_RELEASE
@@ -211,21 +214,29 @@ def golden_spec(mode: str) -> GoldenSpec:
         release = DIAGNOSTIC_16K_RELEASE
     else:
         raise ValueError(f"Unknown golden mode: {mode}")
+    return release, base_cases
 
-    batch_size = sampling_spec().batch_size
+
+def _expand_cases(base_cases: tuple[tuple[str, str, int], ...], batch_size: int) -> tuple[GoldenCaseSpec, ...]:
     if batch_size % len(base_cases) != 0:
         raise ValueError("The full-Hero batch size must be a multiple of the logical case count")
     repeats = batch_size // len(base_cases)
-    cases = tuple(
+    return tuple(
         GoldenCaseSpec(id=f"{case_id}-repeat-{repeat}", source_prompt_id=source, valid_length=length)
         for repeat in range(repeats)
         for case_id, source, length in base_cases
     )
+
+
+def golden_spec(mode: str) -> GoldenSpec:
+    training_model, inference_model = _validated_model_configs()
+    release, base_cases = _mode_cases(mode)
+    batch_size = sampling_spec().batch_size
     return GoldenSpec(
         release=release,
         mode=mode,
         batch_size=batch_size,
-        cases=cases,
+        cases=_expand_cases(base_cases, batch_size),
         tokenizer=TOKENIZER,
         tokenizer_revision=TOKENIZER_REVISION,
         training_model=training_model,

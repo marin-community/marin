@@ -27,7 +27,7 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.sample import (
     COMPUTE_POLICY,
     expected_logprobs,
     next_logits,
-    restore_model,
+    restore_model_state,
 )
 
 
@@ -94,7 +94,7 @@ def test_native_restore_preserves_weights_and_applies_pending_router_bias(
             source_revision="a" * 40,
             target_cluster="test",
         )
-        restored = restore_model(request, mesh)
+        restored = restore_model_state(request, mesh).model
         expected = eqx.tree_at(
             lambda tree: tree.stacked_blocks.stacked.mlp.router_bias,
             model,

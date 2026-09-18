@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -13,6 +12,8 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
+
+from marin.profiling.trace_summary import sha256_for_path
 
 FORMAT_NAME = "marin-hero-forward-goldens"
 FORMAT_VERSION = 1
@@ -94,8 +95,7 @@ class GoldenBundle:
     arrays: Mapping[str, np.ndarray]
 
     @classmethod
-    def load(cls, root: str | Path) -> GoldenBundle:
-        root = Path(root)
+    def load(cls, root: Path) -> GoldenBundle:
         manifest = json.loads((root / MANIFEST_FILENAME).read_text())
         _validate_manifest(manifest)
         arrays_path = root / ARRAYS_FILENAME
@@ -103,7 +103,7 @@ class GoldenBundle:
         actual_size = arrays_path.stat().st_size
         if actual_size != expected["bytes"]:
             raise ValueError(f"{ARRAYS_FILENAME} size is {actual_size}, expected {expected['bytes']}")
-        actual_digest = _sha256(arrays_path)
+        actual_digest = sha256_for_path(arrays_path)
         if actual_digest != expected["sha256"]:
             raise ValueError(f"{ARRAYS_FILENAME} checksum is {actual_digest}, expected {expected['sha256']}")
         with np.load(arrays_path, allow_pickle=False) as saved:
@@ -112,9 +112,8 @@ class GoldenBundle:
         return cls(root=root, manifest=manifest, arrays=arrays)
 
 
-def write_bundle(root: str | Path, manifest: Mapping[str, object], arrays: Mapping[str, np.ndarray]) -> None:
+def write_bundle(root: Path, manifest: Mapping[str, object], arrays: Mapping[str, np.ndarray]) -> None:
     """Write a new local bundle. The caller must publish it to a never-overwritten path."""
-    root = Path(root)
     root.mkdir(parents=True, exist_ok=False)
     normalized = {name: np.asarray(value) for name, value in arrays.items()}
     for name, value in normalized.items():
@@ -130,7 +129,7 @@ def write_bundle(root: str | Path, manifest: Mapping[str, object], arrays: Mappi
             "files": {
                 ARRAYS_FILENAME: {
                     "bytes": arrays_path.stat().st_size,
-                    "sha256": _sha256(arrays_path),
+                    "sha256": sha256_for_path(arrays_path),
                 }
             },
         }
@@ -140,7 +139,7 @@ def write_bundle(root: str | Path, manifest: Mapping[str, object], arrays: Mappi
     (root / MANIFEST_FILENAME).write_text(json.dumps(complete_manifest, indent=2, sort_keys=True) + "\n")
 
 
-def load_observations(path: str | Path) -> dict[str, np.ndarray]:
+def load_observations(path: Path) -> dict[str, np.ndarray]:
     """Load backend observations from one pickle-free NumPy archive."""
     with np.load(path, allow_pickle=False) as saved:
         return {name: saved[name] for name in saved.files}
@@ -370,11 +369,3 @@ def _validate_arrays(manifest: Mapping[str, object], arrays: Mapping[str, np.nda
     for name in ("target_logprobs", "top_logprobs", "full_logits", "route_combine_weights", "route_cutoff_gaps"):
         if not np.isfinite(arrays[name]).all():
             raise ValueError(f"{name} contains a non-finite value")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()

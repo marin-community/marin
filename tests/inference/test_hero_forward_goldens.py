@@ -13,12 +13,13 @@ from marin.testing.inference.hero_forward_goldens import (
 )
 
 FIXTURE = Path(__file__).parents[2] / "lib/marin/src/marin/testing/inference/resources/hero_forward_fixture_v1"
+COMPARISON_TOLERANCE = 0.01
 TOLERANCES = ComparisonTolerances(
-    target_logprob=0.01,
-    top_logprob=0.01,
-    full_logit=0.01,
-    route_combine_weight=0.01,
-    route_cutoff_gap=0.01,
+    target_logprob=COMPARISON_TOLERANCE,
+    top_logprob=COMPARISON_TOLERANCE,
+    full_logit=COMPARISON_TOLERANCE,
+    route_combine_weight=COMPARISON_TOLERANCE,
+    route_cutoff_gap=COMPARISON_TOLERANCE,
 )
 
 
@@ -26,10 +27,16 @@ def _observations(bundle: GoldenBundle) -> dict[str, np.ndarray]:
     return {name: bundle.arrays[name].copy() for name in REQUIRED_OBSERVATIONS}
 
 
-def test_hero_forward_fixture_loads_and_exact_observations_match() -> None:
+def test_hero_forward_comparator_accepts_numeric_changes_within_bounds() -> None:
     bundle = GoldenBundle.load(FIXTURE)
+    observations = _observations(bundle)
+    observations["target_logprobs"][0] += COMPARISON_TOLERANCE / 2
+    observations["top_logprobs"][0, 0] -= COMPARISON_TOLERANCE / 2
+    observations["full_logits"][0, 0] += COMPARISON_TOLERANCE / 2
+    observations["route_combine_weights"][0, 0, 0, 0] += COMPARISON_TOLERANCE / 2
+    observations["route_cutoff_gaps"][0, 0, 0] += COMPARISON_TOLERANCE / 2
 
-    report = compare_observations(bundle, _observations(bundle), TOLERANCES)
+    report = compare_observations(bundle, observations, TOLERANCES)
 
     assert report.ok
 
