@@ -166,7 +166,7 @@ def _capture_identity(uri: str) -> dict[str, str]:
     return {"uri": uri, "sha256": digest.hexdigest()}
 
 
-def main(config: OfflineGrpoConfig):
+def _validate_config(config: OfflineGrpoConfig) -> None:
     if config.trainer.initialize_from or config.trainer.load_checkpoint_path:
         raise ValueError("Resume offline runs using the same checkpointer base path and run id")
     if config.trainer.batch_axis_name != "batch":
@@ -175,6 +175,89 @@ def main(config: OfflineGrpoConfig):
         raise ValueError("num_train_steps must equal the number of ordered capture batches")
     if config.stop_after is not None and not 0 < config.stop_after <= len(config.captures):
         raise ValueError("stop_after must select a step in the ordered capture stream")
+
+
+def _continuation_contract(config: OfflineGrpoConfig, microbatch_size: int) -> dict:
+    return {
+        "captures": [_capture_identity(uri) for uri in config.captures],
+        "initial_model": config.initial_model,
+        "tokenizer": config.tokenizer,
+        "optimizer": draccus.encode(config.optimizer),
+        "grpo": draccus.encode(config.grpo),
+        "normalize_by_std": config.normalize_by_std,
+        "num_train_steps": config.trainer.num_train_steps,
+        "model": draccus.encode(config.model),
+        "mp": str(config.trainer.mp),
+        "seed": config.trainer.seed,
+        "train_batch_size": config.trainer.train_batch_size,
+        "microbatch_size": microbatch_size,
+        "vocab_block_size": config.vocab_block_size,
+    }
+
+
+def _write_continuation_contract(trainer: Trainer, contract: dict) -> None:
+    contract_path = StoragePath(trainer.checkpoint_path) / "offline-grpo.json"
+    if contract_path.exists():
+        with contract_path.open("r") as source:
+            if json.load(source) != contract:
+                raise ValueError("Offline continuation requires the same capture stream and training recipe")
+    elif is_checkpoint_path(trainer.checkpoint_path):
+        raise ValueError("Existing checkpoints need their offline capture-stream contract")
+    elif jax.process_index() == 0:
+        contract_path.parent.mkdirs()
+        with contract_path.open("wt") as output:
+            json.dump(contract, output, indent=2)
+
+
+def _initial_state(trainer: Trainer, config: OfflineGrpoConfig, context, tokenizer: AutoTokenizer):
+    Vocab = round_axis_for_partitioning(hax.Axis("vocab", len(tokenizer)), trainer.parameter_axis_mapping)
+    model_key, training_key = jax.random.split(jax.random.PRNGKey(config.trainer.seed))
+    return trainer.initial_state(
+        training_key,
+        is_trainable=config.trainable_filter(eqx.filter_eval_shape(context.model.build, Vocab, key=model_key)),
+        model_init=partial(
+            load_model_from_source,
+            context=context,
+            Vocab=Vocab,
+            model_key=model_key,
+            parameter_axis_mapping=trainer.parameter_axis_mapping,
+            compute_dtype=trainer.mp.param_dtype,
+            cast_to_param=trainer.mp.cast_to_param,
+            hf_ref=config.initial_model,
+        ),
+    )
+
+
+def _train_captures(trainer: Trainer, state, config: OfflineGrpoConfig, tokenizer: AutoTokenizer):
+    end_step = config.stop_after or config.trainer.num_train_steps
+    while int(state.step) < end_step:
+        uri = config.captures[int(state.step)]
+        rollout, manifest = read_captured_rollout(uri)
+        if manifest["tokenizer"] != config.tokenizer:
+            raise ValueError("Capture tokenizer does not match the policy tokenizer")
+        if rollout.sequences.min() < 0 or rollout.sequences.max() >= len(tokenizer):
+            raise ValueError("Capture contains token IDs outside the policy vocabulary")
+        batch = prepare_grpo_example(rollout, normalize_by_std=config.normalize_by_std)
+        if batch.tokens.axis_size("batch") != trainer.TrainBatch.size:
+            raise ValueError("Each capture must contain exactly one full trainer batch")
+        if config.grpo.kl_loss_coef and batch.reference_logprobs is None:
+            raise ValueError("KL requires fixed reference logprobs in the capture")
+        batch = hax.shard(batch, trainer.compute_axis_mapping)
+        batch = score_grpo_batch(trainer, state.model, batch, block_size=config.vocab_block_size)
+        info = trainer.train_step(state, batch)
+        state = info.state
+        save_checkpoint(
+            state,
+            int(state.step),
+            str(StoragePath(trainer.checkpoint_path) / f"step-{int(state.step)}"),
+            is_temporary=False,
+        )
+        logger.info("Completed offline GRPO step %d from %s: loss=%g", int(state.step), uri, info.loss)
+    return state
+
+
+def main(config: OfflineGrpoConfig):
+    _validate_config(config)
     tokenizer = AutoTokenizer.from_pretrained(config.tokenizer)
     context = prepare_model_init_context(
         config.model,
@@ -192,72 +275,9 @@ def main(config: OfflineGrpoConfig):
     with Trainer(
         config.trainer, config.optimizer.build(config.trainer.num_train_steps), loss, add_default_hooks=False
     ) as trainer:
-        contract = {
-            "captures": [_capture_identity(uri) for uri in config.captures],
-            "initial_model": config.initial_model,
-            "tokenizer": config.tokenizer,
-            "optimizer": draccus.encode(config.optimizer),
-            "grpo": draccus.encode(config.grpo),
-            "normalize_by_std": config.normalize_by_std,
-            "num_train_steps": config.trainer.num_train_steps,
-            "model": draccus.encode(config.model),
-            "mp": str(config.trainer.mp),
-            "seed": config.trainer.seed,
-            "train_batch_size": config.trainer.train_batch_size,
-            "microbatch_size": microbatch_size,
-            "vocab_block_size": config.vocab_block_size,
-        }
-        contract_path = StoragePath(trainer.checkpoint_path) / "offline-grpo.json"
-        if contract_path.exists():
-            with contract_path.open("r") as source:
-                if json.load(source) != contract:
-                    raise ValueError("Offline continuation requires the same capture stream and training recipe")
-        elif is_checkpoint_path(trainer.checkpoint_path):
-            raise ValueError("Existing checkpoints need their offline capture-stream contract")
-        elif jax.process_index() == 0:
-            contract_path.parent.mkdirs()
-            with contract_path.open("wt") as output:
-                json.dump(contract, output, indent=2)
-        Vocab = round_axis_for_partitioning(hax.Axis("vocab", len(tokenizer)), trainer.parameter_axis_mapping)
-        model_key, training_key = jax.random.split(jax.random.PRNGKey(config.trainer.seed))
-        state = trainer.initial_state(
-            training_key,
-            is_trainable=config.trainable_filter(eqx.filter_eval_shape(context.model.build, Vocab, key=model_key)),
-            model_init=partial(
-                load_model_from_source,
-                context=context,
-                Vocab=Vocab,
-                model_key=model_key,
-                parameter_axis_mapping=trainer.parameter_axis_mapping,
-                compute_dtype=trainer.mp.param_dtype,
-                cast_to_param=trainer.mp.cast_to_param,
-                hf_ref=config.initial_model,
-            ),
-        )
-        end_step = config.stop_after or config.trainer.num_train_steps
-        while int(state.step) < end_step:
-            uri = config.captures[int(state.step)]
-            rollout, manifest = read_captured_rollout(uri)
-            if manifest["tokenizer"] != config.tokenizer:
-                raise ValueError("Capture tokenizer does not match the policy tokenizer")
-            if rollout.sequences.min() < 0 or rollout.sequences.max() >= len(tokenizer):
-                raise ValueError("Capture contains token IDs outside the policy vocabulary")
-            batch = prepare_grpo_example(rollout, normalize_by_std=config.normalize_by_std)
-            if batch.tokens.axis_size("batch") != trainer.TrainBatch.size:
-                raise ValueError("Each capture must contain exactly one full trainer batch")
-            if config.grpo.kl_loss_coef and batch.reference_logprobs is None:
-                raise ValueError("KL requires fixed reference logprobs in the capture")
-            batch = hax.shard(batch, trainer.compute_axis_mapping)
-            batch = score_grpo_batch(trainer, state.model, batch, block_size=config.vocab_block_size)
-            info = trainer.train_step(state, batch)
-            state = info.state
-            save_checkpoint(
-                state,
-                int(state.step),
-                str(StoragePath(trainer.checkpoint_path) / f"step-{int(state.step)}"),
-                is_temporary=False,
-            )
-            logger.info("Completed offline GRPO step %d from %s: loss=%g", int(state.step), uri, info.loss)
+        _write_continuation_contract(trainer, _continuation_contract(config, microbatch_size))
+        state = _initial_state(trainer, config, context, tokenizer)
+        state = _train_captures(trainer, state, config, tokenizer)
         if int(state.step) == config.trainer.num_train_steps:
             assert context.converter is not None
             context.converter.save_pretrained(state.model, config.hf_save_path, upload_to_hf=False)

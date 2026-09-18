@@ -10,6 +10,8 @@ from dataclasses import dataclass
 import numpy as np
 from rigging.filesystem.storage_path import StoragePath
 
+SCHEMA_VERSION = 1
+
 
 @dataclass(frozen=True)
 class CapturedRollout:
@@ -66,7 +68,9 @@ def write_captured_rollout(uri: str, rollout: CapturedRollout, manifest: dict) -
     arrays = {
         field.name: value for field in dataclasses.fields(rollout) if (value := getattr(rollout, field.name)) is not None
     }
-    arrays["manifest"] = np.asarray(json.dumps({"schema_version": 1, **manifest}, allow_nan=False, sort_keys=True))
+    arrays["manifest"] = np.asarray(
+        json.dumps({"schema_version": SCHEMA_VERSION, **manifest}, allow_nan=False, sort_keys=True)
+    )
     with StoragePath(uri).open("wb") as output:
         np.savez_compressed(output, **arrays)
 
@@ -75,7 +79,7 @@ def read_captured_rollout(uri: str) -> tuple[CapturedRollout, dict]:
     """Read a capture without allowing executable pickle payloads."""
     with StoragePath(uri).open("rb") as source, np.load(source, allow_pickle=False) as archive:
         manifest = json.loads(str(archive["manifest"]))
-        if manifest["schema_version"] != 1:
+        if manifest["schema_version"] != SCHEMA_VERSION:
             raise ValueError(f"Unsupported GRPO capture schema: {manifest['schema_version']}")
         rollout = CapturedRollout(
             **{field.name: archive[field.name] for field in dataclasses.fields(CapturedRollout) if field.name in archive}
