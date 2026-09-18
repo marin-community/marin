@@ -58,7 +58,7 @@ def _row(
     role: str = "",
     attributes: dict[str, str] | None = None,
 ) -> tuple:
-    resource = {"role": role} if role else {}
+    resource = {"role": role, "training_loop": "sync"} if role else {"training_loop": "sync"}
     return (
         CLUSTER,
         service,

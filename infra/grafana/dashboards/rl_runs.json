@@ -1,6 +1,6 @@
 {
   "uid": "marin-rl-runs",
-  "title": "RL Post-training",
+  "title": "RL Post-training (sync)",
   "description": "One reinforcement-learning run, across every process that reports it. Runs are identified by run_id, which the MarinSkyRL driver, trainer and Ray controller all stamp. Accelerator and engine series carry no run_id of their own and are joined to the run through the nodes and the Iris job its own rows name. Everything here is read from telemetry_v1, so it answers after the run's pods are gone; W&B keeps the full-fidelity experiment record.",
   "tags": [
     "marin",
@@ -118,7 +118,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "SELECT run_id AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND run_id IS NOT NULL GROUP BY 1 ORDER BY MAX(timestamp_ms) DESC"
+                  "value": "SELECT run_id AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step' AND json_get(resource_attributes_json,'training_loop')='sync' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND run_id IS NOT NULL GROUP BY 1 ORDER BY MAX(timestamp_ms) DESC"
                 },
                 {
                   "key": "from",

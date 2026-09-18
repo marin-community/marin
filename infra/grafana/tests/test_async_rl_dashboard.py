@@ -98,7 +98,7 @@ def store():
                     timestamp=BASE_EPOCH_MS + len(rows) if timestamp is None else timestamp,
                     seq=len(rows),
                     attributes={"role": "trainer", "step": "1", **(attributes or {})},
-                    resource={"role": "trainer", "host": process},
+                    resource={"role": "trainer", "host": process, "training_loop": "async"},
                     body=body,
                 )
             )

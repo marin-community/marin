@@ -230,8 +230,8 @@ of repeating the Kubernetes object name.
 | Node | Node details | `nodes.json` | What is happening on one physical GPU node? | cluster, node |
 | Workload | Jobs | `jobs.json` | What is running, queued, and stuck? | cluster, job |
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
-| Workload | RL Post-training | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
-| Workload | Async RL Post-training | `async_rl.json` | Is concurrent rollout work useful, fresh, and keeping the policy trainer busy? | cluster, run, job, execution |
+| Workload | RL Post-training (sync) | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
+| Workload | RL Post-training (async) | `async_rl.json` | Is concurrent rollout work useful, fresh, and keeping the policy trainer busy? | cluster, run, job, execution |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
 | Workload | Inference overview | `inference_overview.json` | Is inference progressing, and are responses slow or queues growing? | identity kind, serve |
 | Workload | Inference diagnostics | `inference.json` | Which engines, request stages, or workload changes explain the slowdown? | identity kind, serve |
@@ -241,9 +241,9 @@ Getting a run onto the RL Post-training view is a MarinSkyRL-side question: whic
 the telemetry environment, what a run id should look like, and which panels a synchronous run
 leaves blank by design. MarinSkyRL documents it at `docs/grafana-rl-runs.md`.
 
-Async RL Post-training (`marin-async-rl`) reads native MarinSkyRL records from
+RL Post-training (async) (`marin-async-rl`) reads native MarinSkyRL records from
 Finelog. Select a cluster, run, exact training job, and its driver and worker
-executions. It links from Home and RL Post-training and needs no additional
+executions. It links from Home and RL Post-training (sync) and needs no additional
 datasource or W&B credentials. Its panels stay empty until a run exports the
 matching records: MarinSkyRL gates them behind `trainer.training_metrics`,
 `trainer.async_spans`, `trainer.generate_spans` and `trainer.policy_train_spans`,

@@ -1,6 +1,6 @@
 {
   "uid": "marin-async-rl",
-  "title": "Async RL Post-training",
+  "title": "RL Post-training (async)",
   "description": "Concurrent rollout and Megatron training diagnostics. Select one run and job, then the execution processes to inspect. Missing telemetry is unknown, not zero.",
   "tags": [
     "marin",
@@ -109,7 +109,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "SELECT run_id AS value FROM (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND name IN ('lifecycle','policy_step','rollout_call')) GROUP BY run_id HAVING run_id IS NOT NULL ORDER BY MAX(timestamp_ms) DESC"
+                  "value": "SELECT run_id AS value FROM (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND name IN ('lifecycle','policy_step','rollout_call') AND json_get(resource_attributes_json,'training_loop')='async') GROUP BY run_id HAVING run_id IS NOT NULL ORDER BY MAX(timestamp_ms) DESC"
                 },
                 {
                   "key": "from",
@@ -2828,7 +2828,7 @@
       "id": 34,
       "type": "timeseries",
       "title": "Core and cycle duration",
-      "description": "Core covers admission, preparation, optimizer and weight synchronization. Cycle also includes callbacks/checkpoint/evaluation until metric publication. Neither includes startup, inter-epoch cleanup or final export; this is not whole-job cost. Eval can alter following queue occupancy.",
+      "description": "Core covers admission, preparation, optimizer and weight synchronization. Cycle also includes callbacks/checkpoint/evaluation until the step's metrics are logged. Neither includes startup, inter-epoch cleanup or final export; this is not whole-job cost. Eval can alter following queue occupancy.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

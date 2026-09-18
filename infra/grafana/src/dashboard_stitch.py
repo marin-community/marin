@@ -30,7 +30,7 @@ _ASYNC_RL_LINK = {
     "includeVars": True,
     "keepTime": True,
     "targetBlank": False,
-    "title": "Async RL Post-training",
+    "title": "RL Post-training (async)",
     "type": "link",
     "url": "/d/marin-async-rl",
 }
@@ -70,7 +70,7 @@ _RL_POST_TRAINING_LINK = {
     "includeVars": True,
     "keepTime": True,
     "targetBlank": False,
-    "title": "RL Post-training",
+    "title": "RL Post-training (sync)",
     "type": "link",
     "url": "/d/marin-rl-runs",
 }
