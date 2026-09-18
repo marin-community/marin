@@ -18,6 +18,7 @@ from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.opencode import INLINE_TOOL_CALL, opencode_protocol_messages, prompt_tool_definitions
 from marin.datakit.download.rollout_transforms import (
+    CHAT_DOCUMENT_VERSION,
     checked_openai_chat_document,
     load_parquet_batched,
     render_role_message,
@@ -122,7 +123,7 @@ def nemotron_terminal_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/nemotron-terminal-corpus",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"chat_document_version": "2026.09.18.1", "version": "2026.09.17.native-terminus"},
+        hash_attrs={"chat_document_version": CHAT_DOCUMENT_VERSION, "version": "2026.09.17.native-terminus"},
     )
     return processed, normalize_chat_step(
         output_schema=CHAT_SCHEMA, name="normalized-chat/nemotron-terminal", download=processed

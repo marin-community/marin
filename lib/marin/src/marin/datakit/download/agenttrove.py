@@ -42,6 +42,7 @@ from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.opencode import INLINE_TOOL_CALL, opencode_protocol_messages, prompt_tool_definitions
 from marin.datakit.download.rollout_transforms import (
+    CHAT_DOCUMENT_VERSION,
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
     TRAJECTORY_UNVERIFIED_TAG,
@@ -241,7 +242,10 @@ def agenttrove_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/agenttrove",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"chat_document_version": "2026.09.18.1", "version": "2026.09.17.native-terminus-source-filter"},
+        hash_attrs={
+            "chat_document_version": CHAT_DOCUMENT_VERSION,
+            "version": "2026.09.17.native-terminus-source-filter",
+        },
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/agenttrove", download=processed

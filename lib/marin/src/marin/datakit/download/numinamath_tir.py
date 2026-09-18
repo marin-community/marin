@@ -22,7 +22,11 @@ from zephyr.readers import load_parquet
 
 from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import checked_openai_chat_document, text_document
+from marin.datakit.download.rollout_transforms import (
+    CHAT_DOCUMENT_VERSION,
+    checked_openai_chat_document,
+    text_document,
+)
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -203,7 +207,7 @@ def numinamath_tir_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/numinamath-tir",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"chat_document_version": "2026.09.18.1", "version": "2026.09.11.review-fixes"},
+        hash_attrs={"chat_document_version": CHAT_DOCUMENT_VERSION, "version": "2026.09.11.review-fixes"},
     )
     return processed, normalize_chat_step(
         output_schema=CHAT_SCHEMA, name="normalized-chat/numinamath-tir", download=processed

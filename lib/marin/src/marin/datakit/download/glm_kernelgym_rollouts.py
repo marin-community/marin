@@ -36,6 +36,7 @@ from zephyr.readers import load_jsonl
 from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
+    CHAT_DOCUMENT_VERSION,
     ReasoningFormatError,
     checked_openai_chat_document,
     normalize_reasoning_tokens,
@@ -271,7 +272,7 @@ def glm_kernelgym_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path, truncation_filter),
         hash_attrs={
-            "chat_document_version": "2026.09.18.1",
+            "chat_document_version": CHAT_DOCUMENT_VERSION,
             "version": "2026.09.11.review-fixes",
             "truncation_filter": truncation_filter.value,
         },

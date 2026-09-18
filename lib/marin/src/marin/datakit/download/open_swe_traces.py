@@ -16,7 +16,11 @@ from zephyr.dataset import Dataset
 
 from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import checked_openai_chat_document, load_parquet_batched
+from marin.datakit.download.rollout_transforms import (
+    CHAT_DOCUMENT_VERSION,
+    checked_openai_chat_document,
+    load_parquet_batched,
+)
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "nvidia/Open-SWE-Traces"
@@ -132,7 +136,7 @@ def open_swe_traces_chat_normalize_steps(source_name: str) -> tuple[StepSpec, ..
         name=f"processed-chat/{source_name}",
         deps=[raw],
         fn=lambda output_path: transform_chat(raw.output_path, output_path),
-        hash_attrs={"chat_document_version": "2026.09.18.1", "version": TRANSFORM_VERSION},
+        hash_attrs={"chat_document_version": CHAT_DOCUMENT_VERSION, "version": TRANSFORM_VERSION},
     )
     return processed, normalize_chat_step(
         name=f"normalized-chat/{source_name}", download=processed, output_schema=SOURCE_CHAT_SCHEMA

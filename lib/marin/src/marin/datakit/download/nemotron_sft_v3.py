@@ -26,7 +26,11 @@ from marin.datakit.chat_normalize import (
 )
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.nemotron_chat_prompts import SEED_DATASET_REVISIONS, restore_chat_prompts
-from marin.datakit.download.rollout_transforms import load_parquet_batched, openai_chat_document
+from marin.datakit.download.rollout_transforms import (
+    CHAT_DOCUMENT_VERSION,
+    load_parquet_batched,
+    openai_chat_document,
+)
 from marin.execution.step_spec import StepSpec
 
 TRANSFORM_VERSION = "2026.09.17.chat-v4"
@@ -429,7 +433,7 @@ def _processed_chat_step(download: StepSpec, *, family: str, partition_name: str
             download.output_path, output_path, family=family, partition_name=partition_name
         ),
         hash_attrs={
-            "chat_document_version": "2026.09.18.1",
+            "chat_document_version": CHAT_DOCUMENT_VERSION,
             "family": family,
             "partition": partition_name,
             "version": TRANSFORM_VERSION,

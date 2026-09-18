@@ -33,7 +33,9 @@ from marin.execution.step_spec import StepSpec
 
 CHAT_NORMALIZE_VERSION = "2026.09.18.1"
 MAX_REJECTED_RECORD_FRACTION = 0.05
-THINK_TOKENS = ("<|start_think|>", "<|end_think|>")
+START_THINK = "<|start_think|>"
+END_THINK = "<|end_think|>"
+THINK_TOKENS = (START_THINK, END_THINK)
 
 
 _SAFE_TOOL_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]+")

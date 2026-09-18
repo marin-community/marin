@@ -15,7 +15,7 @@ from openai_harmony import Author, Message, Role
 from rigging.filesystem.factory import open_url
 from zephyr import counters
 
-from marin.datakit.chat_normalize import ChatChannel
+from marin.datakit.chat_normalize import END_THINK, START_THINK, ChatChannel
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +24,9 @@ CHAT_CONTROL_TOKEN = re.compile(
     r"eom_id|eot_id|python_tag|reserved_special_token_\d+)\|>"
 )
 TOOL_WRAPPER = re.compile(r"</?tool_(?:call|response)(?:[: >])", re.IGNORECASE)
-REASONING_START = "<|start_think|>"
-REASONING_END = "<|end_think|>"
+CHAT_DOCUMENT_VERSION = "2026.09.18.1"
+REASONING_START = START_THINK
+REASONING_END = END_THINK
 REASONING_TOKEN = re.compile(r"<\|(?:start|end)_think\|>")
 CHAT_ROLE_ALIASES = MappingProxyType(
     {

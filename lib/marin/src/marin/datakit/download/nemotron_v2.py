@@ -22,7 +22,11 @@ from zephyr.dataset import Dataset
 
 from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import checked_openai_chat_document, load_parquet_batched
+from marin.datakit.download.rollout_transforms import (
+    CHAT_DOCUMENT_VERSION,
+    checked_openai_chat_document,
+    load_parquet_batched,
+)
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -331,7 +335,7 @@ def nemotron_sft_chat_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
                 prefix_join(download.output_path, source_dir), output_path, source_subset
             ),
             hash_attrs={
-                "chat_document_version": "2026.09.18.1",
+                "chat_document_version": CHAT_DOCUMENT_VERSION,
                 "version": "2026.09.09.adjacent-speakers" if subset == "sft_general" else "2026.09.05.2.harmony-arrow",
                 "subset": subset,
             },
