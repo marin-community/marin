@@ -14,6 +14,8 @@ the experimental evidence; runtime assignment loads only the YAML catalog.
 - `subject_inventory.json` is the September 3, 2026 TaskTrove competency chart reduced to 34 macro areas and 151
   micro guideposts. Its labels help find omissions; generated sections must still satisfy the curriculum rubric.
 - `rubric.md` defines the cross-subject review criteria.
+- `workflow.md` is the resumable operating procedure, including the exact generator, blind-task, fit-judge, holistic-
+  review, and optional Luna prompts.
 - A small set of model-visible TaskTrove tasks supplies concrete discovery evidence. In-distribution examples listed
   by the evaluation policy are held-out coverage probes. Out-of-distribution evaluations contribute domain and task
   format metadata only. Source names, solutions, and verifier implementations are excluded from generation.
@@ -38,6 +40,12 @@ into the canonical YAML. For each selected macro area:
 5. Compare findings across subjects. Mutual self-confidence and prerequisite continuity are blocking criteria even
    when the numeric score is high. Revise the rubric or generation instructions only for problems that recur, then
    generate another version.
+
+In parallel with curriculum generation, a curriculum-blind high-reasoning agent generates 24 diverse tasks from the
+subject definition. A separate judge reports how many have an exact home, an ambiguous but complete home, a coverage
+gap, or are invalid. This blind-fit X/Y is a sampled coverage diagnostic beside the holistic score, not another term
+inside it. Freeze the task set across curriculum repairs. During initial calibration, a systematic operation-family
+gap blocks promotion; `workflow.md` defines the complete independence and reporting rules.
 
 The hierarchy has two node kinds. A `capability` is a trainable outcome and the only kind that may receive task
 assignments, declare prerequisites, or carry entry and representative probes. A `group` is an organizational scope;
