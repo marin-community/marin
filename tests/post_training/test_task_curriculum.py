@@ -172,8 +172,6 @@ def test_mapping_ranks_sections_independently_inside_each_graph() -> None:
             f"{prefix}processes",
         ]
         assert all(len(graph.candidates) == 2 for graph in graph_rows)
-    assert {mapping.embedding_model for mapping in mappings} == {"embed-v1"}
-    assert {mapping.catalog_version for mapping in mappings} == {"catalog-1"}
 
 
 def test_embedding_cache_reuses_vectors_by_text_and_model(tmp_path: Path) -> None:

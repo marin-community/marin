@@ -33,6 +33,7 @@ class EmbeddingCache(AbstractContextManager["EmbeddingCache"]):
         self._connection.close()
 
     def embedding(self, cache_key: str) -> np.ndarray | None:
+        """Return the cached vector, or `None` when the key is absent."""
         row = self._connection.execute(
             "SELECT dimensions, value FROM embeddings WHERE cache_key = ?", (cache_key,)
         ).fetchone()

@@ -33,7 +33,7 @@ def _write_jsonl(path: Path, values: Sequence[BaseModel]) -> None:
     path.write_text("".join(value.model_dump_json() + "\n" for value in values))
 
 
-def _openai_embeddings(model: str, batch_size: int) -> Callable[[Sequence[str]], np.ndarray]:
+def _openai_embedding_function(model: str, batch_size: int) -> Callable[[Sequence[str]], np.ndarray]:
     def embed(texts: Sequence[str]) -> np.ndarray:
         vectors: list[list[float]] = []
         with OpenAI(timeout=300.0) as client:
@@ -72,7 +72,7 @@ def main(
     catalog_row = load_catalog(catalog)
     graph_anchor_rows = graph_anchors(catalog_row, anchor_rows)
     section_anchor_rows = section_anchors(catalog_row, anchor_rows)
-    embed = _openai_embeddings(embedding_model, embedding_batch_size)
+    embed = _openai_embedding_function(embedding_model, embedding_batch_size)
     with EmbeddingCache(cache) as local_cache:
         membership_vectors = {
             facet: cached_embeddings(
