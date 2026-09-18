@@ -79,6 +79,7 @@ CHECKPOINT_WRITER_MODEL_DIGEST = "d461b6b0832be902ecbc9111edfbbc77a9cfd760470064
 TOKENIZER = "marin-community/marin-tokenizer"
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 NATIVE_OUTPUT_BOUND = 1e-4
+DETERMINISTIC_XLA_FLAGS = "--xla_gpu_deterministic_ops=true"
 GOLDEN_MODES = ("smoke", "required")
 AUTHORITATIVE_WEIGHT_KEYS = ("master_params", "params")
 
@@ -535,6 +536,7 @@ def produce(request: GoldenRequest, store_root: str) -> None:
                 "packages": _runtime_versions(),
             },
             "compute_policy": str(COMPUTE_POLICY),
+            "xla_flags": os.environ.get("XLA_FLAGS"),
             "target_cluster": request.target_cluster,
             "accelerator_kind": "GPU",
             "accelerator_variant": "GB200",
@@ -642,6 +644,7 @@ def submit(mode: str, store_root: str) -> None:
                 SAMPLING_GPUS_PER_NODE,
                 sampler_module="experiments.grug.moe_hero_ep.ops.forward_goldens",
                 user=JOB_USER,
+                environment_overrides={"XLA_FLAGS": DETERMINISTIC_XLA_FLAGS},
             )
             jobs.submit(request, name, priority_band_value("interactive"))
     print(f"Submitted /{JOB_USER}/{name} for {remote_root}")

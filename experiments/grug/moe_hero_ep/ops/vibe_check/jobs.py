@@ -122,6 +122,7 @@ class IrisSamplingJobs:
         processes_per_task: int,
         sampler_module: str,
         user: str = JOB_USER,
+        environment_overrides: dict[str, str] | None = None,
     ):
         self.client = client
         self.endpoint = endpoint
@@ -131,6 +132,7 @@ class IrisSamplingJobs:
         self.processes_per_task = processes_per_task
         self.sampler_module = sampler_module
         self.user = user
+        self.environment_overrides = dict(environment_overrides or {})
 
     def states(self) -> dict[str, JobState]:
         return {
@@ -164,6 +166,7 @@ class IrisSamplingJobs:
                 "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
                 "WANDB_MODE": "disabled",
                 "GIT_COMMIT": request.source_revision,
+                **self.environment_overrides,
             },
             resources=resources,
         )

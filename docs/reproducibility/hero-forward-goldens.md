@@ -55,6 +55,10 @@ Those bounds are an explicit example, not qualified cross-backend tolerances. Ea
 the provisional bounds used during bring-up. Native repeatability measurements in the manifest do not establish
 a valid cross-backend tolerance.
 
+The producer enables `--xla_gpu_deterministic_ops=true`. The native dropless `sonic_cute` path combines expert
+contributions with a GPU scatter-add; fixing that reduction order makes the repeat and traced-versus-ordinary
+checks measure instrumentation effects instead of atomic scheduling. The exact flag is retained in the manifest.
+
 ## Input and score alignment
 
 All indices are zero-based.
