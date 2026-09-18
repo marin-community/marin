@@ -59,6 +59,12 @@ def _config():
     )
 
 
+def test_june_adapter_uses_june_capacity_default_from_hf_config():
+    assert JuneSnowballConfig().capacity_factor == 1.0
+    decoded = JuneSnowballConfig.from_hf_config(_config().to_hf_config(24))
+    assert decoded.capacity_factor == 1.0
+
+
 class ModelInputs(NamedTuple):
     tokens: hax.NamedArray
     segments: hax.NamedArray

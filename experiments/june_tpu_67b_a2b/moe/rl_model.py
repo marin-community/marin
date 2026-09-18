@@ -15,7 +15,6 @@ from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.grug.grug_moe import _DEFAULT_EP_CAPACITY_FACTOR
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.models.snowball import (
@@ -34,6 +33,7 @@ from levanter.models.snowball import (
 from levanter.pipeline import evenly_partition_layers
 
 from experiments.june_tpu_67b_a2b.moe.model import (
+    _DEFAULT_EP_CAPACITY_FACTOR,
     LONG_ATTENTION_INTERVAL,
     Block,
     GatedNorm,
