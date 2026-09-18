@@ -695,7 +695,7 @@ def build_arm(
             # Fail fast: a broken config surfaces on the first attempt, and a
             # healthy run resumes from its latest checkpoint on resubmission.
             max_retries=1,
-            wandb_entity="marin-community",
+            wandb_entity="dogml",
         ),
     )
     # The eval artifact is keyed on the model name; include the owner so two

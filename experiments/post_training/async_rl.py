@@ -594,7 +594,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             priority="interactive",
             # One automatic retry, then fail; a healthy run resumes from its latest checkpoint on resubmission.
             max_retries=1,
-            wandb_entity="marin-community",
+            wandb_entity="dogml",
         ),
     )
     # The evaluation serves the rendered window, so a --set on the budget reaches the server.
