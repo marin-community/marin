@@ -8,8 +8,8 @@ agent transcripts, embeddings, mappings, and intermediate JSON in external exper
 
 Evaluate a subject in two independent ways:
 
-1. A holistic reviewer scores the complete curriculum against `rubric.md`. Structural readiness requires at least
-   85/100 and no structural blockers. Evidence confidence is reported separately and guides later sampling.
+1. A holistic reviewer scores the complete curriculum against `rubric.md`. A subject is structurally `pilot_ready`
+   at 85/100 with no structural blockers. Evidence confidence is reported separately and guides later sampling.
 2. A blind task generator creates `max(24, 2 * guidepost_count)` subject tasks without seeing the curriculum. A
    separate fit judge sees only the task instructions and curriculum and classifies each task as `exact`,
    `ambiguous`, `gap`, or `invalid`.
@@ -22,6 +22,13 @@ operation-family-wide gap blocks promotion, but there is no permanent numeric bl
 grouping and the operator confirms it from the task text. A single gap tied to a guidepost with no capability also
 blocks promotion; `validate_subject_promotion` detects that case from the hidden task metadata and holistic guidepost
 accounting. Record observed rates across several subjects before setting a numeric threshold.
+
+`pilot_ready` is the quality bar for treating a subject as reviewed. During full-catalog scale-out, a schema-valid
+graph may enter the canonical YAML after one broad repair when every inventory guidepost has an explicit home. Its
+latest non-passing review, blind-fit
+misses, confirmed gaps, and evidence limitations must remain visible in the wave report. This provisional inclusion
+does not satisfy the `pilot_ready` bar. Revisit those subjects using broader evidence instead of recursively
+optimizing against one review or frozen blind sample.
 
 Curriculum-derived Luna placement tasks remain an optional boundary diagnostic. They do not substitute for either
 independent review: their wording tends to mirror the curriculum, and successful placement says little about mutual
@@ -373,8 +380,10 @@ whose representative probe requires more of the task's central operation and nam
    complete holistic review and fit judgment on the frozen blind tasks. Stop after one repair pass unless a guidepost
    remains uncovered or the schema/generation contract fails. Record isolated misses and sparse evidence for the next
    version instead of adding task-specific sections or repeatedly rereviewing the graph.
-6. Call `validate_subject_promotion` on the final artifacts. It requires a passing holistic review, no confirmed
-   systematic gap, and no blind-task gap tied to an uncovered guidepost. Add a passing curriculum to
+6. Call `validate_subject_promotion` before marking a subject `pilot_ready`. It requires a passing holistic review,
+   no confirmed systematic gap, and no blind-task gap tied to an uncovered guidepost. A breadth-first scale-out may
+   still add a provisional subject after the one-repair stopping rule above; do not call that subject `pilot_ready`,
+   and preserve its exact last review and fit result in the wave report. Add the selected curriculum to
    `curriculum.yaml` and declare `routing_facet` from the intended
    membership semantics and record whether a labeled member/near-neighbor fixture calibrated that choice. A missing
    fixture leaves routing provisional but does not block a structurally sound curriculum. Increment `catalog_version`

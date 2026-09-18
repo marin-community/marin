@@ -5,9 +5,9 @@ keeps curriculum design separate from task correctness:
 TaskCompendium owns model-visible task semantics and private verifier contracts; a curriculum describes observable
 capabilities, boundaries, examples, and prerequisites.
 
-`curriculum.yaml` is the canonical catalog. It contains 22 reviewed curriculum graphs and 697 globally unique nodes:
-638 trainable capabilities and 59 organizational groups. The Markdown reports under `pilot/` and `wave2/` preserve
-the experimental evidence; runtime assignment loads only the YAML catalog.
+`curriculum.yaml` is the canonical catalog. It contains all 34 inventory macro areas and 959 globally unique nodes:
+854 trainable capabilities and 105 organizational groups. The wave reports preserve the experimental evidence and
+identify provisional subjects; runtime assignment loads only the YAML catalog.
 
 ## Inputs
 
@@ -280,6 +280,18 @@ This wave separated structural readiness from evidence maturity. A graph scores 
 structural blockers. Evidence confidence remains in the report and directs later sampling, but low confidence does
 not prevent a coherent graph from entering the versioned catalog. The catalog now covers 22 of 34 macro areas and 107
 of 151 guideposts. Its 697 nodes project to about 984 nodes at full guidepost coverage if current density holds.
+
+## Wave-nine full baseline
+
+Wave nine added the remaining 12 macro areas and 44 guideposts. The `wave9-1` catalog covers all 34 inventory areas
+and all 151 guideposts with 959 nodes: 854 capabilities and 105 groups. Each subject used 16 curated model-visible
+TaskTrove examples and 24 curriculum-blind tasks. ML/AI and algorithms also used four answer-hidden, in-distribution
+MMLU probes each under the evaluation policy.
+
+The full catalog is a versioned baseline. One subject is `pilot_ready`; the other subjects received one broad repair,
+and the weakest received one bounded split/probe correction. The report retains non-passing scores, systematic blind
+gaps, and sparse evidence. The complete table, recurrent findings, exact role setup, and evidence reference are in
+[`wave9/README.md`](wave9/README.md).
 
 ## Provenance
 

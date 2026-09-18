@@ -114,6 +114,13 @@ The total is a comparison aid. `pilot_ready` requires at least 85 points and no 
 at 70 points or above yields `revise`; a score below 70 yields `regenerate`. Pervasive structural defects must reduce
 the affected dimension scores instead of overriding the status thresholds.
 
+Those statuses describe review maturity. They do not require a breadth-first catalog build to keep regenerating one
+subject until it passes. After the documented one-repair stopping rule, the canonical versioned baseline may include
+a `revise` or `regenerate` graph provisionally when it is schema-valid and every inventory guidepost has an explicit
+home. The wave report must retain the exact score, blockers, blind-fit misses, and evidence limitations. Provisional
+inclusion supplies a complete object to improve in later waves; it does not convert the review status to
+`pilot_ready`.
+
 Evidence confidence is reported separately. Sparse evidence identifies where to sample tasks or rerun review. A
 structurally coherent graph can enter the versioned catalog with low evidence confidence. Put evidence limitations in
 findings and recommended changes. Reserve blockers for structural defects. This keeps curriculum quality distinct
