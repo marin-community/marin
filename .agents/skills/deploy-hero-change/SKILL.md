@@ -102,7 +102,8 @@ every guard as a dry run against the live cluster before the day:
   id afterwards; a second submission would compete for the same tree.
 - Rollback: cancel the new coordinator (this also stops the Iris retry loop)
   and confirm it is terminal; relaunch the old commit's `trigger_hero.sh` from
-  the pristine rollback worktree under the old run id.
+  the pristine rollback worktree under the old run id, as `IRIS_USER=marin`
+  (the old launcher does not set it).
   Never fork W&B again during rollback. Use the old revision's command syntax.
   The old tree resumes its own newest checkpoint; confirm that is the intended
   anchor before launching.

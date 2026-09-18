@@ -97,7 +97,9 @@ submits training, which resumes that W&B child without `fork_from`. Iris
 retries also resume the child. If fork creation succeeds but submission fails,
 inspect the child and use `launch` again only after confirming no coordinator
 is live. Do not repeat `fork-wandb` for recovery or rollback. Rollback uses the
-old run ID and old revision's launcher.
+old run ID and the old revision's launcher, submitted as `IRIS_USER=marin` so
+the coordinator stays attributed to the project; the old launcher does not set
+it.
 
 Keep one operator as the submission owner; the coordinator checks do not
 serialize launches across machines. After submission, verify exactly one live
