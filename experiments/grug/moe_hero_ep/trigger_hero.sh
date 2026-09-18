@@ -42,6 +42,7 @@ fi
 uv run python - "$mode" "$RUN_ID" "$WANDB_PROJECT" "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" "$launch_commit" <<'PYTHON'
 import csv
 import io
+import re
 import subprocess
 import sys
 
@@ -55,6 +56,9 @@ lineage = {
     "hero_wandb_fork_from": fork_from,
     "hero_launch_commit": launch_commit,
 }
+parent_id = fork_from.split("?_step=", 1)[0]
+if not re.fullmatch(r"[A-Za-z0-9_.-]+", run_id) or not re.fullmatch(r"[A-Za-z0-9_.-]+", parent_id):
+    raise ValueError("Run IDs may contain only letters, digits, '_', '.', and '-'")
 api = wandb.Api()
 if mode == "fork-wandb":
     if list(api.runs(f"{entity}/{project}", filters={"name": run_id}, per_page=1)):
@@ -65,22 +69,24 @@ if mode == "fork-wandb":
     ):
         pass
 else:
+    # Root coordinators sit at depth 1 under the submitting user's namespace. Match every
+    # namespace so a parent relaunched under another IRIS_USER still blocks the child.
+    coordinator_sql = (
+        "SELECT job_id, state FROM jobs WHERE depth = 1 AND "
+        f"(job_id LIKE '%/{parent_id}-coord-%' OR job_id LIKE '%/{run_id}-coord-%')"
+    )
     result = subprocess.run(
-        ["uv", "run", "iris", "--config", "lib/iris/config/marin.yaml", "query", "-f", "csv",
-         "SELECT job_id, state FROM jobs WHERE depth = 1"],
+        ["uv", "run", "iris", "--config", "lib/iris/config/marin.yaml", "query", "-f", "csv", coordinator_sql],
         check=True, capture_output=True, text=True,
     )
     reader = csv.DictReader(io.StringIO(result.stdout))
     if reader.fieldnames != ["job_id", "state"]:
         raise ValueError("Unknown coordinator state: unexpected Iris query response")
     rows = list(reader)
-    parent_id = fork_from.split("?_step=", 1)[0]
-    parent_prefix = f"/marin/{parent_id}-coord-"
-    child_prefix = f"/marin/{run_id}-coord-"
-    if not any(row["job_id"].startswith(parent_prefix) for row in rows):
+    if not any(f"/{parent_id}-coord-" in row["job_id"] for row in rows):
         raise ValueError("Unknown parent coordinator state; refusing launch")
     for row in rows:
-        if row["job_id"].startswith((parent_prefix, child_prefix)) and int(row["state"]) not in TERMINAL_JOB_STATES:
+        if int(row["state"]) not in TERMINAL_JOB_STATES:
             raise ValueError(f"Coordinator is not terminal: {row['job_id']}")
     child = api.run(f"{entity}/{project}/{run_id}")
     for key, expected in lineage.items():
