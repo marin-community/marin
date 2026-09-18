@@ -229,6 +229,7 @@ def build_ladder_run(
         training_data_mode=TrainingDataMode.MIXTURE,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=True,
+        gc_interval=100,
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
