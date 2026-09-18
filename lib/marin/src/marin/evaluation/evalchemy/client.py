@@ -33,6 +33,9 @@ EVALCHEMY_RESULTS_SUFFIX = ".json"
 # DROP) stay well inside it; lm-eval would otherwise fall back to its 256-token API default.
 _NATIVE_PROMPT_RESERVE = 4096
 
+# Smallest budget either context-derived clamp will request.
+_MIN_GENERATION_BUDGET = 256
+
 # vLLM returns HTTP 400 when prompt_tokens + max_tokens exceeds the served context window. Reserve
 # this many tokens for the prompt when shrinking a generation budget to fit a small served context.
 _CONTEXT_PROMPT_RESERVE = 1024
@@ -54,7 +57,7 @@ def generation_budget(max_gen_toks: int | None, max_length: int | None) -> int |
     """
     if max_gen_toks is None or max_length is None or max_gen_toks + _CONTEXT_PROMPT_RESERVE <= max_length:
         return max_gen_toks
-    return max(256, max_length - _CONTEXT_PROMPT_RESERVE)
+    return max(_MIN_GENERATION_BUDGET, max_length - _CONTEXT_PROMPT_RESERVE)
 
 
 def is_evalchemy_benchmark(task_name: str) -> bool:
@@ -73,7 +76,32 @@ def native_generation_budget(max_length: int | None) -> int | None:
     """The served-context budget for an lm-eval-native generation task with no configured cap."""
     if max_length is None:
         return None
-    return max(256, max_length - _NATIVE_PROMPT_RESERVE)
+    return max(_MIN_GENERATION_BUDGET, max_length - _NATIVE_PROMPT_RESERVE)
+
+
+def budget_arguments(config: dict, task: dict, max_length: int | None) -> tuple[list[str], list[str]]:
+    """The ``--gen_kwargs`` entries and extra argv that set one task's generation budget.
+
+    A configured cap goes out as both ``max_gen_toks`` (read by lm-eval-native tasks) and
+    ``--max_tokens`` (read by Evalchemy's chat benchmarks). Without one, a chat benchmark gets neither
+    and sizes its own responses from the served context and its stored longest prompt, while an
+    lm-eval-native generation task gets the served context minus a prompt reserve as ``max_gen_toks``.
+    """
+    gen_budget = generation_budget(config["max_gen_toks"], max_length)
+    if gen_budget != config["max_gen_toks"]:
+        print(
+            f"clamped max_gen_toks {config['max_gen_toks']} -> {gen_budget} to fit served context {max_length}",
+            flush=True,
+        )
+    if gen_budget is not None:
+        return [f"max_gen_toks={gen_budget}"], ["--max_tokens", str(gen_budget)]
+    if not task["generation"] or is_evalchemy_benchmark(task["name"]):
+        return [], []
+    native_budget = native_generation_budget(max_length)
+    if native_budget is None:
+        return [], []
+    print(f"native task {task['name']}: max_gen_toks={native_budget} from served context {max_length}", flush=True)
+    return [f"max_gen_toks={native_budget}"], []
 
 
 def served_max_length(base_url: str) -> int | None:
@@ -143,33 +171,12 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
     # completion_only: code-infilling tasks score a raw continuation, which chat formatting breaks.
     use_chat = config["apply_chat_template"] and task["generation"] and not task["completion_only"]
     model = "local-chat-completions" if use_chat else "local-completions"
-    gen_budget = generation_budget(config["max_gen_toks"], max_length)
-    if gen_budget != config["max_gen_toks"]:
-        print(
-            f"clamped max_gen_toks {config['max_gen_toks']} -> {gen_budget} to fit served context {max_length}",
-            flush=True,
-        )
     # Model-level extra sampler kwargs (skip_special_tokens, repetition_penalty, ...) ride on the same
     # --gen_kwargs list as the generation budget; lm-eval forwards them on both the completions and chat
     # routes (MCQ tasks ignore gen_kwargs). A per-model value overrides the max_gen_toks default only if
-    # it keys "max_gen_toks", which the registry does not. Without a configured cap, an Evalchemy
-    # chat benchmark gets neither the gen_kwargs budget nor --max_tokens and sizes its own responses
-    # from the served context and its stored longest prompt; an lm-eval-native generation task gets
-    # the served context minus a prompt reserve as max_gen_toks.
-    gen_kwargs = [f"{key}={value}" for key, value in config.get("extra_gen_kwargs", {}).items()]
-    budget_args: list[str] = []
-    if gen_budget is not None:
-        gen_kwargs.insert(0, f"max_gen_toks={gen_budget}")
-        # Chat-native benchmarks (MATH500-style) size their generations from --max_tokens, not
-        # gen_kwargs; lm-eval-native tasks ignore it.
-        budget_args = ["--max_tokens", str(gen_budget)]
-    elif task["generation"] and not is_evalchemy_benchmark(task["name"]):
-        native_budget = native_generation_budget(max_length)
-        if native_budget is not None:
-            print(
-                f"native task {task['name']}: max_gen_toks={native_budget} from served context {max_length}", flush=True
-            )
-            gen_kwargs.insert(0, f"max_gen_toks={native_budget}")
+    # it keys "max_gen_toks", which the registry does not.
+    budget_kwargs, budget_args = budget_arguments(config, task, max_length)
+    gen_kwargs = budget_kwargs + [f"{key}={value}" for key, value in config.get("extra_gen_kwargs", {}).items()]
     cmd = [
         str(Path(python).with_name("evalchemy")),
         "--model",

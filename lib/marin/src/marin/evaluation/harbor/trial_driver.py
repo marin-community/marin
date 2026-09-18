@@ -343,13 +343,13 @@ def _harbor_config_commit() -> str:
     return commit
 
 
-def _preflight_dataset_path(policy_path: Path, metadata: _DatasetMetadata, workdir: Path) -> str | None:
+def _preflight_dataset_path(
+    policy_path: Path, metadata: _DatasetMetadata, workdir: Path, hf_token: str | None
+) -> str | None:
     """Local task directory for the placeholder job, or ``None`` for a Harbor registry dataset.
 
     Harbor validates ``datasets[].name`` as a registry package reference, so a Hugging Face source
-    has to reach ``Job.create`` as a path, the same way the evaluation worker materializes it at run
-    time (``marin.evaluation.harbor.dataset``). The snapshot lives under the preflight's temporary
-    directory and is discarded with it; the download itself is cached under the Hugging Face cache.
+    has to reach ``Job.create`` as a path, as the evaluation worker does at run time.
     """
     if metadata.kind == _DatasetKind.LOCAL:
         return str((policy_path.parent / metadata.selector).resolve())
@@ -362,7 +362,7 @@ def _preflight_dataset_path(policy_path: Path, metadata: _DatasetMetadata, workd
             repo_type="dataset",
             revision=metadata.revision,
             max_workers=_HF_SNAPSHOT_WORKERS,
-            token=os.environ.get("HF_TOKEN") or False,
+            token=hf_token or False,
         )
         root = workdir / "hf_dataset"
         shutil.copytree(snapshot, root, symlinks=False)
@@ -371,7 +371,7 @@ def _preflight_dataset_path(policy_path: Path, metadata: _DatasetMetadata, workd
     return None
 
 
-def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict[str, object]:
+def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object], hf_token: str | None) -> dict[str, object]:
     document = _document(path)
     config = JobConfig.model_validate(document, extra="forbid")
     if config.tasks:
@@ -387,7 +387,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
     stable_config = _stable_config(config)
     stable_policy_json = _stable_policy_json(stable_config)
     with tempfile.TemporaryDirectory(prefix="marin-harbor-preflight-job-") as jobs_dir:
-        dataset_path = _preflight_dataset_path(path, dataset_metadata, Path(jobs_dir))
+        dataset_path = _preflight_dataset_path(path, dataset_metadata, Path(jobs_dir), hf_token)
         effective = _effective_config(
             stable_config,
             RuntimeOverlay(
@@ -440,6 +440,7 @@ def _preflight(request_path: Path) -> None:
     if not isinstance(requests, list):
         raise ValueError("Harbor preflight request must be a list")
     results: list[dict[str, object]] = []
+    hf_token = os.environ.get("HF_TOKEN")
     for request in requests:
         if not isinstance(request, Mapping):
             raise ValueError("Harbor preflight request entries must be objects")
@@ -449,7 +450,7 @@ def _preflight(request_path: Path) -> None:
             raise ValueError("Harbor preflight request path must be a string")
         if not isinstance(model_agent_kwargs, Mapping):
             raise ValueError("Harbor preflight model agent kwargs must be a mapping")
-        results.append(_preflight_one(Path(path), model_agent_kwargs))
+        results.append(_preflight_one(Path(path), model_agent_kwargs, hf_token))
     sys.stdout.write(json.dumps(results, ensure_ascii=False, separators=(",", ":")))
 
 

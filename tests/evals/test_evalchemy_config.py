@@ -173,23 +173,23 @@ def test_unset_budget_lets_evalchemy_size_its_own_benchmark(monkeypatch):
     assert model_args["max_length"] == "40960"
 
 
-def test_unset_budget_sizes_native_generation_task_from_served_context(monkeypatch):
-    # lm-eval-native tasks only read max_gen_toks (default 256), so the client hands them the served
-    # context minus a prompt reserve; --max_tokens stays off because it is an Evalchemy-only knob.
+@pytest.mark.parametrize(
+    ("max_length", "expected_gen_kwargs"),
+    [
+        # Served context known: the native task gets the context minus the prompt reserve.
+        (40960, "max_gen_toks=36864,skip_special_tokens=false"),
+        # Unknown context: nothing to derive from, only the model's extra kwargs go out.
+        (None, "skip_special_tokens=false"),
+    ],
+)
+def test_unset_budget_sizes_native_generation_task_from_served_context(monkeypatch, max_length, expected_gen_kwargs):
+    # lm-eval-native tasks only read max_gen_toks (default 256); --max_tokens stays off because it is
+    # an Evalchemy-only knob.
     monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: False)
     config = _payload(_config(max_gen_toks=None, extra_gen_kwargs={"skip_special_tokens": "false"}))
-    cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", 40960)
+    cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", max_length)
 
-    assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=36864,skip_special_tokens=false"
-    assert "--max_tokens" not in cmd
-
-
-def test_unset_budget_without_served_context_sends_only_extra_gen_kwargs(monkeypatch):
-    monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: False)
-    config = _payload(_config(max_gen_toks=None, extra_gen_kwargs={"skip_special_tokens": "false"}))
-    cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", None)
-
-    assert cmd[cmd.index("--gen_kwargs") + 1] == "skip_special_tokens=false"
+    assert cmd[cmd.index("--gen_kwargs") + 1] == expected_gen_kwargs
     assert "--max_tokens" not in cmd
 
 
