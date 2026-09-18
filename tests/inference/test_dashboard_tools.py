@@ -4,11 +4,13 @@
 """Tests for dashboard tool schemas, execution, and agent workspaces."""
 
 import asyncio
+import os
 import subprocess
 from collections.abc import Iterator
 from dataclasses import asdict
 from pathlib import Path
 
+import marin.inference.repository_snapshot as repository_snapshot
 import pytest
 import requests
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
@@ -16,7 +18,7 @@ from marin.inference.chat_template_protocol import ChatTemplateProtocol, ToolCal
 from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, build_dashboard_app, serve_app_background
 from marin.inference.python_tool_routes import TOOL_WORKER_TIMEOUT
 from marin.inference.python_tools import python_tools_from_source
-from marin.inference.repository_snapshot import clone_repository_snapshot
+from marin.inference.repository_snapshot import RepositorySnapshotTooLarge, clone_repository_snapshot
 
 from experiments.llama import llama3_instruct_trainable_chat_template
 from experiments.sft.delphi_chat_template import DELPHI_V0_CHAT_TEMPLATE
@@ -44,8 +46,9 @@ def spin() -> int:
 DASHBOARD_REQUEST_TIMEOUT = TOOL_WORKER_TIMEOUT + 5
 
 
-def _git(repository: Path, *arguments: str) -> None:
-    subprocess.run(["git", "-C", str(repository), *arguments], check=True, capture_output=True)
+def _git(repository: Path, *arguments: str) -> str:
+    result = subprocess.run(["git", "-C", str(repository), *arguments], check=True, capture_output=True)
+    return result.stdout.decode()
 
 
 def _repository_with_history(repository: Path) -> None:
@@ -70,6 +73,8 @@ def _repository_with_history(repository: Path) -> None:
     (repository / "node_modules").mkdir()
     (repository / "node_modules/dependency.js").write_text("ignored\n")
     _git(repository, "add", ".")
+    parent_commit = _git(repository, "rev-parse", "HEAD").strip()
+    _git(repository, "update-index", "--add", "--cacheinfo", f"160000,{parent_commit},vendor")
     _git(
         repository,
         "-c",
@@ -343,8 +348,32 @@ def test_repository_import_clones_bounded_text_history(tmp_path):
         "README.md": "second revision\n",
         "src/main.py": "print('hello')\n",
     }
-    assert snapshot.skipped_files == 2
+    assert snapshot.skipped_files == 3
     assert not snapshot.truncated_history
+
+
+def test_repository_clone_stops_when_temporary_storage_exceeds_limit(tmp_path, monkeypatch):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    marker = tmp_path / "clone-finished"
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        "#!/bin/sh\n"
+        'for destination in "$@"; do :; done\n'
+        'mkdir -p "$destination"\n'
+        'head -c 2048 /dev/zero > "$destination/pack"\n'
+        "sleep 1\n"
+        'touch "$MARIN_CLONE_MARKER"\n'
+    )
+    fake_git.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+    monkeypatch.setenv("MARIN_CLONE_MARKER", str(marker))
+    monkeypatch.setattr(repository_snapshot, "MAX_REPOSITORY_CLONE_BYTES", 1024)
+
+    with pytest.raises(RepositorySnapshotTooLarge):
+        asyncio.run(clone_repository_snapshot("https://github.com/owner/repository"))
+
+    assert not marker.exists()
 
 
 def test_dashboard_shell_workspace_recreates_imported_git_history(dashboard_tool_base_url, tmp_path):

@@ -6,8 +6,10 @@
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
@@ -136,7 +138,7 @@ def _clone_repository(clone_url: str, destination: Path) -> None:
         }
     )
     try:
-        subprocess.run(
+        process = subprocess.Popen(
             [
                 "git",
                 "-c",
@@ -156,19 +158,56 @@ def _clone_repository(clone_url: str, destination: Path) -> None:
                 clone_url,
                 str(destination),
             ],
-            check=True,
-            capture_output=True,
-            timeout=REPOSITORY_CLONE_TIMEOUT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=environment,
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise RepositoryCloneError(f"GitHub repository clone exceeded {REPOSITORY_CLONE_TIMEOUT} seconds") from exc
     except FileNotFoundError as exc:
         raise RepositoryCloneError("Git is unavailable on the dashboard server") from exc
-    except subprocess.CalledProcessError as exc:
-        detail = exc.stderr.decode(errors="replace").strip().splitlines()
+
+    deadline = time.monotonic() + REPOSITORY_CLONE_TIMEOUT
+    while process.poll() is None:
+        if _directory_bytes(destination) > MAX_REPOSITORY_CLONE_BYTES:
+            _kill_clone(process)
+            raise RepositorySnapshotTooLarge(f"Repository clone exceeds {MAX_REPOSITORY_CLONE_BYTES} bytes")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _kill_clone(process)
+            raise RepositoryCloneError(f"GitHub repository clone exceeded {REPOSITORY_CLONE_TIMEOUT} seconds")
+        try:
+            _, stderr = process.communicate(timeout=min(0.1, remaining))
+        except subprocess.TimeoutExpired:
+            continue
+        break
+    else:
+        _, stderr = process.communicate()
+
+    if process.returncode != 0:
+        detail = stderr.decode(errors="replace").strip().splitlines()
         suffix = f": {detail[-1]}" if detail else ""
-        raise RepositoryCloneError(f"Could not clone public GitHub repository{suffix}") from exc
+        raise RepositoryCloneError(f"Could not clone public GitHub repository{suffix}")
+
+
+def _directory_bytes(root: Path) -> int:
+    total_bytes = 0
+    for directory, _, filenames in os.walk(root):
+        for filename in filenames:
+            try:
+                total_bytes += os.stat(Path(directory, filename), follow_symlinks=False).st_size
+            except FileNotFoundError:
+                continue
+            if total_bytes > MAX_REPOSITORY_CLONE_BYTES:
+                return total_bytes
+    return total_bytes
+
+
+def _kill_clone(process: subprocess.Popen[bytes]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.communicate()
 
 
 def repository_snapshot_from_git(repository_path: Path) -> RepositorySnapshot:
@@ -231,7 +270,6 @@ def _text_snapshot(repository_path: Path, commit_id: str, blob_cache: dict[str, 
         try:
             metadata, raw_path = entry.split(b"\t", maxsplit=1)
             mode, kind, object_id, size_text = metadata.decode().split()
-            size = int(size_text)
         except (UnicodeDecodeError, ValueError) as exc:
             raise RepositoryCloneError("Git returned an invalid tree entry") from exc
         try:
@@ -242,6 +280,10 @@ def _text_snapshot(repository_path: Path, commit_id: str, blob_cache: dict[str, 
         if kind != "blob" or mode not in {"100644", "100755"} or not _is_repository_path(path):
             skipped_files += 1
             continue
+        try:
+            size = int(size_text)
+        except ValueError as exc:
+            raise RepositoryCloneError("Git returned an invalid blob size") from exc
         if size > MAX_WORKSPACE_FILE_BYTES:
             skipped_files += 1
             continue
