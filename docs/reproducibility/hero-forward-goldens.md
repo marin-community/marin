@@ -96,17 +96,13 @@ the BF16 values passed to expert computation, widened to float32 for storage.
 Padding uses expert ID `-1`, combine weight `0`, and gap `0`. A small cutoff gap is reported when a route differs;
 it never excuses the mismatch. The expert parameters remain in the checkpoint.
 
-## Reproduce a reviewed baseline
+## Reproduce the 4K reference
 
 Hero trained with `MasterParamMode.DEVICE`. This checkpoint therefore stores its authoritative FP32 master copy
 directly under `params`; it has no separate `master_params` tree. The producer validates that layout and dtype,
 applies the checkpoint's pending query-bias values once with the native restore rule, casts the result to BF16,
 and then freezes that effective bias. Its only intentional model override is the existing `sonic_cute` dropless
 MoE implementation.
-
-The 8,192- and 16,384-token diagnostics are deliberately skipped. The checkpoint-writing configuration fixes
-`max_seq_len=4096`; either run would require changing model semantics rather than exercising this fixed model.
-The manifest retains this result explicitly.
 
 For a reviewed replacement, first update the pinned checkpoint or producer and bump the release constant. Then
 commit the exact producer source and submit from a clean tree:
@@ -119,3 +115,52 @@ marin-env uv run --frozen python -m experiments.grug.moe_hero_ep.ops.forward_gol
 The job uses interactive priority on `cw-us-east-08a`, eight four-GPU GB200 nodes, and the source revision named
 in the request. It refuses to overwrite a complete or partial bundle path. Run `--mode smoke` first after a
 producer change; that exercises the same full checkpoint and 32-GPU topology with 64-token rows.
+
+## Longer-context diagnostics
+
+The original 4K manifest says that 8,192- and 16,384-token runs would require a model-semantic change. That
+conclusion came from a producer guard against inputs longer than `max_seq_len`; it was not a runtime result. The
+manifest remains unchanged as part of the published 4K record. This section supersedes only that skip rationale.
+
+`max_seq_len=4096` fixes the training input length, optimizer accounting, and exported model metadata. Native
+`Transformer.__call__` derives its sequence length from the input tensor. Fused RoPE positions, full-causal FA4
+bounds, sliding-window bounds, and token validity are built at that runtime length. The longer runs removed the
+producer guard and left the checkpoint model dictionary unchanged, including `max_seq_len=4096`, RoPE, attention,
+and kernel choices.
+
+| Input length | Iris job | Bundle | `arrays.npz` |
+| --- | --- | --- | --- |
+| 8,192 | [8K diagnostic](https://iris.oa.dev/#/job/%2Fhero-goldens%2Fhero-forward-diagnostic-8192-0b2ca7688e4b) | `s3://marin-us-east-02a/marin/reference/hero-forward/hero-535b-step108000-bf16-8k-diagnostic-v1-5a7dffedea5c` | 317,548,529 bytes; SHA-256 `906a2bfb14d40fa23596646807692727e59f9006afda885e95995464b93d4632` |
+| 16,384 | [16K diagnostic](https://iris.oa.dev/#/job/%2Fhero-goldens%2Fhero-forward-diagnostic-16384-0fa004114827) | `s3://marin-us-east-02a/marin/reference/hero-forward/hero-535b-step108000-bf16-16k-diagnostic-v1-b4f39ffb123b` | 632,080,781 bytes; SHA-256 `3879ce6770f7016a50b35f38334e455e07b7d7a671ff05780c5fae9d9cc7ae42` |
+
+Each job ran one fixed token sequence repeated across the 32 rows required by the eight-node, 32-GB200 topology.
+The 8K and 16K archives contain route tensors shaped `[48, 32, 8192, 8]` and `[48, 32, 16384, 8]`, respectively.
+For both lengths, the ordinary repeat and traced-versus-ordinary checks had zero maximum numerical change and zero
+top-token changes. Both stored bundles were fetched, checksum-validated, loaded without importing JAX or Levanter,
+and exactly self-compared through the NumPy-only consumer. Target alignment and global expert-ID bounds also passed.
+
+The [first 16K attempt](https://iris.oa.dev/#/job/%2Fhero-goldens%2Fhero-forward-diagnostic-16384-c9633c7bbc64)
+completed both ordinary forwards and the traced forward, then nonzero ranks entered JAX clean-exit shutdown while
+process zero materialized the 1.7 GB uncompressed route trace. The coordination service aborted two minutes later.
+Producer revision `231c6b08d94e75acfe3806ede58fa8817e75d9f3` keeps all ranks at a global barrier until
+process zero finishes validation, compression, and upload. The linked 16K retry completed all eight tasks in
+5 minutes 8 seconds.
+
+The successful runs show that this native implementation can execute these fixed inputs. They do not establish a
+supported Hero context length: the checkpoint was trained at 4,096 tokens, and these runs did not add context
+extension or qualify model quality beyond that length.
+
+To reproduce each published request, check out its recorded producer revision and use a fresh CoreWeave object
+storage root because the producer refuses to overwrite an existing bundle:
+
+```bash
+# Published 8K request.
+git checkout 79670824e907ebcc4292c6d034983c8a0036e51d
+marin-env uv run --frozen python -m experiments.grug.moe_hero_ep.ops.forward_goldens \
+  submit --mode diagnostic-8192 --store-root s3://marin-us-east-02a/tmp/<fresh-8k-root>
+
+# Published 16K request, including the rank-lifecycle barrier.
+git checkout 231c6b08d94e75acfe3806ede58fa8817e75d9f3
+marin-env uv run --frozen python -m experiments.grug.moe_hero_ep.ops.forward_goldens \
+  submit --mode diagnostic-16384 --store-root s3://marin-us-east-02a/tmp/<fresh-16k-root>
+```
