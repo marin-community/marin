@@ -1,0 +1,4 @@
+title = "Zephyr"
+description = "Explore Zephyr pipelines, execution history, and reducer input sizes."
+build_command = "npm ci && npm run build"
+python_entrypoint = "server.app:create_api"
