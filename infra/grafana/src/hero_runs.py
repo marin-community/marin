@@ -9,12 +9,13 @@ reports a running task. Its last path component is `<run-id>-coord` or
 contract also gives the exact `run_id` in its Levanter telemetry. See
 docs/ops/training-stall-alert-contract.md.
 
-`phase_enrollment_query` is the second path: a run that still publishes Levanter
-`phase` telemetry. The run-health projections watch the union, so an outage on
-one side leaves the other watching. See docs/ops/hero-run-health-alerts.md.
+Recent Levanter `phase` telemetry is the second path. The run-health projections
+watch the union, so an outage on one side leaves the other watching. A separate
+exact-run query recovers the current execution for an Iris-active run whose
+heartbeat is already stale. See docs/ops/hero-run-health-alerts.md.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -124,9 +125,8 @@ def task_state_query(now: datetime) -> str:
     )
 
 
-def phase_enrollment_query(now: datetime) -> str:
-    """Return the latest Levanter phase and execution identity for each hero run."""
-    start = sql_epoch_ms(now - PHASE_EXECUTION_LOOKBACK)
+def _phase_query(now: datetime, lookback: timedelta, predicate: str) -> str:
+    start = sql_epoch_ms(now - lookback)
     end = sql_epoch_ms(now)
     return (
         "WITH samples AS ("
@@ -134,7 +134,7 @@ def phase_enrollment_query(now: datetime) -> str:
         "run_id, job_id, execution_uid, timestamp_ms, seq "
         f"FROM {LEVANTER_METRICS_TABLE} "
         f"WHERE name = '{PHASE_METRIC}' AND process_index = 0 "
-        f"AND run_id LIKE '{HERO_RUN_PREFIX}%' AND job_id IS NOT NULL AND execution_uid IS NOT NULL "
+        f"AND {predicate} AND job_id IS NOT NULL AND execution_uid IS NOT NULL "
         f"AND timestamp_ms >= {start} AND timestamp_ms < {end}"
         "), ranked AS ("
         "SELECT origin_cluster, run_id, job_id, execution_uid, timestamp_ms, "
@@ -145,6 +145,32 @@ def phase_enrollment_query(now: datetime) -> str:
         "SELECT origin_cluster AS cluster, run_id, job_id AS telemetry_job, execution_uid, "
         "to_timestamp_millis(timestamp_ms) AS phase_at "
         "FROM ranked WHERE rn = 1"
+    )
+
+
+def recent_phase_query(now: datetime) -> str:
+    """Return the latest recent phase and execution identity for each hero run."""
+    return _phase_query(
+        now,
+        PHASE_ENROLLMENT_LOOKBACK,
+        f"run_id LIKE '{HERO_RUN_PREFIX}%'",
+    )
+
+
+def phase_execution_query(now: datetime, runs: Sequence[RunIdentity]) -> str:
+    """Return the latest phase identity for exact active hero runs."""
+    # Keep the exact run clause at the top level so Finelog can prune the
+    # run-partitioned table before applying the cluster/run identity pairs.
+    run_predicate = run_id_predicate(runs)
+    identities = sorted({(run.cluster, run.run_id) for run in runs})
+    identity_predicate = " OR ".join(
+        "(" f"COALESCE(NULLIF(cluster,''),'unknown') = {sql_string(cluster)} " f"AND run_id = {sql_string(run_id)}" ")"
+        for cluster, run_id in identities
+    )
+    return _phase_query(
+        now,
+        PHASE_EXECUTION_LOOKBACK,
+        f"{run_predicate} AND ({identity_predicate})",
     )
 
 
@@ -171,6 +197,14 @@ def root_job_for(telemetry_job: str) -> str | None:
         if hero_run_id(candidate) is not None:
             return candidate
     return None
+
+
+def phase_root_key(row: Mapping[str, object]) -> tuple[str, str] | None:
+    """Return the cluster and hero root named by a phase query row."""
+    root_job = root_job_for(str(row["telemetry_job"]))
+    if root_job is None:
+        return None
+    return str(row["cluster"]), root_job
 
 
 def active_hero_runs(task_states: pa.Table, now: datetime) -> tuple[HeroRun, ...]:
