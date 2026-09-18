@@ -23,6 +23,10 @@ from experiments.post_training.tasktrove.mcqa_routing import (
     read_batch_output,
     select_tasks,
 )
+from experiments.post_training.tasktrove.mcqa_routing_pipeline import (
+    RoutingArtifactConfig,
+    aggregate_worker_outputs,
+)
 
 
 def _task(index: int) -> RoutingTask:
@@ -225,6 +229,67 @@ def test_read_batch_output_allows_failed_batch_without_output():
 
     assert output == ""
     assert errors is None
+
+
+def test_aggregate_worker_outputs_writes_complete_sorted_ledger(tmp_path):
+    config = RoutingArtifactConfig(
+        input_path="input.parquet",
+        output_path=str(tmp_path),
+        source="source",
+        git_revision="abc123",
+        sample_size=2,
+        sample_seed="sample",
+        request_batch_size=20,
+        relay_job="/relay",
+        poll_seconds=10,
+        worker_count=2,
+        worker_cpu=2,
+        worker_ram="4g",
+        worker_disk="8g",
+    )
+    rows = [
+        {
+            "task_id": "task-b",
+            "route": "sft",
+            "route_source": "best-effort-fallback",
+            "policy_version": "v1",
+            "reason_codes": ["fallback:invalid_row"],
+            "subject": "other",
+        },
+        {
+            "task_id": "task-a",
+            "route": "rl",
+            "route_source": "glm-5.3",
+            "policy_version": "v1",
+            "reason_codes": ["model_route:rl"],
+            "subject": "math",
+        },
+    ]
+    for worker_index, row in enumerate(rows):
+        worker_root = tmp_path / f"worker-{worker_index:03d}"
+        worker_root.mkdir()
+        (worker_root / "decisions.jsonl").write_text(json.dumps(row) + "\n")
+        mapping = {key: row[key] for key in ("task_id", "route", "route_source", "policy_version", "reason_codes")}
+        (worker_root / "route-mappings.jsonl").write_text(json.dumps(mapping) + "\n")
+        (worker_root / "summary.json").write_text(
+            json.dumps(
+                {
+                    "requests": 1,
+                    "degraded_requests": int(row["route_source"] == "best-effort-fallback"),
+                    "fallback_rows": int(row["route_source"] == "best-effort-fallback"),
+                }
+            )
+        )
+
+    summary = aggregate_worker_outputs(config)
+
+    assert summary["routed_rows"] == 2
+    assert summary["route_counts"] == {"sft": 1, "rl": 1}
+    assert summary["fallback_rows"] == 1
+    assert [json.loads(line)["task_id"] for line in (tmp_path / "route-mappings.jsonl").read_text().splitlines()] == [
+        "task-a",
+        "task-b",
+    ]
 
 
 @pytest.mark.parametrize(

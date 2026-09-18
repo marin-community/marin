@@ -152,33 +152,38 @@ uv run python -m experiments.post_training.tasktrove.publish export \
 
 ## Route MCQA tasks
 
-`mcqa_routing.py` assigns mechanically valid MCQA rows to `rl`, `sft`, or `garbage` with GLM-5.3.
-Run it as an Iris job with one or more replicas and provide `GLM_BULK_TOKEN` through the job's secret
-environment. Each replica reads the Parquet row groups whose indexes belong to that replica and writes
-to a separate `worker-NNN` output prefix.
+`mcqa_routing_pipeline.py` builds an `ArtifactStep` that assigns mechanically valid MCQA rows to `rl`,
+`sft`, or `garbage` with GLM-5.3. Run the module in a single Iris coordinator and provide
+`GLM_BULK_TOKEN` through the job environment. The step launches a replicated CPU worker job. Each
+worker reads its assigned Parquet row groups and writes to a separate `worker-NNN` output prefix.
 
 ```bash
-uv run python -m experiments.post_training.tasktrove.mcqa_routing \
-  --input s3://marin-us-east-02a/marin/tasktrove/routing/mcqa-glm53-v1/input/mechanical-ledger.parquet \
-  --output s3://marin-us-east-02a/marin/tasktrove/routing/<run> \
-  --git-revision <bundled-marin-revision> \
-  --sample-size 10000 \
+uv run python -m experiments.post_training.tasktrove.mcqa_routing_pipeline \
+  --run-id <unique-run-id> \
+  --sample-size 50000 \
   --sample-seed <stable-sample-name> \
-  --request-batch-size 20
+  --worker-count 16 \
+  --request-batch-size 20 \
+  --ttl-days 7 \
+  --run
 ```
 
-`--sample-size` is the total across replicas. Zero routes every mechanical survivor. Each chat-completion
-request contains at most `--request-batch-size` questions. A replica submits all of its requests as one
-GLM Batch API job. Each completion forces one `submit_routes` tool call with a strict JSON Schema. The
-client also checks each returned row ID and model field. Missing or invalid rows are routed to SFT with
-an explicit fallback reason; valid rows from the same response are retained. A failed or expired server-side
-batch produces SFT fallback mappings for its missing rows. Batch state is written before polling, so an Iris
-retry after a transport failure resumes the same server-side batch without paying for a second pass.
+The module resolves its output with `marin_temp_bucket` under a lifecycle-managed S3 TTL prefix.
+`--sample-size` is the total across workers. Zero routes every mechanical survivor. Each chat-completion
+request contains at most `--request-batch-size` questions. A worker submits all of its requests as one GLM
+Batch API job. Each completion forces one `submit_routes` tool call with a strict JSON Schema. The client
+also checks each returned row ID and model field. Missing or invalid rows are routed to SFT with an explicit
+fallback reason; valid rows from the same response are retained. A failed or expired server-side batch
+produces SFT fallback mappings for its missing rows.
 
-Use a new output prefix when the input, sample, rubric, model, or batch settings change. Existing batch
-state is resumed without comparing those settings.
+The step writes `run-config.json` before launching workers. A rerun against the same output path must have
+the same config. Workers with `summary.json` return immediately; unfinished workers resume the batch ID in
+their `batch-state.json`. This permits recovery after coordinator, worker, or transport failure without
+reclassifying completed work. Use a new run ID when the input, sample, rubric, model, or batch settings
+change.
 
-Each worker writes:
+The artifact root contains combined `decisions.jsonl`, `route-mappings.jsonl`, and `summary.json` files.
+Each worker also writes:
 
 | path | contents |
 |---|---|

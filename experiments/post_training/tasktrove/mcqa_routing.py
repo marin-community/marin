@@ -121,6 +121,20 @@ class RoutingTask:
 
 
 @dataclass(frozen=True)
+class RoutingConfig:
+    input_path: str
+    output_path: str
+    source: str
+    git_revision: str
+    sample_size: int
+    sample_seed: str
+    request_batch_size: int
+    relay_job: str
+    poll_seconds: float
+    expected_workers: int | None = None
+
+
+@dataclass(frozen=True)
 class GlmDecision:
     row_id: int
     route: Route
@@ -638,10 +652,14 @@ def _worker_sample_size(total: int, worker_index: int, worker_count: int) -> int
     return quotient + (worker_index < remainder)
 
 
-def run(args: argparse.Namespace) -> None:
+def run_worker(config: RoutingConfig) -> None:
     worker_index, worker_count = _worker_coordinates()
-    selected_rows = None if args.sample_size == 0 else _worker_sample_size(args.sample_size, worker_index, worker_count)
-    output_root = StoragePath(args.output) / f"worker-{worker_index:03d}"
+    if config.expected_workers is not None and worker_count != config.expected_workers:
+        raise ValueError(f"Iris launched {worker_count} workers, expected {config.expected_workers}")
+    selected_rows = (
+        None if config.sample_size == 0 else _worker_sample_size(config.sample_size, worker_index, worker_count)
+    )
+    output_root = StoragePath(config.output_path) / f"worker-{worker_index:03d}"
     output_root.mkdirs()
     summary_path = output_root / "summary.json"
     if summary_path.exists():
@@ -650,18 +668,18 @@ def run(args: argparse.Namespace) -> None:
 
     started = time.time()
     tasks, scan_summary = select_tasks(
-        args.input,
-        source=args.source,
+        config.input_path,
+        source=config.source,
         worker_index=worker_index,
         worker_count=worker_count,
         sample_size=selected_rows,
-        sample_seed=args.sample_seed,
+        sample_seed=config.sample_seed,
     )
     logger.info("worker %d selected %d rows from %d source rows", worker_index, len(tasks), scan_summary["source_rows"])
 
-    base_url = resolve_base_url(args.relay_job)
+    base_url = resolve_base_url(config.relay_job)
     token = os.environ["GLM_BULK_TOKEN"]
-    lines, by_custom_id = batch_lines(tasks, args.request_batch_size, worker_index)
+    lines, by_custom_id = batch_lines(tasks, config.request_batch_size, worker_index)
     request_path = output_root / "requests.jsonl"
     if not request_path.exists():
         request_path.write_text(_jsonl(lines))
@@ -684,10 +702,10 @@ def run(args: argparse.Namespace) -> None:
             worker_index,
             batch_id,
             len(lines),
-            args.request_batch_size,
+            config.request_batch_size,
         )
 
-    batch = wait_for_batch(base_url, token, batch_id, args.poll_seconds)
+    batch = wait_for_batch(base_url, token, batch_id, config.poll_seconds)
     raw_output, raw_errors = read_batch_output(base_url, token, batch)
     (output_root / "raw-output.jsonl").write_text(raw_output)
     if raw_errors is not None:
@@ -711,14 +729,14 @@ def run(args: argparse.Namespace) -> None:
     summary = {
         "worker_index": worker_index,
         "worker_count": worker_count,
-        "input": args.input,
+        "input": config.input_path,
         "output": str(output_root),
-        "source": args.source,
-        "sample_seed": args.sample_seed,
-        "sample_size": args.sample_size,
-        "request_batch_size": args.request_batch_size,
+        "source": config.source,
+        "sample_seed": config.sample_seed,
+        "sample_size": config.sample_size,
+        "request_batch_size": config.request_batch_size,
         "requests": len(lines),
-        "git_revision": args.git_revision,
+        "git_revision": config.git_revision,
         "policy_version": POLICY_VERSION,
         "glm_batch": {
             "file_id": file_id,
@@ -776,4 +794,17 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    run(parse_args())
+    args = parse_args()
+    run_worker(
+        RoutingConfig(
+            input_path=args.input,
+            output_path=args.output,
+            source=args.source,
+            git_revision=args.git_revision,
+            sample_size=args.sample_size,
+            sample_seed=args.sample_seed,
+            request_batch_size=args.request_batch_size,
+            relay_job=args.relay_job,
+            poll_seconds=args.poll_seconds,
+        )
+    )
