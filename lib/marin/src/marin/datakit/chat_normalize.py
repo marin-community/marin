@@ -31,11 +31,10 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.18.1"
+CHAT_NORMALIZE_VERSION = "2026.09.18.2"
 MAX_REJECTED_RECORD_FRACTION = 0.05
 START_THINK = "<|start_think|>"
 END_THINK = "<|end_think|>"
-THINK_TOKENS = (START_THINK, END_THINK)
 
 
 _SAFE_TOOL_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]+")
@@ -266,13 +265,6 @@ def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field
     )
     if enable_thinking != has_analysis:
         raise ValueError("enable_thinking must match assistant analysis in the conversation")
-    if any(
-        token in message_text(message)
-        for message in messages
-        if message.author.role == Role.ASSISTANT
-        for token in THINK_TOKENS
-    ):
-        raise ValueError("Assistant content must not contain literal think tokens")
     tools = kwargs.get("tools", [])
     if not isinstance(tools, list):
         raise ValueError("tools must be a list of function definitions")

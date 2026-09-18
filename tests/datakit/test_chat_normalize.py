@@ -85,20 +85,6 @@ def test_normalization_rejects_missing_or_inconsistent_thinking_mode(mode):
             _normalize_chat_record(record, "messages", "id")
 
 
-def test_normalization_rejects_think_tokens_inside_assistant_text():
-    record = {
-        "messages": [
-            Message.from_role_and_content(Role.USER, "Question").to_dict(),
-            Message.from_role_and_content(Role.ASSISTANT, "<|start_think|>hidden")
-            .with_channel(ChatChannel.FINAL)
-            .to_dict(),
-        ],
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
-    with pytest.raises(ValueError, match="literal think tokens"):
-        _normalize_chat_record(record, "messages", "id")
-
-
 def test_normalization_rejects_thinking_mode_without_analysis():
     record = {
         "messages": [
