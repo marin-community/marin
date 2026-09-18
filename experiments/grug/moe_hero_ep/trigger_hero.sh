@@ -123,18 +123,16 @@ TARGET_CLUSTER=cw-us-east-08a
 TARGET_DESCRIPTION='11 x NVL72'
 short_uuid=$(uuidgen | tr '[:upper:]' '[:lower:]')
 short_uuid=${short_uuid:0:8}
-launch_tree_dirty=false
 launch_job_name="${RUN_ID}-coord-${short_uuid}"
-launch_record=$(printf '🤖 Hero launch requested.\n\n- Run ID: `%s`\n- Commit: `%s`\n- Tree dirty: `%s`\n- Coordinator job: `%s`\n- Target: `%s` (%s)' \
-  "$RUN_ID" "$launch_commit" "$launch_tree_dirty" "$launch_job_name" "$TARGET_CLUSTER" "$TARGET_DESCRIPTION")
 
 echo "Recording hero launch on ${HERO_ISSUE}"
 launch_record_file=$(mktemp)
 trap 'rm -f "$launch_record_file"' EXIT
-printf '%s\n\nW&B fork: `%s`; handoff checkpoint: `%s`.\n' \
-  "$launch_record" "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" > "$launch_record_file"
+printf '🤖 Hero launch requested.\n\n- Run ID: `%s`\n- Commit: `%s`\n- Coordinator job: `%s`\n- Target: `%s` (%s)\n\nW&B fork: `%s`; handoff checkpoint: `%s`.\n' \
+  "$RUN_ID" "$launch_commit" "$launch_job_name" "$TARGET_CLUSTER" "$TARGET_DESCRIPTION" \
+  "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" > "$launch_record_file"
 agent-gh issue comment "$HERO_ISSUE" --body-file "$launch_record_file"
-echo "Launching hero from commit ${launch_commit}; tree_dirty=${launch_tree_dirty}"
+echo "Launching hero from commit ${launch_commit}"
 
 IRIS_USER=marin uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
   --target-cluster "$TARGET_CLUSTER" \
