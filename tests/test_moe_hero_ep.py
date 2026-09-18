@@ -824,10 +824,14 @@ def test_block_threads_attention_padding_into_moe_metrics():
 
     with set_mesh(mesh):
         block = model.Block.init(cfg, key=jax.random.key(58))
-        _, metrics = jax.jit(lambda x: block(x, mask))(hidden)
+        _, metrics = jax.jit(lambda x: block(x, mask, trace_routes=True))(hidden)
 
     np.testing.assert_array_equal(jnp.sum(metrics["routing_counts_local"]), jnp.array(4.0))
     np.testing.assert_array_equal(metrics["skipped_assignments"], jnp.array(4, dtype=jnp.int32))
+    assert metrics["trace_expert_ids"].shape == (1, 8, cfg.num_experts_per_token)
+    np.testing.assert_array_equal(metrics["trace_expert_ids"][:, 4:], -1)
+    np.testing.assert_array_equal(metrics["trace_combine_weights"][:, 4:], 0)
+    np.testing.assert_array_equal(metrics["trace_cutoff_gap"][:, 4:], 0)
 
 
 @pytest.mark.parametrize("qb_estimator", [model.QbEstimator.HIST, model.QbEstimator.TOPK])

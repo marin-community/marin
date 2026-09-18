@@ -1056,20 +1056,18 @@ class MoEMLP(eqx.Module):
         )
         if trace_routes:
             trace_valid = token_valid[..., None]
-            trace_experts = rearrange(selected_experts, "(b s) k -> b s k", b=b, s=s)
-            trace_weights = rearrange(combine_weights, "(b s) k -> b s k", b=b, s=s)
-            cutoff_gap = rearrange(_topk_logits[:, -2] - _topk_logits[:, -1], "(b s) -> b s", b=b, s=s)
-            router_stats["trace_expert_ids"] = _batch_reshard(
-                jnp.where(trace_valid, trace_experts, jnp.asarray(-1, dtype=trace_experts.dtype))
+            trace_experts = _batch_reshard(rearrange(selected_experts, "(b s) k -> b s k", b=b, s=s))
+            trace_weights = _batch_reshard(rearrange(combine_weights, "(b s) k -> b s k", b=b, s=s))
+            cutoff_gap = _batch_reshard(rearrange(_topk_logits[:, -2] - _topk_logits[:, -1], "(b s) -> b s", b=b, s=s))
+            router_stats["trace_expert_ids"] = jnp.where(
+                trace_valid, trace_experts, jnp.asarray(-1, dtype=trace_experts.dtype)
             )
             # Cast after the BF16 combine-weight conversion so the trace records the values
             # supplied to expert computation while remaining portable in a NumPy archive.
-            router_stats["trace_combine_weights"] = _batch_reshard(
-                jnp.where(trace_valid, trace_weights, jnp.asarray(0, dtype=trace_weights.dtype)).astype(jnp.float32)
-            )
-            router_stats["trace_cutoff_gap"] = _batch_reshard(
-                jnp.where(token_valid, cutoff_gap, jnp.asarray(0, dtype=cutoff_gap.dtype))
-            )
+            router_stats["trace_combine_weights"] = jnp.where(
+                trace_valid, trace_weights, jnp.asarray(0, dtype=trace_weights.dtype)
+            ).astype(jnp.float32)
+            router_stats["trace_cutoff_gap"] = jnp.where(token_valid, cutoff_gap, jnp.asarray(0, dtype=cutoff_gap.dtype))
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha`.
         s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
         if self.cfg.qb_estimator == QbEstimator.HIST:
