@@ -21,6 +21,7 @@ from jaxtyping import Array, Bool, Float, Int
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call, gpu_compute_capability
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
+from levanter.grug.sharding import _partitioning_axes
 
 
 @dataclass(frozen=True)
@@ -255,6 +256,19 @@ def _segment_lengths_sharding(
     if isinstance(num_segments_sharding, NamedSharding) and len(num_segments_sharding.spec) == 1:
         return NamedSharding(num_segments_sharding.mesh, P(num_segments_sharding.spec[0], None))
     return None
+
+
+def _assert_sequence_axis_unsharded(q: Float[Array, "B S H D"]) -> None:
+    """Reject context-parallel queries: the THD path packs tokens with global positions."""
+    sharding = _sharding_of(q)
+    if not isinstance(sharding, NamedSharding) or len(sharding.spec) <= 1:
+        return
+    # A length-1 axis named on the sequence dim (see ``compact_grug_mesh``) partitions nothing.
+    if _partitioning_axes(sharding.spec[1], sharding.mesh):
+        raise NotImplementedError(
+            "gpu_fa4_thd_attention does not support a sharded q sequence axis (context parallelism); "
+            f"got sharding {sharding.spec}. Use the gpu_fa4_cute backend instead."
+        )
 
 
 def _sharding_of(x: Array | None) -> jax.sharding.Sharding | None:
@@ -820,6 +834,7 @@ def gpu_fa4_thd_attention(
     """
     if jax.default_backend() != "gpu":
         raise RuntimeError("gpu_fa4_thd_attention requires the JAX GPU backend.")
+    _assert_sequence_axis_unsharded(q)
     _validate_simple_causal_self_attention(q, k, v, mask, backend_name="gpu_fa4_thd_attention")
     assert isinstance(mask, AttentionMask)
     if mask.thd_segment_metadata is None:

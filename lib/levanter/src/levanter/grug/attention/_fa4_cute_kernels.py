@@ -41,7 +41,7 @@ after the backend has already imported the optional CUDA-only modules.
 The first target is BSHD BF16/FP16 causal self-attention with packed segment
 metadata:
 
-    valid[b, q] and lower_bounds[b, q] <= k <= q
+    valid[b, q] and lower_bounds[b, q] <= k <= q + q_offset
 
 The dynamic segment mask is applied in every N tile. That is simpler than the
 FlashAttention v2 sample's split between masked and unmasked tiles and avoids
@@ -54,6 +54,8 @@ Nontrivial differences from upstream FA4/CuTe:
   metadata, not as cu_seqlens or a dense attention mask.
 - The forward score tile applies the segment/causal predicate immediately before
   softmax exponentiation.
+- ``q_offset`` (context parallelism) gives the global position of local query 0, so a
+  sequence-sharded Q block keeps the causal frontier of its own rows.
 - The backward launcher reuses upstream preprocess/postprocess, but the main
   backward kernel is the segmented port in ``_fa4_cute_segmented_bwd``.
 """
@@ -179,7 +181,7 @@ def segmented_flash_attention_forward_launcher(
 
     Returns:
         A ``cute.jit`` launcher with the JAX ``cutlass_call`` signature:
-        ``(stream, q, k, v, lower_bounds, valid, out, lse, *, softmax_scale)``.
+        ``(stream, q, k, v, lower_bounds, valid, q_offset, out, lse, *, softmax_scale)``.
     """
     _validate_config(
         head_dim=head_dim,
@@ -249,6 +251,7 @@ def segmented_flash_attention_forward_launcher(
             mV: cute.Tensor,
             mLowerBounds: cute.Tensor,
             mValid: cute.Tensor,
+            mQOffset: cute.Tensor,
             mO: cute.Tensor,
             mLSE: cute.Tensor,
             softmax_scale: cutlass.Float32,
@@ -355,6 +358,7 @@ def segmented_flash_attention_forward_launcher(
                 mV,
                 mLowerBounds,
                 mValid,
+                mQOffset,
                 mO,
                 mLSE,
                 softmax_scale_log2,
@@ -376,6 +380,7 @@ def segmented_flash_attention_forward_launcher(
             mV: cute.Tensor,
             mLowerBounds: cute.Tensor,
             mValid: cute.Tensor,
+            mQOffset: cute.Tensor,
             mO: cute.Tensor,
             mLSE: cute.Tensor,
             softmax_scale_log2: cutlass.Float32,
@@ -392,8 +397,11 @@ def segmented_flash_attention_forward_launcher(
             m_block, batch_idx, q_head = cute.arch.block_idx()
             kv_head = q_head // self._qhead_per_kvhead
 
+            # Context parallelism: local query i sits at global key position i + q_offset,
+            # so every causal upper bound below shifts by it. Zero for unsharded queries.
+            q_offset = mQOffset[0]
             n_block_max = min(
-                cute.ceil_div((m_block + 1) * self._m_block_size, self._n_block_size),
+                cute.ceil_div((m_block + 1) * self._m_block_size + q_offset, self._n_block_size),
                 cute.ceil_div(mK.shape[0], self._n_block_size),
             )
             n_block = n_block_max - 1
@@ -534,6 +542,7 @@ def segmented_flash_attention_forward_launcher(
                 mK=mK,
                 mLowerBounds=mLowerBounds,
                 mValid=mValid,
+                q_offset=q_offset,
             )
             mma_params = SimpleNamespace(
                 thr_mma=thr_mma, tiled_mma=tiled_mma, tSrQ=tSrQ, tSrK=tSrK, tOrVt=tOrVt, acc_O=acc_O
@@ -808,7 +817,7 @@ def segmented_flash_attention_forward_launcher(
                     key_idx = tScS_mn[0, c][3]
                     key_in_bounds = cute.elem_less(key_idx, basic_params.mK.shape[0])
                     key_after_lower_bound = cute.elem_less(query_lower_bound, key_idx + 1)
-                    key_before_query = cute.elem_less(key_idx, query_idx + 1)
+                    key_before_query = cute.elem_less(key_idx, query_idx + basic_params.q_offset + 1)
                     if not (
                         query_in_bounds
                         and query_valid
@@ -927,12 +936,13 @@ def segmented_flash_attention_forward_launcher(
         v: cute.Tensor,
         lower_bounds: cute.Tensor,
         valid: cute.Tensor,
+        q_offset: cute.Tensor,
         out: cute.Tensor,
         lse: cute.Tensor,
         *,
         softmax_scale: cutlass.Float32,
     ):
-        kernel(q, k, v, lower_bounds, valid, out, lse, softmax_scale, stream)
+        kernel(q, k, v, lower_bounds, valid, q_offset, out, lse, softmax_scale, stream)
 
     return _launch_segmented_flash_attention_forward
 
@@ -956,6 +966,9 @@ def segmented_flash_attention_backward_launcher(
     preprocess computes dPsum/LSE-log2 and zeros dQ accumulators, the main
     tiled kernel accumulates dQ/dK/dV, then postprocess converts accumulators
     to the requested BF16/FP16 gradients.
+
+    The ``q_offset[1]`` int32 tensor gives local query 0's global position, matching
+    forward. Unpartitioned queries use zero.
     """
     _validate_config(
         head_dim=head_dim,
@@ -1104,6 +1117,7 @@ def segmented_flash_attention_backward_launcher(
         lse: cute.Tensor,
         lower_bounds: cute.Tensor,
         valid: cute.Tensor,
+        q_offset: cute.Tensor,
         dq: cute.Tensor,
         dk: cute.Tensor,
         dv: cute.Tensor,
@@ -1144,6 +1158,7 @@ def segmented_flash_attention_backward_launcher(
                 dv,
                 lower_bounds,
                 valid,
+                q_offset,
                 softmax_scale,
                 None,
                 None,
@@ -1176,6 +1191,7 @@ def segmented_flash_attention_backward_launcher(
             dv_accum,
             lower_bounds,
             valid,
+            q_offset,
             softmax_scale,
             None,
             None,
