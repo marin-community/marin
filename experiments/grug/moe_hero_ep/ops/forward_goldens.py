@@ -69,6 +69,8 @@ JOB_USER = "hero-goldens"
 STORE_ROOT = "s3://marin-us-east-02a/marin/reference/hero-forward"
 REQUIRED_RELEASE = "hero-535b-step108000-bf16-v1"
 SMOKE_RELEASE = "hero-535b-step108000-bf16-smoke-v1"
+DIAGNOSTIC_8K_RELEASE = "hero-535b-step108000-bf16-8k-diagnostic-v1"
+DIAGNOSTIC_16K_RELEASE = "hero-535b-step108000-bf16-16k-diagnostic-v1"
 SELECTED_CHECKPOINT_URI = (
     "s3://marin-us-east-02a/marin/grug/hero-ragged_a2a-nccl2307-ep-step81k/" "2026.08.19.2/checkpoints/step-108000"
 )
@@ -80,7 +82,7 @@ TOKENIZER = "marin-community/marin-tokenizer"
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 NATIVE_OUTPUT_BOUND = 1e-4
 DETERMINISTIC_XLA_FLAGS = "--xla_gpu_deterministic_ops=true"
-GOLDEN_MODES = ("smoke", "required")
+GOLDEN_MODES = ("smoke", "required", "diagnostic-8192", "diagnostic-16384")
 AUTHORITATIVE_WEIGHT_KEYS = ("master_params", "params")
 
 
@@ -200,6 +202,12 @@ def golden_spec(mode: str) -> GoldenSpec:
             ("context-exact", "neuron-associate-grub-zoo", 4096),
         )
         release = REQUIRED_RELEASE
+    elif mode == "diagnostic-8192":
+        base_cases = (("context-diagnostic-8192", "neuron-associate-grub-zoo", 8192),)
+        release = DIAGNOSTIC_8K_RELEASE
+    elif mode == "diagnostic-16384":
+        base_cases = (("context-diagnostic-16384", "neuron-associate-grub-zoo", 16384),)
+        release = DIAGNOSTIC_16K_RELEASE
     else:
         raise ValueError(f"Unknown golden mode: {mode}")
 
@@ -433,8 +441,6 @@ def produce(request: GoldenRequest, store_root: str) -> None:
     tokenizer = AutoTokenizer.from_pretrained(request.spec.tokenizer, revision=request.spec.tokenizer_revision)
     input_arrays, cases = build_inputs(request, tokenizer)
     model_config = draccus.decode(hero_recipe.GrugModelConfig, request.spec.model)
-    if input_arrays["tokens"].shape[1] > model_config.max_seq_len:
-        raise ValueError("Required golden sequence exceeds the unchanged Hero model context")
 
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
     with jax.set_mesh(mesh):
@@ -606,18 +612,16 @@ def produce(request: GoldenRequest, store_root: str) -> None:
             "ordinary_repeat": repeatability.as_dict(),
             "traced_versus_ordinary": instrumentation.as_dict(),
         },
-        "optional_context_diagnostics": {
-            "8192": (
-                "skipped: the fixed checkpoint-writing model config has max_seq_len=4096; running 8192 "
-                "would require a model-semantic configuration change"
-            ),
-            "16384": (
-                "skipped: the fixed checkpoint-writing model config has max_seq_len=4096; running 16384 "
-                "would require a model-semantic configuration change"
-            ),
-        },
         "arrays": {name: {"shape": list(value.shape), "dtype": str(value.dtype)} for name, value in arrays.items()},
     }
+    if request.spec.mode in ("diagnostic-8192", "diagnostic-16384"):
+        manifest["context_diagnostic"] = {
+            "input_sequence_length": input_arrays["tokens"].shape[1],
+            "training_sequence_length": model_config.max_seq_len,
+            "exceeds_training_sequence_length": input_arrays["tokens"].shape[1] > model_config.max_seq_len,
+            "runtime_length_source": "native Transformer forward derives sequence length from the input tensor",
+            "scope": "diagnostic only; this result does not establish a supported context length",
+        }
     with TemporaryDirectory(prefix="hero-forward-goldens-") as directory:
         local = Path(directory) / request.bundle_id
         with log_time("Local bundle validation and compression"):

@@ -71,6 +71,22 @@ def test_smoke_input_bank_keeps_full_hero_batch_with_short_sequences() -> None:
     assert arrays["token_validity"].all()
 
 
+@pytest.mark.parametrize(
+    ("mode", "sequence_length"),
+    (("diagnostic-8192", 8192), ("diagnostic-16384", 16384)),
+)
+def test_context_diagnostic_input_bank_repeats_one_fixed_case_across_topology(mode: str, sequence_length: int) -> None:
+    request = _request(mode)
+
+    arrays, cases = build_inputs(request, _Tokenizer())
+
+    assert arrays["tokens"].shape == (32, sequence_length)
+    assert arrays["token_validity"].all()
+    assert all(case.valid_length == sequence_length for case in request.spec.cases)
+    assert all(np.array_equal(arrays["tokens"][0], row) for row in arrays["tokens"][1:])
+    assert {case["source_prompt_id"] for case in cases} == {"neuron-associate-grub-zoo"}
+
+
 def test_authoritative_checkpoint_weights_require_fp32_params_or_master_tree() -> None:
     model = {"weight": np.ones((2,), dtype=np.float32)}
 
