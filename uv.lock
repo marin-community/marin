@@ -678,15 +678,14 @@ overrides = [
     { name = "click", specifier = ">=8.3.1" },
     { name = "datasets", specifier = ">=3.1.0,<5.0.0" },
     { name = "equinox", specifier = ">=0.11.10" },
-    { name = "gitpython", specifier = ">=3.1.50" },
+    { name = "gitpython", specifier = ">=3.1.59" },
     { name = "gradio", specifier = ">=6.14.0" },
     { name = "jupyter-server", specifier = ">=2.18.2" },
     { name = "jupyterlab", specifier = ">=4.5.7" },
     { name = "litellm", specifier = ">=1.83.14" },
     { name = "lxml", specifier = ">=6.1.0" },
-    { name = "mistune", specifier = ">=3.2.1" },
+    { name = "mistune", specifier = ">=3.3.3" },
     { name = "multipart", specifier = ">=1.3.1" },
-    { name = "nltk", specifier = ">=3.10.3" },
     { name = "notebook", specifier = ">=7.5.6" },
     { name = "omegaconf", specifier = ">=2.4.0.dev4" },
     { name = "orjson", specifier = ">=3.11.9" },
@@ -908,15 +907,15 @@ wheels = [
 
 [[package]]
 name = "anyio"
-version = "4.12.1"
+version = "4.14.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "idna" },
     { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-10-marin-root-pipeline') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-root-pipeline' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-root-pipeline' and extra == 'group-10-marin-iris-dev') or (extra == 'extra-10-marin-root-pipeline' and extra == 'group-10-marin-iris-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/96/f0/5eb65b2bb0d09ac6776f2eb54adee6abe8228ea05b20a5ad0e4945de8aac/anyio-4.12.1.tar.gz", hash = "sha256:41cfcc3a4c85d3f05c932da7c26d0201ac36f72abd4435ba90d0464a3ffed703", size = 228685, upload-time = "2026-01-06T11:45:21.246Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/61/cc/a381afa6efea9f496eff839d4a6a1aed3bfafc7b3ab4b0d1b243a12573dd/anyio-4.14.2.tar.gz", hash = "sha256:cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f", size = 260176, upload-time = "2026-07-12T20:29:07.082Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/38/0e/27be9fdef66e72d64c0cdc3cc2823101b80585f8119b5c112c2e8f5f7dab/anyio-4.12.1-py3-none-any.whl", hash = "sha256:d405828884fc140aa80a3c667b8beed277f1dfedec42ba031bd6ac3db606ab6c", size = 113592, upload-time = "2026-01-06T11:45:19.497Z" },
+    { url = "https://files.pythonhosted.org/packages/da/35/f2287558c17e29fafc8ef3daf819bb9834061cfa43bff8014f7df7f63bdc/anyio-4.14.2-py3-none-any.whl", hash = "sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494", size = 125813, upload-time = "2026-07-12T20:29:05.763Z" },
 ]
 
 [[package]]
@@ -2640,14 +2639,14 @@ wheels = [
 
 [[package]]
 name = "gitpython"
-version = "3.1.58"
+version = "3.1.62"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gitdb" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/26/d6/5f358ff283325580c2003a6d953aea18cfe10ae87b46f5ebc80fa3a386dc/gitpython-3.1.58.tar.gz", hash = "sha256:621416df10ef3fd0e19fabf9172ddeed0fa704d353d04f194eec56a625a95b22", size = 228498, upload-time = "2026-08-04T15:05:49.47Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/db/3ca813cbacb23ab6fe46ff38a9b5ef8e73e970c8051f2ce903aacafe0446/gitpython-3.1.62.tar.gz", hash = "sha256:1791de66309bc0c7cfca40bf8d2e3de7ca091cbf94e6051be1ad0722c61062af", size = 231728, upload-time = "2026-09-07T02:57:21.155Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/0c/9d8752098bc442f0726e64aa6135940b3a96809915d1aa4206c1bb97881d/gitpython-3.1.58-py3-none-any.whl", hash = "sha256:d331e722577f0fd7fc1f857419b3ecc07af66282b933d2a4d95f84a042fdd50f", size = 220183, upload-time = "2026-08-04T15:05:48.025Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/0b/29d7965215f8ef830a7ca1f42997fe13e5693d85e9edb18f938d063ef5f2/gitpython-3.1.62-py3-none-any.whl", hash = "sha256:7002251225e10e29d2e1f49e6532613fe5d5d9f0b6f1f02997a52b38fe56899e", size = 222753, upload-time = "2026-09-07T02:57:19.762Z" },
 ]
 
 [[package]]
@@ -7518,11 +7517,11 @@ wheels = [
 
 [[package]]
 name = "mistune"
-version = "3.3.0"
+version = "3.3.4"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/84/9c/1939635275ec7258e2b43b00dafabc36d89ad11aa7838d375dc1b0e561cb/mistune-3.3.0.tar.gz", hash = "sha256:3074ec4c61b384abe725128e4dcbb483f5a09cc4632012505cdee655d3a113b9", size = 110936, upload-time = "2026-06-21T13:11:39.458Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7b/92/328a294a6de83bacb95bed01f04e0eaff4e3616ee359fc821a5dfc539b02/mistune-3.3.4.tar.gz", hash = "sha256:58b5c96d6fcb61190dfe5fae498d2b2065f99cf61e9649418fd54cf1ada86dfe", size = 121426, upload-time = "2026-07-22T05:22:30.89Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b7/76/b90f9d48d43fbd80a79a20d3eab2e5109859c7a56dc663b23187385898f3/mistune-3.3.0-py3-none-any.whl", hash = "sha256:a758e578acda49d8195f9a860b132dae2cf7bf409381393b1c4e6e489a65397b", size = 61250, upload-time = "2026-06-21T13:11:37.938Z" },
+    { url = "https://files.pythonhosted.org/packages/77/e4/288365afae98953bc01de09f686f40d8ee84578135aa7767d5d4e60b5278/mistune-3.3.4-py3-none-any.whl", hash = "sha256:ee015381e955e370962968befe1d729ab60fafb6a715ac6751763fbce38c8d4a", size = 66862, upload-time = "2026-07-22T05:22:29.419Z" },
 ]
 
 [[package]]
