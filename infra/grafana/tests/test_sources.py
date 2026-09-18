@@ -448,7 +448,9 @@ def _activity_handler(found_in: str, run: dict, asked: list[str], tps_points: li
         if "specs" in variables:  # the reference-tps history read, not the activity search
             if variables["project"] != found_in:
                 return httpx.Response(200, json={"data": {"project": None}})
-            history = {"state": "running", "sampledHistory": [list(tps_points)]}
+            spec = json.loads(variables["specs"][0])
+            points = [point for point in tps_points if point["_step"] >= spec.get("minStep", 0)]
+            history = {"state": "running", "sampledHistory": [points]}
             return httpx.Response(200, json={"data": {"project": {"run": history}}})
         asked.append(variables["project"])
         if variables["project"] != found_in:
@@ -508,6 +510,63 @@ def test_wandb_run_activity_separates_active_time_from_downtime():
         "progress_efficiency": pytest.approx(0.75),
         "projected_finish_ms": None,  # no `_step` or `run_progress` in this summary
     }
+
+
+@pytest.mark.parametrize("has_child_history", [False, True])
+def test_wandb_run_activity_excludes_inherited_fork_history(has_child_history):
+    created = datetime(2026, 9, 18, tzinfo=UTC)
+    heartbeat = created + timedelta(seconds=200)
+    run = {
+        "state": "running",
+        "createdAt": created.isoformat(),
+        "heartbeatAt": heartbeat.isoformat(),
+        "branchPoint": {"step": 99},
+        "summaryMetrics": json.dumps(
+            {
+                "_step": 109 if has_child_history else 99,
+                "run_progress": 0.545 if has_child_history else 0.495,
+                "throughput/total_tokens": 110_000 if has_child_history else 100_000,
+            }
+        ),
+    }
+    points = [
+        {
+            "_step": 99,
+            "_timestamp": created.timestamp() - 1000,
+            "throughput/total_tokens": 100_000,
+            "throughput/tokens_per_second": 1000,
+        },
+    ]
+    if has_child_history:
+        points.extend(
+            [
+                {
+                    "_step": 100,
+                    "_timestamp": created.timestamp() + 20,
+                    "throughput/total_tokens": 101_000,
+                    "throughput/tokens_per_second": 100,
+                },
+                {
+                    "_step": 109,
+                    "_timestamp": heartbeat.timestamp(),
+                    "throughput/total_tokens": 110_000,
+                    "throughput/tokens_per_second": 100,
+                },
+            ]
+        )
+
+    (row,) = _wandb(_activity_handler("marin_moe", run, [], points)).run_activity("fork")
+
+    if has_child_history:
+        # Only the child's 10,000 tokens count over its 200-second lifetime.
+        assert row["reference_tps"] == 100
+        assert row["progress_efficiency"] == pytest.approx(0.5)
+        # Nine steps in 180 seconds: 91 remaining steps take another 1820 seconds.
+        assert row["projected_finish_ms"] == round((heartbeat.timestamp() + 1820) * 1000)
+    else:
+        assert row["reference_tps"] is None
+        assert row["progress_efficiency"] is None
+        assert row["projected_finish_ms"] is None
 
 
 def test_wandb_run_activity_credits_a_from_scratch_run_its_first_step():

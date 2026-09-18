@@ -84,7 +84,7 @@ query RunSampledHistory($entity: String!, $project: String!, $run: String!, $spe
 _ACTIVITY_QUERY = """
 query RunActivity($entity: String!, $project: String!, $run: String!) {
   project(entityName: $entity, name: $project) {
-    run(name: $run) { state createdAt heartbeatAt summaryMetrics }
+    run(name: $run) { state createdAt heartbeatAt summaryMetrics branchPoint { step } }
   }
 }
 """
@@ -146,7 +146,7 @@ class WandbSource:
         return view.get("displayName") or "W&B report", runs
 
     def _sampled_points(
-        self, *, project: str, run: str, keys: tuple[str, ...], samples: int
+        self, *, project: str, run: str, keys: tuple[str, ...], samples: int, min_step: int | None = None
     ) -> list[dict[str, float]] | None:
         """Numeric points from one run's sampled history, or None if the run is absent.
 
@@ -154,7 +154,9 @@ class WandbSource:
         since W&B writes a null wherever a metric was not logged on that step. Callers
         decide what an absent run means.
         """
-        spec = json.dumps({"keys": list(keys), "samples": samples})
+        spec = json.dumps(
+            {"keys": list(keys), "samples": samples, **({"minStep": min_step} if min_step is not None else {})}
+        )
         run_data = (
             self._graphql(
                 _HISTORY_QUERY,
@@ -242,8 +244,11 @@ class WandbSource:
 
         return self._search_projects(run, project, read)
 
-    def _history_baseline(self, *, project: str, run: str) -> _HistoryBaseline | None:
+    def _history_baseline(self, *, project: str, run: str, min_step: int | None = None) -> _HistoryBaseline | None:
         """The reference token rate and where this W&B run's own work begins.
+
+        Forks restrict sampling to steps after the branch point, excluding inherited
+        parent history from both the token baseline and reference speed.
 
         All from one sampled history. The mean of the rate is the reference speed
         -- a mean over history, not the summary's last-step value, so a checkpoint or
@@ -267,6 +272,7 @@ class WandbSource:
             run=run,
             keys=(_STEP_KEY, _TIMESTAMP_KEY, _TOTAL_TOKENS_KEY, _TPS_KEY),
             samples=_TPS_SAMPLES,
+            min_step=min_step,
         )
         if not points:
             return None
@@ -327,7 +333,10 @@ class WandbSource:
             wall = heartbeat_seconds - _epoch_seconds(run_data["createdAt"])
             tokens_seen = summary.get(_TOTAL_TOKENS_KEY)
             tokens_seen = float(tokens_seen) if isinstance(tokens_seen, int | float) else None
-            baseline = self._history_baseline(project=candidate, run=run)
+            branch_point = run_data.get("branchPoint")
+            baseline = self._history_baseline(
+                project=candidate, run=run, min_step=int(branch_point["step"]) + 1 if branch_point else None
+            )
             reference_tps = baseline.reference_tps if baseline else None
             tokens_since_start = tokens_seen - baseline.tokens_baseline if tokens_seen is not None and baseline else None
             efficiency = (
