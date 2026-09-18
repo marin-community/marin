@@ -1,19 +1,25 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
+import struct
 import tempfile
 import warnings
+import wave
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from levanter.data.sharded_datasource import (
+    AudioTextUrlDataSource,
     ParquetDataSource,
     TextUrlDataSource,
     _mk_shard_name_mapping,
     _sniff_format_for_dataset,
 )
+from levanter.testing.helpers import skip_if_no_soundlibs
 
 
 def test_sniff_format_for_json():
@@ -114,3 +120,28 @@ def test_shard_name_mapping_pairs_each_url_with_its_own_existence(tmp_path):
     assert absent in messages[0]
     assert "a.jsonl" not in messages[0]
     assert "named.jsonl" not in messages[0]
+
+
+def _write_sine_wav(path: str, num_frames: int, sampling_rate: int) -> None:
+    with wave.open(path, "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(sampling_rate)
+        frames = (int(20000 * math.sin(2 * math.pi * 440 * i / sampling_rate)) for i in range(num_frames))
+        f.writeframes(b"".join(struct.pack("<h", frame) for frame in frames))
+
+
+@skip_if_no_soundlibs
+def test_resolve_audio_pointer_reads_the_path_entry_of_a_dict(tmp_path):
+    # HuggingFace's Audio type may hand back {"path": ...} instead of a bare filename,
+    # and the loader has to open that path rather than the surrounding dict.
+    sampling_rate = 16000
+    wav = tmp_path / "tone.wav"
+    _write_sine_wav(str(wav), num_frames=sampling_rate // 10, sampling_rate=sampling_rate)
+
+    audio = AudioTextUrlDataSource.resolve_audio_pointer({"path": str(wav)}, sampling_rate)
+
+    assert audio["sampling_rate"] == sampling_rate
+    assert len(audio["array"]) == sampling_rate // 10
+    bare_path = AudioTextUrlDataSource.resolve_audio_pointer(str(wav), sampling_rate)
+    np.testing.assert_array_equal(audio["array"], bare_path["array"])

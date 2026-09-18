@@ -16,25 +16,23 @@ data-parallel rack uses one 64-device expert mesh.
   diagnostic uses 1024 sequences.
 - Router: top-8 quantile balancing uses a global histogram with 10,000 bins. It has next-step,
   stop-gradient expert biases and no auxiliary balancing loss.
-- MoE backend: `fixed_pooled_wave_all_to_all`, as a temporary fallback. Each sender uses one fixed
-  pool per destination and stripes it over three static waves. The receiver runs all six local
-  experts in each wave and drops rows above the fixed expert capacity. Expert IDs travel in the
-  activation payload, so the method does not use a metadata collective. The receiver and sender
-  capacity factors are 1.15. `ragged_all_to_all` is the intended default and takes the hero back
-  once it stops hanging an 11-rack run after a watch step
-  ([#8870](https://github.com/marin-community/marin/issues/8870)): one update carries each (peer,
-  local expert) pair, so rows arrive grouped by expert, and it reaches XLA's device-initiated
-  (NCCL LSA) kernel, which needs Marin's patched PJRT build, installed on GB200 through the `gpu`
-  extra (`lib/marin/pyproject.toml`).
+- MoE backend: `ragged_all_to_all`. One update carries each (peer, local expert) pair, so rows
+  arrive grouped by expert, and local experts run in two chunks that share the 1.15 receiver
+  capacity. The transport reaches XLA's device-initiated (NCCL LSA) kernel, which needs Marin's patched
+  PJRT build, installed on GB200 through the `gpu` extra (`lib/marin/pyproject.toml`); a run that
+  reaches the stock plugin fails at startup.
+  The production hero trained on `fixed_pooled_wave_all_to_all` through step 81716 (3.77T of its 18T
+  tokens); `hero-ragged_a2a-ep-step81k` continues from that checkpoint on the ragged transport.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
-- Weights: bf16 on device with a pinned-host fp32 master, which the pooled-wave device peak needs.
-  A checkpoint written with a master restores natively here. A master-less checkpoint, which the
-  hero writes when it keeps fp32 weights on device under the ragged transport, cannot restore into
-  this mode: synthesizing a master is refused. The reverse direction migrates in process, so a
-  master-bearing checkpoint reaches either mode.
+- Weights: fp32 on device with bf16 compute. A checkpoint written with a pinned-host fp32 master
+  migrates in process on restore: its stored fp32 master is read directly into the run's params
+  (the bf16 compute copy goes unread), and the next save writes the new layout. The reverse
+  (synthesizing a master) is refused.
 - Runtime: Each GPU has one JAX process. The recipe uses `cuda_async`, no PGLE, and no GPU
-  command buffers. The layer carry stays in HBM, which only the ragged transport offloads. Inline
-  watch uses collective overlap limit 1. A disabled watch uses limit 4.
+  command buffers. The ragged transport stages each layer's residual carry on pinned host, which
+  frees the HBM the latency-hiding scheduler needs to run. Collective overlap stays at 1: the
+  offload, the scheduler, and a higher limit corrupt training together, though no pair of them
+  does.
 - Resources: Each four-GPU worker requests 120 CPU, 890 GB of RAM, and 1 TB of disk.
 
 The attention, shared-expert, language-model-head, and optimizer states use the combined `data` and
@@ -42,6 +40,45 @@ The attention, shared-expert, language-model-head, and optimizer states use the 
 
 Bounded diagnostics write metrics only by default. `--save-checkpoints` writes checkpoints below
 `--checkpoint-path` and resumes from the newest complete checkpoint.
+
+## Coordinated garbage collection
+
+Pass `--gc-interval 100` to `python -m experiments.grug.moe_hero_ep.launch_diagnostics`,
+or set `gc_interval=100` in `hero_grug_trainer_config`. The default `None` preserves automatic
+Python garbage collection. The launcher distributes one configuration to all ranks. After ten
+training steps in each process (including after resume), disable automatic cyclic collection
+and collect once. Then a training hook collects at completed global steps divisible by the
+interval, after evaluation hooks and before checkpoint work. It also collects on the forced
+final callback pass. Training collectives bound rank skew; GC adds no barriers. Collect after each
+evaluation hook as well, so cycles holding temporary eval buffers do not wait for the next periodic boundary.
+Reference-count deallocation continues. The previous GC policy is restored on exit.
+
+`throughput/gc_time` records local startup and hook collection time when GC runs; the `garbage_collection`
+profiler annotation also covers evaluation cleanup. Evaluation cleanup is included in callback
+and iteration time. `throughput/checkpoint_time` includes the save-decision broadcast and any
+synchronous checkpoint work. `throughput/iteration_time` includes batch loading, training,
+callbacks, checkpoint work, and GC. The existing `throughput/duration` excludes loading,
+callbacks, checkpoints, and GC. Tracker steps are zero-based: collections after completed updates
+100/200/300 appear at x=99/199/299. Use elapsed time per update for comparisons.
+
+The [single-rack validation](https://iris.oa.dev/#/job/%2Fmwittmann%2Fgc-sync-9205-hook-20260917-coord)
+used the full model with one sequence per GPU on 64 GPUs. Across 300 measured updates after ten
+warmup steps, elapsed time including initial and final collection fell from 795.576 to 776.003
+seconds (2.46%; 2.652 to 2.587 seconds/update). Before the final callback pass, elapsed time fell
+from 795.575 to 774.700 seconds (2.62%). Across all ranks, automatic GC produced 72 full
+collections across 48 steps; coordinated GC produced one collection per rank after warmup, at
+global updates 100/200/300, and on normal completion at global update 310. Scheduled collections ran through
+the training hook before checkpoint decisions. The slowest rank's periodic collections took
+1.15–1.22 seconds; final collection took up to 1.30 seconds.
+
+Both arms had identical sampled live HBM (35.094 GiB per rank) and allocator peaks (111.840 GiB),
+with no increase above their post-warmup baselines. Live memory was sampled every ten measured
+steps and at completion; the allocator peak includes warmup. The largest per-rank RSS increase in treatment was
+54.4 MiB above its post-warmup baseline. This single pair exercised checkpoint decisions with writes
+and evaluation disabled. The result supports the mechanism and short-term memory behavior at this
+batch size. Cycles can still retain device buffers between collections; keep the feature opt-in
+pending a production-batch trial that includes evaluation transitions and longer memory tracking.
+See [#9205](https://github.com/marin-community/marin/issues/9205).
 
 ## Why this recipe
 
@@ -79,6 +116,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 
 | option | effect |
 | --- | --- |
+| `--gc-interval` | opts into cyclic GC at shared completed-step boundaries after warmup |
 | `--dp-racks` | sets the data-parallel rack count; `--batch-size` stays global |
 | `--batch-size` | sets global sequences per step and the optimizer token budget |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
@@ -196,8 +234,8 @@ group `moe-hero-ep-small-abl` and carry Paloma and uncheatable evaluation at `--
 ### Scaling ladder
 
 `launch_scaling_ladder.py` trains one uniform hero recipe at five widths so a narrow rung predicts
-the `d6144` hero (which is the hero itself). Every rung shares the hero data (the Harrier
-2026.08.18 two-phase mixture on the Marin tokenizer, simulated against the 18.75T target budget),
+the `d6144` hero (which is the hero itself). Every rung shares the data schedule below on the
+Marin tokenizer (simulated against 18.75T for small runs; raw sampling above 1e23 training FLOPs),
 the offloaded MuonH optimizer, the hero mixed precision, 384 experts / top-8, the ragged
 all-to-all transport, the QB histogram estimator at 10k bins, and a dropless held-out eval. Only
 the width and the rack count vary; the rack count, batch, step budget, eval cadence, and
@@ -219,6 +257,10 @@ durable output root, and a rolling temporary checkpoint every hour goes to regio
 storage with the shared 14-day lifecycle TTL. One temporary checkpoint is kept. A hardware fault, a
 host out-of-memory, or a preemption thus costs at most one hour of training. The training job
 retries 1000 times on failure and 100 times on preemption.
+
+The [new mixture](../../../docs/reports/hero-mixture-log.md) starts at ~27.7%
+of training, with cooldown weights at ~80% (hero steps 108,000 and 312,192).
+Before using `trigger_hero.sh`, wait for permanent `step-108000` to finish and stop the old run.
 
 Launch or resume the production d6144 hero with `trigger_hero.sh`. The trigger first comments on
 [issue #8506](https://github.com/marin-community/marin/issues/8506) with the full `HEAD` commit,

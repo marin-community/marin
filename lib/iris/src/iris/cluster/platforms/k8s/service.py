@@ -138,14 +138,6 @@ class K8sService(Protocol):
         """Delete all resources matching the given label selector."""
         ...
 
-    def list_pods_in_namespace(self, namespace: str) -> list[dict]:
-        """List pods in an explicit namespace (not the service's own)."""
-        ...
-
-    def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
-        """Delete a pod in an explicit namespace, ignoring NotFound."""
-        ...
-
     def remove_finalizer(self, resource: K8sResource, name: str, finalizer: str) -> None:
         """Strip a single finalizer from a resource so it can be reclaimed."""
         ...
@@ -486,32 +478,6 @@ class CloudK8sService:
                 name = item.get("metadata", {}).get("name")
                 if name:
                     self.delete(resource, name, wait=wait)
-
-    # -- cross-namespace pod operations ---------------------------------------
-
-    def list_pods_in_namespace(self, namespace: str) -> list[dict]:
-        """List pods in an explicit namespace (not the service's own).
-
-        Chunked like every other list: this one runs on the control loop (blocker
-        eviction) against foreign tenant namespaces, which are larger than Iris's own.
-        """
-        return list(self.iter_json(K8sResource.PODS, namespace=namespace))
-
-    def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
-        """Delete a pod in an explicit namespace, ignoring NotFound."""
-        logger.info("k8s: DELETE pod %s/%s", namespace, name)
-        with _k8s_call(f"delete pod {namespace}/{name}"):
-            try:
-                self._resource_api(K8sResource.PODS).delete(
-                    name=name,
-                    namespace=namespace,
-                    body={"propagationPolicy": "Background"},
-                    **self._request_timeout_kwargs(),
-                )
-            except NotFoundError:
-                return
-            except ApiException as e:
-                raise KubectlError(f"delete pod {namespace}/{name} failed ({e.status}): {e.reason}") from e
 
     # -- remove_finalizer ----------------------------------------------------
 

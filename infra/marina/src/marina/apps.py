@@ -24,7 +24,7 @@ from starlette.types import ASGIApp
 
 from marina.db import DatabaseSpec, engine_for
 from marina.manifest import AppManifest
-from marina.mcp import mcp_for_api
+from marina.mcp import OperationRisk, mcp_for_api
 
 APP_MODULE = "app"
 CREATE_API = "create_api"
@@ -50,16 +50,21 @@ class Services:
 
 @dataclass(frozen=True)
 class RegisteredApi:
-    """A checked-in app's mounted HTTP service and generated MCP server."""
+    """A checked-in app's HTTP service and full and read-only MCP projections."""
 
     app: ASGIApp
     mcp: FastMCP
+    read_mcp: FastMCP
 
 
 def registered_api(api: FastAPI, *, mounted_app: ASGIApp | None = None) -> RegisteredApi:
     """Generate MCP tools while optionally mounting a lifecycle wrapper around the API."""
     app = api if mounted_app is None else mounted_app
-    return RegisteredApi(app=app, mcp=mcp_for_api(api, app))
+    return RegisteredApi(
+        app=app,
+        mcp=mcp_for_api(api, app),
+        read_mcp=mcp_for_api(api, app, frozenset({OperationRisk.READ})),
+    )
 
 
 def is_python_app(manifest: AppManifest) -> bool:
@@ -85,10 +90,10 @@ def migration(manifest: AppManifest) -> Callable[[Engine], None] | None:
     return getattr(_module(manifest), MIGRATE, None)
 
 
-def data_url_for(data_root: str, app: str) -> str:
-    """The app's directory under the data root, whether that root is local or ``gs://``."""
-    return prefix_join(data_root, app)
+def data_url_for(manifest: AppManifest, data_root: str) -> str:
+    """The app's explicit data URL, or its directory under the deployment data root."""
+    return manifest.data_url or prefix_join(data_root, manifest.name)
 
 
 def services_for(manifest: AppManifest, data_root: str, database: DatabaseSpec | None) -> Services:
-    return Services(name=manifest.name, data_url=data_url_for(data_root, manifest.name), database=database)
+    return Services(name=manifest.name, data_url=data_url_for(manifest, data_root), database=database)

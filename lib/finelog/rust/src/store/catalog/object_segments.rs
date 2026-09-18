@@ -9,7 +9,6 @@
 //! durable remotely, and [`Catalog::replace_with_published_snapshot`] rebuilds
 //! the whole projection from a verified remote state after recovery.
 
-use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 
 use super::segments::{remove_segments_in, upsert_segment_in};
@@ -154,7 +153,7 @@ fn insert_object_segments_in(
 
 /// Advance the namespace's catalog generation and return the new revision.
 /// Fails when the namespace has no head row to advance.
-fn advance_generation_in(
+pub(super) fn advance_generation_in(
     transaction: &rusqlite::Transaction<'_>,
     namespace: &str,
 ) -> Result<TableRevision, StatsError> {
@@ -181,6 +180,18 @@ fn advance_generation_in(
 }
 
 impl Catalog {
+    /// Allocate a fresh generation for a changed object-state projection.
+    pub fn advance_object_state_revision(
+        &self,
+        namespace: &str,
+    ) -> Result<TableRevision, StatsError> {
+        let mut inner = self.inner.lock().unwrap();
+        let transaction = inner.conn.transaction().map_err(sqlite_err)?;
+        let revision = advance_generation_in(&transaction, namespace)?;
+        transaction.commit().map_err(sqlite_err)?;
+        Ok(revision)
+    }
+
     /// Rebuild the complete local projection from a verified remote catalog.
     pub fn replace_with_published_snapshot(
         &self,
@@ -197,19 +208,6 @@ impl Catalog {
             )));
         }
         let mut inner = self.inner.lock().unwrap();
-        let local_generation: Option<i64> = inner
-            .conn
-            .query_row(
-                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
-                [namespace],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(sqlite_err)?;
-        if local_generation == Some(remote_generation as i64) {
-            return Ok(());
-        }
-
         inner.upsert_locked(namespace, &schema)?;
         inner.upsert_policy_locked(namespace, &policy)?;
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;

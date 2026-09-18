@@ -19,10 +19,12 @@ import yaml
 from config import CLUSTERS, K8S_CLUSTERS, ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
+from errors import FinelogUnavailableError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from hero_health import DROP_FRACTION_MAX, ROUTER_BIAS_MAX, ROUTER_ENTROPY_MIN
 from k8s_source import K8sFleet
+from relay_health import RelaySenderStatus
 from server import create_app
 from starlette.testclient import TestClient
 from wandb_source import WandbSource
@@ -189,22 +191,33 @@ class _FakeFinelog:
             )
         return pa.table({})
 
+    def relay_status(self) -> tuple[RelaySenderStatus, ...]:
+        return ()
 
-def test_every_rule_query_url_answers_on_the_bridge():
-    """Join each rule's datasource base path with its query URL and GET it for real."""
+
+class _UnavailableFinelog(_FakeFinelog):
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        raise FinelogUnavailableError("unavailable")
+
+
+def _bridge_client(finelog_source: _FakeFinelog) -> TestClient:
     iris_sources = {name: _FakeIris(name) for name in ("marin", "marin-dev")}
-    finelog_sources = {"marin": _FakeFinelog("marin")}
     fleet = K8sFleet([make_k8s_source(k8s_api(healthy_k8s_routes()))])
-    client = TestClient(
+    return TestClient(
         create_app(
             bridge_config(),
-            finelog_sources,
+            {"marin": finelog_source},
             iris_sources,
             GithubSource(auth=None, timeout=5.0),
             fleet,
             WandbSource(timeout=5.0),
         )
     )
+
+
+def test_every_rule_query_url_answers_on_the_bridge():
+    """Join each rule's datasource base path with its query URL and GET it for real."""
+    client = _bridge_client(_FakeFinelog("marin"))
     base_paths = _datasources()
     for rule in _rules():
         for node in rule["data"]:
@@ -216,6 +229,26 @@ def test_every_rule_query_url_answers_on_the_bridge():
             response = client.get(url, params=params)
             assert response.status_code == 200, f"{rule['uid']}: GET {url} -> {response.status_code}"
             assert response.json(), f"{rule['uid']}: GET {url} returned no rows"
+
+
+def test_configured_finelog_query_dependent_alerts_stay_normal_when_query_path_is_unavailable():
+    client = _bridge_client(_UnavailableFinelog("marin"))
+    base_path = _datasources()["finelog-marin"]
+
+    for rule in _rules():
+        if rule["uid"] in {"finelog-fleet-unhealthy", "finelog-relay-stalled"}:
+            continue
+        for node in rule["data"]:
+            if node["datasourceUid"] != "finelog-marin":
+                continue
+            model = node["model"]
+            params = {param["key"]: param["value"] for param in model.get("url_options", {}).get("params", [])}
+            url = base_path + model["url"]
+
+            response = client.get(url, params=params)
+
+            assert response.status_code == 200, f"{rule['uid']}: GET {url} -> {response.status_code}"
+            assert all(row["value"] == 0 for row in response.json()), rule["uid"]
 
 
 def test_alert_queries_select_exactly_one_numeric_column():
@@ -390,6 +423,14 @@ def test_finelog_health_alert_pages_critical_after_five_minutes():
     assert rule["labels"]["severity"] == "critical"
     assert rule["data"][0]["datasourceUid"] == "finelog-marin"
     assert rule["data"][0]["model"]["url"] == "/alerts/fleet_health"
+
+
+def test_finelog_relay_alert_pages_stalled_or_missing_namespaces():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "finelog-relay-stalled"]
+    assert rule["for"] == "2m"
+    assert rule["labels"]["severity"] == "critical"
+    assert rule["noDataState"] == "Alerting"
+    assert rule["data"][0]["model"]["url"] == "/alerts/relay_status"
 
 
 def test_node_deadlock_alert_pages_critical_after_five_minutes():
@@ -1074,6 +1115,14 @@ def test_training_status_reads_whole_run_active_time_from_wandb():
     # Four days of wall clock, ninety hours of them running.
     assert (row["active_seconds"], row["active_share"]) == (324_000.0, 0.9375)
     assert {column["selector"] for column in target["columns"]} <= set(row)
+    # The projected finish rides on the same target as epoch milliseconds, which only the
+    # date unit makes readable in a stat tile.
+    finish = next(
+        override
+        for override in panel["fieldConfig"]["overrides"]
+        if override["matcher"]["options"] == "projected finish"
+    )
+    assert {field["id"]: field["value"] for field in finish["properties"]} == {"unit": "dateTimeAsIso"}
 
 
 def test_training_attempts_table_links_the_newest_attempt_to_iris():

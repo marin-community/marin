@@ -14,7 +14,7 @@
 //! [legacy-path middleware]             (transport layer; rewrites the URI)
 //!   /health              (200 always; body says `ok` or why ingest is degraded)
 //!   /v1/telemetry       (authenticated bounded JSON ingestion)
-//!   /api/*              (build + segment introspection)
+//!   /api/*              (build, segment, and forwarding introspection)
 //!   /debug/*            (only with --debug-admin)
 //!   /static, /favicon.ico, /, /{*rest}   (SPA, before the fallback)
 //!   .fallback_service(connect)            (RPC POSTs land here)
@@ -34,6 +34,7 @@ use connectrpc::{ConnectRpcService, Limits, Router as ConnectRouter};
 use crate::proto::finelog::logging::LogServiceExt;
 use crate::proto::finelog::stats::StatsServiceExt;
 use crate::server::auth::{auth_gate, AuthInterceptor, AuthPolicy};
+use crate::server::forwarding::ForwardingConfig;
 use crate::server::ingest_health::IngestHealth;
 use crate::server::interceptors::{
     ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
@@ -62,6 +63,9 @@ pub struct ServerConfig {
     pub telemetry_dedupe_capacity: usize,
     /// Default per-method slow-RPC threshold (ms); `<= 0` disables.
     pub slow_rpc_threshold_ms: i64,
+    /// Downstream forwarding target exposed by the authenticated operator
+    /// introspection routes.
+    pub forwarding: Option<ForwardingConfig>,
     /// The authenticated-ingress policy. Always enforced — the
     /// interceptor gates every RPC and the policy is default-deny. The default
     /// ([`AuthPolicy::allow_localhost`]) admits loopback only, so a bare finelog
@@ -79,6 +83,7 @@ impl Default for ServerConfig {
             max_concurrent_telemetry: telemetry::DEFAULT_MAX_CONCURRENT_REQUESTS,
             telemetry_dedupe_capacity: telemetry::DEFAULT_DEDUPE_CAPACITY,
             slow_rpc_threshold_ms: DEFAULT_SLOW_RPC_THRESHOLD_MS,
+            forwarding: None,
             auth: Arc::new(AuthPolicy::allow_localhost()),
         }
     }
@@ -97,6 +102,12 @@ impl ServerConfig {
     /// allow-localhost default; the policy is always default-deny.
     pub fn with_auth(mut self, policy: AuthPolicy) -> Self {
         self.auth = Arc::new(policy);
+        self
+    }
+
+    /// Add a configured downstream target to operator introspection.
+    pub fn with_forwarding(mut self, forwarding: ForwardingConfig) -> Self {
+        self.forwarding = Some(forwarding);
         self
     }
 }
@@ -150,10 +161,15 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
     );
     // The introspection routes bypass the Connect interceptor chain, so they
     // carry the same default-deny auth policy the RPCs do.
-    let introspection =
-        introspection::introspection_router(Arc::clone(&store), Arc::clone(&health)).layer(
-            axum::middleware::from_fn_with_state(Arc::clone(&config.auth), auth_gate),
-        );
+    let introspection = introspection::introspection_router(
+        Arc::clone(&store),
+        Arc::clone(&health),
+        config.forwarding.clone(),
+    )
+    .layer(axum::middleware::from_fn_with_state(
+        Arc::clone(&config.auth),
+        auth_gate,
+    ));
     // `/health` answers 200 whether or not ingest is wedged and puts the verdict
     // in the body, which the deploy gates read. It is also the Kubernetes
     // liveness, readiness, and startup probe, and a registration that disagrees

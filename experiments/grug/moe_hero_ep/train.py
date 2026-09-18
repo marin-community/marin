@@ -10,7 +10,7 @@ import logging
 import os
 import time
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
@@ -40,7 +40,14 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
 from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_REQUIRED_XLA_FLAGS
-from levanter.grug.grug_moe import MoeImplementation
+from levanter.grug.grug_moe import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+    MOE_VALID_ASSIGNMENTS_METRIC,
+    MoeImplementation,
+)
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -58,6 +65,7 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
 from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, RematMode, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
@@ -272,6 +280,8 @@ class GrugTrainerConfig:
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
     data_seed: int | None = None
     log_every: int = 1
+    # None preserves automatic GC; 100 was tested with the full model on EP64.
+    gc_interval: int | None = None
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
@@ -298,6 +308,10 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     sharding_dump_path: str | None = None
+
+    def __post_init__(self):
+        if self.gc_interval is not None and self.gc_interval <= 0:
+            raise ValueError("GC interval must be positive")
 
 
 @dataclass(frozen=True)
@@ -490,6 +504,19 @@ def _first_step_only(hook: Callable[..., None]) -> Callable[..., None]:
         hook(step, *args, **kwargs)
 
     return gated
+
+
+def _collect_after_eval(hook: Callable[..., None]) -> Callable[..., None]:
+    @functools.wraps(hook)
+    def wrapped(*args, **kwargs):
+        try:
+            hook(*args, **kwargs)
+        finally:
+            # Eval can leave cycles holding replicated device buffers. Reclaim them
+            # after its frame has returned, before another eval or training step.
+            collect_garbage()
+
+    return wrapped
 
 
 def build_tagged_evaluator(
@@ -714,6 +741,8 @@ def _drop_metrics(
     dropped_assignments: jax.Array,
     sender_dropped_assignments: jax.Array,
     receiver_dropped_assignments: jax.Array,
+    skipped_padding_assignments: jax.Array,
+    valid_assignments: jax.Array,
     *,
     batch_size: int,
     sequence_length: int,
@@ -728,18 +757,25 @@ def _drop_metrics(
     dropped_assignments_host = _sum_int64(dropped_assignments)
     sender_dropped_assignments_host = _sum_int64(sender_dropped_assignments)
     receiver_dropped_assignments_host = _sum_int64(receiver_dropped_assignments)
+    skipped_padding_assignments_host = _sum_int64(skipped_padding_assignments)
+    valid_assignments_host = _sum_int64(valid_assignments)
     if dropped_assignments_host != sender_dropped_assignments_host + receiver_dropped_assignments_host:
         raise ValueError("total dropped assignments must equal sender plus receiver dropped assignments")
-    total_assignments = batch_size * sequence_length * top_k * num_layers
-    receiver_assignments = total_assignments - sender_dropped_assignments_host
+    total_positions = batch_size * sequence_length * top_k * num_layers
+    if valid_assignments_host + skipped_padding_assignments_host != total_positions:
+        raise ValueError("valid plus skipped assignments must equal the padded batch size")
+    receiver_assignments = valid_assignments_host - sender_dropped_assignments_host
     return {
-        "moe/dropped_assignments": dropped_assignments_host,
-        "moe/drop_fraction": dropped_assignments_host / total_assignments,
-        "moe/sender_dropped_assignments": sender_dropped_assignments_host,
-        "moe/sender_drop_fraction": sender_dropped_assignments_host / total_assignments,
-        "moe/receiver_dropped_assignments": receiver_dropped_assignments_host,
-        "moe/receiver_drop_fraction": receiver_dropped_assignments_host / total_assignments,
+        MOE_DROPPED_ASSIGNMENTS_METRIC: dropped_assignments_host,
+        "moe/drop_fraction": dropped_assignments_host / max(valid_assignments_host, 1),
+        MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC: sender_dropped_assignments_host,
+        "moe/sender_drop_fraction": sender_dropped_assignments_host / max(valid_assignments_host, 1),
+        MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC: receiver_dropped_assignments_host,
+        "moe/receiver_drop_fraction": receiver_dropped_assignments_host / max(valid_assignments_host, 1),
         "moe/receiver_drop_fraction_of_received": receiver_dropped_assignments_host / max(receiver_assignments, 1),
+        MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: skipped_padding_assignments_host,
+        "moe/skipped_padding_fraction": skipped_padding_assignments_host / total_positions,
+        MOE_VALID_ASSIGNMENTS_METRIC: valid_assignments_host,
     }
 
 
@@ -941,7 +977,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     dashboard = (
         TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
     )
-    with set_mesh(mesh), dashboard:
+    with set_mesh(mesh), dashboard, ExitStack() as gc_resources:
         batch_schedule = trainer.batch_schedule
 
         @jax.jit
@@ -1138,6 +1174,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 eval_hooks.append(dropless_eval_hook)
 
+            if config.trainer.gc_interval is not None:
+                eval_hooks = [_collect_after_eval(hook) for hook in eval_hooks]
+
             if interval is not None and interval > 0:
                 for hook in eval_hooks:
                     state_callbacks.add_hook(hook, every=interval)
@@ -1157,12 +1196,20 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
 
+        current_step = int(state.step)
+        gc_start_step = current_step + GC_WARMUP_STEPS
+
         # Main optimization loop.
         try:
-            while int(state.step) < stop_step:
+            while current_step < stop_step:
+                iteration_start = time.perf_counter()
+                if config.trainer.gc_interval is not None and current_step == gc_start_step:
+                    gc_start = time.perf_counter()
+                    gc_hook = gc_resources.enter_context(coordinated_gc())
+                    state_callbacks.add_hook(gc_hook, every=config.trainer.gc_interval)
+                    levanter.tracker.log({GC_TIME_METRIC: time.perf_counter() - gc_start}, step=current_step)
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
-                current_step = int(state.step)
                 watch_due = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
@@ -1176,13 +1223,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 state, metrics, inline_watch_stats = train_step(state, batch)
                 if inline_watch_stats is not None and watch_due:
                     watch_stats = inline_watch_stats
-                step = int(state.step) - 1
+                current_step = int(state.step)
+                step = current_step - 1
 
                 jax.block_until_ready(metrics["train/loss"])
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
 
                 if not jnp.isfinite(metrics["train/loss"]):
-                    raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
+                    raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {current_step}.")
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
@@ -1204,11 +1252,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                             step=step,
                         )
-                    if "moe/dropped_assignments" in metrics:
+                    if MOE_DROPPED_ASSIGNMENTS_METRIC in metrics:
                         drop_metrics = _drop_metrics(
-                            metrics["moe/dropped_assignments"],
-                            metrics["moe/sender_dropped_assignments"],
-                            metrics["moe/receiver_dropped_assignments"],
+                            metrics[MOE_DROPPED_ASSIGNMENTS_METRIC],
+                            metrics[MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC],
+                            metrics[MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC],
+                            metrics[MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC],
+                            metrics[MOE_VALID_ASSIGNMENTS_METRIC],
                             batch_size=batch.tokens.shape[0],
                             sequence_length=batch.tokens.shape[1],
                             top_k=config.model.num_experts_per_token,
@@ -1219,13 +1269,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
+                checkpoint_start = time.perf_counter()
                 if checkpointer is not None:
                     with callbacks.progress_event_scope(
                         state_callbacks.emit_event,
                         callbacks.ProgressEvent.CHECKPOINT_STARTED,
                         callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                     ):
-                        checkpointer.on_step(tree=state, step=int(state.step))
+                        checkpointer.on_step(tree=state, step=current_step)
+
+                checkpoint_duration = time.perf_counter() - checkpoint_start
+                levanter.tracker.log(
+                    {
+                        "throughput/checkpoint_time": checkpoint_duration,
+                        "throughput/iteration_time": time.perf_counter() - iteration_start,
+                    },
+                    step=step,
+                )
 
         except BaseException:
             logger.exception(

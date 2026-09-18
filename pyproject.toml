@@ -20,6 +20,7 @@ dependencies = [
     # cloud credentials and reads the key from a projected Secret instead.
     "marin-rigging[secrets]",
     "marin-zephyr",
+    "tasktrove-verify[answer,reasoning-gym,schema]",
     # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
     # workspace member (editable source) so deploy/CLI fixes land without a wheel
     # republish. Its native companion marin-finelog-server (the in-process
@@ -194,6 +195,7 @@ members = [
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
+    "lib/tasktrove-verify",
     "lib/finestore",
     "infra/pulumi",
     "infra/buckets",
@@ -222,6 +224,7 @@ marin-levanter = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
+tasktrove-verify = { workspace = true }
 marin-finestore = { workspace = true }
 marin-iac = { workspace = true }
 jaxpp = { git = "https://github.com/NVIDIA/jaxpp.git", rev = "46b8443eed01f54688dd24ae451203a504b1cff8" }
@@ -310,7 +313,7 @@ known-first-party = ["experiments"]
 # "config" is the local module in infra/tpu-ci/{setup,vm_manager}.py. The repo-root
 # config/ directory (cluster YAMLs) would otherwise make isort treat ``import config``
 # as first-party and reorder it, so pin it to the third-party group it already sits in.
-known-third-party = ["wandb", "config"]
+known-third-party = ["wandb", "config", "marin"]
 
 
 # Pyrefly type checker configuration
@@ -331,10 +334,12 @@ project-includes = [
     "lib/ducky/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
+    "lib/tasktrove-verify/src/**/*.py",
     "lib/finestore/src/**/*.py",
     "infra/marina/src/**/*.py",
     "infra/marina/apps/**/*.py",
     "infra/deploy/src/**/*.py",
+    "experiments/grug/moe_hero_ep/ops/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
 ]
@@ -348,6 +353,7 @@ search-path = [
     "lib/haliax/src",
     "lib/rigging/src",
     "lib/zephyr/src",
+    "lib/tasktrove-verify/src",
     "lib/finestore/src",
     "lib/fray/src",
     "lib/iris/src",
@@ -355,6 +361,7 @@ search-path = [
     "infra/deploy/src",
     "infra/marina/src",
     "infra/marina/apps",
+    ".",
 ]
 disable-search-path-heuristics = true
 
@@ -428,7 +435,6 @@ ignore-missing-imports = [
 
 # Exclude non-production code from type checking
 project-excludes = [
-    "experiments/**",
     "scripts/debug/**",
     "scripts/ferries/**",
     "scripts/gpu_eval/**",

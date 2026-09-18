@@ -685,7 +685,6 @@ class K8sControllerProvider:
         self,
         config: IrisClusterConfig,
         dry_run: bool = False,
-        label_prefix: str | None = None,
     ) -> list[str]:
         target_names = ["controller"]
         if dry_run:
@@ -846,7 +845,7 @@ class K8sControllerProvider:
           iris-system     10000  — control plane, Iris, Finelog, and hero work
           iris-production  1000  — admin production work; below system
           iris-interactive   10  — normal user work
-          iris-batch          0  — opportunistic; below interactive, above CoreWeave NHC
+          iris-batch          0  — opportunistic; can preempt CoreWeave NHC
         """
         for name, value, preemption_policy in IRIS_PRIORITY_CLASSES:
             manifest = build_priority_class_manifest(name, value, preemption_policy)

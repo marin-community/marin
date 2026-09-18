@@ -38,12 +38,8 @@ HERO_NODE_CPU = 120
 HERO_NODE_RAM = "890g"
 HERO_NODE_DISK = "1t"
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
-# The pooled-wave transport peaks at 149.9 GiB of device memory with fp32 weights on device
-# (#8549), above the 138.2 GiB `cuda_async` release threshold, so this fallback keeps the fp32
-# master on pinned host and leaves the device copy in bf16. The mode is part of the checkpoint
-# layout: a master-less checkpoint cannot restore into it, because synthesizing a master is
-# refused. The diagnostics, soak, and benchmarks follow the hero.
-HERO_MASTER_PARAM_MODE = MasterParamMode.FP32_PINNED_HOST
+# The hero keeps fp32 weights on device; the diagnostics, soak, and benchmarks follow it.
+HERO_MASTER_PARAM_MODE = MasterParamMode.DEVICE
 # An fp32 master keeps the device copy in bf16; without one the device weights are the fp32 copy.
 HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE = {
     MasterParamMode.FP32_PINNED_HOST: HERO_MIXED_PRECISION,
@@ -78,11 +74,13 @@ def hero_grug_trainer_config(
     watch_mode: WatchMode,
     save_checkpoints: bool,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
+    gc_interval: int | None = None,
 ) -> GrugTrainerConfig:
     """Set the Grug options that affect the compiled hero step."""
     return GrugTrainerConfig(
         data_seed=None,
         log_every=1,
+        gc_interval=gc_interval,
         ema_beta=None,
         z_loss_weight=1e-4,
         # Keep the MuonH state on pinned host memory so the transport buffers have sufficient HBM.

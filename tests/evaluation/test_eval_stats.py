@@ -14,7 +14,6 @@ from marin.evaluation.eval_stats import (
     Coverage,
     IntervalKind,
     Measurement,
-    MetricKind,
     MissingPolicy,
     ResultFlag,
     SelectionRequest,
@@ -27,12 +26,15 @@ from marin.evaluation.eval_stats import (
     wilson_interval,
 )
 from marin.evaluation.records import (
+    BenchmarkMetadataRef,
+    BenchmarkMetricRef,
     EvalchemyRef,
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
     HarborRef,
     HardwareRef,
+    MetricKind,
     ModelRef,
     Provenance,
     RunStatus,
@@ -52,13 +54,20 @@ def _measurement(
     status: RunStatus = RunStatus.SUCCEEDED,
     run_id: str = "run",
     flags: frozenset[ResultFlag] = frozenset(),
+    metric: str = "exact_match,flexible-extract",
+    kind: MetricKind = MetricKind.BINARY,
+    declared: bool = False,
+    protocol_metric: str | None = None,
+    protocol_kind: MetricKind | None = None,
+    n_benchmark: int | None = None,
+    item_cap: int | None = None,
 ) -> Measurement:
     return Measurement(
         benchmark=benchmark,
-        metric="exact_match,flexible-extract",
-        kind=MetricKind.BINARY,
+        metric=metric,
+        kind=kind,
         value=n_correct / n_scored,
-        coverage=Coverage(n_scored=n_scored, n_attempted=n_attempted),
+        coverage=Coverage(n_scored=n_scored, n_benchmark=n_benchmark, n_attempted=n_attempted),
         n_correct=n_correct,
         run_id=run_id,
         created_at=created_at,
@@ -66,6 +75,10 @@ def _measurement(
         model=model,
         status=status,
         flags=flags,
+        declared=declared,
+        protocol_metric=protocol_metric or (metric.split(",", 1)[0] if declared else None),
+        protocol_kind=protocol_kind or (kind if declared else None),
+        item_cap=item_cap,
     )
 
 
@@ -218,6 +231,21 @@ def test_difference_widening_is_asymmetric_in_which_run_lost_items():
     assert (a_lost.low, a_lost.high) != (b_lost.low, b_lost.high)
 
 
+def test_difference_requires_one_metric_protocol():
+    with pytest.raises(ValueError, match="different metrics"):
+        difference_interval(_measurement(metric="acc"), _measurement(metric="f1", kind=MetricKind.CONTINUOUS))
+
+
+def test_difference_accepts_legacy_filters_and_interval_kinds_for_one_metric():
+    binary = _measurement(metric="exact_match,flexible-extract")
+    continuous = _measurement(metric="exact_match,none", kind=MetricKind.CONTINUOUS, n_correct=50)
+
+    interval = difference_interval(binary, continuous)
+
+    assert interval.low == pytest.approx(-0.409513)
+    assert interval.high == pytest.approx(0.608142)
+
+
 # --------------------------------------------------------------------------------------------------
 # Panel aggregation
 # --------------------------------------------------------------------------------------------------
@@ -331,6 +359,47 @@ def test_selection_rejects_below_gate_coverage_and_says_why():
     assert "coverage 0.800" in rejection.reason
 
 
+def test_selection_rejects_a_cap_that_covers_too_little_of_the_benchmark():
+    capped = _measurement(n_benchmark=1000, n_attempted=100, n_scored=100, item_cap=100)
+
+    selection = select([capped], SelectionRequest(min_coverage=0, min_benchmark_coverage=0.9))
+
+    assert selection.cells == {}
+    assert selection.rejections[0].reason == "benchmark coverage 0.100 below 0.90"
+
+
+def test_zero_benchmark_gate_admits_known_caps_but_never_unknown_caps():
+    known = _measurement(run_id="known", n_benchmark=1000, n_attempted=100, n_scored=100, item_cap=100)
+    unknown = _measurement(run_id="unknown", n_attempted=100, n_scored=100, item_cap=100)
+
+    selection = select([known, unknown], SelectionRequest(min_benchmark_coverage=0))
+
+    assert selection.cells["m"]["gsm8k"].run_id == "known"
+    assert selection.rejections[0].reason == "capped run with unreported benchmark size"
+
+
+def test_newest_declared_protocol_excludes_legacy_metrics_for_the_column():
+    legacy = _measurement(
+        benchmark="drop",
+        run_id="legacy",
+        metric="exact_match,none",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    declared = _measurement(
+        benchmark="drop",
+        run_id="declared",
+        metric="f1,none",
+        kind=MetricKind.CONTINUOUS,
+        declared=True,
+        created_at="2026-02-01T00:00:00+00:00",
+    )
+
+    selection = select([legacy, declared], SelectionRequest())
+
+    assert selection.cells["m"]["drop"].run_id == "declared"
+    assert selection.rejections[0].reason == "metric exact_match differs from declared f1"
+
+
 def test_selection_rejects_failed_runs_but_keeps_them_explainable():
     measurements = [_measurement(status=RunStatus.INFRA_FAILED, run_id="broken")]
 
@@ -423,7 +492,29 @@ def _record(
     mechanism: str = "evalchemy",
     harbor: HarborRef | None = None,
     evalchemy: EvalchemyRef | None = None,
+    primary_metric: str | None = None,
+    metric_kind: MetricKind | None = None,
+    source_metric: str | None = None,
+    canonical_metrics: dict[str, dict[str, float]] | None = None,
 ) -> EvalRunRecord:
+    benchmark = None
+    if primary_metric is not None and metric_kind is not None:
+        benchmark = BenchmarkMetadataRef(
+            schema_version=1,
+            task=eval_name,
+            primary_metric=primary_metric,
+            metric_kind=metric_kind,
+            metrics=(
+                BenchmarkMetricRef(
+                    name=primary_metric,
+                    source_name=source_metric or primary_metric,
+                    kind=metric_kind,
+                    higher_is_better=True,
+                ),
+            ),
+            n_benchmark=next(iter((coverage or {}).values())).n_benchmark if coverage else None,
+            n_attempted=next(iter((coverage or {}).values())).n_attempted if coverage else None,
+        )
     return EvalRunRecord(
         run_id="run-1",
         group_id="group-1",
@@ -433,7 +524,13 @@ def _record(
         eval=EvalRef(
             name=eval_name,
             mechanism=mechanism,
-            tasks=(EvalTaskRef(name=eval_name, num_fewshot=5),),
+            tasks=(
+                EvalTaskRef(
+                    name=eval_name,
+                    num_fewshot=5,
+                    benchmark=benchmark,
+                ),
+            ),
             harbor=harbor,
             evalchemy=evalchemy,
         ),
@@ -442,6 +539,7 @@ def _record(
         error=None,
         results_path="gs://bucket/run-1/results",
         metrics=metrics,
+        canonical_metrics=canonical_metrics or {},
         coverage=coverage or {},
         jobs={},
         log_tails={},
@@ -466,11 +564,107 @@ def test_record_adapter_recovers_the_item_counts_lm_eval_records():
     measurement = measurement_from_record(record)
 
     assert measurement is not None
-    assert measurement.metric == "exact_match,flexible-extract"
+    assert measurement.metric == "accuracy"
+    assert measurement.num_fewshot == 5
     assert measurement.coverage.n_scored == 128
     assert measurement.n_correct == 54
     assert measurement.kind is MetricKind.BINARY
     assert ResultFlag.ATTRITION_UNREPORTED in measurement.flags
+
+
+def test_record_adapter_uses_the_declared_metric_and_filter_priority():
+    record = _record(
+        metrics={
+            "drop_3shot": {
+                "exact_match,none": 0.2,
+                "f1,strict-match": 0.4,
+                "f1,flexible-extract": 0.6,
+                "f1_stderr,flexible-extract": 0.03,
+                "sample_len": 100,
+            }
+        },
+        primary_metric="f1",
+        metric_kind=MetricKind.CONTINUOUS,
+        canonical_metrics={"drop_3shot": {"f1": 0.6, "f1_stderr": 0.03}},
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.metric == "f1"
+    assert measurement.value == 0.6
+    assert measurement.kind is MetricKind.CONTINUOUS
+    assert measurement.declared
+
+
+def test_record_adapter_pairs_chat_average_with_its_recorded_standard_error():
+    record = _record(
+        metrics={"aime24": {"accuracy_avg": 0.5, "accuracy_std_err": 0.04, "num_total": 30}},
+        primary_metric="accuracy",
+        metric_kind=MetricKind.CONTINUOUS,
+        source_metric="accuracy_avg",
+        canonical_metrics={"aime24": {"accuracy": 0.5, "accuracy_stderr": 0.04}},
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.recorded_stderr == 0.04
+
+
+def test_record_adapter_rejects_results_missing_the_declared_metric():
+    record = _record(
+        metrics={"drop_3shot": {"exact_match,none": 0.2, "sample_len": 100}},
+        primary_metric="f1",
+        metric_kind=MetricKind.CONTINUOUS,
+        canonical_metrics={"drop_3shot": {"accuracy": 0.2}},
+    )
+
+    assert measurement_from_record(record) is None
+
+
+def test_record_adapter_keeps_an_undeclared_custom_task_beside_metadata_tasks():
+    record = _record(
+        metrics={
+            "gsm8k": {"exact_match,none": 0.6, "sample_len": 10},
+            "custom": {"exact_match,none": 0.8, "sample_len": 10},
+        },
+        primary_metric="accuracy",
+        metric_kind=MetricKind.BINARY,
+        source_metric="exact_match",
+        canonical_metrics={"gsm8k": {"accuracy": 0.6}},
+    )
+    record = record.model_copy(
+        update={
+            "evaluation": record.evaluation.model_copy(
+                update={
+                    "tasks": (
+                        record.evaluation.tasks[0],
+                        EvalTaskRef(name="custom", num_fewshot=0, task_alias="custom"),
+                    )
+                }
+            )
+        }
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.value == pytest.approx(0.7)
+    assert measurement.metric == "accuracy"
+
+
+def test_record_adapter_reads_benchmark_coverage_and_flags_inconsistent_counts():
+    record = _record(
+        metrics={"gsm8k_5shot": {"exact_match,none": 0.5, "sample_len": 20}},
+        coverage={"gsm8k_5shot": TaskCoverage(n_benchmark=10, n_attempted=12, n_scored=20)},
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.coverage.benchmark_rate == 1.0
+    assert ResultFlag.INCONSISTENT_COVERAGE in measurement.flags
 
 
 def test_record_adapter_scores_a_group_task_from_its_aggregate_row():
@@ -648,3 +842,33 @@ def test_a_run_the_model_merely_failed_is_not_flagged_as_unanswered():
 
 def test_record_adapter_returns_nothing_for_a_run_that_produced_no_metrics():
     assert measurement_from_record(_record(metrics={})) is None
+
+
+def test_record_adapter_reads_the_standard_error_of_a_repeated_sample_task():
+    """Evalchemy's aime24 writes ``accuracy_avg`` with ``accuracy_std_err``, not lm-eval's ``_stderr``.
+
+    Without that pairing the measurement has no dispersion and its interval is [0, 1], so the cell
+    shows a score with no precision behind it and Compare cannot rank it.
+    """
+    record = _record(
+        eval_name="aime24",
+        metrics={
+            "aime24": {
+                "num_total": 30.0,
+                "solved_avg": 4.9,
+                "accuracy_avg": 4.9 / 30,
+                "accuracy_std_err": 0.0173,
+                "num_repeat": 10.0,
+            }
+        },
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.metric == "accuracy"  # the legacy alias for accuracy_avg
+    assert measurement.recorded_stderr == pytest.approx(0.0173)
+    assert ResultFlag.NO_DISPERSION not in measurement.flags
+    interval = measurement_interval(measurement)
+    assert interval.low > 0.1
+    assert interval.high < 0.25

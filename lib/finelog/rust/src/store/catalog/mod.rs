@@ -44,6 +44,7 @@ mod table_specs;
 #[cfg(test)]
 mod tests;
 
+pub use cursors::ForwardingSettlement;
 pub use namespaces::RegisteredNamespace;
 pub(crate) use object_segments::MIGRATION_SOURCE_ID_SEPARATOR;
 pub use object_segments::{ObjectSegmentRecord, PublishedObjectSegment};

@@ -8,6 +8,7 @@ import io
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 from typing import IO, cast
@@ -22,7 +23,7 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
-    ResolvedDataLocator,
+    ResolvedDirectoryDataSource,
     ResolvedModelLocator,
     SkyRLEvaluationModel,
     SkyRLLaunchRequest,
@@ -35,8 +36,12 @@ from marin.rl.skyrl import (
     SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
+    TaskTroveDataSource,
+    TaskTroveSelection,
+    TaskTroveTagMatch,
     run_skyrl,
     skyrl_step,
+    skyrl_temporary_run_path,
 )
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
@@ -188,8 +193,8 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "marin.rl.skyrl.temporary_storage_base_path",
-        lambda _output_path, *, ttl_days, category: f"s3://temp/ttl={ttl_days}d/{category}/users/alice/run",
+        "marin.rl.skyrl.skyrl_temporary_run_path",
+        lambda _output_path, *, ttl_days: f"s3://temp/ttl={ttl_days}d/skyrl/users/alice/run",
     )
     spec = dataclasses.replace(_spec(), name="users/alice/tests/iceball-rl", version="dev")
     step = skyrl_step(spec, _execution())
@@ -218,6 +223,18 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
         "++terminal_bench_config.trials_dir=" "'s3://temp/ttl=14d/skyrl/users/alice/run/attempts/trace_jobs'",
         "++generator.trajectory_retention.output_path="
         "'s3://temp/ttl=14d/skyrl/users/alice/run/attempts/trajectories'",
+    )
+
+
+def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+
+    assert (
+        skyrl_temporary_run_path(
+            "s3://marin-us-east-02a/marin/users/alice/run",
+            ttl_days=14,
+        )
+        == "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/alice/run"
     )
 
 
@@ -276,39 +293,8 @@ def test_evaluation_uses_the_validated_training_tokenizer() -> None:
 
 
 def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    output = SkyRLOutputPaths(
-        checkpoint_root="s3://test/run/checkpoints",
-        export_root="s3://test/run/exports",
-        attempts_root="s3://test/run/attempts",
-        resolved_config_uri="s3://test/run/resolved.json",
-        terminal_manifest_uri="s3://test/run/terminal.json",
-    )
-    request = SkyRLLaunchRequest(
-        run_id="checkpoints/iceball-rl-2026.08.01",
-        attempt_id="attempt-1",
-        config_yaml="trainer: {}\n",
-        runtime=_spec().runtime,
-        model=ResolvedModelLocator(
-            uri="s3://test/sft/hf",
-            identity="sft@version:fingerprint",
-            local_path="/tmp/model",
-            tokenizer_uri="Qwen/Qwen3-0.6B-Base",
-            tokenizer_revision="da87bfb",
-        ),
-        train_data=(
-            ResolvedDataLocator(
-                uri="s3://test/gsm8k",
-                identity="gsm8k@version:fingerprint",
-                local_path="/tmp/data",
-                relative_path="train.parquet",
-            ),
-        ),
-        validation_data=(),
-        topology=_spec().topology,
-        output=output,
-        seed=17,
-        overrides=(),
-    )
+    request = _launch_request()
+    output = request.output
     response = {
         "run_id": request.run_id,
         "attempt_id": request.attempt_id,
@@ -335,6 +321,8 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
         return _FakeLauncherProcess(response=json.dumps(response), returncode=0, stdout=_kwargs["stdout"])
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    catalog_rows = []
+    monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", catalog_rows.append)
 
     model = run_skyrl(
         SkyRLRunConfig(
@@ -351,7 +339,58 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
         "commit": MARIN_SKYRL.commit,
         "profile": SkyRLRuntimeProfile.FSDP.value,
     }
+    assert launch_envelopes[0]["request"]["train_data"][0]["kind"] == "directory"
     assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
+    assert len(catalog_rows) == 1
+    assert catalog_rows[0].run_id == request.run_id
+    assert catalog_rows[0].attempt_id == request.attempt_id
+    assert catalog_rows[0].status == "succeeded"
+    assert catalog_rows[0].rollout_uri == f"{output.attempts_root}/trajectories"
+    assert catalog_rows[0].job_id == "01KTEST"
+
+
+def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:
+    release = ArtifactStep.adopt("tasktrove/clean", "2026.09.10", str(tmp_path))
+    (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "tasktrove-verify@abc123"}))
+    source = TaskTroveDataSource(
+        release,
+        TaskTroveSelection(
+            sources=("source-b", "source-a"),
+            tags=("terminal", "bash"),
+            modes=("script",),
+            tag_match=TaskTroveTagMatch.ALL,
+            limit=160,
+            seed=17,
+        ),
+    )
+    context = StepContext.for_run(
+        output_path=str(tmp_path / "output"),
+        prefix=str(tmp_path),
+        runtime_args={},
+        deps=(release,),
+    )
+
+    resolved = source.resolve(context)
+
+    assert resolved.uri == str(tmp_path / "tasks/part-00000.parquet")
+    assert resolved.relative_path == "part-00000.parquet"
+    assert resolved.verifier_ref == "tasktrove-verify@abc123"
+    assert resolved.selection.sources == ("source-a", "source-b")
+    assert resolved.selection.tags == ("bash", "terminal")
+    assert resolved.kind == "tasktrove_parquet"
+
+
+@pytest.mark.parametrize(
+    "selection, message",
+    [
+        (TaskTroveSelection, "requires at least one"),
+        (lambda: TaskTroveSelection(tags=("bash", "bash")), "duplicate"),
+        (lambda: TaskTroveSelection(sources=("source-a",), limit=0), "positive"),
+    ],
+)
+def test_tasktrove_selection_rejects_ambiguous_inputs(selection: Callable[[], TaskTroveSelection], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        selection()
 
 
 def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -362,6 +401,8 @@ def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.Monkey
         "Popen",
         lambda command, **_kwargs: _FakeLauncherProcess(response="", logs="entrypoint must be a registered name\n"),
     )
+    catalog_rows = []
+    monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", catalog_rows.append)
     step = skyrl_step(_spec(), _execution())
     config = step.build_config(
         StepContext.for_run(
@@ -374,6 +415,10 @@ def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.Monkey
 
     with pytest.raises(RuntimeError, match="entrypoint must be a registered name"):
         run_skyrl(config)
+
+    assert len(catalog_rows) == 1
+    assert catalog_rows[0].status == "failed"
+    assert catalog_rows[0].rollout_uri.endswith("/attempts/trajectories")
 
 
 def test_launcher_logs_reach_stderr_while_the_run_is_live(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -415,3 +460,100 @@ def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
     )
 
     assert completed.returncode == 4
+
+
+def _launch_request() -> SkyRLLaunchRequest:
+    """One complete launch request, as the marin launcher builds it."""
+    return SkyRLLaunchRequest(
+        run_id="checkpoints/iceball-rl-2026.08.01",
+        attempt_id="attempt-1",
+        config_yaml="trainer: {}\n",
+        runtime=_spec().runtime,
+        model=ResolvedModelLocator(
+            uri="s3://test/sft/hf",
+            identity="sft@version:fingerprint",
+            local_path="/tmp/model",
+            tokenizer_uri="Qwen/Qwen3-0.6B-Base",
+            tokenizer_revision="da87bfb",
+        ),
+        train_data=(
+            ResolvedDirectoryDataSource(
+                uri="s3://test/gsm8k",
+                identity="gsm8k@version:fingerprint",
+                local_path="/tmp/data",
+                relative_path="train.parquet",
+            ),
+        ),
+        validation_data=(),
+        topology=_spec().topology,
+        output=SkyRLOutputPaths(
+            checkpoint_root="s3://test/run/checkpoints",
+            export_root="s3://test/run/exports",
+            attempts_root="s3://test/run/attempts",
+            resolved_config_uri="s3://test/run/resolved.json",
+            terminal_manifest_uri="s3://test/run/terminal.json",
+        ),
+        seed=17,
+        overrides=(),
+    )
+
+
+def test_a_runtime_profile_that_contradicts_the_config_strategy_is_refused() -> None:
+    """The mismatch is otherwise silent until the pod has its GPUs: the launcher installs one
+    backend's closure, the trainer asks for the other, and the run dies on an import error naming
+    neither the profile nor the strategy."""
+    request = _launch_request()
+
+    with pytest.raises(ValueError, match="megatron"):
+        dataclasses.replace(
+            request,
+            config_yaml="trainer:\n  strategy: megatron\n",
+            runtime=dataclasses.replace(request.runtime, profile=SkyRLRuntimeProfile.FSDP),
+        )
+
+
+@pytest.mark.parametrize(
+    "config_yaml",
+    [
+        pytest.param("trainer:\n  strategy: megatron\n", id="names the matching strategy"),
+        pytest.param("trainer:\n  max_steps: 8\n", id="names no strategy"),
+        pytest.param("trainer:\n", id="empty trainer section"),
+        pytest.param("", id="empty config"),
+        pytest.param("- a list\n", id="not a mapping"),
+    ],
+)
+def test_a_config_that_does_not_contradict_the_profile_is_accepted(config_yaml: str) -> None:
+    """Only a config that names a *different* strategy is a contradiction. Everything else leaves
+    the trainer's own default alone, including the shapes that are not a mapping at all -- the
+    guard must not turn those into a crash inside a frozen dataclass constructor."""
+    request = _launch_request()
+
+    accepted = dataclasses.replace(
+        request,
+        config_yaml=config_yaml,
+        runtime=dataclasses.replace(request.runtime, profile=SkyRLRuntimeProfile.MEGATRON),
+    )
+
+    assert accepted.config_yaml == config_yaml
+
+
+def test_a_strategy_override_decides_which_backend_the_guard_checks() -> None:
+    """Overrides are applied after the config, so the guard judges the strategy that wins."""
+    request = _launch_request()
+    fsdp = dataclasses.replace(request.runtime, profile=SkyRLRuntimeProfile.FSDP)
+
+    accepted = dataclasses.replace(
+        request,
+        config_yaml="trainer:\n  strategy: megatron\n",
+        runtime=fsdp,
+        overrides=("trainer.strategy=fsdp2",),
+    )
+    assert accepted.runtime.profile is SkyRLRuntimeProfile.FSDP
+
+    with pytest.raises(ValueError, match="megatron"):
+        dataclasses.replace(
+            request,
+            config_yaml="trainer:\n  strategy: fsdp2\n",
+            runtime=fsdp,
+            overrides=("++trainer.strategy=megatron",),
+        )

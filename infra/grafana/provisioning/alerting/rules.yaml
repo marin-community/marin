@@ -6,8 +6,10 @@
 # /k8s/alerts/* endpoints, which return string label columns plus exactly one
 # numeric column. Most also always emit at least one row per cluster (explicit
 # zeros when healthy), making their NoData state unreachable by construction;
-# gpu_rack_trays is the exception. Every rule still sets noDataState/execErrState
-# to Alerting so monitoring-path failures remain visible.
+# gpu_rack_trays is the exception. Every rule sets execErrState to Alerting so
+# invalid results still surface. Finelog alert endpoints turn only transient
+# query failures into valid non-firing results; FinelogFleetUnhealthy reports
+# that shared query-path failure.
 #
 # Workload-tier signals (gated pods, kueue backlog, workload crashloops) are
 # dashboard-only: they have expected benign causes (capacity pressure, user
@@ -390,6 +392,48 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
+      # The regional process reports this state directly to the hub, outside the
+      # row-forwarding path. The bridge evaluates heartbeat and progress ages so
+      # the Grafana expression remains one explicit value per cluster/table.
+      - uid: finelog-relay-stalled
+        title: FinelogRelayStalled
+        condition: C
+        for: 2m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.namespace }} relay is {{ $labels.state }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/finelog/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/relay_status
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: namespace, text: namespace, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
   # The hourly collector stores CoreWeave usage and zone quotas in Finelog.
   - orgId: 1
     name: coreweave-storage
@@ -418,7 +462,7 @@ groups:
               source: url
               parser: backend
               format: table
-              url: /query
+              url: /alerts/query
               url_options:
                 method: GET
                 params:
@@ -488,7 +532,7 @@ groups:
               source: url
               parser: backend
               format: table
-              url: /query
+              url: /alerts/query
               url_options:
                 method: GET
                 params:

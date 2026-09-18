@@ -84,14 +84,19 @@ def _annotations(risk: OperationRisk) -> ToolAnnotations:
     return ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False)
 
 
-def mcp_for_api(api: FastAPI, mounted_app: ASGIApp) -> FastMCP:
+def mcp_for_api(
+    api: FastAPI,
+    mounted_app: ASGIApp,
+    allowed_risks: frozenset[OperationRisk] | None = None,
+) -> FastMCP:
     """Generate an executable, fail-closed MCP server from one application API."""
     openapi = api.openapi()
     operations = _registered_operations(openapi)
     client = httpx2.AsyncClient(transport=httpx2.ASGITransport(app=mounted_app), base_url="http://marina")
 
     def route_type(route: HTTPRoute, _default: MCPType) -> MCPType | None:
-        if route.operation_id in operations:
+        extension = operations.get(route.operation_id or "")
+        if extension is not None and (allowed_risks is None or extension.risk in allowed_risks):
             return MCPType.TOOL
         return None
 

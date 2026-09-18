@@ -3,16 +3,27 @@
 
 import asyncio
 import gzip
+import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 from marina.apps import create_api as create_registered_api
 from marina.apps import services_for
 from marina.manifest import discover_apps, job_runners, load_manifest
 from marina.mcp import marina_mcp
-from marina.server import CANONICAL_ORIGIN_ENV, MCP_PATH, MarinaConfig, create_app, serve_app_file
+from marina.server import (
+    AGENT_ORIGIN_ENV,
+    CANONICAL_ORIGIN_ENV,
+    MCP_PATH,
+    MCP_READ_PATH,
+    AgentPanelService,
+    MarinaConfig,
+    create_app,
+    serve_app_file,
+)
 from mcp_types import LATEST_PROTOCOL_VERSION
 from rigging.server_auth import ANONYMOUS_ADMIN, identity_scope
 from starlette.testclient import TestClient
@@ -39,6 +50,8 @@ def write_app(apps_dir: Path, name: str, manifest: str = TASKTROVE_MANIFEST, bui
 
 
 def write_api_app(apps_dir: Path, name: str) -> Path:
+    sys.modules.pop(f"{name}.app", None)
+    sys.modules.pop(name, None)
     root = write_app(apps_dir, name)
     (root / "__init__.py").write_text("")
     (root / "app.py").write_text(
@@ -112,6 +125,7 @@ def client(tmp_path: Path) -> TestClient:
     write_app(tmp_path / "apps", "unbuilt", built=False)
     config = config_for(tmp_path)
     (tmp_path / "data" / "tasktrove" / "sources.json").write_text('[{"source": "a"}]')
+    (tmp_path / "data" / "tasktrove" / "tasks.parquet").write_bytes(b"0123456789")
     with gzip.open(tmp_path / "data" / "tasktrove" / "labels.json.gz", "wt") as f:
         f.write("[1, 2]")
     return TestClient(create_app(config), client=("127.0.0.1", 40000))
@@ -121,6 +135,27 @@ def test_manifest_rejects_unknown_keys(tmp_path: Path) -> None:
     root = write_app(tmp_path, "bad", manifest=TASKTROVE_MANIFEST + 'hostname = "x"\n')
     with pytest.raises(ValueError, match="unknown keys"):
         load_manifest(root)
+
+
+def test_manifest_parses_agent_panel_configuration(tmp_path: Path) -> None:
+    manifest = load_manifest(
+        write_app(
+            tmp_path,
+            "tasktrove",
+            manifest=TASKTROVE_MANIFEST
+            + """
+[agent]
+profile = "marina"
+repository = "marin-community/marin"
+starters = ["What is on this page?"]
+""",
+        )
+    )
+
+    assert manifest.agent is not None
+    assert manifest.agent.profile == "marina"
+    assert manifest.agent.repository == "marin-community/marin"
+    assert manifest.agent.starters == ("What is on this page?",)
 
 
 def test_manifest_groups_jobs_by_runner_in_stable_order(tmp_path: Path) -> None:
@@ -208,6 +243,44 @@ def test_app_directory_and_identity(client: TestClient) -> None:
     assert me == {"user": "anonymous", "role": "admin"}
 
 
+def test_agent_config_and_csp_are_enabled_by_app_manifest(tmp_path: Path) -> None:
+    manifest = (
+        TASKTROVE_MANIFEST
+        + """
+[agent]
+profile = "marina"
+repository = "marin-community/marin"
+starters = ["What is on this page?"]
+"""
+    )
+    write_app(tmp_path / "apps", "tasktrove", manifest=manifest)
+    write_app(tmp_path / "apps", "plain")
+    config = replace(
+        config_for(tmp_path),
+        agent_panel=AgentPanelService("https://loom.example"),
+    )
+
+    with TestClient(create_app(config), client=("127.0.0.1", 40000)) as configured:
+        assert configured.get("/api/marina/agent/config", params={"app": "tasktrove"}).json() == {
+            "enabled": True,
+            "origin": "https://loom.example",
+            "profile": "marina",
+            "repository": "marin-community/marin",
+            "starters": ["What is on this page?"],
+        }
+        assert configured.get("/api/marina/agent/config", params={"app": "plain"}).json() == {"enabled": False}
+        assert "https://loom.example" in configured.get("/tasktrove/").headers["content-security-policy"]
+        assert "https://loom.example" not in configured.get("/plain/").headers["content-security-policy"]
+
+
+def test_agent_origin_rejects_insecure_remote_service(tmp_path: Path) -> None:
+    write_app(tmp_path / "apps", "tasktrove")
+    config = replace(config_for(tmp_path), agent_panel=AgentPanelService("http://loom.example"))
+
+    with pytest.raises(ValueError, match=AGENT_ORIGIN_ENV):
+        create_app(config)
+
+
 def test_registered_application_is_searchable_and_callable_over_mcp(tmp_path: Path) -> None:
     manifest = load_manifest(write_api_app(tmp_path / "apps", "tasktrove"))
     registered = create_registered_api(manifest, services_for(manifest, str(tmp_path / "data"), None))
@@ -244,6 +317,24 @@ def test_registered_application_is_searchable_and_callable_over_mcp(tmp_path: Pa
     assert called.data == {"body": {"grade": 10}, "query": "17", "request_id": None}
     assert identity.data == {"user": "anonymous"}
 
+    async def exercise_read_mcp():
+        read_server = marina_mcp({"tasktrove": registered.read_mcp})
+        async with Client(read_server) as read_client:
+            found_write = await read_client.call_tool("find_tool", {"query": "record a feedback grade"})
+            found_read = await read_client.call_tool("find_tool", {"query": "verified Marina caller"})
+            with pytest.raises(ToolError, match="Unknown tool"):
+                await read_client.call_tool(
+                    "call_tool",
+                    {"name": "tasktrove_feedback", "arguments": {"grade": 10}},
+                )
+            return found_write, found_read
+
+    with identity_scope(ANONYMOUS_ADMIN):
+        found_write, found_read = asyncio.run(exercise_read_mcp())
+
+    assert found_write.data == []
+    assert [tool["name"] for tool in found_read.data] == ["tasktrove_whoami"]
+
 
 def test_mcp_is_served_over_authenticated_streamable_http(tmp_path: Path) -> None:
     write_api_app(tmp_path / "apps", "tasktrove")
@@ -275,10 +366,25 @@ def test_mcp_is_served_over_authenticated_streamable_http(tmp_path: Path) -> Non
                 },
             },
         )
+        read_initialized = client.post(
+            f"{MCP_READ_PATH}/",
+            headers={"accept": "application/json, text/event-stream"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": LATEST_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "1"},
+                },
+            },
+        )
 
     assert response.status_code == 200
     assert response.json()["result"]["serverInfo"]["name"] == "Marina"
     assert called.status_code == 200
+    assert read_initialized.status_code == 200
     assert called.json()["result"]["structuredContent"] == {"user": "anonymous"}
 
 
@@ -317,6 +423,70 @@ def test_data_files_come_from_the_data_root(client: TestClient) -> None:
     assert compressed.headers["content-encoding"] == "gzip" and compressed.json() == [1, 2]
     assert client.get("/tasktrove/data/missing.json").status_code == 404
     assert client.get("/tasktrove/data/..%2Fother%2Fx").status_code == 404
+
+
+def test_data_files_come_from_the_manifest_url(tmp_path: Path) -> None:
+    app_data = tmp_path / "release"
+    app_data.mkdir()
+    (app_data / "manifest.json").write_text('{"clean_tasks": 1450969}')
+    write_app(
+        tmp_path / "apps",
+        "tasktrove",
+        manifest=TASKTROVE_MANIFEST + f'data_url = "{app_data}"\n',
+    )
+    config = MarinaConfig(
+        apps_dir=tmp_path / "apps",
+        data_root=str(tmp_path / "unused"),
+        iap_audience=None,
+    )
+
+    with TestClient(create_app(config), client=("127.0.0.1", 40000)) as app_client:
+        response = app_client.get("/tasktrove/data/manifest.json")
+
+    assert response.status_code == 200
+    assert response.json() == {"clean_tasks": 1450969}
+
+
+def test_data_files_support_head_and_byte_ranges(client: TestClient) -> None:
+    head = client.head("/tasktrove/data/tasks.parquet")
+    assert head.status_code == 200 and head.content == b""
+    assert head.headers["accept-ranges"] == "bytes" and head.headers["content-length"] == "10"
+
+    middle = client.get("/tasktrove/data/tasks.parquet", headers={"Range": "bytes=2-5"})
+    assert middle.status_code == 206 and middle.content == b"2345"
+    assert middle.headers["content-range"] == "bytes 2-5/10"
+
+    suffix = client.get("/tasktrove/data/tasks.parquet", headers={"Range": "bytes=-3"})
+    assert suffix.status_code == 206 and suffix.content == b"789"
+    assert client.get("/tasktrove/data/tasks.parquet", headers={"Range": "bytes=10-"}).status_code == 416
+
+
+def test_data_file_range_uses_s3_compatible_arguments(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    content = b"0123456789"
+
+    class S3Filesystem:
+        def isfile(self, _path: str) -> bool:
+            return True
+
+        def size(self, _path: str) -> int:
+            return len(content)
+
+        def cat_file(
+            self,
+            _path: str,
+            version_id: str | None = None,
+            start: int | None = None,
+            end: int | None = None,
+        ) -> bytes:
+            assert version_id is None
+            return content[start:end]
+
+    monkeypatch.setattr("marina.server.filesystem_for", lambda _url: (S3Filesystem(), "release"))
+
+    response = client.get("/tasktrove/data/tasks.parquet", headers={"Range": "bytes=2-5"})
+
+    assert response.status_code == 206
+    assert response.content == b"2345"
 
 
 def test_non_loopback_without_iap_is_denied(tmp_path: Path) -> None:

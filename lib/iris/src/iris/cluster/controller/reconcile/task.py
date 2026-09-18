@@ -257,7 +257,7 @@ def preempt_one(
         new_state,
         reason,
         now_ms,
-        stamp_attempt_finished=False,
+        stamp_attempt_finished=row.current_worker_id is None,
         attempt_state=job_pb2.TASK_STATE_PREEMPTED,
     )
     return TransitionOutcome(
@@ -546,5 +546,5 @@ def timeout_one(
         job_pb2.TASK_STATE_FAILED,
         reason,
         now_ms,
-        stamp_attempt_finished=False,
+        stamp_attempt_finished=row.current_worker_id is None,
     )

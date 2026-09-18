@@ -31,7 +31,7 @@ more on what should be included rather than tone.
 - Avoid section headings in normal bug and task issues. Use plain `Reproduce:`,
   `Expected:`, or `Done when:` labels only when they make the issue easier to
   act on.
-- Put extended investigation history in a linked comment, logbook, or artifact.
+- Put extended investigation history in a linked comment or source artifact.
 - Do not prescribe an implementation unless the choice is part of the task.
 
 Before publishing, apply [ai-writing-donts.md](ai-writing-donts.md) to the exact
@@ -47,10 +47,9 @@ reproduction step, observation, expected behavior, or completion criterion.
 
 ## Experiment Issues
 
-Treat experiment issues as part of Marin's scientific record. Use them as a summary layer, a coordination surface, and a long-lived artifact.
-
-For experiment issues attached to a research program, follow the
-[run-research](../run-research/SKILL.md) workflow.
+Treat experiment issues as part of Marin's scientific record. Use them as a
+summary layer, coordination surface, and long-lived artifact. For requested
+research programs, follow the [research](../research/SKILL.md) workflow.
 
 ### Assume This Reader
 
@@ -66,10 +65,10 @@ For experiment issues attached to a research program, follow the
 ### Keep The Expected Structure
 
 - Maintain a clear TL;DR and evolving conclusion.
-- Link the research logbook, W&B runs, commits, and tags.
+- Link W&B runs, commits, tags, and other source artifacts.
 - Track the decision log and negative results.
 - Reflect current understanding instead of pasting raw logs.
-- Treat the logbook as the detailed record and the issue as the interpreted summary.
+- Keep dense data in its source system and the interpreted summary in the issue.
 
 ### Write Updates This Way
 
@@ -88,5 +87,6 @@ For experiment issues attached to a research program, follow the
 - Do not let the issue become a chat log.
 - Do not forget to update the TL;DR or conclusion.
 - Do not lose the baseline.
-- Do not overly clutter the issue. The log book from the run-research skill should be the full log.
-- Do not assume knowledge of the conversation/thread or the logbook. Each comment should be understandable in the context of the issue.
+- Do not clutter the issue with raw logs or dense tables; link their source.
+- Do not assume knowledge of a private conversation. Each comment should be
+  understandable in the context of the issue.

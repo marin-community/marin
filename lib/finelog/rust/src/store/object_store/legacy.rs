@@ -112,6 +112,17 @@ impl ObjectStore for LegacyObjectStore {
         self.provider.get_path(self.path(id), "legacy object").await
     }
 
+    async fn exists(&self, id: &ObjectId) -> Result<bool, StatsError> {
+        let path = self.path(id);
+        match self.provider.backend().head(&path).await {
+            Ok(_) => Ok(true),
+            Err(object_store::Error::NotFound { .. }) => Ok(false),
+            Err(error) => Err(StatsError::Internal(format!(
+                "inspect legacy object {path}: {error}"
+            ))),
+        }
+    }
+
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
         let path = self.path(id);
         match self.provider.backend().delete(&path).await {

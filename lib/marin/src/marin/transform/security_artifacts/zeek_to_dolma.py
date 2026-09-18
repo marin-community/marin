@@ -23,6 +23,10 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.readers import load_jsonl, load_parquet
+
 from marin.transform.security_artifacts.renderers import (
     DEFAULT_ZEEK_EMPTY_FIELD,
     DEFAULT_ZEEK_SEPARATOR,
@@ -30,9 +34,6 @@ from marin.transform.security_artifacts.renderers import (
     DEFAULT_ZEEK_UNSET_FIELD,
     render_zeek_tsv_log,
 )
-from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset
-from zephyr.readers import load_jsonl, load_parquet
 
 logger = logging.getLogger(__name__)
 

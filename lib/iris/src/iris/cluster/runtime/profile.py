@@ -34,6 +34,12 @@ logger = logging.getLogger(__name__)
 # Target sentinel for profiling the local worker/controller process itself.
 SYSTEM_PROCESS_TARGET = "/system/process"
 
+# Sampling window applied when a ProfileTaskRequest leaves ``duration_seconds`` unset
+# (proto3 zero). The controller forwards the unset field verbatim and sizes its RPC
+# timeout from this value, while the worker and the k8s backend each resolve the
+# default at capture time; one definition keeps the budget and the capture in step.
+DEFAULT_PROFILE_DURATION_SECONDS = 10
+
 
 CPU_FORMAT_MAP: dict[int, tuple[str, str]] = {
     job_pb2.CpuProfile.FLAMEGRAPH: ("flamegraph", "svg"),

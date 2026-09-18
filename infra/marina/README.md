@@ -25,8 +25,11 @@ infra/marina/
 
 - `/<name>/`: files from `dist/`, `index.html` for every other path so client
   routes survive a reload. A `x.json.gz` beside `x.json` is served compressed.
-- `/<name>/data/<path>`: files from `<data root>/<name>/`. Large or changing
-  data lives there rather than in the image or the repository.
+- `/<name>/data/<path>`: files from the app's `data_url`, or from
+  `<data root>/<name>/` when it has no override. The authenticated Marina route
+  proxies reads and byte ranges, so browser code never receives object-store
+  credentials. Large or changing data lives there rather than in the image or
+  the repository.
 - `/<name>/api/`: the ASGI app in the `RegisteredApi` returned by a checked-in
   Python app's `create_api(services)`, mounted behind the same authentication.
   Handlers read the caller with
@@ -48,6 +51,7 @@ infra/marina/
    description = "Browse the TaskTrove task collection."
    connect_src = []          # extra origins the page may fetch; 'self' is implied
    build_command = "cd web && npm ci && npm run build"
+   data_url = "s3://bucket/release"  # optional; defaults to <data root>/<name>
 
    [[jobs]]                  # optional non-serving work
    name = "refresh"
@@ -120,8 +124,23 @@ infra/marina/
    standard `readOnlyHint`, `destructiveHint`, and `openWorldHint` annotations.
    The exact `read`, `write`, `external_write`, or `destructive` value is also
    available at `_meta.marina.risk`.
-4. Write a journey in `apps/<name>/journeys/test_*.py` (below).
-5. Run it locally:
+4. To expose the shared page-agent panel, declare the Loom launch coordinates
+   and up to three empty-state prompts:
+
+   ```toml
+   [agent]
+   profile = "marina"
+   repository = "marin-community/marin"
+   starters = ["What is on the critical path?"]
+   ```
+
+   The active view publishes bounded, versioned page context with
+   `useAgentContext()` from `@marina/agentContext`. The context supplies stable
+   identifiers and UI state; it does not contain a document or select tools.
+   The deployment supplies `MARINA_AGENT_ORIGIN`, so applications do not embed
+   an environment-specific Loom URL.
+5. Write a journey in `apps/<name>/journeys/test_*.py` (below).
+6. Run it locally:
 
    ```bash
    uv run marina check                 # parse manifests, report build state
@@ -177,6 +196,11 @@ clients keep their authorization header; page requests redirect into the app's
 prefix on the canonical origin. The auth chain is IAP's signed assertion header
 when an audience is configured, then loopback; on Cloud Run a missing audience
 is a startup error rather than an open service.
+
+`MARINA_AGENT_ORIGIN` is the Loom origin used by opted-in checked-in apps. It
+must be HTTPS in an IAP deployment; a loopback development kernel may use HTTP.
+Marina adds it to `connect-src` only for apps with an `[agent]` manifest. Loom
+must list Marina's exact origin in its `browser.allowed_origins` setting.
 
 `MARINA_APPLET_ORIGIN` names the separate origin that serves `/a/*`. Requests
 for applet pages on Marina's main host redirect there. The applet host returns
@@ -418,7 +442,7 @@ copying EvalDash code:
 
 ```python
 from finestore.reader import ReadView
-from marin.evaluation.archive import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
+from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 
 def read_samples(results_path: str):
     table = ReadView(results_path).scan(ARCHIVE_SAMPLES_TABLE)

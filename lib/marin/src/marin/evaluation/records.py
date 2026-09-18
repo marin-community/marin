@@ -17,10 +17,13 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import prefix_join
+
+from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_PATTERN
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,52 @@ class RunStatus(StrEnum):
     FAILED = "failed"
     ARTIFACT_FAILED = "artifact_failed"
     INFRA_FAILED = "infra_failed"
+
+
+class MetricKind(StrEnum):
+    """How a metric's uncertainty is computed."""
+
+    BINARY = "binary"
+    CONTINUOUS = "continuous"
+
+
+class BenchmarkMetricRef(BaseModel):
+    """One evaluator metric in its canonical and source vocabularies."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    source_name: str
+    kind: MetricKind
+    higher_is_better: bool
+
+
+class BenchmarkMetadataRef(BaseModel):
+    """The benchmark protocol emitted by an evaluation harness."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1]
+    task: str
+    primary_metric: str
+    metric_kind: MetricKind
+    metrics: tuple[BenchmarkMetricRef, ...]
+    n_benchmark: int | None = Field(ge=0)
+    n_attempted: int | None = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_protocol(self) -> "BenchmarkMetadataRef":
+        metrics = {metric.name: metric for metric in self.metrics}
+        if len(metrics) != len(self.metrics):
+            raise ValueError("metric names must be unique")
+        primary = metrics.get(self.primary_metric)
+        if primary is None:
+            raise ValueError("primary_metric must name one of metrics")
+        if primary.kind is not self.metric_kind:
+            raise ValueError("metric_kind must match the primary metric")
+        if self.n_benchmark is not None and self.n_attempted is not None and self.n_attempted > self.n_benchmark:
+            raise ValueError("n_attempted cannot exceed n_benchmark")
+        return self
 
 
 class ModelResourceConfig(BaseModel):
@@ -152,6 +201,8 @@ class EvalTaskRef(BaseModel):
     generation: bool = False
     unsafe_code: bool = False
     completion_only: bool = False
+    benchmark: BenchmarkMetadataRef | None = None
+    """The evaluator-owned benchmark protocol, when the harness emitted one."""
 
 
 class EvalchemyRef(BaseModel):
@@ -193,6 +244,21 @@ class HarborRef(BaseModel):
         pattern=r"^sha256:[0-9a-f]{64}$",
         exclude_if=lambda value: value is None,
     )
+    harbor_config_commit: str | None = Field(
+        default=None,
+        pattern=FULL_GIT_COMMIT_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    max_input_tokens: int | None = Field(
+        default=None,
+        description="Agent context budget resolved from the served model, the policy, and Harbor's defaults",
+        exclude_if=lambda value: value is None,
+    )
+    max_output_tokens: int | None = Field(
+        default=None,
+        description="Agent generation budget resolved from the served model, the policy, and Harbor's defaults",
+        exclude_if=lambda value: value is None,
+    )
 
 
 class EvalRef(BaseModel):
@@ -206,6 +272,11 @@ class EvalRef(BaseModel):
 
     name: str
     mechanism: str
+    family: str | None = Field(
+        default=None,
+        description="Benchmark this eval is a setting of, for the leaderboard column it shares",
+        exclude_if=lambda value: value is None,
+    )
     tasks: tuple[EvalTaskRef, ...] = ()
     evalchemy: EvalchemyRef | None = None
     harbor: HarborRef | None = None
@@ -274,9 +345,8 @@ class TaskCoverage(BaseModel):
     """How much of one task's intended item set a run actually graded, and how those grades came out.
 
     ``n_attempted`` is the number of items the run set out to grade after any declared cap, and
-    ``n_scored`` how many produced a grade; ``errors`` counts the attempted-but-ungraded items by
-    error type, so a reader can tell a model's score apart from the quality of the infrastructure
-    that produced it.
+    ``n_scored`` how many have a usable score. ``errors`` counts errors by type, including errors
+    on scored outcomes when the harness permits them. Completion uses the item counts.
 
     ``n_attempted`` is ``None`` when the run graded items but could not establish how many it set out
     to grade. That is unknown coverage, and readers widen for it; it is never read as complete. A
@@ -293,6 +363,9 @@ class TaskCoverage(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    n_benchmark: int | None = None
+    """Items in the full benchmark before any run cap."""
+
     n_attempted: int | None = None
     n_scored: int
     n_correct: int | None = None
@@ -303,9 +376,8 @@ class TaskCoverage(BaseModel):
 class EvalRunRecord(BaseModel):
     """The full account of one eval run, serialized to ``record.json``.
 
-    ``metrics`` is ``{task: {metric: value}}`` as produced by
-    :meth:`~marin.evaluation.evalchemy.result.EvalchemyResult.task_metrics`; it is empty when the run did
-    not reach the metric-reading stage. The ``evaluation`` field serializes as
+    ``metrics`` is ``{task: {metric: value}}`` as produced by the evaluator's typed result reader; it
+    is empty when the run did not reach the metric-reading stage. The ``evaluation`` field serializes as
     ``eval`` (a reserved-looking but unambiguous JSON key); use ``model_dump(mode="json",
     by_alias=True)`` or ``model_dump_json(by_alias=True)`` to produce it.
     """
@@ -334,6 +406,8 @@ class EvalRunRecord(BaseModel):
     error: str | None
     results_path: str
     metrics: dict[str, dict[str, float]]
+    canonical_metrics: dict[str, dict[str, float]] = Field(default_factory=dict)
+    """Per-task evaluator metrics projected into the benchmark metadata's canonical vocabulary."""
     coverage: dict[str, TaskCoverage] = Field(default_factory=dict)
     """Per-task item coverage, keyed like ``metrics``, for mechanisms that report an attempted-item
     count. Empty when the mechanism reports none and on every record written before coverage existed;

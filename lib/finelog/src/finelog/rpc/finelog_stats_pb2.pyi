@@ -380,6 +380,72 @@ class CatalogHead(_message.Message):
     tombstoned: bool
     def __init__(self, format_version: _Optional[int] = ..., namespace: _Optional[str] = ..., writer_epoch: _Optional[int] = ..., catalog_generation: _Optional[int] = ..., active_table_spec_version: _Optional[int] = ..., catalog: _Optional[_Union[ObjectRef, _Mapping]] = ..., tombstoned: _Optional[bool] = ...) -> None: ...
 
+class CatalogSegmentKey(_message.Message):
+    __slots__ = ("table_spec_version", "segment_id", "retired")
+    TABLE_SPEC_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SEGMENT_ID_FIELD_NUMBER: _ClassVar[int]
+    RETIRED_FIELD_NUMBER: _ClassVar[int]
+    table_spec_version: int
+    segment_id: str
+    retired: bool
+    def __init__(self, table_spec_version: _Optional[int] = ..., segment_id: _Optional[str] = ..., retired: _Optional[bool] = ...) -> None: ...
+
+class CatalogSegmentAddition(_message.Message):
+    __slots__ = ("key", "segment")
+    KEY_FIELD_NUMBER: _ClassVar[int]
+    SEGMENT_FIELD_NUMBER: _ClassVar[int]
+    key: CatalogSegmentKey
+    segment: CatalogSegment
+    def __init__(self, key: _Optional[_Union[CatalogSegmentKey, _Mapping]] = ..., segment: _Optional[_Union[CatalogSegment, _Mapping]] = ...) -> None: ...
+
+class CatalogDelta(_message.Message):
+    __slots__ = ("metadata", "segment_additions", "segment_removals", "direct_query_additions", "direct_query_removals")
+    METADATA_FIELD_NUMBER: _ClassVar[int]
+    SEGMENT_ADDITIONS_FIELD_NUMBER: _ClassVar[int]
+    SEGMENT_REMOVALS_FIELD_NUMBER: _ClassVar[int]
+    DIRECT_QUERY_ADDITIONS_FIELD_NUMBER: _ClassVar[int]
+    DIRECT_QUERY_REMOVALS_FIELD_NUMBER: _ClassVar[int]
+    metadata: NamespaceCatalog
+    segment_additions: _containers.RepeatedCompositeFieldContainer[CatalogSegmentAddition]
+    segment_removals: _containers.RepeatedCompositeFieldContainer[CatalogSegmentKey]
+    direct_query_additions: _containers.RepeatedCompositeFieldContainer[CatalogSegment]
+    direct_query_removals: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, metadata: _Optional[_Union[NamespaceCatalog, _Mapping]] = ..., segment_additions: _Optional[_Iterable[_Union[CatalogSegmentAddition, _Mapping]]] = ..., segment_removals: _Optional[_Iterable[_Union[CatalogSegmentKey, _Mapping]]] = ..., direct_query_additions: _Optional[_Iterable[_Union[CatalogSegment, _Mapping]]] = ..., direct_query_removals: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class ReleasedObject(_message.Message):
+    __slots__ = ("object", "delete_after_ms")
+    OBJECT_FIELD_NUMBER: _ClassVar[int]
+    DELETE_AFTER_MS_FIELD_NUMBER: _ClassVar[int]
+    object: ObjectRef
+    delete_after_ms: int
+    def __init__(self, object: _Optional[_Union[ObjectRef, _Mapping]] = ..., delete_after_ms: _Optional[int] = ...) -> None: ...
+
+class CatalogNode(_message.Message):
+    __slots__ = ("format_version", "namespace", "catalog_generation", "parent", "delta_depth", "delta_bytes_since_checkpoint", "checkpoint", "delta", "released_objects", "release_summary", "legacy_history_safe_after_ms")
+    FORMAT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_GENERATION_FIELD_NUMBER: _ClassVar[int]
+    PARENT_FIELD_NUMBER: _ClassVar[int]
+    DELTA_DEPTH_FIELD_NUMBER: _ClassVar[int]
+    DELTA_BYTES_SINCE_CHECKPOINT_FIELD_NUMBER: _ClassVar[int]
+    CHECKPOINT_FIELD_NUMBER: _ClassVar[int]
+    DELTA_FIELD_NUMBER: _ClassVar[int]
+    RELEASED_OBJECTS_FIELD_NUMBER: _ClassVar[int]
+    RELEASE_SUMMARY_FIELD_NUMBER: _ClassVar[int]
+    LEGACY_HISTORY_SAFE_AFTER_MS_FIELD_NUMBER: _ClassVar[int]
+    format_version: int
+    namespace: str
+    catalog_generation: int
+    parent: ObjectRef
+    delta_depth: int
+    delta_bytes_since_checkpoint: int
+    checkpoint: NamespaceCatalog
+    delta: CatalogDelta
+    released_objects: _containers.RepeatedCompositeFieldContainer[ReleasedObject]
+    release_summary: bool
+    legacy_history_safe_after_ms: int
+    def __init__(self, format_version: _Optional[int] = ..., namespace: _Optional[str] = ..., catalog_generation: _Optional[int] = ..., parent: _Optional[_Union[ObjectRef, _Mapping]] = ..., delta_depth: _Optional[int] = ..., delta_bytes_since_checkpoint: _Optional[int] = ..., checkpoint: _Optional[_Union[NamespaceCatalog, _Mapping]] = ..., delta: _Optional[_Union[CatalogDelta, _Mapping]] = ..., released_objects: _Optional[_Iterable[_Union[ReleasedObject, _Mapping]]] = ..., release_summary: _Optional[bool] = ..., legacy_history_safe_after_ms: _Optional[int] = ...) -> None: ...
+
 class RegisterTableRequest(_message.Message):
     __slots__ = ("namespace", "schema", "storage_policy", "table_spec")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
@@ -521,3 +587,75 @@ class AbortTableMigrationResponse(_message.Message):
     catalog_generation: int
     active_table_spec_version: int
     def __init__(self, catalog_generation: _Optional[int] = ..., active_table_spec_version: _Optional[int] = ...) -> None: ...
+
+class ReportRelayNamespaceStatus(_message.Message):
+    __slots__ = ("namespace", "visible_high_water", "published_high_water", "settled_cursor")
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    VISIBLE_HIGH_WATER_FIELD_NUMBER: _ClassVar[int]
+    PUBLISHED_HIGH_WATER_FIELD_NUMBER: _ClassVar[int]
+    SETTLED_CURSOR_FIELD_NUMBER: _ClassVar[int]
+    namespace: str
+    visible_high_water: int
+    published_high_water: int
+    settled_cursor: int
+    def __init__(self, namespace: _Optional[str] = ..., visible_high_water: _Optional[int] = ..., published_high_water: _Optional[int] = ..., settled_cursor: _Optional[int] = ...) -> None: ...
+
+class ReportRelayStatusRequest(_message.Message):
+    __slots__ = ("boot_id", "report_sequence", "target", "namespaces")
+    BOOT_ID_FIELD_NUMBER: _ClassVar[int]
+    REPORT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACES_FIELD_NUMBER: _ClassVar[int]
+    boot_id: str
+    report_sequence: int
+    target: str
+    namespaces: _containers.RepeatedCompositeFieldContainer[ReportRelayNamespaceStatus]
+    def __init__(self, boot_id: _Optional[str] = ..., report_sequence: _Optional[int] = ..., target: _Optional[str] = ..., namespaces: _Optional[_Iterable[_Union[ReportRelayNamespaceStatus, _Mapping]]] = ...) -> None: ...
+
+class ReportRelayStatusResponse(_message.Message):
+    __slots__ = ("received_at_ms",)
+    RECEIVED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    received_at_ms: int
+    def __init__(self, received_at_ms: _Optional[int] = ...) -> None: ...
+
+class RelayNamespaceStatus(_message.Message):
+    __slots__ = ("namespace", "visible_high_water", "published_high_water", "settled_cursor", "publication_progress_at_ms", "cursor_progress_at_ms")
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    VISIBLE_HIGH_WATER_FIELD_NUMBER: _ClassVar[int]
+    PUBLISHED_HIGH_WATER_FIELD_NUMBER: _ClassVar[int]
+    SETTLED_CURSOR_FIELD_NUMBER: _ClassVar[int]
+    PUBLICATION_PROGRESS_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_PROGRESS_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    namespace: str
+    visible_high_water: int
+    published_high_water: int
+    settled_cursor: int
+    publication_progress_at_ms: int
+    cursor_progress_at_ms: int
+    def __init__(self, namespace: _Optional[str] = ..., visible_high_water: _Optional[int] = ..., published_high_water: _Optional[int] = ..., settled_cursor: _Optional[int] = ..., publication_progress_at_ms: _Optional[int] = ..., cursor_progress_at_ms: _Optional[int] = ...) -> None: ...
+
+class RelaySenderStatus(_message.Message):
+    __slots__ = ("cluster", "boot_id", "report_sequence", "target", "received_at_ms", "namespaces")
+    CLUSTER_FIELD_NUMBER: _ClassVar[int]
+    BOOT_ID_FIELD_NUMBER: _ClassVar[int]
+    REPORT_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    RECEIVED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACES_FIELD_NUMBER: _ClassVar[int]
+    cluster: str
+    boot_id: str
+    report_sequence: int
+    target: str
+    received_at_ms: int
+    namespaces: _containers.RepeatedCompositeFieldContainer[RelayNamespaceStatus]
+    def __init__(self, cluster: _Optional[str] = ..., boot_id: _Optional[str] = ..., report_sequence: _Optional[int] = ..., target: _Optional[str] = ..., received_at_ms: _Optional[int] = ..., namespaces: _Optional[_Iterable[_Union[RelayNamespaceStatus, _Mapping]]] = ...) -> None: ...
+
+class ListRelayStatusRequest(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class ListRelayStatusResponse(_message.Message):
+    __slots__ = ("senders",)
+    SENDERS_FIELD_NUMBER: _ClassVar[int]
+    senders: _containers.RepeatedCompositeFieldContainer[RelaySenderStatus]
+    def __init__(self, senders: _Optional[_Iterable[_Union[RelaySenderStatus, _Mapping]]] = ...) -> None: ...

@@ -170,12 +170,12 @@ uv run python -m experiments.evaluation.cli launch \
 `agentic` runs seven full Harbor datasets and can consume substantial Daytona and inference
 capacity. Use `tb2-lite`, `swebench-lite`, `aime-smoke`, or `--limit N` for validation runs.
 
-Run one Grug/OpenCode trial with the model and agent policy registered for that benchmark:
+Run one OT-TBLite trial with the registered Grug model and OpenCode agent policy:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
   --model grug-agentic-s3-step1903 \
-  --evals grug-opencode-id \
+  --evals ot-tblite \
   --limit 1
 ```
 
@@ -210,7 +210,7 @@ For example, retry a model-load failure with half the default reader concurrency
 RUNAI_STREAMER_CONCURRENCY=4 \
 uv run python -m experiments.evaluation.cli launch \
   --model grug-agentic-s3-step1903 \
-  --evals grug-opencode-id \
+  --evals ot-tblite \
   --limit 1
 ```
 
@@ -233,7 +233,7 @@ when RunAI reports a transient read failure.
 The `code` suite is registered but is not runnable with the current pinned evaluation image because
 its HumanEvalPlus and MBPPPlus dependencies are absent. Individual evaluation keys are defined in
 `experiments/evaluation/evals.py`. Useful Harbor keys outside `agentic` include `tb2-lite`,
-`swebench-lite`, `swebench-full`, `aime-smoke`, `aime-harbor`, and `grug-opencode-id`.
+`swebench-lite`, `swebench-full`, `aime-smoke`, `aime-harbor`, and `ot-tblite`.
 
 ### Choose a model
 
@@ -245,7 +245,7 @@ its HumanEvalPlus and MBPPPlus dependencies are absent. Individual evaluation ke
 | `llama-3.1-8b-base` | Base, TPU | `nlp` |
 | `llama3.1-8b-instruct` | Instruct, TPU | `core`, `nlp`, or `chat` |
 | `qwen3-32b` | Instruct, CoreWeave H100x2 | `tb2-lite`, `tb2`, or `agentic` |
-| `grug-agentic-s3-step1903` | Instruct export, CoreWeave H100x8 | `grug-opencode-id` |
+| `grug-agentic-s3-step1903` | Instruct export, CoreWeave H100x8 | `ot-tblite` |
 
 The complete catalog is the union of `experiments/evaluation/models.py` and YAML files under
 `experiments/evaluation/serve/models/`. The
@@ -289,12 +289,18 @@ endpoint details.
 TPU-routed runs default to `gs://marin-eval-metadata/evals`. CoreWeave GPU runs default to
 `s3://marin-us-east-02a/marin/evals`. `--dry-run` prints the effective prefix.
 
-Every selected evaluation writes `{records_prefix}/{run_id}/record.json` plus its mechanism-specific
-results and normalized sample parquet. Evalchemy records include the normalized launch configuration;
-Harbor records include the dataset, agent, environment, task limit, and source-policy
-digest. Harbor also persists trial directories and trajectories in the same GCS or S3 results tree.
-A Harbor trial with `exception_info` marks the evaluation failed after its artifacts are saved; a
-verifier-scored zero without an exception remains a completed evaluation with a zero score.
+Every selected evaluation writes `{records_prefix}/{run_id}/record.json` and a FineStore archive
+under its results directory. Evalchemy writes its aggregate JSON and per-task JSONL as FineStore
+source artifacts and writes normalized samples for every extraction filter. Marin derives one
+evaluator-neutral `rollouts_v1` conversation per `(task, doc_id, trial_id)` attempt from those samples,
+deduplicated across extraction filters. Harbor preserves its job metadata, trial results, and
+trajectories while writing normalized agentic samples and steps; Marin derives its `rollouts_v1` rows
+from `steps`. The evaluator's raw artifacts remain in FineStore. Harbor's job tree remains the
+checkpoint used for resume and inspection. Evalchemy records include the
+normalized launch configuration; Harbor records include the dataset, agent, environment, task limit,
+and source-policy digest. A Harbor infrastructure exception remains ungraded and counts against the
+completion gate after its artifacts are saved; a verifier-scored zero remains a completed evaluation
+with a zero score.
 
 [Evaldash](https://evaldash.oa.dev) indexes records from both default stores. The record is the
 source of truth for model, evaluation identity, status, metrics, hardware, provenance, and Iris job
@@ -446,8 +452,8 @@ print(report_artifact.task_metrics)  # {task: {metric: value}}
 print(report_artifact.averages)      # suite-level rollups
 ```
 
-Each individual result is an `EvalchemyResult`; `task_metrics()` reads the per-task scores from the
-evalchemy output tree.
+Each individual result is a `FineStoreEvalchemyResult`; `task_metrics()` reads the per-task scores
+from Evalchemy's aggregate source artifacts in FineStore.
 
 ### Run the repository example scripts
 

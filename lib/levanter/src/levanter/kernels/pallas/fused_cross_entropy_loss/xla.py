@@ -10,9 +10,12 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
-from .reference import linear_softmax_cross_entropy_loss_reference, linear_softmax_cross_entropy_loss_streaming
+from .reference import (
+    _cross_entropy_exp,
+    linear_softmax_cross_entropy_loss_reference,
+    linear_softmax_cross_entropy_loss_streaming,
+)
 from .tuned_block_sizes import (
-    _largest_divisor_at_most,
     infer_block_sizes_with_tuned_match,
     infer_xla_b_block_size,
     infer_xla_v_block_size,
@@ -113,13 +116,9 @@ def _resolve_xla_batch_block_size(
             )
         requested = max_b_block_size
 
-    if requested <= b_dim and b_dim % requested == 0:
-        return requested
-
-    # Default/tuned block sizes often encode a preferred upper bound like 1024.
-    # Preserve that intent by shrinking to the largest valid divisor of B instead
-    # of rejecting smaller local batches outright.
-    return _largest_divisor_at_most(b_dim, min(requested, inferred))
+    # Preserve the requested tile for irregular batches. The public wrapper
+    # pads rows and slices results, avoiding tiny divisor-sized GEMMs.
+    return min(b_dim, requested)
 
 
 def _infer_tuned_xla_batch_block_size(
@@ -355,7 +354,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
                 cap_deriv = (1.0 - tanh_val**2).astype(logits.dtype)
 
             logits = jnp.where(valid[None, :], logits, -jnp.inf)
-            probs = jnp.exp(logits - lse_block[:, None].astype(logits.dtype))
+            probs = _cross_entropy_exp(logits - lse_block[:, None].astype(logits.dtype))
             delta = (
                 dout_loss_block[:, None].astype(logits.dtype) + dout_lse_block[:, None].astype(logits.dtype)
             ) * probs
@@ -438,12 +437,16 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
     if batch_block_size <= 0:
         raise ValueError(f"batch_block_size must be positive, got {batch_block_size}.")
 
-    b_dim, h_dim = x.shape
-    if batch_block_size < b_dim and b_dim % batch_block_size != 0:
-        raise ValueError(
-            f"batch_block_size must divide batch dimension, got B={b_dim}, batch_block_size={batch_block_size}."
-        )
-    b_block = min(batch_block_size, b_dim)
+    original_rows, h_dim = x.shape
+    b_block = min(batch_block_size, original_rows)
+    padding_rows = (-original_rows) % b_block
+    if padding_rows:
+        x = jnp.pad(x, ((0, padding_rows), (0, 0)))
+        labels = jnp.pad(labels, ((0, padding_rows),))
+        lse = jnp.pad(lse, ((0, padding_rows),))
+        dout_loss = jnp.pad(dout_loss, ((0, padding_rows),))
+        dout_lse = jnp.pad(dout_lse, ((0, padding_rows),))
+    b_dim = x.shape[0]
     num_b_blocks = b_dim // b_block
 
     v_dim = w.shape[1]
@@ -489,7 +492,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
             cap_deriv = 1.0 - tanh_val**2
 
         in_vocab = (v_start + v_offsets) < v_dim
-        probs = jnp.where(in_vocab[None, :], jnp.exp(logits - lse_blk[:, None]), 0.0)
+        probs = jnp.where(in_vocab[None, :], _cross_entropy_exp(logits - lse_blk[:, None]), 0.0)
         dlogits = probs * g_softmax_blk[:, None]
 
         # Dense one-hot label subtraction. ``labels - v_start`` lands in
@@ -562,7 +565,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
     grad_x_init = jnp.zeros((b_dim, h_dim), dtype=jnp.float32)
     grad_x, grad_w_blocks = jax.lax.scan(scan_body, grad_x_init, jnp.arange(num_v_blocks, dtype=jnp.int32))
     grad_w = jnp.transpose(grad_w_blocks, (1, 0, 2)).reshape((h_dim, v_padded))
-    return grad_x.astype(x.dtype), grad_w[:, :v_dim]
+    return grad_x[:original_rows].astype(x.dtype), grad_w[:, :v_dim]
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2, 3, 4, 5, 6, 7))
@@ -691,6 +694,9 @@ def linear_softmax_cross_entropy_loss_xla(
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Streaming linear-softmax cross-entropy on plain XLA.
 
+    Partial batch tiles are padded internally; returned values and gradients
+    contain only the original rows.
+
     Args:
         fast_backward: Use the scan/one-hot/tensor-core backward. ``None`` means
             "no call-site preference" and falls back to the library default (off).
@@ -735,8 +741,18 @@ def linear_softmax_cross_entropy_loss_xla(
             return_argmax=return_argmax,
         )
 
+    original_rows = x.shape[0]
+    if fast_backward and bwd_batch_block_size is not None and bwd_batch_block_size <= 0:
+        raise ValueError(f"batch_block_size must be positive, got {bwd_batch_block_size}.")
+    # Forward and backward tiles pad independently, bounding the extra rows
+    # even when the requested tile sizes are relatively prime.
+    padding_rows = (-original_rows) % b_block_size
+    if padding_rows:
+        x = jnp.pad(x, ((0, padding_rows), (0, 0)))
+        labels = jnp.pad(labels, ((0, padding_rows),))
+
     if return_argmax:
-        return _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
+        loss, lse, argmax = _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
             x,
             labels,
             w,
@@ -747,7 +763,9 @@ def linear_softmax_cross_entropy_loss_xla(
             precision=precision,
         )
 
-    return _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
+        return loss[:original_rows], lse[:original_rows], argmax[:original_rows]
+
+    loss, lse = _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
         v_block_size,
         b_block_size,
         dtype,
@@ -760,6 +778,7 @@ def linear_softmax_cross_entropy_loss_xla(
         labels,
         w,
     )
+    return loss[:original_rows], lse[:original_rows]
 
 
 __all__ = ["linear_softmax_cross_entropy_loss_xla"]

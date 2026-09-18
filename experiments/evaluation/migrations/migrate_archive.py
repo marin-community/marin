@@ -29,8 +29,7 @@ from urllib.parse import urlsplit
 
 import click
 import pyarrow.parquet as pq
-from finestore.reader import ReadView
-from marin.evaluation.archive import (
+from finestore.eval import (
     ARCHIVE_SAMPLES_TABLE,
     ARCHIVE_STEPS_TABLE,
     SAMPLES_PREFIX,
@@ -42,8 +41,9 @@ from marin.evaluation.archive import (
     SampleKind,
     StepRecord,
     sample_from_archive_row,
-    trajectory_step_rows,
 )
+from finestore.reader import ReadView
+from marin.evaluation.harbor.trajectory import archive_trajectory, trajectory_step_rows
 from marin.evaluation.records import list_records
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -239,7 +239,8 @@ def migrate_run(
                     logger.warning("legacy trajectory is already missing: %s", uri)
                     missing_trajectory_count += 1
                 else:
-                    stored = store.add_trajectory(
+                    stored = archive_trajectory(
+                        store,
                         raw,
                         task=sample.task,
                         doc_id=sample.doc_id,

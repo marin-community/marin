@@ -66,13 +66,16 @@ impl Provider {
 
         std::fs::create_dir_all(value)
             .map_err(|error| StatsError::Internal(format!("create remote dir {value}: {error}")))?;
-        let backend = LocalFileSystem::new_with_prefix(value).map_err(|error| {
+        let local_root = std::fs::canonicalize(value).map_err(|error| {
+            StatsError::Internal(format!("resolve local remote store {value}: {error}"))
+        })?;
+        let backend = LocalFileSystem::new_with_prefix(&local_root).map_err(|error| {
             StatsError::Internal(format!("local remote store {value}: {error}"))
         })?;
         Ok(Some(Self {
             backend: Arc::new(backend),
             prefix: String::new(),
-            local_root: Some(PathBuf::from(value)),
+            local_root: Some(local_root),
             base_url: None,
         }))
     }

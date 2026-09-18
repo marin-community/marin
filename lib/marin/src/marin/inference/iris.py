@@ -165,7 +165,8 @@ class IrisServiceConfig:
     instances: int = 1
     broker: BrokerConfig | None = None
     timeout_hours: float = 24.0
-    controller_proxy_timeout_seconds: float = 2100.0
+    # Covers both the Iris proxy and dashboard upstream client for long generations.
+    controller_proxy_timeout_seconds: float = 12 * 60 * 60
     port_name: str | None = "http"
 
     def __post_init__(self) -> None:

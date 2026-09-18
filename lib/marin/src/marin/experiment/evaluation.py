@@ -17,9 +17,9 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.evalchemy.result import (
-    EvalchemyResult,
     EvalReport,
     EvalResult,
+    FineStoreEvalchemyResult,
     ReportEntry,
     compile_eval_report,
 )
@@ -141,7 +141,7 @@ def evaluate_evalchemy(
     tokenizer: str | None = None,
     discover_latest_checkpoint: bool = True,
     version: str | None = None,
-) -> ArtifactStep[EvalchemyResult]:
+) -> ArtifactStep[FineStoreEvalchemyResult]:
     """Build one typed Evalchemy result artifact."""
     deps = (model,)
     name = f"evaluation/evalchemy/{model_name}/{config.name}"
@@ -166,7 +166,7 @@ def evaluate_evalchemy(
     return ArtifactStep(
         name=name,
         version=resolve_version(name, version),
-        artifact_type=EvalchemyResult,
+        artifact_type=FineStoreEvalchemyResult,
         run=remote(
             run_served_evalchemy,
             resources=_orchestrator_resources(accelerator),

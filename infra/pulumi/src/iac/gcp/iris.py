@@ -37,7 +37,6 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                             f"serviceAccount:loom-vm@{project}.iam.gserviceaccount.com",
                             principals["human-061"],
                             principals["human-073"],
-                            principals["human-074"],
                         ),
                     ),
                 ),

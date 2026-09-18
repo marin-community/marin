@@ -727,9 +727,8 @@ def cluster_start(ctx, local: bool, fresh: bool, task_image_platforms: str | Non
 
 @cluster.command("stop")
 @click.option("--dry-run/--no-dry-run", default=False, help="Show what would be deleted without deleting")
-@click.option("--label", "label_override", default=None, help="Label prefix override (default from config or 'iris')")
 @click.pass_context
-def cluster_stop(ctx, dry_run: bool, label_override: str | None):
+def cluster_stop(ctx, dry_run: bool):
     """Stop controller and terminate all slices."""
     config = ctx.obj.get("config")
     if not config:
@@ -743,7 +742,7 @@ def cluster_stop(ctx, dry_run: bool, label_override: str | None):
     try:
         bundle = provider_bundle(config)
         try:
-            names = bundle.controller.stop_all(config, dry_run=dry_run, label_prefix=label_override)
+            names = bundle.controller.stop_all(config, dry_run=dry_run)
         finally:
             bundle.controller.shutdown()
     except Exception as e:

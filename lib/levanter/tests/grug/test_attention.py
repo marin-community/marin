@@ -15,6 +15,7 @@ from levanter.grug.attention import (
     AttentionMask,
     attention,
     reference_attention,
+    token_validity_from_attention_mask,
     thd_segment_metadata_from_segment_ids,
 )
 
@@ -122,6 +123,46 @@ def test_thd_segment_metadata_includes_padding_run():
 
     np.testing.assert_array_equal(metadata.segment_lengths, jnp.array([2, 3, 1], dtype=jnp.int32))
     np.testing.assert_array_equal(metadata.num_segments, jnp.array(3, dtype=jnp.int32))
+
+
+def test_token_validity_uses_padding_ids_without_excluding_packed_boundaries():
+    segment_ids = jnp.array(
+        [
+            [0, 0, 1, 1, -1, -1],
+            [7, 8, 8, -1, -1, -1],
+            [-1, -1, -1, -1, -1, -1],
+        ],
+        dtype=jnp.int32,
+    )
+    mask = AttentionMask.causal().with_segment_ids(segment_ids)
+
+    valid = token_validity_from_attention_mask(mask, batch_size=3, sequence_length=6)
+
+    np.testing.assert_array_equal(
+        valid,
+        jnp.array(
+            [
+                [True, True, True, True, False, False],
+                [True, True, True, False, False, False],
+                [False, False, False, False, False, False],
+            ]
+        ),
+    )
+
+
+def test_token_validity_uses_empty_rows_from_dense_boolean_masks():
+    dense_mask = jnp.array(
+        [
+            [True, False, False],
+            [True, True, False],
+            [False, False, False],
+        ],
+        dtype=jnp.bool_,
+    )
+
+    valid = token_validity_from_attention_mask(dense_mask, batch_size=2, sequence_length=3)
+
+    np.testing.assert_array_equal(valid, jnp.array([[True, True, False], [True, True, False]]))
 
 
 def test_grug_lm_example_with_max_segments_stacks_padded_packed_rows():

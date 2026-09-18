@@ -1,0 +1,25 @@
+n_concurrent_trials: 16
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 10
+  include_exceptions:
+    - InternalServerError
+    - APIConnectionError
+    - APITimeoutError
+    - ArtifactUploadTimeoutError
+    - ArtifactWriterBacklogError
+    - CancelledError
+    - ContextManagementInfrastructureError
+    - LLMRequestTimeoutError
+    - SandboxBuildFailedError
+    - TrialTimeoutError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+environment:
+  type: daytona
+agents:
+  - name: terminus-2
+datasets:
+  - name: hf://DCAgent2/swebench-verified-random-100-folders
+    ref: main

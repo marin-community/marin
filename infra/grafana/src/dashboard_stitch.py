@@ -54,6 +54,16 @@ _FLEET_HEALTH_LINK = {
     "type": "link",
     "url": "/d/marin-clusters",
 }
+_RL_POST_TRAINING_LINK = {
+    "asDropdown": False,
+    "icon": "dashboard",
+    "includeVars": True,
+    "keepTime": True,
+    "targetBlank": False,
+    "title": "RL Post-training",
+    "type": "link",
+    "url": "/d/marin-rl-runs",
+}
 _SHARED_LINKS = {
     "cluster_capacity": _CLUSTER_CAPACITY_LINK,
     "cluster_capacity_without_vars": {**_CLUSTER_CAPACITY_LINK, "includeVars": False},
@@ -61,6 +71,7 @@ _SHARED_LINKS = {
     "fleet_accelerators_without_vars": {**_FLEET_ACCELERATORS_LINK, "includeVars": False},
     "fleet_health": _FLEET_HEALTH_LINK,
     "fleet_health_without_vars": {**_FLEET_HEALTH_LINK, "includeVars": False},
+    "rl_post_training": _RL_POST_TRAINING_LINK,
 }
 
 

@@ -5,7 +5,7 @@ requires-python = "==3.12.*"
 dependencies = [
     "daytona==0.200.2",
     "gcsfs",
-    "harbor",
+    "harbor[archive]",
     # LiteLLM imports this at module initialization but does not declare it.
     "pydantic-settings",
     "s3fs",
@@ -16,4 +16,5 @@ package = false
 prerelease = "allow"
 
 [tool.uv.sources]
+# Keep this branch-based: uv.lock pins the runtime commit, and the external dependency updater advances it.
 harbor = { git = "https://github.com/marin-community/harbor.git", branch = "main" }

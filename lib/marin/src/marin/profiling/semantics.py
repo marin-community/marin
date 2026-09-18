@@ -6,6 +6,7 @@
 import math
 import re
 from collections.abc import Iterable
+from functools import cache
 
 _SEMANTIC_FAMILY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("attention_splash", re.compile(r"splash_mha|splash_attention", re.IGNORECASE)),
@@ -29,6 +30,7 @@ _DTYPE_SHAPE_RE = re.compile(r"(?:bf16|f32|f16|s32|u32|s8|u8|pred)\[([^\]]+)\]",
 _INT_RE = re.compile(r"-?\d+")
 
 
+@cache
 def canonical_op_name(name: str) -> str:
     """Canonicalize an op name by removing numeric suffixes and `%` prefix."""
     return re.sub(r"\.\d+$", "", name.strip().lstrip("%"))

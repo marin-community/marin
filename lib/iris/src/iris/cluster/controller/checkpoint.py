@@ -31,14 +31,18 @@ from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import zstandard
+from connectrpc.request import RequestContext
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.db import ControllerDB
+from iris.rpc import controller_pb2
+from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +83,32 @@ class CheckpointResult:
     job_count: int
     task_count: int
     worker_count: int
+
+
+class CheckpointRuntime(Protocol):
+    def begin_checkpoint(self) -> tuple[str, CheckpointResult]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointDependencies:
+    runtime: CheckpointRuntime
+
+
+def begin_checkpoint_request(
+    dependencies: CheckpointDependencies,
+    request: controller_pb2.Controller.BeginCheckpointRequest,
+    context: RequestContext,
+) -> controller_pb2.Controller.BeginCheckpointResponse:
+    del request, context
+    path, result = dependencies.runtime.begin_checkpoint()
+    response = controller_pb2.Controller.BeginCheckpointResponse(
+        checkpoint_path=path,
+        job_count=result.job_count,
+        task_count=result.task_count,
+        worker_count=result.worker_count,
+    )
+    response.created_at.CopyFrom(timestamp_to_proto(result.created_at))
+    return response
 
 
 @dataclass(frozen=True)
