@@ -192,7 +192,7 @@ class IrisSamplingJobs:
                             scheduling_timeout=Duration.from_hours(24),
                             timeout=Duration.from_hours(4),
                             max_retries_failure=0,
-                            max_retries_preemption=0,
+                            max_retries_preemption=1000,
                             max_task_failures=0,
                             priority_band=priority_band,
                             existing_job_policy=job_pb2.EXISTING_JOB_POLICY_ERROR,

@@ -52,8 +52,9 @@ GPU jobs to finish, so workflow success does not mean that sampling completed.
 
 ## Recovery
 
-Each request permits three attempts. The workflow records its source commit when
-it first saves a request. All attempts use that commit for the sampler code, so
+Each request permits three Iris job submissions. Each job permits 1,000 preemption retries.
+The workflow records its source commit when it first saves a request.
+All attempts use that commit for the sampler code, so
 merging a fix does not change existing requests.
 To rerun checkpoints with corrected sampler code, change `release` in
 [config.py](config.py) through a PR, then invoke the workflow. A new release
