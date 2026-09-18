@@ -19,7 +19,7 @@ from zephyr.writers import write_parquet_file
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
-from marin.utilities.validation_utils import write_provenance_json
+from marin.utilities.provenance import write_provenance_json
 
 logger = logging.getLogger(__name__)
 

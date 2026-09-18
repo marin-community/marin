@@ -24,7 +24,7 @@ from zephyr.writers import atomic_rename, ensure_parent_dir, parquet_sink
 from marin.datakit.normalize import normalize_step
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
-from marin.utilities.validation_utils import write_provenance_json
+from marin.utilities.provenance import write_provenance_json
 
 logger = logging.getLogger(__name__)
 
