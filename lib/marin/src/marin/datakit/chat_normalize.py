@@ -31,7 +31,7 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.18.repeated-tool-replies"
+CHAT_NORMALIZE_VERSION = "2026.09.18"
 MAX_REJECTED_RECORD_FRACTION = 0.05
 
 
@@ -100,7 +100,7 @@ def message_text(message: Message) -> str:
 
 
 def has_stalled_tool_call(messages: list[Message]) -> bool:
-    """Find a third identical tool call after two identical replies in one user turn."""
+    """Find a third identical tool call after two identical replies between user messages."""
     calls: list[_ToolCall] = []
     replies: list[_ToolReply] = []
 
