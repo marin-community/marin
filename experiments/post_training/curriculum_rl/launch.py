@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -482,6 +482,10 @@ SNOWBALL_FULL_R5 = ScalePreset(
     extra_overrides=SNOWBALL_MUONH_OVERRIDES,
 )
 
+# The asynchronous launcher's comparison arm: the full Snowball preset run for 100 updates, so the two
+# loops are compared at matched step counts on the same pool.
+SNOWBALL_FULL_100 = replace(SNOWBALL_FULL, label="snowball-full-100", max_steps=100)
+
 SCALES = {
     preset.label: preset
     for preset in (
@@ -489,6 +493,7 @@ SCALES = {
         FULL,
         SNOWBALL_SMOKE,
         SNOWBALL_FULL,
+        SNOWBALL_FULL_100,
         SNOWBALL_SMOKE_R4,
         SNOWBALL_FULL_R4,
         SNOWBALL_SMOKE_R5,
