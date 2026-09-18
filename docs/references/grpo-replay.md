@@ -1,10 +1,9 @@
-# GRPO replay and offline learning
+# GRPO offline learning
 
 `levanter.grpo` implements the regular PPO surrogate used by the pinned
-MarinSkyRL GRPO recipe. `marin.rl.grpo_replay` checks captured loss values and
-logprob gradients. `marin.rl.train_grpo` trains a model on an ordered list of
-completed captures; rollout generation and online policy publication are outside
-this entrypoint.
+MarinSkyRL GRPO recipe. `marin.rl.train_grpo` trains a model on an ordered list
+of completed captures; rollout generation and online policy publication are
+outside this entrypoint.
 
 ## Objective and captures
 
@@ -21,26 +20,12 @@ KL, with gradients through current-policy scores disabled. Reference scores are
 always detached; `KlGradient.DIFFERENTIABLE` enables only the current-policy
 contribution. `accumulation_steps` cancels Levanter's averaging over execution microbatches.
 
-`marin.rl.grpo_artifact.GoldenRollout` stores complete token sequences, attention
-masks, response-aligned objectives, group IDs, original objective-partition IDs,
-and distinct raw-policy and sampling-policy scores. Its NPZ format embeds a JSON
-manifest and loads with pickle disabled. `write_golden_rollout` and
-`read_golden_rollout` validate the array shapes and masks.
-
-Replay requires the recorded MarinSkyRL oracle revision
-`8e33e01707b7225ecde1d6b8ad172a3dd4dc8661`, its configuration/provenance manifest,
-and captured independent Torch logprob gradients:
-
-```bash
-uv run python -m marin.rl.grpo_replay /data/golden.npz \
-  --output-uri /data/replay-result.json --atol 1e-5 --rtol 1e-5
-```
-
-The command rejects unsupported algorithm recipes and reports maximum/mean
-absolute errors for advantages, loss, gradients, and PPO diagnostics. Gradient
-comparisons divide by each positive policy weight before applying tolerances,
-so a large batch cannot hide an error through a small reduction weight. This
-checks the loss boundary; full-model optimizer parity requires separate evidence.
+`marin.rl.grpo_capture.CapturedRollout` stores complete token sequences,
+attention masks, response-aligned masks and rewards, group IDs, original
+objective-partition IDs, old-policy scores, and optional reference scores. Its
+NPZ format embeds a JSON manifest and loads with pickle disabled.
+`write_captured_rollout` and `read_captured_rollout` validate the array shapes
+and masks.
 
 The supported surrogate takes the minimum of the unclipped ratio advantage and
 the clipped-ratio advantage, with independently configured lower/upper clip
@@ -60,17 +45,17 @@ Qwen3 and can be selected through Levanter's registered model configs.
 
 Each capture receives one update. Before that update, captured raw old-policy
 scores are replaced by current-learner scores; captured tokens, rewards, groups,
-partitions, and reference scores remain fixed. Sampling-policy scores are
-retained for provenance and do not enter importance correction. This is offline
-replay, not an off-policy-corrected training algorithm. Scoring and training use
-the same trajectory count and padded sequence width within each capture. Every
-capture must match the configured full batch count; a different sequence width
-can trigger recompilation. It disables dropout and masks padding as a separate
-attention segment. Every update saves through the existing Levanter checkpointer.
-To interrupt deliberately, set `stop_after` to an absolute step; resume with the
-same checkpointer path, run ID, ordered captures, and recipe, removing `stop_after`.
-The saved contract hashes capture contents and rejects changed inputs or recipes.
-At the final step the learner exports HF weights to `hf_save_path`.
+partitions, and reference scores remain fixed. This does not apply an
+off-policy correction. Scoring and training use the same trajectory count and
+padded sequence width within each capture. Every capture must match the
+configured full batch count; a different sequence width can trigger
+recompilation. It disables dropout and masks padding as a separate attention
+segment. Every update saves through the existing Levanter checkpointer. To
+interrupt deliberately, set `stop_after` to an absolute step; resume with the
+same checkpointer path, run ID, ordered captures, and recipe, removing
+`stop_after`. The saved contract hashes capture contents and rejects changed
+inputs or recipes. At the final step the learner exports HF weights to
+`hf_save_path`.
 This uses the existing single-learner checkpoint lifecycle; stage-local pipeline
 checkpoint integration is separate.
 
