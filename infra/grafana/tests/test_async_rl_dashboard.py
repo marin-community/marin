@@ -407,6 +407,9 @@ def test_health_sums_nonfinite_deltas_and_keeps_exporter_processes_separate(stor
         ("telemetry_lost_records", 3, "trainer"),
         ("telemetry_lost_records", 4, "other"),
     ]:
+        # The panel keys an exporter process by its whole resource attribute set, so these rows
+        # carry the fixture's attributes: a second "trainer/trainer" group would tie with the
+        # fixture's under ORDER BY and make the dict below keep whichever sorted last.
         store.execute(
             'INSERT INTO "telemetry_v1.marinskyrl" VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
             telemetry_row(
@@ -414,11 +417,12 @@ def test_health_sums_nonfinite_deltas_and_keeps_exporter_processes_separate(stor
                 value,
                 timestamp=BASE_EPOCH_MS + 1000,
                 seq=1000,
-                resource={"role": "trainer", "host": process},
+                resource={"role": "trainer", "host": process, "training_loop": "async"},
             ),
         )
     rows = query(store, "Exporter and nonfinite observations")
     values = {(row["process"], row["name"]): row["observed_value"] for row in rows}
+    assert len(rows) == len(values)
     assert values == {
         ("trainer/trainer", "training_nonfinite_values"): 2,
         ("trainer/trainer", "telemetry_lost_records"): 3,
