@@ -6,6 +6,7 @@ import io
 import json
 import shutil
 import tarfile
+import uuid
 from pathlib import Path
 
 import pytest
@@ -249,6 +250,71 @@ def test_applet_host_exposes_only_applet_routes(tmp_path: Path, database_url: st
         ).status_code
         == 404
     )
+
+
+def test_named_applet_host_pins_revisions_and_isolates_routes(tmp_path: Path, database_url: str) -> None:
+    publisher, store = applet_client_and_store(tmp_path, database_url)
+    package = package_applet(DEMO_APPLET)
+    first = publisher.post("/api/marina/applets", content=package).json()
+    other = publisher.post("/api/marina/applets", content=package).json()
+    applet_id = first["id"]
+    config = MarinaConfig(
+        apps_dir=tmp_path / "apps",
+        data_root=str(tmp_path / "data"),
+        iap_audience=None,
+        database=store.database,
+        applet_origin="https://applets.example",
+        applet_hosts={"zephyr.example": uuid.UUID(applet_id)},
+    )
+    named = TestClient(create_app(config), base_url="https://zephyr.example", client=("127.0.0.1", 40000))
+    root = named.get("/", follow_redirects=False)
+    assert root.status_code == 307
+    assert root.headers["location"] == "/v/1/"
+    assert root.headers["cache-control"] == "no-cache"
+    page = named.get("/")
+    assert page.url == "https://zephyr.example/v/1/"
+    assert "Problem sets" in page.text
+    assert "script-src 'self'" in page.headers["content-security-policy"]
+    asset = named.get("/v/1/app.js")
+    assert asset.content == (DEMO_APPLET / "dist" / "app.js").read_bytes()
+    assert named.get("/v/1/api/identity").json() == {"user": "anonymous"}
+    query = named.post(
+        "/v/1/query", json={"sql": "SELECT CAST(:value AS INTEGER) AS value", "parameters": {"value": 17}}
+    )
+    assert query.json()["rows"] == [{"value": 17}]
+    assert named.get("/api/marina/apps").status_code == 404
+    assert named.delete(f"/api/marina/applets/{other['id']}").status_code == 404
+    assert named.get(f"/a/{other['id']}/api/identity").status_code == 404
+    assert named.get(f"/a/{applet_id}/v/1/").status_code == 404
+    shared = named.get(f"https://applets.example/a/{applet_id}/v/1/api/revision")
+    assert shared.json() == {"version": 1}
+
+    updated = publisher.post(f"/api/marina/applets/{applet_id}?base_version=1", content=package)
+    assert updated.status_code == 201
+    assert named.get("/", follow_redirects=False).headers["location"] == "/v/2/"
+    assert named.get("/v/1/api/revision").json() == {"version": 1}
+    assert named.get("/v/2/api/revision").json() == {"version": 2}
+    assert publisher.delete(f"/api/marina/applets/{applet_id}").status_code == 204
+    assert named.get("/").status_code == 404
+    assert named.get("/v/1/").status_code == 404
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [("GET", "/"), ("GET", "/v/1/"), ("GET", "/v/1/app.js"), ("GET", "/v/1/api/identity"), ("POST", "/v/1/query")],
+)
+def test_named_applet_host_authenticates_rewritten_routes(tmp_path: Path, method: str, path: str) -> None:
+    apps_dir = tmp_path / "apps"
+    apps_dir.mkdir()
+    config = MarinaConfig(
+        apps_dir=apps_dir,
+        data_root=str(tmp_path / "data"),
+        iap_audience="test-audience",
+        applet_origin="https://applets.example",
+        applet_hosts={"zephyr.example": uuid.uuid4()},
+    )
+    remote = TestClient(create_app(config), base_url="https://zephyr.example", client=("10.0.0.7", 40000))
+    assert remote.request(method, path).status_code == 401
 
 
 def test_store_rejects_non_owner_and_allows_operator(tmp_path: Path, database_url: str) -> None:

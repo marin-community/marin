@@ -354,10 +354,12 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
 
     stable_config = _stable_config(config)
     stable_policy_json = _stable_policy_json(stable_config)
-    dataset_path = (
-        str((path.parent / dataset_metadata.selector).resolve()) if dataset_metadata.kind == _DatasetKind.LOCAL else None
-    )
     with tempfile.TemporaryDirectory(prefix="marin-harbor-preflight-job-") as jobs_dir:
+        dataset_path = (
+            str((path.parent / dataset_metadata.selector).resolve())
+            if dataset_metadata.kind == _DatasetKind.LOCAL
+            else None
+        )
         effective = _effective_config(
             stable_config,
             RuntimeOverlay(

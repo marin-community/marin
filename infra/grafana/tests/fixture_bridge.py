@@ -25,6 +25,7 @@ _LANES = (
     ("harbor", "Harbor", "forks", "evaluation"),
     ("marinskyrl", "SkyRL", "forks", "rl"),
     ("vllm-gpu", "vLLM GPU", "forks", "inference"),
+    ("vllm-gpu-release", "vLLM release", "forks", "inference"),
     ("tpu-inference", "TPU infer", "forks", "inference"),
 )
 

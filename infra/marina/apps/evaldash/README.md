@@ -116,10 +116,12 @@ than standing as a model's newest score -- the zero is real but is equally consi
 grader, and reporting a collapse on that basis would be the same error as hiding it. The empty cell
 names the flag and links the run, and `include_flagged=1` admits it, starred.
 
-Several settings of one benchmark can share a leaderboard column. The launcher writes this grouping
-to each run's `eval.family`; a run without a family keeps its own column. `/panel` returns each family,
-its requested variants, and the selected variant. It selects the variant with the most admitted cells
-for that request, breaking ties by eval name. Requesting one variant pins it.
+Several settings of one benchmark can share a leaderboard column. The launcher writes explicit
+groupings to each run's `eval.family`. Harbor runs without an explicit family use their dataset as the
+family, so policies and dataset versions over the same benchmark group automatically. Other runs
+without a family keep their own column. `/panel` returns each family, its requested variants, and the
+selected variant. It selects the variant with the most admitted cells for that request, breaking ties
+by eval name. Requesting one variant pins it.
 
 The response's `panel` contains one selected variant per family and controls coverage, `complete=1`,
 and aggregation. `benchmarks` and `cells` retain every admitted variant under its exact eval name.

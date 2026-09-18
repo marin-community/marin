@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from marin.evaluation.harbor.dataset import materialize_harbor_dataset
+from marin.evaluation.harbor.dataset import local_harbor_dataset_path
 from marin.evaluation.harbor.driver_config import preflight_harbor_configs
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
@@ -209,6 +209,14 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     assert all(result["stable_policy_json"] == expected["stable_policy_json"] for result in seeded)
     assert all(result["digest"] == expected["digest"] for result in seeded)
     assert expected["trials_per_task"] == 3
+
+
+def test_preflight_resolves_hugging_face_datasets_in_harbor(tmp_path):
+    (result,) = json.loads(_preflight(tmp_path, [(_POLICIES / "swebench-recovery.yaml", {})]).stdout)
+    assert result["dataset_kind"] == "hugging_face"
+    assert result["dataset_selector"] == "DCAgent2/swebench-verified-random-100-folders"
+    assert result["benchmark_metadata"]["task"] == "hf://DCAgent2/swebench-verified-random-100-folders"
+    assert result["benchmark_metadata"]["n_benchmark"] == 100
 
 
 def test_preflight_reports_only_verifier_host_environment_dependencies(tmp_path):
@@ -452,7 +460,7 @@ datasets:
             lambda: worker_workspace,
         )
 
-        assert materialize_harbor_dataset(config, tmp_path / "workdir", hf_token=None) == worker_dataset
+        assert local_harbor_dataset_path(config) == worker_dataset
 
 
 def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(tmp_path, checked_policies):
@@ -464,7 +472,7 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
             {
                 "job_name": "runtime-job",
                 "jobs_dir": str(tmp_path / "jobs"),
-                "dataset_path": str(tmp_path / "tasks"),
+                "dataset_path": None,
                 "endpoint_url": "https://iris.example/capability/v1",
                 "served_model": "served-grug",
                 "task_limit": 3,
@@ -487,7 +495,7 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
 
     assert effective["job_name"] == "runtime-job"
     assert effective["jobs_dir"] == str(tmp_path / "jobs")
-    assert effective["datasets"][0]["path"] == str(tmp_path / "tasks")
+    assert effective["datasets"][0]["name"] == "hf://DCAgent/dev_set_v2"
     assert effective["datasets"][0]["n_tasks"] == 3
     agent = effective["agents"][0]
     assert agent["model_name"] == "hosted_vllm/served-grug"
