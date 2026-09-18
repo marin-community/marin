@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -21,22 +22,37 @@ from experiments.post_training.task_curriculum.models import (
 )
 
 
+@dataclass(frozen=True)
+class GraphAnchor:
+    subject_id: str
+    facet: RoutingFacet
+    text: str
+
+
+@dataclass(frozen=True)
+class SectionAnchor:
+    subject_id: str
+    section_id: str
+    text: str
+
+
 def graph_anchors(
     catalog: CurriculumCatalog,
     assignment_anchors: Sequence[AssignmentAnchor] = (),
-) -> tuple[list[str], list[RoutingFacet], list[str]]:
+) -> list[GraphAnchor]:
     """Return membership anchors for each curriculum graph."""
-    subject_ids: list[str] = []
-    facets: list[RoutingFacet] = []
-    anchors: list[str] = []
+    anchors: list[GraphAnchor] = []
     for entry in catalog.curricula:
         curriculum = entry.curriculum
         roots = [section for section in curriculum.sections if section.parent_id is None]
         for root in roots:
-            subject_ids.append(curriculum.subject_id)
-            facets.append(entry.routing_facet)
             anchors.append(
-                f"{curriculum.subject_name}. {root.name}. {root.outcome} " f"Includes: {'; '.join(root.includes)}."
+                GraphAnchor(
+                    subject_id=curriculum.subject_id,
+                    facet=entry.routing_facet,
+                    text=f"{curriculum.subject_name}. {root.name}. {root.outcome} "
+                    f"Includes: {'; '.join(root.includes)}.",
+                )
             )
     facets_by_subject = {entry.curriculum.subject_id: entry.routing_facet for entry in catalog.curricula}
     for anchor in assignment_anchors:
@@ -44,28 +60,28 @@ def graph_anchors(
             continue
         if anchor.subject_id not in facets_by_subject:
             raise ValueError(f"unknown graph anchor subject {anchor.subject_id}")
-        subject_ids.append(anchor.subject_id)
-        facets.append(facets_by_subject[anchor.subject_id])
-        anchors.append(anchor.text)
-    return subject_ids, facets, anchors
+        anchors.append(GraphAnchor(anchor.subject_id, facets_by_subject[anchor.subject_id], anchor.text))
+    return anchors
 
 
 def section_anchors(
     catalog: CurriculumCatalog,
     assignment_anchors: Sequence[AssignmentAnchor] = (),
-) -> tuple[list[str], list[str], list[str]]:
+) -> list[SectionAnchor]:
     """Return section anchors that exclude task-generation probes."""
-    subject_ids: list[str] = []
-    section_ids: list[str] = []
-    anchors: list[str] = []
+    anchors: list[SectionAnchor] = []
     for entry in catalog.curricula:
         curriculum = entry.curriculum
         for section in curriculum.sections:
             base = f"{section.name}. {section.outcome}"
             for included in section.includes:
-                subject_ids.append(curriculum.subject_id)
-                section_ids.append(section.id)
-                anchors.append(f"{base}. Includes: {included}.")
+                anchors.append(
+                    SectionAnchor(
+                        subject_id=curriculum.subject_id,
+                        section_id=section.id,
+                        text=f"{base}. Includes: {included}.",
+                    )
+                )
     subject_by_section = {
         section.id: entry.curriculum.subject_id for entry in catalog.curricula for section in entry.curriculum.sections
     }
@@ -77,10 +93,8 @@ def section_anchors(
         expected_subject = subject_by_section[anchor.section_id]
         if anchor.subject_id != expected_subject:
             raise ValueError(f"section {anchor.section_id} belongs to {expected_subject}, not {anchor.subject_id}")
-        subject_ids.append(anchor.subject_id)
-        section_ids.append(anchor.section_id)
-        anchors.append(anchor.text)
-    return subject_ids, section_ids, anchors
+        anchors.append(SectionAnchor(anchor.subject_id, anchor.section_id, anchor.text))
+    return anchors
 
 
 def normalized(vectors: np.ndarray) -> np.ndarray:
@@ -109,22 +123,17 @@ def _maximum_scores(
     return groups, scores
 
 
-def map_task_vectors(
+def _validate_mapping_inputs(
     annotations: Sequence[TaskAnnotation],
     membership_vectors: Mapping[RoutingFacet, np.ndarray],
     operation_vectors: np.ndarray,
-    catalog: CurriculumCatalog,
-    graph_anchor_subject_ids: Sequence[str],
-    graph_anchor_facets: Sequence[RoutingFacet],
+    graph_anchor_rows: Sequence[GraphAnchor],
     graph_anchor_vectors: np.ndarray,
-    section_anchor_subject_ids: Sequence[str],
-    section_anchor_ids: Sequence[str],
+    section_anchor_rows: Sequence[SectionAnchor],
     section_anchor_vectors: np.ndarray,
-    embedding_model: str,
     top_k: int,
     row_batch_size: int,
-) -> list[TaskMapping]:
-    """Rank graph membership and sections independently for each curriculum."""
+) -> None:
     task_count = len(annotations)
     if len(operation_vectors) != task_count:
         raise ValueError("task annotation and operation-vector counts differ")
@@ -135,74 +144,125 @@ def map_task_vectors(
     task_ids = [annotation.task_id for annotation in annotations]
     if len(task_ids) != len(set(task_ids)):
         raise ValueError("task annotation IDs must be unique")
-    if not 1 <= top_k:
+    if top_k < 1:
         raise ValueError("top_k must be positive")
     if row_batch_size < 1:
         raise ValueError("row_batch_size must be positive")
-    if not (len(graph_anchor_subject_ids) == len(graph_anchor_facets) == len(graph_anchor_vectors)):
+    if len(graph_anchor_rows) != len(graph_anchor_vectors):
         raise ValueError("graph anchor metadata and vector counts differ")
-    if not (len(section_anchor_subject_ids) == len(section_anchor_ids) == len(section_anchor_vectors)):
+    if len(section_anchor_rows) != len(section_anchor_vectors):
         raise ValueError("section anchor metadata and vector counts differ")
 
-    graph_scores: dict[RoutingFacet, tuple[list[str], np.ndarray]] = {}
-    for facet in RoutingFacet:
-        indices = [index for index, value in enumerate(graph_anchor_facets) if value == facet]
-        graph_scores[facet] = _maximum_scores(
-            membership_vectors[facet],
-            graph_anchor_vectors[indices],
-            [graph_anchor_subject_ids[index] for index in indices],
-        )
 
+def _graph_membership_scores(
+    membership_vectors: Mapping[RoutingFacet, np.ndarray],
+    anchor_rows: Sequence[GraphAnchor],
+    anchor_vectors: np.ndarray,
+) -> dict[RoutingFacet, tuple[list[str], np.ndarray]]:
+    scores: dict[RoutingFacet, tuple[list[str], np.ndarray]] = {}
+    for facet in {anchor.facet for anchor in anchor_rows}:
+        indices = [index for index, anchor in enumerate(anchor_rows) if anchor.facet == facet]
+        scores[facet] = _maximum_scores(
+            membership_vectors[facet],
+            anchor_vectors[indices],
+            [anchor_rows[index].subject_id for index in indices],
+        )
+    return scores
+
+
+def _rank_graph_sections(
+    subject_id: str,
+    routing_facet: RoutingFacet,
+    task_index: int,
+    graph_scores: Mapping[RoutingFacet, tuple[list[str], np.ndarray]],
+    section_scores: np.ndarray,
+    section_positions: Mapping[str, list[int]],
+    section_ids: Sequence[str],
+    top_k: int,
+) -> GraphMapping:
+    graph_subjects, membership_scores = graph_scores[routing_facet]
+    graph_index = graph_subjects.index(subject_id)
+    positions = section_positions[subject_id]
+    if top_k > len(positions):
+        raise ValueError(f"top_k exceeds section count for {subject_id}")
+    winners = sorted(positions, key=lambda position: section_scores[position], reverse=True)[:top_k]
+    return GraphMapping(
+        subject_id=subject_id,
+        routing_facet=routing_facet,
+        membership_similarity=float(np.clip(membership_scores[task_index, graph_index], -1.0, 1.0)),
+        candidates=[
+            MappingCandidate(
+                section_id=section_ids[position],
+                similarity=float(np.clip(section_scores[position], -1.0, 1.0)),
+            )
+            for position in winners
+        ],
+    )
+
+
+def map_task_vectors(
+    annotations: Sequence[TaskAnnotation],
+    membership_vectors: Mapping[RoutingFacet, np.ndarray],
+    operation_vectors: np.ndarray,
+    catalog: CurriculumCatalog,
+    graph_anchor_rows: Sequence[GraphAnchor],
+    graph_anchor_vectors: np.ndarray,
+    section_anchor_rows: Sequence[SectionAnchor],
+    section_anchor_vectors: np.ndarray,
+    embedding_model: str,
+    top_k: int,
+    row_batch_size: int,
+) -> list[TaskMapping]:
+    """Rank graph membership and sections independently for each curriculum."""
+    _validate_mapping_inputs(
+        annotations,
+        membership_vectors,
+        operation_vectors,
+        graph_anchor_rows,
+        graph_anchor_vectors,
+        section_anchor_rows,
+        section_anchor_vectors,
+        top_k,
+        row_batch_size,
+    )
+    task_count = len(annotations)
+    graph_scores = _graph_membership_scores(membership_vectors, graph_anchor_rows, graph_anchor_vectors)
     task_operations = normalized(operation_vectors)
     section_values = normalized(section_anchor_vectors)
-    section_subjects = np.asarray(section_anchor_subject_ids)
-    section_ids = np.asarray(section_anchor_ids)
-    unique_section_ids = list(dict.fromkeys(section_anchor_ids))
+    anchor_section_ids = np.asarray([anchor.section_id for anchor in section_anchor_rows])
+    unique_section_ids = list(dict.fromkeys(anchor.section_id for anchor in section_anchor_rows))
+    subject_by_section = {anchor.section_id: anchor.subject_id for anchor in section_anchor_rows}
     section_positions = {
-        subject_id: [
+        entry.curriculum.subject_id: [
             index
             for index, section_id in enumerate(unique_section_ids)
-            if section_subjects[section_ids == section_id][0] == subject_id
+            if subject_by_section[section_id] == entry.curriculum.subject_id
         ]
-        for subject_id in {entry.curriculum.subject_id for entry in catalog.curricula}
+        for entry in catalog.curricula
     }
-    entries = {entry.curriculum.subject_id: entry for entry in catalog.curricula}
+
     mappings: list[TaskMapping] = []
     for start in range(0, task_count, row_batch_size):
         stop = min(start + row_batch_size, task_count)
         anchor_scores = task_operations[start:stop] @ section_values.T
         section_scores = np.stack(
-            [anchor_scores[:, section_ids == section_id].max(axis=1) for section_id in unique_section_ids],
+            [anchor_scores[:, anchor_section_ids == section_id].max(axis=1) for section_id in unique_section_ids],
             axis=1,
         )
         for row, annotation in enumerate(annotations[start:stop]):
-            graph_mappings: list[GraphMapping] = []
-            for subject_id, entry in entries.items():
-                graph_subjects, scores = graph_scores[entry.routing_facet]
-                graph_index = graph_subjects.index(subject_id)
-                graph_positions = section_positions[subject_id]
-                if top_k > len(graph_positions):
-                    raise ValueError(f"top_k exceeds section count for {subject_id}")
-                winner_positions = sorted(
-                    graph_positions,
-                    key=lambda position: section_scores[row, position],
-                    reverse=True,
-                )[:top_k]
-                candidates = [
-                    MappingCandidate(
-                        section_id=unique_section_ids[position],
-                        similarity=float(np.clip(section_scores[row, position], -1.0, 1.0)),
-                    )
-                    for position in winner_positions
-                ]
-                graph_mappings.append(
-                    GraphMapping(
-                        subject_id=subject_id,
-                        routing_facet=entry.routing_facet,
-                        membership_similarity=float(np.clip(scores[start + row, graph_index], -1.0, 1.0)),
-                        candidates=candidates[:top_k],
-                    )
+            graph_mappings = [
+                _rank_graph_sections(
+                    entry.curriculum.subject_id,
+                    entry.routing_facet,
+                    start + row,
+                    graph_scores,
+                    section_scores[row],
+                    section_positions,
+                    unique_section_ids,
+                    top_k,
                 )
+                for entry in catalog.curricula
+            ]
             graph_mappings.sort(key=lambda graph: graph.membership_similarity, reverse=True)
             mappings.append(
                 TaskMapping(

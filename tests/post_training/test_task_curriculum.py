@@ -119,8 +119,9 @@ def test_curriculum_contract_rejects_depth_above_limit() -> None:
 
 def test_mapping_ranks_sections_independently_inside_each_graph() -> None:
     catalog = _catalog()
-    graph_subject_ids, graph_facets, _ = graph_anchors(catalog)
-    section_subject_ids, section_ids, _ = section_anchors(catalog)
+    graph_anchor_rows = graph_anchors(catalog)
+    section_anchor_rows = section_anchors(catalog)
+    section_ids = [anchor.section_id for anchor in section_anchor_rows]
     annotations = [_annotation("file-task"), _annotation("log-task"), _annotation("process-task")]
     graph_vectors = np.asarray([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]], dtype=np.float32)
     membership_vectors = {
@@ -147,11 +148,9 @@ def test_mapping_ranks_sections_independently_inside_each_graph() -> None:
         membership_vectors,
         task_vectors,
         catalog,
-        graph_subject_ids,
-        graph_facets,
+        graph_anchor_rows,
         graph_vectors,
-        section_subject_ids,
-        section_ids,
+        section_anchor_rows,
         section_vectors,
         embedding_model="embed-v1",
         top_k=2,

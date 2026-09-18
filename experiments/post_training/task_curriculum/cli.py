@@ -65,8 +65,8 @@ def main(
     task_rows = [row for path in annotations for row in _read_jsonl(path, TaskAnnotation)]
     anchor_rows = [row for path in assignment_anchors for row in _read_jsonl(path, AssignmentAnchor)]
     catalog_row = load_catalog(catalog)
-    graph_subject_ids, graph_facets, graph_texts = graph_anchors(catalog_row, anchor_rows)
-    section_subject_ids, section_ids, section_texts = section_anchors(catalog_row, anchor_rows)
+    graph_anchor_rows = graph_anchors(catalog_row, anchor_rows)
+    section_anchor_rows = section_anchors(catalog_row, anchor_rows)
     embed = _openai_embeddings(embedding_model, embedding_batch_size)
     with EmbeddingCache(cache) as local_cache:
         membership_vectors = {
@@ -84,18 +84,26 @@ def main(
             embedding_model,
             embed,
         )
-        graph_vectors = cached_embeddings(local_cache, graph_texts, embedding_model, embed)
-        section_vectors = cached_embeddings(local_cache, section_texts, embedding_model, embed)
+        graph_vectors = cached_embeddings(
+            local_cache,
+            [anchor.text for anchor in graph_anchor_rows],
+            embedding_model,
+            embed,
+        )
+        section_vectors = cached_embeddings(
+            local_cache,
+            [anchor.text for anchor in section_anchor_rows],
+            embedding_model,
+            embed,
+        )
     mappings = map_task_vectors(
         task_rows,
         membership_vectors,
         operation_vectors,
         catalog_row,
-        graph_subject_ids,
-        graph_facets,
+        graph_anchor_rows,
         graph_vectors,
-        section_subject_ids,
-        section_ids,
+        section_anchor_rows,
         section_vectors,
         embedding_model,
         top_k,
