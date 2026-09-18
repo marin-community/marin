@@ -106,15 +106,18 @@ baseline. The browser stores each executed command with the conversation. For
 the next call, the service reconstructs the filesystem and replays those
 commands before executing the new command, which preserves file edits and Git
 state without keeping a host process or directory alive. Editing the initial
-files or choosing **Reset commands** clears that replay history.
+files JSON in the dashboard or choosing **Reset commands** clears that replay
+history. The simulated Git supports local agent workflows including status,
+diffs, branches, commits, tags, merges, stashes, cherry-picks, rebases, blame,
+and reflog. Networked Git commands are unavailable.
 
 To start from an existing project, enter a public GitHub repository URL and
 choose **Load public repo**. The dashboard service downloads the default
 branch's archive outside ShellSim, extracts bounded UTF-8 regular files, and
-passes only that file map into the simulation. It does not forward credentials,
-clone remote Git history, load submodules, or support private repositories.
-ShellSim itself has no real network access, and `git clone` is unavailable; the
-simulated repository receives a new baseline commit after import.
+passes only that file map into the simulation. The limits and skipped file types
+are listed below. It does not forward credentials, clone remote Git history,
+load submodules, or support private repositories. The simulated repository
+receives a new baseline commit after import.
 
 Workspace inputs are limited to 500 files, 256 KiB per file, and 4 MiB total.
 Repository downloads are limited to 4 MiB compressed and 10,000 archive

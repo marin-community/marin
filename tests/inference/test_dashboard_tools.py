@@ -193,12 +193,17 @@ def test_dashboard_shellsim_enforces_cpu_limit(dashboard_tool_base_url):
     assert "cpu_exhausted" in exhausted.json()["details"]
 
 
-def test_dashboard_shell_workspace_replays_commands_with_simulated_git(dashboard_tool_base_url):
+def test_dashboard_shell_workspace_replays_git_branch_workflow(dashboard_tool_base_url):
     files = {
         "calculator.py": "def add(left: int, right: int) -> int:\n    return left - right\n",
         "test_calculator.py": "from calculator import add\n\nassert add(17, 24) == 41\nprint('test passed')\n",
     }
-    edit = "sed -i 's/left - right/left + right/' calculator.py"
+    edit = (
+        "git switch -c fix; "
+        "sed -i 's/left - right/left + right/' calculator.py; "
+        "git add calculator.py; "
+        "git commit -m 'fix calculator'"
+    )
     edited = requests.post(
         f"{dashboard_tool_base_url}/shell",
         json={"files": files, "history": [], "command": edit},
@@ -209,7 +214,14 @@ def test_dashboard_shell_workspace_replays_commands_with_simulated_git(dashboard
         json={
             "files": files,
             "history": [edit],
-            "command": "python3.14 test_calculator.py; git diff calculator.py",
+            "command": (
+                "git switch main; "
+                "git merge fix; "
+                "python3.14 test_calculator.py; "
+                "git log --format='%s' --all; "
+                "printf '\\nSTATUS\\n'; "
+                "git status --short"
+            ),
         },
         timeout=DASHBOARD_REQUEST_TIMEOUT,
     )
@@ -219,7 +231,9 @@ def test_dashboard_shell_workspace_replays_commands_with_simulated_git(dashboard
     assert verified.status_code == 200
     assert verified.json()["exit_code"] == 0
     assert "test passed" in verified.json()["stdout"]
-    assert "+    return left + right" in verified.json()["stdout"]
+    assert "fix calculator" in verified.json()["stdout"]
+    assert "baseline" in verified.json()["stdout"]
+    assert verified.json()["stdout"].endswith("STATUS\n")
 
 
 def test_dashboard_shell_workspace_rejects_parent_paths(dashboard_tool_base_url):

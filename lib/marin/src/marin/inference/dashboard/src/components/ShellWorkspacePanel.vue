@@ -118,7 +118,8 @@ async function loadRepository() {
         </button>
       </div>
       <p class="mt-1 text-[0.7rem] text-text-muted">
-        Loads a bounded snapshot of a public GitHub repository's default branch. Remote history and .git are excluded.
+        Loads up to 500 UTF-8 text files (256 KiB each, 4 MiB total) from a public GitHub repository's default branch.
+        The workspace gets a new Git history; remote history and .git are excluded.
       </p>
       <textarea
         v-model="filesJson"
