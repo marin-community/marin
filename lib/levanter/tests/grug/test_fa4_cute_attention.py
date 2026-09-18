@@ -451,7 +451,12 @@ def test_real_gpu_fa4_cute_configured_backward_matches_reference(native_backward
         output = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
         return jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32)), output
 
-    (_, actual), actual_gradients = jax.jit(jax.value_and_grad(actual_loss, (0, 1, 2), has_aux=True))(q, k, v)
+    actual_call = jax.jit(jax.value_and_grad(actual_loss, (0, 1, 2), has_aux=True))
     (_, expected), expected_gradients = jax.jit(jax.value_and_grad(reference_loss, (0, 1, 2), has_aux=True))(q, k, v)
-    for got, want in zip((actual, *actual_gradients), (expected, *expected_gradients), strict=True):
-        np.testing.assert_allclose(got, want, atol=7e-2, rtol=7e-2)
+    # Partial tiles must not consume stale shared memory on repeated invocations.
+    for _ in range(3):
+        (_, actual), actual_gradients = actual_call(q, k, v)
+        for name, got, want in zip(
+            ("out", "dq", "dk", "dv"), (actual, *actual_gradients), (expected, *expected_gradients), strict=True
+        ):
+            np.testing.assert_allclose(got, want, atol=7e-2, rtol=7e-2, err_msg=name)
