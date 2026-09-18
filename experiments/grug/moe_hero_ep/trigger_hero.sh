@@ -31,10 +31,13 @@ if [[ -n "$tree_status" ]]; then
 fi
 
 launch_commit=$(git rev-parse HEAD)
-main_commit=$(git rev-parse origin/main)
-if [[ "$mode" == fork-wandb && "$launch_commit" != "$main_commit" ]]; then
-  echo "Fetch origin/main and use its exact commit before a cutover launch." >&2
-  exit 1
+if [[ "$mode" == fork-wandb ]]; then
+  git fetch --quiet origin main
+  main_commit=$(git rev-parse FETCH_HEAD)
+  if [[ "$launch_commit" != "$main_commit" ]]; then
+    echo "Check out the fetched origin/main commit ${main_commit} before creating the fork." >&2
+    exit 1
+  fi
 fi
 
 # Create the tracker lineage once, outside the coordinator and training retry loops.
