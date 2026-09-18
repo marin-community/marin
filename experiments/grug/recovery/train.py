@@ -89,6 +89,7 @@ def recovery_train(config: RecoveryRunConfig) -> None:
     mesh = compact_grug_mesh(
         replica_axis_size=config.replica_axis_size,
         model_axis_size=config.model_axis_size,
+        context_axis_size=config.context_axis_size,
     )
     with set_mesh(mesh):
 

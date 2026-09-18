@@ -57,10 +57,12 @@ class RecoveryRunConfig:
     learning_rate: float = 1e-4
     seed: int = 0
 
-    # Mesh: default (replica=1, expert=1, model=model_axis) so params shard FSDP
+    # Mesh: default (replica=1, context=1, expert=1, model=model_axis) so params shard FSDP
     # over the data axis (all local GPUs) with optional tensor-parallel width.
     replica_axis_size: int | None = None
     model_axis_size: int = 1
+    # Sequence-dim shard count. Leave at 1: nothing in the recovery model shards the seq dim.
+    context_axis_size: int = 1
 
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     # Fallback ProgressWatchdog (fixed timeout — no EMA, unsafe under PGLE).
@@ -68,3 +70,7 @@ class RecoveryRunConfig:
     watchdog_startup_grace_seconds: float = 600.0
 
     log_every: int = 1
+
+    def __post_init__(self):
+        if self.context_axis_size != 1:
+            raise ValueError("This Grug variant requires context_axis_size=1; use moe_hero_ep for context parallelism.")

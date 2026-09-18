@@ -875,6 +875,7 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
             activation_fn=jax.nn.silu,
             num_experts=num_experts,
             capacity_factor=0.5,
+            token_sharding_axes=("expert",),
         )
 
     sharded_fixed_a2a = jax.shard_map(
@@ -945,6 +946,7 @@ def test_fixed_all_to_all_padding_does_not_change_capacity_acceptance():
             activation_fn=jax.nn.silu,
             num_experts=2,
             capacity_factor=0.5,
+            token_sharding_axes=("expert",),
         )
 
     sharded_fixed_a2a = jax.shard_map(
@@ -1035,6 +1037,7 @@ def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
             activation_fn=jax.nn.silu,
             num_experts=num_experts,
             capacity_factor=4.0,
+            token_sharding_axes=("expert",),
             transport_capacity_factor=4.0,
             num_expert_waves=num_expert_waves,
         )[0]
@@ -1114,6 +1117,7 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
             activation_fn=jax.nn.silu,
             num_experts=num_experts,
             capacity_factor=1.33,
+            token_sharding_axes=("expert",),
             transport_capacity_factor=0.75,
             num_expert_waves=3,
         )
