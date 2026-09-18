@@ -108,6 +108,16 @@ class PromptCompletions(Record):
     expected_scores: tuple[TokenScore, ...] | None = None
 
 
+class CompletionBatch(Record):
+    sample_index: int = Field(ge=0)
+    start: int = Field(ge=0)
+    completions: tuple[Completion, ...] = Field(min_length=1)
+
+
+class ReferenceScores(Record):
+    scores: tuple[tuple[TokenScore, ...], ...] = Field(min_length=1)
+
+
 class SampleResult(Record):
     request: SampleRequest
     completions: tuple[PromptCompletions, ...]
@@ -212,6 +222,30 @@ class SampleStore:
 
     def result_uri(self, sample_id: str) -> str:
         return str(self.root / f"results/{sample_id}.json")
+
+    def completion_batch(self, sample_id: str, sample_index: int, start: int) -> CompletionBatch | None:
+        saved = conditional_object(str(self.root / f"progress/{sample_id}/batch-{sample_index}-{start}.json")).read()
+        if saved is None:
+            return None
+        batch = CompletionBatch.model_validate_json(saved.data)
+        if (batch.sample_index, batch.start) != (sample_index, start):
+            raise ValueError("Saved batch does not match its progress key")
+        return batch
+
+    def save_completion_batch(self, sample_id: str, batch: CompletionBatch) -> None:
+        target = conditional_object(
+            str(self.root / f"progress/{sample_id}/batch-{batch.sample_index}-{batch.start}.json")
+        )
+        target.write(batch.model_dump_json().encode(), expected_version=None)
+
+    def reference_scores(self, sample_id: str) -> ReferenceScores | None:
+        saved = conditional_object(str(self.root / f"progress/{sample_id}/reference.json")).read()
+        return ReferenceScores.model_validate_json(saved.data) if saved else None
+
+    def save_reference_scores(self, sample_id: str, scores: ReferenceScores) -> None:
+        conditional_object(str(self.root / f"progress/{sample_id}/reference.json")).write(
+            scores.model_dump_json().encode(), expected_version=None
+        )
 
     def result(self, sample_id: str) -> SampleResult:
         result = SampleResult.model_validate_json(StoragePath(self.result_uri(sample_id)).read_bytes())

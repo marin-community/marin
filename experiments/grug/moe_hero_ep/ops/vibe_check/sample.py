@@ -25,6 +25,7 @@ from levanter.cutlass_kernel_cache import cutlass_kernel_cache, install
 from levanter.distributed import DistributedConfig
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.tensorstore_serialization import build_kvstore_spec
+from levanter.utils.jax_utils import multihost_broadcast_sync
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rigging.timing import Timer, log_time
@@ -34,6 +35,8 @@ from experiments.grug.checkpointing import LEGACY_STATE_KEY, MASTER_PARAMS_KEY
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     TOP_TOKEN_COUNT,
+    CompletionBatch,
+    ReferenceScores,
     SampleRequest,
     SampleResult,
     SampleStore,
@@ -131,6 +134,8 @@ def sample(request: SampleRequest, store_root: str) -> None:
     DistributedConfig().initialize()
     # Each rank keeps warnings and errors. Process zero writes shared progress.
     configure_logging(logging.INFO if jax.process_index() == 0 else logging.WARNING)
+    store = SampleStore(store_root)
+    sample_id = request.sample_id
     logger.info("Sampler: checkpoint step=%d, sample=%s", request.checkpoint.step, request.sample_id)
     logger.info(
         "Distributed initialization completed in %.1f seconds: processes=%d, GPUs=%d, prompts=%d",
@@ -202,16 +207,51 @@ def sample(request: SampleRequest, store_root: str) -> None:
             ]
             return jax.tree.map(np.asarray, expected_logprobs(model, *arrays))
 
-        logger.info("Start expected-answer scoring for %d prompts", len(request.spec.prompts))
-        with log_time("Expected-answer scoring and decoding"):
-            expected_scores = score_expected(
-                request.spec,
-                prompt_ids,
-                expected_ids,
-                eos_token_id=tokenizer.eos_token_id,
-                logprobs=logprobs,
-                decode=decode,
-            )
+        def load_batch(sample_index: int, start: int) -> CompletionBatch | None:
+            saved = store.completion_batch(sample_id, sample_index, start) if jax.process_index() == 0 else None
+            # All ranks must skip the same model collectives, including after an interrupted upload.
+            data = multihost_broadcast_sync(saved.model_dump(mode="json") if saved is not None else None)
+            return CompletionBatch.model_validate(data) if data is not None else None
+
+        def save_batch(batch: CompletionBatch) -> None:
+            if jax.process_index() == 0:
+                with log_time("Generation batch upload"):
+                    store.save_completion_batch(sample_id, batch)
+                logger.info(
+                    "Saved batch: sample %d/%d, prompts %d-%d/%d",
+                    batch.sample_index + 1,
+                    request.spec.completions_per_prompt,
+                    batch.start + 1,
+                    batch.start + len(batch.completions),
+                    len(request.spec.prompts),
+                )
+            multihost_broadcast_sync(None)
+
+        saved_reference = store.reference_scores(sample_id) if jax.process_index() == 0 else None
+        reference_data = multihost_broadcast_sync(
+            saved_reference.model_dump(mode="json") if saved_reference is not None else None
+        )
+        if reference_data is not None:
+            expected_scores = ReferenceScores.model_validate(reference_data).scores
+            if len(expected_scores) != len(request.spec.prompts):
+                raise ValueError("Saved reference scores do not match the prompt count")
+            logger.info("Reuse saved reference scores for %d prompts", len(expected_scores))
+        else:
+            logger.info("Start expected-answer scoring for %d prompts", len(request.spec.prompts))
+            with log_time("Expected-answer scoring and decoding"):
+                expected_scores = score_expected(
+                    request.spec,
+                    prompt_ids,
+                    expected_ids,
+                    eos_token_id=tokenizer.eos_token_id,
+                    logprobs=logprobs,
+                    decode=decode,
+                )
+            if jax.process_index() == 0:
+                with log_time("Reference score upload"):
+                    store.save_reference_scores(sample_id, ReferenceScores(scores=expected_scores))
+                logger.info("Saved reference scores for %d prompts", len(expected_scores))
+            multihost_broadcast_sync(None)
         logger.info("Start completion generation: %d samples per prompt", request.spec.completions_per_prompt)
         with log_time("Completion generation and decoding"):
             completions = generate(
@@ -220,6 +260,8 @@ def sample(request: SampleRequest, store_root: str) -> None:
                 eos_token_id=tokenizer.eos_token_id,
                 logits=logits,
                 decode=decode,
+                load_batch=load_batch,
+                save_batch=save_batch,
             )
         completions = tuple(
             completion.model_copy(update={"expected_scores": scores})
@@ -230,7 +272,7 @@ def sample(request: SampleRequest, store_root: str) -> None:
                 "Validate and save %d prompt sets to %s (sample=%s)", len(completions), store_root, request.sample_id
             )
             with log_time("Result validation and upload"):
-                SampleStore(store_root).save_result(
+                store.save_result(
                     SampleResult(
                         request=request,
                         completions=completions,

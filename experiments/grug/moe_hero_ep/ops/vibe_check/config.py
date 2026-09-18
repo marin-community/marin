@@ -53,7 +53,7 @@ def sampling_spec() -> SamplingSpec:
         hero_recipe.HERO_MODEL_CONFIG, moe_implementation=DEFAULT_DROPLESS_MOE_IMPLEMENTATION, expert_chunks=1
     )
     return SamplingSpec(
-        release="hero-native-v4-reference-eos",
+        release="hero-native-v5-resumable-batches",
         completions_per_prompt=3,
         batch_size=SAMPLING_NODES * SAMPLING_GPUS_PER_NODE,
         prompts=tuple(Prompt.model_validate(row) for row in json.loads((CONFIG_DIRECTORY / "prompts.json").read_text())),

@@ -52,6 +52,10 @@ GPU jobs to finish, so workflow success does not mean that sampling completed.
 
 ## Recovery
 
+The sampler saves reference scores and each completed generation batch to object
+storage. Each retry loads the model again, reuses saved progress, and restarts the
+unfinished batch. The report includes a checkpoint after all its batches finish.
+
 Each request permits three attempts. The workflow records its source commit when
 it first saves a request. All attempts use that commit for the sampler code, so
 merging a fix does not change existing requests.

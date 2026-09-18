@@ -17,6 +17,7 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     Completion,
     Prompt,
     PromptCompletions,
+    ReferenceScores,
     SampleRequest,
     SampleResult,
     SampleStore,
@@ -24,7 +25,7 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     StopReason,
     digest,
 )
-from experiments.grug.moe_hero_ep.ops.vibe_check.generation import generate
+from experiments.grug.moe_hero_ep.ops.vibe_check.generation import BatchLogprobs, generate, score_expected
 from experiments.grug.moe_hero_ep.ops.vibe_check.jobs import sample_job_names, submit_pending
 from experiments.grug.moe_hero_ep.ops.vibe_check.publishing import (
     COMMENT_MARKER,
@@ -338,6 +339,94 @@ def test_sampling_streams_do_not_depend_on_prompt_order_or_early_eos(sample_requ
     early = generate(spec, [[1], [2]], eos_token_id=0, logits=early_eos, decode=lambda ids: "".join(map(str, ids)))
     assert all(sample.stop_reason == StopReason.EOS for sample in early[0].samples)
     assert early[1] == alone[0]
+
+
+@pytest.mark.parametrize("interruption", ["generation", "upload_response"])
+def test_generation_resumes_saved_batches_after_interruption(tmp_path, sample_request, interruption):
+    prompts = tuple(
+        sample_request.spec.prompts[0].model_copy(update={"id": f"prompt-{index}", "seed": index, "expected": "4"})
+        for index in range(3)
+    )
+    spec = sample_request.spec.model_copy(
+        update={"prompts": prompts, "batch_size": 2, "temperature": 0.7, "max_new_tokens": 4, "context_length": 8}
+    )
+    request = sample_request.model_copy(update={"spec": spec})
+    store = SampleStore(str(tmp_path))
+    prompt_ids = [[1], [2], [3]]
+
+    def decode(ids):
+        return "".join(str(token) for token in ids if token != 0)
+
+    def logprobs(tokens, positions, targets):
+        return BatchLogprobs(
+            np.full(targets.shape, -np.log(7)),
+            np.broadcast_to(np.arange(5), (*targets.shape, 5)),
+            np.full((*targets.shape, 5), -np.log(7)),
+        )
+
+    reference = ReferenceScores(
+        scores=score_expected(spec, prompt_ids, [[4]] * 3, eos_token_id=0, logprobs=logprobs, decode=decode)
+    )
+    store.save_reference_scores(request.sample_id, reference)
+
+    def logits(tokens, positions):
+        return np.tile(np.array([-1000, 1, 2, 1, 2, 1, 2]), (tokens.shape[0], 1))
+
+    uninterrupted = generate(spec, prompt_ids, eos_token_id=0, logits=logits, decode=decode)
+    model_passes = 0
+
+    def interrupted_logits(tokens, positions):
+        nonlocal model_passes
+        model_passes += 1
+        if model_passes == spec.max_new_tokens + 2:
+            raise ConnectionError("Interrupted during the second batch")
+        return logits(tokens, positions)
+
+    def save_batch(batch):
+        store.save_completion_batch(request.sample_id, batch)
+        if interruption == "upload_response":
+            raise ConnectionError("Lost response after batch upload")
+
+    with pytest.raises(ConnectionError):
+        generate(spec, prompt_ids, eos_token_id=0, logits=interrupted_logits, decode=decode, save_batch=save_batch)
+    assert not store.completed_ids()
+
+    # A new process reads persisted progress. No sampler memory survives the interruption.
+    resumed_store = SampleStore(str(tmp_path))
+    resumed_reference = resumed_store.reference_scores(request.sample_id)
+    assert resumed_reference == reference
+    assert resumed_reference is not None
+    resumed_passes = 0
+
+    def resumed_logits(tokens, positions):
+        nonlocal resumed_passes
+        resumed_passes += 1
+        return logits(tokens, positions)
+
+    resumed = generate(
+        spec,
+        prompt_ids,
+        eos_token_id=0,
+        logits=resumed_logits,
+        decode=decode,
+        load_batch=lambda sample_index, start: resumed_store.completion_batch(request.sample_id, sample_index, start),
+        save_batch=lambda batch: resumed_store.save_completion_batch(request.sample_id, batch),
+    )
+    assert resumed == uninterrupted
+    assert resumed_passes == 5 * spec.max_new_tokens  # Only five of the six batches still require model passes.
+    result = SampleResult(
+        request=request,
+        completions=tuple(
+            row.model_copy(update={"expected_scores": scores})
+            for row, scores in zip(resumed, resumed_reference.scores, strict=True)
+        ),
+        completed_at=NOW.isoformat(),
+        eos_token_id=0,
+    )
+    resumed_store.save_result(result)
+    assert resumed_store.result(request.sample_id) == result
+    other_request = request.model_copy(update={"spec": spec.model_copy(update={"temperature": 0.5})})
+    assert resumed_store.completion_batch(other_request.sample_id, 0, 0) is None
 
 
 def report_data(path):

@@ -14,6 +14,7 @@ from rigging.timing import RateLimiter
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     TOP_TOKEN_COUNT,
     Completion,
+    CompletionBatch,
     PromptCompletions,
     SamplingSpec,
     StopReason,
@@ -153,11 +154,14 @@ def generate(
     eos_token_id: int,
     logits: Callable[[np.ndarray, np.ndarray], np.ndarray],
     decode: Callable[[list[int]], str],
+    load_batch: Callable[[int, int], CompletionBatch | None] | None = None,
+    save_batch: Callable[[CompletionBatch], None] | None = None,
 ) -> tuple[PromptCompletions, ...]:
     """Generate a fixed prompt bank, preserving text and token boundaries.
 
     ``logits`` receives padded token rows and the index of each row's last input token.
     The model backend must be dropless so filler rows cannot change prompt routing.
+    Distributed callers must return the same saved batch on every process.
     """
     if len(prompt_ids) != len(spec.prompts):
         raise ValueError("Tokenized prompt count differs from the prompt bank")
@@ -167,6 +171,28 @@ def generate(
     for sample_index in range(spec.completions_per_prompt):
         for start in range(0, len(prompt_ids), spec.batch_size):
             batch = slice(start, start + spec.batch_size)
+            saved = load_batch(sample_index, start) if load_batch else None
+            if saved is not None:
+                if (
+                    (saved.sample_index, saved.start) != (sample_index, start)
+                    or len(saved.completions) != len(prompt_ids[batch])
+                    or any(
+                        completion.sample_index != sample_index or completion.seed != prompt.seed + sample_index
+                        for prompt, completion in zip(spec.prompts[batch], saved.completions, strict=True)
+                    )
+                ):
+                    raise ValueError("Saved generation batch does not match the request")
+                logger.info(
+                    "Reuse saved batch: sample %d/%d, prompts %d-%d/%d",
+                    sample_index + 1,
+                    spec.completions_per_prompt,
+                    start + 1,
+                    start + len(saved.completions),
+                    len(prompt_ids),
+                )
+                for row, completion in enumerate(saved.completions, start):
+                    samples[row].append(completion)
+                continue
             logger.info(
                 "Generation: sample %d/%d, prompts %d-%d/%d, limit=%d new tokens per prompt",
                 sample_index + 1,
@@ -184,6 +210,8 @@ def generate(
                 logits=logits,
                 decode=decode,
             )
+            if save_batch:
+                save_batch(CompletionBatch(sample_index=sample_index, start=start, completions=completed))
             for row, completion in enumerate(completed, start):
                 samples[row].append(completion)
     return tuple(
