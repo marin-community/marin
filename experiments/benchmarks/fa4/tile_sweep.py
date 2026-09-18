@@ -7,7 +7,7 @@ Times a sliding-window and a full-causal mask against a reference configuration 
 candidate on reproducing ``reference_attention`` in float32.
 
 ``--sweep forward`` varies the forward tile at the production backward. ``--sweep backward``
-varies the backward tile, thread count, and backward path, and lifts the
+disables native backward, varies the segmented tile, thread count, and path, and lifts the
 ``_segmented_backward_arches`` allowlist to do it, since that function is narrower than the
 kernel's own ``can_implement``.
 
@@ -52,7 +52,7 @@ REFERENCE_NUM_THREADS = 128
 CANDIDATE_FORWARD_TILES = ((64, 64), (64, 128), (128, 32), (128, 64), (128, 128), (192, 64), (256, 64))
 CANDIDATE_BACKWARD_TILES = ((64, 64), (64, 128), (128, 64), (128, 128), (192, 64), (256, 64))
 CANDIDATE_NUM_THREADS = (128, 256)
-# path_arch 120 is production (stages 1/1 at head_dim 128, 4-warp atoms); 80 is double-buffered.
+# Port path 120 uses stages 1/1 at head_dim 128 and 4-warp atoms; 80 is double-buffered.
 CANDIDATE_BACKWARD_PATHS = (120, 80)
 
 
@@ -64,9 +64,10 @@ class Candidate:
     backward_path: int
 
     def label(self) -> str:
+        path = "auto" if self.config.sm100_backward is not None else str(self.backward_path)
         return (
             f"{self.config.forward_tile!s:>10} {self.config.backward_tile!s:>10} "
-            f"{self.config.num_threads:>4} {self.backward_path:>5}"
+            f"{self.config.num_threads:>4} {path:>5}"
         )
 
 
@@ -212,7 +213,9 @@ def _build_candidates(base: Flash4CuteKernelConfig, sweep: str, backward_path: i
         ]
     return [
         Candidate(
-            dataclasses.replace(base, forward_tile=base.forward_tile, backward_tile=tile, num_threads=threads),
+            dataclasses.replace(
+                base, forward_tile=base.forward_tile, backward_tile=tile, num_threads=threads, sm100_backward=None
+            ),
             backward_path,
         )
         for tile in CANDIDATE_BACKWARD_TILES
@@ -273,6 +276,8 @@ def main() -> None:
 
     arch = gpu_compute_capability()
     base = flash4_cute_kernel_config(args.head_dim, arch=arch)
+    if args.sweep == "backward":
+        base = dataclasses.replace(base, sm100_backward=None)
     print(f"arch=sm{arch} base_forward_tile={base.forward_tile} base_backward_tile={base.backward_tile}")
     print(f"shape: batch={args.batch} seq={args.seq_len} q_heads={args.q_heads} head_dim={args.head_dim}")
 
