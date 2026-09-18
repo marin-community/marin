@@ -15,7 +15,7 @@ exact-run query recovers the current execution for an Iris-active run whose
 heartbeat is already stale. See docs/ops/hero-run-health-alerts.md.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -158,12 +158,9 @@ def recent_phase_query(now: datetime) -> str:
 
 
 def phase_execution_query(now: datetime, runs: Sequence[RunIdentity]) -> str:
-    """Return the latest phase identity for exact active hero runs.
-
-    This longer fallback is only needed when an Iris-active run has no recent
-    phase heartbeat. Exact run predicates let Finelog prune `levanter.metrics`
-    partitions instead of rediscovering every hero run over the full window.
-    """
+    """Return the latest phase identity for exact active hero runs."""
+    # Keep the exact run clause at the top level so Finelog can prune the
+    # run-partitioned table before applying the cluster/run identity pairs.
     run_predicate = run_id_predicate(runs)
     identities = sorted({(run.cluster, run.run_id) for run in runs})
     identity_predicate = " OR ".join(
@@ -200,6 +197,14 @@ def root_job_for(telemetry_job: str) -> str | None:
         if hero_run_id(candidate) is not None:
             return candidate
     return None
+
+
+def phase_root_key(row: Mapping[str, object]) -> tuple[str, str] | None:
+    """Return the cluster and hero root named by a phase query row."""
+    root_job = root_job_for(str(row["telemetry_job"]))
+    if root_job is None:
+        return None
+    return str(row["cluster"]), root_job
 
 
 def active_hero_runs(task_states: pa.Table, now: datetime) -> tuple[HeroRun, ...]:

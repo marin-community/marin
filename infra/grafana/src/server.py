@@ -115,8 +115,8 @@ from hero_runs import (
     RunIdentity,
     active_hero_runs,
     phase_execution_query,
+    phase_root_key,
     recent_phase_query,
-    root_job_for,
     task_state_query,
 )
 from iris_source import IrisSource
@@ -599,11 +599,7 @@ def create_app(
         task_states = hero_task_states(target, now)
         active_runs = active_hero_runs(task_states, now)
         recent_phase = hero_query("hero_recent_phase", now, target, lambda: recent_phase_query(now))
-        recent_roots = {
-            (str(row["cluster"]), root_job)
-            for row in recent_phase.to_pylist()
-            if (root_job := root_job_for(str(row["telemetry_job"]))) is not None
-        }
+        recent_roots = {key for row in recent_phase.to_pylist() if (key := phase_root_key(row)) is not None}
         missing_phase = tuple(run for run in active_runs if (run.cluster, run.root_job) not in recent_roots)
         if not missing_phase:
             return watched_runs(task_states, recent_phase, now)
