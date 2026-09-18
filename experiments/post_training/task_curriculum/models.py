@@ -271,3 +271,189 @@ class TaskMapping(StrictModel):
     catalog_version: str
     embedding_model: str
     graphs: list[GraphMapping]
+
+
+class DifficultyIntent(StrEnum):
+    ENTRY = "entry"
+    REPRESENTATIVE = "representative"
+    BOUNDARY = "boundary"
+
+
+class BlindTask(StrictModel):
+    id: str = Field(min_length=1)
+    instruction: str = Field(min_length=1)
+    guidepost_basis: list[str] = Field(min_length=1)
+    operation_family: str = Field(min_length=1)
+    difficulty_intent: DifficultyIntent
+
+
+class BlindTaskSet(StrictModel):
+    subject_id: str = Field(min_length=1)
+    prompt_version: str = Field(min_length=1)
+    tasks: list[BlindTask] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_task_ids(self) -> BlindTaskSet:
+        task_ids = [task.id for task in self.tasks]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("blind task IDs must be unique")
+        return self
+
+
+class BlindFitStatus(StrEnum):
+    EXACT = "exact"
+    AMBIGUOUS = "ambiguous"
+    GAP = "gap"
+    INVALID = "invalid"
+
+
+class BlindFitJudgment(StrictModel):
+    task_id: str = Field(min_length=1)
+    status: BlindFitStatus
+    acceptable_capability_ids: list[str]
+    decisive_operation: str = Field(min_length=1)
+    explanation: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_targets(self) -> BlindFitJudgment:
+        target_count = len(self.acceptable_capability_ids)
+        if self.status == BlindFitStatus.EXACT and target_count != 1:
+            raise ValueError("exact fit judgments require one capability")
+        if self.status == BlindFitStatus.AMBIGUOUS and target_count < 2:
+            raise ValueError("ambiguous fit judgments require at least two capabilities")
+        if self.status in {BlindFitStatus.GAP, BlindFitStatus.INVALID} and target_count:
+            raise ValueError("gap and invalid fit judgments cannot name capabilities")
+        if target_count != len(set(self.acceptable_capability_ids)):
+            raise ValueError("acceptable capability IDs must be unique")
+        return self
+
+
+class BlindFitCounts(StrictModel):
+    exact: int = Field(ge=0)
+    ambiguous: int = Field(ge=0)
+    gap: int = Field(ge=0)
+    invalid: int = Field(ge=0)
+
+
+class BlindFitReview(StrictModel):
+    subject_id: str = Field(min_length=1)
+    curriculum_version: str = Field(min_length=1)
+    prompt_version: str = Field(min_length=1)
+    judgments: list[BlindFitJudgment] = Field(min_length=1)
+    counts: BlindFitCounts
+    fit_numerator: int = Field(ge=0)
+    fit_denominator: int = Field(gt=0)
+    systematic_gaps: list[str]
+
+    @model_validator(mode="after")
+    def validate_totals(self) -> BlindFitReview:
+        task_ids = [judgment.task_id for judgment in self.judgments]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("fit judgment task IDs must be unique")
+        expected = BlindFitCounts(
+            exact=sum(judgment.status == BlindFitStatus.EXACT for judgment in self.judgments),
+            ambiguous=sum(judgment.status == BlindFitStatus.AMBIGUOUS for judgment in self.judgments),
+            gap=sum(judgment.status == BlindFitStatus.GAP for judgment in self.judgments),
+            invalid=sum(judgment.status == BlindFitStatus.INVALID for judgment in self.judgments),
+        )
+        if self.counts != expected:
+            raise ValueError("fit counts do not match judgments")
+        if self.fit_numerator != expected.exact + expected.ambiguous:
+            raise ValueError("fit numerator must equal exact plus ambiguous")
+        if self.fit_denominator != len(self.judgments) - expected.invalid:
+            raise ValueError("fit denominator must exclude invalid tasks")
+        if len(self.systematic_gaps) != len(set(self.systematic_gaps)):
+            raise ValueError("systematic gaps must be unique")
+        return self
+
+
+class GapDispositionStatus(StrEnum):
+    BLOCKING = "blocking"
+    REJECTED = "rejected"
+
+
+class SystematicGapDisposition(StrictModel):
+    gap: str = Field(min_length=1)
+    status: GapDispositionStatus
+    rationale: str = Field(min_length=1)
+
+
+class EvidenceStatus(StrEnum):
+    SUPPORT = "support"
+    EXCLUDED = "excluded"
+    MALFORMED = "malformed"
+    UNDERDETERMINED = "underdetermined"
+
+
+class GuidepostAccounting(StrictModel):
+    guidepost_id: str = Field(min_length=1)
+    section_ids: list[str]
+    rationale: str = Field(min_length=1)
+
+
+class EvidenceAccounting(StrictModel):
+    item_id: str = Field(min_length=1)
+    status: EvidenceStatus
+    section_ids: list[str]
+    rationale: str = Field(min_length=1)
+
+
+class HolisticReviewStatus(StrEnum):
+    PILOT_READY = "pilot_ready"
+    REVISE = "revise"
+    REGENERATE = "regenerate"
+
+
+class EvidenceConfidence(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class HolisticDimensionScores(StrictModel):
+    coverage: int = Field(ge=0, le=25)
+    mutual_self_confidence: int = Field(ge=0, le=25)
+    progression_and_epsilon_continuity: int = Field(ge=0, le=25)
+    observable_boundaries: int = Field(ge=0, le=15)
+    probe_quality_and_parsimony: int = Field(ge=0, le=10)
+
+    def total(self) -> int:
+        return (
+            self.coverage
+            + self.mutual_self_confidence
+            + self.progression_and_epsilon_continuity
+            + self.observable_boundaries
+            + self.probe_quality_and_parsimony
+        )
+
+
+class HolisticReview(StrictModel):
+    subject_id: str = Field(min_length=1)
+    curriculum_version: str = Field(min_length=1)
+    score: int = Field(ge=0, le=100)
+    dimension_scores: HolisticDimensionScores
+    status: HolisticReviewStatus
+    confidence: EvidenceConfidence
+    blockers: list[str]
+    highest_risk_sections: list[str]
+    guidepost_accounting: list[GuidepostAccounting]
+    discovery_accounting: list[EvidenceAccounting]
+    evaluation_accounting: list[EvidenceAccounting]
+    findings: list[str]
+    recommended_changes: list[str]
+    proposed_rubric_changes: list[str]
+
+    @model_validator(mode="after")
+    def validate_score_and_gate(self) -> HolisticReview:
+        if self.score != self.dimension_scores.total():
+            raise ValueError("holistic score must equal the dimension-score sum")
+        is_pilot_ready = self.score >= 85 and not self.blockers and self.confidence != EvidenceConfidence.LOW
+        if is_pilot_ready:
+            expected_status = HolisticReviewStatus.PILOT_READY
+        elif self.score < 70:
+            expected_status = HolisticReviewStatus.REGENERATE
+        else:
+            expected_status = HolisticReviewStatus.REVISE
+        if self.status != expected_status:
+            raise ValueError("holistic status does not match the score, blocker, and confidence gate")
+        return self

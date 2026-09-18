@@ -17,17 +17,24 @@ from experiments.post_training.task_curriculum.mapping import (
 from experiments.post_training.task_curriculum.models import (
     AnchorKind,
     AssignmentAnchor,
+    BlindFitReview,
+    BlindTaskSet,
     CapabilitySection,
     CatalogCurriculum,
     Curriculum,
     CurriculumCatalog,
+    GapDispositionStatus,
     GroupSection,
+    HolisticReview,
+    HolisticReviewStatus,
     RoutingFacet,
     SampleTask,
     SamplingFacet,
     SemanticKey,
+    SystematicGapDisposition,
     TaskAnnotation,
 )
+from experiments.post_training.task_curriculum.validation import validate_subject_promotion, validate_subject_run
 
 
 def _section(section_id: str, parent_id: str | None, task_texts: tuple[str, str]) -> CapabilitySection:
@@ -166,6 +173,214 @@ def test_sampling_facets_are_unique_within_capability() -> None:
 def test_curriculum_contract_rejects_depth_above_limit() -> None:
     with pytest.raises(ValueError):
         _curriculum().check_generation_contract(maximum_depth=1)
+
+
+def test_blind_task_set_rejects_duplicate_ids() -> None:
+    task = {
+        "id": "blind-1",
+        "instruction": "Exercise one capability.",
+        "guidepost_basis": ["C00.1"],
+        "operation_family": "exercise capability",
+        "difficulty_intent": "entry",
+    }
+
+    with pytest.raises(ValueError):
+        BlindTaskSet(subject_id="C00", prompt_version="blind-v1", tasks=[task, task])
+
+
+def test_blind_fit_review_recomputes_counts() -> None:
+    review = {
+        "subject_id": "C00",
+        "curriculum_version": "pilot-1",
+        "prompt_version": "fit-v1",
+        "judgments": [
+            {
+                "task_id": "blind-1",
+                "status": "exact",
+                "acceptable_capability_ids": ["c00.example"],
+                "decisive_operation": "exercise capability",
+                "explanation": "The complete task matches the capability.",
+            }
+        ],
+        "counts": {"exact": 0, "ambiguous": 0, "gap": 1, "invalid": 0},
+        "fit_numerator": 0,
+        "fit_denominator": 1,
+        "systematic_gaps": [],
+    }
+
+    with pytest.raises(ValueError):
+        BlindFitReview.model_validate(review)
+
+
+def test_holistic_review_rejects_inconsistent_status() -> None:
+    review = {
+        "subject_id": "C00",
+        "curriculum_version": "pilot-1",
+        "score": 85,
+        "dimension_scores": {
+            "coverage": 22,
+            "mutual_self_confidence": 22,
+            "progression_and_epsilon_continuity": 21,
+            "observable_boundaries": 12,
+            "probe_quality_and_parsimony": 8,
+        },
+        "status": "pilot_ready",
+        "confidence": "medium",
+        "blockers": ["One unresolved blocker."],
+        "highest_risk_sections": ["c00.example"],
+        "guidepost_accounting": [],
+        "discovery_accounting": [],
+        "evaluation_accounting": [],
+        "findings": [],
+        "recommended_changes": [],
+        "proposed_rubric_changes": [],
+    }
+
+    with pytest.raises(ValueError):
+        HolisticReview.model_validate(review)
+
+    review.update(
+        score=69,
+        dimension_scores={
+            "coverage": 18,
+            "mutual_self_confidence": 17,
+            "progression_and_epsilon_continuity": 17,
+            "observable_boundaries": 10,
+            "probe_quality_and_parsimony": 7,
+        },
+        status="revise",
+        blockers=[],
+    )
+    with pytest.raises(ValueError):
+        HolisticReview.model_validate(review)
+
+
+def test_subject_run_validation_checks_cross_artifact_references() -> None:
+    curriculum = Curriculum(
+        version="pilot-1",
+        subject_id="C00",
+        subject_name="Pilot",
+        sections=[_section("c00.example", None, ("exercise an entry", "exercise a representative"))],
+    )
+    blind_tasks = BlindTaskSet.model_validate(
+        {
+            "subject_id": "C00",
+            "prompt_version": "blind-v1",
+            "tasks": [
+                {
+                    "id": f"blind-{index}",
+                    "instruction": f"Exercise capability with input {index}.",
+                    "guidepost_basis": ["C00.1"],
+                    "operation_family": "exercise capability",
+                    "difficulty_intent": "entry",
+                }
+                for index in range(24)
+            ],
+        }
+    )
+    judgments = [
+        {
+            "task_id": task.id,
+            "status": "exact",
+            "acceptable_capability_ids": ["c00.example"],
+            "decisive_operation": "exercise capability",
+            "explanation": "The complete task matches the capability.",
+        }
+        for task in blind_tasks.tasks
+    ]
+    fit_review = BlindFitReview.model_validate(
+        {
+            "subject_id": "C00",
+            "curriculum_version": "pilot-1",
+            "prompt_version": "fit-v1",
+            "judgments": judgments,
+            "counts": {"exact": 24, "ambiguous": 0, "gap": 0, "invalid": 0},
+            "fit_numerator": 24,
+            "fit_denominator": 24,
+            "systematic_gaps": [],
+        }
+    )
+    holistic_review = HolisticReview.model_validate(
+        {
+            "subject_id": "C00",
+            "curriculum_version": "pilot-1",
+            "score": 85,
+            "dimension_scores": {
+                "coverage": 22,
+                "mutual_self_confidence": 22,
+                "progression_and_epsilon_continuity": 21,
+                "observable_boundaries": 12,
+                "probe_quality_and_parsimony": 8,
+            },
+            "status": "pilot_ready",
+            "confidence": "medium",
+            "blockers": [],
+            "highest_risk_sections": ["c00.example"],
+            "guidepost_accounting": [
+                {
+                    "guidepost_id": "C00.1",
+                    "section_ids": ["c00.example"],
+                    "rationale": "The capability covers the guidepost.",
+                }
+            ],
+            "discovery_accounting": [],
+            "evaluation_accounting": [],
+            "findings": [],
+            "recommended_changes": [],
+            "proposed_rubric_changes": [],
+        }
+    )
+
+    validate_subject_run(curriculum, blind_tasks, fit_review, holistic_review, [], {"C00.1"}, set(), set())
+    validate_subject_promotion(blind_tasks, fit_review, holistic_review, [])
+    not_ready_review = holistic_review.model_copy(
+        update={
+            "score": 84,
+            "dimension_scores": holistic_review.dimension_scores.model_copy(update={"coverage": 21}),
+            "status": HolisticReviewStatus.REVISE,
+        }
+    )
+    validate_subject_run(curriculum, blind_tasks, fit_review, not_ready_review, [], {"C00.1"}, set(), set())
+    with pytest.raises(ValueError):
+        validate_subject_promotion(blind_tasks, fit_review, not_ready_review, [])
+    stale_fit = fit_review.model_copy(update={"curriculum_version": "pilot-0"})
+    with pytest.raises(ValueError):
+        validate_subject_run(curriculum, blind_tasks, stale_fit, holistic_review, [], {"C00.1"}, set(), set())
+    invalid_fit = fit_review.model_copy(deep=True)
+    invalid_fit.judgments[0].acceptable_capability_ids = ["c00.unknown"]
+    with pytest.raises(ValueError):
+        validate_subject_run(curriculum, blind_tasks, invalid_fit, holistic_review, [], {"C00.1"}, set(), set())
+
+    fit_with_gap = fit_review.model_copy(update={"systematic_gaps": ["missing operation"]})
+    blocking_gap = SystematicGapDisposition(
+        gap="missing operation",
+        status=GapDispositionStatus.BLOCKING,
+        rationale="Two blind tasks require the same uncovered operation.",
+    )
+    validate_subject_run(
+        curriculum,
+        blind_tasks,
+        fit_with_gap,
+        holistic_review,
+        [blocking_gap],
+        {"C00.1"},
+        set(),
+        set(),
+    )
+    with pytest.raises(ValueError):
+        validate_subject_promotion(blind_tasks, fit_with_gap, holistic_review, [blocking_gap])
+
+    uncovered_fit_data = fit_review.model_dump()
+    uncovered_fit_data["judgments"][0].update(status="gap", acceptable_capability_ids=[])
+    uncovered_fit_data.update(
+        counts={"exact": 23, "ambiguous": 0, "gap": 1, "invalid": 0},
+        fit_numerator=23,
+    )
+    uncovered_fit = BlindFitReview.model_validate(uncovered_fit_data)
+    uncovered_review = holistic_review.model_copy(deep=True)
+    uncovered_review.guidepost_accounting[0].section_ids = []
+    with pytest.raises(ValueError):
+        validate_subject_promotion(blind_tasks, uncovered_fit, uncovered_review, [])
 
 
 def test_mapping_ranks_sections_independently_inside_each_graph() -> None:

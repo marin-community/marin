@@ -14,7 +14,7 @@ score, status, evidence confidence, blockers, and the highest-risk sections. It 
 or edge. A repair creates a new curriculum version and receives another complete-subject review. The reviewer may
 request targeted blinded Luna probes when their result could change a finding.
 
-1. **Coverage:** The capability leaves jointly cover the important behaviors represented by the subject guideposts,
+1. **Coverage:** The capability sections jointly cover the important behaviors represented by the subject guideposts,
    discovery tasks, and permitted evaluation probes. Record plausible omissions; do not add a section for every
    observed task. In-distribution evaluation examples are held-out probes. Out-of-distribution evaluations contribute
    metadata only. The review must account for every guidepost, discovery task, and applicable held-out probe with a
@@ -42,9 +42,12 @@ request targeted blinded Luna probes when their result could change a finding.
    representative, dependent entry, and dependent representative. An independent reviewer checks both variants
    against prerequisite-to-entry transfer, material added capability, and the completed-artifact counterfactual. One
    failing variant blocks the edge. Passing this structural audit does not establish training transfer.
+   Test containment by substituting every child's entry and representative probe into the parent's outcome. When a
+   cross-child workflow is trainable but does not contain each child outcome, make the shared parent a group and add
+   the workflow as a sibling synthesis capability.
 5. **Mutual self-confidence:** Mastery of one representative task in a capability should predict success on most
    other representative tasks in that capability after changing surface form, data, and tools that are not part of
-   the claimed outcome. Test composite leaves with a counterexample pair drawn from different included operation
+   the claimed outcome. Test composite capabilities with a counterexample pair drawn from different included operation
    families. Split the capability when the pair requires distinct central operations, tools, or bodies of knowledge;
    merge capabilities when mastery transfers and the distinction would not change sampling or evaluation. Compare
    tasks under the same knowledge regime: supplied context, broadly expected background, or specialist closed-book
@@ -60,6 +63,11 @@ request targeted blinded Luna probes when their result could change a finding.
    waiver from the distant-pair test: compare tasks from its most
    operationally distant values. Split when changing the value introduces a different solver loop, state transition,
    or evaluation contract rather than different knowledge or data for the same operation.
+   Record an operation signature for each distant probe: input representation, central transformation, output
+   artifact, and correctness contract. Shared topic vocabulary or workflow context does not establish transfer when
+   one of those elements changes materially. Common failure cases include classification versus regression,
+   construction versus interpretation, paired versus unpaired inference, and deterministic mismatch analysis versus
+   intermittent-mechanism diagnosis.
 6. **Generation probes:** Every capability has one `entry` instruction and one `representative` instruction. Groups
    have neither. The entry probe isolates the prerequisite-to-capability delta. The representative probe exercises
    the full outcome and differs in substance from the entry probe. Internal-capability representative probes exercise
@@ -69,6 +77,9 @@ request targeted blinded Luna probes when their result could change a finding.
    Solutions and correctness contracts are outside the curriculum. An internal node remains a capability only when
    it supports a natural cross-child synthesis task. A routing menu or omnibus bundle becomes a group rather than a
    capability.
+   Execute each probe on paper before acceptance. Reject undefined factors, missing geometry or state, contradictory
+   premises, trivial optima, and requests whose result cannot be checked from the supplied facts. This check validates
+   the task instruction only; verifier design remains outside the curriculum.
 7. **Mapping:** Assignment is multi-label across curriculum graphs and single-ranking within each selected graph.
    Each graph declares one membership projection. `subject_domain` is the broad body of knowledge or tool environment
    required by the decisive operation; it excludes narrative subject and answer format. `task_mechanic` is a
@@ -100,35 +111,40 @@ The single-call reviewer scores five dimensions:
 | Probe quality and parsimony | 10 |
 
 The total is a comparison aid. `pilot_ready` requires at least 85 points, no blockers, and medium or high evidence
-confidence. A score from 70 through 84, or any blocker, yields `revise`. A score below 70 or pervasive structural
-failure yields `regenerate`.
+confidence. Any failed gate at 70 points or above yields `revise`; a score below 70 yields `regenerate`. Pervasive
+structural defects must reduce the affected dimension scores instead of overriding the status thresholds.
 
-The routine reviewer must inspect every capability leaf's most distant permitted task pair, every prerequisite edge
+The routine reviewer must inspect every capability section's most distant permitted task pair, every prerequisite edge
 under the completed-artifact counterfactual, every internal-capability representative for coherent synthesis, and
-every guidepost for coverage. It must not infer one leaf per guidepost. High confidence requires direct or held-out
-evidence reaching every leaf and sampled prerequisite edges. A complete structural scan with sparse task evidence is
-medium confidence; missing evidence for major branches is low confidence.
+every guidepost for coverage. It must not infer one capability per guidepost. High confidence requires direct or
+held-out evidence reaching every capability and sampled prerequisite edges. A complete structural scan with sparse
+task evidence is medium confidence; missing evidence for major branches is low confidence.
 
 After any repair, repeat the complete-subject review. A local check that the named blocker disappeared cannot detect
 coverage loss, new catch-all sections, or shifted sibling boundaries.
 
 ## Independent blind-fit diagnostic
 
-Alongside the holistic review, freeze 24 tasks generated by a separate high-reasoning agent that has the subject
-definition but no access to the curriculum. A second independent agent classifies each task against the curriculum
-as `exact`, `ambiguous`, `gap`, or `invalid`. Report `(exact + defensible ambiguous) / (total - invalid)` and all four
-counts. Partial coverage by several sections is a gap, not an ambiguity.
+Alongside the holistic review, freeze `max(24, 2 * guidepost_count)` tasks generated by a separate Sol/high agent that
+has the subject definition but no access to the curriculum. A second independent agent classifies each task against
+the curriculum as `exact`, `ambiguous`, `gap`, or `invalid`. Report
+`(exact + defensible ambiguous) / (total - invalid)` and all four counts. Partial coverage by several sections is a
+gap, not an ambiguity.
 
 This rate measures sampled coverage and boundary legibility. It does not measure mutual self-confidence or epsilon
-continuity and is not added to the 100-point score. During calibration, a repeated operation-family gap is blocking;
-do not set a permanent numeric threshold until results from varied subjects establish a useful operating range. Keep
-the task set fixed across repairs, and keep blind-fit results hidden from the holistic reviewer.
+continuity and is not added to the 100-point score. During calibration, a repeated operation-family gap is blocking.
+Repeated means at least two gap tasks with the same normalized central operation, or one gap in a guidepost for which
+the curriculum has no capability. The fit judge proposes repeated operation-family groupings and the operator
+confirms them from the task text. Cross-artifact promotion validation detects the single-uncovered-guidepost case from
+hidden task metadata and holistic guidepost accounting. Do not set a permanent numeric threshold until results from
+varied subjects establish a useful operating range. Keep the task set fixed across repairs, and keep blind-fit results
+hidden from the holistic reviewer.
 
 ## Optional Luna probes
 
 For a boundary diagnostic, the subject reviewer generates 8–16 concrete tasks concentrated on close siblings and
-coverage gaps. Hide the intended section, ask Luna for one leaf or `out_of_scope`, and accept an alternative only with
-a recorded rationale. About 70% reasonable placement is sufficient during initial scale-out. Curriculum-derived
+coverage gaps. Hide the intended section, ask Luna for one capability or `out_of_scope`, and accept an alternative
+only with a recorded rationale. About 70% reasonable placement is sufficient during initial scale-out. Curriculum-derived
 tasks are a weak diagnostic because their wording tends to mirror the section definitions; held-out TaskTrove and
 permitted in-distribution evaluation examples provide stronger evidence.
 

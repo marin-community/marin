@@ -1,8 +1,8 @@
 # Curriculum generation and review workflow
 
-This runbook describes the one-off agent workflow used to extend `curriculum.yaml`. It is intentionally a review
-procedure, not an API. Keep the durable rubric, prompts, canonical YAML, and concise findings in the repository. Keep
-raw task samples, agent transcripts, embeddings, mappings, and intermediate JSON in external experiment storage.
+This runbook describes the one-off agent workflow used to extend `curriculum.yaml`; no API implements the workflow.
+Keep the durable rubric, prompts, canonical YAML, and concise findings in the repository. Keep raw task samples,
+agent transcripts, embeddings, mappings, and intermediate JSON in external experiment storage.
 
 ## Acceptance rule
 
@@ -10,16 +10,18 @@ Evaluate a subject in two independent ways:
 
 1. A holistic reviewer scores the complete curriculum against `rubric.md`. Promotion requires at least 85/100, no
    blockers, and medium or high evidence confidence.
-2. A blind task generator creates 24 subject tasks without seeing the curriculum. A separate fit judge sees only the
-   task instructions and curriculum and classifies each task as `exact`, `ambiguous`, `gap`, or `invalid`.
+2. A blind task generator creates `max(24, 2 * guidepost_count)` subject tasks without seeing the curriculum. A
+   separate fit judge sees only the task instructions and curriculum and classifies each task as `exact`,
+   `ambiguous`, `gap`, or `invalid`.
 
 Report blind fit as `(exact + defensible ambiguous) / (total - invalid)`, together with all four counts. Do not add it
 to the 100-point holistic score. The blind-fit test measures sampled coverage; the holistic review measures whether
 the curriculum's boundaries and progression are useful for training. During calibration, any repeated or
 operation-family-wide gap blocks promotion, but there is no permanent numeric blind-fit threshold. In one run,
-`repeated` means at least two gap tasks with the same normalized central operation, or one gap tied to a guidepost for
-which no capability exists. The fit judge proposes the grouping and the operator confirms it from the task text.
-Record observed rates across several subjects before setting a numeric threshold.
+`repeated` means at least two gap tasks with the same normalized central operation. The fit judge proposes the
+grouping and the operator confirms it from the task text. A single gap tied to a guidepost with no capability also
+blocks promotion; `validate_subject_promotion` detects that case from the hidden task metadata and holistic guidepost
+accounting. Record observed rates across several subjects before setting a numeric threshold.
 
 Curriculum-derived Luna placement tasks remain an optional boundary diagnostic. They do not substitute for either
 independent review: their wording tends to mirror the curriculum, and successful placement says little about mutual
@@ -61,10 +63,16 @@ Store the manifest and frozen blind-task artifact at a durable URI before ending
 is acceptable only while a single wave is active. A concise checked-in or Loom report records the URI and hashes; it
 does not copy task-level artifacts into this directory.
 
+The reference role model is `gpt-5.6-sol` with high reasoning effort. Record a different pinned model explicitly when
+availability or an experiment requires it. `Provider controlled` means the agent interface did not expose a sampling
+parameter; it is not a request to leave an exposed parameter unset.
+
 ## Output contracts
 
 The curriculum generator writes two files: a JSON object accepted by `Curriculum` in `models.py`, and a separate
-design-audit JSON or Markdown file. Never wrap the curriculum and audit together. The curriculum JSON has this shape:
+design-audit JSON or Markdown file. Never wrap the curriculum and audit together. The audit is a non-authoritative
+reasoning trace: hash and archive it, but derive promotion only from the canonical curriculum and validated reviews.
+The curriculum JSON has this shape:
 
 ```json
 {
@@ -123,6 +131,7 @@ Before fit judging, strip every field except `id` and `instruction`. The fit jud
 ```json
 {
   "subject_id": "C00",
+  "curriculum_version": "subject-version",
   "prompt_version": "blind-fit-v1",
   "judgments": [
     {
@@ -144,6 +153,19 @@ An `ambiguous` judgment is defensible only when every listed capability covers t
 `ambiguous` row contributes to the numerator. A task that partly fits several sections is a `gap`, not an ambiguity.
 `fit_numerator = exact + ambiguous` and `fit_denominator = total - invalid`. A zero denominator invalidates the run;
 regenerate the blind sample.
+
+The operator records one disposition for every proposed systematic gap:
+
+```json
+{
+  "gap": "Normalized operation-family gap from the fit review",
+  "status": "blocking|rejected",
+  "rationale": "Why the task text confirms or rejects the proposed grouping"
+}
+```
+
+A `blocking` disposition prevents promotion. A `rejected` disposition records why the proposed grouping does not
+meet the repeated-gap rule. An empty `systematic_gaps` list requires an empty disposition list.
 
 The holistic review writes:
 
@@ -174,7 +196,7 @@ The holistic review writes:
 
 ## Prompt 1: curriculum generator
 
-Use a high-reasoning model. Replace bracketed fields and attach `rubric.md`, the relevant inventory object, the
+Use `gpt-5.6-sol` with high reasoning effort. Replace bracketed fields and attach `rubric.md`, the relevant inventory object, the
 model-visible discovery evidence, and policy-level evaluation metadata. Do not attach held-out evaluation questions
 or paraphrases derived from them.
 
@@ -199,6 +221,10 @@ CONSTRAINTS
 - For every proposed capability, instantiate the most operationally distant permitted pair. Split it only when
   mastery does not transfer because the central operation, tool interaction, or evaluation contract differs. A
   different topic or tool name alone is insufficient.
+- For each pair, compare the input representation, central transformation, output artifact, and correctness contract.
+  Split when one changes materially; workflow context or shared nouns do not establish transfer. In particular,
+  challenge classification versus regression, construction versus interpretation, paired versus unpaired inference,
+  and deterministic mismatch analysis versus intermittent-mechanism diagnosis.
 - Use a sampling facet only when the central operation and evaluation contract remain stable across its values.
   Apply the same distant-pair test to the facet's most distant values. Split instead when values change the solver
   loop, state transition, or evaluation contract.
@@ -207,13 +233,19 @@ CONSTRAINTS
   artifact would eliminate the dependency. Reject workflow-order edges.
 - The entry probe must give a learner who mastered all prerequisites a non-trivial chance of success. The
   representative probe must exercise the full outcome.
+- Execute every probe on paper. Reject missing state or geometry, undefined factors, inconsistent premises, trivial
+  optima, and outputs that cannot be checked from the supplied facts.
+- Substitute every child probe into its capability parent's outcome. If the parent does not contain every child,
+  make it a group and add any natural cross-child workflow as a sibling synthesis capability.
 - Account for every guidepost and evidence item with a section or an exclusion rationale. Malformed tasks are not
   positive evidence.
 
 DESIGN AUDIT
-Return as a separate file: operation families; guidepost/evidence accounting; the distant-pair result
+Return as a separate file: operation families; guidepost/evidence accounting; the distant-pair operation signatures
+and result
 for every capability and facet; the role decision for every node; accepted and rejected prerequisite edges with the
-completed-artifact counterfactual; and known evidence limitations. Do not mention or infer a target section count.
+completed-artifact counterfactual; probe execute-on-paper results; parent containment results; and known evidence
+limitations. Do not mention or infer a target section count.
 ```
 
 ## Prompt 2: curriculum-blind task generator
@@ -222,7 +254,7 @@ Use a separate high-reasoning context. Do not attach the curriculum, rubric, cur
 results.
 
 ```text
-Generate exactly 24 diverse, concrete tasks that a capable practitioner could reasonably be asked to perform in the
+Generate exactly [N = max(24, 2 * guidepost_count)] diverse, concrete tasks that a capable practitioner could reasonably be asked to perform in the
 subject below. You are sampling the subject, not designing or reverse-engineering a curriculum.
 
 SUBJECT
@@ -230,9 +262,8 @@ SUBJECT
 
 REQUIREMENTS
 - Do not ask for a taxonomy, syllabus, curriculum, or discussion of these guideposts.
-- Cover every guidepost with at least two tasks. This 24-task procedure supports at most 12 guideposts; for a larger
-  inventory use `max(24, 2 * guidepost_count)` tasks. Use the remaining tasks for cross-guidepost work, boundary
-  cases, and underrepresented central operations.
+- Cover every guidepost with at least two tasks. Use the remaining tasks for cross-guidepost work, boundary cases, and
+  underrepresented central operations.
 - Vary central operations, artifacts, contexts, and difficulty. Include entry, representative, and boundary tasks.
 - Each instruction must be self-contained. Supply the data, code, measurements, source excerpts, legal text, or
   interface facts needed to act. Do not rely on an unspecified file, hidden source, or private verifier.
@@ -281,20 +312,25 @@ Required checks:
 - Account for every guidepost and evidence item with a primary capability or exclusion rationale.
 - For every capability, instantiate its most operationally distant permitted task pair. A blocking split finding
   must name both tasks, their different central operations, and how splitting changes sampling or evaluation.
+- Compare each pair's input representation, central transformation, output artifact, and correctness contract.
 - For every sampling facet, compare its most distant values and reject it if the solver loop, state transition, or
   evaluation contract changes.
 - For every prerequisite edge, identify where every dependent representative uses the full prerequisite outcome,
   the one new operation in the entry, and the completed-artifact counterfactual.
 - Check every internal capability for one natural cross-child synthesis. A concatenated set of child deliverables is
-  not synthesis.
+  not synthesis. Also verify that every child probe is an instance of the parent's outcome; otherwise use a group and
+  a sibling synthesis capability.
 - Check all entry-to-representative orderings for a plausible epsilon step. Structural plausibility is not evidence
   of actual training transfer.
+- Execute each probe on paper and reject missing facts, undefined factors, contradictory premises, trivial optima,
+  and uncheckable outputs.
 - Distinguish evidence confidence from structural quality. High confidence requires direct or held-out evidence
-  reaching every leaf and sampled edges; sparse task evidence caps confidence at medium.
+  reaching every capability and sampled edges; sparse task evidence caps confidence at medium.
 
-`pilot_ready` requires at least 85 points, no blockers, and medium or high confidence. Any blocker or score 70--84 is
-`revise`; pervasive structural failure or a score below 70 is `regenerate`. Recommend the smallest repair that fixes
-each concrete defect. Propose a rubric change only for a recurrent issue that generalizes beyond this subject.
+`pilot_ready` requires at least 85 points, no blockers, and medium or high confidence. Any failed gate at 70 points or
+above is `revise`; a score below 70 is `regenerate`. Pervasive defects must lower the affected dimension scores.
+Recommend the smallest repair that fixes each concrete defect. Propose a rubric change only for a recurrent issue
+that generalizes beyond this subject.
 ```
 
 ## Optional prompt: blinded Luna placement
@@ -327,14 +363,16 @@ whose representative probe requires more of the task's central operation and nam
    `jq -S '{subject_id, tasks: [.tasks[] | {id, instruction}]}'`. Canonicalize it with compact JSON plus one newline,
    scan it for leaked sampling fields, record its SHA-256 hash, and launch the fit judge and holistic reviewer
    independently. They may run in parallel.
-4. Check outputs mechanically. The holistic dimensions must remain within 25/25/25/15/10 and sum to `score`; score
-   is in 0--100. Fit judgments must contain every frozen task ID exactly once and no other ID. Counts must equal the
-   judgments; section references must exist and target capabilities; numerator is exact plus ambiguous; denominator
-   is total minus invalid and must be nonzero. Guidepost, discovery, and evaluation ledgers must cover every supplied
-   item exactly once.
+4. Parse the source task set, fit result, gap dispositions, and holistic review with `BlindTaskSet`, `BlindFitReview`,
+   `SystematicGapDisposition`, and `HolisticReview` from `models.py`. Call `validate_subject_run` from `validation.py`
+   with the inventory guidepost IDs and evidence-manifest item IDs. It enforces sample size and guidepost
+   representation, subject and version identity, frozen task IDs, capability-only references, resolved systematic
+   gaps, and complete accounting ledgers. Initial `revise` and `regenerate` results still receive this full validation.
 5. Repair concrete blockers. Revalidate, rerun the complete holistic review, and rerun fit judgment on the frozen
    blind tasks. Do not accept a local blocker-only check.
-6. Promote only the final reviewed curriculum into `curriculum.yaml`. Declare `routing_facet` from the intended
+6. Call `validate_subject_promotion` on the final artifacts. It requires a passing holistic review, no confirmed
+   systematic gap, and no blind-task gap tied to an uncovered guidepost. Add a passing curriculum to
+   `curriculum.yaml` and declare `routing_facet` from the intended
    membership semantics and record whether a labeled member/near-neighbor fixture calibrated that choice. A missing
    fixture leaves routing provisional but does not block a structurally sound curriculum. Increment `catalog_version`
    as `waveN-R`, where `N` is the wave and `R` is the catalog revision within it. Validate the entire file with
@@ -345,9 +383,9 @@ whose representative probe requires more of the task's central operation and nam
    uv run python -c 'from pathlib import Path; from experiments.post_training.task_curriculum.catalog import load_catalog; c=load_catalog(Path("experiments/post_training/task_curriculum/curriculum.yaml")); print(len(c.curricula), sum(len(x.curriculum.sections) for x in c.curricula), sum(len(x.curriculum.capability_sections()) for x in c.curricula))'
    ```
 7. Record a concise result: models and prompt versions, subject/version, node counts, holistic score/status/confidence,
-   blind-fit X/Y and counts, systematic gaps, repairs, optional Luna results, evidence limitations, and catalog
-   version. Archive raw one-off artifacts at the manifest URI, or delete them only after the wave is accepted and no
-   repair needs the frozen task set. Do not check them into this directory.
+   blind-fit X/Y and counts, systematic gaps and dispositions, repairs, optional Luna results, evidence limitations,
+   and catalog version. Archive raw one-off artifacts at the manifest URI, or delete them only after the wave is
+   accepted and no repair needs the frozen task set. Do not check them into this directory.
 8. Run focused tests, type checking, and the repository lint workflow before publishing the change.
 
 ## Resume checklist

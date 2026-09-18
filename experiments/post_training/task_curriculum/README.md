@@ -5,8 +5,8 @@ keeps curriculum design separate from task correctness:
 TaskCompendium owns model-visible task semantics and private verifier contracts; a curriculum describes observable
 capabilities, boundaries, examples, and prerequisites.
 
-`curriculum.yaml` is the canonical catalog. It contains 12 reviewed curriculum graphs and 363 globally unique nodes:
-353 trainable capabilities and 10 organizational groups. The Markdown reports under `pilot/` and `wave2/` preserve
+`curriculum.yaml` is the canonical catalog. It contains 16 reviewed curriculum graphs and 493 globally unique nodes:
+464 trainable capabilities and 29 organizational groups. The Markdown reports under `pilot/` and `wave2/` preserve
 the experimental evidence; runtime assignment loads only the YAML catalog.
 
 ## Inputs
@@ -28,9 +28,9 @@ One-off agent runs produce curricula and reviews. Their reports record the evide
 into the canonical YAML. For each selected macro area:
 
 1. Give a high-reasoning generator the inventory area, rubric, a maximum tree depth, and representative tasks. Before
-   emitting the curriculum, it enumerates operation families, tests the most distant permitted pair for every leaf,
-   and audits proposed prerequisites with the completed-artifact counterfactual. Every section includes an `entry`
-   probe that isolates the smallest prerequisite delta and a `representative` probe for the full outcome.
+   emitting the curriculum, it enumerates operation families, tests the most distant permitted pair for every
+   capability, and audits proposed prerequisites with the completed-artifact counterfactual. Every section includes
+   an `entry` probe that isolates the smallest prerequisite delta and a `representative` probe for the full outcome.
 2. Validate the JSON with `Curriculum` and `Curriculum.check_generation_contract`.
 3. Give the curriculum and rubric to an independent high-reasoning reviewer. The reviewer returns a score, verdict,
    concrete findings, and proposed rubric changes in one call for the complete subject curriculum.
@@ -41,11 +41,12 @@ into the canonical YAML. For each selected macro area:
    when the numeric score is high. Revise the rubric or generation instructions only for problems that recur, then
    generate another version.
 
-In parallel with curriculum generation, a curriculum-blind high-reasoning agent generates 24 diverse tasks from the
-subject definition. A separate judge reports how many have an exact home, an ambiguous but complete home, a coverage
-gap, or are invalid. This blind-fit X/Y is a sampled coverage diagnostic beside the holistic score, not another term
-inside it. Freeze the task set across curriculum repairs. During initial calibration, a systematic operation-family
-gap blocks promotion; `workflow.md` defines the complete independence and reporting rules.
+In parallel with curriculum generation, a curriculum-blind Sol/high agent generates
+`max(24, 2 * guidepost_count)` diverse tasks from the subject definition. A separate judge reports how many have an
+exact home, an ambiguous but complete home, a coverage gap, or are invalid. This blind-fit X/Y is a sampled coverage
+diagnostic reported separately from the holistic score. Freeze the task set across curriculum repairs.
+During initial calibration, a systematic operation-family gap blocks promotion; `workflow.md` defines the complete
+independence and reporting rules.
 
 The hierarchy has two node kinds. A `capability` is a trainable outcome and the only kind that may receive task
 assignments, declare prerequisites, or carry entry and representative probes. A `group` is an organizational scope;
@@ -177,10 +178,11 @@ wave operations and created ambiguous boundaries with transport simulation. A re
 subject review; closing the named blocker is insufficient.
 
 The independent reviewers generated 12 boundary tasks per subject and hid their intended sections from Luna. Luna
-placed all 36 into an accepted leaf or justified alternative. These curriculum-derived probes confirm that the named
-boundaries are legible, but they are easier than held-out data and do not override structural blockers. In-distribution
-examples permitted by the [evaluation policy](https://github.com/marin-community/marin/issues/9193) should supply a
-second held-out coverage view. Out-of-distribution evaluations contribute metadata only under that policy.
+placed all 36 into an accepted capability or justified alternative. These curriculum-derived probes confirm that the
+named boundaries are legible, but they are easier than held-out data and do not override structural blockers.
+In-distribution examples permitted by the [evaluation policy](https://github.com/marin-community/marin/issues/9193)
+should supply a second held-out coverage view. Out-of-distribution evaluations contribute metadata only under that
+policy.
 
 These failures motivated the capability/group distinction and structured sampling facets added in wave six.
 
@@ -205,6 +207,49 @@ it cannot hide a different solver loop, state transition, or evaluation contract
 Both final reviews have medium confidence because the sampled tasks reach only part of each graph and no applicable
 held-out evaluation examples were available. In-distribution examples permitted by the evaluation policy should be
 added as coverage evidence during scale-out. They need not become curriculum nodes or source-specific mapping rules.
+
+## Wave-seven reproducibility and blind fit
+
+Wave seven added strict output models for blind tasks, fit judgments, evidence accounting, and holistic reviews.
+`validation.py` checks curriculum versions, frozen task IDs, guidepost representation, capability references, and
+evidence ledgers across one subject run. `workflow.md` records the complete role prompts and evidence boundaries.
+
+Each of four subjects used 24 tasks generated from the subject inventory by an agent that could not read the
+curriculum. The fit judge received only task IDs, instructions, and the candidate curriculum. The same frozen task
+sets were reused after repairs.
+
+| Subject | Final version | Nodes/capabilities | Initial score and E/A/G/I | Final score | Final E/A/G/I | Fit |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Software QA & Testing | `wave7-10` | 23/19 | 89; 8/0/16/0 | 92, pilot ready | 24/0/0/0 | 24/24 |
+| Robotics & Embodied Systems | `wave7-4` | 28/25 | 81; 15/0/9/0 | 92, pilot ready | 23/0/1/0 | 23/24 |
+| Legal & Compliance | `wave7-2` | 20/16 | 86; 18/0/6/0 | 95, pilot ready | 23/0/1/0 | 23/24 |
+| Bioinformatics & Life-Science Computing | `wave7-5` | 59/51 | 83; 18/0/6/0 | 91, pilot ready | 24/0/0/0 | 24/24 |
+
+E/A/G/I denotes exact, ambiguous, gap, and invalid. Every final systematic-gap list is empty. The roles used
+`gpt-5.6-sol` at high reasoning effort with prompt versions `curriculum-generator-v1`, `blind-tasks-v1`,
+`blind-fit-v1`, and `holistic-review-v1`; sampling parameters were provider controlled. The consolidated evidence is
+Loom artifact `curriculum-wave7-evidence`, revision 1, branch scope `zooq8ec9`, SHA-256
+`49fc55b3fd0a82ca1d2e62b4435ebfa28ebadfd101382a97b0c5d70779e73e6d`, associated with session channel
+`s2uyqg34`. It contains the manifest, frozen blind tasks, final curricula, design audits, fit judgments, and holistic
+reviews. Wave seven calibrated the procedure; the current prompts in `workflow.md` include the resulting corrections
+and are the normative inputs for the next wave.
+
+The initial software-testing score and fit rate show that a high holistic score can coexist with sampled coverage
+gaps. An intermediate software-testing version reached 24/24 fit and scored 81 because its prerequisite and probe
+structure remained defective. Blind fit therefore stays separate from the score. The final robotics and legal misses
+are isolated composite tasks; neither repeated across an operation family nor exposed an uncovered guidepost.
+
+Repairs repeatedly split capabilities whose input, transformation, output, or correctness contract differed. Other
+failures were capability parents that did not contain their children, probes with missing executable inputs, and
+design audits that retained superseded edges. The generator and reviewer prompts now require operation signatures,
+parent-containment checks, and execute-on-paper probe checks. Output validation rejects stale review versions and
+invalid cross-artifact references.
+
+The catalog now covers 16 of 34 macro areas and 77 of 151 guideposts. Its 493 nodes imply about 970 nodes at full
+guidepost coverage if the observed density stays constant, although subject density varies from eight capabilities
+for NLP to 51 for bioinformatics. Mutual self-confidence and epsilon continuity determine density; no per-subject
+section target applies. All four reviews have medium confidence because wave seven used no task-level discovery or
+held-out evaluation questions.
 
 ## Provenance
 
