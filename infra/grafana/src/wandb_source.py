@@ -74,7 +74,7 @@ query Report($id: ID!) {
 _HISTORY_QUERY = """
 query RunSampledHistory($entity: String!, $project: String!, $run: String!, $specs: [JSONString!]!) {
   project(entityName: $entity, name: $project) {
-    run(name: $run) { state sampledHistory(specs: $specs) }
+    run(name: $run) { state branchPoint { step } sampledHistory(specs: $specs) }
   }
 }
 """
@@ -93,6 +93,11 @@ query RunActivity($entity: String!, $project: String!, $run: String!) {
 def _epoch_seconds(stamp: str) -> float:
     """Epoch seconds for a W&B RFC-3339 stamp, whose zone is always `Z`."""
     return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+
+
+class _SampledHistory(NamedTuple):
+    points: list[dict[str, float]]
+    branch_step: int | None
 
 
 class _HistoryBaseline(NamedTuple):
@@ -145,10 +150,10 @@ class WandbSource:
             raise UpstreamError("wandb", "report pins no runs", status_code=502)
         return view.get("displayName") or "W&B report", runs
 
-    def _sampled_points(
+    def _sampled_run_history(
         self, *, project: str, run: str, keys: tuple[str, ...], samples: int, min_step: int | None = None
-    ) -> list[dict[str, float]] | None:
-        """Numeric points from one run's sampled history, or None if the run is absent.
+    ) -> _SampledHistory | None:
+        """Numeric history and fork boundary, or None if the run is absent.
 
         Each point carries every key in `keys`; a point missing any of them is dropped,
         since W&B writes a null wherever a metric was not logged on that step. Callers
@@ -172,16 +177,17 @@ class WandbSource:
             values = {key: point.get(key) for key in keys}
             if all(isinstance(value, int | float) for value in values.values()):
                 points.append(values)
-        return points
+        branch_point = run_data.get("branchPoint")
+        return _SampledHistory(points, int(branch_point["step"]) if branch_point else None)
 
     def _sampled_history(
         self, *, project: str, run: str, x_key: str, y_key: str, samples: int
     ) -> list[tuple[float, float]] | None:
         """Numeric (x, y) pairs from one run's sampled history, or None if it is absent."""
-        points = self._sampled_points(project=project, run=run, keys=(x_key, y_key), samples=samples)
-        if points is None:
+        history = self._sampled_run_history(project=project, run=run, keys=(x_key, y_key), samples=samples)
+        if history is None:
             return None
-        return [(point[x_key], point[y_key]) for point in points]
+        return [(point[x_key], point[y_key]) for point in history.points]
 
     def _search_projects(self, run: str, project: str | None, read: Callable[[str], list[dict] | None]) -> list[dict]:
         """Return the first non-empty `read(candidate)` over the projects that may hold `run`.
@@ -227,19 +233,35 @@ class WandbSource:
         `run` is the Levanter run id: marin names the W&B run after it, and
         `resume="allow"` keeps one W&B run across restarts, so this covers the run
         from step 0 however many times it was resumed. W&B samples server-side, so
-        the response stays small on a long run.
+        the response stays small on a long run. Forks also sample the child segment
+        separately so inherited history cannot crowd out recent training points.
         """
 
         def read(candidate: str) -> list[dict] | None:
-            pairs = self._sampled_history(
-                project=candidate, run=run, x_key=_STEP_KEY, y_key=metric, samples=_RUN_HISTORY_SAMPLES
+            history = self._sampled_run_history(
+                project=candidate, run=run, keys=(_STEP_KEY, metric), samples=_RUN_HISTORY_SAMPLES
             )
-            if pairs is None:
+            if history is None:
                 return None
+            points = history.points
+            if history.branch_step is not None:
+                # Inherited history can consume almost the entire sample budget.
+                # Sample the child's segment separately, retaining the parent prefix.
+                child = self._sampled_run_history(
+                    project=candidate,
+                    run=run,
+                    keys=(_STEP_KEY, metric),
+                    samples=_RUN_HISTORY_SAMPLES,
+                    min_step=history.branch_step + 1,
+                )
+                if child is None:
+                    raise UpstreamError("wandb", f"run {run!r} disappeared while reading history", status_code=502)
+                points = [point for point in points if point[_STEP_KEY] <= history.branch_step] + child.points
+            points = sorted(points, key=lambda point: point[_STEP_KEY])
             run_url = _RUN_URL.format(entity=_ENTITY, project=candidate, run=run)
             return [
-                {"run": run, "project": candidate, "run_url": run_url, "step": step, "value": value}
-                for step, value in pairs
+                {"run": run, "project": candidate, "run_url": run_url, "step": point[_STEP_KEY], "value": point[metric]}
+                for point in points
             ]
 
         return self._search_projects(run, project, read)
@@ -267,15 +289,16 @@ class WandbSource:
         the steps a resumed run inherited and the time before its first step both drop
         out. None before the first logged step.
         """
-        points = self._sampled_points(
+        history = self._sampled_run_history(
             project=project,
             run=run,
             keys=(_STEP_KEY, _TIMESTAMP_KEY, _TOTAL_TOKENS_KEY, _TPS_KEY),
             samples=_TPS_SAMPLES,
             min_step=min_step,
         )
-        if not points:
+        if history is None or not history.points:
             return None
+        points = history.points
         reference_tps = sum(point[_TPS_KEY] for point in points) / len(points)
         first = min(points, key=lambda point: point[_STEP_KEY])
         step, tokens = first[_STEP_KEY], first[_TOTAL_TOKENS_KEY]
