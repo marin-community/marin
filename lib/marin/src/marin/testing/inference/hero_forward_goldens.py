@@ -17,6 +17,7 @@ import numpy as np
 FORMAT_NAME = "marin-hero-forward-goldens"
 FORMAT_VERSION = 1
 ARRAYS_FILENAME = "arrays.npz"
+MANIFEST_FILENAME = "manifest.json"
 
 INPUT_ARRAYS = (
     "tokens",
@@ -67,6 +68,9 @@ class ComparisonIssue:
     kind: Literal["missing", "alignment", "numerical", "routing"]
     field: str
     detail: str
+    count: int | None = None
+    well_separated_count: int | None = None
+    max_abs_error: float | None = None
 
 
 @dataclass(frozen=True)
@@ -92,7 +96,7 @@ class GoldenBundle:
     @classmethod
     def load(cls, root: str | Path) -> GoldenBundle:
         root = Path(root)
-        manifest = json.loads((root / "manifest.json").read_text())
+        manifest = json.loads((root / MANIFEST_FILENAME).read_text())
         _validate_manifest(manifest)
         arrays_path = root / ARRAYS_FILENAME
         expected = manifest["files"][ARRAYS_FILENAME]
@@ -133,7 +137,7 @@ def write_bundle(root: str | Path, manifest: Mapping[str, object], arrays: Mappi
     )
     _validate_manifest(complete_manifest)
     _validate_arrays(complete_manifest, normalized)
-    (root / "manifest.json").write_text(json.dumps(complete_manifest, indent=2, sort_keys=True) + "\n")
+    (root / MANIFEST_FILENAME).write_text(json.dumps(complete_manifest, indent=2, sort_keys=True) + "\n")
 
 
 def load_observations(path: str | Path) -> dict[str, np.ndarray]:
@@ -192,6 +196,8 @@ def compare_observations(
                         f"{int(changed_valid.sum())} valid layer-token routes changed; "
                         f"{int(well_separated.sum())} have a golden cutoff gap above "
                         f"{tolerances.route_cutoff_gap:g}. Small gaps are reported, not excused.",
+                        count=int(changed_valid.sum()),
+                        well_separated_count=int(well_separated.sum()),
                     )
                 )
     _compare_numeric(
@@ -226,7 +232,8 @@ def _compare_exact_values(
     if actual.shape != expected.shape:
         issues.append(ComparisonIssue("numerical", name, f"shape {actual.shape} != {expected.shape}"))
     elif not np.array_equal(actual, expected):
-        issues.append(ComparisonIssue("numerical", name, f"{int(np.count_nonzero(actual != expected))} values differ"))
+        count = int(np.count_nonzero(actual != expected))
+        issues.append(ComparisonIssue("numerical", name, f"{count} values differ", count=count))
 
 
 def _compare_numeric(
@@ -250,12 +257,15 @@ def _compare_numeric(
         return
     error = np.abs(actual.astype(np.float64) - expected.astype(np.float64))
     if error.size and float(error.max()) > tolerance:
+        max_abs_error = float(error.max())
+        count = int(np.count_nonzero(error > tolerance))
         issues.append(
             ComparisonIssue(
                 kind,
                 name,
-                f"max absolute error {float(error.max()):.8g} exceeds {tolerance:g}; "
-                f"{int(np.count_nonzero(error > tolerance))} values exceed the bound",
+                f"max absolute error {max_abs_error:.8g} exceeds {tolerance:g}; {count} values exceed the bound",
+                count=count,
+                max_abs_error=max_abs_error,
             )
         )
 

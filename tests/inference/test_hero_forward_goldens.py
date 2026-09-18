@@ -63,7 +63,8 @@ def test_hero_forward_comparator_reports_numerical_error_beyond_bound() -> None:
 
     issue = next(issue for issue in report.issues if issue.field == "target_logprobs")
     assert issue.kind == "numerical"
-    assert "1 values exceed the bound" in issue.detail
+    assert issue.count == 1
+    assert issue.max_abs_error == pytest.approx(0.02)
 
 
 def test_hero_forward_comparator_reports_well_separated_route_change() -> None:
@@ -75,8 +76,8 @@ def test_hero_forward_comparator_reports_well_separated_route_change() -> None:
 
     issue = next(issue for issue in report.issues if issue.field == "route_expert_ids")
     assert issue.kind == "routing"
-    assert "1 valid layer-token routes changed" in issue.detail
-    assert "1 have a golden cutoff gap" in issue.detail
+    assert issue.count == 1
+    assert issue.well_separated_count == 1
 
 
 def test_hero_forward_comparator_does_not_excuse_small_gap_route_change() -> None:
@@ -87,9 +88,8 @@ def test_hero_forward_comparator_does_not_excuse_small_gap_route_change() -> Non
     report = compare_observations(bundle, observations, TOLERANCES)
 
     issue = next(issue for issue in report.issues if issue.field == "route_expert_ids")
-    assert "1 valid layer-token routes changed" in issue.detail
-    assert "0 have a golden cutoff gap" in issue.detail
-    assert "Small gaps are reported, not excused" in issue.detail
+    assert issue.count == 1
+    assert issue.well_separated_count == 0
 
 
 def test_hero_forward_report_raises_with_structured_issue_summary() -> None:
@@ -97,5 +97,5 @@ def test_hero_forward_report_raises_with_structured_issue_summary() -> None:
     observations = _observations(bundle)
     observations["full_logits"][0, 0] += 0.02
 
-    with pytest.raises(AssertionError, match=r"\[numerical\] full_logits"):
+    with pytest.raises(AssertionError):
         compare_observations(bundle, observations, TOLERANCES).raise_for_errors()

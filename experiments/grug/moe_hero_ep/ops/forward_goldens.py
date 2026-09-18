@@ -18,7 +18,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import NamedTuple, Self
+from typing import NamedTuple, Self, TypedDict
 
 import draccus
 import equinox as eqx
@@ -33,17 +33,23 @@ from jax.sharding import PartitionSpec as P
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
-from marin.testing.inference.hero_forward_goldens import ARRAYS_FILENAME, write_bundle
+from marin.testing.inference.hero_forward_goldens import ARRAYS_FILENAME, MANIFEST_FILENAME, write_bundle
 from pydantic import Field, model_validator
 from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from rigging.timing import Timer, log_time
 from transformers import AutoTokenizer
 
 from experiments.grug.moe_hero_ep import hero_recipe
-from experiments.grug.moe_hero_ep.ops.vibe_check.completions import Checkpoint, Record, digest
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
+    TOP_TOKEN_COUNT,
+    Checkpoint,
+    Prompt,
+    Record,
+    digest,
+)
 from experiments.grug.moe_hero_ep.ops.vibe_check.config import (
     CHECKPOINT_RUNS,
     SAMPLING_GPUS_PER_NODE,
@@ -72,8 +78,8 @@ CHECKPOINT_WRITER_EVIDENCE_URL = "https://github.com/marin-community/marin/issue
 CHECKPOINT_WRITER_MODEL_DIGEST = "d461b6b0832be902ecbc9111edfbbc77a9cfd760470064285c01f6a296b45661"
 TOKENIZER = "marin-community/marin-tokenizer"
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
-TOP_TOKEN_COUNT = 5
 NATIVE_OUTPUT_BOUND = 1e-4
+GOLDEN_MODES = ("smoke", "required")
 
 
 class GoldenCaseSpec(Record):
@@ -113,6 +119,15 @@ class GoldenRequest(Record):
         return f"{self.spec.release}-{digest(identity)[:12]}"
 
 
+class GoldenCaseManifest(TypedDict):
+    id: str
+    row: int
+    source_prompt_id: str
+    valid_length: int
+    scored_target_positions: list[int]
+    construction: str
+
+
 class ForwardValues(NamedTuple):
     target_logprobs: jax.Array
     top_token_ids: jax.Array
@@ -125,6 +140,24 @@ class TracedValues(NamedTuple):
     route_expert_ids: jax.Array
     route_combine_weights: jax.Array
     route_cutoff_gaps: jax.Array
+
+
+class ForwardSelection(NamedTuple):
+    score_cases: jax.Array
+    prediction_positions: jax.Array
+    targets: jax.Array
+    full_cases: jax.Array
+    full_positions: jax.Array
+
+
+class NativeDiagnostic(NamedTuple):
+    target_logprob_max_abs: float
+    top_logprob_max_abs: float
+    full_logit_max_abs: float
+    top_token_id_changes: int
+
+    def as_dict(self) -> dict[str, float | int]:
+        return self._asdict()
 
 
 def golden_spec(mode: str) -> GoldenSpec:
@@ -148,7 +181,7 @@ def golden_spec(mode: str) -> GoldenSpec:
         for key in training_model.keys() | inference_model.keys()
         if training_model.get(key) != inference_model.get(key)
     }
-    if changes != {"moe_implementation": ("ragged_all_to_all", DEFAULT_DROPLESS_MOE_IMPLEMENTATION)}:
+    if changes != {"moe_implementation": (hero_recipe.RAGGED_MOE_IMPLEMENTATION, DEFAULT_DROPLESS_MOE_IMPLEMENTATION)}:
         raise ValueError(f"Unexpected inference model overrides: {changes}")
 
     if mode == "smoke":
@@ -204,14 +237,17 @@ def pinned_request(mode: str, revision: str) -> GoldenRequest:
     )
 
 
-def _source_prompts() -> dict[str, dict]:
+def _source_prompts() -> dict[str, Prompt]:
     path = Path(__file__).with_name("vibe_check") / "prompts.json"
-    return {row["id"]: row for row in json.loads(path.read_text())}
+    prompts = tuple(Prompt.model_validate(row) for row in json.loads(path.read_text()))
+    return {prompt.id: prompt for prompt in prompts}
 
 
-def _fixed_tokens(tokenizer, case: GoldenCaseSpec, prompts: dict[str, dict]) -> list[int]:
+def _fixed_tokens(tokenizer, case: GoldenCaseSpec, prompts: dict[str, Prompt]) -> list[int]:
     source = prompts[case.source_prompt_id]
-    text = source["text"] + source["expected"]
+    if source.expected is None:
+        raise ValueError(f"Source prompt has no fixed continuation: {case.source_prompt_id}")
+    text = source.text + source.expected
     first = tokenizer.encode(text, add_special_tokens=True)
     continuation = tokenizer.encode("\n" + text, add_special_tokens=False)
     if not first or not continuation:
@@ -230,7 +266,7 @@ def _score_positions(valid_length: int, sliding_window: int) -> tuple[int, ...]:
     return tuple(sorted(targets))
 
 
-def build_inputs(request: GoldenRequest, tokenizer) -> tuple[dict[str, np.ndarray], list[dict]]:
+def build_inputs(request: GoldenRequest, tokenizer) -> tuple[dict[str, np.ndarray], list[GoldenCaseManifest]]:
     prompts = _source_prompts()
     sequence = max(case.valid_length for case in request.spec.cases)
     eos_token_id = tokenizer.eos_token_id
@@ -240,7 +276,7 @@ def build_inputs(request: GoldenRequest, tokenizer) -> tuple[dict[str, np.ndarra
     validity = np.zeros_like(tokens, dtype=np.bool_)
     segments = np.full_like(tokens, -1, dtype=np.int32)
     score_mask = np.zeros_like(tokens, dtype=np.bool_)
-    cases = []
+    cases: list[GoldenCaseManifest] = []
     model = draccus.decode(hero_recipe.GrugModelConfig, request.spec.model)
     for row, case in enumerate(request.spec.cases):
         row_tokens = _fixed_tokens(tokenizer, case, prompts)
@@ -291,14 +327,10 @@ def build_inputs(request: GoldenRequest, tokenizer) -> tuple[dict[str, np.ndarra
 def _project_forward(
     model,
     hidden: jax.Array,
-    score_cases: jax.Array,
-    prediction_positions: jax.Array,
-    targets: jax.Array,
-    full_cases: jax.Array,
-    full_positions: jax.Array,
+    selection: ForwardSelection,
 ) -> ForwardValues:
-    selected = hidden.at[score_cases, prediction_positions].get(out_sharding=P())
-    targets = jax.sharding.reshard(targets, P())
+    selected = hidden.at[selection.score_cases, selection.prediction_positions].get(out_sharding=P())
+    targets = jax.sharding.reshard(selection.targets, P())
 
     def project_score(inputs):
         state, target = inputs
@@ -308,7 +340,7 @@ def _project_forward(
         return logprobs[target], top_ids, top_values
 
     target_logprobs, top_token_ids, top_logprobs = jax.lax.map(project_score, (selected, targets))
-    full_hidden = hidden.at[full_cases, full_positions].get(out_sharding=P())
+    full_hidden = hidden.at[selection.full_cases, selection.full_positions].get(out_sharding=P())
     full_logits = jnp.einsum(
         "rh,hv->rv", full_hidden, model.output_proj, preferred_element_type=jnp.float32, out_sharding=P()
     )
@@ -320,15 +352,11 @@ def ordinary_forward(
     model,
     tokens: jax.Array,
     segment_ids: jax.Array,
-    score_cases: jax.Array,
-    prediction_positions: jax.Array,
-    targets: jax.Array,
-    full_cases: jax.Array,
-    full_positions: jax.Array,
+    selection: ForwardSelection,
 ) -> ForwardValues:
     mask = AttentionMask.causal().with_segment_ids(segment_ids)
     hidden, _ = model(tokens, mask=mask)
-    return _project_forward(model, hidden, score_cases, prediction_positions, targets, full_cases, full_positions)
+    return _project_forward(model, hidden, selection)
 
 
 @eqx.filter_jit
@@ -336,15 +364,11 @@ def traced_forward(
     model,
     tokens: jax.Array,
     segment_ids: jax.Array,
-    score_cases: jax.Array,
-    prediction_positions: jax.Array,
-    targets: jax.Array,
-    full_cases: jax.Array,
-    full_positions: jax.Array,
+    selection: ForwardSelection,
 ) -> TracedValues:
     mask = AttentionMask.causal().with_segment_ids(segment_ids)
     hidden, metrics = model(tokens, mask=mask, trace_routes=True)
-    forward = _project_forward(model, hidden, score_cases, prediction_positions, targets, full_cases, full_positions)
+    forward = _project_forward(model, hidden, selection)
     # Process zero writes the bundle. Replication makes each global trace fully addressable there.
     return TracedValues(
         forward=forward,
@@ -354,20 +378,22 @@ def traced_forward(
     )
 
 
-def _numeric_diagnostic(first: ForwardValues, second: ForwardValues) -> dict[str, float | int]:
-    return {
-        "target_logprob_max_abs": float(np.max(np.abs(first.target_logprobs - second.target_logprobs))),
-        "top_logprob_max_abs": float(np.max(np.abs(first.top_logprobs - second.top_logprobs))),
-        "full_logit_max_abs": float(np.max(np.abs(first.full_logits - second.full_logits))),
-        "top_token_id_changes": int(np.count_nonzero(first.top_token_ids != second.top_token_ids)),
-    }
+def _numeric_diagnostic(first: ForwardValues, second: ForwardValues) -> NativeDiagnostic:
+    return NativeDiagnostic(
+        target_logprob_max_abs=float(np.max(np.abs(first.target_logprobs - second.target_logprobs))),
+        top_logprob_max_abs=float(np.max(np.abs(first.top_logprobs - second.top_logprobs))),
+        full_logit_max_abs=float(np.max(np.abs(first.full_logits - second.full_logits))),
+        top_token_id_changes=int(np.count_nonzero(first.top_token_ids != second.top_token_ids)),
+    )
 
 
-def _validate_native_diagnostic(name: str, diagnostic: dict[str, float | int]) -> None:
-    if diagnostic["top_token_id_changes"] or any(
-        float(diagnostic[field]) > NATIVE_OUTPUT_BOUND
-        for field in ("target_logprob_max_abs", "top_logprob_max_abs", "full_logit_max_abs")
-    ):
+def _validate_native_diagnostic(name: str, diagnostic: NativeDiagnostic) -> None:
+    numeric_changes = (
+        diagnostic.target_logprob_max_abs,
+        diagnostic.top_logprob_max_abs,
+        diagnostic.full_logit_max_abs,
+    )
+    if diagnostic.top_token_id_changes or any(change > NATIVE_OUTPUT_BOUND for change in numeric_changes):
         raise ValueError(f"{name} changed native outputs beyond the fixed diagnostic bound: {diagnostic}")
 
 
@@ -378,12 +404,12 @@ def _runtime_versions() -> dict[str, str]:
 
 def _upload_bundle(local: Path, remote_root: str) -> None:
     root = StoragePath(remote_root)
-    manifest_target = conditional_object(str(root / "manifest.json"))
+    manifest_target = conditional_object(str(root / MANIFEST_FILENAME))
     if manifest_target.version() is not None or (root / ARRAYS_FILENAME).exists():
         raise FileExistsError(f"Refusing to overwrite an existing or partial golden bundle: {remote_root}")
     with (local / ARRAYS_FILENAME).open("rb") as source, (root / ARRAYS_FILENAME).open("wb") as target:
         shutil.copyfileobj(source, target, length=8 * 1024 * 1024)
-    manifest_target.write((local / "manifest.json").read_bytes(), expected_version=None)
+    manifest_target.write((local / MANIFEST_FILENAME).read_bytes(), expected_version=None)
 
 
 def produce(request: GoldenRequest, store_root: str) -> None:
@@ -425,15 +451,18 @@ def produce(request: GoldenRequest, store_root: str) -> None:
         def replicated_array(value: np.ndarray) -> jax.Array:
             return jax.device_put(value, replicated)
 
+        selection = ForwardSelection(
+            score_cases=replicated_array(input_arrays["score_case_indices"]),
+            prediction_positions=replicated_array(input_arrays["prediction_positions"]),
+            targets=replicated_array(input_arrays["target_token_ids"]),
+            full_cases=replicated_array(input_arrays["full_logit_case_indices"]),
+            full_positions=replicated_array(input_arrays["full_logit_prediction_positions"]),
+        )
         args = (
             model,
             batch_array(input_arrays["tokens"]),
             batch_array(input_arrays["segment_ids"]),
-            replicated_array(input_arrays["score_case_indices"]),
-            replicated_array(input_arrays["prediction_positions"]),
-            replicated_array(input_arrays["target_token_ids"]),
-            replicated_array(input_arrays["full_logit_case_indices"]),
-            replicated_array(input_arrays["full_logit_prediction_positions"]),
+            selection,
         )
         with log_time("Ordinary forward and compilation"):
             first = ordinary_forward(*args)
@@ -467,7 +496,7 @@ def produce(request: GoldenRequest, store_root: str) -> None:
         "pending_qb_betas": pending_qb_betas.astype(np.float32),
         "effective_router_bias": effective_router_bias.astype(np.float32),
     }
-    remote_root = f"{store_root.rstrip('/')}/{request.bundle_id}"
+    remote_root = prefix_join(store_root, request.bundle_id)
     manifest = {
         "bundle_id": request.bundle_id,
         "asset_root": remote_root,
@@ -512,7 +541,7 @@ def produce(request: GoldenRequest, store_root: str) -> None:
             "resolved_config": request.spec.model,
             "intentional_inference_overrides": {
                 "moe_implementation": {
-                    "training": "ragged_all_to_all",
+                    "training": hero_recipe.RAGGED_MOE_IMPLEMENTATION,
                     "golden": DEFAULT_DROPLESS_MOE_IMPLEMENTATION,
                     "reason": "dropless reference computes every selected expert contribution",
                 }
@@ -557,8 +586,8 @@ def produce(request: GoldenRequest, store_root: str) -> None:
         },
         "native_validation": {
             "gate": f"max absolute output change <= {NATIVE_OUTPUT_BOUND:g} and no top-token ID changes",
-            "ordinary_repeat": repeatability,
-            "traced_versus_ordinary": instrumentation,
+            "ordinary_repeat": repeatability.as_dict(),
+            "traced_versus_ordinary": instrumentation.as_dict(),
         },
         "optional_context_diagnostics": {
             "8192": (
@@ -586,8 +615,8 @@ def submit(mode: str, store_root: str) -> None:
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     request = pinned_request(mode, revision)
     configure_coreweave_s3()
-    remote_root = f"{store_root.rstrip('/')}/{request.bundle_id}"
-    if conditional_object(f"{remote_root}/manifest.json").version() is not None:
+    remote_root = prefix_join(store_root, request.bundle_id)
+    if conditional_object(prefix_join(remote_root, MANIFEST_FILENAME)).version() is not None:
         raise FileExistsError(f"Golden bundle already exists: {remote_root}")
     name = f"hero-forward-{mode}-{digest(request.model_dump(mode='json'))[:12]}"
     with connect_controller(cluster_name=CONTROLLER_CLUSTER) as endpoint:
@@ -610,7 +639,7 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "submit":
         parser = argparse.ArgumentParser(description="Submit the full-Hero golden producer")
         parser.add_argument("submit")
-        parser.add_argument("--mode", choices=("smoke", "required"), required=True)
+        parser.add_argument("--mode", choices=GOLDEN_MODES, required=True)
         parser.add_argument("--store-root", default=STORE_ROOT)
         args = parser.parse_args()
         submit(args.mode, args.store_root)
