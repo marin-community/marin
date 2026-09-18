@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -18,6 +20,7 @@ from levanter.grug.attention import (
     reference_attention,
 )
 from levanter.grug.attention._fa4_cute import _simple_causal_lower_bounds
+from levanter.grug.attention._fa4_cute_config import flash4_cute_kernel_config
 
 
 class _reset_abstract_mesh:
@@ -417,3 +420,39 @@ def test_real_gpu_fa4_cute_sm100_gradients_with_changing_packed_segments(kv_head
             error = f"{name}: max absolute error {difference.max()}, mean {difference.mean()}"
             np.testing.assert_allclose(got, want, atol=7e-2, rtol=7e-2, err_msg=error)
             np.testing.assert_array_equal(got[ids < 0], 0, err_msg=name)
+
+
+@pytest.mark.parametrize("native_tile", [(128, 128), (128, 64), None])
+@pytest.mark.timeout(300)
+def test_real_gpu_fa4_cute_configured_backward_matches_reference(native_tile):
+    if jax.default_backend() != "gpu" or fa4_cute.gpu_compute_capability() != 100:
+        pytest.skip("Native SM100 backward correctness requires an SM100 GPU.")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_sm100")
+    config = flash4_cute_kernel_config(128, arch=100)
+    assert config.sm100_backward is not None
+    native = dataclasses.replace(config.sm100_backward, tile=native_tile) if native_tile is not None else None
+    config = dataclasses.replace(config, sm100_backward=native)
+    keys = jax.random.split(jax.random.key(23), 4)
+    shapes = ((1, 257, 8, 128), (1, 257, 2, 128), (1, 257, 2, 128), (1, 257, 8, 128))
+    q, k, v, cotangent = (jax.random.normal(key, shape, dtype=jnp.bfloat16) for key, shape in zip(keys, shapes))
+    positions = jnp.arange(257)[None, :]
+    ids = jnp.where(positions < 129, 0, 1)
+    bounds = jnp.where(positions < 129, 0, 129).astype(jnp.int32)
+    valid = jnp.ones_like(ids, dtype=jnp.bool_)
+    mask = AttentionMask.causal().with_segment_ids(ids)
+
+    def actual_loss(q, k, v):
+        output = fa4_cute_backend.fa4_cute_attention_forward(
+            q, k, v, bounds, valid, sm_scale=128**-0.5, kernel_config=config
+        )
+        return jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32)), output
+
+    def reference_loss(q, k, v):
+        output = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+        return jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32)), output
+
+    (_, actual), actual_gradients = jax.jit(jax.value_and_grad(actual_loss, (0, 1, 2), has_aux=True))(q, k, v)
+    (_, expected), expected_gradients = jax.jit(jax.value_and_grad(reference_loss, (0, 1, 2), has_aux=True))(q, k, v)
+    for got, want in zip((actual, *actual_gradients), (expected, *expected_gradients), strict=True):
+        np.testing.assert_allclose(got, want, atol=7e-2, rtol=7e-2)
