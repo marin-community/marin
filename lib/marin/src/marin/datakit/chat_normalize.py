@@ -31,7 +31,7 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.11.source-provenance"
+CHAT_NORMALIZE_VERSION = "2026.09.17.completed-assistant-turns"
 MAX_REJECTED_RECORD_FRACTION = 0.05
 
 
@@ -105,7 +105,6 @@ def validate_chat_messages(messages: list[Message]) -> None:
             case _ if not seen_user and role != Role.USER:
                 raise ValueError("The first conversation message must be a user message")
             case Role.USER:
-                seen_user = True
                 if not text.strip():
                     raise ValueError("User messages must contain non-empty text")
                 if message.channel is not None or message.recipient is not None:
@@ -114,6 +113,13 @@ def validate_chat_messages(messages: list[Message]) -> None:
                     raise ValueError("A user turn cannot replace a pending tool observation")
                 if previous is not None and previous.author.role == Role.USER:
                     raise ValueError("Consecutive user turns must be merged by the source adapter")
+                if (
+                    previous is not None
+                    and previous.author.role == Role.ASSISTANT
+                    and previous.channel != ChatChannel.FINAL
+                ):
+                    raise ValueError("An assistant turn must end with a final answer before the next user turn")
+                seen_user = True
             case Role.ASSISTANT:
                 if not text.strip():
                     raise ValueError("Assistant messages must contain non-empty text")
@@ -142,6 +148,8 @@ def validate_chat_messages(messages: list[Message]) -> None:
         previous = message
     if not seen_user or messages[-1].author.role != Role.ASSISTANT:
         raise ValueError("A chat training record must end with an assistant response")
+    if messages[-1].channel != ChatChannel.FINAL and messages[-1].recipient is None:
+        raise ValueError("A chat training record must end with a final answer or tool call")
 
 
 def validate_tool_definitions(tools: list[dict], messages: list[Message]) -> None:

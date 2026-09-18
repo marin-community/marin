@@ -83,14 +83,15 @@ The schema and validators live in `marin.datakit.chat_normalize`:
 - The conversation starts with a nonblank user request. User messages have no
   channel or recipient, and adjacent user messages must be combined by the source.
 - Assistant messages contain nonblank text and identify `analysis`, `commentary`,
-  or `final`. After a final answer, a continuing conversation needs a new user turn.
+  or `final`. Each assistant turn ends with a final answer or a tool call. A new
+  user turn may follow a final answer or the observation for a tool call.
 - Tool calls are assistant commentary addressed to `functions.<name>`, with a JSON
   object of arguments. Every called tool needs an explicit definition with a unique
   name and an object-valued `parameters` field.
 - Tool replies are commentary addressed to `assistant`, named for their calls.
   Replies must match pending calls in order before the conversation resumes.
-- Records end with an assistant message. Reasoning-only endings and unanswered
-  final batches of tool calls are allowed, preserving incomplete attempts.
+- Records end with an assistant final answer or tool call. Unanswered final
+  batches of tool calls are allowed, preserving incomplete attempts.
 
 Restore withheld prompts before chat conversion; a source hash is a lookup key,
 not a substitute for the original user request.
@@ -231,8 +232,8 @@ function calls use `<tool_call>` JSON blocks, and named tool replies use
 `<tool_response>` blocks. The template also accepts `reasoning_content` from
 inference clients and serializes structured tool definitions as JSON. API tool
 reply IDs are resolved to function names; the rendered text omits the IDs. Reasoning
-from earlier turns is retained, including records ending in analysis or unanswered
-tool calls. Supported per-record `chat_template_kwargs` are `tools` (a list of
+from earlier turns is retained, and records may end with unanswered tool calls.
+Supported per-record `chat_template_kwargs` are `tools` (a list of
 recorded function definitions), `enable_thinking` (a boolean), and
 `custom_instructions` (a string). `enable_thinking` adds a `/think` or `/nothink`
 system instruction; omitting it adds neither. It does not remove reasoning.
