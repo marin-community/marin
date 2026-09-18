@@ -45,6 +45,7 @@ fi
 uv run python - "$mode" "$RUN_ID" "$WANDB_PROJECT" "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" "$launch_commit" <<'PYTHON'
 import csv
 import io
+import os
 import re
 import subprocess
 import sys
@@ -80,6 +81,9 @@ if mode == "fork-wandb":
     api = wandb.Api()
     if list(api.runs(f"{entity}/{project}", filters={"name": run_id}, per_page=1)):
         raise ValueError(f"W&B child {run_id} already exists; inspect it before using launch")
+    # W&B rejects fork_from alongside resume, and the operator's shell may export either.
+    os.environ.pop("WANDB_RESUME", None)
+    os.environ.pop("WANDB_RESUME_FROM", None)
     with wandb.init(
         entity=entity, project=project, id=run_id, name=run_id,
         fork_from=fork_from, config=lineage, mode="online",

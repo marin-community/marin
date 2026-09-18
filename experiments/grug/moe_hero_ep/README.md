@@ -48,6 +48,9 @@ Bounded diagnostics write metrics only by default. `--save-checkpoints` writes c
 land them on main. The checkpoint must have `metadata.json` and remain retained
 through the trial and rollback window. Use a new run ID and checkpoint tree.
 
+`fork-wandb` clears `WANDB_RESUME` and `WANDB_RESUME_FROM` from its environment
+because W&B rejects them alongside `fork_from`.
+
 W&B forks use `<parent-run-id>?_step=<history-step>`. Inspect parent history to
 choose the boundary before the first replayed update. The checkpoint records
 completed updates, while hero training metrics use zero-based steps; verify the
