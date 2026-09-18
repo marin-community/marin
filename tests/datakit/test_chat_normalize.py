@@ -129,6 +129,28 @@ def test_harmony_validation_rejects_invalid_channels_and_calls(tail):
         validate_chat_messages([Message.from_role_and_content(Role.USER, "Question"), tail])
 
 
+@pytest.mark.parametrize("channel", [ChatChannel.ANALYSIS, ChatChannel.COMMENTARY])
+def test_harmony_validation_requires_final_or_tool_call_at_record_end(channel):
+    messages = [
+        Message.from_role_and_content(Role.USER, "Question"),
+        Message.from_role_and_content(Role.ASSISTANT, "Still working").with_channel(channel),
+    ]
+    with pytest.raises(ValueError, match="final answer or tool call"):
+        validate_chat_messages(messages)
+
+
+@pytest.mark.parametrize("channel", [ChatChannel.ANALYSIS, ChatChannel.COMMENTARY])
+def test_harmony_validation_requires_final_before_next_user(channel):
+    messages = [
+        Message.from_role_and_content(Role.USER, "First question"),
+        Message.from_role_and_content(Role.ASSISTANT, "Still working").with_channel(channel),
+        Message.from_role_and_content(Role.USER, "Second question"),
+        Message.from_role_and_content(Role.ASSISTANT, "Answer").with_channel(ChatChannel.FINAL),
+    ]
+    with pytest.raises(ValueError, match="final answer before the next user turn"):
+        validate_chat_messages(messages)
+
+
 def test_normalize_chat_to_parquet_keeps_varying_tool_schemas_arrow_stable(tmp_path: Path):
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"

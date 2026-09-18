@@ -83,14 +83,15 @@ The schema and validators live in `marin.datakit.chat_normalize`:
 - The conversation starts with a nonblank user request. User messages have no
   channel or recipient, and adjacent user messages must be combined by the source.
 - Assistant messages contain nonblank text and identify `analysis`, `commentary`,
-  or `final`. After a final answer, a continuing conversation needs a new user turn.
+  or `final`. Each assistant turn ends with a final answer or a tool call. A new
+  user turn may follow a final answer or the observation for a tool call.
 - Tool calls are assistant commentary addressed to `functions.<name>`, with a JSON
   object of arguments. Every called tool needs an explicit definition with a unique
   name and an object-valued `parameters` field.
 - Tool replies are commentary addressed to `assistant`, named for their calls.
   Replies must match pending calls in order before the conversation resumes.
-- Records end with an assistant message. Reasoning-only endings and unanswered
-  final batches of tool calls are allowed, preserving incomplete attempts.
+- Records end with an assistant final answer or tool call. Unanswered final
+  batches of tool calls are allowed, preserving incomplete attempts.
 
 Restore withheld prompts before chat conversion; a source hash is a lookup key,
 not a substitute for the original user request.
