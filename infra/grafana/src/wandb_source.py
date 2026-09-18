@@ -233,8 +233,7 @@ class WandbSource:
         `run` is the Levanter run id: marin names the W&B run after it, and
         `resume="allow"` keeps one W&B run across restarts, so this covers the run
         from step 0 however many times it was resumed. W&B samples server-side, so
-        the response stays small on a long run. Forks also sample the child segment
-        separately so inherited history cannot crowd out recent training points.
+        the response stays small on a long run.
         """
 
         def read(candidate: str) -> list[dict] | None:
