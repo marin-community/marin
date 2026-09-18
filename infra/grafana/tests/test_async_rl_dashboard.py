@@ -315,7 +315,7 @@ def test_shipped_panel_sql_returns_declared_fields_for_selected_attempt(store, t
 
 
 def test_wait_means_use_await_counts_and_queue_gauges_use_last_value(store):
-    waits = {row["series"]: row["value"] for row in query(store, "Producer await duration")}
+    waits = {row["series"]: row["value"] for row in query(store, "Generation worker await duration")}
     assert waits == {"slot mean · driver": pytest.approx(40 / 12), "slot max · driver": 18}
     gauges = {row["series"]: row["value"] for row in query(store, "Completed buffer depth and capacity")}
     assert gauges == {"rollout_queue_depth · driver": 3, "rollout_capacity · driver": 64}
@@ -678,9 +678,9 @@ def test_periodic_evaluation_metrics_logged_in_train_phase_are_visible(store):
     assert len(query(store, "Evaluation score contributions by stop class")) == 3
 
 
-def test_realised_staleness_panels_count_groups_and_sum_tokens_per_staleness(store):
-    groups = query(store, "Realised staleness — groups per step")
-    tokens = query(store, "Realised staleness — tokens per step")
+def test_consumed_staleness_panels_count_groups_and_sum_tokens_per_staleness(store):
+    groups = query(store, "Consumed staleness — groups per step")
+    tokens = query(store, "Consumed staleness — tokens per step")
     assert [row["value"] for row in groups if row["series"].startswith("staleness 0 ·")] == [1, 1]
     assert [row["value"] for row in groups if row["series"].startswith("staleness 1 ·")] == [1, 2, 1]
     assert [row["value"] for row in tokens if row["series"].startswith("staleness 1 ·")] == [80, 70]
@@ -691,10 +691,10 @@ def test_realised_staleness_panels_count_groups_and_sum_tokens_per_staleness(sto
         "(name='rollout_staleness_steps' AND value=1) OR "
         "(name='consumed_staleness' AND json_get(body_json,'staleness')='1')"
     )
-    for title in ("Realised staleness — groups per step", "Realised staleness — tokens per step"):
+    for title in ("Consumed staleness — groups per step", "Consumed staleness — tokens per step"):
         assert all(row["series"].startswith("staleness 0 ·") for row in query(store, title))
     store.execute("DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='consumed_staleness'")
-    assert query(store, "Realised staleness — tokens per step") == []
+    assert query(store, "Consumed staleness — tokens per step") == []
 
 
 def test_weight_sync_timeline_orders_training_and_sync_windows(store):
@@ -710,8 +710,8 @@ def test_weight_sync_timeline_orders_training_and_sync_windows(store):
 
 
 def test_ratio_panels_read_mismatch_and_learner_drift_families_separately(store):
-    mismatch = query(store, "Engine mismatch \u03c1 (staleness 0)")
-    staleness = query(store, "Mismatch by realised staleness")
+    mismatch = query(store, "Learner/vLLM mismatch \u03c1 (staleness 0)")
+    staleness = query(store, "Learner/vLLM mismatch by staleness bucket")
     drift = query(store, "Learner drift within the update")
     assert [row["value"] for row in mismatch if "/log_ratio_abs_mean ·" in row["series"]] == [0.1, 0.2]
     assert [row["value"] for row in staleness if "/staleness1/" in row["series"]] == [0.3, 0.6]
@@ -721,7 +721,7 @@ def test_ratio_panels_read_mismatch_and_learner_drift_families_separately(store)
         'DELETE FROM "telemetry_v1.marinskyrl" WHERE '
         "json_get(attributes_json,'metric') LIKE 'policy/mismatch/staleness1/%'"
     )
-    assert not any("/staleness1/" in row["series"] for row in query(store, "Mismatch by realised staleness"))
+    assert not any("/staleness1/" in row["series"] for row in query(store, "Learner/vLLM mismatch by staleness bucket"))
 
 
 def test_position_panel_keeps_ratio_families_and_positions_separate(store):

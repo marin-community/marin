@@ -353,7 +353,7 @@
       "id": 3,
       "type": "timeseries",
       "title": "Generated and consumed response tokens / s",
-      "description": "Native token increments divided by the bucket width, including idle time. Generated work can be consumed in later buckets or discarded; these rates are not same-cohort efficiency. Partial edge buckets can read low.",
+      "description": "Native token increments divided by the bucket width, including idle time. Generated work can be consumed in later buckets or discarded, so these are independent counts, not a matched throughput ratio. Partial edge buckets can read low.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -538,7 +538,7 @@
     {
       "id": 5,
       "type": "row",
-      "title": "Consumer waits and producer backpressure",
+      "title": "Trainer waits and generation-worker backpressure",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -643,7 +643,7 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "Producer await duration",
+      "title": "Generation worker await duration",
       "description": "Mean is total wait seconds divided by the number of awaits, not the average of per-call sums. Max retains the longest await. Slot waits are admission backpressure; concurrent wait totals are not driver wall time.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -841,7 +841,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Consumed buffer dwell",
-      "description": "Time from group completion to admission for consumed groups. High dwell means generated work waits for the consumer. Discarded-group dwell is excluded.",
+      "description": "Time from group completion to admission for consumed groups. High dwell means generated work waits for the trainer. Discarded-group dwell is excluded.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -933,7 +933,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Consumed policy staleness",
-      "description": "Policy versions behind at consumption, one observation per admitted group. This excludes rejected groups; inspect the group-disposition ledger for discarded work.",
+      "description": "Policy versions behind at consumption, one observation per admitted group. This excludes rejected groups; see the group disposition panels for discarded work.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1502,7 +1502,7 @@
       "id": 19,
       "type": "timeseries",
       "title": "Group dispositions / bucket",
-      "description": "Native terminal disposition increments, separated from restored-buffer credit. Consumed, rejected and shutdown-pending work have distinct meanings. A time window can start after generation or end before disposition; these bucket totals are not cohort efficiency.",
+      "description": "Native terminal disposition increments, separated from restored-buffer credit. Consumed, rejected and shutdown-pending work have distinct meanings. A time window can start after generation or end before disposition; these bucket totals are not a matched completion rate.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1594,7 +1594,7 @@
       "id": 20,
       "type": "timeseries",
       "title": "Tokens by group disposition / bucket",
-      "description": "Native terminal disposition increments, separated from restored-buffer credit. Consumed, rejected and shutdown-pending work have distinct meanings. A time window can start after generation or end before disposition; these bucket totals are not cohort efficiency.",
+      "description": "Native terminal disposition increments, separated from restored-buffer credit. Consumed, rejected and shutdown-pending work have distinct meanings. A time window can start after generation or end before disposition; these bucket totals are not a matched completion rate.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1883,7 +1883,7 @@
       "id": 40,
       "type": "timeseries",
       "title": "Consumed length stops and coverage",
-      "description": "Length-stop fraction uses admitted response sequences before DP padding, and is published only after the learner update completes. Coverage is the fraction of those sequences with a recorded stop reason. A length stop means the engine or runner exhausted a length budget; it does not prove the answer is incomplete. Missing fractions remain gaps rather than zero, including steps with incomplete coverage.",
+      "description": "Length-stop fraction uses admitted response sequences before DP padding, and is published only after the learner update completes. Coverage is the fraction of those sequences with a recorded stop reason. A length stop means the vLLM engine or trajectory runner exhausted a length budget; it does not prove the answer is incomplete. Missing fractions remain gaps rather than zero, including steps with incomplete coverage.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3010,7 +3010,7 @@
       "id": 36,
       "type": "timeseries",
       "title": "Core wall fractions",
-      "description": "Sequential driver walls divided by core duration: waiting for a full admitted batch, run_training (preparation plus optimizer), and weight sync. These omit conversion/other driver work. They are neither GPU utilization nor sums of concurrent producer waits.",
+      "description": "Sequential driver walls divided by core duration: waiting for a full admitted batch, run_training (preparation plus optimizer), and weight sync. These omit conversion/other driver work. They are neither GPU utilization nor sums of concurrent generation-worker waits.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3114,7 +3114,7 @@
       "id": 38,
       "type": "timeseries",
       "title": "Useful tokens per configured role GPU-second",
-      "description": "Loss tokens / policy GPUs / cycle seconds and consumed response tokens / inference GPUs / cycle seconds. Configured role counts do not prove actual allocation, engine utilization or billed savings. They count the GPUs a run asked for per role, so a run whose roles share nodes is not separable here. These records carry no physical engine/GPU mapping.",
+      "description": "Loss tokens / policy GPUs / cycle seconds and consumed response tokens / inference GPUs / cycle seconds. Configured role counts do not prove actual allocation, vLLM engine utilization or billed savings. They count the GPUs a run asked for per role, so a run whose roles share nodes is not separable here. These records carry no physical vLLM engine/GPU mapping.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3408,7 +3408,7 @@
       "id": 42,
       "type": "table",
       "title": "Inference sampled throughput by learner phase",
-      "description": "Reset-safe imported vLLM token counters aligned with driver UTC phase windows. Only sample intervals wholly inside one successful phase count; reset and boundary-crossing intervals are excluded. Rate is tokens divided by covered sample seconds, not whole phase duration. Coverage reveals gaps; NULL rate means unobserved, not idle. Collector process and unique engine identity are preserved. This measures sampled service, not GPU execution or exact kernel overlap; collection delay and clock alignment limit precision.",
+      "description": "Reset-safe imported vLLM token counters aligned with driver UTC phase windows. Only sample intervals wholly inside one successful phase count; reset and boundary-crossing intervals are excluded. Rate is tokens divided by covered sample seconds, not whole phase duration. Coverage reveals gaps; NULL rate means unobserved, not idle. Collector process and unique vLLM engine identity are preserved. This measures sampled service, not GPU execution or exact kernel overlap; collection delay and clock alignment limit precision.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -4039,7 +4039,7 @@
     {
       "id": 51,
       "type": "timeseries",
-      "title": "Realised staleness — groups per step",
+      "title": "Consumed staleness — groups per step",
       "description": "One native staleness observation per admitted group. Rejected groups are excluded. Each bar is one optimizer step, positioned at its last observation; staleness and execution remain separate. Missing staleness values are gaps, not zero counts.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -4131,7 +4131,7 @@
     {
       "id": 52,
       "type": "timeseries",
-      "title": "Realised staleness — tokens per step",
+      "title": "Consumed staleness — tokens per step",
       "description": "Sum of response tokens in admitted groups before DP padding. Requires consumed_staleness telemetry; older runs have no series. Each bar is one optimizer step, positioned at its last observation; staleness and execution remain separate. Missing staleness values are gaps, not zero counts.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -4358,7 +4358,7 @@
     {
       "id": 54,
       "type": "timeseries",
-      "title": "Engine mismatch ρ (staleness 0)",
+      "title": "Learner/vLLM mismatch ρ (staleness 0)",
       "description": "Consume-time learner/vLLM ratios only for staleness-zero loss tokens. KL and χ² are empirical token diagnostics. ESS measures ratio-weight concentration. Missing buckets are unavailable.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -4449,8 +4449,8 @@
     {
       "id": 55,
       "type": "timeseries",
-      "title": "Mismatch by realised staleness",
-      "description": "Mean absolute consume-time learner/vLLM log ratio per observed staleness bucket. Only staleness zero isolates engine mismatch; other buckets mix it with drift. Observed staleness is selected, not randomized.",
+      "title": "Learner/vLLM mismatch by staleness bucket",
+      "description": "Mean absolute consume-time learner/vLLM log ratio per observed staleness bucket. Only staleness zero isolates vLLM engine mismatch; other buckets mix it with drift. Observed staleness is selected, not randomized.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -4541,7 +4541,7 @@
       "id": 56,
       "type": "timeseries",
       "title": "Learner drift within the update",
-      "description": "Learner ratio against the logprobs recomputed at consumption, pooled over the update's microbatches (policy/log_ratio_*). Curves use optimizer-step wall timestamps. This is within-update drift, separate from rollout engine mismatch; missing series are unavailable.",
+      "description": "Learner ratio against the logprobs recomputed at consumption, pooled over the update's microbatches (policy/log_ratio_*). Curves use optimizer-step wall timestamps. This is within-update drift, separate from vLLM engine mismatch at rollout time; missing series are unavailable.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

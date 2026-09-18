@@ -826,7 +826,7 @@ token is attenuated to that subset even if the app holds broader grants.
 
 ### Async RL diagnostic panels
 
-The nine panels beginning with “Realised staleness” add per-step staleness
+The nine panels beginning with “Consumed staleness” add per-step staleness
 distributions, training/weight-sync intervals, separate ratio families, gradient
 persistence, and correction activity. Bars share each optimizer step's final observation time.
 The timeline uses explicit interval ends; its sync completion markers have a
