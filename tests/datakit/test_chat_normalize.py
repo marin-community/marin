@@ -108,6 +108,91 @@ def test_harmony_tool_handoff_requires_matching_observations_before_continuation
         validate_chat_messages([user, call, wrong_observation, final])
 
 
+def test_normalization_filters_repeated_tool_call_after_identical_replies(tmp_path: Path):
+    def call(arguments: str) -> Message:
+        return (
+            Message.from_role_and_content(Role.ASSISTANT, arguments)
+            .with_channel(ChatChannel.COMMENTARY)
+            .with_recipient("functions.search")
+        )
+
+    def reply(text: str) -> Message:
+        return (
+            Message.from_author_and_content(Author.new(Role.TOOL, "functions.search"), text)
+            .with_channel(ChatChannel.COMMENTARY)
+            .with_recipient("assistant")
+        )
+
+    repeated = [
+        Message.from_role_and_content(Role.USER, "Search again."),
+        call('{"query":"x","limit":1}'),
+        reply("same result"),
+        call('{"limit":1,"query":"x"}'),
+        reply("same result"),
+        call('{"query":"x","limit":1}'),
+    ]
+    clean = [
+        Message.from_role_and_content(Role.USER, "Hello."),
+        Message.from_role_and_content(Role.ASSISTANT, "Hi.").with_channel(ChatChannel.FINAL),
+    ]
+    records = [
+        {"messages": [message.to_dict() for message in clean]},
+        {
+            "messages": [message.to_dict() for message in repeated],
+            "chat_template_kwargs": {"tools": [{"name": "search", "parameters": {"type": "object"}}]},
+        },
+    ]
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "data.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    result = normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(tmp_path / "normalized"))
+
+    normalized = [
+        row
+        for path in (tmp_path / "normalized" / "outputs" / "main").glob("*.parquet")
+        for row in pq.read_table(path).to_pylist()
+    ]
+    assert len(normalized) == 1
+    assert normalized[0]["messages"][0]["content"][0]["text"] == "Hello."
+    assert result.counters["normalize_chat/repeated_tool_calls_filtered"] == 1
+    assert result.counters.get("normalize_chat/records_quarantined", 0) == 0
+
+
+@pytest.mark.parametrize("replies", [("43% complete", "65% complete"), ("same result", "same result")])
+def test_tool_call_repetition_requires_unchanged_feedback_and_sequential_calls(replies):
+    user = Message.from_role_and_content(Role.USER, "Search.")
+    call = (
+        Message.from_role_and_content(Role.ASSISTANT, '{"query":"x"}')
+        .with_channel(ChatChannel.COMMENTARY)
+        .with_recipient("functions.search")
+    )
+    observations = [
+        Message.from_author_and_content(Author.new(Role.TOOL, "functions.search"), text)
+        .with_channel(ChatChannel.COMMENTARY)
+        .with_recipient("assistant")
+        for text in replies
+    ]
+    messages = [user, call, observations[0], call, observations[1], call]
+    if replies[0] == replies[1]:
+        messages = [
+            user,
+            call,
+            call,
+            call,
+            observations[0],
+            observations[1],
+            observations[0],
+            Message.from_role_and_content(Role.ASSISTANT, "Done.").with_channel(ChatChannel.FINAL),
+        ]
+    record = {
+        "messages": [message.to_dict() for message in messages],
+        "chat_template_kwargs": {"tools": [{"name": "search", "parameters": {"type": "object"}}]},
+    }
+
+    assert _normalize_chat_record(record, "messages", "id")["messages"] == record["messages"]
+
+
 @pytest.mark.parametrize(
     "tail",
     [

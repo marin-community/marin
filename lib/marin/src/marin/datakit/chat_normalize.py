@@ -8,7 +8,7 @@ import re
 from collections import deque
 from collections.abc import Callable, Iterator
 from enum import StrEnum
-from typing import Any
+from typing import Any, NamedTuple
 
 import dupekit
 import pyarrow as pa
@@ -31,7 +31,7 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.17.completed-assistant-turns"
+CHAT_NORMALIZE_VERSION = "2026.09.18"
 MAX_REJECTED_RECORD_FRACTION = 0.05
 
 
@@ -77,11 +77,61 @@ class ChatChannel(StrEnum):
     FINAL = "final"
 
 
+class RepeatedToolCallError(ValueError):
+    """A conversation repeats one tool call after two identical replies."""
+
+
+class _ToolCall(NamedTuple):
+    position: int
+    recipient: str
+    arguments: str
+
+
+class _ToolReply(NamedTuple):
+    position: int
+    text: str
+
+
 def message_text(message: Message) -> str:
     """Read the text-only content supported by Datakit chat artifacts."""
     if not message.content or any(not isinstance(part, TextContent) for part in message.content):
         raise ValueError("Datakit chat messages require text content parts")
     return "".join(part.text for part in message.content)
+
+
+def has_stalled_tool_call(messages: list[Message]) -> bool:
+    """Find a third identical tool call after two identical replies between user messages."""
+    calls: list[_ToolCall] = []
+    replies: list[_ToolReply] = []
+
+    def turn_has_repetition() -> bool:
+        for first, second, third, first_reply, second_reply in zip(
+            calls, calls[1:], calls[2:], replies, replies[1:], strict=False
+        ):
+            if (
+                first.recipient == second.recipient == third.recipient
+                and first.arguments == second.arguments == third.arguments
+                and first_reply.text == second_reply.text
+                and first.position < first_reply.position < second.position < second_reply.position < third.position
+            ):
+                return True
+        return False
+
+    for position, message in enumerate(messages):
+        match message.author.role:
+            case Role.USER:
+                if turn_has_repetition():
+                    return True
+                calls.clear()
+                replies.clear()
+            case Role.ASSISTANT if message.recipient is not None:
+                arguments = json.loads(message_text(message))
+                calls.append(
+                    _ToolCall(position, message.recipient, json.dumps(arguments, sort_keys=True, separators=(",", ":")))
+                )
+            case Role.TOOL:
+                replies.append(_ToolReply(position, message_text(message)))
+    return turn_has_repetition()
 
 
 def validate_chat_messages(messages: list[Message]) -> None:
@@ -209,6 +259,8 @@ def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field
     if not isinstance(tools, list):
         raise ValueError("tools must be a list of function definitions")
     validate_tool_definitions(tools, messages)
+    if has_stalled_tool_call(messages):
+        raise RepeatedToolCallError("A tool call repeated after two identical tool replies")
     serialized_messages = [message.to_dict() for message in messages]
 
     source_id = record.get("source_id")
@@ -242,6 +294,9 @@ def _build_chat_pipeline(
     def normalize_record(record: dict[str, Any]) -> list[dict[str, Any]]:
         try:
             normalized = _normalize_chat_record(record, messages_field, id_field)
+        except RepeatedToolCallError:
+            counters.pipeline.update_counter("normalize_chat/repeated_tool_calls_filtered", 1)
+            return []
         except (UnicodeError, ValueError) as error:
             counters.pipeline.update_counter("normalize_chat/records_quarantined", 1)
             counters.pipeline.update_counter(f"normalize_chat/quarantined/{type(error).__name__}", 1)
