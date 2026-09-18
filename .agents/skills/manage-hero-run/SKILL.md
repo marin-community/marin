@@ -130,21 +130,11 @@ Many failures can be recoverable just by relaunching using the same id. These in
 ### Launching with a new run id
 
 - Use a new run id and W&B id only when the old lineage is unsafe or semantically different, such as W&B corruption or a nontrivial code change. Nontrivial code changes should have a new W&B id. Document the reason, old and new identities, source checkpoint, output root, and code SHA in the durable run record.
-- For a cutover to a new W&B ID, fork from the parent history at
-  `<parent-run-id>?_step=<history-step>`. Verify the history boundary against
-  the checkpoint; the W&B `_step` and checkpoint step are separate recorded
-  values, and the fork `_step` must precede the first step the child logs
-  (`global_step == N-1` for checkpoint `step-N`; recipe in the
-  [hero README](../../../experiments/grug/moe_hero_ep/README.md#hero-cutovers-and-wb-lineage)).
-  Keep the entity and project unchanged.
-- Fork only once. W&B forbids `resume` alongside `fork_from`, and the trainer's
-  `WandbConfig` re-sends whichever it holds on every retry, so the hero
-  launcher creates the child with a one-off `wandb.init(fork_from=...)`
-  (`trigger_hero.sh fork-wandb`) and training always resumes the child with
-  its existing ID and `resume="allow"` (`trigger_hero.sh launch`).
-- Forking preserves tracker lineage but does not restore training state. Inherited
-  history is not evidence that the new execution has made progress. Confirm its
-  new steps and execution identity in Finelog, following `deploy-hero-change`.
+- For code cutovers, follow `deploy-hero-change` and the
+  [hero launcher procedure](../../../experiments/grug/moe_hero_ep/README.md#hero-cutovers-and-wb-lineage).
+  Keep the W&B entity/project, fork once at a verified checkpoint boundary, and
+  resume the child on retries. Verify new progress in Finelog; inherited W&B
+  history does not establish that training has resumed.
 - Use `initialize_from` to have training pick up from a specific prior checkpoint.
 - If the user does not specify a checkpoint to use for a resume, select the newest "complete" one. Complete checkpoints have `metadata.json`. If no complete checkpoints are available, escalate to the DRI instead of guessing. If the user specifies a checkpoint that does not have `metadata.json`, block the launch and escalate instead of guessing. Do not use incomplete checkpoints for resume or relaunch.
 - Sort by parsed numeric step, not lexicographic path order.
