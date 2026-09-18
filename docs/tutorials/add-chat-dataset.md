@@ -137,6 +137,12 @@ columns. Pass the same schema to both writing stages so optional fields survive.
 Normalization validates conversations, hashes messages plus template arguments,
 and removes exact duplicates. Bump the source transformation version when its
 output changes so cached processed and normalized artifacts are rebuilt.
+It also filters a conversation when an assistant makes the same tool call a
+third time in one user turn after the first two calls returned identical text.
+Each repeated call must follow the preceding reply; parallel calls do not
+trigger this filter. The count is `normalize_chat/repeated_tool_calls_filtered`.
+These filtered records are separate from malformed-record quarantines and the
+5% quarantine health limit.
 
 ## 5. Register and verify the source
 
