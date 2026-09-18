@@ -63,6 +63,9 @@ def resolve_model_config(model_key: str | None, config_path: Path | None) -> Mod
 
 
 def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
+    geometry = batch.accelerator.geometry
+    serving = geometry.label if geometry is not None else "worker-resolved"
+    task_count = geometry.task_count if geometry is not None else 1
     click.echo(
         f"model: {spec.model.name}  platform: {spec.platform.value}  "
         f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
@@ -79,6 +82,7 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
         click.echo(
             f"  eval={eval_ref.name}  location={batch.model.location}  "
             f"backend={batch.model.serve.backend.value}  accel={batch.accelerator.label}  "
+            f"serve={serving} tasks={task_count} x {batch.accelerator.label}  "
             f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
             f"tasks={tasks}  "
             f"{agent_context}"

@@ -3,6 +3,7 @@
 
 """Tests for inference serving and the dashboard reverse proxy."""
 
+import argparse
 import dataclasses
 import json
 import os
@@ -28,12 +29,14 @@ from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.external_dependencies import VLLM_GPU_RELEASE
+from marin.inference import iris_vllm
 from marin.inference.backend import ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     IrisConfig,
     LevanterEngineConfig,
     ServedModelConfig,
+    ServingGeometry,
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
@@ -518,6 +521,126 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
 
     assert "accelerator" not in registered_metadata
     assert float(registered_metadata["proxy_timeout_seconds"]) == 43_200
+
+
+@pytest.mark.parametrize("task_index", [0, 1])
+@pytest.mark.parametrize("fail", [False, True])
+@pytest.mark.parametrize("tensor_parallel_size,data_parallel_size", [(8, 1), (1, 8)])
+def test_pipeline_service_endpoint_and_shutdown_lifecycle(
+    monkeypatch, task_index, fail, tensor_parallel_size, data_parallel_size
+):
+    events = []
+    endpoints = []
+    argv = []
+    coordinator = iris_vllm.VllmCoordinatorActor("127.0.0.1")
+    if task_index == 0:
+        coordinator.follower_stopped(1)
+    elif not fail:
+        coordinator.request_shutdown()
+
+    def acknowledge(index):
+        events.append("acknowledged")
+        coordinator.follower_stopped(index)
+
+    rpc = SimpleNamespace(
+        vllm_primary_address=coordinator.vllm_primary_address,
+        shutdown_requested=coordinator.shutdown_requested,
+        request_shutdown=coordinator.request_shutdown,
+        followers_stopped=coordinator.followers_stopped,
+        follower_stopped=acknowledge,
+    )
+    monkeypatch.setattr(iris_vllm, "_coordinator_client", lambda _: rpc)
+
+    @contextmanager
+    def registered(name, address, metadata=None, **kwargs):
+        if metadata is not None:
+            endpoints.append(metadata)
+            events.append("registered")
+        yield
+
+    context = SimpleNamespace(registry=SimpleNamespace(registered=registered))
+    monkeypatch.setattr(iris_vllm, "iris_ctx", lambda: context)
+    monkeypatch.setattr("marin.inference.iris.iris_ctx", lambda: context)
+
+    def check_alive():
+        if fail:
+            raise RuntimeError("vLLM died")
+
+    def ready():
+        check_alive()
+        events.append("ready")
+
+    @contextmanager
+    def process(**kwargs):
+        argv.extend(kwargs["extra_args"])
+        events.append("started")
+        try:
+            yield SimpleNamespace(
+                wait_until_ready=ready,
+                check_alive=check_alive,
+                server_url="http://127.0.0.1:1/v1",
+            )
+        finally:
+            events.append("stopped")
+
+    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", process)
+    service = IrisServiceConfig(
+        model=ServedModelConfig(
+            weights="org/model",
+            tensor_parallel_size=tensor_parallel_size,
+            max_model_len=4096,
+            chat_template_content="{{ messages }}",
+        ),
+        engine=VllmEngineConfig(extra_args=("--enable-prefix-caching",)),
+        iris=IrisConfig(
+            worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=2),
+            worker_environment=create_environment(docker_image="test"),
+            serving_geometry=ServingGeometry(tensor_parallel_size, data_parallel_size, 2, 8),
+            cache_ttl_days=0,
+        ),
+        endpoint_name="/serve/pipeline",
+        timeout_hours=0,
+        port_name=None,
+    )
+    set_job_info(JobInfo(task_id=JobName.from_wire(f"/alice/pipeline/{task_index}"), num_tasks=2))
+    try:
+        if fail:
+            with pytest.raises(RuntimeError, match="vLLM died"):
+                run_iris_service(service)
+        else:
+            run_iris_service(service)
+    finally:
+        set_job_info(None)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tensor-parallel-size", type=int)
+    parser.add_argument("--data-parallel-size", type=int)
+    parser.add_argument("--pipeline-parallel-size", type=int)
+    parser.add_argument("--device-ids")
+    parser.add_argument("--node-rank", type=int)
+    parser.add_argument("--data-parallel-start-rank", type=int)
+    parser.add_argument("--headless", action="store_true")
+    options, _ = parser.parse_known_args(argv)
+    assert options.tensor_parallel_size == tensor_parallel_size
+    assert options.data_parallel_size == data_parallel_size
+    assert options.pipeline_parallel_size == 2
+    assert options.device_ids == "0,1,2,3,4,5,6,7"
+    assert options.node_rank == task_index
+    assert options.data_parallel_start_rank == (0 if data_parallel_size > 1 else None)
+    assert options.headless == (task_index == 1)
+    if fail:
+        assert events == ["started", "stopped"]
+        assert not coordinator.shutdown_requested()
+        assert endpoints == []
+    elif task_index == 0:
+        assert events == ["started", "ready", "registered", "stopped"]
+        assert len(endpoints) == 1
+        assert endpoints[0]["pipeline_parallel_size"] == "2"
+        assert endpoints[0]["tensor_parallel_size"] == str(tensor_parallel_size)
+        assert coordinator.shutdown_requested()
+    else:
+        assert events == ["started", "stopped", "acknowledged"]
+        assert endpoints == []
 
 
 def test_resolve_serving_plan_rejects_incompatible_tpu_alternatives():
