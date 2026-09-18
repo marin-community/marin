@@ -1,3 +1,4 @@
+import { ThinkingMode } from './chat_template'
 import type { Conversation, SamplingParams } from './types'
 
 const CONVERSATIONS_KEY = 'marin-serve:conversations:v1'
@@ -15,7 +16,16 @@ export function loadConversations(): Conversation[] {
     const raw = localStorage.getItem(CONVERSATIONS_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.map((conversation) => ({
+      ...conversation,
+      pythonTools: conversation.pythonTools ?? '',
+      shellWorkspace: conversation.shellWorkspace
+        ? { repositoryUrl: '', ...conversation.shellWorkspace }
+        : null,
+      thinkingMode: conversation.thinkingMode ?? ThinkingMode.TemplateDefault,
+      customInstructions: conversation.customInstructions ?? '',
+    }))
   } catch {
     return []
   }

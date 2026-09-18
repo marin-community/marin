@@ -74,11 +74,13 @@ def hero_grug_trainer_config(
     watch_mode: WatchMode,
     save_checkpoints: bool,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
+    gc_interval: int | None = None,
 ) -> GrugTrainerConfig:
     """Set the Grug options that affect the compiled hero step."""
     return GrugTrainerConfig(
         data_seed=None,
         log_every=1,
+        gc_interval=gc_interval,
         ema_beta=None,
         z_loss_weight=1e-4,
         # Keep the MuonH state on pinned host memory so the transport buffers have sufficient HBM.

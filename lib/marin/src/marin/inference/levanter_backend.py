@@ -24,7 +24,7 @@ from transformers import PreTrainedTokenizerBase
 from marin.inference.backend import ModelSpec
 from marin.inference.config import LevanterEngineConfig
 from marin.inference.dashboard_server import BackgroundServer, bind_serving_socket, serve_app_background
-from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size
+from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size, tool_chat_template
 from marin.inference.vllm_server import (
     JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS,
     JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES,
@@ -70,6 +70,7 @@ class LevanterServedModel:
 
     base_url: str
     model_id: str
+    chat_template_content: str | None
     uvicorn: BackgroundServer
 
     def check_alive(self) -> None:
@@ -197,6 +198,7 @@ class LevanterBackend:
                 "engine. Score it with LevanterBackend.load_model, or serve it with vLLM."
             )
         with self.load_model(spec) as loaded:
+            chat_template_content = tool_chat_template(loaded.tokenizer)
             # InferenceServer.create must build the engine on-mesh, so it runs inside load_model's
             # device-mesh context; the serve loop below then runs off-mesh, as before.
             server = InferenceServer.create(
@@ -226,6 +228,7 @@ class LevanterBackend:
                 yield LevanterServedModel(
                     base_url=f"http://{self.host}:{port}",
                     model_id=spec.api_model,
+                    chat_template_content=chat_template_content,
                     uvicorn=background,
                 )
         finally:

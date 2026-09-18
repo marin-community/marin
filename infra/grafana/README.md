@@ -463,10 +463,13 @@ causes. `severity=critical` routes to `ops-critical` (email
 ops@openathena.ai, and the bridge, which announces the alert in Slack and opens a
 Loom triage session on that thread). `severity=warning`
 matches the always-active `dashboard-only` mute timing: Grafana continues
-evaluating and displaying the alert, but creates no notification. Every rule sets
-`noDataState: Alerting` and `execErrState: Alerting`, and the alert endpoints return
-explicit zeros when healthy, so monitoring-path failures use the same
-critical or warning handling as the rule.
+evaluating and displaying the alert, but creates no notification. Every rule
+sets explicit error and no-data behavior, and the alert endpoints return
+explicit zeros when healthy. Every rule alerts on invalid query results and
+other execution errors. Finelog alert endpoints convert only retryable service
+failures into valid non-firing results because `FinelogFleetUnhealthy` reports
+that shared failure. The CoreWeave storage rules stay normal when a successful
+query returns no data.
 
 Federation peer reachability comes from `ListPeers` on the Marin controller.
 The controller heartbeat traverses production DNS, TLS, Traefik, the source-IP

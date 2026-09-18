@@ -45,6 +45,7 @@ from finestore.store import DataStore
 # under several filters (gsm8k under strict-match and flexible-extract) emits one sample per filter,
 # and each is a distinct row rather than one overwriting the other.
 SCHEMA_VERSION = 4
+ROLLOUT_SCHEMA_VERSION = 1
 
 SAMPLES_PREFIX = "samples_"
 SAMPLES_SUFFIX = ".parquet"
@@ -56,6 +57,34 @@ class SampleKind(StrEnum):
     MULTIPLE_CHOICE = "multiple_choice"
     GENERATION = "generation"
     AGENTIC = "agentic"
+
+
+class ConversationType(StrEnum):
+    """The interaction protocol represented by a normalized rollout."""
+
+    COMPLETION = "completion"
+    CHAT = "chat"
+    AGENTIC = "agentic"
+
+
+class ParticipantType(StrEnum):
+    """A provider-neutral participant category."""
+
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
+    ENVIRONMENT = "environment"
+    OTHER = "other"
+
+
+class RolloutContentType(StrEnum):
+    """The semantic type of one ordered rollout part."""
+
+    MESSAGE = "message"
+    REASONING = "reasoning"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
 
 
 class Message(BaseModel):
@@ -125,6 +154,38 @@ class EvalSample(BaseModel):
     doc: str = "{}"
 
 
+class RolloutRecord(BaseModel):
+    """One ordered part of an evaluation rollout.
+
+    A rollout is addressed by ``task``/``doc_id``/``trial_id``. ``turn_id`` orders conversational
+    turns and ``part_id`` orders message, reasoning, tool-call, and tool-result content within a
+    turn. ``participant_type`` is the provider-neutral role; ``participant_id`` retains the concrete
+    source name, such as a model or an evaluator-native role.
+
+    Structured content is encoded as JSON in ``content`` and identified by ``content_type``. The
+    raw evaluator output remains in the archive's source artifacts and trajectory blobs.
+    """
+
+    schema_version: int = ROLLOUT_SCHEMA_VERSION
+    task: str
+    doc_id: str
+    trial_id: str = ""
+    turn_id: int
+    part_id: int
+    conversation_type: ConversationType
+    participant_type: ParticipantType
+    participant_id: str
+    content_type: RolloutContentType
+    content: str
+    metadata_json: str = "{}"
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    cost_usd: float | None = None
+    prompt_token_ids: list[int] | None = None
+    completion_token_ids: list[int] | None = None
+    logprobs: list[float] | None = None
+
+
 # --------------------------------------------------------------------------------------------------
 # Writer: the parquet schema is the pydantic model, so ``EvalSample.model_validate(row)`` on any
 # ``to_pylist`` row is the reader.
@@ -145,14 +206,14 @@ def write_sample_parquet(fs, dest: str, samples: Iterable[EvalSample]) -> None:
 
 # --------------------------------------------------------------------------------------------------
 # FineStore archive writer: an eval run's durable output is one FineStore archive rooted at its
-# results directory, with a ``samples`` table (one row per evaluated question, this contract), a
-# ``steps`` table (agentic trajectories flattened for column projection), and finestore's reserved
-# ``blobs`` table (raw trajectories and other opaque attachments). The samples row is the sample's
-# JSON dump plus the archive's ``trial_id`` key; the reader ignores that extra key when validating.
+# results directory, with a ``samples`` table (one row per evaluated question), a ``steps`` table
+# (Harbor trajectories flattened for compatibility), a versioned provider-neutral rollout
+# conversation table, and finestore's reserved ``blobs`` table for raw artifacts.
 # --------------------------------------------------------------------------------------------------
 
 ARCHIVE_SAMPLES_TABLE = "samples"
 ARCHIVE_STEPS_TABLE = "steps"
+ARCHIVE_ROLLOUTS_TABLE = f"rollouts_v{ROLLOUT_SCHEMA_VERSION}"
 
 # Blob-name prefix for preserved evaluator-native inputs. A blob under this prefix is the verbatim
 # bytes of a file the export read, keyed by its path relative to the run's results root, so a rebuild
@@ -169,6 +230,7 @@ TRIAL_ID_COLUMN = "trial_id"
 FILTER_COLUMN = "filter"
 SAMPLES_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN, FILTER_COLUMN)
 STEPS_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN, "step_id")
+ROLLOUTS_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN, "turn_id", "part_id")
 
 
 def samples_schema() -> pa.Schema:
@@ -190,6 +252,11 @@ def steps_schema() -> pa.Schema:
     return arrow_schema(StepRecord)
 
 
+def rollouts_schema() -> pa.Schema:
+    """The pinned schema for provider-neutral rollout conversation parts."""
+    return arrow_schema(RolloutRecord)
+
+
 def sample_to_archive_row(sample: EvalSample, *, trial_id: str = "") -> dict:
     """One archive ``samples`` row: the sample's JSON-mode dump plus its ``trial_id`` and ``filter``
     archive keys. The filter comes from the sample's own grading, so a caller sets it by grading the
@@ -205,11 +272,11 @@ def sample_from_archive_row(row: dict) -> EvalSample:
 
     ``metrics`` is a pinned ``map<string,double>``, so a batch that wrote no metrics reads back a null
     map and a partly-populated map can carry null values; normalize null, absent, and null-valued
-    metrics to a plain dict (a null value means the metric is absent, not zero) before validation. The
-    caller must materialize map columns as dicts (``to_pylist(maps_as_pydicts="strict")``). Archive-only
-    keys (``trial_id`` and finestore's ``_seq``/``_writer``/``_gen`` columns) are ignored by the model.
+    metrics to a plain dict (a null value means the metric is absent, not zero) before validation.
+    Arrow map-pair iterables are accepted directly. Archive-only keys (``trial_id`` and finestore's
+    ``_seq``/``_writer``/``_gen`` columns) are ignored by the model.
     """
-    metrics = row.get("metrics") or {}
+    metrics = dict(row.get("metrics") or {})
     return EvalSample.model_validate(
         {**row, "metrics": {name: value for name, value in metrics.items() if value is not None}}
     )
@@ -242,11 +309,12 @@ class StepRecord:
 
 
 class EvaluationStore:
-    """One eval run's finestore archive: a ``samples`` table (the :class:`EvalSample` contract), a
-    ``steps`` table (flattened agentic trajectories), and raw trajectories held as blobs and
-    referenced by a ``finestore://`` URI. Evaluators convert their native outputs to
-    :class:`EvalSample` and :class:`StepRecord` before calling this wrapper; reads go through
-    ``ReadView`` over the same root.
+    """One eval run's FineStore archive.
+
+    ``samples`` holds evaluation and grading data, ``steps`` retains the earlier flattened Harbor
+    contract, and ``rollouts_vN`` holds provider-neutral conversation parts under its schema version.
+    Raw evaluator files and trajectories remain blobs. Reads go through ``ReadView`` over the same
+    root.
     """
 
     def __init__(self, store: DataStore) -> None:
@@ -256,6 +324,12 @@ class EvaluationStore:
         )
         self._steps = store.table(
             ARCHIVE_STEPS_TABLE, schema=steps_schema(), primary_key=STEPS_MERGE_KEY, schema_version=SCHEMA_VERSION
+        )
+        self._rollouts = store.table(
+            ARCHIVE_ROLLOUTS_TABLE,
+            schema=rollouts_schema(),
+            primary_key=ROLLOUTS_MERGE_KEY,
+            schema_version=ROLLOUT_SCHEMA_VERSION,
         )
 
     @classmethod
@@ -271,6 +345,10 @@ class EvaluationStore:
         """Append normalized agentic steps to the ``steps`` table."""
         self._steps.extend(dataclasses.asdict(step) for step in steps)
 
+    def add_rollouts(self, records: Iterable[RolloutRecord]) -> None:
+        """Append provider-neutral conversation parts to the ``rollouts`` table."""
+        self._rollouts.extend(record.model_dump(mode="json") for record in records)
+
     def add_artifact(self, name: str, raw: bytes, *, metadata: Mapping[str, object] | None = None) -> str:
         """Store an opaque artifact and return its ``finestore://`` URI."""
         return self._store.write_object(name, raw, metadata)
@@ -278,8 +356,8 @@ class EvaluationStore:
     def add_source_artifact(self, name: str, raw: bytes, *, content_type: str) -> str:
         """Preserve one evaluator-native source file inside the archive; return its blob URI.
 
-        ``name`` is the file's path relative to the run's results root, so a rebuild can re-derive
-        the tables from the archive alone, without the surrounding results tree still being intact.
+        ``name`` is the evaluator-owned path below ``sources/``. A rebuild can re-derive the tables
+        from the archive alone, without an external results tree still being intact.
         """
         return self.add_artifact(
             prefix_join(SOURCES_PREFIX, name),

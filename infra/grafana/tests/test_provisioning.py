@@ -19,6 +19,7 @@ import yaml
 from config import CLUSTERS, K8S_CLUSTERS, ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
+from errors import FinelogUnavailableError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from hero_health import DROP_FRACTION_MAX, ROUTER_BIAS_MAX, ROUTER_ENTROPY_MIN
@@ -194,21 +195,29 @@ class _FakeFinelog:
         return ()
 
 
-def test_every_rule_query_url_answers_on_the_bridge():
-    """Join each rule's datasource base path with its query URL and GET it for real."""
+class _UnavailableFinelog(_FakeFinelog):
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        raise FinelogUnavailableError("unavailable")
+
+
+def _bridge_client(finelog_source: _FakeFinelog) -> TestClient:
     iris_sources = {name: _FakeIris(name) for name in ("marin", "marin-dev")}
-    finelog_sources = {"marin": _FakeFinelog("marin")}
     fleet = K8sFleet([make_k8s_source(k8s_api(healthy_k8s_routes()))])
-    client = TestClient(
+    return TestClient(
         create_app(
             bridge_config(),
-            finelog_sources,
+            {"marin": finelog_source},
             iris_sources,
             GithubSource(auth=None, timeout=5.0),
             fleet,
             WandbSource(timeout=5.0),
         )
     )
+
+
+def test_every_rule_query_url_answers_on_the_bridge():
+    """Join each rule's datasource base path with its query URL and GET it for real."""
+    client = _bridge_client(_FakeFinelog("marin"))
     base_paths = _datasources()
     for rule in _rules():
         for node in rule["data"]:
@@ -220,6 +229,26 @@ def test_every_rule_query_url_answers_on_the_bridge():
             response = client.get(url, params=params)
             assert response.status_code == 200, f"{rule['uid']}: GET {url} -> {response.status_code}"
             assert response.json(), f"{rule['uid']}: GET {url} returned no rows"
+
+
+def test_configured_finelog_query_dependent_alerts_stay_normal_when_query_path_is_unavailable():
+    client = _bridge_client(_UnavailableFinelog("marin"))
+    base_path = _datasources()["finelog-marin"]
+
+    for rule in _rules():
+        if rule["uid"] in {"finelog-fleet-unhealthy", "finelog-relay-stalled"}:
+            continue
+        for node in rule["data"]:
+            if node["datasourceUid"] != "finelog-marin":
+                continue
+            model = node["model"]
+            params = {param["key"]: param["value"] for param in model.get("url_options", {}).get("params", [])}
+            url = base_path + model["url"]
+
+            response = client.get(url, params=params)
+
+            assert response.status_code == 200, f"{rule['uid']}: GET {url} -> {response.status_code}"
+            assert all(row["value"] == 0 for row in response.json()), rule["uid"]
 
 
 def test_alert_queries_select_exactly_one_numeric_column():

@@ -376,9 +376,8 @@ class TaskCoverage(BaseModel):
 class EvalRunRecord(BaseModel):
     """The full account of one eval run, serialized to ``record.json``.
 
-    ``metrics`` is ``{task: {metric: value}}`` as produced by
-    :meth:`~marin.evaluation.evalchemy.result.EvalchemyResult.task_metrics`; it is empty when the run did
-    not reach the metric-reading stage. The ``evaluation`` field serializes as
+    ``metrics`` is ``{task: {metric: value}}`` as produced by the evaluator's typed result reader; it
+    is empty when the run did not reach the metric-reading stage. The ``evaluation`` field serializes as
     ``eval`` (a reserved-looking but unambiguous JSON key); use ``model_dump(mode="json",
     by_alias=True)`` or ``model_dump_json(by_alias=True)`` to produce it.
     """
