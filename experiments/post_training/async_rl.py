@@ -6,32 +6,42 @@
 One launcher for asynchronous RL experiments. It reuses the curriculum-RL policy, pool and
 evaluation wiring and adds the fully asynchronous training loop, the Megatron geometry the 67B-A2B
 Snowball policy trains with, and the loop settings the async programme settled on. Every setting
-below carries one sentence saying what it does and why it has its value; presets bundle them,
-``--set`` changes one. The launcher writes every setting it decides into the rendered config,
-including values MarinSkyRL's base config or the curriculum template already hold, so the run
-never depends on a default changing underneath it.
+below carries one sentence saying what it does; presets bundle them, ``--set`` changes one. The
+launcher writes every setting it decides into the rendered config, including values MarinSkyRL's
+base config or the curriculum template already hold, so the run never depends on a default changing
+underneath it.
 
 Plan or run::
 
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset smoke
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default --run
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default \\
-        --set trainer.fully_async.max_staleness_steps=1 --run
+        --set trainer.fully_async.max_staleness_steps=2 --run
+
+The house numbers come from the programme's loop simulation on the 40-GPU topology. 128 prompts
+per update is where consumed tokens per second saturate, four times the programme's 32 for +184%
+with the trainer idle 8% instead of 50%; the batch grows in prompts because more answers per prompt
+would change the advantage estimate. 192 workers is the throughput plateau: 160 gives 1% less, 224
+gives 0.5% more for seven points of KV cache. A 32-group buffer moves throughput nowhere, re-pays
+the prompt at fewer aborts than a deeper one (554 re-prefills against 3,704 at 128) and keeps a full
+update of staleness headroom when responses lengthen by half. The 8192-token window with a
+4096-token cap is the programme's: mean generated length is about 1,060 tokens, so a 16k window adds
+no capacity and only lets the long tail age out, and the 32k window of the 64-GPU Snowball Ultra
+campaign would collapse concurrency here from about 8,192 slots to about 124.
 
 Two parts of the programme's frozen recipe are not here. The off-policy correction
 (``regular_mask``) lives in marin-community/MarinSkyRL#628, so this launcher trains the plain
 ``regular`` loss. The stopping package (``parser_only``) exists only on the research stack, so runs
 use MarinSkyRL's stock answer parsing and stopping. The loop settings, the telemetry gates and the
-``marin_tokenizer`` chat template are declared only by the MarinSkyRL revisions that carry the
-async-knobs and telemetry changes; an older pinned revision rejects them when Hydra parses the
-config, before any GPU is used.
+``marin_tokenizer`` chat template need a MarinSkyRL revision carrying both the telemetry change
+(marin-community/MarinSkyRL#654) and the async-knobs change.
 """
 
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, fields, replace
-from enum import StrEnum
+from dataclasses import asdict, dataclass, fields, replace
+from typing import NamedTuple
 
 import click
 import yaml
@@ -40,12 +50,14 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
+    _STRATEGY_FOR_PROFILE,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
     SkyRLEvaluationModel,
     SkyRLModel,
     SkyRLRetentionPolicy,
+    SkyRLRolePlan,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
@@ -60,10 +72,9 @@ from experiments.post_training.curriculum_rl.launch import (
     GPU_VARIANT,
     GPUS_PER_NODE,
     MODEL_ARTIFACT_NAME,
-    POLICIES,
     POOL_ARTIFACT_NAME,
     SEED,
-    SNOWBALL_SMOKE,
+    SNOWBALL_POLICY,
     PolicySpec,
     ScalePreset,
     evaluation_serving,
@@ -79,83 +90,108 @@ from experiments.post_training.curriculum_rl.pool import (
 
 EXPERIMENT_NAME = "async-rl"
 WANDB_PROJECT = f"marin-{EXPERIMENT_NAME}"
-# Prompts sampled per optimizer update; the trainer's batch sizes count prompts, not answers. 128
-# is where the simulated loop saturates on the house topology: four times the programme's 32 for
-# +184% consumed tokens per second, zero discards and the trainer idle 8% instead of 50%; 4,096
-# sequences per update would buy 16% more and fill the KV cache. The batch grows in prompts, not
-# answers: 128 x 4 and 32 x 16 sample the same tokens per second, and more answers per prompt
-# would change the advantage estimate.
+# Prompts sampled per optimizer update; the trainer's batch sizes count prompts, not answers.
 PROMPTS_PER_UPDATE = 128
 # Answers sampled per prompt, so one update trains on 512 sequences.
 ANSWERS_PER_PROMPT = 4
-# The named chat template the rollout runner renders conversations with; it is the marin-tokenizer's
-# own template registered in MarinSkyRL, so the runner tokenizes exactly what the tokenizer would.
-CHAT_TEMPLATE = {"source": "name", "name_or_path": "marin_tokenizer"}
+# Engines cancel requests still generating when new weights arrive, and the client resubmits each
+# prompt with the tokens it already generated.
+PAUSE_MODE = "abort"
+# Two resumable checkpoints in the TTL-14-day temporary bucket; the terminal export is durable.
+RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=2)
 
 
-class PauseMode(StrEnum):
-    """What the vLLM engines do with requests still generating when new weights arrive."""
+@dataclass(frozen=True)
+class ChatTemplate:
+    """The chat template the rollout runner renders conversations with."""
 
-    # Cancel them; the client resubmits each prompt with the tokens it already generated, so the
-    # answer continues under the new weights after one prefill. The programme's measured default.
-    ABORT = "abort"
-    # Freeze them in the scheduler and resume them after the reload; they keep the cache the old
-    # weights built only when clear_kv_cache_on_weight_sync is false.
-    KEEP = "keep"
+    source: str
+    name_or_path: str
+
+
+# The marin-tokenizer's own template registered in MarinSkyRL, so the runner tokenizes exactly what
+# the tokenizer would.
+CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="marin_tokenizer")
+
+
+@dataclass(frozen=True)
+class MegatronGeometry:
+    """Megatron parallelism of one model, keyed as its ``megatron_config`` section."""
+
+    tensor_model_parallel_size: int
+    pipeline_model_parallel_size: int
+    context_parallel_size: int
+    expert_model_parallel_size: int
+    expert_tensor_parallel_size: int
 
 
 @dataclass(frozen=True)
 class TrainingRecipe:
-    """How one policy trains: backend, parallel geometry, engine geometry and optimizer."""
+    """How one policy trains: runtime, topology, parallel geometry and optimizer."""
 
-    # MarinSkyRL runtime profile: the frozen dependency set the run installs; the trainer backend
-    # (megatron) follows from it.
+    # MarinSkyRL runtime profile: the frozen dependency set the run installs.
     profile: SkyRLRuntimeProfile
-    # AdamW step size for the policy; every measured programme run and the checked-in Snowball
-    # Megatron configs use 1e-6.
+    # Nodes the job holds: the policy nodes plus one per engine.
+    num_nodes: int
+    # Placement and batch shape; MarinSkyRL writes these over the config from the topology.
+    role_plan: SkyRLRolePlan
+    # AdamW step size; every measured programme run and the checked-in Snowball Megatron configs
+    # use 1e-6.
     learning_rate: float
     # AdamW decoupled weight decay; the base config's 1e-2, written here so it cannot drift.
     weight_decay: float
     # Gradient-norm clip applied before each optimizer step.
     max_grad_norm: float
     # Megatron parallelism for the policy and the reference model.
-    megatron: dict[str, int]
+    megatron: MegatronGeometry
     # Data and expert parallelism of the one vLLM engine, which spans one node.
     engine_data_parallel_size: int
     engine_expert_parallel_size: int
-    # Host memory per training task; the programme's Megatron runs asked for 1800GB per node so
-    # checkpoint staging never ran out.
-    task_memory: str
+    # Host memory per training task; Megatron checkpoint staging needs 1800GB where the policy
+    # spec's 512GB covers only the FSDP load.
+    host_memory: str
     # vLLM engine settings the model needs beyond the ones the launcher writes itself.
     engine_init_kwargs: dict[str, object]
 
     @property
     def strategy(self) -> str:
-        return "megatron" if self.profile is SkyRLRuntimeProfile.MEGATRON else "fsdp2"
+        return _STRATEGY_FOR_PROFILE[self.profile]
 
 
-# Snowball 67B-A2B on the 40-GPU house topology: pipeline depth 2 with 16-way data parallelism
-# across four policy nodes, experts sharded eight ways, no tensor or context parallelism; the one
-# engine shards experts across its node's eight ranks (DP8/EP8). The shape of every measured run.
+# Snowball 67B-A2B on the 40-GPU house topology: four policy nodes with the reference colocated,
+# pipeline depth 2 with 16-way data parallelism and experts sharded eight ways, and one engine node
+# sharding experts across its eight ranks (DP8/EP8).
 SNOWBALL_RECIPE = TrainingRecipe(
     profile=SkyRLRuntimeProfile.MEGATRON,
+    num_nodes=5,
+    role_plan=SkyRLRolePlan(
+        colocate_all=False,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=GPUS_PER_NODE,
+        num_inference_engines=1,
+        inference_engine_tensor_parallel_size=1,
+        train_batch_size=PROMPTS_PER_UPDATE,
+        policy_mini_batch_size=PROMPTS_PER_UPDATE,
+        # One sequence per GPU per micro-step: 32 micro-steps over 16 data-parallel ranks.
+        micro_train_batch_size_per_gpu=1,
+        n_samples_per_prompt=ANSWERS_PER_PROMPT,
+    ),
     learning_rate=1.0e-6,
     weight_decay=1e-2,
     max_grad_norm=1.0,
-    megatron={
-        "tensor_model_parallel_size": 1,
-        "pipeline_model_parallel_size": 2,
-        "context_parallel_size": 1,
-        "expert_model_parallel_size": 8,
-        "expert_tensor_parallel_size": 1,
-    },
+    megatron=MegatronGeometry(
+        tensor_model_parallel_size=1,
+        pipeline_model_parallel_size=2,
+        context_parallel_size=1,
+        expert_model_parallel_size=8,
+        expert_tensor_parallel_size=1,
+    ),
     engine_data_parallel_size=GPUS_PER_NODE,
     engine_expert_parallel_size=GPUS_PER_NODE,
-    task_memory="1800GB",
+    host_memory="1800GB",
     # The Triton MoE kernels; the fused defaults do not cover this expert layout.
     engine_init_kwargs={"moe_backend": "triton"},
 )
-RECIPES = {"snowball": SNOWBALL_RECIPE}
 
 
 @dataclass(frozen=True)
@@ -165,22 +201,17 @@ class AsyncPreset:
     label: str
     # Optimizer updates the run performs before it stops; the epoch bound never fires first.
     max_steps: int
-    # Evaluate every this many updates; -1 turns evaluation off entirely, including the pass at the
-    # end of training. Evaluation waits until the weight sync completes, so it scores the weights
-    # the run just trained.
+    # Evaluate every this many updates, after the weight sync so the scored weights are the trained
+    # ones; -1 turns evaluation off, including the pass at the end of training.
     eval_interval: int
     # How many updates old a group may be when the trainer consumes it; 0 admits only groups
     # sampled by the current weights.
     max_staleness_steps: int
     # Groups generating at once across the engines: at least one update's prompts, or the trainer
-    # refuses to start, and few enough that every group in flight or buffered is consumed inside
-    # the staleness allowance.
+    # refuses to start.
     generation_workers: int
-    # Finished groups the completed buffer holds before a worker waits with its group in hand. The
-    # depth moves throughput nowhere; a deeper buffer lengthens residence and re-pays the prompt at
-    # every abort (554 re-prefills at 32 against 3,704 at 128), and 32 keeps a full update of
-    # staleness headroom when responses lengthen by half, where 64 has none. Always a literal:
-    # null would mean the worker count, an invisible buffer nobody chose.
+    # Finished groups held before a worker waits with its group in hand; always a literal, since
+    # null would mean the worker count.
     max_buffered_groups: int
     # Prompt-plus-response budget one request may occupy in the engine, in tokens.
     request_window_tokens: int
@@ -188,78 +219,24 @@ class AsyncPreset:
     max_new_tokens: int
     # Evaluation suites the ``evaluation`` stage scores the terminal export on, comma separated.
     evals: str
-    # What engines do with in-flight requests at a weight sync; see PauseMode.
-    pause_mode: PauseMode = PauseMode.ABORT
     # Drop the engines' KV cache at the pause so nothing computed by the old weights is reused.
     clear_kv_cache_on_weight_sync: bool = True
     # Count a group's staleness from the policy version that sampled its first token rather than
     # from the trainer's step when the group was submitted.
     first_token_admission: bool = True
-    # Export the telemetry the async dashboards read: trainer scalars, async-loop windows and
-    # generation-worker waits, the per-rank Megatron policy-update spans, the Megatron optimizer
-    # inventory and the pooled learner-versus-engine ratio diagnostics. Each is a separate gate.
+    # Export the telemetry the async dashboards read; each gate is written separately below.
     telemetry: bool = True
-    # Record exact quantiles of the log-ratio on top of the pooled diagnostics; no dashboard panel
-    # reads them and they gather up to 4M values per rank.
+    # Record exact quantiles of the log-ratio; no dashboard panel reads them and they gather up to
+    # 4M values per rank.
     exact_ratio_quantiles: bool = False
-    # Track the cosine between successive gradients; costs one fp32 gradient copy per rank at the
-    # micro-batch-1 memory ceiling and one all-reduce per update.
+    # Track the cosine between successive gradients; costs one fp32 gradient copy per rank and one
+    # all-reduce per update.
     grad_cosine: bool = False
 
-    def __post_init__(self) -> None:
-        # Every retained prompt must fit the request window beside the response budget, or rows skip
-        # generation and their groups fail admission.
-        if MAX_PROMPT_TOKENS > self.request_window_tokens - self.max_new_tokens:
-            raise ValueError(f"{self.label}: pool prompts do not fit the request window beside the response cap")
-        if self.generation_workers < PROMPTS_PER_UPDATE:
-            raise ValueError(
-                f"{self.label}: {self.generation_workers} workers cannot fill an update of {PROMPTS_PER_UPDATE}"
-            )
-        # At staleness 0 nothing stale is ever admitted: every group that crosses a weight sync is
-        # discarded and regenerated, so the allowance bounds no queue and the ratio check is moot.
-        if self.max_staleness_steps == 0:
-            return
-        in_flight = self.generation_workers + self.max_buffered_groups
-        if in_flight / PROMPTS_PER_UPDATE >= self.max_staleness_steps:
-            raise ValueError(
-                f"{self.label}: {in_flight} groups in flight or buffered exceed "
-                f"{self.max_staleness_steps} updates of {PROMPTS_PER_UPDATE}, so the last of them would age out"
-            )
 
-    def scale(self, policy: PolicySpec) -> ScalePreset:
-        """The curriculum scale point this preset trains at for ``policy``."""
-        # 128 prompts of 4 answers per update, one sequence per GPU per micro-step (32 micro-steps
-        # over 16 data-parallel ranks), no packing: the house shape.
-        plan = replace(
-            SNOWBALL_SMOKE.role_plan,
-            train_batch_size=PROMPTS_PER_UPDATE,
-            policy_mini_batch_size=PROMPTS_PER_UPDATE,
-            micro_train_batch_size_per_gpu=1,
-            n_samples_per_prompt=ANSWERS_PER_PROMPT,
-        )
-        return replace(
-            SNOWBALL_SMOKE,
-            label=f"{policy.label}-{self.label}",
-            role_plan=plan,
-            max_steps=self.max_steps,
-            eval_interval=self.eval_interval,
-            # A resumable checkpoint at every evaluation, or at the end when there is no evaluation.
-            ckpt_interval=self.max_steps if self.eval_interval <= 0 else self.eval_interval,
-            request_window_tokens=self.request_window_tokens,
-            max_new_tokens=self.max_new_tokens,
-            micro_forward_batch_size_per_gpu=1,
-            evals=self.evals,
-        )
-
-
-# The house loop: staleness 4 with 192 workers (1.5 updates of prompts generating, where the
-# simulated throughput plateaus: 160 gives 1% less, 224 gives 0.5% more for seven points of KV)
-# and 32 groups buffered, 224 groups against an allowance of 512 so uneven finish times never age
-# a group out; abort at the copy; 100 updates evaluated every 5. The window is the programme's
-# 8192 with a 4096-token cap: mean generated length is about 1,060 tokens, so a 16k window adds
-# no capacity and only lets the long tail run on and age out (discards 0% to 3%), and the 32k
-# window and max_num_seqs 16 of the 64-GPU Snowball Ultra campaign are that topology's numbers,
-# which here would collapse concurrency from about 8,192 slots to about 124.
+# The house loop: staleness 4 with 192 workers and 32 groups buffered, 224 groups against an
+# allowance of 512 so uneven finish times never age a group out; 100 updates evaluated every 5 in
+# the programme's 8192-token window with a 4096-token cap.
 DEFAULT = AsyncPreset(
     label="default",
     max_steps=100,
@@ -271,8 +248,7 @@ DEFAULT = AsyncPreset(
     max_new_tokens=4096,
     evals="math500,gsm8k-0shot",
 )
-# Two updates on the house geometry and batch with short responses: proves the wiring end to end
-# and measures policy_train at its 32 micro-steps before the first long run.
+# Two updates on the house geometry and batch with short responses: proves the wiring end to end.
 SMOKE_PRESET = replace(
     DEFAULT,
     label="smoke",
@@ -282,24 +258,49 @@ SMOKE_PRESET = replace(
     max_new_tokens=1024,
     evals="gsm8k-smoke",
 )
-# Every consumed group was sampled by the current weights, so importance ratios are exactly one up
-# to engine mismatch; generation that crosses a weight sync is discarded rather than trained on.
-# Workers sit at the trainer's floor of one update's prompts.
+# Every consumed group was sampled by the current weights; workers sit at the trainer's floor of
+# one update's prompts.
 ON_POLICY = replace(DEFAULT, label="on_policy", max_staleness_steps=0, generation_workers=PROMPTS_PER_UPDATE)
 PRESETS = {preset.label: preset for preset in (SMOKE_PRESET, DEFAULT, ON_POLICY)}
 
 
-def parse_setting(text: str) -> tuple[str, object, bool]:
+def checkpoint_interval(max_steps: int, eval_interval: int) -> int:
+    """A resumable checkpoint at every evaluation, or at the end when there is no evaluation."""
+    return max_steps if eval_interval <= 0 else eval_interval
+
+
+def scale_point(preset: AsyncPreset) -> ScalePreset:
+    """The curriculum scale point ``preset`` renders through; its data and environment sections survive."""
+    return ScalePreset(
+        label=preset.label,
+        num_nodes=SNOWBALL_RECIPE.num_nodes,
+        role_plan=SNOWBALL_RECIPE.role_plan,
+        max_steps=preset.max_steps,
+        eval_interval=preset.eval_interval,
+        ckpt_interval=checkpoint_interval(preset.max_steps, preset.eval_interval),
+        request_window_tokens=preset.request_window_tokens,
+        max_new_tokens=preset.max_new_tokens,
+        micro_forward_batch_size_per_gpu=1,
+        evals=preset.evals,
+    )
+
+
+class Setting(NamedTuple):
+    key: str
+    value: object
+    adds: bool
+
+
+def parse_setting(text: str) -> Setting:
     """Split ``[+]dotted.key=value`` into a path, a YAML-parsed value and whether it may add a key."""
     key, separator, value = text.partition("=")
     if not separator or not key:
         raise click.BadParameter(f"a setting must look like dotted.key=value, got {text!r}")
-    adds = key.startswith("+")
-    return key.lstrip("+"), yaml.safe_load(value), adds
+    return Setting(key.lstrip("+"), yaml.safe_load(value), key.startswith("+"))
 
 
 # Keys MarinSkyRL's launcher writes from the topology and the run request as ++ overrides after the
-# config, so a --set on them would be silently discarded; they change through the preset only.
+# config, so a --set on them would be silently discarded; they change through the recipe only.
 TOPOLOGY_OWNED_SETTINGS = frozenset(
     {
         "trainer.placement.colocate_all",
@@ -322,14 +323,31 @@ TOPOLOGY_OWNED_SETTINGS = frozenset(
         "trainer.max_ckpts_to_keep",
     }
 )
+# Keys MarinSkyRL derives from context_budget and rejects as direct YAML.
+DERIVED_CONTEXT_SETTINGS = frozenset(
+    {
+        "generator.max_input_length",
+        "trainer.max_prompt_length",
+        "generator.max_turns",
+        "generator.sampling_params.max_generate_length",
+        "generator.engine_init_kwargs.max_model_len",
+    }
+)
+# Keys this launcher derives from the rendered trainer.eval_interval and trainer.max_steps.
+EVAL_DERIVED_SETTINGS = frozenset({"trainer.eval_before_train", "trainer.ckpt_interval"})
 
 
-def apply_setting(config: dict, key: str, value: object, *, adds: bool) -> None:
-    """Set one dotted key in the assembled config; unknown keys fail unless the override adds."""
+def apply_setting(config: dict, setting: Setting) -> None:
+    """Set one dotted key in the assembled config; unknown keys fail unless the setting adds."""
+    key, value, adds = setting
     if key == "entrypoint":
         raise click.BadParameter("this launcher is the fully asynchronous loop; entrypoint cannot change")
     if key in TOPOLOGY_OWNED_SETTINGS:
-        raise click.BadParameter(f"{key!r} is written from the topology after the config; change the preset instead")
+        raise click.BadParameter(f"{key!r} is written from the topology after the config; change the recipe instead")
+    if key in DERIVED_CONTEXT_SETTINGS:
+        raise click.BadParameter(f"MarinSkyRL derives {key!r} from context_budget; set context_budget instead")
+    if key in EVAL_DERIVED_SETTINGS:
+        raise click.BadParameter(f"{key!r} follows trainer.eval_interval; set that instead")
     parts = key.split(".")
     node = config
     for part in parts[:-1]:
@@ -346,18 +364,41 @@ def apply_setting(config: dict, key: str, value: object, *, adds: bool) -> None:
     node[parts[-1]] = value
 
 
-def training_config(
-    policy: PolicySpec, preset: AsyncPreset, recipe: TrainingRecipe, settings: tuple[str, ...] = ()
-) -> str:
+def check_loop_shape(config: dict) -> None:
+    """Refuse a rendered config the trainer would reject or whose groups would age out."""
+    budget = config["context_budget"]
+    trainer = config["trainer"]
+    loop = trainer["fully_async"]
+    prompts = trainer["train_batch_size"]
+    workers = loop["num_parallel_generation_workers"]
+    staleness = loop["max_staleness_steps"]
+    # Every retained prompt must fit the request window beside the response budget, or rows skip
+    # generation and their groups fail admission.
+    if MAX_PROMPT_TOKENS > budget["request_window_tokens"] - budget["max_new_tokens_per_turn"]:
+        raise click.BadParameter("pool prompts do not fit the request window beside the response cap")
+    if workers < prompts:
+        raise click.BadParameter(f"{workers} generation workers cannot fill an update of {prompts} prompts")
+    # At staleness 0 nothing stale is ever admitted, so the allowance bounds no queue.
+    if staleness == 0:
+        return
+    in_flight = workers + loop["max_buffered_groups"]
+    if in_flight / prompts >= staleness:
+        raise click.BadParameter(
+            f"{in_flight} groups in flight or buffered exceed {staleness} updates of {prompts}, "
+            "so the last of them would age out"
+        )
+
+
+def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict:
     """Render the RL config: the curriculum data wiring plus every setting this launcher decides."""
-    scale = preset.scale(policy)
-    plan = scale.role_plan
+    recipe = SNOWBALL_RECIPE
+    plan = recipe.role_plan
     # The curriculum template supplies the data and environment sections; every other section is
-    # written below in full, so nothing is inherited from the template or the base config.
-    config = yaml.safe_load(rl_config_yaml(scale))
+    # written below in full.
+    config = yaml.safe_load(rl_config_yaml(scale_point(preset)))
     config["entrypoint"] = "fully_async"
     # The one public context declaration; MarinSkyRL derives the prompt, generation and engine
-    # lengths from it and rejects those keys as direct YAML.
+    # lengths from it.
     config["context_budget"] = {
         "request_window_tokens": preset.request_window_tokens,
         "max_new_tokens_per_turn": preset.max_new_tokens,
@@ -372,28 +413,25 @@ def training_config(
         "use_sample_packing": False,
         # Recompute activations in the backward pass; the 67B-A2B forward does not fit otherwise.
         "gradient_checkpointing": True,
-        # Keep the optimizer state resident; the engines run on their own node, so nothing needs
-        # the policy's memory while it waits.
+        # Keep the optimizer state resident; the engines run on their own node.
         "offload_optimizer_during_rollouts": False,
         # Passes over the pool the dataloader may make; 100 updates of 128 prompts need several.
         "epochs": 50,
-        "max_steps": scale.max_steps,
+        "max_steps": preset.max_steps,
         # One optimizer pass over each batch; the mini batch equals the batch, so one update per batch.
         "update_epochs_per_batch": 1,
         "train_batch_size": plan.train_batch_size,
         "policy_mini_batch_size": plan.policy_mini_batch_size,
         "micro_train_batch_size_per_gpu": plan.micro_train_batch_size_per_gpu,
-        "micro_forward_batch_size_per_gpu": scale.micro_forward_batch_size_per_gpu,
+        "micro_forward_batch_size_per_gpu": 1,
         # Validation prompts scored per in-run evaluation.
         "eval_batch_size": 256,
-        # Score the starting weights once when evaluation is on, so the curves have a step-0 point.
-        "eval_before_train": scale.eval_interval > 0,
-        "eval_interval": scale.eval_interval,
-        "ckpt_interval": scale.ckpt_interval,
+        "eval_interval": preset.eval_interval,
         # No periodic HF export; the terminal export the launcher performs after training stays.
         "hf_save_interval": -1,
         # Resume from the latest resumable checkpoint on resubmission.
         "resume_mode": "latest",
+        "max_ckpts_to_keep": RETENTION.resume_checkpoint_count,
         "seed": SEED,
         "logger": "wandb",
         "project_name": WANDB_PROJECT,
@@ -428,10 +466,10 @@ def training_config(
                 "weight_decay": recipe.weight_decay,
                 "max_grad_norm": recipe.max_grad_norm,
             },
-            "megatron_config": dict(recipe.megatron),
+            "megatron_config": asdict(recipe.megatron),
         },
         # The reference model shares the policy's geometry so it can share the policy's GPUs.
-        "ref": {"megatron_config": dict(recipe.megatron)},
+        "ref": {"megatron_config": asdict(recipe.megatron)},
         "placement": {
             "colocate_all": plan.colocate_all,
             # The reference model lives on the policy's nodes; only the engine has its own node.
@@ -446,7 +484,7 @@ def training_config(
             "max_staleness_steps": preset.max_staleness_steps,
             "num_parallel_generation_workers": preset.generation_workers,
             "max_buffered_groups": preset.max_buffered_groups,
-            "pause_mode": preset.pause_mode.value,
+            "pause_mode": PAUSE_MODE,
             "clear_kv_cache_on_weight_sync": preset.clear_kv_cache_on_weight_sync,
             "first_token_admission": preset.first_token_admission,
         },
@@ -485,7 +523,7 @@ def training_config(
         "enable_http_endpoint": True,
         # Each turn re-renders the conversation through the chat template; the entrypoint requires it.
         "use_conversation_multi_turn": True,
-        "chat_template": dict(CHAT_TEMPLATE),
+        "chat_template": asdict(CHAT_TEMPLATE),
         "engine_init_kwargs": dict(recipe.engine_init_kwargs),
         "sampling_params": {
             # Full-distribution sampling; the ratio diagnostics assume no truncation.
@@ -498,22 +536,13 @@ def training_config(
     # Let the allocator grow segments instead of fragmenting at the memory ceiling.
     config["extra_env"] = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
     for text in settings:
-        key, value, adds = parse_setting(text)
-        apply_setting(config, key, value, adds=adds)
-    return yaml.safe_dump(config, sort_keys=False)
-
-
-def engine_geometry_overrides(recipe: TrainingRecipe) -> tuple[str, ...]:
-    """Hydra overrides restating the engine's data and expert parallelism.
-
-    MarinSkyRL writes the engine geometry it derives from the role plan as overrides after reading
-    the config, and the role plan marin sends carries no data or expert parallelism; the request
-    overrides are applied last, so these keep the values the config declares.
-    """
-    return (
-        f"generator.inference_engine_data_parallel_size={recipe.engine_data_parallel_size}",
-        f"generator.inference_engine_expert_parallel_size={recipe.engine_expert_parallel_size}",
-    )
+        apply_setting(config, parse_setting(text))
+    trainer = config["trainer"]
+    # Score the starting weights once when evaluation is on, so the curves have a step-0 point.
+    trainer["eval_before_train"] = trainer["eval_interval"] > 0
+    trainer["ckpt_interval"] = checkpoint_interval(trainer["max_steps"], trainer["eval_interval"])
+    check_loop_shape(config)
+    return config
 
 
 @dataclass(frozen=True)
@@ -522,22 +551,21 @@ class AsyncRun:
     evaluation: ArtifactStep[EvaluationResult]
 
 
-def build_run(
-    *, policy: PolicySpec, preset: AsyncPreset, version: str | None, settings: tuple[str, ...] = ()
-) -> AsyncRun:
+def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, settings: tuple[str, ...] = ()) -> AsyncRun:
     """Assemble the RL step and its evaluation for one policy and preset."""
-    recipe = RECIPES[policy.label]
-    scale = preset.scale(policy)
+    recipe = SNOWBALL_RECIPE
+    config = training_config(preset, settings)
     pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
     model = policy.adopted_model or model_step(version or resolve_version(MODEL_ARTIFACT_NAME, None))
     # Settings change what the run is, so they change its address: two --set runs never share one.
-    suffix = f"-set-{hashlib.sha256(chr(10).join(settings).encode()).hexdigest()[:8]}" if settings else ""
+    changes = "\n".join(settings)
+    suffix = f"-set-{hashlib.sha256(changes.encode()).hexdigest()[:8]}" if settings else ""
     base_name = f"checkpoints/{EXPERIMENT_NAME}/{policy.label}-{preset.label}{suffix}"
     rl = skyrl_step(
         SkyRLSpec(
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
-            config_yaml=training_config(policy, preset, recipe, settings),
+            config_yaml=yaml.safe_dump(config, sort_keys=False),
             runtime=SkyRLRuntime(profile=recipe.profile),
             model=ArtifactHfModel(
                 step=model,
@@ -548,21 +576,20 @@ def build_run(
             train_data=(ArtifactDataSource(pool, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(pool, relative_path=VALIDATION_FILENAME),),
             topology=SkyRLTopology(
-                num_nodes=scale.num_nodes,
+                num_nodes=recipe.num_nodes,
                 gpus_per_node=GPUS_PER_NODE,
                 gpu_variant=GPU_VARIANT,
-                role_plan=scale.role_plan,
+                role_plan=recipe.role_plan,
             ),
-            # Two resumable checkpoints in the TTL-14-day temporary bucket; the terminal export is durable.
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
+            retention=RETENTION,
             seed=SEED,
-            overrides=(*BASE_OVERRIDES, *engine_geometry_overrides(recipe)),
+            overrides=(*BASE_OVERRIDES, *policy.overrides),
         ),
         IrisSkyRLExecution(
             cluster=policy.cluster,
             cluster_config=f"lib/iris/config/{policy.cluster}.yaml",
             cpu=16,
-            memory=recipe.task_memory,
+            memory=recipe.host_memory,
             disk="2TB",
             priority="interactive",
             # One automatic retry, then fail; a healthy run resumes from its latest checkpoint on resubmission.
@@ -570,12 +597,19 @@ def build_run(
             wandb_entity="marin-community",
         ),
     )
+    # The evaluation serves the rendered window, so a --set on the budget reaches the server.
+    budget = config["context_budget"]
+    served = replace(
+        scale_point(preset),
+        request_window_tokens=budget["request_window_tokens"],
+        max_new_tokens=budget["max_new_tokens_per_turn"],
+    )
     # The eval artifact is keyed on the model name; the owner keeps two users at one version apart.
     evaluation_model_name = f"{username_segment()}-{EXPERIMENT_NAME}-{policy.label}-{preset.label}{suffix}"
-    evaluation_base_name = f"evals/{evaluation_model_name}/{scale.evals}"
+    evaluation_base_name = f"evals/{evaluation_model_name}/{preset.evals}"
     evaluation = eval_step(
-        SkyRLEvaluationModel(step=rl, model=evaluation_serving(policy, scale, evaluation_model_name)),
-        scale.evals,
+        SkyRLEvaluationModel(step=rl, model=evaluation_serving(policy, served, evaluation_model_name)),
+        preset.evals,
         version=version or resolve_version(evaluation_base_name, None),
         accelerator=f"{GPU_VARIANT}x{policy.serve_gpus}",
         submission_cluster=policy.cluster,
@@ -586,7 +620,6 @@ def build_run(
 
 @click.command(help=__doc__)
 @click.option("--preset", type=click.Choice(sorted(PRESETS)), default="smoke", show_default=True)
-@click.option("--model", "model_label", type=click.Choice(sorted(RECIPES)), default="snowball", show_default=True)
 @click.option(
     "--set",
     "settings",
@@ -602,9 +635,9 @@ def build_run(
     help="Terminal stage; evaluation includes the RL run automatically.",
 )
 @build_options
-def main(preset: str, model_label: str, settings: tuple[str, ...], stage: str) -> dict[str, ArtifactStep]:
-    run = build_run(policy=POLICIES[model_label], preset=PRESETS[preset], version=None, settings=settings)
-    return {f"{model_label}-{preset}": getattr(run, stage)}
+def main(preset: str, settings: tuple[str, ...], stage: str) -> dict[str, ArtifactStep]:
+    run = build_run(SNOWBALL_POLICY, PRESETS[preset], version=None, settings=settings)
+    return {f"{SNOWBALL_POLICY.label}-{preset}": getattr(run, stage)}
 
 
 if __name__ == "__main__":
