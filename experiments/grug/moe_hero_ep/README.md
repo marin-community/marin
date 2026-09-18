@@ -324,9 +324,8 @@ retries 1000 times on failure and 100 times on preemption.
 
 The [new mixture](../../../docs/reports/hero-mixture-log.md) starts at ~27.7%
 of training, with cooldown weights at ~80% (hero steps 108,000 and 312,192).
-Before using `trigger_hero.sh`, wait for permanent `step-108000` to finish and stop the old run.
-
-Launch or resume the production d6144 hero with `trigger_hero.sh`. The trigger refuses a dirty
+Launch or resume the production d6144 hero with `trigger_hero.sh launch` as described in
+[Hero cutovers and W&B lineage](#hero-cutovers-and-wb-lineage). The trigger refuses a dirty
 worktree, then comments on [issue #8506](https://github.com/marin-community/marin/issues/8506)
 with the full `HEAD` commit, the coordinator job name, the W&B fork point, and the handoff
 checkpoint. A missing GitHub CLI login or failed comment aborts the trigger before Iris
@@ -334,7 +333,7 @@ submission. Iris also captures its standard launch provenance in `MARIN_PROVENAN
 continues to identify the checkpoint and output lineage across resumptions.
 
 ```bash
-WANDB_API_KEY=... ./experiments/grug/moe_hero_ep/trigger_hero.sh
+WANDB_API_KEY=... ./experiments/grug/moe_hero_ep/trigger_hero.sh launch
 ```
 
 ```bash
