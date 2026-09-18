@@ -41,6 +41,50 @@ The attention, shared-expert, language-model-head, and optimizer states use the 
 Bounded diagnostics write metrics only by default. `--save-checkpoints` writes checkpoints below
 `--checkpoint-path` and resumes from the newest complete checkpoint.
 
+## Hero cutovers and W&B lineage
+
+Use the [deployment checklist](../../../.agents/skills/deploy-hero-change/SKILL.md)
+for preflight, the 200-step trial, and rollback. `trigger_hero.sh` records the
+current run ID, handoff checkpoint, and W&B fork point; update these together and
+land them on main. Record the old run's exact launch SHA and command for rollback.
+The checkpoint must be complete and protected from cleanup through the trial.
+
+Both commands below require `WANDB_API_KEY`, an authenticated GitHub CLI (`gh`),
+and a pristine checkout. Fork creation requires fetched main; subsequent launches
+use the same SHA recorded on the child, even if main advances.
+
+For checkpoint `step-N`, the first replayed update logs `global_step=N`. Find the
+parent row with `global_step=N-1` and use its actual W&B `_step` in
+`WANDB_FORK_FROM='<parent-run-id>?_step=<history-step>'`. Inspect the parent with
+`wandb.Api().run("marin-community/marin_moe/<parent>")` and
+`run.scan_history(keys=["_step", "global_step"], min_step=N-2, max_step=N+1)`.
+These bounds use W&B `_step`; if the indices differ or the row is missing,
+adjust the history range and locate `global_step=N-1` explicitly before forking.
+Do not inherit parent results for the replayed updates.
+
+Create the child tracker once, outside training retry loops:
+
+```bash
+experiments/grug/moe_hero_ep/trigger_hero.sh fork-wandb
+```
+
+After preflight and confirmation that the old coordinator is terminal, submit:
+
+```bash
+experiments/grug/moe_hero_ep/trigger_hero.sh launch
+```
+
+For recovery, verify no child coordinator is live, then use `launch` from the
+recorded SHA. Do not fork again. For rollback, use the old run's recorded revision
+and command with `IRIS_USER=marin`. One operator owns submissions; verify exactly
+one live coordinator after launch.
+
+W&B forks preserve history, while `--initialize-from-checkpoint` restores training
+state. Confirm new child progress from its Finelog execution, not inherited W&B
+rows. Before submission, the launcher posts source SHA, run and coordinator IDs,
+fork point, and checkpoint to [#8506](https://github.com/marin-community/marin/issues/8506);
+a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
+
 ## Coordinated garbage collection
 
 Pass `--gc-interval 100` to `python -m experiments.grug.moe_hero_ep.launch_diagnostics`,
@@ -260,18 +304,8 @@ retries 1000 times on failure and 100 times on preemption.
 
 The [new mixture](../../../docs/reports/hero-mixture-log.md) starts at ~27.7%
 of training, with cooldown weights at ~80% (hero steps 108,000 and 312,192).
-Before using `trigger_hero.sh`, wait for permanent `step-108000` to finish and stop the old run.
-
-Launch or resume the production d6144 hero with `trigger_hero.sh`. The trigger first comments on
-[issue #8506](https://github.com/marin-community/marin/issues/8506) with the full `HEAD` commit,
-whether the tree has staged, unstaged, or untracked changes, and the coordinator job name. A
-missing GitHub CLI login or failed comment aborts the trigger before Iris submission. Iris also
-captures its standard launch provenance in `MARIN_PROVENANCE`. The run ID continues to identify
-the checkpoint and output lineage across resumptions.
-
-```bash
-WANDB_API_KEY=... ./experiments/grug/moe_hero_ep/trigger_hero.sh
-```
+For production launch and recovery, follow
+[Hero cutovers and W&B lineage](#hero-cutovers-and-wb-lineage).
 
 ```bash
 python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
