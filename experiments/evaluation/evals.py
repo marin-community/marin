@@ -42,6 +42,11 @@ _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
         )
     }
 )
+_TOGETHER_API_KEY_SECRET: SecretSpec = (
+    "env:TOGETHER_API_KEY",
+    "gcp-secret://projects/hai-gcp-models/secrets/together_api_key/versions/latest",
+)
+_VERIFIER_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType({"TOGETHER_API_KEY": _TOGETHER_API_KEY_SECRET})
 
 # Capped ``-smoke`` variants remain unfamilied because scoring surfaces exclude them.
 _EVAL_FAMILIES: Mapping[str, str] = MappingProxyType({"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"})
@@ -139,7 +144,7 @@ class HarborDefinition:
     def secret_env_for(self, config: ValidatedHarborConfig) -> Mapping[str, SecretSpec]:
         secret_env = dict(_DAYTONA_SECRET_ENV) if config.environment == _DAYTONA_ENVIRONMENT_TYPE else {}
         for key in config.verifier_env_keys:
-            secret_env.setdefault(key, (f"env:{key}",))
+            secret_env.setdefault(key, _VERIFIER_SECRET_ENV.get(key, (f"env:{key}",)))
         return MappingProxyType(secret_env)
 
     def record_ref_for(self, config: ValidatedHarborConfig, runtime_task_limit: int | None) -> EvalRef:

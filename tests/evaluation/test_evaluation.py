@@ -638,7 +638,10 @@ def test_build_evaluation_batch_routes_declared_verifier_host_secrets(monkeypatc
             "env:DAYTONA_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         ),
-        "TOGETHER_API_KEY": ("env:TOGETHER_API_KEY",),
+        "TOGETHER_API_KEY": (
+            "env:TOGETHER_API_KEY",
+            "gcp-secret://projects/hai-gcp-models/secrets/together_api_key/versions/latest",
+        ),
     }
     assert batch.evaluations[0].secret_env_keys == ("DAYTONA_API_KEY", "TOGETHER_API_KEY")
 
@@ -697,7 +700,12 @@ def test_build_evaluation_batch_routes_and_records_financebench_judge(monkeypatc
     batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
 
     evaluation = batch.evaluations[0]
-    assert batch.secret_env == {"JUDGE_API_KEY": ("env:TOGETHER_API_KEY",)}
+    assert batch.secret_env == {
+        "JUDGE_API_KEY": (
+            "env:TOGETHER_API_KEY",
+            "gcp-secret://projects/hai-gcp-models/secrets/together_api_key/versions/latest",
+        )
+    }
     assert evaluation.secret_env_keys == ("JUDGE_API_KEY",)
     assert evaluation.identity.eval_ref.evalchemy.judge.model_dump() == {
         "base_url": "https://api.together.xyz/v1",
