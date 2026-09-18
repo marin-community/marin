@@ -38,14 +38,15 @@ _CONTEXT_PROMPT_RESERVE = 1024
 _CONTEXT_MARGIN = 64
 
 
-def generation_budget(max_gen_toks: int, max_length: int | None) -> int:
+def generation_budget(max_gen_toks: int | None, max_length: int | None) -> int | None:
     """The per-request generation cap, shrunk to fit a served context smaller than the budget.
 
     A model whose context is smaller than the suite's generation budget (e.g. a 4k-context model
     under an 8k chat budget) 400s every request unless the requested ``max_tokens`` leaves room for
-    the prompt within the context window.
+    the prompt within the context window. ``None`` (no configured cap) stays ``None``: Evalchemy then
+    derives each benchmark's budget from the served context and its stored longest prompt.
     """
-    if max_length is None or max_gen_toks + _CONTEXT_PROMPT_RESERVE <= max_length:
+    if max_gen_toks is None or max_length is None or max_gen_toks + _CONTEXT_PROMPT_RESERVE <= max_length:
         return max_gen_toks
     return max(256, max_length - _CONTEXT_PROMPT_RESERVE)
 
@@ -126,10 +127,15 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
     # Model-level extra sampler kwargs (skip_special_tokens, repetition_penalty, ...) ride on the same
     # --gen_kwargs list as the generation budget; lm-eval forwards them on both the completions and chat
     # routes (MCQ tasks ignore gen_kwargs). A per-model value overrides the max_gen_toks default only if
-    # it keys "max_gen_toks", which the registry does not.
-    gen_kwargs = ",".join(
-        [f"max_gen_toks={gen_budget}", *(f"{key}={value}" for key, value in config.get("extra_gen_kwargs", {}).items())]
-    )
+    # it keys "max_gen_toks", which the registry does not. Without a configured cap neither the
+    # gen_kwargs budget nor --max_tokens is sent, so Evalchemy sizes the response budget itself.
+    gen_kwargs = [f"{key}={value}" for key, value in config.get("extra_gen_kwargs", {}).items()]
+    budget_args: list[str] = []
+    if gen_budget is not None:
+        gen_kwargs.insert(0, f"max_gen_toks={gen_budget}")
+        # Chat-native benchmarks (MATH500-style) size their generations from --max_tokens, not
+        # gen_kwargs; lm-eval-native tasks ignore it.
+        budget_args = ["--max_tokens", str(gen_budget)]
     cmd = [
         str(Path(python).with_name("evalchemy")),
         "--model",
@@ -138,12 +144,8 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         build_model_args(config, use_chat, max_length),
         "--tasks",
         task["name"],
-        "--gen_kwargs",
-        gen_kwargs,
-        # Chat-native benchmarks (MATH500-style) size their generations from --max_tokens, not
-        # gen_kwargs; lm-eval-native tasks ignore it.
-        "--max_tokens",
-        str(gen_budget),
+        *(["--gen_kwargs", ",".join(gen_kwargs)] if gen_kwargs else []),
+        *budget_args,
         "--output_path",
         output_path,
         # Per-question jsonl (doc, prompt, responses, per-sample scores) next to the results JSON;

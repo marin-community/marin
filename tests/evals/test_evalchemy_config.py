@@ -36,6 +36,7 @@ def _config(**overrides) -> EvalchemyRunConfig:
     base = dict(
         name="core",
         tasks=(EvalTaskConfig("arc_easy", 0), EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_cot", generation=True)),
+        max_gen_toks=2048,
     )
     base.update(overrides)
     return EvalchemyRunConfig(**base)
@@ -155,6 +156,26 @@ def test_extra_gen_kwargs_ride_on_gen_kwargs():
 def test_no_extra_gen_kwargs_leaves_gen_kwargs_at_budget_only():
     cmd = build_command(_payload(), _payload()["tasks"][1], "/tmp/out", "/opt/py", None)
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"
+
+
+def test_unset_budget_sends_no_generation_cap():
+    # Without a configured cap Evalchemy sizes the response budget from the served context and the
+    # benchmark's stored longest prompt; an explicit max_gen_toks or --max_tokens would override that.
+    config = _payload(_config(max_gen_toks=None))
+    cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", 40960)
+
+    assert "--max_tokens" not in cmd
+    assert "--gen_kwargs" not in cmd
+    model_args = dict(pair.split("=", 1) for pair in cmd[cmd.index("--model_args") + 1].split(","))
+    assert model_args["max_length"] == "40960"
+
+
+def test_unset_budget_keeps_extra_gen_kwargs():
+    config = _payload(_config(max_gen_toks=None, extra_gen_kwargs={"skip_special_tokens": "false"}))
+    cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", None)
+
+    assert cmd[cmd.index("--gen_kwargs") + 1] == "skip_special_tokens=false"
+    assert "--max_tokens" not in cmd
 
 
 def test_build_command_chat_route_needs_template_and_generation():
