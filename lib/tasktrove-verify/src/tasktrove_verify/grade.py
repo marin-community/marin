@@ -7,6 +7,7 @@ import argparse
 import importlib
 import json
 import logging
+import math
 import sys
 import traceback
 from collections.abc import Callable
@@ -60,6 +61,19 @@ def scored(reward: float, **detail: object) -> Reward:
 
 def invalid_task(message: str) -> Reward:
     return Reward(0.0, Status.INVALID_TASK, {"error": message})
+
+
+def numeric_tolerance(spec: NumericSpec) -> float:
+    """Return the finite effective tolerance for a valid numeric grading spec."""
+    if not math.isfinite(spec.expected):
+        raise InvalidTask(f"numeric expected must be a finite number, got {spec.expected}")
+    for name, value in (("tolerance_abs", spec.tolerance_abs), ("tolerance_rel", spec.tolerance_rel)):
+        if not math.isfinite(value) or value < 0:
+            raise InvalidTask(f"numeric {name} must be a finite nonnegative number, got {value}")
+    tolerance = max(spec.tolerance_abs, spec.tolerance_rel * abs(spec.expected))
+    if not math.isfinite(tolerance):
+        raise InvalidTask(f"numeric effective tolerance must be finite, got {tolerance}")
+    return tolerance
 
 
 def infra_error(message: str) -> Reward:
@@ -117,7 +131,15 @@ def negative_candidate(spec: Spec) -> str | None:
         other = "B" if spec.expected.upper() != "B" else "A"
         return f"Answer: {other}"
     if isinstance(spec, NumericSpec):
-        return f"\\boxed{{{spec.expected + 1.0}}}"
+        try:
+            tolerance = numeric_tolerance(spec)
+        except InvalidTask:
+            return None
+        offset = max(2 * tolerance, 1.0)
+        for candidate in (spec.expected + offset, spec.expected - offset):
+            if math.isfinite(candidate) and abs(candidate - spec.expected) > tolerance:
+                return f"\\boxed{{{candidate}}}"
+        return "not a number"
     if isinstance(spec, ExactSpec) and len(spec.expected) > 1 and spec.ordered:
         return "\n".join(reversed(spec.expected))
     return None

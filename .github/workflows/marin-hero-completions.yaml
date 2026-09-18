@@ -4,10 +4,27 @@ on:
   schedule:
     - cron: "17 * * * *"
   workflow_dispatch:
+    inputs:
+      submission:
+        description: Submit the next checkpoint or all unfinished checkpoints
+        type: choice
+        default: next
+        options:
+          - next
+          - all
+      priority:
+        description: Priority for all currently discovered checkpoints
+        type: choice
+        default: batch
+        options:
+          - batch
+          - interactive
+          - production
 
 permissions:
   contents: read
   issues: write
+  id-token: write
 
 concurrency:
   group: hero-checkpoint-completions
@@ -45,9 +62,21 @@ jobs:
         id: auth
         uses: google-github-actions/auth@v3
         with:
-          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
       - name: Reconcile every permanent checkpoint
-        run: uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check reconcile
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          SAMPLING_SUBMISSION: ${{ inputs.submission || 'next' }}
+          SAMPLING_PRIORITY: ${{ inputs.priority }}
+        run: |
+          args=()
+          if [[ -n "$SAMPLING_PRIORITY" ]]; then
+            args+=(--priority "$SAMPLING_PRIORITY")
+          fi
+          uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check reconcile \
+            --submission "$SAMPLING_SUBMISSION" "${args[@]}"
       - name: Publish current completions and a daily snapshot
         if: always() && steps.auth.outcome == 'success'
         run: uv run --no-sync python -m experiments.grug.moe_hero_ep.ops.vibe_check report

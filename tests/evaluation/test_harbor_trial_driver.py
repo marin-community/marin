@@ -208,6 +208,16 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     expected = checked_policies[path.name]
     assert all(result["stable_policy_json"] == expected["stable_policy_json"] for result in seeded)
     assert all(result["digest"] == expected["digest"] for result in seeded)
+    assert expected["trials_per_task"] == 3
+
+
+def test_preflight_materializes_hugging_face_datasets(tmp_path):
+    # Harbor validates datasets[].name as a registry package, so the preflight must hand it the
+    # downloaded snapshot as a path (the worker does the same at run time) and count its tasks.
+    (result,) = json.loads(_preflight(tmp_path, [(_POLICIES / "swebench-recovery.yaml", {})]).stdout)
+    assert result["dataset_kind"] == "hugging_face"
+    assert result["dataset_selector"] == "DCAgent2/swebench-verified-random-100-folders"
+    assert result["benchmark_metadata"]["n_benchmark"] == 100
 
 
 def test_preflight_reports_only_verifier_host_environment_dependencies(tmp_path):
@@ -435,9 +445,13 @@ datasets:
   - path: tasks
 """
         )
-        (launch_dir / "tasks").mkdir()
+        task_dir = launch_dir / "tasks" / "task-one"
+        task_dir.mkdir(parents=True)
+        (task_dir / "task.toml").write_text('version = "1.0"\n[task]\nname = "task-one"\n[environment]\n')
+        (task_dir / "instruction.md").write_text("Solve the task.")
 
         (config,) = preflight_harbor_configs([(policy_path, {})])
+        assert config.benchmark.n_benchmark == 1
 
         worker_workspace = tmp_path / "worker"
         worker_dataset = worker_workspace / launch_dir.relative_to(_ROOT) / "tasks"

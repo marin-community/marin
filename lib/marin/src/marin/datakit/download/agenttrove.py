@@ -12,6 +12,11 @@ completeness (``original_teacher`` is populated on every row of the pinned
 revision; ``model`` and ``model_provider`` are null for some streams), so a row
 is dropped when any of them names an excluded family.
 
+The structured-chat SFT export also drops task sources with known weak task
+contracts or unverifiable outcomes. ``original_source`` groups several upstream
+repositories under labels such as ``exp_rpt``, so these exclusions intentionally
+remove whole groups.
+
 Transcripts carrying a task outcome are prefixed with a tag so the model can
 condition on it. Only two streams record a verdict — r2egym rows hold a numeric
 reward (``"1.0"``/``"0.0"``) and swesmith rows hold ``"success"``/``"timeout"``,
@@ -45,7 +50,7 @@ from marin.datakit.download.rollout_transforms import (
     render_role_message,
     text_document,
 )
-from marin.datakit.download.terminus import TASK_DESCRIPTION_MARKER, terminus_protocol_messages
+from marin.datakit.download.terminus import terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -69,6 +74,14 @@ EXCLUDED_TEACHER_MARKERS = frozenset({"gpt", "openai", "claude", "anthropic", "g
 # provenance ("GPT-OSS-120B", "openai/gpt-oss-120b") matches two excluded
 # markers. An allowed marker on any field keeps the row outright.
 ALLOWED_TEACHER_MARKERS = frozenset({"gpt-oss"})
+
+# The pinned AgentTrove revision exposes only coarse task-source labels. TaskTrove
+# retired bad task lineages within these groups, and sampled freelancer rows are
+# open-ended job postings rather than executable terminal tasks. Drop the groups
+# rather than retaining unidentifiable siblings of the bad lineages.
+EXCLUDED_TASK_SOURCES = frozenset(
+    {"freelancer", "Inferred Bugs", "MagiCoder Evol Instruct", "exp_rpt", "exp_rle", "unknown"}
+)
 
 PROVENANCE_FIELDS = ("model", "model_provider", "original_teacher")
 
@@ -125,6 +138,9 @@ def row_to_doc(row: dict) -> list[dict]:
 
 
 def row_to_chat_doc(row: dict) -> list[dict]:
+    if row.get("original_source") in EXCLUDED_TASK_SOURCES:
+        counters.pipeline.update_counter("agenttrove/chat/dropped_source", 1)
+        return []
     if is_excluded_teacher(row):
         return []
     conversations = row.get("conversations")
@@ -136,15 +152,14 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             counters.pipeline.update_counter("agenttrove/chat/missing_tool_definitions_filtered", 1)
             return []
         converted = opencode_protocol_messages(conversations, tools)
+        if converted is None:
+            return []
+        messages, metadata = converted
     else:
-        first = conversations[0]
-        content = first.get("content")
-        if first.get("role") == "user" and isinstance(content, str) and TASK_DESCRIPTION_MARKER in content:
-            conversations = [{**first, "content": content[content.index(TASK_DESCRIPTION_MARKER) :]}, *conversations[1:]]
-        converted = terminus_protocol_messages(conversations)
-    if converted is None:
-        return []
-    messages, metadata = converted
+        messages = terminus_protocol_messages(conversations)
+        if messages is None:
+            return []
+        metadata = {}
     merged_messages: list[dict] = []
     for message in messages:
         if merged_messages and message.get("role") == "user" and merged_messages[-1].get("role") == "user":
@@ -226,7 +241,7 @@ def agenttrove_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/agenttrove",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.11.review-fixes"},
+        hash_attrs={"version": "2026.09.17.native-terminus-source-filter"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/agenttrove", download=processed

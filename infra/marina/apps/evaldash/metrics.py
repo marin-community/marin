@@ -21,7 +21,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from marin.evaluation.eval_measurements import measurement_from_record, measurements_from_records
+from marin.evaluation.eval_measurements import declared_metric_gap, measurement_from_record, measurements_from_records
 from marin.evaluation.eval_stats import (
     DEFAULT_EXCLUDE_FLAGS,
     DEFAULT_MIN_COVERAGE,
@@ -31,12 +31,15 @@ from marin.evaluation.eval_stats import (
     Completeness,
     Interval,
     Measurement,
+    MetricProtocol,
     MissingPolicy,
     Rejection,
     SelectionRequest,
     covers_panel,
+    declared_protocols,
     difference_interval,
     matches_filters,
+    matches_protocol,
     measurement_interval,
     panel_aggregate,
     select,
@@ -102,16 +105,25 @@ def eval_suites(evals: set[str]) -> list[dict]:
 
 
 def declared_families(records: Iterable[EvalRunRecord]) -> dict[str, str]:
-    """Map each eval name to its newest non-null family declaration."""
-    declared: dict[str, tuple[str, str]] = {}
+    """Map each eval name to its explicit family or newest Harbor dataset."""
+    explicit: dict[str, tuple[str, str]] = {}
+    inferred: dict[str, tuple[str, str]] = {}
     for record in records:
         family = record.evaluation.family
-        if family is None:
+        if family is not None:
+            current = explicit.get(record.evaluation.name)
+            if current is None or (record.created_at or "") > current[1]:
+                explicit[record.evaluation.name] = (family, record.created_at or "")
             continue
-        current = declared.get(record.evaluation.name)
-        if current is None or (record.created_at or "") > current[1]:
-            declared[record.evaluation.name] = (family, record.created_at or "")
-    return {name: family for name, (family, _) in declared.items()}
+        harbor = record.evaluation.harbor
+        if harbor is not None:
+            current = inferred.get(record.evaluation.name)
+            if current is None or (record.created_at or "") > current[1]:
+                inferred[record.evaluation.name] = (harbor.dataset, record.created_at or "")
+    return {
+        **{name: family for name, (family, _) in inferred.items()},
+        **{name: family for name, (family, _) in explicit.items()},
+    }
 
 
 def group_by_family(names: Iterable[str], families: Mapping[str, str]) -> dict[str, list[str]]:
@@ -168,7 +180,7 @@ def _panel_records(records: list[EvalRunRecord]) -> list[EvalRunRecord]:
 def _gap_reason(record: EvalRunRecord) -> str:
     """Why a record contributes no cell, when the request did not reject it outright."""
     if record.status == RunStatus.SUCCEEDED:
-        return "no metrics recorded"
+        return declared_metric_gap(record) or "no metrics recorded"
     return f"status {record.status.value}"
 
 
@@ -183,9 +195,12 @@ def cell_payload(measurement: Measurement) -> dict:
         "interval_kind": interval.kind.value,
         "metric": measurement.metric,
         "metric_kind": measurement.kind.value,
+        "declared": measurement.declared,
         "n_scored": coverage.n_scored,
+        "n_benchmark": coverage.n_benchmark,
         "n_attempted": coverage.n_attempted,
         "coverage": coverage.rate,
+        "benchmark_rate": coverage.benchmark_rate,
         "errors": dict(coverage.errors),
         "item_cap": measurement.item_cap,
         "flags": sorted(flag.value for flag in measurement.flags),
@@ -264,8 +279,15 @@ def build_panel(
     """
     eligible = _panel_records(records)
     metadata = run_metadata(eligible)
+    measurements = measurements_from_records(eligible)
+    protocols = declared_protocols(measurements)
     # Family columns are resolved after selection, so apply completeness to the effective panel below.
-    selection = select(measurements_from_records(eligible), replace(request, completeness=Completeness.ANY), metadata)
+    selection = select(
+        measurements,
+        replace(request, completeness=Completeness.ANY),
+        metadata,
+        protocols,
+    )
     requested = list(request.panel) if request.panel is not None else list(selection.benchmarks)
     families = _family_columns(requested, declared_families(eligible), selection.cells)
     panel = [column.default for column in families]
@@ -301,6 +323,10 @@ def build_panel(
         )
     return {
         "benchmarks": list(selection.benchmarks),
+        "protocols": {
+            benchmark: {"metric": protocol.metric, "kind": protocol.kind.value}
+            for benchmark, protocol in protocols.items()
+        },
         "panel": panel,
         "families": [
             {"family": column.family, "variants": list(column.variants), "default": column.default}
@@ -309,6 +335,7 @@ def build_panel(
         "rows": rows,
         "request": {
             "min_coverage": request.min_coverage,
+            "min_benchmark_coverage": request.min_benchmark_coverage,
             "cohort": request.cohort.value,
             "cohort_version": request.cohort_version,
             "completeness": request.completeness.value,
@@ -340,7 +367,8 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
     """
     eligible = _panel_records(records)
     metadata = run_metadata(eligible)
-    selection = select(measurements_from_records(eligible), request, metadata)
+    measurements = measurements_from_records(eligible)
+    selection = select(measurements, request, metadata, declared_protocols(measurements))
     chosen = {model: dict(selection.cells.get(model, {})) for model in models}
 
     union = [name for name in selection.benchmarks if any(name in cells for cells in chosen.values())]
@@ -394,10 +422,10 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
     }
 
 
-def record_headline(record: EvalRunRecord) -> dict | None:
+def record_headline(record: EvalRunRecord, protocol: MetricProtocol | None = None) -> dict | None:
     """One run's headline score with its interval, or None when the run produced no primary metric."""
     measurement = measurement_from_record(record)
-    if measurement is None:
+    if measurement is None or (protocol is not None and not matches_protocol(measurement, protocol)):
         return None
     return cell_payload(measurement)
 
@@ -423,11 +451,11 @@ def _model_cohorts(records: list[EvalRunRecord]) -> list[dict]:
     return cohorts
 
 
-def _model_history(records: list[EvalRunRecord]) -> dict[str, list[dict]]:
+def _model_history(records: list[EvalRunRecord], protocols: Mapping[str, MetricProtocol]) -> dict[str, list[dict]]:
     """Per-eval score-over-time: every scored run for the model on each eval, oldest first."""
     history: dict[str, list[dict]] = {}
     for record in records:
-        headline = record_headline(record)
+        headline = record_headline(record, protocols.get(record.evaluation.name))
         if headline is None:
             continue
         history.setdefault(record.evaluation.name, []).append({**headline, "status": record.status.value})
@@ -436,11 +464,16 @@ def _model_history(records: list[EvalRunRecord]) -> dict[str, list[dict]]:
     return history
 
 
-def _model_runs(records: list[EvalRunRecord]) -> list[dict]:
+def _model_runs(records: list[EvalRunRecord], protocols: Mapping[str, MetricProtocol]) -> list[dict]:
     """Every run for the model, newest first, each with its headline score when it scored."""
     runs = []
     for record in records:
-        headline = record_headline(record)
+        protocol = protocols.get(record.evaluation.name)
+        measurement = measurement_from_record(record)
+        headline = record_headline(record, protocol)
+        protocol_mismatch = (
+            measurement is not None and protocol is not None and not matches_protocol(measurement, protocol)
+        )
         runs.append(
             {
                 "run_id": record.run_id,
@@ -449,7 +482,11 @@ def _model_runs(records: list[EvalRunRecord]) -> list[dict]:
                 "created_at": record.created_at,
                 "version": record.version,
                 "headline": headline,
-                "gap_reason": None if headline else _gap_reason(record),
+                "gap_reason": (
+                    None
+                    if headline
+                    else "metric differs from current protocol" if protocol_mismatch else _gap_reason(record)
+                ),
             }
         )
     runs.sort(key=lambda run: run["created_at"] or "", reverse=True)
@@ -464,6 +501,7 @@ def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
     as the headline panel does. ``history`` is the per-eval score-over-time across every scored run,
     and ``runs`` spans every run for the model (smoke included), newest first.
     """
+    protocols = declared_protocols(measurements_from_records(_panel_records(records)))
     model_records = [record for record in records if record.model.name == model]
     if not model_records:
         return None
@@ -476,8 +514,8 @@ def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
         "user": newest.user,
         "current_version": max(eligible, key=lambda r: r.created_at or "").version if eligible else None,
         "cohorts": _model_cohorts(eligible),
-        "history": _model_history(eligible),
-        "runs": _model_runs(model_records),
+        "history": _model_history(eligible, protocols),
+        "runs": _model_runs(model_records, protocols),
     }
 
 
@@ -487,6 +525,7 @@ def panel_request(
     cohort_version: str | None = None,
     completeness: Completeness = Completeness.ANY,
     min_coverage: float = DEFAULT_MIN_COVERAGE,
+    min_benchmark_coverage: float = DEFAULT_MIN_COVERAGE,
     filters: dict[str, str] | None = None,
     model_query: str | None = None,
     include_flagged: bool = False,
@@ -499,6 +538,7 @@ def panel_request(
     """
     return SelectionRequest(
         min_coverage=min_coverage,
+        min_benchmark_coverage=min_benchmark_coverage,
         exclude_flags=frozenset() if include_flagged else DEFAULT_EXCLUDE_FLAGS,
         cohort=CohortMode.SINGLE_COHORT if cohort_version else CohortMode.LATEST_VALID,
         cohort_version=cohort_version,

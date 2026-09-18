@@ -9,5 +9,6 @@ apply_chat_template: true
 limit: null
 batch_size: 1
 seed: 1234
-max_tokens: 2048
+# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own
+# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.
 runtime_extras: [ifeval]

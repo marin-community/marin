@@ -11,10 +11,14 @@ import pyarrow as pa
 import pytest
 from config import ClusterTarget
 from conftest import bridge_config
-from errors import UpstreamError
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from errors import FinelogUnavailableError, UpstreamError
+from finelog.errors import StatsError
 from finelog_health import FinelogRole
 from finelog_source import FinelogSource
 from github_source import GithubSource
+from google.api_core.exceptions import Forbidden, ServiceUnavailable
 from iris_source import IrisSource
 from k8s_source import K8sFleet
 from nightly_config import NIGHTLY_LANES
@@ -23,6 +27,7 @@ from starlette.testclient import TestClient
 from wandb_source import WandbSource
 
 TARGET = ClusterTarget(name="marin", project="p", zone="z", instance_filter="f", controller_filter="c")
+HEALTH_QUERY = 'SELECT * FROM "log" LIMIT 1'
 
 
 def _iris(handler) -> IrisSource:
@@ -49,7 +54,7 @@ class _FakeLogClient:
         self._raises = raises
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
-        assert sql == 'SELECT * FROM "log" LIMIT 1'
+        assert sql == HEALTH_QUERY
         assert max_rows == 1
         if self._raises is not None:
             raise self._raises
@@ -80,6 +85,29 @@ def test_finelog_health_reports_query_failures_without_raising():
 def test_finelog_health_does_not_mask_programming_errors():
     with pytest.raises(ValueError, match="bug"):
         _finelog(ValueError("bug")).health()
+
+
+def test_finelog_query_classifies_only_retryable_rpc_failures_as_unavailable():
+    unavailable = StatsError("query failed")
+    unavailable.__cause__ = ConnectError(Code.UNAVAILABLE, "down")
+    with pytest.raises(FinelogUnavailableError):
+        _finelog(unavailable).query(HEALTH_QUERY, max_rows=1)
+
+    invalid = StatsError("invalid query")
+    invalid.__cause__ = ConnectError(Code.INVALID_ARGUMENT, "syntax error")
+    with pytest.raises(StatsError) as raised:
+        _finelog(invalid).query(HEALTH_QUERY, max_rows=1)
+    assert raised.value is invalid
+
+
+def test_finelog_query_classifies_only_retryable_discovery_failures_as_unavailable():
+    with pytest.raises(FinelogUnavailableError):
+        _finelog(ServiceUnavailable("temporarily unavailable")).query(HEALTH_QUERY, max_rows=1)
+
+    forbidden = Forbidden("permission denied")
+    with pytest.raises(Forbidden) as raised:
+        _finelog(forbidden).query(HEALTH_QUERY, max_rows=1)
+    assert raised.value is forbidden
 
 
 def test_finelog_relay_status_calls_connect_json_without_a_new_client_release():

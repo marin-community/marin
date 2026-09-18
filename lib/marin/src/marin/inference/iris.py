@@ -26,6 +26,7 @@ from rigging.timing import Deadline, Duration
 
 from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.broker import InferenceBroker
+from marin.inference.chat_template_protocol import protocol_for_chat_template
 from marin.inference.config import (
     BrokerConfig,
     IrisConfig,
@@ -34,7 +35,12 @@ from marin.inference.config import (
     ServedModelConfig,
     VllmEngineConfig,
 )
-from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, build_dashboard_app, serve_app_background
+from marin.inference.dashboard_server import (
+    ServingInfo,
+    bind_serving_socket,
+    build_dashboard_app,
+    serve_app_background,
+)
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import LocalInferenceSession, local_inference
 from marin.inference.types import (
@@ -165,7 +171,8 @@ class IrisServiceConfig:
     instances: int = 1
     broker: BrokerConfig | None = None
     timeout_hours: float = 24.0
-    controller_proxy_timeout_seconds: float = 2100.0
+    # Covers both the Iris proxy and dashboard upstream client for long generations.
+    controller_proxy_timeout_seconds: float = 12 * 60 * 60
     port_name: str | None = "http"
 
     def __post_init__(self) -> None:
@@ -273,6 +280,15 @@ def _detect_chat_support(model: RunningModel) -> bool:
     return response.status_code == 200
 
 
+def _model_tool_chat_template(model: ServedModelConfig) -> str | None:
+    if model.chat_template_content is not None:
+        return model.chat_template_content
+    # Keep tokenizer and Transformers imports inside the serving worker.
+    from marin.inference.model_preparation import read_tool_chat_template  # noqa: PLC0415
+
+    return read_tool_chat_template(model.tokenizer or model.weights, model.revision)
+
+
 @contextlib.contextmanager
 def _register_dashboard(
     service: IrisServiceConfig,
@@ -281,6 +297,7 @@ def _register_dashboard(
     tensor_parallel_size: int,
     backend_name: str,
     streaming: bool,
+    chat_template_content: str | None,
 ) -> Iterator[None]:
     job_info = get_job_info()
     if job_info is None:
@@ -299,6 +316,7 @@ def _register_dashboard(
         has_chat_template=has_chat_template,
         endpoint=service.endpoint_name,
         streaming=streaming,
+        chat_template_protocol=protocol_for_chat_template(chat_template_content),
     )
     app = build_dashboard_app(
         upstream_base_url=_server_root(model),
@@ -351,6 +369,7 @@ def run_iris_service(service: IrisServiceConfig) -> None:
                 tensor_parallel_size=tensor_parallel_size,
                 backend_name=local_session.backend_name,
                 streaming=True,
+                chat_template_content=local_session.chat_template_content,
             ):
                 _block_until_timeout(local_session.check_alive, service.timeout_hours)
         return
@@ -370,6 +389,7 @@ def run_iris_service(service: IrisServiceConfig) -> None:
             tensor_parallel_size=session.tensor_parallel_size,
             backend_name=session.backend_name,
             streaming=session.streaming,
+            chat_template_content=_model_tool_chat_template(service.model),
         ):
             _block_until_timeout(session.check_alive, service.timeout_hours)
 

@@ -150,6 +150,7 @@ def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
 
     monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
     monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda config: object())
+    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: "{{ messages }}")
     spec = ModelSpec(
         weights="org/model",
         revision="abc123",
@@ -474,6 +475,7 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
             model=RunningModel(OpenAIEndpoint("http://127.0.0.1:1/v1", model_id)),
             backend_name="vllm",
             tensor_parallel_size=1,
+            chat_template_content="{{ messages }}",
             check_alive=lambda: None,
         )
 
@@ -515,6 +517,7 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
         set_job_info(None)
 
     assert "accelerator" not in registered_metadata
+    assert float(registered_metadata["proxy_timeout_seconds"]) == 43_200
 
 
 def test_resolve_serving_plan_rejects_incompatible_tpu_alternatives():

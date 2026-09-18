@@ -10,7 +10,9 @@ import importlib.metadata
 import inspect
 import json
 import os
+import shutil
 import sys
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum, StrEnum
@@ -25,8 +27,9 @@ from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # instal
 from harbor_config.env import get_required_host_vars  # pyrefly: ignore[missing-import]
 from harbor_config.errors import ErrorCategory, errors_by_category, known_error_types  # pyrefly: ignore[missing-import]
 from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
-from harbor_config.models.job.config import DatasetConfig  # pyrefly: ignore[missing-import]
+from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
+from huggingface_hub import snapshot_download  # pyrefly: ignore[missing-import]  # installed by external driver
 from pydantic import BaseModel, ConfigDict, ValidationError
 from upath import UPath  # pyrefly: ignore[missing-import]  # installed by external driver
 
@@ -46,8 +49,9 @@ _STABLE_JOB_NAME = "__marin_job__"
 _STABLE_JOBS_DIR = "/__marin_jobs__"
 _STABLE_MODEL = "__marin_model__"
 _STABLE_ENDPOINT = "http://marin.invalid/v1"
-_PLACEHOLDER_DATASET_PATH = "/__marin_dataset__"
 _HF_DATASET_PREFIX = "hf://"
+# Task datasets are hundreds of small files; the default 8 workers take minutes on a cold cache.
+_HF_SNAPSHOT_WORKERS = 32
 
 
 class RuntimeOverlay(BaseModel):
@@ -60,6 +64,8 @@ class RuntimeOverlay(BaseModel):
     served_model: str
     task_limit: int | None
     model_agent_kwargs: dict[str, Any]
+    archive_root: str
+    archive_dataset: str
 
 
 class _DatasetKind(StrEnum):
@@ -284,6 +290,10 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             "jobs_dir": UPath(overlay.jobs_dir),
             "agents": [agent],
             "datasets": [dataset],
+            "archive": ArchiveConfig(
+                root=overlay.archive_root,
+                dataset=overlay.archive_dataset,
+            ),
         }
     )
     return effective
@@ -333,7 +343,35 @@ def _harbor_config_commit() -> str:
     return commit
 
 
-def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict[str, object]:
+def _preflight_dataset_path(
+    policy_path: Path, metadata: _DatasetMetadata, workdir: Path, hf_token: str | None
+) -> str | None:
+    """Local task directory for the placeholder job, or ``None`` for a Harbor registry dataset.
+
+    Harbor validates ``datasets[].name`` as a registry package reference, so a Hugging Face source
+    has to reach ``Job.create`` as a path, as the evaluation worker does at run time.
+    """
+    if metadata.kind == _DatasetKind.LOCAL:
+        return str((policy_path.parent / metadata.selector).resolve())
+    if metadata.kind == _DatasetKind.HUGGING_FACE:
+        # Download into the user's Hugging Face cache so repeated launches of one policy pay for the
+        # snapshot once, then copy it out (dereferencing the cache's blob symlinks) so the job sees a
+        # plain task tree like the worker's.
+        snapshot = snapshot_download(
+            repo_id=metadata.selector,
+            repo_type="dataset",
+            revision=metadata.revision,
+            max_workers=_HF_SNAPSHOT_WORKERS,
+            token=hf_token or False,
+        )
+        root = workdir / "hf_dataset"
+        shutil.copytree(snapshot, root, symlinks=False)
+        (root / ".gitattributes").unlink(missing_ok=True)
+        return str(root)
+    return None
+
+
+def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object], hf_token: str | None) -> dict[str, object]:
     document = _document(path)
     config = JobConfig.model_validate(document, extra="forbid")
     if config.tasks:
@@ -348,21 +386,25 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
 
     stable_config = _stable_config(config)
     stable_policy_json = _stable_policy_json(stable_config)
-    placeholder_dataset_path = (
-        None if dataset_metadata.kind == _DatasetKind.HARBOR_REGISTRY else _PLACEHOLDER_DATASET_PATH
-    )
-    effective = _effective_config(
-        stable_config,
-        RuntimeOverlay(
-            job_name=_STABLE_JOB_NAME,
-            jobs_dir=_STABLE_JOBS_DIR,
-            dataset_path=placeholder_dataset_path,
-            endpoint_url=_STABLE_ENDPOINT,
-            served_model=_STABLE_MODEL,
-            task_limit=None,
-            model_agent_kwargs=dict(model_agent_kwargs),
-        ),
-    )
+    with tempfile.TemporaryDirectory(prefix="marin-harbor-preflight-job-") as jobs_dir:
+        dataset_path = _preflight_dataset_path(path, dataset_metadata, Path(jobs_dir), hf_token)
+        effective = _effective_config(
+            stable_config,
+            RuntimeOverlay(
+                job_name=_STABLE_JOB_NAME,
+                jobs_dir=jobs_dir,
+                dataset_path=dataset_path,
+                endpoint_url=_STABLE_ENDPOINT,
+                served_model=_STABLE_MODEL,
+                task_limit=None,
+                model_agent_kwargs=dict(model_agent_kwargs),
+                archive_root=jobs_dir,
+                archive_dataset=dataset_metadata.selector,
+            ),
+        )
+        job = asyncio.run(Job.create(effective))
+    if len(job.benchmark_metadata) != 1:
+        raise ValueError("Harbor shared launcher requires exactly one benchmark descriptor")
     infrastructure_errors = errors_by_category(ErrorCategory.INFRASTRUCTURE)
     agent_errors = errors_by_category(ErrorCategory.AGENT)
     passthrough_errors = errors_by_category(ErrorCategory.PASSTHROUGH)
@@ -388,6 +430,8 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
         },
         "max_input_tokens": model_info[MAX_INPUT_TOKENS_KEY],
         "max_output_tokens": model_info[MAX_OUTPUT_TOKENS_KEY],
+        "benchmark_metadata": job.benchmark_metadata[0].model_dump(mode="json"),
+        "trials_per_task": config.n_attempts * len(config.agents),
     }
 
 
@@ -396,6 +440,7 @@ def _preflight(request_path: Path) -> None:
     if not isinstance(requests, list):
         raise ValueError("Harbor preflight request must be a list")
     results: list[dict[str, object]] = []
+    hf_token = os.environ.get("HF_TOKEN")
     for request in requests:
         if not isinstance(request, Mapping):
             raise ValueError("Harbor preflight request entries must be objects")
@@ -405,7 +450,7 @@ def _preflight(request_path: Path) -> None:
             raise ValueError("Harbor preflight request path must be a string")
         if not isinstance(model_agent_kwargs, Mapping):
             raise ValueError("Harbor preflight model agent kwargs must be a mapping")
-        results.append(_preflight_one(Path(path), model_agent_kwargs))
+        results.append(_preflight_one(Path(path), model_agent_kwargs, hf_token))
     sys.stdout.write(json.dumps(results, ensure_ascii=False, separators=(",", ":")))
 
 

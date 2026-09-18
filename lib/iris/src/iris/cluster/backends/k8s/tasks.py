@@ -110,6 +110,7 @@ from iris.cluster.runtime.env import (
 )
 from iris.cluster.runtime.output_capture import task_output_storage_failure
 from iris.cluster.runtime.profile import (
+    DEFAULT_PROFILE_DURATION_SECONDS,
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
     build_profile_row,
@@ -1397,37 +1398,6 @@ _GC_MAX_AGE_SECONDS = 3600  # 1 hour
 # cannot race exit-status collection.
 _GANG_GC_MAX_AGE_SECONDS = 60
 
-# Blocker eviction: minimum interval between reconcile-driven eviction sweeps
-# of preempt_namespaces. Gang pods can stay SchedulingGated for many cycles
-# while Kueue retries admission; without this floor every reconcile would
-# re-list the foreign namespaces and re-issue deletes for pods already
-# terminating.
-_PREEMPT_INTERVAL_SECONDS = 30
-
-
-def _has_gated_gpu_pods(pods: list[dict]) -> bool:
-    """True when any GPU-requesting pod is still held by a Kueue scheduling gate.
-
-    Kueue's webhook gates every pod carrying the queue-name label and removes the
-    gate only on Workload admission, so a surviving gate on a GPU pod — a gang member
-    or a single-pod GPU job, both of which now route through Kueue — means it is still
-    waiting for GPU capacity, the signal to evict foreign preemptible blockers holding
-    that capacity.
-    """
-    for pod in pods:
-        if not pod.get("spec", {}).get("schedulingGates"):
-            continue
-        if _pod_gpu_request(pod) > 0:
-            return True
-    return False
-
-
-def _run_req_gpu_count(run_req: job_pb2.RunTaskRequest) -> int:
-    """GPU count a task requests (0 for CPU-only), used to gate blocker eviction."""
-    if not run_req.HasField("resources") or not run_req.resources.HasField("device"):
-        return 0
-    return get_gpu_count(run_req.resources.device)
-
 
 def _pod_gpu_request(pod: dict) -> int:
     """Total GPUs the pod requests, counting limits as implicit requests."""
@@ -1440,25 +1410,6 @@ def _pod_gpu_request(pod: dict) -> int:
         if value:
             total += parse_k8s_quantity(str(value))
     return total
-
-
-def _is_preemptible_blocker(pod: dict) -> bool:
-    """Whether a foreign-namespace pod is safe for Iris to evict.
-
-    Hard guards, independent of configuration: the pod must declare a negative
-    priority (its priority class marks it scheduler-preemptible by design) AND
-    request GPUs (it actually holds capacity Kueue TAS counts against gangs).
-    Terminal and already-terminating pods are skipped.
-    """
-    meta = pod.get("metadata", {})
-    if meta.get("deletionTimestamp"):
-        return False
-    if pod.get("status", {}).get("phase") in ("Succeeded", "Failed"):
-        return False
-    priority = pod.get("spec", {}).get("priority")
-    if not isinstance(priority, int) or priority >= 0:
-        return False
-    return _pod_gpu_request(pod) > 0
 
 
 @dataclass(frozen=True)
@@ -2375,10 +2326,6 @@ class K8sTaskProvider:
     # Cluster-level pod settings; also the source of the namespace and managed
     # label this backend uses for its own ConfigMap/PDB writes and kubectl scans.
     pods: PodConfig
-    # Namespaces whose preemptible (negative-priority) GPU pods Iris evicts
-    # when it has gang work for Kueue. Empty disables the feature; see
-    # _evict_preemptible_blockers for the safety guards.
-    preempt_namespaces: list[str] = field(default_factory=list)
     # Pre-resolved iris.task_event Table handle.
     # When None (tests without finelog) the scheduling/admission event log is
     # disabled; task state still flows, only the diagnostic timeline is skipped.
@@ -2409,7 +2356,6 @@ class K8sTaskProvider:
     _task_event_log: TaskEventLog | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_cluster_scan: float = field(default=0.0, init=False, repr=False)
-    _last_preempt_time: float = field(default=0.0, init=False, repr=False)
     # Terminal-resource GC runs on its own thread. _gc_lock guards the deferred-cleanup
     # hash set, the one piece of state it shares with the control loop.
     _gc_emitter: PeriodicEmitter | None = field(default=None, init=False, repr=False)
@@ -2506,13 +2452,6 @@ class K8sTaskProvider:
         GC only takes the active-pod snapshot here; its pass runs on its own
         thread.
         """
-        # Free GPU capacity for any incoming GPU pod before it is created (gang
-        # member or single-pod GPU job — both route through Kueue): Kueue TAS
-        # computes node capacity at admission, so blockers must be gone (or
-        # terminating) by the time it evaluates the new Workload.
-        if self.preempt_namespaces and any(_run_req_gpu_count(r) > 0 for r in request.tasks_to_run):
-            self._evict_preemptible_blockers(reason="GPU pod submission", force=True)
-
         apply_failures: list[TaskUpdate] = []
         for run_req in request.tasks_to_run:
             try:
@@ -2561,12 +2500,6 @@ class K8sTaskProvider:
             labels=_MANAGED_POD_LABELS,
             field_selector=_ACTIVE_PODS_FIELD_SELECTOR,
         )
-
-        # Blockers can also appear AFTER submission (health checks target any
-        # idle GPU node), so keep evicting while any GPU pod waits gated for
-        # Kueue admission.
-        if self.preempt_namespaces and _has_gated_gpu_pods(managed_pods):
-            self._evict_preemptible_blockers(reason="GPU pods held SchedulingGated awaiting Kueue admission")
 
         desired_keys: set[tuple[str, int]] = set()
         for run_req in request.tasks_to_run:
@@ -2643,7 +2576,7 @@ class K8sTaskProvider:
         """
         attempt_id = target.attempt_id
         pod_name = self._live_pod_name(target)
-        duration = request.duration_seconds or 10
+        duration = request.duration_seconds or DEFAULT_PROFILE_DURATION_SECONDS
         dispatch = _K8sProfileDispatch(self.kubectl, pod_name)
         profile_type = job_pb2.ProfileType()
         profile_type.CopyFrom(request.profile_type)
@@ -2806,57 +2739,6 @@ class K8sTaskProvider:
             )
             self.kubectl.apply_json(pdb)
             logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
-
-    def _evict_preemptible_blockers(self, *, reason: str, force: bool = False) -> None:
-        """Delete preemptible GPU pods from preempt_namespaces to unblock gang admission.
-
-        Kueue TAS counts every non-Kueue pod's GPU requests as fixed node usage
-        and its preemption only targets Kueue Workloads, while gang pods never
-        reach the kube-scheduler until admitted — so pods the kube-scheduler
-        would displace (negative priority, PreemptLowerPriority) instead starve
-        gangs indefinitely. Iris performs that eviction itself, in the layer it
-        owns.
-
-        Safety guards regardless of configuration: only pods that pass
-        _is_preemptible_blocker (negative priority AND GPU request, not already
-        terminating) are deleted, and Iris's own namespace is never touched.
-        ``force`` bypasses the debounce for discrete events (gang submission);
-        the reconcile-driven path is rate-limited to _PREEMPT_INTERVAL_SECONDS.
-
-        Eviction is best-effort: per-namespace list/delete failures are logged
-        and skipped so they can never block task dispatch in reconcile().
-        """
-        now = time.monotonic()
-        if not force and now - self._last_preempt_time < _PREEMPT_INTERVAL_SECONDS:
-            return
-        self._last_preempt_time = now
-        for ns in self.preempt_namespaces:
-            if ns == self.pods.namespace:
-                logger.warning("preempt_namespaces includes iris's own namespace %r; refusing to evict there", ns)
-                continue
-            try:
-                pods = self.kubectl.list_pods_in_namespace(ns)
-            except KubectlError as e:
-                logger.warning("Failed to list pods in preempt namespace %s: %s", ns, e)
-                continue
-            for pod in pods:
-                if not _is_preemptible_blocker(pod):
-                    continue
-                name = pod.get("metadata", {}).get("name", "")
-                if not name:
-                    continue
-                logger.info(
-                    "Evicting preemptible blocker pod %s/%s (priority=%s, gpus=%d): %s",
-                    ns,
-                    name,
-                    pod.get("spec", {}).get("priority"),
-                    _pod_gpu_request(pod),
-                    reason,
-                )
-                try:
-                    self.kubectl.delete_pod_in_namespace(ns, name)
-                except KubectlError as e:
-                    logger.warning("Failed to evict blocker pod %s/%s: %s", ns, name, e)
 
     def _delete_stray_pods(self, cached_pods: list[dict], desired_keys: set[tuple[str, int]]) -> None:
         """Delete pods that aren't in the desired ``(task_hash, attempt_id)`` set.

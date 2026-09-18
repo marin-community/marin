@@ -63,6 +63,14 @@ on the assistant message. For tools, pass the recorded definitions through
 the converter can associate results with calls before producing Harmony messages.
 Do not reconstruct tool definitions from observed arguments.
 
+Some agent datasets use a text protocol instead of API tool calls. Terminus is
+a terminal-agent protocol whose responses are JSON objects with a `commands`
+list and often `analysis`, `plan`, and `task_complete` fields. Its source exports
+record command output as user turns. Keep the source record's initial user prompt
+and train on the JSON responses as assistant text. The
+`terminus_protocol_messages` parser in `download/terminus.py` extracts the JSON
+object and keeps the command observations as user turns.
+
 For a source that constructs Harmony `Message` objects directly, use
 `chat_document` to serialize them instead.
 
@@ -83,6 +91,9 @@ The schema and validators live in `marin.datakit.chat_normalize`:
   Replies must match pending calls in order before the conversation resumes.
 - Records end with an assistant message. Reasoning-only endings and unanswered
   final batches of tool calls are allowed, preserving incomplete attempts.
+
+Restore withheld prompts before chat conversion; a source hash is a lookup key,
+not a substitute for the original user request.
 
 The normalizer expects serialized Harmony, not source fields such as `tool_calls`
 or `reasoning_content`. Incorrect answers and tool arguments that violate the
@@ -197,6 +208,11 @@ normalized text. Deduplication compares rendered bytes: equivalent conversations
 rendered with different templates need not deduplicate. Use the same template
 version when combining rendered sources. The structured Harmony artifact remains
 available through `source.chat_normalized`.
+
+Rendered text has no per-turn loss mask. `ChatLmDatasetFormat` currently masks
+user turns and trains on every assistant turn. The Nemotron adapter retains its
+source `train_turns` list as `source_train_turns`, but neither renderer nor
+trainer applies it.
 
 Stored text omits BOS; the standard text tokenizer prepends it and appends its
 normal space-plus-EOS document separator after the final chat EOT. Direct

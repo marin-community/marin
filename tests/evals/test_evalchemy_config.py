@@ -36,6 +36,7 @@ def _config(**overrides) -> EvalchemyRunConfig:
     base = dict(
         name="core",
         tasks=(EvalTaskConfig("arc_easy", 0), EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_cot", generation=True)),
+        max_gen_toks=2048,
     )
     base.update(overrides)
     return EvalchemyRunConfig(**base)
@@ -123,6 +124,8 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     assert "--apply_chat_template" not in cmd
     assert cmd[cmd.index("--tasks") + 1] == "gsm8k"
     assert cmd[cmd.index("--output_path") + 1] == "/tmp/out"
+    assert cmd[cmd.index("--finestore_output_path") + 1] == config["out_path"]
+    assert cmd[cmd.index("--finestore_output_prefix") + 1] == "gsm8k_cot"
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"
     # Chat-native benchmarks read --max_tokens instead of gen_kwargs; both carry the unit's cap.
     assert cmd[cmd.index("--max_tokens") + 1] == "2048"
@@ -157,6 +160,48 @@ def test_no_extra_gen_kwargs_leaves_gen_kwargs_at_budget_only():
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"
 
 
+def test_unset_budget_lets_evalchemy_size_its_own_benchmark(monkeypatch):
+    # Without a configured cap Evalchemy sizes a chat benchmark's responses from the served context
+    # and its stored longest prompt; an explicit max_gen_toks or --max_tokens would override that.
+    monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: name == "AIME24")
+    config = _payload(_config(max_gen_toks=None, tasks=(EvalTaskConfig("AIME24", 0, generation=True),)))
+    cmd = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 40960)
+
+    assert "--max_tokens" not in cmd
+    assert "--gen_kwargs" not in cmd
+    model_args = dict(pair.split("=", 1) for pair in cmd[cmd.index("--model_args") + 1].split(","))
+    assert model_args["max_length"] == "40960"
+
+
+@pytest.mark.parametrize(
+    ("max_length", "expected_gen_kwargs"),
+    [
+        # Served context known: the native task gets the context minus the prompt reserve.
+        (40960, "max_gen_toks=36864,skip_special_tokens=false"),
+        # Unknown context: nothing to derive from, only the model's extra kwargs go out.
+        (None, "skip_special_tokens=false"),
+    ],
+)
+def test_unset_budget_sizes_native_generation_task_from_served_context(monkeypatch, max_length, expected_gen_kwargs):
+    # lm-eval-native tasks only read max_gen_toks (default 256); --max_tokens stays off because it is
+    # an Evalchemy-only knob.
+    monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: False)
+    config = _payload(_config(max_gen_toks=None, extra_gen_kwargs={"skip_special_tokens": "false"}))
+    cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", max_length)
+
+    assert cmd[cmd.index("--gen_kwargs") + 1] == expected_gen_kwargs
+    assert "--max_tokens" not in cmd
+
+
+def test_unset_budget_loglikelihood_task_gets_no_gen_kwargs(monkeypatch):
+    monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: False)
+    config = _payload(_config(max_gen_toks=None))
+    cmd = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 40960)  # arc_easy, loglikelihood
+
+    assert "--gen_kwargs" not in cmd
+    assert "--max_tokens" not in cmd
+
+
 def test_build_command_chat_route_needs_template_and_generation():
     config = _payload(_config(apply_chat_template=True))
     generative, mcq = config["tasks"][1], config["tasks"][0]
@@ -165,7 +210,16 @@ def test_build_command_chat_route_needs_template_and_generation():
     cmd = build_command(config, generative, "/tmp/out", "/opt/py", None)
     assert cmd[cmd.index("--model") + 1] == "local-chat-completions"
     assert "--apply_chat_template" in cmd
-    assert "base_url=http://10.0.0.1:30000/v1/chat/completions" in build_model_args(config, True, None)
+    chat_args = dict(pair.split("=", 1) for pair in build_model_args(config, True, None).split(","))
+    assert chat_args["base_url"] == "http://10.0.0.1:30000/v1/chat/completions"
+    # The endpoint applies the chat template; a client-side tokenizer would reject custom tokenizer
+    # code (Kimi-Linear) or metadata the client's Transformers cannot read (Gemma 4).
+    assert chat_args["tokenizer_backend"] == "none"
+    assert "tokenizer" not in chat_args
+    completion_args = dict(pair.split("=", 1) for pair in build_model_args(config, False, None).split(","))
+    assert completion_args["tokenizer_backend"] == "huggingface"
+    assert completion_args["tokenizer"] == _MODEL.tokenizer
+    assert completion_args["trust_remote_code"] == "True"
 
     # ...but a loglikelihood (MCQ) task always uses completions: chat endpoints cannot echo prompt
     # logprobs, and lm-eval rejects loglikelihood over chat completions.

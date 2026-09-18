@@ -312,7 +312,7 @@ def _run() -> list[SeedRow]:
 
     def loss_and_grad(impl, x, sel, cw, w13, w2, *, capacity_factor):
         def loss(x, w13, w2):
-            out, dropped = moe_mlp(
+            out, dispatch_counts = moe_mlp(
                 x,
                 sel,
                 cw,
@@ -323,10 +323,10 @@ def _run() -> list[SeedRow]:
                 report_capacity_overflow=True,
                 capacity_factor=capacity_factor,
             )
-            return (out * out).sum(), (out, dropped)
+            return (out * out).sum(), (out, dispatch_counts)
 
-        (_v, (out, dropped)), grads = jax.value_and_grad(loss, argnums=(0, 1, 2), has_aux=True)(x, w13, w2)
-        return out, grads, int(dropped.total)
+        (_v, (out, dispatch_counts)), grads = jax.value_and_grad(loss, argnums=(0, 1, 2), has_aux=True)(x, w13, w2)
+        return out, grads, int(dispatch_counts.dropped)
 
     def reshard(x, sel, cw, w13, w2):
         return (

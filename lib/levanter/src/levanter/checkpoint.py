@@ -901,8 +901,15 @@ def _save_metadata(checkpoint_path, step, is_temporary, extra_metadata=None):
         "is_temporary": is_temporary,
     }
     if jax.process_index() == 0:
-        with atomic_rename(prefix_join(checkpoint_path, "metadata.json")) as temporary_path:
-            StoragePath(temporary_path).write_text(json.dumps(metadata))
+        metadata_path = StoragePath(prefix_join(checkpoint_path, "metadata.json"))
+        if metadata_path.is_remote:
+            # Object-store writers publish the completed object when they close. A sibling rename
+            # would copy and then delete its temporary source, which protected checkpoint prefixes
+            # intentionally forbid.
+            metadata_path.write_text(json.dumps(metadata))
+        else:
+            with atomic_rename(str(metadata_path)) as temporary_path:
+                StoragePath(temporary_path).write_text(json.dumps(metadata))
 
 
 def load_checkpoint(

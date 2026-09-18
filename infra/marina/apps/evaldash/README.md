@@ -102,34 +102,43 @@ the same rules. Every cell is a measurement: the rate over the items a run grade
 behind it, the per-cause counts of items it attempted and never graded, and a 95% interval. When a run
 reports an attempted count, the interval covers the ungraded items by Manski bounds with an
 Imbens-Manski critical value rather than imputing them; when it reports none, the interval is labelled
-`sampling_only`, because completeness is then unknown. Rankings sort on the interval's lower bound, so
-losing items cannot buy rank. Each row's `last_updated` is the maximum `created_at` among its cells.
+`sampling_only`, because completeness is then unknown. A panel benchmark column sorts on the score;
+`/compare` ranks on the interval's lower bound, so losing items cannot buy rank there. Each row's
+`last_updated` is the maximum `created_at` among its cells.
 
-Both runners establish that attempted count. Harbor reports the trials it dispatched; lm-eval publishes
-no such count in its aggregate results, so the evalchemy path derives it from the document indices in
-the run's own per-sample rows (`marin.evaluation.lm_eval_samples`), which also carry the pass tally and
-the count of items whose grader extracted no answer. A cell every one of whose graded items yielded no
+Both evaluators emit benchmark metadata with the full item count, the count selected after a run cap,
+and the canonical metric protocol. Marin preserves that block in `record.json`. Harbor reports task
+counts there; Marin multiplies them by the configured trials per task when it records coverage. The
+per-sample rows still carry the pass tally and the count of items whose grader extracted no answer. A
+cell every one of whose graded items yielded no
 extractable answer is flagged `no_answers`. Such a result is held out of the panel by default rather
 than standing as a model's newest score -- the zero is real but is equally consistent with a broken
 grader, and reporting a collapse on that basis would be the same error as hiding it. The empty cell
 names the flag and links the run, and `include_flagged=1` admits it, starred.
 
-Several settings of one benchmark can share a leaderboard column. The launcher writes this grouping
-to each run's `eval.family`; a run without a family keeps its own column. `/panel` returns each family,
-its requested variants, and the selected variant. It selects the variant with the most admitted cells
-for that request, breaking ties by eval name. Requesting one variant pins it.
+Several settings of one benchmark can share a leaderboard column. The launcher writes explicit
+groupings to each run's `eval.family`. Harbor runs without an explicit family use their dataset as the
+family, so policies and dataset versions over the same benchmark group automatically. Other runs
+without a family keep their own column. `/panel` returns each family, its requested variants, and the
+selected variant. It selects the variant with the most admitted cells for that request, breaking ties
+by eval name. Requesting one variant pins it.
 
 The response's `panel` contains one selected variant per family and controls coverage, `complete=1`,
 and aggregation. `benchmarks` and `cells` retain every admitted variant under its exact eval name.
 The SPA stores its panel selection locally. The Compare route carries the selected variants in its
 URL, and `/meta` lists siblings omitted from a narrowed panel so the picker can restore them.
 
-The primary metric per task matches on the base metric name with lm-eval's `,<filter>` suffix
-stripped: the first present of `exact_match`, `accuracy`, `acc_norm`, `acc`, `pass@1` (falling back to
-the alphabetically-first non-stderr metric).
+The evaluator names each task's primary metric, its canonical spelling, and whether its observations
+are binary or continuous. A column's protocol comes from the newest record with evaluator metadata;
+a cell whose metric or kind differs is rejected rather than ranked against unlike numbers. Records
+written before this metadata existed use their prior metric-selection rules and canonical aliases so
+their columns remain populated while benchmarks are rerun.
 
 By default each benchmark is taken from the newest run that clears the request's admission rules
-(`min_coverage`, default 0.9, and a succeeded status), so a cohort that re-ran only part of a model's
+(`min_coverage`, default 0.9, and a succeeded status). `min_benchmark_coverage`, also 0.9, is the share
+of the benchmark the run set out to grade; a capped run whose benchmark size is unrecorded is never
+admitted. The corresponding rejection reasons report low benchmark coverage, an unreported benchmark
+size for a capped run, or a metric protocol mismatch. A cohort that re-ran only part of a model's
 benchmark set does not hide results that are still the newest available for their own benchmark;
 `cohort=<version>` pins every column to one launch instead. A `(model, benchmark)` with no admitted
 cell is reported in `missing` with the reason and the offending run, so an empty cell is explained.
@@ -139,6 +148,9 @@ is produced carries its panel, per-benchmark metrics, and policy. An unusable qu
 aggregate policy, a `min_coverage` outside `[0, 1]`) is a 400 rather than a silent fallback to a
 different question. Archived models (a `model_state` side table the ingestor never touches) drop out
 unless `include_archived=1`.
+
+The `/panel` response also returns `protocols`, keyed by benchmark, with the declared metric and kind
+used to admit its cells.
 
 `/compare` answers the ordering question the panel cannot: per benchmark, the model with the
 highest interval lower bound leads, and every other model gets an interval for its gap to that leader,
