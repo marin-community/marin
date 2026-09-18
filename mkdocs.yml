@@ -87,6 +87,7 @@ nav:
       - Markdownified Datasets: reports/markdownified-datasets.md
   - Reproducibility:
       - Pretraining source pool: reproducibility/pretraining-source-pool.md
+      - Hero 535B forward goldens: reproducibility/hero-forward-goldens.md
   - Developer Guide:
       - Contributing: dev-guide/contributing.md
       - Tutorial Guidelines: dev-guide/tutorial-guidelines.md

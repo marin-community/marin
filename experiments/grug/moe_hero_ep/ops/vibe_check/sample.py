@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import draccus
 import equinox as eqx
@@ -46,7 +46,14 @@ COMPUTE_POLICY = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16
 logger = logging.getLogger(__name__)
 
 
-def restore_model(request: SampleRequest, mesh: jax.sharding.Mesh) -> Transformer:
+class RestoreResult(NamedTuple):
+    model: Transformer
+    pending_qb_betas: jax.Array
+    weights_key: str
+    wrapped: bool
+
+
+def restore_model_state(request: SampleRequest, mesh: jax.sharding.Mesh) -> RestoreResult:
     """Restore authoritative weights and pending router bias, with no optimizer or fallback checkpoint."""
     checkpoint = request.checkpoint.uri
     logger.info("Validate checkpoint metadata and weight layout: %s", checkpoint)
@@ -88,7 +95,16 @@ def restore_model(request: SampleRequest, mesh: jax.sharding.Mesh) -> Transforme
         state = state[LEGACY_STATE_KEY]
     jax.block_until_ready(state)
     logger.info("Checkpoint arrays ready; apply pending router bias")
-    return _apply_qb_betas(state[weights_key], state["pending_qb_betas"])
+    return RestoreResult(
+        model=_apply_qb_betas(state[weights_key], state["pending_qb_betas"]),
+        pending_qb_betas=state["pending_qb_betas"],
+        weights_key=weights_key,
+        wrapped=wrapped,
+    )
+
+
+def restore_model(request: SampleRequest, mesh: jax.sharding.Mesh) -> Transformer:
+    return restore_model_state(request, mesh).model
 
 
 @eqx.filter_jit

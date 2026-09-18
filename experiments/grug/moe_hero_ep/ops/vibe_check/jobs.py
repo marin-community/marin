@@ -121,6 +121,7 @@ class IrisSamplingJobs:
         resources: ResourceConfig,
         processes_per_task: int,
         sampler_module: str,
+        user: str = JOB_USER,
     ):
         self.client = client
         self.endpoint = endpoint
@@ -129,10 +130,11 @@ class IrisSamplingJobs:
         self.resources = resources
         self.processes_per_task = processes_per_task
         self.sampler_module = sampler_module
+        self.user = user
 
     def states(self) -> dict[str, JobState]:
         return {
-            job.job_id.name: job.state for job in self.client.list_jobs(prefix=f"/{JOB_USER}/") if job.job_id.is_root
+            job.job_id.name: job.state for job in self.client.list_jobs(prefix=f"/{self.user}/") if job.job_id.is_root
         }
 
     def submit(self, request: SampleRequest, name: str, priority_band: int) -> None:
@@ -182,7 +184,7 @@ class IrisSamplingJobs:
                         client.submit(
                             wrap_multiprocess(command, native_resources, self.processes_per_task),
                             name=name,
-                            user=JOB_USER,
+                            user=self.user,
                             resources=native_resources,
                             replicas=resources.replicas,
                             environment=EnvironmentSpec(env_vars=environment, extras=["gpu"]),

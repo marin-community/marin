@@ -1023,6 +1023,8 @@ class MoEMLP(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         token_valid: Bool[Array, "B S"],
+        *,
+        trace_routes: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
@@ -1052,6 +1054,22 @@ class MoEMLP(eqx.Module):
             mesh,
             num_experts=self.cfg.num_experts,
         )
+        if trace_routes:
+            trace_valid = token_valid[..., None]
+            trace_experts = rearrange(selected_experts, "(b s) k -> b s k", b=b, s=s)
+            trace_weights = rearrange(combine_weights, "(b s) k -> b s k", b=b, s=s)
+            cutoff_gap = rearrange(_topk_logits[:, -2] - _topk_logits[:, -1], "(b s) -> b s", b=b, s=s)
+            router_stats["trace_expert_ids"] = _batch_reshard(
+                jnp.where(trace_valid, trace_experts, jnp.asarray(-1, dtype=trace_experts.dtype))
+            )
+            # Cast after the BF16 combine-weight conversion so the trace records the values
+            # supplied to expert computation while remaining portable in a NumPy archive.
+            router_stats["trace_combine_weights"] = _batch_reshard(
+                jnp.where(trace_valid, trace_weights, jnp.asarray(0, dtype=trace_weights.dtype)).astype(jnp.float32)
+            )
+            router_stats["trace_cutoff_gap"] = _batch_reshard(
+                jnp.where(token_valid, cutoff_gap, jnp.asarray(0, dtype=cutoff_gap.dtype))
+            )
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha`.
         s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
         if self.cfg.qb_estimator == QbEstimator.HIST:
@@ -1204,6 +1222,8 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
+        *,
+        trace_routes: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         # A remat policy acts on named intermediates, and a block argument is not one. This
         # reassignment routes every use below through the name, which lets the policy offload it.
@@ -1219,7 +1239,7 @@ class Block(eqx.Module):
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         token_valid = token_validity_from_attention_mask(mask, batch_size=x.shape[0], sequence_length=x.shape[1])
-        mlp_out, router_stats = self.mlp(mlp_in, token_valid)
+        mlp_out, router_stats = self.mlp(mlp_in, token_valid, trace_routes=trace_routes)
         if self.shared is not None:
             for shared_expert in self.shared:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -1294,6 +1314,8 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        *,
+        trace_routes: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
@@ -1362,6 +1384,7 @@ class Transformer(eqx.Module):
                 layer_mask,
                 use_long,
                 use_long,
+                trace_routes=trace_routes,
             )
 
         hidden, stacked_router_stats = jax.lax.scan(
@@ -1387,6 +1410,14 @@ class Transformer(eqx.Module):
             "margin_min_per_layer": stacked_router_stats["margin_min"],
             "margin_max_per_layer": stacked_router_stats["margin_max"],
         }
+        if trace_routes:
+            router_metrics.update(
+                {
+                    "route_expert_ids": stacked_router_stats["trace_expert_ids"],
+                    "route_combine_weights": stacked_router_stats["trace_combine_weights"],
+                    "route_cutoff_gaps": stacked_router_stats["trace_cutoff_gap"],
+                }
+            )
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
 

@@ -1,0 +1,45 @@
+{
+  "bundle_id": "hero-forward-fixture-v1",
+  "cases": [
+    {
+      "id": "short",
+      "row": 0,
+      "valid_length": 3
+    },
+    {
+      "id": "padded",
+      "row": 1,
+      "valid_length": 2
+    }
+  ],
+  "checkpoint": {
+    "step": 1,
+    "uri": "fixture://checkpoint"
+  },
+  "files": {
+    "arrays.npz": {
+      "bytes": 3946,
+      "sha256": "ea2f780c09b6f34f9dbb487a1fb160acfbd615d1ecf41f3b17aaa86de22df60a"
+    }
+  },
+  "format": "marin-hero-forward-goldens",
+  "format_version": 1,
+  "indexing": {
+    "route": "route_expert_ids[layer, case, token, route_slot]",
+    "score": "tokens[score_case_indices[i], prediction_positions[i] + 1]",
+    "token": "tokens[case, position]"
+  },
+  "model": {
+    "experts_per_token": 2,
+    "num_experts": 8,
+    "num_layers": 2
+  },
+  "producer": {
+    "revision": "0000000000000000000000000000000000000000",
+    "runtime": "fixture"
+  },
+  "tokenizer": {
+    "name": "fixture",
+    "revision": "0000000000000000000000000000000000000000"
+  }
+}

@@ -1,0 +1,101 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+from marin.testing.inference.hero_forward_goldens import (
+    REQUIRED_OBSERVATIONS,
+    ComparisonTolerances,
+    GoldenBundle,
+    compare_observations,
+)
+
+FIXTURE = Path(__file__).parents[2] / "lib/marin/src/marin/testing/inference/resources/hero_forward_fixture_v1"
+TOLERANCES = ComparisonTolerances(
+    target_logprob=0.01,
+    top_logprob=0.01,
+    full_logit=0.01,
+    route_combine_weight=0.01,
+    route_cutoff_gap=0.01,
+)
+
+
+def _observations(bundle: GoldenBundle) -> dict[str, np.ndarray]:
+    return {name: bundle.arrays[name].copy() for name in REQUIRED_OBSERVATIONS}
+
+
+def test_hero_forward_fixture_loads_and_exact_observations_match() -> None:
+    bundle = GoldenBundle.load(FIXTURE)
+
+    report = compare_observations(bundle, _observations(bundle), TOLERANCES)
+
+    assert report.ok
+
+
+def test_hero_forward_comparator_reports_missing_score() -> None:
+    bundle = GoldenBundle.load(FIXTURE)
+    observations = _observations(bundle)
+    del observations["target_logprobs"]
+
+    report = compare_observations(bundle, observations, TOLERANCES)
+
+    assert [(issue.kind, issue.field) for issue in report.issues] == [("missing", "target_logprobs")]
+
+
+def test_hero_forward_comparator_reports_shifted_alignment() -> None:
+    bundle = GoldenBundle.load(FIXTURE)
+    observations = _observations(bundle)
+    observations["prediction_positions"][0] += 1
+
+    report = compare_observations(bundle, observations, TOLERANCES)
+
+    assert any(issue.kind == "alignment" and issue.field == "prediction_positions" for issue in report.issues)
+
+
+def test_hero_forward_comparator_reports_numerical_error_beyond_bound() -> None:
+    bundle = GoldenBundle.load(FIXTURE)
+    observations = _observations(bundle)
+    observations["target_logprobs"][1] += 0.02
+
+    report = compare_observations(bundle, observations, TOLERANCES)
+
+    issue = next(issue for issue in report.issues if issue.field == "target_logprobs")
+    assert issue.kind == "numerical"
+    assert "1 values exceed the bound" in issue.detail
+
+
+def test_hero_forward_comparator_reports_well_separated_route_change() -> None:
+    bundle = GoldenBundle.load(FIXTURE)
+    observations = _observations(bundle)
+    observations["route_expert_ids"][0, 0, 1, 0] = 7
+
+    report = compare_observations(bundle, observations, TOLERANCES)
+
+    issue = next(issue for issue in report.issues if issue.field == "route_expert_ids")
+    assert issue.kind == "routing"
+    assert "1 valid layer-token routes changed" in issue.detail
+    assert "1 have a golden cutoff gap" in issue.detail
+
+
+def test_hero_forward_comparator_does_not_excuse_small_gap_route_change() -> None:
+    bundle = GoldenBundle.load(FIXTURE)
+    observations = _observations(bundle)
+    observations["route_expert_ids"][0, 0, 0, 0] = 7
+
+    report = compare_observations(bundle, observations, TOLERANCES)
+
+    issue = next(issue for issue in report.issues if issue.field == "route_expert_ids")
+    assert "1 valid layer-token routes changed" in issue.detail
+    assert "0 have a golden cutoff gap" in issue.detail
+    assert "Small gaps are reported, not excused" in issue.detail
+
+
+def test_hero_forward_report_raises_with_structured_issue_summary() -> None:
+    bundle = GoldenBundle.load(FIXTURE)
+    observations = _observations(bundle)
+    observations["full_logits"][0, 0] += 0.02
+
+    with pytest.raises(AssertionError, match=r"\[numerical\] full_logits"):
+        compare_observations(bundle, observations, TOLERANCES).raise_for_errors()
