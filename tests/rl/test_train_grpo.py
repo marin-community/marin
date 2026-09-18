@@ -20,7 +20,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.tracker.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig
-from marin.rl.grpo_artifact import GoldenRollout, write_golden_rollout
+from marin.rl.grpo_capture import CapturedRollout, write_captured_rollout
 from marin.rl.train_grpo import OfflineGrpoConfig, main, prepare_grpo_example, score_grpo_batch
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
@@ -30,15 +30,13 @@ from transformers import LlamaForCausalLM, PreTrainedTokenizerFast
 
 def _rollout():
     mask = np.array([[1, 1, 0], [1, 0, 0], [1, 1, 1], [1, 0, 0]], dtype=np.int32)
-    return GoldenRollout(
+    return CapturedRollout(
         sequences=np.array([[0, 2, 3, 4, 0], [2, 3, 5, 0, 0], [0, 4, 6, 7, 8], [3, 4, 9, 0, 0]]),
         attention_mask=np.array([[0, 1, 1, 1, 0], [1, 1, 1, 0, 0], [0, 1, 1, 1, 1], [1, 1, 1, 0, 0]]),
         response_mask=mask,
         loss_mask=mask,
         rewards=np.array([[0, 1, 0], [0, 0, 0], [0, 0, 2], [-1, 0, 0]], dtype=np.float32),
-        advantages=np.zeros((4, 3), dtype=np.float32),
         old_logprobs=np.full((4, 3), -9.0, dtype=np.float32),
-        behavior_logprobs=np.full((4, 3), -10.0, dtype=np.float32),
         group_ids=np.array([0, 0, 1, 1]),
         objective_partition_ids=np.array([0, 1, 0, 1]),
     )
@@ -161,7 +159,7 @@ def test_offline_grpo_main_rejects_rewritten_capture_on_continuation(tmp_path):
     model.save_pretrained(model_path)
     captures = [str(tmp_path / f"capture{i}.npz") for i in range(2)]
     for uri in captures:
-        write_golden_rollout(uri, _rollout(), {"tokenizer": model_path})
+        write_captured_rollout(uri, _rollout(), {"tokenizer": model_path})
     config = OfflineGrpoConfig(
         captures=captures,
         initial_model=model_path,
@@ -191,6 +189,6 @@ def test_offline_grpo_main_rejects_rewritten_capture_on_continuation(tmp_path):
     assert metrics["train/ppo_ratio_exact_unit_fraction"] == 1.0
     assert np.isfinite(metrics["train/log_ratio_abs_max"])
     changed = dataclasses.replace(_rollout(), rewards=_rollout().rewards + 0.25 * _rollout().response_mask)
-    write_golden_rollout(captures[1], changed, {"tokenizer": model_path})
+    write_captured_rollout(captures[1], changed, {"tokenizer": model_path})
     with pytest.raises(ValueError, match="same capture stream"):
         main(dataclasses.replace(config, stop_after=None))

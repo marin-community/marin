@@ -27,9 +27,10 @@ from levanter.models.qwen import Qwen3Config
 from levanter.optim.config import AdamConfig
 from levanter.trainer import Trainer, TrainerConfig, initialize
 from levanter.utils.types import FilterTree
-from marin.rl.grpo_artifact import GoldenRollout, read_golden_rollout
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoTokenizer
+
+from marin.rl.grpo_capture import CapturedRollout, read_captured_rollout
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ class OfflineGrpoConfig:
         return True
 
 
-def prepare_grpo_example(rollout: GoldenRollout, *, normalize_by_std: bool) -> GrpoExample:
+def prepare_grpo_example(rollout: CapturedRollout, *, normalize_by_std: bool) -> GrpoExample:
     """Preserve complete groups and objective partitions before execution slicing."""
     rollout.validate()
     batch_size, response_width = rollout.old_logprobs.shape
@@ -236,7 +237,7 @@ def main(config: OfflineGrpoConfig):
         end_step = config.stop_after or config.trainer.num_train_steps
         while int(state.step) < end_step:
             uri = config.captures[int(state.step)]
-            rollout, manifest = read_golden_rollout(uri)
+            rollout, manifest = read_captured_rollout(uri)
             if manifest["tokenizer"] != config.tokenizer:
                 raise ValueError("Capture tokenizer does not match the policy tokenizer")
             if rollout.sequences.min() < 0 or rollout.sequences.max() >= len(tokenizer):
