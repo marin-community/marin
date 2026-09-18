@@ -1,0 +1,1325 @@
+{
+  "arrays": {
+    "effective_router_bias": {
+      "dtype": "float32",
+      "shape": [
+        48,
+        384
+      ]
+    },
+    "full_logit_case_indices": {
+      "dtype": "int32",
+      "shape": [
+        14
+      ]
+    },
+    "full_logit_prediction_positions": {
+      "dtype": "int32",
+      "shape": [
+        14
+      ]
+    },
+    "full_logits": {
+      "dtype": "float32",
+      "shape": [
+        14,
+        128256
+      ]
+    },
+    "pending_qb_betas": {
+      "dtype": "float32",
+      "shape": [
+        48,
+        384
+      ]
+    },
+    "positions": {
+      "dtype": "int32",
+      "shape": [
+        32,
+        4096
+      ]
+    },
+    "prediction_positions": {
+      "dtype": "int32",
+      "shape": [
+        408
+      ]
+    },
+    "route_combine_weights": {
+      "dtype": "float32",
+      "shape": [
+        48,
+        32,
+        4096,
+        8
+      ]
+    },
+    "route_cutoff_gaps": {
+      "dtype": "float32",
+      "shape": [
+        48,
+        32,
+        4096
+      ]
+    },
+    "route_expert_ids": {
+      "dtype": "int32",
+      "shape": [
+        48,
+        32,
+        4096,
+        8
+      ]
+    },
+    "score_case_indices": {
+      "dtype": "int32",
+      "shape": [
+        408
+      ]
+    },
+    "score_mask": {
+      "dtype": "bool",
+      "shape": [
+        32,
+        4096
+      ]
+    },
+    "segment_ids": {
+      "dtype": "int32",
+      "shape": [
+        32,
+        4096
+      ]
+    },
+    "target_logprobs": {
+      "dtype": "float32",
+      "shape": [
+        408
+      ]
+    },
+    "target_token_ids": {
+      "dtype": "int32",
+      "shape": [
+        408
+      ]
+    },
+    "token_validity": {
+      "dtype": "bool",
+      "shape": [
+        32,
+        4096
+      ]
+    },
+    "tokens": {
+      "dtype": "int32",
+      "shape": [
+        32,
+        4096
+      ]
+    },
+    "top_logprobs": {
+      "dtype": "float32",
+      "shape": [
+        408,
+        5
+      ]
+    },
+    "top_token_ids": {
+      "dtype": "int32",
+      "shape": [
+        408,
+        5
+      ]
+    },
+    "valid_lengths": {
+      "dtype": "int32",
+      "shape": [
+        32
+      ]
+    }
+  },
+  "asset_root": "s3://marin-us-east-02a/marin/reference/hero-forward/hero-535b-step108000-bf16-v1-dcfe4ced165a",
+  "bundle_id": "hero-535b-step108000-bf16-v1-dcfe4ced165a",
+  "cases": [
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "short-fixed-continuation-repeat-0",
+      "row": 0,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        28,
+        29,
+        30,
+        31
+      ],
+      "source_prompt_id": "add-two-numbers",
+      "valid_length": 32
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "padded-code-continuation-repeat-0",
+      "row": 1,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        124,
+        125,
+        126,
+        127
+      ],
+      "source_prompt_id": "code-unique-in-order",
+      "valid_length": 128
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "long-reference-repeat-0",
+      "row": 2,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        508,
+        509,
+        510,
+        511
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 512
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "local-window-minus-one-repeat-0",
+      "row": 3,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2043,
+        2044,
+        2045,
+        2046
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 2047
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "local-window-exact-repeat-0",
+      "row": 4,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2044,
+        2045,
+        2046,
+        2047
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 2048
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "local-window-plus-one-repeat-0",
+      "row": 5,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2045,
+        2046,
+        2047,
+        2048
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 2049
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "context-minus-one-repeat-0",
+      "row": 6,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2047,
+        2048,
+        2049,
+        4091,
+        4092,
+        4093,
+        4094
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 4095
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "context-exact-repeat-0",
+      "row": 7,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2047,
+        2048,
+        2049,
+        4092,
+        4093,
+        4094,
+        4095
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 4096
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "short-fixed-continuation-repeat-1",
+      "row": 8,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        28,
+        29,
+        30,
+        31
+      ],
+      "source_prompt_id": "add-two-numbers",
+      "valid_length": 32
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "padded-code-continuation-repeat-1",
+      "row": 9,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        124,
+        125,
+        126,
+        127
+      ],
+      "source_prompt_id": "code-unique-in-order",
+      "valid_length": 128
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "long-reference-repeat-1",
+      "row": 10,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        508,
+        509,
+        510,
+        511
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 512
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "local-window-minus-one-repeat-1",
+      "row": 11,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2043,
+        2044,
+        2045,
+        2046
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 2047
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "local-window-exact-repeat-1",
+      "row": 12,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2044,
+        2045,
+        2046,
+        2047
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 2048
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "local-window-plus-one-repeat-1",
+      "row": 13,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2045,
+        2046,
+        2047,
+        2048
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 2049
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "context-minus-one-repeat-1",
+      "row": 14,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2047,
+        2048,
+        2049,
+        4091,
+        4092,
+        4093,
+        4094
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 4095
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "context-exact-repeat-1",
+      "row": 15,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2047,
+        2048,
+        2049,
+        4092,
+        4093,
+        4094,
+        4095
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 4096
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "short-fixed-continuation-repeat-2",
+      "row": 16,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        28,
+        29,
+        30,
+        31
+      ],
+      "source_prompt_id": "add-two-numbers",
+      "valid_length": 32
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "padded-code-continuation-repeat-2",
+      "row": 17,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        124,
+        125,
+        126,
+        127
+      ],
+      "source_prompt_id": "code-unique-in-order",
+      "valid_length": 128
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "long-reference-repeat-2",
+      "row": 18,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        508,
+        509,
+        510,
+        511
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 512
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "local-window-minus-one-repeat-2",
+      "row": 19,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2043,
+        2044,
+        2045,
+        2046
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 2047
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "local-window-exact-repeat-2",
+      "row": 20,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2044,
+        2045,
+        2046,
+        2047
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 2048
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "local-window-plus-one-repeat-2",
+      "row": 21,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2045,
+        2046,
+        2047,
+        2048
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 2049
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "context-minus-one-repeat-2",
+      "row": 22,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2047,
+        2048,
+        2049,
+        4091,
+        4092,
+        4093,
+        4094
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 4095
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "context-exact-repeat-2",
+      "row": 23,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2047,
+        2048,
+        2049,
+        4092,
+        4093,
+        4094,
+        4095
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 4096
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "short-fixed-continuation-repeat-3",
+      "row": 24,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        28,
+        29,
+        30,
+        31
+      ],
+      "source_prompt_id": "add-two-numbers",
+      "valid_length": 32
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "padded-code-continuation-repeat-3",
+      "row": 25,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        124,
+        125,
+        126,
+        127
+      ],
+      "source_prompt_id": "code-unique-in-order",
+      "valid_length": 128
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "long-reference-repeat-3",
+      "row": 26,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        508,
+        509,
+        510,
+        511
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 512
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "local-window-minus-one-repeat-3",
+      "row": 27,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2043,
+        2044,
+        2045,
+        2046
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 2047
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "local-window-exact-repeat-3",
+      "row": 28,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2044,
+        2045,
+        2046,
+        2047
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 2048
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "local-window-plus-one-repeat-3",
+      "row": 29,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2045,
+        2046,
+        2047,
+        2048
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 2049
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "context-minus-one-repeat-3",
+      "row": 30,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2047,
+        2048,
+        2049,
+        4091,
+        4092,
+        4093,
+        4094
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 4095
+    },
+    {
+      "construction": "tokenize prompt plus fixed expected continuation, then repeat it with a newline and truncate",
+      "id": "context-exact-repeat-3",
+      "row": 31,
+      "scored_target_positions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        2047,
+        2048,
+        2049,
+        4092,
+        4093,
+        4094,
+        4095
+      ],
+      "source_prompt_id": "neuron-associate-grub-zoo",
+      "valid_length": 4096
+    }
+  ],
+  "checkpoint": {
+    "checkpoint_wrapped": false,
+    "master_parameter_layout": "Hero used MasterParamMode.DEVICE: the authoritative FP32 master copy is stored directly under params; this checkpoint has no separate master_params tree",
+    "metadata_digest": "18e481eefbe5e84021d14022ffc3540ed8d6bc10a63781eff232cc9d766e2406",
+    "pending_query_bias": "pending_qb_betas applied once with the native restore rule, then held fixed",
+    "restored_weight_dtypes": [
+      "float32"
+    ],
+    "restored_weights": "params",
+    "retention": "permanent checkpoint metadata has is_temporary=false",
+    "run_id": "hero-ragged_a2a-nccl2307-ep-step81k",
+    "step": 108000,
+    "timestamp": "2026-09-15T16:01:28.296153",
+    "training_model": {
+      "attention_implementation": "gpu_fa4_cute_wide",
+      "capacity_factor": 1.15,
+      "expert_chunks": 1,
+      "global_every": 4,
+      "global_kv_heads": 6,
+      "head_dim": 128,
+      "hidden_dim": 6144,
+      "initializer_std": 0.0063788795384978605,
+      "intermediate_dim": 3072,
+      "latent_dim": 3072,
+      "layer_norm_eps": 1e-05,
+      "local_kv_heads": 12,
+      "max_seq_len": 4096,
+      "moe_implementation": "ragged_all_to_all",
+      "num_expert_waves": 3,
+      "num_experts": 384,
+      "num_experts_per_token": 8,
+      "num_heads": 48,
+      "num_kv_heads": 12,
+      "num_layers": 48,
+      "num_shared_experts": 2,
+      "pooled_transport_capacity_factor": 1.15,
+      "qb_estimator": "hist",
+      "qb_hist_bins": 10000,
+      "qk_mult": 1.3,
+      "remat_mode": "recompute_all",
+      "report_capacity_overflow": true,
+      "rope": {
+        "scaling_factor": null,
+        "theta": 10000.0
+      },
+      "rope_fused": true,
+      "sconv": true,
+      "sconv_kernel": 4,
+      "sconv_sites": [
+        "k",
+        "attn",
+        "mlp"
+      ],
+      "shared_expert_intermediate_dim": 3072,
+      "sliding_window": 2048,
+      "vocab_size": 128256
+    },
+    "training_model_digest": "d461b6b0832be902ecbc9111edfbbc77a9cfd760470064285c01f6a296b45661",
+    "uri": "s3://marin-us-east-02a/marin/grug/hero-ragged_a2a-nccl2307-ep-step81k/2026.08.19.2/checkpoints/step-108000",
+    "weight_conversion": "authoritative FP32 params cast once to BF16 compute parameters",
+    "writer_bundle_id": "c26e1dae4cd5a3a6c4305653994679c3f3310d0ad30ff82b3316240ac946029d",
+    "writer_evidence_url": "https://github.com/marin-community/marin/issues/8506#issuecomment-5609812430",
+    "writer_revision": "04fb3484560711bafcc98b2975d551363ee95067",
+    "writer_run_version": "2026.08.19.2"
+  },
+  "created_at": "2026-09-18T04:06:01.725243+00:00",
+  "files": {
+    "arrays.npz": {
+      "bytes": 80380854,
+      "sha256": "191eff3463d09960ec074c79dfbc477c308d6858b2d9d44efed70538ba880a12"
+    }
+  },
+  "format": "marin-hero-forward-goldens",
+  "format_version": 1,
+  "indexing": {
+    "full_logit": "full_logits[row, vocabulary_token_id]",
+    "route": "route_expert_ids[layer, case, token_position, ordered_route_slot]",
+    "score": "target_token_ids[i] is predicted from hidden state [score_case_indices[i], prediction_positions[i]]",
+    "token": "tokens[case, token_position] with zero-based positions"
+  },
+  "mask": {
+    "kind": "causal_segment_ids",
+    "padding_segment_id": -1,
+    "score_mask_array": "score_mask",
+    "score_mask_is_attention_mask": false,
+    "segment_ids_array": "segment_ids",
+    "token_validity_array": "token_validity"
+  },
+  "model": {
+    "configuration_cross_check": "checkpoint-writing and producer training configs have the pinned identical digest; the inference config differs only by the declared dropless MoE implementation",
+    "experts_per_token": 8,
+    "intentional_inference_overrides": {
+      "moe_implementation": {
+        "golden": "sonic_cute",
+        "reason": "dropless reference computes every selected expert contribution",
+        "training": "ragged_all_to_all"
+      }
+    },
+    "num_experts": 384,
+    "num_layers": 48,
+    "resolved_config": {
+      "attention_implementation": "gpu_fa4_cute_wide",
+      "capacity_factor": 1.15,
+      "expert_chunks": 1,
+      "global_every": 4,
+      "global_kv_heads": 6,
+      "head_dim": 128,
+      "hidden_dim": 6144,
+      "initializer_std": 0.0063788795384978605,
+      "intermediate_dim": 3072,
+      "latent_dim": 3072,
+      "layer_norm_eps": 1e-05,
+      "local_kv_heads": 12,
+      "max_seq_len": 4096,
+      "moe_implementation": "sonic_cute",
+      "num_expert_waves": 3,
+      "num_experts": 384,
+      "num_experts_per_token": 8,
+      "num_heads": 48,
+      "num_kv_heads": 12,
+      "num_layers": 48,
+      "num_shared_experts": 2,
+      "pooled_transport_capacity_factor": 1.15,
+      "qb_estimator": "hist",
+      "qb_hist_bins": 10000,
+      "qk_mult": 1.3,
+      "remat_mode": "recompute_all",
+      "report_capacity_overflow": true,
+      "rope": {
+        "scaling_factor": null,
+        "theta": 10000.0
+      },
+      "rope_fused": true,
+      "sconv": true,
+      "sconv_kernel": 4,
+      "sconv_sites": [
+        "k",
+        "attn",
+        "mlp"
+      ],
+      "shared_expert_intermediate_dim": 3072,
+      "sliding_window": 2048,
+      "vocab_size": 128256
+    }
+  },
+  "native_validation": {
+    "gate": "max absolute output change <= 0.0001 and no top-token ID changes",
+    "ordinary_repeat": {
+      "full_logit_max_abs": 0.0,
+      "target_logprob_max_abs": 0.0,
+      "top_logprob_max_abs": 0.0,
+      "top_token_id_changes": 0
+    },
+    "traced_versus_ordinary": {
+      "full_logit_max_abs": 0.0,
+      "target_logprob_max_abs": 0.0,
+      "top_logprob_max_abs": 0.0,
+      "top_token_id_changes": 0
+    }
+  },
+  "optional_context_diagnostics": {
+    "16384": "skipped: the fixed checkpoint-writing model config has max_seq_len=4096; running 16384 would require a model-semantic configuration change",
+    "8192": "skipped: the fixed checkpoint-writing model config has max_seq_len=4096; running 8192 would require a model-semantic configuration change"
+  },
+  "producer": {
+    "accelerator_kind": "GPU",
+    "accelerator_variant": "GB200",
+    "compute_policy": "p=full,c=bf16,o=bf16",
+    "global_device_count": 32,
+    "local_device_count": 1,
+    "mesh": {
+      "data": 32,
+      "expert": 1,
+      "model": 1,
+      "replica_dcn": 1
+    },
+    "process_count": 32,
+    "regeneration_command": "python -m experiments.grug.moe_hero_ep.ops.forward_goldens --request request.json --store-root s3://marin-us-east-02a/marin/reference/hero-forward",
+    "request": {
+      "checkpoint": {
+        "metadata_digest": "18e481eefbe5e84021d14022ffc3540ed8d6bc10a63781eff232cc9d766e2406",
+        "run_id": "hero-ragged_a2a-nccl2307-ep-step81k",
+        "step": 108000,
+        "timestamp": "2026-09-15T16:01:28.296153",
+        "uri": "s3://marin-us-east-02a/marin/grug/hero-ragged_a2a-nccl2307-ep-step81k/2026.08.19.2/checkpoints/step-108000"
+      },
+      "source_revision": "608b8405cc7b99ac711b5ab60f909aefe58787fa",
+      "spec": {
+        "batch_size": 32,
+        "cases": [
+          {
+            "id": "short-fixed-continuation-repeat-0",
+            "source_prompt_id": "add-two-numbers",
+            "valid_length": 32
+          },
+          {
+            "id": "padded-code-continuation-repeat-0",
+            "source_prompt_id": "code-unique-in-order",
+            "valid_length": 128
+          },
+          {
+            "id": "long-reference-repeat-0",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 512
+          },
+          {
+            "id": "local-window-minus-one-repeat-0",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 2047
+          },
+          {
+            "id": "local-window-exact-repeat-0",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 2048
+          },
+          {
+            "id": "local-window-plus-one-repeat-0",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 2049
+          },
+          {
+            "id": "context-minus-one-repeat-0",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 4095
+          },
+          {
+            "id": "context-exact-repeat-0",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 4096
+          },
+          {
+            "id": "short-fixed-continuation-repeat-1",
+            "source_prompt_id": "add-two-numbers",
+            "valid_length": 32
+          },
+          {
+            "id": "padded-code-continuation-repeat-1",
+            "source_prompt_id": "code-unique-in-order",
+            "valid_length": 128
+          },
+          {
+            "id": "long-reference-repeat-1",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 512
+          },
+          {
+            "id": "local-window-minus-one-repeat-1",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 2047
+          },
+          {
+            "id": "local-window-exact-repeat-1",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 2048
+          },
+          {
+            "id": "local-window-plus-one-repeat-1",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 2049
+          },
+          {
+            "id": "context-minus-one-repeat-1",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 4095
+          },
+          {
+            "id": "context-exact-repeat-1",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 4096
+          },
+          {
+            "id": "short-fixed-continuation-repeat-2",
+            "source_prompt_id": "add-two-numbers",
+            "valid_length": 32
+          },
+          {
+            "id": "padded-code-continuation-repeat-2",
+            "source_prompt_id": "code-unique-in-order",
+            "valid_length": 128
+          },
+          {
+            "id": "long-reference-repeat-2",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 512
+          },
+          {
+            "id": "local-window-minus-one-repeat-2",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 2047
+          },
+          {
+            "id": "local-window-exact-repeat-2",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 2048
+          },
+          {
+            "id": "local-window-plus-one-repeat-2",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 2049
+          },
+          {
+            "id": "context-minus-one-repeat-2",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 4095
+          },
+          {
+            "id": "context-exact-repeat-2",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 4096
+          },
+          {
+            "id": "short-fixed-continuation-repeat-3",
+            "source_prompt_id": "add-two-numbers",
+            "valid_length": 32
+          },
+          {
+            "id": "padded-code-continuation-repeat-3",
+            "source_prompt_id": "code-unique-in-order",
+            "valid_length": 128
+          },
+          {
+            "id": "long-reference-repeat-3",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 512
+          },
+          {
+            "id": "local-window-minus-one-repeat-3",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 2047
+          },
+          {
+            "id": "local-window-exact-repeat-3",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 2048
+          },
+          {
+            "id": "local-window-plus-one-repeat-3",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 2049
+          },
+          {
+            "id": "context-minus-one-repeat-3",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 4095
+          },
+          {
+            "id": "context-exact-repeat-3",
+            "source_prompt_id": "neuron-associate-grub-zoo",
+            "valid_length": 4096
+          }
+        ],
+        "mode": "required",
+        "model": {
+          "attention_implementation": "gpu_fa4_cute_wide",
+          "capacity_factor": 1.15,
+          "expert_chunks": 1,
+          "global_every": 4,
+          "global_kv_heads": 6,
+          "head_dim": 128,
+          "hidden_dim": 6144,
+          "initializer_std": 0.0063788795384978605,
+          "intermediate_dim": 3072,
+          "latent_dim": 3072,
+          "layer_norm_eps": 1e-05,
+          "local_kv_heads": 12,
+          "max_seq_len": 4096,
+          "moe_implementation": "sonic_cute",
+          "num_expert_waves": 3,
+          "num_experts": 384,
+          "num_experts_per_token": 8,
+          "num_heads": 48,
+          "num_kv_heads": 12,
+          "num_layers": 48,
+          "num_shared_experts": 2,
+          "pooled_transport_capacity_factor": 1.15,
+          "qb_estimator": "hist",
+          "qb_hist_bins": 10000,
+          "qk_mult": 1.3,
+          "remat_mode": "recompute_all",
+          "report_capacity_overflow": true,
+          "rope": {
+            "scaling_factor": null,
+            "theta": 10000.0
+          },
+          "rope_fused": true,
+          "sconv": true,
+          "sconv_kernel": 4,
+          "sconv_sites": [
+            "k",
+            "attn",
+            "mlp"
+          ],
+          "shared_expert_intermediate_dim": 3072,
+          "sliding_window": 2048,
+          "vocab_size": 128256
+        },
+        "release": "hero-535b-step108000-bf16-v1",
+        "tokenizer": "marin-community/marin-tokenizer",
+        "tokenizer_revision": "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2",
+        "training_model": {
+          "attention_implementation": "gpu_fa4_cute_wide",
+          "capacity_factor": 1.15,
+          "expert_chunks": 1,
+          "global_every": 4,
+          "global_kv_heads": 6,
+          "head_dim": 128,
+          "hidden_dim": 6144,
+          "initializer_std": 0.0063788795384978605,
+          "intermediate_dim": 3072,
+          "latent_dim": 3072,
+          "layer_norm_eps": 1e-05,
+          "local_kv_heads": 12,
+          "max_seq_len": 4096,
+          "moe_implementation": "ragged_all_to_all",
+          "num_expert_waves": 3,
+          "num_experts": 384,
+          "num_experts_per_token": 8,
+          "num_heads": 48,
+          "num_kv_heads": 12,
+          "num_layers": 48,
+          "num_shared_experts": 2,
+          "pooled_transport_capacity_factor": 1.15,
+          "qb_estimator": "hist",
+          "qb_hist_bins": 10000,
+          "qk_mult": 1.3,
+          "remat_mode": "recompute_all",
+          "report_capacity_overflow": true,
+          "rope": {
+            "scaling_factor": null,
+            "theta": 10000.0
+          },
+          "rope_fused": true,
+          "sconv": true,
+          "sconv_kernel": 4,
+          "sconv_sites": [
+            "k",
+            "attn",
+            "mlp"
+          ],
+          "shared_expert_intermediate_dim": 3072,
+          "sliding_window": 2048,
+          "vocab_size": 128256
+        }
+      },
+      "target_cluster": "cw-us-east-08a"
+    },
+    "revision": "608b8405cc7b99ac711b5ab60f909aefe58787fa",
+    "runtime": {
+      "packages": {
+        "equinox": "0.13.2",
+        "flash-attn-4": "4.0.0b28",
+        "jax": "0.11.1",
+        "jaxlib": "0.11.1",
+        "numpy": "2.3.5",
+        "transformers": "5.12.1"
+      },
+      "platform": "Linux-6.17.13-155-gdec5393c-coreweave-arm64-aarch64-with-glibc2.41",
+      "python": "3.12.14"
+    },
+    "target_cluster": "cw-us-east-08a",
+    "task_id": "/hero-goldens/hero-forward-required-23eb6bbdea13/0:0",
+    "xla_flags": "--xla_gpu_deterministic_ops=true --xla_gpu_nccl_termination_timeout_seconds=600"
+  },
+  "routing": {
+    "combine_weights": "actual BF16 expert-combine values, widened to float32 for storage",
+    "cutoff_gap": "float32 biased Kth score minus biased (K+1)th score",
+    "expert_ids": "ordered global expert IDs selected from biased router logits",
+    "padding": {
+      "combine_weight": 0,
+      "cutoff_gap": 0,
+      "expert_id": -1
+    }
+  },
+  "scoring": {
+    "cross_backend_tolerances": "not yet qualified; consumers must provide explicit provisional bounds",
+    "full_logits": "float32 pre-softmax rows",
+    "normalization": "float32 log_softmax over the full 128256-token vocabulary",
+    "top_k": 5
+  },
+  "tokenizer": {
+    "name": "marin-community/marin-tokenizer",
+    "revision": "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
+  }
+}

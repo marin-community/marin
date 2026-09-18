@@ -10,9 +10,15 @@ The required bundle is stored at:
 s3://marin-us-east-02a/marin/reference/hero-forward/hero-535b-step108000-bf16-v1-dcfe4ced165a
 ```
 
-The checked-in copy of its `manifest.json` records the object checksum, source revisions, runtime, job,
-checkpoint layout, resolved training and inference model configurations, tokenizer revision, case definitions,
-and native repeatability measurements. The permanent arrays stay in CoreWeave object storage.
+The [checked-in manifest](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/testing/inference/resources/hero_535b_step108000_bf16_v1/manifest.json)
+records the object checksum, source revisions, runtime, job, checkpoint layout, resolved training and inference
+model configurations, tokenizer revision, case definitions, and native repeatability measurements. The permanent
+arrays stay in CoreWeave object storage.
+
+The [required Iris job](https://iris.oa.dev/#/job/%2Fhero-goldens%2Fhero-forward-required-23eb6bbdea13)
+completed all eight tasks on 32 GB200s in `cw-us-east-08a`. Its stored bundle was then fetched back and checked
+with the NumPy-only consumer. The earlier [short smoke job](https://iris.oa.dev/#/job/%2Fhero-goldens%2Fhero-forward-smoke-c10222d78be0)
+used the same topology and producer revision.
 
 ## Fetch and load
 
