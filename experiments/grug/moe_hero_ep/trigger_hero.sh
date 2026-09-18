@@ -67,7 +67,7 @@ if mode == "fork-wandb":
 else:
     result = subprocess.run(
         ["uv", "run", "iris", "--config", "lib/iris/config/marin.yaml", "query", "-f", "csv",
-         "SELECT job_id, state FROM jobs WHERE depth = 0"],
+         "SELECT job_id, state FROM jobs WHERE depth = 1"],
         check=True, capture_output=True, text=True,
     )
     reader = csv.DictReader(io.StringIO(result.stdout))
