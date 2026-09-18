@@ -495,6 +495,7 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
                         tensor_parallel_size=geometry.tensor_parallel_size,
                         backend_name=backend.name,
                         streaming=True,
+                        chat_template_content=_model_tool_chat_template(service.model),
                     ):
                         _block_until_timeout(environment.check_alive, service.timeout_hours)
             else:
