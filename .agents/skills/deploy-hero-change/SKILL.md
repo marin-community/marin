@@ -60,13 +60,17 @@ Write down, and get agreement on:
   restores the full state (params, optimizer, step, data position) from exactly
   that step when the child tree is empty. Later restarts prefer the new run's own, newer checkpoints. The
   old run's tree is never written again.
-- Create the W&B fork once, outside automatic retry loops. `WandbConfig.fork_from`
-  (PR #9231) omits `resume` during initialization; later launches must omit
-  `fork_from` and resume the child ID. The hero launcher separates these actions:
-  run `trigger_hero.sh fork-wandb` once, then `trigger_hero.sh launch` for the
-  initial training submission and subsequent recovery. If submission fails after
-  fork creation, verify the existing child and use `launch`; do not fork again.
-  Both commands refuse unresolved handoff placeholders.
+- Create the W&B fork once, outside automatic retry loops. W&B forbids `resume`
+  alongside `fork_from`, and the trainer's `WandbConfig` (PR #9231) re-sends
+  whichever it is given on every Iris retry, so the hero launcher creates the
+  child with a one-off `wandb.init(fork_from=...)` and the trainer only ever
+  resumes the child ID: run `trigger_hero.sh fork-wandb` once, then
+  `trigger_hero.sh launch` for the initial training submission and subsequent
+  recovery. If submission fails after fork creation, verify the existing child
+  and use `launch`; do not fork again. Both commands refuse unresolved handoff
+  placeholders. The boundary rule (`global_step == N-1` for checkpoint `step-N`)
+  and the inspection recipe live in the
+  [hero README](../../../experiments/grug/moe_hero_ep/README.md#hero-cutovers-and-wb-lineage).
 - W&B lineage does not restore model, optimizer, or data state. Keep the explicit
   `--initialize-from-checkpoint` handoff and a fresh checkpoint tree. The W&B
   child inherits history through the fork point, so check new Finelog rows and
