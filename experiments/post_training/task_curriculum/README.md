@@ -30,13 +30,17 @@ into the canonical YAML. For each selected macro area:
    the smallest prerequisite delta and a `representative` probe for the full outcome.
 2. Validate the JSON with `Curriculum` and `Curriculum.check_generation_contract`.
 3. Give the curriculum and rubric to an independent reviewer. The reviewer returns a score, verdict, concrete
-   findings, and proposed rubric changes.
+   findings, and proposed rubric changes in one call for the complete subject curriculum.
 4. Compare findings across subjects. Mutual self-confidence and prerequisite continuity are blocking criteria even
    when the numeric score is high. Revise the rubric or generation instructions only for problems that recur, then
    generate another version.
 
 The checked-in `pilot/` and `wave2/` reports summarize the one-off results. Promote reviewed changes into
 `curriculum.yaml`; do not add another runtime curriculum or check in task-level experiment artifacts.
+
+The detailed rubric is a development tool for a small subject sample. Routine scale-out uses its compact five-part
+score in one Luna call per curriculum version. Sampled Luna failures provide a difficulty proxy; this workflow does
+not run model-training experiments.
 
 ## Task mapping
 
@@ -75,7 +79,8 @@ uv run python -m experiments.post_training.task_curriculum.cli \
 
 The output contains a membership score and section candidates for every graph. Thresholds are calibrated independently
 per graph on a frozen member, close-neighbor, overlap, and out-of-scope sample; scores from distinct projections are
-not comparable. The mapper has no source-specific rules or per-task exceptions.
+not comparable. The mapper has no source-specific rules or per-task exceptions. Mapping is a diagnostic signal, not a
+curriculum blocker; roughly 70% reasonable placement is adequate for initial scale-out.
 
 For the full TaskTrove run, materialize the approximately 4 GB clean release and shard annotation and embedding work.
 Keep these artifacts outside the curriculum YAML:
@@ -111,6 +116,26 @@ A six-edge prerequisite audit generated two prerequisite representatives, two de
 representatives per edge. Batched Luna review passed the transfer and added-capability checks on all six. It rejected
 two edges under the completed-artifact counterfactual: requirements-to-design-proposal and journal-entry-to-ledger-
 posting. The canonical catalog removes those edges and supplies the upstream artifacts in the dependent probes.
+
+## Wave-four procedure test
+
+Wave four generated curricula for NLP & Language Technology, Computational Science & Simulation, and Security &
+Adversarial Analysis from their guideposts and eight TaskTrove examples each. The first evidence classifier produced
+topic-driven false positives: safety-refusal tasks appeared to be security work, shell parsing appeared to be NLP,
+and conceptual physics appeared to be simulation. The discovery rule now classifies the behavior required from the
+answer and requires an actual computational model or method for computational-science membership.
+
+The first lightweight review prompt scored the three generated curricula 91, 83, and 88 and assigned high confidence.
+Manual inspection found that result too permissive. A revised prompt challenged every leaf's most distant task pair,
+every prerequisite edge, internal-node synthesis, and confidence from evidence breadth. It rescored the same versions
+77, 79, and 83, all `revise`. One repair pass produced 7, 21, and 12 sections; fresh single-call reviews scored them
+80, 81, and 83 with medium confidence and remaining blockers.
+
+The recurring defects were one-leaf-per-guidepost generation, broad specialist leaves, workflow-order prerequisites,
+and parent probes that bundled independent child deliverables. The stricter reviewer also tended toward recursive
+splitting based only on different tools or subfields. A blocking split must now cite two concrete probes with distinct
+central operations and explain how the split changes sampling or evaluation. None of the three provisional curricula
+is promoted into `curriculum.yaml` yet.
 
 ## Provenance
 

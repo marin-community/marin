@@ -3,6 +3,17 @@
 Score the curriculum by its usefulness for training. Encyclopedic completeness is not a goal. State the evidence
 for each judgment and name changes that would apply beyond the current subject.
 
+## Review modes
+
+Use this detailed rubric while developing the generator and review procedure on sampled subjects. It diagnoses
+section boundaries, prerequisite edges, probes, and evidence failures. It may generate counterexample tasks and run
+Luna on small samples in batches of 8–16.
+
+Routine scale-out uses one Luna review call for one complete subject curriculum version. The call reads the subject
+guideposts, curriculum, and a small evidence summary, then returns a score, status, evidence confidence, blockers,
+and the highest-risk sections. It does not spawn a reviewer per section or edge. A repair creates a new curriculum
+version and receives one new review call.
+
 1. **Coverage:** The leaves jointly cover the important capabilities represented by the subject guideposts,
    discovery tasks, and permitted evaluation probes. Record plausible omissions; do not add a section for every
    observed task. In-distribution evaluation examples are held-out probes. Out-of-distribution evaluations contribute
@@ -34,7 +45,10 @@ for each judgment and name changes that would apply beyond the current subject.
    outcome. Test composite leaves with a counterexample pair drawn from different included operation families. Split
    the section when the pair requires distinct central operations, tools, or bodies of knowledge; merge sections when
    mastery transfers and the distinction would not change sampling or evaluation. Compare tasks under the same
-   knowledge regime: supplied context, broadly expected background, or specialist closed-book recall.
+   knowledge regime: supplied context, broadly expected background, or specialist closed-book recall. A blocking
+   split recommendation must cite two concrete, instantiable task probes, explain why their central operations do not
+   transfer, and state how the split changes training sampling or evaluation. Different tools or subfields alone do
+   not justify a split.
 6. **Generation probes:** Every section has one `entry` instruction and one `representative` instruction. The entry
    probe isolates the prerequisite-to-section delta. The representative probe exercises the full outcome and differs
    in substance from the entry probe. Internal-node representative probes exercise cross-child synthesis. Both must
@@ -51,10 +65,46 @@ for each judgment and name changes that would apply beyond the current subject.
    same capability should retrieve the same section. Calibrate membership independently per graph; scores from
    different projections are not directly comparable. Treat low similarity and unstable neighbors as evidence about
    annotation quality, anchors, boundaries, or missing coverage. Do not add source-specific rules or per-task
-   exceptions.
+   exceptions. Mapping is diagnostic rather than a curriculum acceptance gate. Roughly 70% reasonable placement is
+   sufficient for initial scale-out when human reviewers find the curriculum boundary coherent; improve task keys,
+   anchors, and embeddings separately.
 8. **Adaptive size:** Section count and depth follow the preceding criteria. There is no target density per macro
    area. Flag broad catch-alls when mutual self-confidence is implausible, and flag distinctions that would not change
    sampling, transfer, or evaluation.
 
-A high score requires no blocking issue in coverage, boundaries, progression, mutual self-confidence, or generation.
-The numeric score is a comparison aid; findings and reproducible examples govern revisions.
+## Routine score
+
+The single-call reviewer scores five dimensions:
+
+| Dimension | Points |
+| --- | ---: |
+| Coverage | 25 |
+| Mutual self-confidence | 25 |
+| Progression and epsilon continuity | 25 |
+| Observable boundaries | 15 |
+| Probe quality and parsimony | 10 |
+
+The total is a comparison aid. `pilot_ready` requires at least 85 points, no blockers, and medium or high evidence
+confidence. A score from 70 through 84, or any blocker, yields `revise`. A score below 70 or pervasive structural
+failure yields `regenerate`.
+
+The routine reviewer must inspect every leaf's most distant permitted task pair, every prerequisite edge under the
+completed-artifact counterfactual, every internal-node representative for coherent synthesis, and every guidepost for
+coverage. It must not infer one leaf per guidepost. High confidence requires direct or held-out evidence reaching
+every leaf and sampled prerequisite edges. A complete structural scan with sparse task evidence is medium confidence;
+missing evidence for major branches is low confidence.
+
+## Luna difficulty proxy
+
+Model-training experiments are outside this curriculum workflow. During development or a periodic audit, use Luna
+failures as a rough proxy on two prerequisite representatives, two dependent entries, and two dependent
+representatives per sampled edge:
+
+- failing a prerequisite probe is a floor condition and leaves the edge empirically inconclusive;
+- passing both prerequisites and failing both entries rejects epsilon continuity;
+- passing both prerequisites and at least one entry is positive epsilon evidence;
+- solving every probe is a ceiling condition and leaves only the structural judgment; and
+- representative success above entry success flags probe ordering for review.
+
+Findings and reproducible examples govern revisions. Passing the structural or Luna audit does not establish learning
+transfer.
