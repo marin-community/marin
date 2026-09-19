@@ -54,8 +54,8 @@ Nontrivial differences from upstream FA4/CuTe:
   metadata, not as cu_seqlens or a dense attention mask.
 - The forward score tile applies the segment/causal predicate immediately before
   softmax exponentiation.
-- The backward launcher reuses upstream preprocess/postprocess, but the main
-  backward kernel is the segmented port in ``_fa4_cute_segmented_bwd``.
+- Backward uses native upstream SM90/SM100 kernels for supported GQA shapes
+  and the segmented port in ``_fa4_cute_segmented_bwd`` for other configurations.
 """
 
 import importlib
@@ -65,7 +65,7 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 from levanter.cutlass_kernel_cache import cute_launcher_factory
-from levanter.grug.attention._fa4_cute_config import Flash4CuteSm90BackwardConfig
+from levanter.grug.attention._fa4_cute_config import Flash4CuteSm100BackwardConfig, Flash4CuteSm90BackwardConfig
 
 
 @dataclass(frozen=True)
@@ -979,12 +979,6 @@ def segmented_flash_attention_backward_launcher(
 
     preprocess_module = importlib.import_module("flash_attn.cute.flash_bwd_preprocess")
     postprocess_module = importlib.import_module("flash_attn.cute.flash_bwd_postprocess")
-    # Grug divergence from upstream FA4: JAX cutlass_call exposes nested scratch
-    # buffers as generic memrefs. Upstream postprocess uses cp.async, which
-    # verifies only for global memrefs, so patch the postprocess copy atom to the
-    # universal op used by the segmented main kernel.
-    postprocess_module.assume_tensor_aligned = lambda tensor: tensor
-    postprocess_module.cpasync.CopyG2SOp = lambda *args, **kwargs: cute.nvgpu.CopyUniversalOp()
     segmented_bwd_module = importlib.import_module("levanter.grug.attention._fa4_cute_segmented_bwd")
     FlashAttentionBackwardPreprocess = preprocess_module.FlashAttentionBackwardPreprocess
     FlashAttentionBackwardPostprocess = postprocess_module.FlashAttentionBackwardPostprocess
@@ -1070,28 +1064,9 @@ def segmented_flash_attention_backward_launcher(
         score_mod_bwd=None,
     )
 
-    class _Float32ZeroFill:
-        def __init__(self, num_threads: int):
-            self._num_threads = num_threads
-
-        @cute.jit
-        def __call__(self, tensor: cute.Tensor, stream: cuda.CUstream):
-            self.kernel(tensor).launch(
-                grid=[cute.ceil_div(cute.size(tensor), self._num_threads), 1, 1],
-                block=[self._num_threads, 1, 1],
-                stream=stream,
-            )
-
-        @cute.kernel
-        def kernel(self, tensor: cute.Tensor):
-            tidx, _, _ = cute.arch.thread_idx()
-            bidx, _, _ = cute.arch.block_idx()
-            flat = cute.make_tensor(tensor.iterator, cute.make_layout(cute.size(tensor)))
-            idx = bidx * self._num_threads + tidx
-            if idx < cute.size(flat):
-                flat[idx] = cutlass.Float32(0.0)
-
-    zero_fill = _Float32ZeroFill(postprocess_threads)
+    support = _native_segmented_backward_support(modules, num_threads=postprocess_threads)
+    zero_fill = support.zero_fill
+    _as_gmem_tensor = support.as_gmem_tensor
 
     @cute.jit
     def _launch_segmented_flash_attention_backward(
@@ -1158,7 +1133,7 @@ def segmented_flash_attention_backward_launcher(
                 None,
                 stream,
             )
-            dq_postprocess(dq_accum, dq, softmax_scale, None, None, None, None, stream)
+            dq_postprocess(_as_gmem_tensor(dq_accum), dq, softmax_scale, None, None, None, None, stream)
             return
 
         if cutlass.const_expr(qhead_per_kvhead > 1):
@@ -1190,11 +1165,83 @@ def segmented_flash_attention_backward_launcher(
             None,
             stream,
         )
-        dq_postprocess(dq_accum, dq, softmax_scale, None, None, None, None, stream)
-        dk_postprocess(dk_accum, dk, softmax_scale, None, None, None, None, stream)
-        dv_postprocess(dv_accum, dv, cutlass.Float32(1.0), None, None, None, None, stream)
+        dq_postprocess(_as_gmem_tensor(dq_accum), dq, softmax_scale, None, None, None, None, stream)
+        dk_postprocess(_as_gmem_tensor(dk_accum), dk, softmax_scale, None, None, None, None, stream)
+        dv_postprocess(_as_gmem_tensor(dv_accum), dv, cutlass.Float32(1.0), None, None, None, None, stream)
 
     return _launch_segmented_flash_attention_backward
+
+
+@dataclass(frozen=True)
+class _NativeSegmentedBackwardSupport:
+    mask_mod: Any
+    zero_fill: Any
+    as_gmem_tensor: Any
+
+
+def _native_segmented_backward_support(modules: Any, *, num_threads: int) -> _NativeSegmentedBackwardSupport:
+    """Build the mask, zero-fill kernel, and gmem views shared by native backward."""
+    deps = _import_cute_dependencies(modules)
+    cutlass, cute, cuda = deps.cutlass, deps.cute, deps.cuda
+    utils_module = importlib.import_module("flash_attn.cute.utils")
+
+    @cute.jit
+    def _grug_segment_mask_mod(
+        batch_idx: cutlass.Int32,
+        head_idx: cutlass.Int32,
+        q_idx: cutlass.Int32,
+        kv_idx: cutlass.Int32,
+        seqlen_info: Any,
+        aux_tensors: Any,
+    ) -> Any:
+        del head_idx, seqlen_info
+        batch_idx = utils_module.ssa_to_scalar(batch_idx)
+        q_idx = utils_module.ssa_to_scalar(q_idx)
+        kv_idx = utils_module.ssa_to_scalar(kv_idx)
+        lower_bounds, valid = aux_tensors
+        query_in_bounds = cute.elem_less(q_idx, lower_bounds.shape[1])
+        metadata_q_idx = q_idx if query_in_bounds else lower_bounds.shape[1] - 1
+        query_valid = valid[batch_idx, metadata_q_idx] != 0
+        query_lower_bound = lower_bounds[batch_idx, metadata_q_idx]
+        key_after_lower_bound = cute.elem_less(query_lower_bound, kv_idx + 1)
+        key_before_query = cute.elem_less(kv_idx, q_idx + 1)
+        mask_value = query_in_bounds and query_valid and key_after_lower_bound and key_before_query
+        return utils_module.scalar_to_ssa(mask_value, cutlass.Boolean)
+
+    class _Float32ZeroFill:
+        def __init__(self, num_threads: int):
+            self._num_threads = num_threads
+
+        @cute.jit
+        def __call__(self, tensor: cute.Tensor, stream: cuda.CUstream):
+            self.kernel(tensor).launch(
+                grid=[cute.ceil_div(cute.size(tensor), self._num_threads), 1, 1],
+                block=[self._num_threads, 1, 1],
+                stream=stream,
+            )
+
+        @cute.kernel
+        def kernel(self, tensor: cute.Tensor):
+            tidx, _, _ = cute.arch.thread_idx()
+            bidx, _, _ = cute.arch.block_idx()
+            flat = cute.make_tensor(tensor.iterator, cute.make_layout(cute.size(tensor)))
+            idx = cutlass.Int64(bidx) * self._num_threads + cutlass.Int64(tidx)
+            if idx < cute.size(flat):
+                flat[idx] = cutlass.Float32(0.0)
+
+    zero_fill = _Float32ZeroFill(num_threads)
+
+    @cute.jit
+    def _as_gmem_tensor(tensor: cute.Tensor) -> cute.Tensor:
+        ptr = cute.make_ptr(
+            tensor.element_type,
+            tensor.iterator.toint(),
+            cute.AddressSpace.gmem,
+            assumed_align=256,
+        )
+        return cute.make_tensor(ptr, tensor.layout)
+
+    return _NativeSegmentedBackwardSupport(_grug_segment_mask_mod, zero_fill, _as_gmem_tensor)
 
 
 @cute_launcher_factory
@@ -1238,28 +1285,10 @@ def segmented_flash_attention_backward_sm90_launcher(
     AuxData = utils_module.AuxData
     _patch_jax_array_list_tvm_ffi_converter()
 
-    @cute.jit
-    def _grug_segment_mask_mod(
-        batch_idx: cutlass.Int32,
-        head_idx: cutlass.Int32,
-        q_idx: cutlass.Int32,
-        kv_idx: cutlass.Int32,
-        seqlen_info: Any,
-        aux_tensors: Any,
-    ) -> Any:
-        del head_idx, seqlen_info
-        batch_idx = utils_module.ssa_to_scalar(batch_idx)
-        q_idx = utils_module.ssa_to_scalar(q_idx)
-        kv_idx = utils_module.ssa_to_scalar(kv_idx)
-        lower_bounds, valid = aux_tensors
-        query_in_bounds = cute.elem_less(q_idx, lower_bounds.shape[1])
-        metadata_q_idx = q_idx if query_in_bounds else lower_bounds.shape[1] - 1
-        query_valid = valid[batch_idx, metadata_q_idx] != 0
-        query_lower_bound = lower_bounds[batch_idx, metadata_q_idx]
-        key_after_lower_bound = cute.elem_less(query_lower_bound, kv_idx + 1)
-        key_before_query = cute.elem_less(kv_idx, q_idx + 1)
-        mask_value = query_in_bounds and query_valid and key_after_lower_bound and key_before_query
-        return utils_module.scalar_to_ssa(mask_value, cutlass.Boolean)
+    support = _native_segmented_backward_support(modules, num_threads=config.num_threads)
+    _grug_segment_mask_mod = support.mask_mod
+    zero_fill = support.zero_fill
+    _as_gmem_tensor = support.as_gmem_tensor
 
     tile_m, tile_n = config.tile
     backward = FlashAttentionBackwardSm90(
@@ -1290,39 +1319,6 @@ def segmented_flash_attention_backward_sm90_launcher(
         q_subtile_factor=1,
         dQ_single_wg=config.dq_single_wg,
     )
-
-    class _Float32ZeroFill:
-        def __init__(self, num_threads: int):
-            self._num_threads = num_threads
-
-        @cute.jit
-        def __call__(self, tensor: cute.Tensor, stream: cuda.CUstream):
-            self.kernel(tensor).launch(
-                grid=[cute.ceil_div(cute.size(tensor), self._num_threads), 1, 1],
-                block=[self._num_threads, 1, 1],
-                stream=stream,
-            )
-
-        @cute.kernel
-        def kernel(self, tensor: cute.Tensor):
-            tidx, _, _ = cute.arch.thread_idx()
-            bidx, _, _ = cute.arch.block_idx()
-            flat = cute.make_tensor(tensor.iterator, cute.make_layout(cute.size(tensor)))
-            idx = bidx * self._num_threads + tidx
-            if idx < cute.size(flat):
-                flat[idx] = cutlass.Float32(0.0)
-
-    zero_fill = _Float32ZeroFill(config.num_threads)
-
-    @cute.jit
-    def _as_gmem_tensor(tensor: cute.Tensor) -> cute.Tensor:
-        ptr = cute.make_ptr(
-            tensor.element_type,
-            tensor.iterator.toint(),
-            cute.AddressSpace.gmem,
-            assumed_align=256,
-        )
-        return cute.make_tensor(ptr, tensor.layout)
 
     @cute.jit
     def _launch_segmented_flash_attention_backward_sm90(
@@ -1393,6 +1389,108 @@ def segmented_flash_attention_backward_sm90_launcher(
 
 
 @cute_launcher_factory
+def segmented_flash_attention_backward_sm100_launcher(
+    modules: Any, *, head_dim: int, head_dim_v: int, qhead_per_kvhead: int, config: Flash4CuteSm100BackwardConfig
+) -> Any:
+    """Build the native SM100 packed backward launcher with one CTA per cluster."""
+    if config.tile != (128, 128):
+        # FA4 b28 fails CuTe copy-layout verification for the 128x64 packed path.
+        raise NotImplementedError("Packed SM100 backward currently supports 128x128 tiles.")
+    if config.cluster_size != 1 or config.use_2cta_instrs:
+        raise NotImplementedError("Packed SM100 backward currently supports one CTA per cluster.")
+    deps = _import_cute_dependencies(modules)
+    cutlass, cute, cuda = deps.cutlass, deps.cute, deps.cuda
+    native_module = importlib.import_module("flash_attn.cute.flash_bwd_sm100")
+    sparsity_module = importlib.import_module("flash_attn.cute.block_sparsity")
+    utils_module = importlib.import_module("flash_attn.cute.utils")
+    FlashAttentionBackwardSm100 = native_module.FlashAttentionBackwardSm100
+    BlockSparseTensors = sparsity_module.BlockSparseTensors
+    _patch_jax_array_list_tvm_ffi_converter()
+    AuxData = utils_module.AuxData
+
+    support = _native_segmented_backward_support(modules, num_threads=config.zero_fill_threads)
+    _grug_segment_mask_mod = support.mask_mod
+    zero_fill = support.zero_fill
+    _as_gmem_tensor = support.as_gmem_tensor
+
+    backward = FlashAttentionBackwardSm100(
+        head_dim,
+        head_dim_v,
+        is_causal=False,
+        is_local=False,
+        qhead_per_kvhead=qhead_per_kvhead,
+        tile_m=config.tile[0],
+        tile_n=config.tile[1],
+        cluster_size=config.cluster_size,
+        use_2cta_instrs=config.use_2cta_instrs,
+        deterministic=False,
+        mask_mod=_grug_segment_mask_mod,
+        has_aux_tensors=True,
+    )
+
+    @cute.jit
+    def _broadcast_heads(tensor: cute.Tensor, heads: cutlass.Constexpr) -> cute.Tensor:
+        # Each head reads the same packed mask; keep the physical head dimension at one.
+        shape = (tensor.shape[0], heads, *tensor.shape[2:])
+        stride = (tensor.stride[0], 0, *tensor.stride[2:])
+        return cute.make_tensor(tensor.iterator, cute.make_layout(shape, stride=stride))
+
+    @cute.jit
+    def _launch_native_sm100(
+        stream: cuda.CUstream,
+        q: cute.Tensor,
+        k: cute.Tensor,
+        v: cute.Tensor,
+        dout: cute.Tensor,
+        lse_log2: cute.Tensor,
+        dpsum: cute.Tensor,
+        lower_bounds: cute.Tensor,
+        valid: cute.Tensor,
+        mask_block_cnt: cute.Tensor,
+        mask_block_idx: cute.Tensor,
+        full_block_cnt: cute.Tensor,
+        full_block_idx: cute.Tensor,
+        dq_accum: cute.Tensor,
+        dk_accum: cute.Tensor,
+        dv_accum: cute.Tensor,
+        *,
+        softmax_scale: cutlass.Float32,
+    ):
+        blocksparse_tensors = BlockSparseTensors(
+            _broadcast_heads(mask_block_cnt, q.shape[2]),
+            _broadcast_heads(mask_block_idx, q.shape[2]),
+            _broadcast_heads(full_block_cnt, q.shape[2]),
+            _broadcast_heads(full_block_idx, q.shape[2]),
+        )
+        if cutlass.const_expr(qhead_per_kvhead > 1):
+            zero_fill(dq_accum, stream)
+            zero_fill(dk_accum, stream)
+            zero_fill(dv_accum, stream)
+        lse_log2_gmem = _as_gmem_tensor(lse_log2)
+        dpsum_gmem = _as_gmem_tensor(dpsum)
+        dq_accum_gmem = _as_gmem_tensor(dq_accum)
+        dk_accum_gmem = _as_gmem_tensor(dk_accum)
+        dv_accum_gmem = _as_gmem_tensor(dv_accum)
+        backward(
+            q,
+            k,
+            v,
+            dout,
+            lse_log2_gmem,
+            dpsum_gmem,
+            dq_accum_gmem,
+            dk_accum_gmem,
+            dv_accum_gmem,
+            softmax_scale,
+            aux_data=AuxData(tensors=(lower_bounds, valid)),
+            blocksparse_tensors=blocksparse_tensors,
+            stream=stream,
+        )
+
+    return _launch_native_sm100
+
+
+@cute_launcher_factory
 def segmented_flash_attention_backward_sm90_preprocess_launcher(
     modules: Any,
     *,
@@ -1401,7 +1499,7 @@ def segmented_flash_attention_backward_sm90_preprocess_launcher(
     head_dim_v: int,
     tile_m: int,
 ) -> Any:
-    """Build the native Hopper backward preprocess launcher."""
+    """Build native backward statistics without allocating gradient accumulators."""
     deps = _import_cute_dependencies(modules)
     cutlass = deps.cutlass
     cute = deps.cute
@@ -1433,7 +1531,6 @@ def segmented_flash_attention_backward_sm90_preprocess_launcher(
         lse: cute.Tensor,
         dpsum: cute.Tensor,
         lse_log2: cute.Tensor,
-        dq_accum: cute.Tensor,
         *,
         softmax_scale: cutlass.Float32,
     ):
@@ -1443,7 +1540,7 @@ def segmented_flash_attention_backward_sm90_preprocess_launcher(
             dpsum,
             lse,
             lse_log2,
-            dq_accum,
+            None,
             None,
             None,
             None,

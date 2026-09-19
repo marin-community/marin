@@ -1484,13 +1484,15 @@ class SegmentedFlashAttentionBackwardSm80:
                         predicate[i, k] = (
                             tKpK[i, n, k] if cutlass.const_expr(self.check_hdim_oob) else True
                         ) and predicate_n
+                # Universal copies leave masked destinations unchanged; MMA still reads them.
+                if not predicate_n or self.check_hdim_oob:
+                    tKsK[None, n, None].fill(0.0)
                 cute.copy(
                     gmem_thr_copy,
                     tKgK[None, n, None],
                     tKsK[None, n, None],
                     pred=predicate,
                 )
-            # We need to clear the sK smem tiles since we'll use sKt for mma_dq
 
     @cute.jit
     def load_V(
@@ -1518,6 +1520,8 @@ class SegmentedFlashAttentionBackwardSm80:
                         predicate[i, k] = (
                             tVpV[i, n, k] if cutlass.const_expr(self.check_hdim_oob) else True
                         ) and predicate_n
+                if not predicate_n or self.check_hdim_v_oob:
+                    tVsV[None, n, None].fill(0.0)
                 cute.copy(
                     gmem_thr_copy,
                     tVgV[None, n, None],
@@ -1554,13 +1558,16 @@ class SegmentedFlashAttentionBackwardSm80:
                         predicate[i, k] = (
                             tQpQ[i, m, k] if cutlass.const_expr(self.check_hdim_oob) else True
                         ) and predicate_m
+                if not predicate_m or self.check_hdim_oob:
+                    tQsQ[None, m, None, smem_pipe_write_q if cutlass.const_expr(self.num_stages_Q) > 1 else 0].fill(
+                        0.0
+                    )
                 cute.copy(
                     gmem_tiled_copy_Q,
                     tQgQ[None, m, None, block],
                     tQsQ[None, m, None, smem_pipe_write_q if cutlass.const_expr(self.num_stages_Q) > 1 else 0],
                     pred=predicate,
                 )
-            # We need to clear the sQ smem tiles since we'll use sQt for mma_dK
         # We made sure LSE length is padded so we read `kBlockM` elements so that all
         # elements in sLSE are filled. Without this we might have uninitialized sLSE values.
         for m in cutlass.range_constexpr(cute.size(tLSEsLSE.shape[1])):
@@ -1600,13 +1607,16 @@ class SegmentedFlashAttentionBackwardSm80:
                         predicate[i, k] = (
                             tdOpdO[i, m, k] if cutlass.const_expr(self.check_hdim_oob) else True
                         ) and predicate_m
+                if not predicate_m or self.check_hdim_v_oob:
+                    tdOsdO[None, m, None, smem_pipe_write_q if cutlass.const_expr(self.num_stages_dO > 1) else 0].fill(
+                        0.0
+                    )
                 cute.copy(
                     gmem_tiled_copy_dO,
                     tdOgdO[None, m, None, block],
                     tdOsdO[None, m, None, smem_pipe_write_q if cutlass.const_expr(self.num_stages_dO > 1) else 0],
                     pred=predicate,
                 )
-            # We need to clear the sQ smem tiles since we'll use sQt for mma_dK
         # We made sure LSE length is padded so we read `kBlockM` elements so that all
         # elements in sLSE are filled. Without this we might have uninitialized sLSE values.
         for m in cutlass.range_constexpr(cute.size(tdPsumgdPsum.shape[1])):

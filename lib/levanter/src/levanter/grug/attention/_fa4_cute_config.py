@@ -5,6 +5,17 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 
+@dataclass(frozen=True)
+class Flash4CuteSm100BackwardConfig:
+    """Validated native Blackwell backward schedule."""
+
+    tile: tuple[int, int]
+    zero_fill_threads: int
+    postprocess_threads: int
+    cluster_size: int
+    use_2cta_instrs: bool
+
+
 class Sm90BackwardSchedule(StrEnum):
     DENSE = "dense"
     CAUSAL_OR_LOCAL = "causal_or_local"
@@ -36,6 +47,7 @@ class Flash4CuteKernelConfig:
     num_threads: int
     backward_arch: int | None = None
     sm90_backward: Flash4CuteSm90BackwardConfig | None = None
+    sm100_backward: Flash4CuteSm100BackwardConfig | None = None
 
 
 def flash4_cute_kernel_config(
@@ -45,11 +57,23 @@ def flash4_cute_kernel_config(
 ) -> Flash4CuteKernelConfig:
     arch_family = arch // 10
     if arch_family == 10:
+        # Native packed-mask backward is validated on SM100 (GB200) only.
+        # SM103 retains the segmented port until it has its own correctness gate.
+        native = None
+        if arch == 100 and head_dim == 128:
+            native = Flash4CuteSm100BackwardConfig(
+                tile=(128, 128),
+                zero_fill_threads=512,
+                postprocess_threads=128,
+                cluster_size=1,
+                use_2cta_instrs=False,
+            )
         return Flash4CuteKernelConfig(
             forward_tile=(128, 128 if head_dim <= 64 else 64),
             backward_tile=(64, 64),
             num_threads=128,
-            backward_arch=120,
+            backward_arch=arch,
+            sm100_backward=native,
         )
     if arch_family == 12:
         return Flash4CuteKernelConfig(

@@ -61,9 +61,9 @@ pipeline = [
     "jax[cuda13]==0.11.0",
     "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
     "nvidia-nccl-cu13>=2.31.2; sys_platform == 'linux'",
-    "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
-    "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
-    "quack-kernels[cu13]==0.6.1; sys_platform == 'linux'",
+    "nvidia-cutlass-dsl[cu13]==4.6.2; sys_platform == 'linux'",
+    "flash-attn-4[cu13]>=4.0.0b27,<4.1; sys_platform == 'linux'",
+    "quack-kernels[cu13]==0.6.4; sys_platform == 'linux'",
     "jax-triton==0.3.1; sys_platform == 'linux'",
     "triton>=3.6.0,<3.7; sys_platform == 'linux'",
     # Flash Attention's Python helpers import Torch, but the Grug kernels execute
