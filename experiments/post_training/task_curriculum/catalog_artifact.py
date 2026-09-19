@@ -8,8 +8,8 @@ from marin.execution.lazy import ArtifactStep
 
 CATALOG_FILENAME = "curriculum.yaml"
 CATALOG_SHA256 = "72a763b98f9ecf7f8f598b788c4f59e7ace213c01a30b403768a8f8f16f55382"
-CATALOG_URI = "s3://marin-us-east-02a/marin/task-curriculum/catalogs/" "2026.09.18-72a763b98f9e/curriculum.yaml"
-CATALOG_ROOT_URI = CATALOG_URI.removesuffix(f"/{CATALOG_FILENAME}")
+CATALOG_ROOT_URI = "s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.18-72a763b98f9e"
+CATALOG_URI = f"{CATALOG_ROOT_URI}/{CATALOG_FILENAME}"
 
 TASK_CURRICULUM = ArtifactStep.adopt(
     "post-training/task-curriculum/catalog",

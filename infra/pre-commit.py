@@ -46,7 +46,6 @@ MARIN_LICENSE = ROOT_DIR / "etc/license_header.txt"
 LEVANTER_BLACK_CONFIG = ROOT_DIR / "lib/levanter/pyproject.toml"
 HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
 MARIN_RUFF_CONFIG = ROOT_DIR / "lib/marin/pyproject.toml"
-LARGE_DATA_FILES = frozenset({ROOT_DIR / "experiments/post_training/task_curriculum/curriculum.yaml"})
 
 EXCLUDE_PATTERNS = [
     ".git/**",
@@ -325,8 +324,6 @@ def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
 
     large_files = []
     for file_path in files:
-        if file_path in LARGE_DATA_FILES:
-            continue
         if file_path.stat().st_size > max_size:
             large_files.append((file_path, file_path.stat().st_size))
 
