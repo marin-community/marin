@@ -1,10 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from openai_harmony import Message
-
 from marin.datakit.chat_normalize import ChatChannel, message_text
 from marin.datakit.download.synthetic_misconceptions import row_to_chat_doc
+from openai_harmony import Message
 
 
 def test_row_to_chat_doc_removes_trailing_user_turn() -> None:

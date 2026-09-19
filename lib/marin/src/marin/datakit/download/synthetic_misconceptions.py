@@ -16,6 +16,7 @@ from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "open-athena/synthetic-misconceptions-conversations"
 HF_REVISION = "aac8a4cb74bd999ffce39944058a136c27460cbb"
+DATA_FILE = "train.parquet"
 
 
 def row_to_chat_doc(row: dict) -> list[dict]:
@@ -33,7 +34,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
 
 def transform_chat(input_path: str, output_path: str) -> None:
     pipeline = (
-        Dataset.from_files(prefix_join(input_path, "train.parquet"))
+        Dataset.from_files(prefix_join(input_path, DATA_FILE))
         .flat_map(load_parquet)
         .flat_map(row_to_chat_doc)
         .write_parquet(
@@ -53,7 +54,7 @@ def synthetic_misconceptions_chat_normalize_steps() -> tuple[StepSpec, ...]:
         "raw/synthetic-misconceptions-conversations",
         hf_dataset_id=HF_DATASET_ID,
         revision=HF_REVISION,
-        hf_urls_glob=["train.parquet"],
+        hf_urls_glob=[DATA_FILE],
     )
     processed = StepSpec(
         name="processed-chat/synthetic-misconceptions-conversations",
