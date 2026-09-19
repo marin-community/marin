@@ -40,6 +40,8 @@ their task environment.
 - `HISTORY.md` summarizes each completed generation, review, and mapping experiment.
 - `source_survey/README.md` compares source-guided regeneration against the frozen cross-domain v1 baseline and
   records the final practical TaskTrove placement audit.
+- `source_audit/README.md` evaluates the bounded-repair method against v1 and source-first v2, including a held-out
+  TaskTrove repair for command-line environment operations in D02.
 - In the general workflow, a small set of model-visible TaskTrove tasks supplies concrete discovery evidence. In-distribution examples listed
   by the evaluation policy are held-out coverage probes. Out-of-distribution evaluations contribute domain and task
   format metadata only. Source names, solutions, and verifier implementations are excluded from generation. The
@@ -50,6 +52,8 @@ their task environment.
 
 The five-subject source survey tested public college course sequences, textbook exercise families, and professional
 standards as generator inputs. `source_survey/README.md` records the result and the bounded-repair recommendation.
+The subsequent v3 experiment applied that recommendation. V1 remains canonical; v3 is an immutable experimental
+catalog registered as `TASK_CURRICULUM_SOURCE_AUDIT_V3`.
 
 ## Curriculum iteration
 
