@@ -7,3 +7,7 @@ task_options:
 # No max_tokens: Evalchemy sizes AIME24 responses from the served context window minus the
 # benchmark's longest prompt (evalchemy#132). An explicit cap truncated reasoning models' chains.
 runtime_extras: [aime24]
+# Reasoning-heavy benchmark: keep hybrid-thinking models in thinking mode (model catalog default is
+# off); the uncapped context-derived budget leaves room to close the reasoning channel.
+chat_template_kwargs:
+  enable_thinking: true
