@@ -18,13 +18,10 @@ Plan or run::
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default \\
         --set trainer.fully_async.max_staleness_steps=2 --run
 
-The defaults are sized for the 40-GPU topology from a simulation of the loop. 128 prompts per
-update is where consumed tokens per second saturate with the trainer idle 8% instead of 50%; the
-batch grows in prompts because more answers per prompt would change the advantage estimate. 192
-generation workers is the throughput plateau, and a 32-group buffer re-pays the prompt at the
-fewest aborts while keeping a full update of staleness headroom when responses lengthen. The
-8192-token window with a 4096-token cap fits the pool's response lengths; a longer window adds no
-capacity and lets the long tail age out. The loop settings, the telemetry gates and the
+The defaults are sized for the 40-GPU topology: 128 prompts per update at four answers each, 192
+generation workers, a buffer of 32 finished groups, staleness 4, and an 8192-token request window
+with a 4096-token response cap. A larger batch grows in prompts rather than in answers per prompt,
+which would change the advantage estimate. The loop settings, the telemetry gates and the
 ``marin_tokenizer`` chat template need a MarinSkyRL revision carrying
 marin-community/MarinSkyRL#654 and marin-community/MarinSkyRL#685; an older pin rejects the keys
 when Hydra parses the config, before any GPU is used.
@@ -226,10 +223,9 @@ class AsyncPreset:
     grad_cosine: bool = False
 
 
-# The default loop: staleness 4 with 192 workers and 32 groups buffered, 224 groups against an
-# allowance of 512 so uneven finish times never age a group out; 100 updates evaluated every 10 in
-# an 8192-token window with a 4096-token cap. Each evaluation pauses generation for its 256
-# prompts, so every 5 would spend more wall on evaluation than on training.
+# The default loop: staleness 4 with 192 workers and 32 groups buffered, 100 updates in an
+# 8192-token window with a 4096-token cap, evaluated every 10. An evaluation pauses generation for
+# its 256 prompts; a run at every 5 spent longer evaluating than training.
 DEFAULT = AsyncPreset(
     label="default",
     max_steps=100,
