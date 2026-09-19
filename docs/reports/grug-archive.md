@@ -60,6 +60,15 @@ goes stale on the next commit.
 - Purpose: one-rack GB200 EP64 throughput and MFU baseline.
 - Issue: https://github.com/marin-community/marin/issues/7279
 
+### grug-fast-track
+- Path: `experiments/grug/fast_track/`
+- Origin: `moe_hero_ep`
+- Introduced: a021438bc7
+- Status: active
+- Purpose: self-contained 16k-vocab dense-vs-MoE H100 scaling ladder + MFU study; trimmed from moe_hero_ep (HF/ragged/host-offload removed, H100 fixed-pooled-wave EP only).
+- Diff: https://marin-community.github.io/marin/grug-diffs/pr-9287/fast_track/index.html
+- Issue: https://github.com/marin-community/marin/pull/9287
+
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`
 - Introduced: 5efe76834
