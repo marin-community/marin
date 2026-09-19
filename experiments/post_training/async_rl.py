@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch fully asynchronous RL on the curriculum pool with every setting written explicitly.
+"""Launch Qwen or Snowball fully asynchronous RL on the curriculum pool.
 
-One launcher for asynchronous RL experiments. It reuses the curriculum-RL policy, pool and
-evaluation wiring and adds the fully asynchronous training loop and the Megatron geometry the
-67B-A2B Snowball policy trains with. Every setting below carries one sentence saying what it does;
+One launcher for asynchronous RL experiments. It reuses the curriculum-RL policies, pool and
+evaluation wiring and adds the fully asynchronous training loop and Megatron geometries. Every
+setting below carries one sentence saying what it does;
 presets bundle them and ``--set`` changes one. The launcher writes every setting it decides into
 the rendered config, including values MarinSkyRL's base config or the curriculum template already
 hold, so a run never depends on a default changing underneath it, and two runs that differ in any
@@ -18,8 +18,11 @@ Plan or run::
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default --run
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default \\
         --set trainer.fully_async.max_staleness_steps=2 --run
+    python -m experiments.post_training.async_rl --version 2026.08.29 --policy qwen --preset smoke \\
+        --set trainer.algorithm.use_tis=true --set trainer.algorithm.score_centering_topk=32 \\
+        --set generator.sampling_params.logprobs=32 --run
 
-The defaults are sized for the 40-GPU topology: 128 prompts per update at four answers each, 192
+The Snowball defaults are sized for the 40-GPU topology: 128 prompts per update at four answers each, 192
 generation workers, a buffer of 32 finished groups, staleness 4, and an 8192-token request window
 with a 4096-token response cap. A larger batch grows in prompts rather than in answers per prompt,
 which would change the advantage estimate. The loop settings, the telemetry gates and the
@@ -64,6 +67,7 @@ from experiments.post_training.curriculum_rl.launch import (
     GPUS_PER_NODE,
     MODEL_ARTIFACT_NAME,
     POOL_ARTIFACT_NAME,
+    QWEN_POLICY,
     SEED,
     SNOWBALL_POLICY,
     SNOWBALL_SMOKE,
@@ -103,6 +107,9 @@ class ChatTemplate:
 # The marin-tokenizer's own template registered in MarinSkyRL, so the runner tokenizes exactly what
 # the tokenizer would.
 CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="marin_tokenizer")
+QWEN_CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="qwen3_without_thinking")
+# This revision includes the score-centering learner and exact behavior top-k capture.
+SCORE_CENTERING_SKYRL_COMMIT = "65bda669779d3a659fb19ee8eb6439e69e727b7f"
 
 
 @dataclass(frozen=True)
@@ -185,6 +192,38 @@ SNOWBALL_RECIPE = TrainingRecipe(
 )
 
 
+# Keep the learner on one H100 node and place eight independent Qwen3 engines on another.
+QWEN_RECIPE = TrainingRecipe(
+    profile=SkyRLRuntimeProfile.MEGATRON,
+    num_nodes=2,
+    role_plan=SkyRLRolePlan(
+        colocate_all=False,
+        policy_num_nodes=1,
+        policy_num_gpus_per_node=GPUS_PER_NODE,
+        num_inference_engines=GPUS_PER_NODE,
+        inference_engine_tensor_parallel_size=1,
+        train_batch_size=32,
+        policy_mini_batch_size=32,
+        micro_train_batch_size_per_gpu=2,
+        n_samples_per_prompt=ANSWERS_PER_PROMPT,
+    ),
+    learning_rate=1.0e-6,
+    weight_decay=1e-2,
+    max_grad_norm=1.0,
+    megatron=MegatronGeometry(
+        tensor_model_parallel_size=1,
+        pipeline_model_parallel_size=1,
+        context_parallel_size=1,
+        expert_model_parallel_size=1,
+        expert_tensor_parallel_size=1,
+    ),
+    engine_data_parallel_size=1,
+    engine_expert_parallel_size=1,
+    host_memory="128GB",
+    engine_init_kwargs={},
+)
+
+
 @dataclass(frozen=True)
 class AsyncPreset:
     """One bundle of async-loop settings: ``default`` is the house loop, ``smoke`` proves the wiring
@@ -253,6 +292,10 @@ SMOKE_PRESET = replace(
 # one update's prompts.
 ON_POLICY = replace(DEFAULT, label="on_policy", max_staleness_steps=0, generation_workers=PROMPTS_PER_UPDATE)
 PRESETS = {preset.label: preset for preset in (SMOKE_PRESET, DEFAULT, ON_POLICY)}
+QWEN_DEFAULT = replace(DEFAULT, generation_workers=64, max_buffered_groups=16, max_steps=60, eval_interval=5)
+QWEN_SMOKE = replace(SMOKE_PRESET, generation_workers=32, max_buffered_groups=8)
+QWEN_ON_POLICY = replace(QWEN_DEFAULT, label="on_policy", max_staleness_steps=0, generation_workers=32)
+QWEN_PRESETS = {preset.label: preset for preset in (QWEN_SMOKE, QWEN_DEFAULT, QWEN_ON_POLICY)}
 
 
 def checkpoint_interval(max_steps: int, eval_interval: int) -> int:
@@ -379,9 +422,15 @@ def check_loop_shape(config: dict) -> None:
         )
 
 
-def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict:
+def training_config(
+    preset: AsyncPreset,
+    settings: tuple[str, ...] = (),
+    *,
+    recipe: TrainingRecipe | None = None,
+    chat_template: ChatTemplate = CHAT_TEMPLATE,
+) -> dict:
     """Render the RL config: the curriculum data wiring plus every setting this launcher decides."""
-    recipe = SNOWBALL_RECIPE
+    recipe = recipe or SNOWBALL_RECIPE
     plan = recipe.role_plan
     # The curriculum template supplies the data and environment sections; every other section is
     # written below in full.
@@ -414,7 +463,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "train_batch_size": plan.train_batch_size,
         "policy_mini_batch_size": plan.policy_mini_batch_size,
         "micro_train_batch_size_per_gpu": plan.micro_train_batch_size_per_gpu,
-        "micro_forward_batch_size_per_gpu": 1,
+        "micro_forward_batch_size_per_gpu": plan.micro_train_batch_size_per_gpu,
         # Validation prompts scored per in-run evaluation.
         "eval_batch_size": 256,
         "eval_interval": preset.eval_interval,
@@ -446,6 +495,10 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
             "use_kl_in_reward": False,
             # No truncated importance sampling on top of the clip.
             "use_tis": False,
+            # A positive score-centering width requires TIS and matching behavior top-k capture.
+            "score_centering_topk": 0,
+            # Truncate old-trainer / behavior ratios at two when TIS is enabled.
+            "tis_imp_ratio_cap": 2.0,
             # Symmetric PPO clip.
             "eps_clip_low": 0.2,
             "eps_clip_high": 0.2,
@@ -517,7 +570,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "enable_http_endpoint": True,
         # Each turn re-renders the conversation through the chat template; the entrypoint requires it.
         "use_conversation_multi_turn": True,
-        "chat_template": asdict(CHAT_TEMPLATE),
+        "chat_template": asdict(chat_template),
         "engine_init_kwargs": dict(recipe.engine_init_kwargs),
         "sampling_params": {
             # Full-distribution sampling; the ratio diagnostics assume no truncation.
@@ -571,10 +624,18 @@ class AsyncRun:
     evaluation: ArtifactStep[EvaluationResult]
 
 
-def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, settings: tuple[str, ...] = ()) -> AsyncRun:
+def build_run(
+    policy: PolicySpec,
+    preset: AsyncPreset,
+    version: str | None,
+    settings: tuple[str, ...] = (),
+    *,
+    recipe: TrainingRecipe | None = None,
+    chat_template: ChatTemplate = CHAT_TEMPLATE,
+) -> AsyncRun:
     """Assemble the RL step and its evaluation for one policy and preset."""
-    recipe = SNOWBALL_RECIPE
-    config = training_config(preset, settings)
+    recipe = recipe or SNOWBALL_RECIPE
+    config = training_config(preset, settings, recipe=recipe, chat_template=chat_template)
     pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
     model = policy.adopted_model or model_step(version or resolve_version(MODEL_ARTIFACT_NAME, None))
     # Settings change what the run is, so they change its address: two --set runs never share one.
@@ -586,7 +647,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
             config_yaml=yaml.safe_dump(config, sort_keys=False),
-            runtime=SkyRLRuntime(profile=recipe.profile),
+            runtime=SkyRLRuntime(profile=recipe.profile, commit=SCORE_CENTERING_SKYRL_COMMIT),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=policy.tokenizer_uri,
@@ -644,6 +705,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
 
 @click.command(help=__doc__)
 @click.option("--preset", type=click.Choice(sorted(PRESETS)), default="smoke", show_default=True)
+@click.option("--policy", "policy_name", type=click.Choice(("qwen", "snowball")), default="snowball", show_default=True)
 @click.option(
     "--set",
     "settings",
@@ -659,9 +721,13 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
     help="Terminal stage; evaluation includes the RL run automatically.",
 )
 @build_options
-def main(preset: str, settings: tuple[str, ...], stage: str) -> dict[str, ArtifactStep]:
-    run = build_run(SNOWBALL_POLICY, PRESETS[preset], version=None, settings=settings)
-    return {f"{SNOWBALL_POLICY.label}-{preset}": getattr(run, stage)}
+def main(preset: str, settings: tuple[str, ...], stage: str, policy_name: str = "snowball") -> dict[str, ArtifactStep]:
+    policy = QWEN_POLICY if policy_name == "qwen" else SNOWBALL_POLICY
+    recipe = QWEN_RECIPE if policy_name == "qwen" else SNOWBALL_RECIPE
+    chat_template = QWEN_CHAT_TEMPLATE if policy_name == "qwen" else CHAT_TEMPLATE
+    presets = QWEN_PRESETS if policy_name == "qwen" else PRESETS
+    run = build_run(policy, presets[preset], version=None, settings=settings, recipe=recipe, chat_template=chat_template)
+    return {f"{policy.label}-{preset}": getattr(run, stage)}
 
 
 if __name__ == "__main__":

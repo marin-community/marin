@@ -13,7 +13,7 @@ from marin.execution.build_context import BuildContext, VersionCodex, build_cont
 from marin.execution.lazy import StepContext
 
 from experiments.post_training import async_rl
-from experiments.post_training.curriculum_rl.launch import BASE_OVERRIDES, SNOWBALL_POLICY, rl_config_yaml
+from experiments.post_training.curriculum_rl.launch import BASE_OVERRIDES, QWEN_POLICY, SNOWBALL_POLICY, rl_config_yaml
 
 # Every key the launcher decides beyond the ones its own tables and dataclasses name.
 EXPLICIT_KEYS = (
@@ -49,6 +49,8 @@ EXPLICIT_KEYS = (
     "trainer.algorithm.use_kl_loss",
     "trainer.algorithm.use_kl_in_reward",
     "trainer.algorithm.use_tis",
+    "trainer.algorithm.score_centering_topk",
+    "trainer.algorithm.tis_imp_ratio_cap",
     "trainer.algorithm.eps_clip_low",
     "trainer.algorithm.eps_clip_high",
     "trainer.algorithm.ratio_diagnostics.pooled",
@@ -299,6 +301,38 @@ def test_command_plans_without_running(owner):
     with build_context(BuildContext(versions=VersionCodex(default="2026.09.18"))):
         handles = async_rl.main.callback.__wrapped__(preset="smoke", settings=(), stage="rl")
     assert list(handles) == ["snowball-smoke"]
+
+
+def test_qwen_smoke_selects_megatron_policy_and_pinned_skyrl_runtime(owner):
+    result = CliRunner().invoke(async_rl.main, ["--version", "2026.09.18", "--policy", "qwen", "--preset", "smoke"])
+    assert result.exit_code == 0, result.output
+    run = async_rl.build_run(
+        QWEN_POLICY,
+        async_rl.QWEN_SMOKE,
+        version="2026.09.18",
+        recipe=async_rl.QWEN_RECIPE,
+        chat_template=async_rl.QWEN_CHAT_TEMPLATE,
+    )
+    built = run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args.keys(), run.rl.deps))
+    config = yaml.safe_load(built.request.config_yaml)
+    assert built.request.runtime.commit == async_rl.SCORE_CENTERING_SKYRL_COMMIT
+    assert built.launcher_requirement.endswith(f"@{async_rl.SCORE_CENTERING_SKYRL_COMMIT}")
+    assert config["trainer"]["strategy"] == "megatron"
+    assert config["generator"]["chat_template"]["name_or_path"] == "qwen3_without_thinking"
+
+
+def test_score_centering_setting_changes_only_the_correction_at_matched_capture():
+    matched = ("trainer.algorithm.use_tis=true", "generator.sampling_params.logprobs=32")
+    tis = flattened(async_rl.training_config(async_rl.QWEN_SMOKE, matched, recipe=async_rl.QWEN_RECIPE))
+    centered = flattened(
+        async_rl.training_config(
+            async_rl.QWEN_SMOKE,
+            (*matched, "trainer.algorithm.score_centering_topk=32"),
+            recipe=async_rl.QWEN_RECIPE,
+        )
+    )
+    differences = {key: (tis[key], centered[key]) for key in tis if tis[key] != centered[key]}
+    assert differences == {"trainer.algorithm.score_centering_topk": (0, 32)}
 
 
 def test_seed_setting_reaches_the_config_and_the_request(owner):
