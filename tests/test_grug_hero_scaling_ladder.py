@@ -91,6 +91,7 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
         num_steps=1,
         schedule_steps=390_251,
         version="dev",
+        gc_interval=100,
     )
     ladder = build_ladder_run(run_id="test-ladder", size="d6144", version="dev")
     diagnostic_config = diagnostic.build_config(
