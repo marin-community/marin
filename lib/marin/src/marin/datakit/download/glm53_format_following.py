@@ -29,7 +29,7 @@ from marin.execution.step_spec import StepSpec
 
 WILDCHAT_NAME = "wildchat-glm53-format-completions"
 WILDCHAT_REPO = "open-athena/" + WILDCHAT_NAME
-WILDCHAT_REVISION = "411bc9d89d8b2d983c51c9d9acd7b511c8dbe2c9"
+WILDCHAT_REVISION = "e042ff3eed9c6f5fd0d2b4773c1a35fe49619769"
 NUM_SHARDS = 32
 SOURCE_REPO = "allenai/WildChat-4.8M"
 SOURCE_REVISION = "c827c6df8fcf008219ffaffa4d1dd77491099367"
