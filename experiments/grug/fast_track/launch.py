@@ -46,6 +46,13 @@ from experiments.grug.fast_track.train import (
     run_grug,
 )
 from experiments.grug.moe.launch_datakit_moe_mix import _val_component
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
+    HARRIER_MIX_2026_08_18_STORE,
+    harrier_mix_2026_08_18_data_config,
+)
+from experiments.grug.moe_hero_ep.hero_recipe import validation_datasets
+from experiments.llama import llama3_tokenizer_vocab_size
+from experiments.marin_tokenizer import marin_tokenizer
 
 # Run defaults.
 H100_LADDER_SIZES = ("d512", "d768", "d1024", "d1280")
@@ -281,6 +288,7 @@ def build_h100_ladder_run(
     dense: bool = False,
     save_checkpoints: bool = False,
     ablation: str = "none",
+    tok128k: bool = False,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -323,6 +331,7 @@ def build_h100_ladder_run(
         num_steps = max(1, round(target_tokens / (batch_size * SEQ_LEN)))
     elif num_steps <= 0:
         raise ValueError(f"--num-steps must be positive, got {num_steps}")
+    run_flops = 6.0 * active * num_steps * batch_size * SEQ_LEN  # analytic budget (drives Harrier epoching)
 
     # no_eval pushes eval past the run end (clean MFU probes); otherwise eval at the midpoint and end.
     steps_per_eval = num_steps + 1 if no_eval else max(1, num_steps // 2)
@@ -353,12 +362,16 @@ def build_h100_ladder_run(
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
     eval_tag = tokenizer.rsplit("/", 1)[-1]
-    validation = [
-        *uncheatable_datasets(tokenizer=tokenizer, tag=eval_tag).values(),
-        *paloma_datasets(
-            tokenizer=tokenizer, tag=eval_tag, raw_prefix=_PALOMA_DETOK_RAW, version=PALOMA_DETOK_VERSION
-        ).values(),
-    ]
+    if tok128k:
+        # 128k Marin tokenizer: reuse the hero's Marin/llama3 eval caches (vocab-compatible).
+        validation = [*validation_datasets(), *uncheatable_datasets(tokenizer=tokenizer).values()]
+    else:
+        validation = [
+            *uncheatable_datasets(tokenizer=tokenizer, tag=eval_tag).values(),
+            *paloma_datasets(
+                tokenizer=tokenizer, tag=eval_tag, raw_prefix=_PALOMA_DETOK_RAW, version=PALOMA_DETOK_VERSION
+            ).values(),
+        ]
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
@@ -374,7 +387,12 @@ def build_h100_ladder_run(
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
-                tags=["h100", "fasttrack", "vocab-16k", *([] if ablation == "none" else [f"abl-{ablation}"])],
+                tags=[
+                    "h100",
+                    "fasttrack",
+                    "vocab-128k" if tok128k else "vocab-16k",
+                    *([] if ablation == "none" else [f"abl-{ablation}"]),
+                ],
                 group="fasttrack-scaling-ladder",
                 name=run_id,
                 replicate_path=ctx.output_path,
@@ -402,9 +420,19 @@ def build_h100_ladder_run(
                 keep_last_temporary_checkpoints=1,
             ),
         )
-        data = _flat_cache_data_config(
-            ctx=ctx, validation=validation, tokenizer=tokenizer, train_cache_dir=train_cache_dir
-        )
+        if tok128k:
+            data = harrier_mix_2026_08_18_data_config(
+                ctx=ctx,
+                total_steps=num_steps,
+                batch_size=batch_size,
+                max_seq_len=SEQ_LEN,
+                experiment_flops=run_flops,
+                validation=validation,
+            )
+        else:
+            data = _flat_cache_data_config(
+                ctx=ctx, validation=validation, tokenizer=tokenizer, train_cache_dir=train_cache_dir
+            )
         return GrugRunConfig(
             model=model,
             data=data,
@@ -431,7 +459,7 @@ def build_h100_ladder_run(
         artifact_type=ThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(*validation,),
+        deps=((HARRIER_MIX_2026_08_18_STORE, *validation) if tok128k else (*validation,)),
         runtime_args={"train_resources": train_resources},
     )
 
@@ -473,6 +501,11 @@ def build_h100_ladder_run(
     show_default=True,
     help="Hold-one-feature-out ablation vs the MoE baseline.",
 )
+@click.option(
+    "--tok128k",
+    is_flag=True,
+    help="Train on the 128k Marin tokenizer (hero Harrier mixture) instead of the 16k BPE cache.",
+)
 @build_options
 def main(
     run_id: str,
@@ -484,7 +517,11 @@ def main(
     dense: bool,
     save_checkpoints: bool,
     ablation: str,
+    tok128k: bool,
 ) -> ArtifactStep[ThroughputResult]:
+    kwargs = {}
+    if tok128k:
+        kwargs = {"tokenizer": marin_tokenizer, "vocab_size": llama3_tokenizer_vocab_size}
     return build_h100_ladder_run(
         run_id=run_id,
         size=size,
@@ -495,6 +532,8 @@ def main(
         dense=dense,
         save_checkpoints=save_checkpoints,
         ablation=ablation,
+        tok128k=tok128k,
+        **kwargs,
     )
 
 
