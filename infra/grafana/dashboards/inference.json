@@ -10,9 +10,9 @@
   "timezone": "utc",
   "editable": false,
   "schemaVersion": 39,
-  "refresh": "1m",
+  "refresh": "2m",
   "time": {
-    "from": "now-3h",
+    "from": "now-5m",
     "to": "now"
   },
   "templating": {
@@ -102,6 +102,16 @@
         "sort": 1,
         "regex": "",
         "hide": 0
+      },
+      {
+        "name": "output_cap",
+        "label": "Output token cap (annotation)",
+        "type": "textbox",
+        "query": "unknown",
+        "current": {
+          "text": "unknown",
+          "value": "unknown"
+        }
       }
     ]
   },
@@ -365,7 +375,7 @@
     {
       "type": "table",
       "title": "Engine comparison (observed samples)",
-      "description": "Up to 128 observed identities per signal, keyed by cluster, service, resource and engine. Legacy identities may cover more than one physical DP engine. Running/waiting are sample means; KV is raw peak; tokens/s is the mean over bins with valid deltas, not the whole wall-clock window. Missing cells are unknown, not idle. Narrow to one rollout phase before comparing; check freshness below for unequal coverage.",
+      "description": "Up to 128 observed identities per signal, keyed by cluster, service, resource and engine. Legacy identities may cover more than one physical DP engine. Running/waiting are sample means; KV is raw peak; tokens/s is the mean over bins with valid deltas, not the whole wall-clock window. Missing cells are unknown, not idle. Narrow to one rollout phase before comparing; check freshness below for unequal coverage. ITL is the token-weighted native histogram mean in seconds over this window.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -451,6 +461,22 @@
               {
                 "id": "unit",
                 "value": "percentunit"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "inter_token_latency_mean"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Inter-token latency (mean)"
+              },
+              {
+                "id": "unit",
+                "value": "s"
               }
             ]
           }
@@ -837,7 +863,7 @@
       "id": 1,
       "gridPos": {
         "x": 0,
-        "y": 40,
+        "y": 48,
         "w": 8,
         "h": 6
       }
@@ -847,7 +873,7 @@
       "id": 10,
       "gridPos": {
         "x": 8,
-        "y": 40,
+        "y": 48,
         "w": 8,
         "h": 6
       }
@@ -863,7 +889,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 40,
+        "y": 48,
         "w": 8,
         "h": 6
       },
@@ -942,6 +968,182 @@
           ]
         }
       ]
+    },
+    {
+      "type": "barchart",
+      "title": "Output length distribution (cap: ${output_cap} tokens)",
+      "description": "Counts in disjoint native histogram intervals, labeled by inclusive upper bound. The lower bound is the previous bucket. Only completed requests contribute. The cap is an annotation supplied for the selected run; it is not inferred from observed lengths.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/vllm/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "identity_kind",
+                "value": "${identity_kind}"
+              },
+              {
+                "key": "identity",
+                "value": "${identity}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "output_length_distribution"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "series",
+              "text": "upper bound (tokens)",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "requests",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": 45,
+        "showValue": "auto",
+        "stacking": "none",
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "id": 17,
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 16,
+        "h": 8
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Finished at length limit",
+      "description": "Fraction of engine finishes whose native request_success_total finish reason is length. Denominator includes all reasons in that counter. It excludes unfinished requests and separately reported failure counters.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "No completed samples"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/vllm/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "identity_kind",
+                "value": "${identity_kind}"
+              },
+              {
+                "key": "identity",
+                "value": "${identity}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "length_finish_fraction"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "value"
+        },
+        "textMode": "value",
+        "colorMode": "value"
+      },
+      "id": 18,
+      "gridPos": {
+        "x": 16,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      }
     }
   ],
   "links": [
