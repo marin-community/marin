@@ -42,7 +42,7 @@ INITIAL_DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
 MARIN_TOKENIZER = "marin-community/marin-tokenizer"
 MARIN_TOKENIZER_REVISION = "a5ca45f"
 GPUS_PER_NODE = 8
-MARINSKYRL_COMMIT = "e1074aca3018183ee2fee9f6fd07da06685e5c18"
+MARINSKYRL_COMMIT = "0dfee6a094f5101bbb15aacecca9d38ce578880d"
 
 SNOWBALL_MODEL = ArtifactStep.adopt(
     "models/snowball-67b-a2b-sft-s2-thinking",
