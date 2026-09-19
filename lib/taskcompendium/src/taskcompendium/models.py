@@ -10,6 +10,8 @@ SCHEMA_VERSION = "0.1"
 
 @dataclass(frozen=True)
 class Source:
+    """Pinned provenance for the source row and the importer that converted it."""
+
     dataset: str
     revision: str
     row: str
@@ -22,7 +24,7 @@ class Source:
 
 @dataclass(frozen=True)
 class ExactAnswer:
-    """Private reference and comparison rules, never part of rendered instructions."""
+    """An exact reference answer and its text-normalization rules."""
 
     expected: str
     ignore_case: bool = True
@@ -35,7 +37,12 @@ class ExactAnswer:
 
 @dataclass(frozen=True)
 class TaskRequirements:
-    """Operations and action interfaces the task needs from a target."""
+    """Environment functionality required to run the task.
+
+    ``capabilities`` contains generic operations such as ``filesystem`` or
+    ``shell``. ``action_interfaces`` contains named stateful tool surfaces such
+    as ``workplace:v1``.
+    """
 
     capabilities: tuple[str, ...] = ()
     action_interfaces: tuple[str, ...] = ()
@@ -43,7 +50,7 @@ class TaskRequirements:
 
 @dataclass(frozen=True)
 class TaskSpec:
-    """One pinned semantic task, independent of output format or Harbor launch."""
+    """The private definition of one deterministic answer task."""
 
     id: str
     instructions: str

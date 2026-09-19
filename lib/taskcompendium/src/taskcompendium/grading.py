@@ -30,7 +30,7 @@ class GradeResult:
 
 
 def grade_answer(specification: TaskSpec, rendering: Rendering, response: str | None) -> GradeResult:
-    """Keep submission errors separate from failed correctness checks."""
+    """Extract and score a response while distinguishing invalid submissions from verifier failures."""
     try:
         candidate = extract_answer(response, rendering)
     except (ValueError, TypeError) as error:

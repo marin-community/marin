@@ -68,8 +68,6 @@ def lower_to_harbor(
 ) -> Path:
     """Write one custom-verifier task; launch agent selection remains separate."""
     validate_binding(specification, binding)
-    if not rendering.id:
-        raise ValueError("A rendering id is required")
     instruction = render_instruction(specification, rendering)
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "environment").mkdir()
