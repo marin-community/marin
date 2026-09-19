@@ -121,7 +121,10 @@ LIMIT {JOBS_MAX_PROVISIONING_ROWS + 1}
     task_sql = f"""
 WITH averages AS (
     SELECT task_id, AVG(memory_mb) AS memory_mb, AVG(cpu_millicores) AS cpu_millicores
-    FROM "iris.task" WHERE ts >= {start} AND ts < {end} GROUP BY 1
+    FROM "iris.task"
+    WHERE COALESCE(NULLIF(cluster, ''), 'marin') IN ({cluster_values})
+      AND ts >= {start} AND ts < {end}
+    GROUP BY 1
 ), selected_ids AS (
     SELECT task_id, memory_rank, cpu_rank
     FROM (SELECT task_id, ROW_NUMBER() OVER (ORDER BY memory_mb DESC, task_id) AS memory_rank,
@@ -133,14 +136,18 @@ SELECT {bucket} AS t, task.task_id,
        AVG(task.memory_mb) AS memory_mb, AVG(task.cpu_millicores) AS cpu_millicores,
        selected_ids.memory_rank, selected_ids.cpu_rank
 FROM "iris.task" AS task JOIN selected_ids USING (task_id)
-WHERE task.ts >= {start} AND task.ts < {end}
+WHERE COALESCE(NULLIF(task.cluster, ''), 'marin') IN ({cluster_values})
+  AND task.ts >= {start} AND task.ts < {end}
 GROUP BY 1, 2, 5, 6 ORDER BY 1, 2
 LIMIT {JOBS_MAX_RESOURCE_ROWS + 1}
 """.strip()
     worker_sql = f"""
 WITH averages AS (
     SELECT worker_id, AVG(cpu_pct) AS cpu_pct, AVG(mem_bytes) AS mem_bytes
-    FROM "iris.worker" WHERE ts >= {start} AND ts < {end} GROUP BY 1
+    FROM "iris.worker"
+    WHERE COALESCE(NULLIF(cluster, ''), 'marin') IN ({cluster_values})
+      AND ts >= {start} AND ts < {end}
+    GROUP BY 1
 ), selected_ids AS (
     SELECT worker_id, cpu_rank, memory_rank
     FROM (SELECT worker_id, ROW_NUMBER() OVER (ORDER BY cpu_pct DESC, worker_id) AS cpu_rank,
@@ -152,7 +159,8 @@ SELECT {bucket} AS t, worker.worker_id,
        AVG(worker.cpu_pct) AS cpu_pct, AVG(worker.mem_bytes) AS mem_bytes,
        selected_ids.cpu_rank, selected_ids.memory_rank
 FROM "iris.worker" AS worker JOIN selected_ids USING (worker_id)
-WHERE worker.ts >= {start} AND worker.ts < {end}
+WHERE COALESCE(NULLIF(worker.cluster, ''), 'marin') IN ({cluster_values})
+  AND worker.ts >= {start} AND worker.ts < {end}
 GROUP BY 1, 2, 5, 6 ORDER BY 1, 2
 LIMIT {JOBS_MAX_RESOURCE_ROWS + 1}
 """.strip()

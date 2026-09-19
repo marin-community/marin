@@ -112,10 +112,6 @@ def validate_table_budget(name: str, table: pa.Table, *, max_rows: int, max_samp
         raise QueryResultTooLargeError(f"{name} exceeded its {max_samples}-sample budget")
 
 
-def validate_source_result(source: SourceQuery, table: pa.Table) -> None:
-    validate_table_budget(source.name, table, max_rows=source.max_rows, max_samples=source.max_samples)
-
-
 def projection_database() -> duckdb.DuckDBPyConnection:
     """Open an in-memory DuckDB connection with the bridge projection budget."""
     return duckdb.connect(config={"threads": 1, "memory_limit": "512MB", "temp_directory": ""})

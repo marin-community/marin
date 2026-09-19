@@ -106,7 +106,7 @@ from config import (
 )
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from dashboard_dataset import DashboardDataset, project_dataset, validate_source_result
+from dashboard_dataset import DashboardDataset, project_dataset, validate_table_budget
 from errors import FinelogUnavailableError, UpstreamError
 from finelog.errors import QueryResultTooLargeError, QueryTimeoutError, StatsError
 from finelog_health import FinelogHealth
@@ -574,7 +574,12 @@ def create_app(
             for source_query in dataset.sources:
                 query_started = time.monotonic()
                 table = source.query(source_query.sql, max_rows=min(source_query.max_rows, config.max_rows))
-                validate_source_result(source_query, table)
+                validate_table_budget(
+                    source_query.name,
+                    table,
+                    max_rows=source_query.max_rows,
+                    max_samples=source_query.max_samples,
+                )
                 source_tables[source_query.name] = table
                 logger.info(
                     "dashboard dataset source dataset=%s source=%s cluster=%s rows=%d elapsed_ms=%d",

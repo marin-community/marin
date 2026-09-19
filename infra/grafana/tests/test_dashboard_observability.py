@@ -331,9 +331,13 @@ def test_jobs_views_keep_selected_jobs_and_independent_top_twenty_rankings() -> 
     )
     database.execute(
         """CREATE TABLE "iris.task"(
-               ts TIMESTAMP, task_id VARCHAR, memory_mb DOUBLE, cpu_millicores DOUBLE)"""
+               ts TIMESTAMP, cluster VARCHAR, task_id VARCHAR,
+               memory_mb DOUBLE, cpu_millicores DOUBLE)"""
     )
-    database.execute('CREATE TABLE "iris.worker"(ts TIMESTAMP, worker_id VARCHAR, cpu_pct DOUBLE, mem_bytes DOUBLE)')
+    database.execute(
+        """CREATE TABLE "iris.worker"(
+               ts TIMESTAMP, cluster VARCHAR, worker_id VARCHAR, cpu_pct DOUBLE, mem_bytes DOUBLE)"""
+    )
     database.execute(
         "CREATE MACRO to_timestamp_millis(ms) AS TIMESTAMP '1970-01-01 00:00:00' + ms * INTERVAL 1 MILLISECOND"
     )
@@ -346,12 +350,14 @@ def test_jobs_views_keep_selected_jobs_and_independent_top_twenty_rankings() -> 
         ],
     )
     database.executemany(
-        'INSERT INTO "iris.task" VALUES (?, ?, ?, ?)',
-        [("1970-01-01 00:00:01", f"task-{index:02}", 21 - index, index) for index in range(21)],
+        'INSERT INTO "iris.task" VALUES (?, ?, ?, ?, ?)',
+        [("1970-01-01 00:00:01", "cw-a", f"task-{index:02}", 21 - index, index) for index in range(21)]
+        + [("1970-01-01 00:00:01", "cw-b", "task-other-cluster", 1_000, 1_000)],
     )
     database.executemany(
-        'INSERT INTO "iris.worker" VALUES (?, ?, ?, ?)',
-        [("1970-01-01 00:00:01", f"worker-{index:02}", index, 21 - index) for index in range(21)],
+        'INSERT INTO "iris.worker" VALUES (?, ?, ?, ?, ?)',
+        [("1970-01-01 00:00:01", "cw-a", f"worker-{index:02}", index, 21 - index) for index in range(21)]
+        + [("1970-01-01 00:00:01", "cw-b", "worker-other-cluster", 1_000, 1_000)],
     )
     dataset = jobs_overview_dataset(("cw-a",), ("selected",), 0, 60_000, 15_000)
     _materialize_sources(database, dataset, "task_state", "tasks", "workers")
