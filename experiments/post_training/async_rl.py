@@ -477,6 +477,8 @@ def training_config(
         # Validation prompts scored per in-run evaluation.
         "eval_batch_size": 256,
         "eval_interval": preset.eval_interval,
+        # Keep per-answer dumps so completion, correctness, and truncation can be re-scored.
+        "dump_eval_results": True,
         # No periodic HF export; the terminal export the launcher performs after training stays.
         "hf_save_interval": -1,
         # Resume from the latest resumable checkpoint on resubmission.
@@ -588,6 +590,18 @@ def training_config(
             "top_p": 1.0,
             # Return the sampled token's logprob so the ratio diagnostics can compare it with the learner's.
             "logprobs": 0,
+        },
+        # One deterministic held-out answer per prompt, with the same response cap as training.
+        "eval_n_samples_per_prompt": 1,
+        "eval_sampling_params": {
+            "max_generate_length": "${generator.sampling_params.max_generate_length}",
+            "repetition_penalty": 1.0,
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "min_p": 0.0,
+            "top_k": -1,
+            "logprobs": None,
+            "stop": None,
         },
     }
     # Let the allocator grow segments instead of fragmenting at the memory ceiling.
