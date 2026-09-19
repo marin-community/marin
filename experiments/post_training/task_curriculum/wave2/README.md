@@ -137,7 +137,7 @@ The reviewers repeatedly found four problems:
 4. Evidence is uneven. C23 has no applicable held-out eval probe, 31 of C27's 34 leaves lack direct eval evidence, and
    several discovery cohorts were dominated by tasks outside their nominal area.
 
-The repaired curricula still exhibit these issues in narrower places. C01 retains a broad standalone/system synthesis
+These are historical C-series results. The repaired curricula still exhibit these issues in narrower places. C01 retains a broad standalone/system synthesis
 boundary; C06 has schema-validation/data-quality and record-integration/linkage collisions; C07 retains broad table,
 experimental-design, longitudinal, and survival leaves; C25's closed-book factual QA leaf spans unrelated specialist
 knowledge; and C27 retains composite tax, performance, factor-risk, and disbursement leaves.
@@ -145,8 +145,9 @@ knowledge; and C27 retains composite tax, performance, factor-risk, and disburse
 ## Wave-three disposition
 
 Wave three completed the multi-label relabeling, split semantic keys into domain, mechanic, and operation projections,
-tested graph and section anchors separately, and audited six prerequisite edges. The reviewed curricula are in
-`../curriculum.yaml`; the current architecture and results are summarized in the parent README.
+tested graph and section anchors separately, and audited six prerequisite edges. The reviewed curricula are in the
+catalog registered by `../catalog_artifact.py`; the current architecture and results are summarized in the parent
+README.
 
 Task-level JSON and JSONL files are data products rather than source configuration, so they are not retained in the
 repository. Future annotations, anchors, vectors, calibration labels, and assignments belong in versioned Parquet

@@ -5,27 +5,56 @@ keeps curriculum design separate from task correctness:
 TaskCompendium owns model-visible task semantics and private verifier contracts; a curriculum describes observable
 capabilities, boundaries, examples, and prerequisites.
 
-`curriculum.yaml` is the canonical catalog. It contains all 34 inventory macro areas and 959 globally unique nodes:
-854 trainable capabilities and 105 organizational groups. The wave reports preserve the experimental evidence and
-identify provisional subjects; runtime assignment loads only the YAML catalog.
+The canonical cross-domain v1 catalog is the immutable object registered by `catalog_artifact.py`. Here, canonical
+means versioned and addressable, not promotion-ready: the breadth-first catalog deliberately includes provisional
+subjects after the one-repair stopping rule. It contains all
+45 D-series subject roots and 2,252 globally unique nodes: 1,853 trainable capabilities and 399 organizational
+groups. The wave reports preserve the experimental evidence and identify provisional subjects; the 3.7 MB YAML
+payload lives in CoreWeave S3 rather than git.
+
+- Artifact handle: `TASK_CURRICULUM`, version `2026.09.18.2`
+- Catalog: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.18-72a763b98f9e/curriculum.yaml`
+- SHA-256: `72a763b98f9ecf7f8f598b788c4f59e7ace213c01a30b403768a8f8f16f55382`
+- Evidence: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.18-72a763b98f9e/evidence.tar.gz`
+- Human viewer: [Task curriculum](https://applets.marina.oa.dev/a/67f69132-2ef4-4c9e-b8b5-77cabd126442/)
+
+Materialize the YAML before local validation or mapping:
+
+```bash
+uv run fsutil cp \
+  s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.18-72a763b98f9e/curriculum.yaml \
+  /tmp/task-curriculum-cross-domain-v1.yaml
+```
+
+`fsutil` reads `CW_KEY_ID` and `CW_KEY_SECRET` for this bucket. CoreWeave Iris tasks receive the same credentials from
+their task environment.
 
 ## Inputs
 
-- `subject_inventory.json` is the September 3, 2026 TaskTrove competency chart reduced to 34 macro areas and 151
-  micro guideposts. Its labels help find omissions; generated sections must still satisfy the curriculum rubric.
+- `subject_inventory.json` is the `2026.09.18-cross-domain-v1` inventory: 45 D-series subject roots and 356
+  guideposts. It is a cross-domain redesign rather than a one-to-one rename of the earlier TaskTrove-derived roots.
+  ISCED-F, CIP, Frascati, evaluation inventories, and occupational taxonomies are coverage checks rather than
+  curriculum node definitions.
 - `rubric.md` defines the cross-subject review criteria.
 - `workflow.md` is the resumable operating procedure, including the exact generator, blind-task, fit-judge, holistic-
   review, and optional Luna prompts.
-- A small set of model-visible TaskTrove tasks supplies concrete discovery evidence. In-distribution examples listed
+- In the general workflow, a small set of model-visible TaskTrove tasks supplies concrete discovery evidence. In-distribution examples listed
   by the evaluation policy are held-out coverage probes. Out-of-distribution evaluations contribute domain and task
-  format metadata only. Source names, solutions, and verifier implementations are excluded from generation.
+  format metadata only. Source names, solutions, and verifier implementations are excluded from generation. The
+  breadth-first D-series v1 run did not add direct TaskTrove or evaluation tasks: it used the frozen inventory and
+  optional matching C-series graphs, which is why its evidence confidence is mostly low.
 - TaskCompendium's subject, competency, task-shape, artifact, context, interaction, and state facets are optional
   vocabulary for describing task semantics.
+
+After this first D-series pass, audit the inventory against representative college course sequences, established
+introductory textbook contents and exercise families, and relevant accreditation or professional standards. This
+follow-up tests root and guidepost coverage; course and chapter headings do not automatically become capabilities or
+prerequisites. The reproducible procedure and promotion rule are in `workflow.md`.
 
 ## Curriculum iteration
 
 One-off agent runs produce curricula and reviews. Their reports record the evidence, and reviewed changes are promoted
-into the canonical YAML. For each selected macro area:
+into a new immutable catalog version. For each selected macro area:
 
 1. Give a high-reasoning generator the inventory area, rubric, a maximum tree depth, and representative tasks. Before
    emitting the curriculum, it enumerates operation families, tests the most distant permitted pair for every
@@ -64,12 +93,16 @@ direction, jurisdiction, or scientific-model family; its concrete value is recor
 the catalog. The effective task set is a capability plus fixed facet values. This makes mutual self-confidence
 testable under one knowledge regime without creating one curriculum node per language pair or jurisdiction.
 
-The checked-in `pilot/` and `wave2/` reports summarize the one-off results. Promote reviewed changes into
-`curriculum.yaml`; do not add another runtime curriculum or check in task-level experiment artifacts.
+The checked-in `pilot/` and `wave2/` reports summarize the one-off results. Publish a reviewed catalog as a new
+immutable object and update `catalog_artifact.py`; do not check in another catalog payload or task-level experiment
+artifacts.
 
 The detailed rubric is a development tool for a small subject sample. Routine scale-out uses its compact five-part
 score in one high-reasoning call per curriculum version. Sampled Luna placements and failures provide optional
 boundary and difficulty evidence; this workflow does not run model-training experiments.
+
+[`wave10/README.md`](wave10/README.md) records the complete D-series v1 procedure, aggregate results, selected
+revisions, blocking gaps, immutable artifacts, and the planned course/textbook source-survey follow-up.
 
 ## Task mapping
 
@@ -99,7 +132,7 @@ Run a pilot mapping with:
 ```bash
 uv run python -m experiments.post_training.task_curriculum.cli \
   --annotations /tmp/task-annotations-000.jsonl \
-  --catalog experiments/post_training/task_curriculum/curriculum.yaml \
+  --catalog /tmp/task-curriculum-cross-domain-v1.yaml \
   --assignment-anchors /tmp/assignment-anchors.jsonl \
   --cache /tmp/curriculum-embeddings.sqlite \
   --embedding-model text-embedding-3-small \
@@ -281,9 +314,9 @@ structural blockers. Evidence confidence remains in the report and directs later
 not prevent a coherent graph from entering the versioned catalog. The catalog now covers 22 of 34 macro areas and 107
 of 151 guideposts. Its 697 nodes project to about 984 nodes at full guidepost coverage if current density holds.
 
-## Wave-nine full baseline
+## Historical C-series full baseline
 
-Wave nine added the remaining 12 macro areas and 44 guideposts. The `wave9-1` catalog covers all 34 inventory areas
+Wave nine added the remaining 12 macro areas and 44 guideposts. The retired `wave9-1` catalog covers all 34 C-series inventory areas
 and all 151 guideposts with 959 nodes: 854 capabilities and 105 groups. Each subject used 16 curated model-visible
 TaskTrove examples and 24 curriculum-blind tasks. ML/AI and algorithms also used four answer-hidden, in-distribution
 MMLU probes each under the evaluation policy.
@@ -295,6 +328,10 @@ gaps, and sparse evidence. The complete table, recurrent findings, exact role se
 
 ## Provenance
 
+- [UNESCO ISCED Fields of Education and Training](https://uis.unesco.org/sites/default/files/documents/isced-fields-of-education-and-training-2013-en.pdf)
+- [NCES Classification of Instructional Programs 2020](https://nces.ed.gov/ipeds/cipcode/browse.aspx?y=56)
+- [OECD Frascati Manual](https://www.oecd.org/en/publications/frascati-manual-2015_9789264239012-en.html)
+- [O*NET Content Model](https://www.onetcenter.org/content.html)
 - [TaskTrove competency coverage audit](https://storage.googleapis.com/marin-public/benjaminfeuer/tasktrove-competency-coverage/2026.09.03/index.html)
 - [Coverage issue #8879](https://github.com/marin-community/marin/issues/8879)
 - [Evaluation policy #9193](https://github.com/marin-community/marin/issues/9193)

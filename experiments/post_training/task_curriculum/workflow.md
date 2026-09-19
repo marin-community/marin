@@ -1,8 +1,10 @@
 # Curriculum generation and review workflow
 
-This runbook describes the one-off agent workflow used to extend `curriculum.yaml`; no API implements the workflow.
-Keep the durable rubric, prompts, canonical YAML, and concise findings in the repository. Keep raw task samples,
-agent transcripts, embeddings, mappings, and intermediate JSON in external experiment storage.
+This runbook describes the one-off agent workflow used to extend the catalog registered in `catalog_artifact.py`; no
+API implements the workflow.
+Keep the durable rubric, prompts, artifact declaration, inventory, and concise findings in the repository. Keep
+catalog payloads, raw task samples, agent transcripts, embeddings, mappings, and intermediate JSON in immutable
+external experiment storage.
 
 ## Acceptance rule
 
@@ -24,7 +26,7 @@ blocks promotion; `validate_subject_promotion` detects that case from the hidden
 accounting. Record observed rates across several subjects before setting a numeric threshold.
 
 `pilot_ready` is the quality bar for treating a subject as reviewed. During full-catalog scale-out, a schema-valid
-graph may enter the canonical YAML after one broad repair when every inventory guidepost has an explicit home. Its
+graph may enter the next published catalog artifact after one broad repair when every inventory guidepost has an explicit home. Its
 latest non-passing review, blind-fit
 misses, confirmed gaps, and evidence limitations must remain visible in the wave report. This provisional inclusion
 does not satisfy the `pilot_ready` bar. Revisit those subjects using broader evidence instead of recursively
@@ -66,6 +68,22 @@ Use separate agent contexts for all four roles. A repair is a new curriculum ver
 holistic review and blind-fit judgment against the same frozen blind tasks. Regenerate blind tasks only when they are
 invalid, leaked the curriculum, or the subject definition changed.
 
+### Post-v1 source survey
+
+After the first D-series catalog pass, audit each root against at least two public undergraduate course sequences
+from independent institutions and one established introductory or survey textbook table of contents. Record the
+source URL, institution or publisher, edition, access date, and a content hash when the source is stable. Normalize
+topics and exercise families, then map each to an existing guidepost as `covered`, `cross-domain`, or
+`candidate_gap`. Promote a candidate gap only when at least two independent sources support it and it describes a
+learnable behavior that no existing guidepost covers.
+
+For trades, public safety, clinical practice, and other fields poorly represented by college textbooks, substitute
+authoritative licensing, accreditation, or professional competency standards. Store the source extraction and
+topic mappings externally; check in only a versioned inventory revision and concise findings. Course order and
+chapter structure are evidence for breadth and candidate progression, not capability boundaries, mutual
+self-confidence, or prerequisite edges. The normal generator, completed-artifact counterfactual, holistic review,
+and blind-fit checks remain authoritative.
+
 Store the manifest and frozen blind-task artifact at a durable URI before ending a wave that may need repair. `/tmp`
 is acceptable only while a single wave is active. A concise checked-in or Loom report records the URI and hashes; it
 does not copy task-level artifacts into this directory.
@@ -84,12 +102,12 @@ The curriculum JSON has this shape:
 ```json
 {
   "version": "subject-version",
-  "subject_id": "C00",
+  "subject_id": "D00",
   "subject_name": "Subject name",
   "sections": [
     {
       "kind": "capability",
-      "id": "c00.example",
+      "id": "d00.example",
       "parent_id": null,
       "name": "Observable capability",
       "outcome": "What a model can do",
@@ -104,7 +122,7 @@ The curriculum JSON has this shape:
     },
     {
       "kind": "group",
-      "id": "c00.group",
+      "id": "d00.group",
       "parent_id": null,
       "name": "Organizational scope",
       "scope": "What its descendants cover",
@@ -119,13 +137,13 @@ The blind task generator writes:
 
 ```json
 {
-  "subject_id": "C00",
+  "subject_id": "D00",
   "prompt_version": "blind-tasks-v1",
   "tasks": [
     {
-      "id": "c00-blind-001",
+      "id": "d00-blind-001",
       "instruction": "Self-contained task instruction",
-      "guidepost_basis": ["C00.1"],
+      "guidepost_basis": ["D00.1"],
       "operation_family": "Operation used to construct the sample",
       "difficulty_intent": "entry|representative|boundary"
     }
@@ -137,14 +155,14 @@ Before fit judging, strip every field except `id` and `instruction`. The fit jud
 
 ```json
 {
-  "subject_id": "C00",
+  "subject_id": "D00",
   "curriculum_version": "subject-version",
   "prompt_version": "blind-fit-v1",
   "judgments": [
     {
-      "task_id": "c00-blind-001",
+      "task_id": "d00-blind-001",
       "status": "exact|ambiguous|gap|invalid",
-      "acceptable_capability_ids": ["c00.example"],
+      "acceptable_capability_ids": ["d00.example"],
       "decisive_operation": "What determines placement",
       "explanation": "Short evidence-based rationale"
     }
@@ -178,7 +196,7 @@ The holistic review writes:
 
 ```json
 {
-  "subject_id": "C00",
+  "subject_id": "D00",
   "curriculum_version": "subject-version",
   "score": 0,
   "dimension_scores": {
@@ -192,9 +210,9 @@ The holistic review writes:
   "confidence": "low|medium|high",
   "blockers": ["Concrete blocking defect"],
   "highest_risk_sections": ["section.id"],
-  "guidepost_accounting": [{"guidepost_id": "C00.1", "section_ids": ["c00.example"], "rationale": "..."}],
-  "discovery_accounting": [{"item_id": "task-id", "status": "support|excluded|malformed|underdetermined", "section_ids": ["c00.example"], "rationale": "..."}],
-  "evaluation_accounting": [{"item_id": "eval-item-id", "status": "support|excluded|malformed|underdetermined", "section_ids": ["c00.example"], "rationale": "..."}],
+  "guidepost_accounting": [{"guidepost_id": "D00.1", "section_ids": ["d00.example"], "rationale": "..."}],
+  "discovery_accounting": [{"item_id": "task-id", "status": "support|excluded|malformed|underdetermined", "section_ids": ["d00.example"], "rationale": "..."}],
+  "evaluation_accounting": [{"item_id": "eval-item-id", "status": "support|excluded|malformed|underdetermined", "section_ids": ["d00.example"], "rationale": "..."}],
   "findings": ["Evidence-backed finding"],
   "recommended_changes": ["Minimal generalizable repair"],
   "proposed_rubric_changes": ["Only recurrent cross-subject changes"]
@@ -384,15 +402,17 @@ whose representative probe requires more of the task's central operation and nam
    no confirmed systematic gap, and no blind-task gap tied to an uncovered guidepost. A breadth-first scale-out may
    still add a provisional subject after the one-repair stopping rule above; do not call that subject `pilot_ready`,
    and preserve its exact last review and fit result in the wave report. Add the selected curriculum to
-   `curriculum.yaml` and declare `routing_facet` from the intended
+   a locally materialized catalog and declare `routing_facet` from the intended
    membership semantics and record whether a labeled member/near-neighbor fixture calibrated that choice. A missing
    fixture leaves routing provisional but does not block a structurally sound curriculum. Increment `catalog_version`
    as `waveN-R`, where `N` is the wave and `R` is the catalog revision within it. Validate the entire file with
    `load_catalog`, which checks routing values and global subject/section uniqueness. Recompute catalog counts from
-   the parsed object. Task mapping remains a diagnostic and is not a promotion gate.
+   the parsed object. Upload the complete YAML to a new immutable S3 directory, verify its SHA-256 by reading it back,
+   and update `CATALOG_URI`, `CATALOG_SHA256`, and `TASK_CURRICULUM` in `catalog_artifact.py`. Do not check the catalog
+   payload into git. Task mapping remains a diagnostic and is not a promotion gate.
 
    ```bash
-   uv run python -c 'from pathlib import Path; from experiments.post_training.task_curriculum.catalog import load_catalog; c=load_catalog(Path("experiments/post_training/task_curriculum/curriculum.yaml")); print(len(c.curricula), sum(len(x.curriculum.sections) for x in c.curricula), sum(len(x.curriculum.capability_sections()) for x in c.curricula))'
+   uv run python -c 'from pathlib import Path; from experiments.post_training.task_curriculum.catalog import load_catalog; c=load_catalog(Path("/tmp/task-curriculum-next.yaml")); print(len(c.curricula), sum(len(x.curriculum.sections) for x in c.curricula), sum(len(x.curriculum.capability_sections()) for x in c.curricula))'
    ```
 7. Record a concise result: models and prompt versions, subject/version, node counts, holistic score/status/confidence,
    blind-fit X/Y and counts, systematic gaps and dispositions, repairs, optional Luna results, evidence limitations,
@@ -402,7 +422,7 @@ whose representative probe requires more of the task's central operation and nam
 
 ## Resume checklist
 
-A new operator can resume from the canonical YAML, inventory, rubric, this runbook, and the latest concise report.
+A new operator can resume from the catalog artifact, inventory, rubric, this runbook, and the latest concise report.
 Before starting another wave, confirm that all promoted subjects validate, list inventory subjects absent from the
 catalog, inspect the last wave's recurrent findings, and select a varied group of subjects rather than adjacent
 specialties. Change a prompt only when a finding recurs across subjects; record a new prompt version and retain the

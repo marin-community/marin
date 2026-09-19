@@ -2,11 +2,13 @@
 
 Wave eight promoted six subject graphs after one generation and one repair pass. The canonical catalog now has 22
 subjects, 107 of 151 inventory guideposts, 697 nodes, 638 capabilities, and 59 groups. Raw discovery tasks, blind
-tasks, reviews, and design audits are stored in Loom artifact `curriculum-wave8-evidence`; `../curriculum.yaml` is the
-only runtime curriculum. Artifact revision 1 has source JSON SHA-256
+tasks, reviews, and design audits are stored in Loom artifact `curriculum-wave8-evidence`; the current runtime
+catalog is registered in `../catalog_artifact.py`. Artifact revision 1 has source JSON SHA-256
 `52b9a5907765ca21602dfebef4f4782910f93d6d16b714899105f275fb53dd75` in session channel `s2uyqg34`.
 
 ## Setup
+
+This report is part of the historical C-series scale-out; it does not describe the later D-series catalog.
 
 The wave sampled 16 model-visible tasks per subject from TaskTrove Clean `2026.09.10.9`, pinned by Parquet SHA-256
 `26d0613cc017f5564d5bc8af29596efefa42f839f0f38842ffe1e6885d20da66`. The broken `nl2bash` source was excluded.

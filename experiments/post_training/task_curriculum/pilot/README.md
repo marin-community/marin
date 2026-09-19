@@ -27,7 +27,7 @@ The first review round found the same two structural problems in different subje
 `rubric.md` now makes those tests explicit. It also requires a routing rule for overlapping sections and preserves
 the original mutual-predictiveness test for leaf granularity.
 
-| area | review sequence | sections in `curriculum.yaml` | remaining weakness |
+| area | review sequence | sections in the catalog artifact | remaining weakness |
 |---|---:|---|---|
 | C03 Shell & Systems Administration | 78 → 86 | 21 | process/resource and authentication leaves still combine weakly predictive operations |
 | C14 Mathematics & Formal Reasoning | 72 → 79 → 89 → 95 | 23 | integer enumeration and structural proof remain broad; discovery evidence covers few leaves |
@@ -75,6 +75,6 @@ cross-cutting boundary reproducible.
 
 ## Artifact disposition
 
-The reviewed graphs now live in the canonical `../curriculum.yaml`. The task identities, semantic keys, blind
+The reviewed graphs are preserved in the historical C-series catalog recorded by the later wave reports. The task identities, semantic keys, blind
 references, embeddings, and assignments were experimental data products and are not runtime configuration. The
 parent README describes the wave-three multi-label architecture and the external artifact contract for future runs.

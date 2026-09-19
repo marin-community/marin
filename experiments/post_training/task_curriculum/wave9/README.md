@@ -1,9 +1,13 @@
 # Wave-nine full curriculum baseline
 
+This is the retired 34-root C-series baseline. The later D-series cross-domain catalog is documented in
+[`../wave10/README.md`](../wave10/README.md); counts and identifiers below remain historical results.
+
 Wave nine fills the 12 macro areas absent after wave eight. It uses the same four isolated Sol/high roles documented
 in `../workflow.md`: curriculum generation, curriculum-blind task generation, holistic review, and blind-fit
-judgment. The canonical runtime artifact remains `../curriculum.yaml`; the one-off JSON inputs and role outputs are
-stored in the Loom evidence artifact named below.
+judgment. The immutable historical catalog is
+`s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.18-c1821f8f67c1/curriculum.yaml`; the one-off JSON
+inputs and role outputs are stored in the Loom evidence artifact named below.
 
 ## Inputs
 
