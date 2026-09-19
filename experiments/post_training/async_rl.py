@@ -1,15 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch fully asynchronous RL on the curriculum pool at the async programme's house settings.
+"""Launch fully asynchronous RL on the curriculum pool with every setting written explicitly.
 
 One launcher for asynchronous RL experiments. It reuses the curriculum-RL policy, pool and
-evaluation wiring and adds the fully asynchronous training loop, the Megatron geometry the 67B-A2B
-Snowball policy trains with, and the loop settings the async programme settled on. Every setting
-below carries one sentence saying what it does; presets bundle them, ``--set`` changes one. The
-launcher writes every setting it decides into the rendered config, including values MarinSkyRL's
-base config or the curriculum template already hold, so the run never depends on a default changing
-underneath it.
+evaluation wiring and adds the fully asynchronous training loop and the Megatron geometry the
+67B-A2B Snowball policy trains with. Every setting below carries one sentence saying what it does;
+presets bundle them and ``--set`` changes one. The launcher writes every setting it decides into
+the rendered config, including values MarinSkyRL's base config or the curriculum template already
+hold, so a run never depends on a default changing underneath it, and two runs that differ in any
+setting never share an address.
 
 Plan or run::
 
@@ -18,23 +18,16 @@ Plan or run::
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default \\
         --set trainer.fully_async.max_staleness_steps=2 --run
 
-The house numbers come from the programme's loop simulation on the 40-GPU topology. 128 prompts
-per update is where consumed tokens per second saturate, four times the programme's 32 for +184%
-with the trainer idle 8% instead of 50%; the batch grows in prompts because more answers per prompt
-would change the advantage estimate. 192 workers is the throughput plateau: 160 gives 1% less, 224
-gives 0.5% more for seven points of KV cache. A 32-group buffer moves throughput nowhere, re-pays
-the prompt at fewer aborts than a deeper one (554 re-prefills against 3,704 at 128) and keeps a full
-update of staleness headroom when responses lengthen by half. The 8192-token window with a
-4096-token cap is the programme's: mean generated length is about 1,060 tokens, so a 16k window adds
-no capacity and only lets the long tail age out, and the 32k window of the 64-GPU Snowball Ultra
-campaign would collapse concurrency here from about 8,192 slots to about 124.
-
-Two parts of the programme's frozen recipe are not here. The off-policy correction
-(``regular_mask``) lives in marin-community/MarinSkyRL#628, so this launcher trains the plain
-``regular`` loss. The stopping package (``parser_only``) exists only on the research stack, so runs
-use MarinSkyRL's stock answer parsing and stopping. The loop settings, the telemetry gates and the
-``marin_tokenizer`` chat template need a MarinSkyRL revision carrying both the telemetry change
-(marin-community/MarinSkyRL#654) and the async-knobs change.
+The defaults are sized for the 40-GPU topology from a simulation of the loop. 128 prompts per
+update is where consumed tokens per second saturate with the trainer idle 8% instead of 50%; the
+batch grows in prompts because more answers per prompt would change the advantage estimate. 192
+generation workers is the throughput plateau, and a 32-group buffer re-pays the prompt at the
+fewest aborts while keeping a full update of staleness headroom when responses lengthen. The
+8192-token window with a 4096-token cap fits the pool's response lengths; a longer window adds no
+capacity and lets the long tail age out. The loop settings, the telemetry gates and the
+``marin_tokenizer`` chat template need a MarinSkyRL revision carrying
+marin-community/MarinSkyRL#654 and marin-community/MarinSkyRL#685; an older pin rejects the keys
+when Hydra parses the config, before any GPU is used.
 """
 
 from __future__ import annotations
@@ -135,8 +128,7 @@ class TrainingRecipe:
     num_nodes: int
     # Placement and batch shape; MarinSkyRL writes these over the config from the topology.
     role_plan: SkyRLRolePlan
-    # AdamW step size; every measured programme run and the checked-in Snowball Megatron configs
-    # use 1e-6.
+    # AdamW step size; the checked-in Snowball Megatron configs and the measured runs use 1e-6.
     learning_rate: float
     # AdamW decoupled weight decay; the base config's 1e-2, written here so it cannot drift.
     weight_decay: float
@@ -158,7 +150,7 @@ class TrainingRecipe:
         return _STRATEGY_FOR_PROFILE[self.profile]
 
 
-# Snowball 67B-A2B on the 40-GPU house topology: four policy nodes with the reference colocated,
+# Snowball 67B-A2B on the 40-GPU topology: four policy nodes with the reference colocated,
 # pipeline depth 2 with 16-way data parallelism and experts sharded eight ways, and one engine node
 # sharding experts across its eight ranks (DP8/EP8).
 SNOWBALL_RECIPE = TrainingRecipe(
@@ -196,7 +188,7 @@ SNOWBALL_RECIPE = TrainingRecipe(
 
 @dataclass(frozen=True)
 class AsyncPreset:
-    """One bundle of async-loop settings; ``smoke`` proves wiring, ``default`` is the house loop."""
+    """One bundle of async-loop settings; ``smoke`` proves wiring, ``default`` is the full loop."""
 
     label: str
     # Optimizer updates the run performs before it stops; the epoch bound never fires first.
@@ -234,13 +226,14 @@ class AsyncPreset:
     grad_cosine: bool = False
 
 
-# The house loop: staleness 4 with 192 workers and 32 groups buffered, 224 groups against an
-# allowance of 512 so uneven finish times never age a group out; 100 updates evaluated every 5 in
-# the programme's 8192-token window with a 4096-token cap.
+# The default loop: staleness 4 with 192 workers and 32 groups buffered, 224 groups against an
+# allowance of 512 so uneven finish times never age a group out; 100 updates evaluated every 10 in
+# an 8192-token window with a 4096-token cap. Each evaluation pauses generation for its 256
+# prompts, so every 5 would spend more wall on evaluation than on training.
 DEFAULT = AsyncPreset(
     label="default",
     max_steps=100,
-    eval_interval=5,
+    eval_interval=10,
     max_staleness_steps=4,
     generation_workers=192,
     max_buffered_groups=32,
@@ -248,7 +241,7 @@ DEFAULT = AsyncPreset(
     max_new_tokens=4096,
     evals="math500,gsm8k-0shot",
 )
-# Two updates on the house geometry and batch with short responses: proves the wiring end to end.
+# Two updates on the default geometry and batch with short responses: proves the wiring end to end.
 SMOKE_PRESET = replace(
     DEFAULT,
     label="smoke",
@@ -318,7 +311,6 @@ TOPOLOGY_OWNED_SETTINGS = frozenset(
         "trainer.policy_mini_batch_size",
         "trainer.micro_train_batch_size_per_gpu",
         "generator.n_samples_per_prompt",
-        "trainer.seed",
         "trainer.resume_mode",
         "trainer.max_ckpts_to_keep",
     }
@@ -432,6 +424,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         # Resume from the latest resumable checkpoint on resubmission.
         "resume_mode": "latest",
         "max_ckpts_to_keep": RETENTION.resume_checkpoint_count,
+        # Sampling and shuffling seed; --set trainer.seed=N changes it and the run's address with it.
         "seed": SEED,
         "logger": "wandb",
         "project_name": WANDB_PROJECT,
@@ -582,7 +575,8 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
                 role_plan=recipe.role_plan,
             ),
             retention=RETENTION,
-            seed=SEED,
+            # The request's seed is what MarinSkyRL writes over the config, so it follows a --set.
+            seed=config["trainer"]["seed"],
             overrides=(*BASE_OVERRIDES, *policy.overrides),
         ),
         IrisSkyRLExecution(
@@ -594,7 +588,9 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             priority="interactive",
             # One automatic retry, then fail; a healthy run resumes from its latest checkpoint on resubmission.
             max_retries=1,
-            wandb_entity="marin-community",
+            # The W&B key decides the entity; a hard-coded one fails at runtime for a key that
+            # cannot write there.
+            wandb_entity=None,
         ),
     )
     # The evaluation serves the rendered window, so a --set on the budget reaches the server.

@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from dataclasses import fields
+import json
+from dataclasses import asdict, fields
 
 import click
 import pytest
@@ -15,7 +16,7 @@ from experiments.post_training import async_rl
 from experiments.post_training.curriculum_rl.launch import SNOWBALL_POLICY
 
 # Every key the launcher decides beyond the ones its own tables and dataclasses name.
-HOUSE_KEYS = (
+EXPLICIT_KEYS = (
     "entrypoint",
     "context_budget.request_window_tokens",
     "context_budget.max_new_tokens_per_turn",
@@ -32,6 +33,7 @@ HOUSE_KEYS = (
     "trainer.eval_batch_size",
     "trainer.eval_before_train",
     "trainer.eval_interval",
+    "trainer.seed",
     "trainer.ckpt_interval",
     "trainer.hf_save_interval",
     "trainer.logger",
@@ -121,7 +123,7 @@ PRESET_LOOPS = {
 
 
 def ruled_keys() -> set[str]:
-    keys = set(HOUSE_KEYS) | set(async_rl.TOPOLOGY_OWNED_SETTINGS)
+    keys = set(EXPLICIT_KEYS) | set(async_rl.TOPOLOGY_OWNED_SETTINGS)
     for section in ("trainer.policy.megatron_config", "trainer.ref.megatron_config"):
         keys |= {f"{section}.{field.name}" for field in fields(async_rl.MegatronGeometry)}
     keys |= {f"generator.chat_template.{field.name}" for field in fields(async_rl.ChatTemplate)}
@@ -235,3 +237,16 @@ def test_command_plans_without_running(monkeypatch):
     with build_context(BuildContext(versions=VersionCodex(default="2026.09.18"))):
         handles = async_rl.main.callback.__wrapped__(preset="smoke", settings=(), stage="rl")
     assert list(handles) == ["snowball-smoke"]
+
+
+def test_seed_setting_reaches_the_config_and_the_request(monkeypatch):
+    """MarinSkyRL writes the request's seed over the config, so both must carry the --set value."""
+    monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
+    monkeypatch.setattr(async_rl, "username_segment", lambda: "alice")
+    assert rendered()["trainer"]["seed"] == async_rl.SEED
+    assert rendered(settings=("trainer.seed=23",))["trainer"]["seed"] == 23
+    run = async_rl.build_run(SNOWBALL_POLICY, async_rl.SMOKE_PRESET, version="2026.09.18", settings=("trainer.seed=23",))
+    built = run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args.keys(), run.rl.deps))
+    seeds = {key: value for key, value in flattened(asdict(built)).items() if key.endswith("seed")}
+    assert seeds and all(value == 23 for value in seeds.values()), seeds
+    assert "seed: 23" in json.dumps(asdict(built), default=str)
