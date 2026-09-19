@@ -249,7 +249,9 @@ datasource or W&B credentials. Every panel description names the records it
 reads: lifecycle, step, buffer, staleness, phase-wall and exporter series arrive
 whenever MarinSkyRL telemetry is configured, while the training-metric, span and
 Megatron panels stay empty until the run exports `trainer.training_metrics`,
-`trainer.async_spans` or `trainer.policy_train_spans`.
+`trainer.async_spans` or `trainer.policy_train_spans`. The two supply panels also
+need the `async_run_configuration` record the trainer emits once at start, under
+that same `trainer.training_metrics` gate.
 
 Native token counters are summed; queue gauges use their latest observation.
 Concurrent producer waits can exceed elapsed time. Rollout completions are joined
@@ -840,6 +842,22 @@ per-group token event (`body.staleness`, `body.response_tokens`, role/step
 attributes); a run that does not emit it has no token-staleness series, and the
 same holds for the ratio, gradient and correction series. The drift panels read the consume-time
 learner/vLLM ratio and fill from a wider set of runs.
+
+“Rollout length against the supply crossover” and “Supply headroom” ask whether the
+generation pool can still produce one update's tokens inside one update. Only the
+consumed length is measured: the ceiling comes from `async_run_configuration`
+(workers, buffer depth, staleness allowance, batch shape and response cap, with one
+weight sync per update), scaled by the run's own mean per-sequence decode rate — the
+pool's `generation_tokens_total` counter deltas per second over its summed
+`num_requests_running`, both per engine and rated the way panel 42 rates the same
+counter — and its mean generating wall. That wall is the update's `async_phase_window`
+windows other than `weight_sync`, currently `rollout_wait` plus `training`: the three
+windows are consecutive and disjoint, and the sync is the only phase that holds the
+engines. The decode rate is extrapolated from one operating point with no saturation
+curve behind it, so headroom below 1.0 predicts the trainer beginning to wait for
+rollouts, not a change in quality. A configuration record carrying only some of the
+settings charts nothing rather than a partial constant, and so does a run missing any
+of the five records.
 
 ## Adding a dashboard
 

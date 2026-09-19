@@ -4917,6 +4917,227 @@
         }
       ],
       "interval": "1m"
+    },
+    {
+      "id": 60,
+      "type": "timeseries",
+      "title": "Rollout length against the supply crossover",
+      "description": "Mean consumed response length per optimizer step against L*, the length at which the generation pool stops producing one update's tokens inside one update, and the run's configured response cap. The length series is measured — training_metric_value for async/performance/consumed_response_tokens over consumed/sequences per optimizer step — while the ceiling comes from the async_run_configuration record the trainer emits once at start (generation_workers, max_buffered_groups, max_staleness_steps, train_batch_size, n_samples_per_prompt, max_generate_length), scaled by the run's own mean per-sequence decode rate (generation_tokens_total counter deltas per engine, summed across the pool and divided by the summed num_requests_running gauge) and its mean generating wall, the update's async_phase_window windows other than weight_sync, the one phase that holds the engines. That decode rate is assumed constant at whatever this run sustained, extrapolated from one operating point with no saturation curve behind it, so a crossing predicts the trainer beginning to wait on rollouts rather than a change in quality; empty without trainer.training_metrics, which gates async_run_configuration.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 144,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(crossover L\\*|response cap) .*"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH r AS (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name IN ('training_metric_value','async_phase_window','async_run_configuration','generation_tokens_total','num_requests_running') AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring}) AND job_id IN (${job:sqlstring}) AND execution_uid IN (${execution:sqlstring})), lengths AS (\n SELECT run_id,job_id,execution_uid,json_get(attributes_json,'step') AS step,MAX(timestamp_ms) AS observed_ms,\n MAX(CASE WHEN json_get(attributes_json,'metric')='async/performance/consumed_response_tokens' THEN value END) AS response_tokens,\n MAX(CASE WHEN json_get(attributes_json,'metric')='consumed/sequences' THEN value END) AS sequences\n FROM r WHERE name='training_metric_value' AND json_get(attributes_json,'metric') IN ('async/performance/consumed_response_tokens','consumed/sequences') AND json_get(attributes_json,'payload_kind')='train'\n GROUP BY run_id,job_id,execution_uid,json_get(attributes_json,'step')\n), counters AS (\n SELECT run_id,job_id,execution_uid,json_get(resource_attributes_json,'host') AS collector,json_get(attributes_json,'engine') AS engine,COALESCE(json_get(attributes_json,'model_name'),'') AS model,timestamp_ms,seq,value,\n LAG(timestamp_ms) OVER (PARTITION BY run_id,job_id,execution_uid,json_get(resource_attributes_json,'host'),json_get(attributes_json,'engine'),COALESCE(json_get(attributes_json,'model_name'),'') ORDER BY timestamp_ms,seq) AS previous_ms,\n LAG(value) OVER (PARTITION BY run_id,job_id,execution_uid,json_get(resource_attributes_json,'host'),json_get(attributes_json,'engine'),COALESCE(json_get(attributes_json,'model_name'),'') ORDER BY timestamp_ms,seq) AS previous_value\n FROM r WHERE name='generation_tokens_total' AND json_get(attributes_json,'metric_source')='vllm' AND json_get(attributes_json,'source_temporality')='cumulative_snapshot' AND json_get(attributes_json,'engine') IS NOT NULL\n), engine_rates AS (\n SELECT run_id,job_id,execution_uid,collector,engine,model,SUM(value - previous_value) / SUM((timestamp_ms - previous_ms) / 1000.0) AS tokens_per_second\n FROM counters WHERE previous_ms IS NOT NULL AND timestamp_ms > previous_ms AND value >= previous_value\n GROUP BY run_id,job_id,execution_uid,collector,engine,model\n), engine_running AS (\n SELECT run_id,job_id,execution_uid,json_get(resource_attributes_json,'host') AS collector,json_get(attributes_json,'engine') AS engine,COALESCE(json_get(attributes_json,'model_name'),'') AS model,AVG(value) AS running_sequences\n FROM r WHERE name='num_requests_running' AND json_get(attributes_json,'metric_source')='vllm' AND json_get(attributes_json,'source_kind')='gauge' AND json_get(attributes_json,'engine') IS NOT NULL\n GROUP BY run_id,job_id,execution_uid,json_get(resource_attributes_json,'host'),json_get(attributes_json,'engine'),COALESCE(json_get(attributes_json,'model_name'),'')\n), decode AS (\n SELECT rates.run_id,rates.job_id,rates.execution_uid,AVG(rates.pool_tokens_per_second / running.pool_running_sequences) AS tokens_per_sequence_second\n FROM (SELECT run_id,job_id,execution_uid,collector,SUM(tokens_per_second) AS pool_tokens_per_second FROM engine_rates GROUP BY run_id,job_id,execution_uid,collector) rates\n JOIN (SELECT run_id,job_id,execution_uid,collector,SUM(running_sequences) AS pool_running_sequences FROM engine_running GROUP BY run_id,job_id,execution_uid,collector HAVING SUM(running_sequences) > 0) running ON running.run_id=rates.run_id AND running.job_id=rates.job_id AND running.execution_uid=rates.execution_uid AND running.collector=rates.collector\n GROUP BY rates.run_id,rates.job_id,rates.execution_uid\n), windows AS (\n SELECT run_id,job_id,execution_uid,json_get(attributes_json,'step') AS step,json_get(attributes_json,'phase') AS phase,\n MAX(CAST(json_get(body_json,'finished_unix_ms') AS BIGINT) - CAST(json_get(body_json,'started_unix_ms') AS BIGINT)) / 1000.0 AS phase_seconds\n FROM r WHERE name='async_phase_window' AND json_get(attributes_json,'phase') <> 'weight_sync'\n GROUP BY run_id,job_id,execution_uid,json_get(attributes_json,'step'),json_get(attributes_json,'phase')\n), generating AS (\n SELECT run_id,job_id,execution_uid,step,SUM(phase_seconds) AS generating_seconds\n FROM windows GROUP BY run_id,job_id,execution_uid,step\n), configuration AS (\n SELECT run_id,job_id,execution_uid,\n MAX(CAST(json_get(body_json,'train_batch_size') AS DOUBLE)) AS prompts_per_update,\n MAX(CAST(json_get(body_json,'n_samples_per_prompt') AS DOUBLE)) AS answers_per_prompt,\n MAX(CAST(json_get(body_json,'generation_workers') AS DOUBLE)) AS workers,\n MAX(CAST(json_get(body_json,'max_generate_length') AS DOUBLE)) AS response_cap,\n (MAX(CAST(json_get(body_json,'max_staleness_steps') AS DOUBLE)) + 2 - 1 /* allowance + 2 - cadence, with cadence 1: the loop syncs weights after every update and carries no knob to change that */) * MAX(CAST(json_get(body_json,'train_batch_size') AS DOUBLE)) - MAX(CAST(json_get(body_json,'max_buffered_groups') AS DOUBLE)) AS budget_groups\n FROM r WHERE name='async_run_configuration' GROUP BY run_id,job_id,execution_uid\n), constant AS (\n SELECT configuration.run_id,configuration.job_id,configuration.execution_uid,configuration.prompts_per_update,configuration.answers_per_prompt,configuration.response_cap,\n (CASE WHEN configuration.workers < configuration.budget_groups THEN configuration.workers ELSE configuration.budget_groups END) * configuration.answers_per_prompt * decode.tokens_per_sequence_second * generating_wall.generating_seconds AS supply_tokens\n FROM configuration\n JOIN decode ON decode.run_id=configuration.run_id AND decode.job_id=configuration.job_id AND decode.execution_uid=configuration.execution_uid\n JOIN (SELECT run_id,job_id,execution_uid,AVG(generating_seconds) AS generating_seconds FROM generating GROUP BY run_id,job_id,execution_uid) generating_wall ON generating_wall.run_id=configuration.run_id AND generating_wall.job_id=configuration.job_id AND generating_wall.execution_uid=configuration.execution_uid\n WHERE configuration.prompts_per_update IS NOT NULL AND configuration.answers_per_prompt IS NOT NULL AND configuration.workers IS NOT NULL AND configuration.budget_groups IS NOT NULL\n)\nSELECT to_timestamp_millis(lengths.observed_ms) AS t,CASE WHEN kinds.kind='length' THEN 'mean response length' WHEN kinds.kind='crossover' THEN 'crossover L*' ELSE 'response cap' END || ' · ' || lengths.execution_uid AS series,CASE WHEN kinds.kind='length' THEN lengths.response_tokens / lengths.sequences WHEN kinds.kind='crossover' THEN constant.supply_tokens / (constant.prompts_per_update * constant.answers_per_prompt) ELSE constant.response_cap END AS value FROM lengths JOIN constant ON constant.run_id=lengths.run_id AND constant.job_id=lengths.job_id AND constant.execution_uid=lengths.execution_uid CROSS JOIN (VALUES ('length'),('crossover'),('cap')) AS kinds(kind) WHERE lengths.sequences>0 ORDER BY t,series"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 61,
+      "type": "timeseries",
+      "title": "Supply headroom",
+      "description": "Supply over demand per optimizer step: the tokens the generation pool can produce during one update divided by the tokens the update consumes, one unitless series per execution, with 1.0 the crossover and 1.0 to 1.2 the warning band. The length series is measured — training_metric_value for async/performance/consumed_response_tokens over consumed/sequences per optimizer step — while the ceiling comes from the async_run_configuration record the trainer emits once at start (generation_workers, max_buffered_groups, max_staleness_steps, train_batch_size, n_samples_per_prompt, max_generate_length), scaled by the run's own mean per-sequence decode rate (generation_tokens_total counter deltas per engine, summed across the pool and divided by the summed num_requests_running gauge) and its mean generating wall, the update's async_phase_window windows other than weight_sync, the one phase that holds the engines. That decode rate is assumed constant at whatever this run sustained, extrapolated from one operating point with no saturation curve behind it, so a crossing predicts the trainer beginning to wait on rollouts rather than a change in quality; empty without trainer.training_metrics, which gates async_run_configuration.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 144,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed+area"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1.0
+              },
+              {
+                "color": "green",
+                "value": 1.2
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH r AS (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name IN ('training_metric_value','async_phase_window','async_run_configuration','generation_tokens_total','num_requests_running') AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring}) AND job_id IN (${job:sqlstring}) AND execution_uid IN (${execution:sqlstring})), lengths AS (\n SELECT run_id,job_id,execution_uid,json_get(attributes_json,'step') AS step,MAX(timestamp_ms) AS observed_ms,\n MAX(CASE WHEN json_get(attributes_json,'metric')='async/performance/consumed_response_tokens' THEN value END) AS response_tokens,\n MAX(CASE WHEN json_get(attributes_json,'metric')='consumed/sequences' THEN value END) AS sequences\n FROM r WHERE name='training_metric_value' AND json_get(attributes_json,'metric') IN ('async/performance/consumed_response_tokens','consumed/sequences') AND json_get(attributes_json,'payload_kind')='train'\n GROUP BY run_id,job_id,execution_uid,json_get(attributes_json,'step')\n), counters AS (\n SELECT run_id,job_id,execution_uid,json_get(resource_attributes_json,'host') AS collector,json_get(attributes_json,'engine') AS engine,COALESCE(json_get(attributes_json,'model_name'),'') AS model,timestamp_ms,seq,value,\n LAG(timestamp_ms) OVER (PARTITION BY run_id,job_id,execution_uid,json_get(resource_attributes_json,'host'),json_get(attributes_json,'engine'),COALESCE(json_get(attributes_json,'model_name'),'') ORDER BY timestamp_ms,seq) AS previous_ms,\n LAG(value) OVER (PARTITION BY run_id,job_id,execution_uid,json_get(resource_attributes_json,'host'),json_get(attributes_json,'engine'),COALESCE(json_get(attributes_json,'model_name'),'') ORDER BY timestamp_ms,seq) AS previous_value\n FROM r WHERE name='generation_tokens_total' AND json_get(attributes_json,'metric_source')='vllm' AND json_get(attributes_json,'source_temporality')='cumulative_snapshot' AND json_get(attributes_json,'engine') IS NOT NULL\n), engine_rates AS (\n SELECT run_id,job_id,execution_uid,collector,engine,model,SUM(value - previous_value) / SUM((timestamp_ms - previous_ms) / 1000.0) AS tokens_per_second\n FROM counters WHERE previous_ms IS NOT NULL AND timestamp_ms > previous_ms AND value >= previous_value\n GROUP BY run_id,job_id,execution_uid,collector,engine,model\n), engine_running AS (\n SELECT run_id,job_id,execution_uid,json_get(resource_attributes_json,'host') AS collector,json_get(attributes_json,'engine') AS engine,COALESCE(json_get(attributes_json,'model_name'),'') AS model,AVG(value) AS running_sequences\n FROM r WHERE name='num_requests_running' AND json_get(attributes_json,'metric_source')='vllm' AND json_get(attributes_json,'source_kind')='gauge' AND json_get(attributes_json,'engine') IS NOT NULL\n GROUP BY run_id,job_id,execution_uid,json_get(resource_attributes_json,'host'),json_get(attributes_json,'engine'),COALESCE(json_get(attributes_json,'model_name'),'')\n), decode AS (\n SELECT rates.run_id,rates.job_id,rates.execution_uid,AVG(rates.pool_tokens_per_second / running.pool_running_sequences) AS tokens_per_sequence_second\n FROM (SELECT run_id,job_id,execution_uid,collector,SUM(tokens_per_second) AS pool_tokens_per_second FROM engine_rates GROUP BY run_id,job_id,execution_uid,collector) rates\n JOIN (SELECT run_id,job_id,execution_uid,collector,SUM(running_sequences) AS pool_running_sequences FROM engine_running GROUP BY run_id,job_id,execution_uid,collector HAVING SUM(running_sequences) > 0) running ON running.run_id=rates.run_id AND running.job_id=rates.job_id AND running.execution_uid=rates.execution_uid AND running.collector=rates.collector\n GROUP BY rates.run_id,rates.job_id,rates.execution_uid\n), windows AS (\n SELECT run_id,job_id,execution_uid,json_get(attributes_json,'step') AS step,json_get(attributes_json,'phase') AS phase,\n MAX(CAST(json_get(body_json,'finished_unix_ms') AS BIGINT) - CAST(json_get(body_json,'started_unix_ms') AS BIGINT)) / 1000.0 AS phase_seconds\n FROM r WHERE name='async_phase_window' AND json_get(attributes_json,'phase') <> 'weight_sync'\n GROUP BY run_id,job_id,execution_uid,json_get(attributes_json,'step'),json_get(attributes_json,'phase')\n), generating AS (\n SELECT run_id,job_id,execution_uid,step,SUM(phase_seconds) AS generating_seconds\n FROM windows GROUP BY run_id,job_id,execution_uid,step\n), configuration AS (\n SELECT run_id,job_id,execution_uid,\n MAX(CAST(json_get(body_json,'train_batch_size') AS DOUBLE)) AS prompts_per_update,\n MAX(CAST(json_get(body_json,'n_samples_per_prompt') AS DOUBLE)) AS answers_per_prompt,\n MAX(CAST(json_get(body_json,'generation_workers') AS DOUBLE)) AS workers,\n MAX(CAST(json_get(body_json,'max_generate_length') AS DOUBLE)) AS response_cap,\n (MAX(CAST(json_get(body_json,'max_staleness_steps') AS DOUBLE)) + 2 - 1 /* allowance + 2 - cadence, with cadence 1: the loop syncs weights after every update and carries no knob to change that */) * MAX(CAST(json_get(body_json,'train_batch_size') AS DOUBLE)) - MAX(CAST(json_get(body_json,'max_buffered_groups') AS DOUBLE)) AS budget_groups\n FROM r WHERE name='async_run_configuration' GROUP BY run_id,job_id,execution_uid\n), constant AS (\n SELECT configuration.run_id,configuration.job_id,configuration.execution_uid,configuration.prompts_per_update,configuration.answers_per_prompt,configuration.response_cap,\n (CASE WHEN configuration.workers < configuration.budget_groups THEN configuration.workers ELSE configuration.budget_groups END) * configuration.answers_per_prompt * decode.tokens_per_sequence_second * generating_wall.generating_seconds AS supply_tokens\n FROM configuration\n JOIN decode ON decode.run_id=configuration.run_id AND decode.job_id=configuration.job_id AND decode.execution_uid=configuration.execution_uid\n JOIN (SELECT run_id,job_id,execution_uid,AVG(generating_seconds) AS generating_seconds FROM generating GROUP BY run_id,job_id,execution_uid) generating_wall ON generating_wall.run_id=configuration.run_id AND generating_wall.job_id=configuration.job_id AND generating_wall.execution_uid=configuration.execution_uid\n WHERE configuration.prompts_per_update IS NOT NULL AND configuration.answers_per_prompt IS NOT NULL AND configuration.workers IS NOT NULL AND configuration.budget_groups IS NOT NULL\n)\nSELECT to_timestamp_millis(lengths.observed_ms) AS t,'supply headroom · ' || lengths.execution_uid AS series,constant.supply_tokens / (constant.prompts_per_update * constant.answers_per_prompt * (lengths.response_tokens / lengths.sequences)) AS value FROM lengths JOIN constant ON constant.run_id=lengths.run_id AND constant.job_id=lengths.job_id AND constant.execution_uid=lengths.execution_uid WHERE lengths.sequences>0 AND lengths.response_tokens>0 ORDER BY t,series"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
     }
   ],
   "version": 2

@@ -173,6 +173,19 @@ def store(telemetry_table):
     add("terminal", body={"status": "completed", "reason": "normal_exit"})
     add("policy_step", 1)
     add("weight_sync_completed", body={"model_version_step": 1})
+    # The loop settings the supply panels compute their ceiling from, emitted once at trainer start.
+    add(
+        "async_run_configuration",
+        body={
+            "generation_workers": 4,
+            "mini_batch_size": 4,
+            "max_staleness_steps": 1,
+            "max_buffered_groups": 2,
+            "train_batch_size": 8,
+            "n_samples_per_prompt": 2,
+            "max_generate_length": 1024,
+        },
+    )
     for kind, value in [("generated_token", 150), ("consumed_response_token", 100), ("consumed_loss_token", 90)]:
         add("work_completed", value, attributes={"work_kind": kind})
     for phase in (
@@ -262,6 +275,8 @@ def store(telemetry_table):
         ("async/performance/loss_tokens_per_configured_policy_gpu_second", 5),
         ("async/performance/configured_policy_gpus", 8),
         ("async/performance/configured_inference_gpus", 8),
+        ("async/performance/consumed_response_tokens", 4000),
+        ("consumed/sequences", 16),
     ]:
         add(
             "training_metric_value",
@@ -325,6 +340,23 @@ def store(telemetry_table):
             process="other",
             attributes={"engine": "engine-A", "metric_source": "vllm", "source_temporality": "cumulative_snapshot"},
         )
+    # The gauge beside the counter: concurrent sequences per engine, 3 and 2 on average, whose pool
+    # sum divides the pool token rate into a rate per sequence. The collector above reports no gauge,
+    # so it contributes no rate rather than a pool rate over somebody else's request count.
+    for engine, samples in [("engine-A", [(0, 2), (4000, 4)]), ("engine-B", [(0, 1), (4000, 3)])]:
+        for offset, value in samples:
+            add(
+                "num_requests_running",
+                value,
+                timestamp=phase_start + offset,
+                attributes={
+                    "engine": engine,
+                    "engine_index": "0",
+                    "metric_source": "vllm",
+                    "source_kind": "gauge",
+                    "source_temporality": "current_snapshot",
+                },
+            )
     # Two optimizer steps, both within one display bucket: do not pool their staleness.
     for step, staleness, tokens in [(2, 0, 10), (2, 1, 30), (2, 1, 50), (3, 0, 20), (3, 1, 70)]:
         add("rollout_staleness_steps", staleness, attributes={"step": str(step)})
@@ -438,6 +470,8 @@ PANEL_SERIES = {
     "Position dependence of |log \u03c1|": 8,
     "Gradient direction persistence": 9,
     "Correction activity": 14,
+    "Rollout length against the supply crossover": 3,
+    "Supply headroom": 1,
 }
 
 
@@ -891,3 +925,59 @@ def test_correction_panel_distinguishes_populations_and_bounds_reference_coverag
     assert [row["value"] for row in rows if row["series"].startswith("M2 reference")] == [0.04, 0.04]
     store.execute(f"DELETE FROM {TABLE} WHERE json_get(attributes_json,'metric')='policy/m2_mask/m2_before'")
     assert not any(row["series"].startswith("M2 reference") for row in query(store, "Correction activity"))
+
+
+def test_supply_panels_divide_the_configured_ceiling_by_the_measured_demand(store):
+    # The counters above rate the pool at 135 / 10 + 80 / 4 = 33.5 tokens a second over 3 + 2
+    # concurrent sequences, so 6.7 a sequence. The pool holds min(4 workers, (1 + 2 - 1) * 8 prompts
+    # - 2 buffered groups) * 2 answers = 8 sequences through the update's 10 s of generating wall:
+    # 536 tokens of supply against 8 * 2 * (4000 / 16) = 4000 consumed.
+    # Rows, not a dict: a dropped identity predicate returns a second series under the same name.
+    headroom = [(row["series"], row["value"]) for row in query(store, "Supply headroom")]
+    assert headroom == [("supply headroom · driver", pytest.approx(0.134))]
+    crossover = [(row["series"], row["value"]) for row in query(store, "Rollout length against the supply crossover")]
+    assert crossover == [
+        ("crossover L* · driver", pytest.approx(33.5)),
+        ("mean response length · driver", pytest.approx(250)),
+        ("response cap · driver", 1024),
+    ]
+
+
+def test_generating_wall_sums_the_update_windows_the_weight_sync_does_not_hold(store):
+    # An update's windows are consecutive and disjoint, and the engines generate through all of them
+    # but the sync. Adding the 2 s the trainer spent waiting for the buffer lengthens the wall to
+    # 12 s and the supply with it; counting the 4 s weight sync as well would reach 16.
+    store.execute(
+        f"INSERT INTO {TABLE} VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        telemetry_row(
+            "async_phase_window",
+            timestamp=BASE_EPOCH_MS + 1000,
+            seq=2000,
+            attributes={"role": "trainer", "step": "1", "phase": "rollout_wait", "outcome": "success"},
+            resource={"role": "trainer", "host": "trainer", "training_loop": "async"},
+            body={
+                "started_unix_ms": BASE_EPOCH_MS - 2000,
+                "finished_unix_ms": BASE_EPOCH_MS,
+                "duration_seconds": 2,
+            },
+        ),
+    )
+    headroom = [(row["series"], row["value"]) for row in query(store, "Supply headroom")]
+    assert headroom == [("supply headroom · driver", pytest.approx(0.1608))]
+    assert [
+        (row["series"], row["value"])
+        for row in query(store, "Rollout length against the supply crossover")
+        if row["series"].startswith("crossover")
+    ] == [("crossover L* · driver", pytest.approx(40.2))]
+    # A record carrying only some of the settings — the shape the first knobs branch emitted, and
+    # the shape the completed run left in finelog — has no ceiling either.
+    store.execute(
+        f"UPDATE {TABLE} SET body_json=json_merge_patch(body_json, '{{\"train_batch_size\": null}}') "
+        "WHERE name='async_run_configuration'"
+    )
+    assert query(store, "Supply headroom") == []
+    # The record is gated on trainer.training_metrics; a run without it has no ceiling, and the
+    # panels have to go empty rather than fall back to a number of their own.
+    store.execute(f"DELETE FROM {TABLE} WHERE name='async_run_configuration'")
+    assert query(store, "Supply headroom") == []
+    assert query(store, "Rollout length against the supply crossover") == []
