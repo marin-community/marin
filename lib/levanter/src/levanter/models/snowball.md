@@ -46,8 +46,10 @@ so downstream floating-point auxiliary transport can represent counts exactly.
 
 The June model retains optimization barriers after RMS variance, embedding
 gather, and router sigmoid. These prevent demonstrated forward/AD rounding
-changes caused by fusion. The model-only tests cover HF mappings, masks and
-positions, forward/gradient agreement, stage ownership, and uneven partitions.
-The wider GRPO migration additionally required a scorer-only compute-weight
+changes caused by fusion; each boundary has a scoring-versus-AD regression
+test at its production shapes. The model-only tests cover HF mappings, masks and
+positions, forward/gradient agreement, stage ownership, uneven partitions, the
+two-device expert-parallel stage path, and the telemetry bound. The wider GRPO
+migration additionally required a scorer-only compute-weight
 cast boundary; its end-to-end numerical result should not be attributed to
 these model changes alone. See the [numerical investigation](https://marina.oa.dev/echo/wiki/363).
