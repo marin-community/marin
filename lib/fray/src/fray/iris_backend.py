@@ -698,6 +698,7 @@ class FrayIrisClient:
                 existing_job_policy=policy,
                 task_image=request.resources.image,
                 priority_band=request.priority,
+                timeout=request.timeout,
             )
         except IrisJobAlreadyExists as e:
             raise FrayJobAlreadyExists(request.name) from e
