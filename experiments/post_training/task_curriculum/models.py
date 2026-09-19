@@ -24,6 +24,8 @@ class ProbeKind(StrEnum):
 EXPECTED_PROBE_KINDS = (ProbeKind.ENTRY, ProbeKind.REPRESENTATIVE)
 MIN_COSINE_SIMILARITY = -1.0
 MAX_COSINE_SIMILARITY = 1.0
+PILOT_READY_SCORE = 85
+REGENERATE_SCORE = 70
 
 
 class SampleTask(StrictModel):
@@ -449,10 +451,10 @@ class HolisticReview(StrictModel):
     def validate_score_and_gate(self) -> HolisticReview:
         if self.score != self.dimension_scores.total():
             raise ValueError("holistic score must equal the dimension-score sum")
-        is_pilot_ready = self.score >= 85 and not self.blockers
+        is_pilot_ready = self.score >= PILOT_READY_SCORE and not self.blockers
         if is_pilot_ready:
             expected_status = HolisticReviewStatus.PILOT_READY
-        elif self.score < 70:
+        elif self.score < REGENERATE_SCORE:
             expected_status = HolisticReviewStatus.REGENERATE
         else:
             expected_status = HolisticReviewStatus.REVISE

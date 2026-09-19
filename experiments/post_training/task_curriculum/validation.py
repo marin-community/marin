@@ -26,7 +26,7 @@ MIN_BLIND_TASKS_PER_GUIDEPOST = 2
 
 @dataclass(frozen=True)
 class SubjectRunArtifacts:
-    """Artifacts produced by the four isolated roles for one subject version."""
+    """Role outputs and operator dispositions retained for one subject version."""
 
     curriculum: Curriculum
     blind_tasks: BlindTaskSet
