@@ -42,7 +42,7 @@ INITIAL_DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
 MARIN_TOKENIZER = "marin-community/marin-tokenizer"
 MARIN_TOKENIZER_REVISION = "a5ca45f"
 GPUS_PER_NODE = 8
-MARINSKYRL_COMMIT = "82cf8eb55460cadd438a93b052fd03daba970c0b"
+MARINSKYRL_COMMIT = "b9cefcd9d2700415a0be6aba65a4fe1fd1c83536"
 
 SNOWBALL_MODEL = ArtifactStep.adopt(
     "models/snowball-67b-a2b-sft-s2-thinking",
@@ -97,6 +97,7 @@ generator:
   max_num_batched_tokens: 16384
   enforce_eager: false
   run_engines_locally: true
+  weight_sync_backend: nccl
   async_engine: true
   batched: false
   engine_init_kwargs:
