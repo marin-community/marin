@@ -324,6 +324,7 @@ def _build_chat_pipeline(
             return []
         messages = [Message.from_dict(message) for message in normalized["messages"]]
         if _has_long_final_response(messages):
+            # Long finals can indicate reasoning that a source adapter failed to separate.
             counters.pipeline.update_counter("normalize_chat/conversations_with_final_over_2k_estimated_tokens", 1)
         counters.pipeline.update_counter("normalize_chat/records_validated", 1)
         return [normalized]
