@@ -1,13 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Classify TaskTrove MCQA tasks as RL, SFT, or garbage with GLM-5.3.
+"""Classify mechanically valid TaskTrove MCQA rows as RL, SFT, or garbage.
 
-The worker runs as an Iris job with one or more replicas. Each replica
-reads a disjoint set of Parquet row groups, applies deterministic structural
-checks, selects its share of an optional hash sample, and submits one persistent
-GLM Batch API job. Outputs are written below a replica-specific object-storage
-prefix so a retried task can resume the submitted GLM batch.
+Malformed or incomplete model responses fail closed to SFT. RL requires a
+verified answer-key match, high confidence, prompt-contained evidence, and
+multi-step or multi-constraint reasoning.
 """
 
 from __future__ import annotations
@@ -40,7 +38,11 @@ logger = logging.getLogger(__name__)
 
 MCQA_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
 POLICY_VERSION = "tasktrove-mcqa-glm53-v1"
+GLM_BULK_TOKEN_ENV = "GLM_BULK_TOKEN"
+DECISIONS_FILENAME = "decisions.jsonl"
 ROUTE_MAPPINGS_FILENAME = "route-mappings.jsonl"
+ROUTE_MAPPING_FIELDS = ("task_id", "route", "route_source", "policy_version", "reason_codes")
+WORKER_SUMMARY_FILENAME = "summary.json"
 VERIFIER_TOML = "tests/verifier.toml"
 _OPTION_RE = re.compile(r"(?m)^\s*\(?([A-J])[.):]\s+(.+?)\s*$")
 _ALL_OR_NONE_RE = re.compile(r"(?i)\b(?:all|none) of the above\b")
@@ -615,7 +617,7 @@ def parse_batch_output(
         invalid_row_ids = set()
         for raw_result in raw_results:
             row_id = raw_result.get("id") if isinstance(raw_result, dict) else None
-            if type(row_id) is not int or row_id < 0 or row_id >= len(tasks):
+            if not isinstance(row_id, int) or isinstance(row_id, bool) or row_id < 0 or row_id >= len(tasks):
                 continue
             if row_id in decisions or row_id in invalid_row_ids:
                 decisions.pop(row_id, None)
@@ -661,7 +663,7 @@ def run_worker(config: RoutingConfig) -> None:
     )
     output_root = StoragePath(config.output_path) / f"worker-{worker_index:03d}"
     output_root.mkdirs()
-    summary_path = output_root / "summary.json"
+    summary_path = output_root / WORKER_SUMMARY_FILENAME
     if summary_path.exists():
         logger.info("worker %d already completed: %s", worker_index, summary_path)
         return
@@ -678,7 +680,7 @@ def run_worker(config: RoutingConfig) -> None:
     logger.info("worker %d selected %d rows from %d source rows", worker_index, len(tasks), scan_summary["source_rows"])
 
     base_url = resolve_base_url(config.relay_job)
-    token = os.environ["GLM_BULK_TOKEN"]
+    token = os.environ[GLM_BULK_TOKEN_ENV]
     lines, by_custom_id = batch_lines(tasks, config.request_batch_size, worker_index)
     request_path = output_root / "requests.jsonl"
     if not request_path.exists():
@@ -716,11 +718,8 @@ def run_worker(config: RoutingConfig) -> None:
         raise RuntimeError(f"worker {worker_index} routed {len(routed)} of {len(tasks)} tasks")
 
     routed.sort(key=lambda row: row["task_id"])
-    (output_root / "decisions.jsonl").write_text(_jsonl(routed))
-    mappings = [
-        {key: row[key] for key in ("task_id", "route", "route_source", "policy_version", "reason_codes")}
-        for row in routed
-    ]
+    (output_root / DECISIONS_FILENAME).write_text(_jsonl(routed))
+    mappings = [{key: row[key] for key in ROUTE_MAPPING_FIELDS} for row in routed]
     (output_root / ROUTE_MAPPINGS_FILENAME).write_text(_jsonl(mappings))
 
     route_subject = defaultdict(Counter)

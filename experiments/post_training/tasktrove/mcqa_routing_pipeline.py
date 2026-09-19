@@ -22,9 +22,13 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
 
 from experiments.post_training.tasktrove.mcqa_routing import (
+    DECISIONS_FILENAME,
+    GLM_BULK_TOKEN_ENV,
     MCQA_SOURCE,
     POLICY_VERSION,
     ROUTE_MAPPINGS_FILENAME,
+    WORKER_SUMMARY_FILENAME,
+    Route,
     RoutingConfig,
     run_worker,
 )
@@ -91,8 +95,8 @@ def aggregate_worker_outputs(config: RoutingArtifactConfig) -> dict:
     mappings = []
     for worker_index in range(config.worker_count):
         worker_root = output_root / f"worker-{worker_index:03d}"
-        worker_summaries.append(json.loads((worker_root / "summary.json").read_text()))
-        decisions.extend(_read_jsonl(worker_root / "decisions.jsonl"))
+        worker_summaries.append(json.loads((worker_root / WORKER_SUMMARY_FILENAME).read_text()))
+        decisions.extend(_read_jsonl(worker_root / DECISIONS_FILENAME))
         mappings.extend(_read_jsonl(worker_root / ROUTE_MAPPINGS_FILENAME))
 
     task_ids = [row["task_id"] for row in decisions]
@@ -106,7 +110,7 @@ def aggregate_worker_outputs(config: RoutingArtifactConfig) -> dict:
 
     decisions.sort(key=lambda row: row["task_id"])
     mappings.sort(key=lambda row: row["task_id"])
-    _write_jsonl(output_root / "decisions.jsonl", decisions)
+    _write_jsonl(output_root / DECISIONS_FILENAME, decisions)
     _write_jsonl(output_root / ROUTE_MAPPINGS_FILENAME, mappings)
 
     summary = {
@@ -126,8 +130,7 @@ def aggregate_worker_outputs(config: RoutingArtifactConfig) -> dict:
         "route_counts": dict(Counter(row["route"] for row in decisions)),
         "subject_counts": dict(Counter(row["subject"] for row in decisions)),
         "route_subject_counts": {
-            route: dict(Counter(row["subject"] for row in decisions if row["route"] == route))
-            for route in ("rl", "sft", "garbage")
+            route: dict(Counter(row["subject"] for row in decisions if row["route"] == route)) for route in Route
         },
         "workers": worker_summaries,
     }
@@ -149,7 +152,7 @@ def _write_or_check_run_config(config: RoutingArtifactConfig) -> None:
 def run_routing_artifact(config: RoutingArtifactConfig) -> None:
     """Run the worker gang and assemble its complete route ledger."""
     _write_or_check_run_config(config)
-    token = os.environ["GLM_BULK_TOKEN"]
+    token = os.environ[GLM_BULK_TOKEN_ENV]
     run_hash = hashlib.sha256(config.output_path.encode()).hexdigest()[:8]
     worker_resources = ResourceConfig.with_cpu(
         cpu=config.worker_cpu,
@@ -161,7 +164,7 @@ def run_routing_artifact(config: RoutingArtifactConfig) -> None:
         run_worker,
         name=f"tasktrove-mcqa-routing-{run_hash}",
         resources=worker_resources,
-        env_vars={"GLM_BULK_TOKEN": token},
+        env_vars={GLM_BULK_TOKEN_ENV: token},
     )
     route_workers(config.worker_config())
     summary = aggregate_worker_outputs(config)

@@ -14,12 +14,17 @@ from zephyr.dataset import Dataset
 from experiments.post_training.tasktrove.convert import CONVERTED_SCHEMA
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.dataset import APPROX_SHARD_BYTES, WORKER_RESOURCES, WORKING_SHARDS
-from experiments.post_training.tasktrove.mcqa_routing import MCQA_SOURCE, ROUTE_MAPPINGS_FILENAME, Route
+from experiments.post_training.tasktrove.mcqa_routing import (
+    MCQA_SOURCE,
+    ROUTE_MAPPING_FIELDS,
+    ROUTE_MAPPINGS_FILENAME,
+    Route,
+)
 from experiments.post_training.tasktrove.verify import FILTERED_GLOB
 
 ROUTED_GLOB = "graded/*.parquet"
 ROUTED_PATTERN = "graded/part-{shard:05d}.parquet"
-ROUTING_COLUMNS = ("route", "route_source", "policy_version", "reason_codes")
+ROUTING_COLUMNS = ROUTE_MAPPING_FIELDS[1:]
 ROUTED_SCHEMA = pa.schema(
     [
         *CONVERTED_SCHEMA,

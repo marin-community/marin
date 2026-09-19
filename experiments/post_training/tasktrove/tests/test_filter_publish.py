@@ -22,6 +22,7 @@ from experiments.post_training.tasktrove.convert import ConvertedRecord, convert
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.mcqa_routing import ROUTE_MAPPINGS_FILENAME
 from experiments.post_training.tasktrove.publish import (
     DEFAULT_HF_REPO_ID,
     TASK_COLUMNS,
@@ -100,7 +101,7 @@ def _write_routes(path: Path, routes: dict[str, str]) -> Path:
         for task_id, route in routes.items()
     ]
     path.mkdir()
-    (path / "route-mappings.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    (path / ROUTE_MAPPINGS_FILENAME).write_text("".join(json.dumps(row) + "\n" for row in rows))
     return path
 
 

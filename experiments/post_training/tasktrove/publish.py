@@ -3,17 +3,13 @@
 
 """Publish the retained TaskTrove rows and their rejection ledger.
 
-    tasks/part-00000.parquet every surviving Harbor task with its selection columns
+    tasks/part-00000.parquet RL compatibility view with the previous row schema
     rl/part-00000.parquet    complete RL corpus, with MCQA routing provenance
     sft/part-00000.parquet   MCQA tasks routed to SFT, with routing provenance
     ledger.parquet           one row per task omitted from ``tasks/``: its status and reason
     manifest.json            revision, tool ref, counts per status, route, source, converter, mode,
                              tag, check, and Dockerfile
     report.md                the manifest as tables, regenerated every run
-
-The release splits are copied by Zephyr stages from the routed rows; the ledger and counts come from
-one pass over their small columns. The only binaries read are one task per distinct Dockerfile, for
-its base image.
 
     python -m experiments.post_training.tasktrove.publish summary <routed_path> <output_path> <tool_ref>
     python -m experiments.post_training.tasktrove.publish export <tasks_dir> <path> [--dest DIR]
@@ -146,10 +142,6 @@ def _is_main_task(row: dict) -> bool:
     return row["status"] == ConvertStatus.CONVERTED
 
 
-def _is_rl_task(row: dict) -> bool:
-    return row["status"] == ConvertStatus.CONVERTED
-
-
 def _is_sft_task(row: dict) -> bool:
     return row["status"] == ROUTED_SFT_STATUS
 
@@ -164,7 +156,7 @@ def _write_tasks(routed_path: str, output_path: str, split: str) -> None:
     elif split == Route.RL:
         columns = ROUTED_TASK_COLUMNS
         schema = ROUTED_TASKS_SCHEMA
-        predicate = _is_rl_task
+        predicate = _is_main_task
     elif split == Route.SFT:
         columns = ROUTED_TASK_COLUMNS
         schema = ROUTED_TASKS_SCHEMA
