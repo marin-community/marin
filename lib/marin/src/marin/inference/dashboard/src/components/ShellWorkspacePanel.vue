@@ -30,8 +30,8 @@ const filesJson = computed({
   get: () => props.workspace?.filesJson ?? '',
   set: (value: string) => {
     if (!props.workspace) return
-    update({ ...props.workspace, filesJson: value, history: [] })
-    status.value = 'Command history reset because the initial files changed.'
+    update({ ...props.workspace, filesJson: value, commits: [], history: [] })
+    status.value = 'Imported Git history and command history reset because the initial files changed.'
   },
 })
 
@@ -44,7 +44,7 @@ function update(workspace: ShellWorkspace | null) {
 
 function enable() {
   status.value = ''
-  update({ filesJson: '{}', history: [], repositoryUrl: '' })
+  update({ filesJson: '{}', commits: [], history: [], repositoryUrl: '' })
 }
 
 function remove() {
@@ -75,8 +75,14 @@ async function loadRepository() {
   abort = controller
   try {
     const snapshot = await importRepository(workspace.repositoryUrl.trim(), controller.signal)
-    update({ ...workspace, filesJson: JSON.stringify(snapshot.files, null, 2), history: [] })
-    status.value = `Loaded ${Object.keys(snapshot.files).length} text files; skipped ${snapshot.skipped_files}.`
+    update({
+      ...workspace,
+      filesJson: JSON.stringify(snapshot.files, null, 2),
+      commits: snapshot.commits,
+      history: [],
+    })
+    const historyNote = snapshot.truncated_history ? ' (older history omitted)' : ''
+    status.value = `Cloned ${Object.keys(snapshot.files).length} text files and ${snapshot.commits.length} commits${historyNote}; skipped ${snapshot.skipped_files} files.`
   } catch (error) {
     if (!isAbortError(error)) status.value = String(error)
   } finally {
@@ -114,11 +120,12 @@ async function loadRepository() {
           :disabled="disabled || importing || !repositoryUrl.trim()"
           @click="loadRepository"
         >
-          {{ importing ? 'Loading…' : 'Load public repo' }}
+          {{ importing ? 'Cloning…' : 'Clone public repo' }}
         </button>
       </div>
       <p class="mt-1 text-[0.7rem] text-text-muted">
-        Loads a bounded snapshot of a public GitHub repository's default branch. Remote history and .git are excluded.
+        Clones a public GitHub repository once and imports a bounded slice of recent first-parent history for UTF-8
+        text files. The remote and .git are not retained.
       </p>
       <textarea
         v-model="filesJson"
@@ -130,7 +137,8 @@ async function loadRepository() {
       ></textarea>
       <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
         <p class="text-[0.7rem] text-text-muted">
-          Commands run from /work. {{ workspace.history.length }} commands will be replayed before the next call.
+          Commands run from /work. {{ workspace.commits.length }} imported commits and {{ workspace.history.length }}
+          commands will be replayed before the next call.
         </p>
         <div class="flex gap-2">
           <button

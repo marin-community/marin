@@ -119,6 +119,7 @@ async function applyExample(example: ChatExample) {
   if (example.workspaceFiles !== undefined) {
     props.conversation.shellWorkspace = {
       filesJson: JSON.stringify(example.workspaceFiles, null, 2),
+      commits: [],
       history: [],
       repositoryUrl: '',
     }
@@ -226,7 +227,7 @@ async function executeToolCalls(
         const workspace = conversation.shellWorkspace
         if (!workspace || !workspaceFiles) throw new Error('Shell workspace is not enabled')
         const command = bashCommand(call.arguments)
-        const shellResult = await invokeShell(workspaceFiles, workspace.history, command, signal)
+        const shellResult = await invokeShell(workspaceFiles, workspace.commits, workspace.history, command, signal)
         result = shellResult
         if (shellResult.stop_reason === null) workspace.history.push(command)
       } else {
