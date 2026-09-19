@@ -18,3 +18,8 @@ serve:
   - --enable-expert-parallel
   - --model-loader-extra-config
   - '{"distributed":true}'
+# The in-repo template maps enable_thinking to its /think soft-switch. Evals pin thinking off
+# (evalchemy#152); reasoning-heavy launch files opt back in per key.
+generation:
+  chat_template_kwargs:
+    enable_thinking: false

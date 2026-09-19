@@ -16,3 +16,8 @@ serve:
 agent:
   agent_kwargs:
     extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'
+# Hybrid-thinking template default: evals pin thinking off (evalchemy#152); reasoning-heavy
+# launch files opt back in per key.
+generation:
+  chat_template_kwargs:
+    enable_thinking: false
