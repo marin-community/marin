@@ -96,11 +96,16 @@ class GenerationConfig:
     """Per-model generation settings for evaluation clients.
 
     ``max_gen_toks`` sets the Evalchemy generation limit and Harbor agent output budget.
-    ``extra_gen_kwargs`` apply only to Evalchemy.
+    ``extra_gen_kwargs`` apply only to Evalchemy. ``chat_template_kwargs`` are boolean render-time
+    template arguments (e.g. ``enable_thinking``) forwarded on the Evalchemy chat route so a
+    hybrid-thinking model's template does not impose its default thinking mode; an Evalchemy
+    launch file overrides these per key. Only booleans: a YAML ``false`` decodes cleanly, while a
+    draccus union field would stringify it into a Jinja-truthy ``"False"``.
     """
 
     max_gen_toks: int | None = None
     extra_gen_kwargs: Mapping[str, str] = field(default_factory=dict)
+    chat_template_kwargs: Mapping[str, bool] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

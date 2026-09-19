@@ -202,6 +202,45 @@ def test_unset_budget_loglikelihood_task_gets_no_gen_kwargs(monkeypatch):
     assert "--max_tokens" not in cmd
 
 
+def test_chat_route_carries_chat_template_kwargs_inside_model_args():
+    # A hybrid-thinking model's template force-opens its reasoning channel by default; the render
+    # arg rides --model_args as compact JSON (evalchemy#152 forwards it into each chat request),
+    # because lm-eval splits --model_args on commas and a second key would shred the payload.
+    config = _payload(_config(apply_chat_template=True, chat_template_kwargs={"enable_thinking": False}))
+
+    cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", None)
+
+    model_args = dict(pair.split("=", 1) for pair in cmd[cmd.index("--model_args") + 1].split(","))
+    assert model_args["chat_template_kwargs"] == '{"enable_thinking":false}'
+    assert "--chat_template_kwargs" not in cmd
+
+
+def test_chat_template_kwargs_stay_off_the_completions_route():
+    # The completions route applies no chat template, so render args would be silently dropped
+    # by the endpoint; the model arg must not appear even for a configured model.
+    config = _payload(_config(apply_chat_template=True, chat_template_kwargs={"enable_thinking": False}))
+
+    mcq_cmd = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", None)
+    mcq_args = dict(pair.split("=", 1) for pair in mcq_cmd[mcq_cmd.index("--model_args") + 1].split(","))
+    chat_without_kwargs = _payload(_config(apply_chat_template=True))
+    chat_cmd = build_command(chat_without_kwargs, config["tasks"][1], "/tmp/out", "/opt/py", None)
+    chat_args = dict(pair.split("=", 1) for pair in chat_cmd[chat_cmd.index("--model_args") + 1].split(","))
+
+    assert "chat_template_kwargs" not in mcq_args
+    assert "chat_template_kwargs" not in chat_args
+
+
+def test_multi_key_chat_template_kwargs_are_rejected_on_the_chat_route():
+    # lm-eval's comma split would shred a two-key JSON payload mid-value; fail at command build
+    # instead of letting the evaluator receive a malformed mapping.
+    config = _payload(
+        _config(apply_chat_template=True, chat_template_kwargs={"enable_thinking": False, "strict_format": False})
+    )
+
+    with pytest.raises(ValueError, match="one key"):
+        build_model_args(config, True, None)
+
+
 def test_build_command_chat_route_needs_template_and_generation():
     config = _payload(_config(apply_chat_template=True))
     generative, mcq = config["tasks"][1], config["tasks"][0]

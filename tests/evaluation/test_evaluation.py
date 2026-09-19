@@ -814,6 +814,38 @@ def test_evalchemy_generation_budget_preserves_benchmark_protocol(
     assert len(warnings) == expected_warnings
 
 
+def test_launch_file_overrides_model_chat_template_kwargs_per_key(tmp_path, monkeypatch):
+    # The catalog declares the model's default thinking mode; a benchmark launch file must be able
+    # to flip it (format-strict tasks need thinking off) while the model's other render args ride
+    # along, and the merged decision lands in the recorded launch configuration.
+    config_path = tmp_path / "thinking.yaml"
+    config_path.write_text("tasks: [triviaqa]\nchat_template_kwargs:\n  enable_thinking: false\n")
+    model = replace(
+        models()["qwen3-8b"],
+        generation=GenerationConfig(chat_template_kwargs={"enable_thinking": True, "strict_format": False}),
+    )
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    spec = LaunchSpec(
+        model=model,
+        evals=(),
+        evalchemy_definitions=(EvalchemyDefinition(name="thinking", config_path=config_path),),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
+    assert evalchemy is not None
+    assert evalchemy.chat_template_kwargs == {"enable_thinking": False, "strict_format": False}
+
+
 def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     first = replace(
@@ -902,6 +934,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
             "seed": 1234,
             "extra_gen_kwargs": {},
             "extra_model_args": {},
+            "chat_template_kwargs": {},
         },
     }
 

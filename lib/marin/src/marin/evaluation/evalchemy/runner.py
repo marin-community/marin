@@ -109,6 +109,10 @@ class EvalchemyRunConfig:
     seed: int | None = None
     extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
     extra_model_args: dict[str, str | int | float | bool] = field(default_factory=dict)
+    # Boolean chat-template render arguments (e.g. ``enable_thinking``) forwarded on the chat route
+    # so a hybrid-thinking model's template does not impose its default thinking mode
+    # (marin-community/evalchemy#151). Empty means the endpoint's template default applies.
+    chat_template_kwargs: dict[str, bool] = field(default_factory=dict)
     max_length: int | None = None
     runtime: EvalchemyRuntimeConfig = field(default_factory=EvalchemyRuntimeConfig)
 
@@ -197,6 +201,7 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
             "batch_size": config.batch_size,
             "seed": config.seed,
             "extra_model_args": dict(config.extra_model_args),
+            "chat_template_kwargs": dict(config.chat_template_kwargs),
             "max_length": config.max_length,
         }
     )

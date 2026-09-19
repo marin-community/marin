@@ -307,7 +307,10 @@ imply. Set `tokenizer` when `location` is an object-store export because the eva
 its tokenizer through Hugging Face. vLLM streams object-store weights through the RunAI loader.
 Every explicit `serve` value wins over what `auto_serve_overrides` derives from the model's
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
-rides on `--gen_kwargs`.
+rides on `--gen_kwargs`. `generation.chat_template_kwargs` (boolean render args, e.g.
+`enable_thinking=false` for a hybrid-thinking model whose template force-opens its reasoning
+channel) is forwarded as JSON on the Evalchemy chat route, and an Evalchemy launch file's
+`chat_template_kwargs` overrides it per key.
 
 Add a same-named Evalchemy YAML file under `configs/evalchemy/` and add its name to
 `_STANDARD_EVALCHEMY_EVALS` in `evals.py`, or add a Harbor `JobConfig` YAML under `configs/harbor/`

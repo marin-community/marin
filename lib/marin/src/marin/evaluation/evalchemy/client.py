@@ -157,6 +157,18 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
     args.update(config.get("extra_model_args", {}))
     if max_length is not None:
         args["max_length"] = max_length
+    if use_chat:
+        # Render-time template arguments (enable_thinking, ...) ride --model_args as compact JSON and
+        # evalchemy's chat model forwards them into each request's chat_template_kwargs
+        # (marin-community/evalchemy#152). lm-eval splits --model_args on commas, so only a
+        # single-key mapping survives; bool-only values keep the payload comma-free.
+        chat_template_kwargs = config.get("chat_template_kwargs") or {}
+        if chat_template_kwargs:
+            if len(chat_template_kwargs) > 1:
+                raise ValueError(
+                    f"chat_template_kwargs must hold one key for the comma-joined --model_args, got {sorted(chat_template_kwargs)}"
+                )
+            args["chat_template_kwargs"] = json.dumps(chat_template_kwargs, separators=(",", ":"))
     return ",".join(f"{key}={value}" for key, value in args.items())
 
 

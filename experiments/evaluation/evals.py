@@ -78,6 +78,7 @@ class EvalchemyDefinition:
                 seed=config.seed,
                 extra_gen_kwargs=dict(config.extra_gen_kwargs),
                 extra_model_args=dict(config.extra_model_args),
+                chat_template_kwargs=dict(config.chat_template_kwargs),
                 max_length=config.max_length,
             ),
         )
@@ -108,6 +109,12 @@ class EvalchemyDefinition:
             extra_gen_kwargs={
                 **config.extra_gen_kwargs,
                 **model.generation.extra_gen_kwargs,
+            },
+            # The launch file wins per key: a benchmark policy (thinking off for format-strict
+            # tasks) must be able to override the model catalog's default thinking mode.
+            chat_template_kwargs={
+                **model.generation.chat_template_kwargs,
+                **config.chat_template_kwargs,
             },
         )
 
@@ -237,6 +244,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         seed=config.seed,
         extra_gen_kwargs=extra_gen_kwargs,
         extra_model_args=extra_model_args,
+        chat_template_kwargs=dict(config.chat_template_kwargs),
         max_length=config.max_length,
         runtime=EvalchemyRuntimeConfig(
             requirement=EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras))
