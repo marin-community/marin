@@ -18,8 +18,11 @@ Plan or run::
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default --run
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default \\
         --set trainer.fully_async.max_staleness_steps=2 --run
-    python -m experiments.post_training.async_rl --version 2026.08.29 --policy qwen --preset smoke \\
-        --set trainer.algorithm.use_tis=true --set trainer.algorithm.score_centering_topk=32 \\
+    python -m experiments.post_training.async_rl --version 2026.09.19.2 --policy qwen --preset smoke \\
+        --override documents/curriculum-rl-pool=2026.08.29.1 \\
+        --override models/curriculum-rl-qwen3-0.6b=2026.08.29 \\
+        --wandb-entity marin-community --set trainer.algorithm.use_tis=true \\
+        --set trainer.algorithm.score_centering_topk=32 \\
         --set generator.sampling_params.logprobs=32 --run
 
 The Snowball defaults are sized for the 40-GPU topology: 128 prompts per update at four answers each, 192
