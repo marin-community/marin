@@ -103,7 +103,10 @@ def test_pipeline_embedding_recompute_preserves_values_and_gradients(dtype):
 def test_hero_pipeline_preserves_hidden_states_and_router_statistics(qb_estimator):
     mesh, model = _tiny_hero(qb_estimator)
     batch = _packed_batch()
-    with jax.set_mesh(mesh):
+    # Histogram binning is discontinuous: scan fusion can move a margin across a
+    # bin edge through rounding. Compare router statistics at the same per-layer execution
+    # boundaries; the tests below separately cover compiled loss and gradients.
+    with jax.set_mesh(mesh), jax.disable_jit():
         expected_hidden, expected_metrics = model(batch.tokens, batch.attn_mask)
         stages = split_transformer(model, 2, layer_counts=(2, 3))
         hidden = stages[0].embed(batch.tokens)
