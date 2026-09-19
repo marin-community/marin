@@ -24,10 +24,11 @@ GPU work.
   environment. The `.1` revision also changed AIME prompt endings to `Answer: <answer>`; later
   matched arms must keep that revision and their evaluation prompt membership fixed.
 - The Qwen smoke config has two optimizer updates, 32 prompts per update, four samples per
-  prompt, 32 generation workers, an eight-group buffer, a 1,024-token response cap, and a
-  256-prompt held-out evaluation with one greedy response per prompt. TIS is enabled with cap
-  2.0. The qualification correction width is 32; a width of 128 and capture-only controls are
-  still needed before the main comparison. All work uses Iris `interactive` priority.
+  prompt, 32 generation workers, an eight-group buffer, and a 1,024-token response cap. It
+  disables evaluation to isolate the training path. Qwen's default preset evaluates 256 held-out
+  prompts every five updates, with one greedy response per prompt. TIS is enabled with cap 2.0.
+  The qualification correction width is 32; a width of 128 and capture-only controls are still
+  needed before the main comparison. All work uses Iris `interactive` priority.
 
 For one sampled token, let `q` be the behavior policy that sampled it, `o` the stored trainer
 policy at the start of the optimizer update, and `p` the trainer policy being differentiated.
