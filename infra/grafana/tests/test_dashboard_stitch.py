@@ -30,6 +30,7 @@ def test_stitch_dashboard_leaves_non_ref_panels_untouched():
 @pytest.mark.parametrize(
     ("link_ref", "expected_title", "expected_url", "expected_include_vars"),
     [
+        ("async_rl", "RL Post-training (async)", "/d/marin-async-rl", True),
         ("cluster_capacity", "Cluster capacity", "/d/marin-cluster-capacity", True),
         ("fleet_accelerators_without_vars", "Fleet accelerators", "/d/marin-accel", False),
         ("fleet_health", "Fleet health", "/d/marin-clusters", True),
