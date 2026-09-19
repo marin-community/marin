@@ -214,6 +214,57 @@ def _flat_cache_data_config(
     )
 
 
+# Hold-one-feature-out ablations vs the MoE baseline (see the fast_track ablation issue). Each drops
+# or changes exactly one feature; "none" is the unmodified baseline.
+ABLATIONS = (
+    "none",
+    "drop_xsa",
+    "drop_attn_gate",
+    "drop_gated_norm",
+    "drop_latent",
+    "full_rope_local",
+    "drop_sconv",
+    "drop_muonh",
+    "halve_granularity",
+    "halve_sparsity",
+    "drop_gqa",
+)
+
+
+def _ablate_model(model: GrugModelConfig, ablation: str) -> GrugModelConfig:
+    if ablation in ("none", "drop_muonh"):
+        return model
+    if ablation == "drop_xsa":
+        return dataclasses.replace(model, use_xsa=False)
+    if ablation == "drop_attn_gate":
+        return dataclasses.replace(model, use_attn_gate=False)
+    if ablation == "drop_gated_norm":
+        return dataclasses.replace(model, use_gated_norm=False)
+    if ablation == "drop_latent":  # experts on full hidden -> ~2x wider
+        return dataclasses.replace(model, latent_dim=None)
+    if ablation == "full_rope_local":
+        return dataclasses.replace(model, full_rope_local=True)
+    if ablation == "drop_sconv":
+        return dataclasses.replace(model, sconv=False)
+    if ablation == "halve_granularity":  # top-4 of 192 at 2x expert width (active ~unchanged)
+        return dataclasses.replace(
+            model, num_experts=192, num_experts_per_token=4, intermediate_dim=model.intermediate_dim * 2
+        )
+    if ablation == "halve_sparsity":  # top-8 of 192 (half the total experts, same active)
+        return dataclasses.replace(model, num_experts=192)
+    if ablation == "drop_gqa":  # KV heads = Q heads (full MHA)
+        return dataclasses.replace(
+            model, num_kv_heads=model.num_heads, local_kv_heads=model.num_heads, global_kv_heads=model.num_heads
+        )
+    raise ValueError(f"unknown ablation {ablation!r}")
+
+
+def _ablate_optimizer(optimizer, ablation: str):
+    if ablation == "drop_muonh":
+        return dataclasses.replace(optimizer, route_muonh_to_adamh=True)
+    return optimizer
+
+
 def build_h100_ladder_run(
     *,
     run_id: str,
@@ -229,6 +280,7 @@ def build_h100_ladder_run(
     no_eval: bool = False,
     dense: bool = False,
     save_checkpoints: bool = False,
+    ablation: str = "none",
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -244,6 +296,7 @@ def build_h100_ladder_run(
 
     rung = _h100_ladder_rung(size)
     model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
+    model = _ablate_model(model, ablation)
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.gpus_per_task
     replica_axis_size = 1
@@ -279,6 +332,7 @@ def build_h100_ladder_run(
         hidden_dim=model.hidden_dim,
         seq_len=SEQ_LEN,
     )
+    optimizer = _ablate_optimizer(optimizer, ablation)
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
         log_every=1,
@@ -320,7 +374,7 @@ def build_h100_ladder_run(
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
-                tags=["h100", "fasttrack", "vocab-16k"],
+                tags=["h100", "fasttrack", "vocab-16k", *([] if ablation == "none" else [f"abl-{ablation}"])],
                 group="fasttrack-scaling-ladder",
                 name=run_id,
                 replicate_path=ctx.output_path,
@@ -412,6 +466,13 @@ def build_h100_ladder_run(
     default=False,
     help="Save a permanent final checkpoint to S3 (off by default; also enables recovery).",
 )
+@click.option(
+    "--ablation",
+    type=click.Choice(ABLATIONS),
+    default="none",
+    show_default=True,
+    help="Hold-one-feature-out ablation vs the MoE baseline.",
+)
 @build_options
 def main(
     run_id: str,
@@ -422,6 +483,7 @@ def main(
     no_eval: bool,
     dense: bool,
     save_checkpoints: bool,
+    ablation: str,
 ) -> ArtifactStep[ThroughputResult]:
     return build_h100_ladder_run(
         run_id=run_id,
@@ -432,6 +494,7 @@ def main(
         no_eval=no_eval,
         dense=dense,
         save_checkpoints=save_checkpoints,
+        ablation=ablation,
     )
 
 

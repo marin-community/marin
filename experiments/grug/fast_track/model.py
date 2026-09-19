@@ -125,6 +125,11 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
+    # Ablation toggles (defaults preserve the fast_track architecture).
+    use_xsa: bool = True  # Exclusive Self Attention (subtract the v-parallel component of attn out).
+    use_attn_gate: bool = True  # Headwise sigmoid gate on the attention output.
+    use_gated_norm: bool = True  # GatedNorm after each RMSNorm (else plain RMSNorm).
+    full_rope_local: bool = False  # Rotate the full head_dim on rope layers (else half-RoPE).
     sconv: bool = True
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
@@ -282,7 +287,7 @@ class CausalSelfAttention(eqx.Module):
 
         # Half-RoPE: rotate only the first half of Q/K head_dim; disable_rope skips RoPE on long/global layers.
         def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
-            half = head_dim // 2
+            half = head_dim if self.cfg.full_rope_local else head_dim // 2
             q_rot, k_rot = apply_rotary_embedding(
                 qh[..., :half], kh[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
             )
@@ -304,18 +309,20 @@ class CausalSelfAttention(eqx.Module):
         # on CPU (e.g. the grug variant-contract tests).
         attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
         attn_out = attention(q, k, v, mask, implementation=attn_impl)
-        # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
-        # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.
-        aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        # GPU XSA with GQA can give attn_out a backend-specific head sharding;
-        # match v to that dynamic sharding before the per-head projection math.
-        aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, None, "model"))
-        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
-        attn_out = gate * attn_out
+        if self.cfg.use_xsa:
+            # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
+            # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.
+            aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
+            # GPU XSA with GQA can give attn_out a backend-specific head sharding;
+            # match v to that dynamic sharding before the per-head projection math.
+            aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, None, "model"))
+            dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
+            v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+            attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+        if self.cfg.use_attn_gate:
+            # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
+            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+            attn_out = gate * attn_out
         # Merge heads into hidden dim while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(
             attn_out,
@@ -615,10 +622,10 @@ class MoEMLP(eqx.Module):
 
 class Block(eqx.Module):
     rms_attn: RMSNorm
-    attn_gated_norm: GatedNorm
+    attn_gated_norm: GatedNorm | None
     attn: CausalSelfAttention
     rms_mlp: RMSNorm
-    mlp_gated_norm: GatedNorm
+    mlp_gated_norm: GatedNorm | None
     mlp: "MoEMLP | DenseMLP"
     shared: tuple[DenseMLP, ...] | None
     sconv_attn: "ShortConv | None"
@@ -631,10 +638,14 @@ class Block(eqx.Module):
             # Dense block: one SwiGLU DenseMLP(hidden, intermediate_dim), no MoE and no shared experts.
             return Block(
                 rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-                attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
+                attn_gated_norm=(
+                    GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key) if cfg.use_gated_norm else None
+                ),
                 attn=CausalSelfAttention.init(cfg, key=attn_key),
                 rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-                mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+                mlp_gated_norm=(
+                    GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key) if cfg.use_gated_norm else None
+                ),
                 mlp=DenseMLP.init(cfg.hidden_dim, cfg.intermediate_dim, cfg.initializer_std, key=mlp_key),
                 shared=None,
                 sconv_attn=(
@@ -657,10 +668,14 @@ class Block(eqx.Module):
             )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
+            attn_gated_norm=(
+                GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key) if cfg.use_gated_norm else None
+            ),
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+            mlp_gated_norm=(
+                GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key) if cfg.use_gated_norm else None
+            ),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
             sconv_attn=(
@@ -683,12 +698,16 @@ class Block(eqx.Module):
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = _seg[0] if _seg is not None else None
 
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        attn_in = self.rms_attn(x)
+        if self.attn_gated_norm is not None:
+            attn_in = self.attn_gated_norm(attn_in)
         attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        mlp_in = self.rms_mlp(x)
+        if self.mlp_gated_norm is not None:
+            mlp_in = self.mlp_gated_norm(mlp_in)
         if isinstance(self.mlp, DenseMLP):
             mlp_out = self.mlp(mlp_in, moe_output_reshard=False)
             router_stats: dict[str, jax.Array] = {}
@@ -713,11 +732,11 @@ def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
-    embed_gated_norm: GatedNorm
+    embed_gated_norm: GatedNorm | None
     output_proj: jax.Array
     stacked_blocks: ArrayStacked[Block]
     final_norm: RMSNorm
-    final_gated_norm: GatedNorm
+    final_gated_norm: GatedNorm | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -752,11 +771,15 @@ class Transformer(eqx.Module):
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
+            embed_gated_norm=(
+                GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key) if cfg.use_gated_norm else None
+            ),
             output_proj=output_proj,
             stacked_blocks=stacked_blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            final_gated_norm=(
+                GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key) if cfg.use_gated_norm else None
+            ),
             config=cfg,
         )
 
@@ -775,7 +798,9 @@ class Transformer(eqx.Module):
 
         cfg = self.config
         hidden = _embedding_gather(self.token_embed, token_ids)
-        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        hidden = self.embed_norm(hidden)
+        if self.embed_gated_norm is not None:
+            hidden = self.embed_gated_norm(hidden)
 
         # Local layers use a sliding window; every global_every-th layer is full causal.
         segment_ids = None
@@ -841,7 +866,9 @@ class Transformer(eqx.Module):
                 "margin_min_per_layer": stacked_router_stats["margin_min"],
                 "margin_max_per_layer": stacked_router_stats["margin_max"],
             }
-        hidden = self.final_gated_norm(self.final_norm(hidden))
+        hidden = self.final_norm(hidden)
+        if self.final_gated_norm is not None:
+            hidden = self.final_gated_norm(hidden)
         return hidden, router_metrics
 
     @named_call

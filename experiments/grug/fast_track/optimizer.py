@@ -183,6 +183,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
     gate_router_weight_decay: float = 0.02
+    # Ablation: route the MuonH param groups through AdamH (at the MuonH LR) instead of Newton-Schulz.
+    route_muonh_to_adamh: bool = False
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -229,7 +231,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return optax.chain(*components)
 
             transforms = {
-                "muonh": muonh_transform(),
+                "muonh": adamh_transform_at(learning_rate) if self.route_muonh_to_adamh else muonh_transform(),
                 "adamh": adamh_transform_at(learning_rate),
                 "adam": adam_transform_at(adam_lr),
             }
