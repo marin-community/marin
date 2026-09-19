@@ -19,7 +19,7 @@ from marin.inference.config import (
     VllmLauncherType,
     VllmSource,
 )
-from marin.inference.model_preparation import read_tool_chat_template
+from marin.inference.model_preparation import is_hub_model_id, read_tool_chat_template
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -150,7 +150,9 @@ class VllmBackend:
             ),
             "--served-model-name",
             spec.api_model,
-            *(("--revision", spec.revision) if spec.revision is not None else ()),
+            # vLLM rejects a revision paired with a resolved cache path, so forward the pin
+            # only when the weights are still a bare hub id.
+            *(("--revision", spec.revision) if is_hub_model_id(spec.weights) and spec.revision is not None else ()),
             *chat_template_args,
             *self.config.extra_args,
             *extra_args,

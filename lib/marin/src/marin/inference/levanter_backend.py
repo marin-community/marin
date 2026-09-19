@@ -24,7 +24,12 @@ from transformers import PreTrainedTokenizerBase
 from marin.inference.backend import ModelSpec
 from marin.inference.config import LevanterEngineConfig
 from marin.inference.dashboard_server import BackgroundServer, bind_serving_socket, serve_app_background
-from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size, tool_chat_template
+from marin.inference.model_preparation import (
+    is_hub_model_id,
+    read_attention_heads,
+    select_tensor_parallel_size,
+    tool_chat_template,
+)
 from marin.inference.vllm_server import (
     JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS,
     JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES,
@@ -44,7 +49,9 @@ LEVANTER_DTYPES = ("bfloat16", "float16", "float32")
 
 
 def _checkpoint_ref(spec: ModelSpec) -> str:
-    if spec.revision is None:
+    # The ``@revision`` suffix only parses for hub ids; appending it to a resolved cache
+    # path would corrupt the reference the checkpoint loader resolves.
+    if spec.revision is None or not is_hub_model_id(spec.weights):
         return spec.weights
     return f"{spec.weights}@{spec.revision}"
 
