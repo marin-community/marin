@@ -10,7 +10,7 @@ external experiment storage.
 
 Evaluate a subject in two independent ways:
 
-1. A holistic reviewer scores the complete curriculum against `rubric.md`. A subject is structurally `pilot_ready`
+1. A holistic reviewer scores the complete curriculum against `prompts/rubric.md`. A subject is structurally `pilot_ready`
    at 85/100 with no structural blockers. Evidence confidence is reported separately and guides later sampling.
 2. A blind task generator creates `max(24, 2 * guidepost_count)` subject tasks without seeing the curriculum. A
    separate fit judge sees only the task instructions and curriculum and classifies each task as `exact`,
@@ -41,7 +41,7 @@ self-confidence or epsilon continuity.
 Create a run manifest before calling an agent. Record:
 
 - subject ID, name, and guideposts from `subject_inventory.json`;
-- Git commit, `rubric.md` hash, prompt version, model, reasoning effort, provider, and agent/session ID for every role;
+- Git commit, `prompts/rubric.md` hash, prompt version, model, reasoning effort, provider, and agent/session ID for every role;
 - sampling settings when the provider exposes them; record `provider controlled` instead of inventing a seed or
   temperature when it does not;
 - discovery-task IDs and content hashes, with answers and verifiers excluded;
@@ -219,159 +219,20 @@ The holistic review writes:
 }
 ```
 
-## Prompt 1: curriculum generator
+## Durable role prompts
 
-Use `gpt-5.6-sol` with high reasoning effort. Replace bracketed fields and attach `rubric.md`, the relevant inventory object, the
-model-visible discovery evidence, and policy-level evaluation metadata. Do not attach held-out evaluation questions
-or paraphrases derived from them.
+The exact prompts are versioned separately so a run can hash and attach only the role it needs:
 
-```text
-You are designing one subject graph for a training curriculum. Produce Curriculum JSON and a concise design audit.
+- [`prompts/generation.md`](prompts/generation.md) for curriculum generation;
+- [`prompts/blind_tasks.md`](prompts/blind_tasks.md) for curriculum-blind task sampling;
+- [`prompts/blind_fit.md`](prompts/blind_fit.md) for fit judgment;
+- [`prompts/review.md`](prompts/review.md) for holistic review; and
+- [`prompts/luna_placement.md`](prompts/luna_placement.md) for the optional batched diagnostic.
 
-SUBJECT
-[subject inventory object]
+The shared scoring and boundary definitions are in [`prompts/rubric.md`](prompts/rubric.md). Preserve the allowed-read
+sets from Inputs and provenance when composing each role call. A prompt edit requires a new prompt version; do not
+rewrite archived results to match it.
 
-EVIDENCE
-[manifest, model-visible discovery evidence, and policy-level evaluation metadata]
-
-CONSTRAINTS
-- Follow the attached rubric. Optimize for useful training boundaries, not encyclopedic coverage.
-- Maximum hierarchy depth is 4. Section IDs begin with [lowercase subject ID].
-- First enumerate the subject's distinct central operation families. Do not infer one section per guidepost.
-- A capability is an observable outcome and a task-assignment target. A group is hierarchy only. Convert routing
-  menus and omnibus parents to groups; retain an internal capability only when one natural representative task
-  requires coherent cross-child synthesis.
-- Every capability has exactly one entry probe followed by one representative probe. Both are concrete,
-  self-contained task instructions. Do not specify solutions, graders, harnesses, or verifier behavior.
-- For every proposed capability, instantiate the most operationally distant permitted pair. Split it only when
-  mastery does not transfer because the central operation, tool interaction, or evaluation contract differs. A
-  different topic or tool name alone is insufficient.
-- For each pair, compare the input representation, central transformation, output artifact, and correctness contract.
-  Split when one changes materially; workflow context or shared nouns do not establish transfer. In particular,
-  challenge classification versus regression, construction versus interpretation, paired versus unpaired inference,
-  and deterministic mismatch analysis versus intermittent-mechanism diagnosis.
-- Use a sampling facet only when the central operation and evaluation contract remain stable across its values.
-  Apply the same distant-pair test to the facet's most distant values. Split instead when values change the solver
-  loop, state transition, or evaluation contract.
-- Prerequisites connect capabilities only. For each edge, identify the full upstream outcome used by every dependent
-  representative, the single new operation in the dependent entry, and whether supplying the completed upstream
-  artifact would eliminate the dependency. Reject workflow-order edges.
-- The entry probe must give a learner who mastered all prerequisites a non-trivial chance of success. The
-  representative probe must exercise the full outcome.
-- Execute every probe on paper. Reject missing state or geometry, undefined factors, inconsistent premises, trivial
-  optima, and outputs that cannot be checked from the supplied facts.
-- Substitute every child probe into its capability parent's outcome. If the parent does not contain every child,
-  make it a group and add any natural cross-child workflow as a sibling synthesis capability.
-- Account for every guidepost and evidence item with a section or an exclusion rationale. Malformed tasks are not
-  positive evidence.
-
-DESIGN AUDIT
-Return as a separate file: operation families; guidepost/evidence accounting; the distant-pair operation signatures
-and result
-for every capability and facet; the role decision for every node; accepted and rejected prerequisite edges with the
-completed-artifact counterfactual; probe execute-on-paper results; parent containment results; and known evidence
-limitations. Do not mention or infer a target section count.
-```
-
-## Prompt 2: curriculum-blind task generator
-
-Use a separate high-reasoning context. Do not attach the curriculum, rubric, curriculum probes, reviews, or fit
-results.
-
-```text
-Generate exactly [N = max(24, 2 * guidepost_count)] diverse, concrete tasks that a capable practitioner could reasonably be asked to perform in the
-subject below. You are sampling the subject, not designing or reverse-engineering a curriculum.
-
-SUBJECT
-[subject ID, name, guideposts, and optional pre-curriculum domain brief with sources and hash]
-
-REQUIREMENTS
-- Do not ask for a taxonomy, syllabus, curriculum, or discussion of these guideposts.
-- Cover every guidepost with at least two tasks. Use the remaining tasks for cross-guidepost work, boundary cases, and
-  underrepresented central operations.
-- Vary central operations, artifacts, contexts, and difficulty. Include entry, representative, and boundary tasks.
-- Each instruction must be self-contained. Supply the data, code, measurements, source excerpts, legal text, or
-  interface facts needed to act. Do not rely on an unspecified file, hidden source, or private verifier.
-- Keep each task genuinely in the named subject. Narrative subject matter alone is insufficient.
-- Avoid near-duplicates and simple surface rewrites. Do not include answers or solution sketches.
-- Output strict JSON using the blind-task contract. `guidepost_basis`, `operation_family`, and `difficulty_intent`
-  document how you sampled; they will be hidden from the fit judge.
-```
-
-## Prompt 3: blind-fit judge
-
-Use a separate high-reasoning context. Attach the candidate curriculum and only the blind task IDs and instructions.
-Do not attach generation metadata, holistic reviews, prior fit judgments, or answers.
-
-```text
-Judge whether each independently generated task has a useful home in this subject curriculum. Inspect the complete
-task, not its nouns or output format. Groups are never task targets.
-
-For each task:
-- `exact`: one capability covers the complete task and its decisive operation.
-- `ambiguous`: two or more capabilities each plausibly cover the complete task; list all acceptable capabilities.
-- `gap`: no capability covers the complete task. Partial coverage by several capabilities is still a gap.
-- `invalid`: the task is malformed, materially underdetermined, or not genuinely in the subject.
-
-Do not reward a capability merely because its wording resembles the task. Do not penalize benign changes in data,
-surface form, or sampling-facet value. Name the decisive operation and explain the result briefly. Then return the
-strict blind-fit JSON contract, verify that every input task appears exactly once, compute the four counts, set the
-numerator to exact plus defensible ambiguous, set the denominator to total minus invalid, and identify repeated gaps
-that indicate a missing operation family.
-```
-
-## Prompt 4: holistic curriculum reviewer
-
-Use a separate high-reasoning context. Attach `rubric.md`, the candidate curriculum, inventory object, evidence
-manifest, model-visible discovery tasks, and permitted held-out in-distribution evaluation instructions. Do not attach
-answers, verifiers, earlier reviews, or blind-fit results.
-
-```text
-Perform a fresh complete-subject curriculum review. Return strict JSON using the holistic-review contract.
-
-Read every capability, group, sampling facet, prerequisite edge, entry probe, representative probe, guidepost, and
-evidence item. Score: coverage 25; mutual self-confidence 25; progression and epsilon continuity 25; observable
-boundaries 15; probe quality and parsimony 10.
-
-Required checks:
-- Account for every guidepost and evidence item with a primary capability or exclusion rationale.
-- For every capability, instantiate its most operationally distant permitted task pair. A blocking split finding
-  must name both tasks, their different central operations, and how splitting changes sampling or evaluation.
-- Compare each pair's input representation, central transformation, output artifact, and correctness contract.
-- For every sampling facet, compare its most distant values and reject it if the solver loop, state transition, or
-  evaluation contract changes.
-- For every prerequisite edge, identify where every dependent representative uses the full prerequisite outcome,
-  the one new operation in the entry, and the completed-artifact counterfactual.
-- Check every internal capability for one natural cross-child synthesis. A concatenated set of child deliverables is
-  not synthesis. Also verify that every child probe is an instance of the parent's outcome; otherwise use a group and
-  a sibling synthesis capability.
-- Check all entry-to-representative orderings for a plausible epsilon step. Structural plausibility is not evidence
-  of actual training transfer.
-- Execute each probe on paper and reject missing facts, undefined factors, contradictory premises, trivial optima,
-  and uncheckable outputs.
-- Distinguish evidence confidence from structural quality. High confidence requires direct or held-out evidence
-  reaching every capability and sampled edges; sparse task evidence caps confidence at medium.
-
-`pilot_ready` requires at least 85 points and no structural blockers. Sparse evidence lowers confidence and belongs in
-the findings. Reserve blockers for structural defects. Any failed structural gate at 70 points or above is `revise`;
-a score below 70 is `regenerate`. Pervasive defects must lower the affected dimension scores. Recommend the smallest
-repair that fixes each concrete defect. Propose a rubric change only for a recurrent issue that generalizes beyond
-this subject.
-```
-
-## Optional prompt: blinded Luna placement
-
-Use this only when a boundary or difficulty uncertainty could change a finding. Batch 8--16 tasks. Hide intended
-targets and expose capability sections only. Record model, prompt version, task IDs, chosen target, rationale, and the
-artifact hash. This is advisory evidence: the approximate 70% reasonable-placement rate used during early pilots is
-not a promotion threshold.
-
-```text
-For each task, choose one capability ID from the supplied curriculum or `out_of_scope`. Groups are not valid
-targets. Base placement on the decisive operation, not narrative nouns or answer format. Return each task ID exactly
-once with the chosen target and one-sentence rationale. If two capabilities are genuinely equivalent, choose the one
-whose representative probe requires more of the task's central operation and name the alternative.
-```
 
 ## Run sequence
 

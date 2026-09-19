@@ -24,7 +24,8 @@ The first review round found the same two structural problems in different subje
 - prerequisites described useful background rather than a capability required by every representative dependent
   task.
 
-`rubric.md` now makes those tests explicit. It also requires a routing rule for overlapping sections and preserves
+`../prompts/rubric.md` now makes those tests explicit. It also requires a routing rule for overlapping sections and
+preserves
 the original mutual-predictiveness test for leaf granularity.
 
 | area | review sequence | sections in the catalog artifact | remaining weakness |

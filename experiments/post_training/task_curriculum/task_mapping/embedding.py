@@ -10,15 +10,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from experiments.post_training.task_curriculum.models import (
+from experiments.post_training.task_curriculum.models import CurriculumCatalog, RoutingFacet
+from experiments.post_training.task_curriculum.task_mapping.models import (
     MAX_COSINE_SIMILARITY,
     MIN_COSINE_SIMILARITY,
     AnchorKind,
     AssignmentAnchor,
-    CurriculumCatalog,
     GraphMapping,
     MappingCandidate,
-    RoutingFacet,
     TaskAnnotation,
     TaskMapping,
 )

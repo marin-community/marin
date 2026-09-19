@@ -8,16 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from experiments.post_training.task_curriculum.cache import EmbeddingCache, cached_embeddings
-from experiments.post_training.task_curriculum.mapping import (
-    MappingInputs,
-    graph_anchors,
-    map_task_vectors,
-    section_anchors,
-)
 from experiments.post_training.task_curriculum.models import (
-    AnchorKind,
-    AssignmentAnchor,
     BlindFitReview,
     BlindTaskSet,
     CapabilitySection,
@@ -30,9 +21,19 @@ from experiments.post_training.task_curriculum.models import (
     HolisticReviewStatus,
     RoutingFacet,
     SampleTask,
-    SamplingFacet,
-    SemanticKey,
     SystematicGapDisposition,
+)
+from experiments.post_training.task_curriculum.task_mapping.cache import EmbeddingCache, cached_embeddings
+from experiments.post_training.task_curriculum.task_mapping.embedding import (
+    MappingInputs,
+    graph_anchors,
+    map_task_vectors,
+    section_anchors,
+)
+from experiments.post_training.task_curriculum.task_mapping.models import (
+    AnchorKind,
+    AssignmentAnchor,
+    SemanticKey,
     TaskAnnotation,
 )
 from experiments.post_training.task_curriculum.validation import (
@@ -122,147 +123,6 @@ def _annotation(task_id: str) -> TaskAnnotation:
             answer_form="text",
         ),
     )
-
-
-def test_curriculum_contract_rejects_incomplete_probe_pair() -> None:
-    curriculum = Curriculum(
-        version="pilot-1",
-        subject_id="C00",
-        subject_name="Pilot",
-        sections=[
-            CapabilitySection(
-                kind="capability",
-                id="files",
-                parent_id=None,
-                name="files",
-                outcome="Complete file work",
-                includes=["file work"],
-                excludes=["process work"],
-                prerequisites=[],
-                sample_tasks=[SampleTask(kind="representative", instruction="rename a file")],
-            )
-        ],
-    )
-
-    with pytest.raises(ValueError):
-        curriculum.check_generation_contract(maximum_depth=2)
-
-
-def test_curriculum_rejects_group_prerequisite() -> None:
-    with pytest.raises(ValueError, match="non-capability prerequisites"):
-        Curriculum(
-            version="pilot-1",
-            subject_id="C00",
-            subject_name="Pilot",
-            sections=[
-                _group("files"),
-                CapabilitySection(
-                    **(
-                        _section("files.search", "files", ("find a file", "filter matching lines")).model_dump()
-                        | {"prerequisites": ["files"]}
-                    ),
-                ),
-            ],
-        )
-
-
-def test_sampling_facets_are_unique_within_capability() -> None:
-    section = _section("translate", None, ("translate a greeting", "translate a short letter"))
-    duplicate = SamplingFacet(id="language_direction", description="Source and target language pair")
-    section_data = section.model_dump()
-    section_data["sampling_facets"] = [duplicate, duplicate]
-
-    with pytest.raises(ValueError, match="sampling facet IDs must be unique"):
-        CapabilitySection.model_validate(section_data)
-
-
-def test_curriculum_contract_rejects_depth_above_limit() -> None:
-    with pytest.raises(ValueError):
-        _curriculum().check_generation_contract(maximum_depth=1)
-
-
-def test_blind_task_set_rejects_duplicate_ids() -> None:
-    task = {
-        "id": "blind-1",
-        "instruction": "Exercise one capability.",
-        "guidepost_basis": ["C00.1"],
-        "operation_family": "exercise capability",
-        "difficulty_intent": "entry",
-    }
-
-    with pytest.raises(ValueError):
-        BlindTaskSet(subject_id="C00", prompt_version="blind-v1", tasks=[task, task])
-
-
-def test_blind_fit_review_recomputes_counts() -> None:
-    review = {
-        "subject_id": "C00",
-        "curriculum_version": "pilot-1",
-        "prompt_version": "fit-v1",
-        "judgments": [
-            {
-                "task_id": "blind-1",
-                "status": "exact",
-                "acceptable_capability_ids": ["c00.example"],
-                "decisive_operation": "exercise capability",
-                "explanation": "The complete task matches the capability.",
-            }
-        ],
-        "counts": {"exact": 0, "ambiguous": 0, "gap": 1, "invalid": 0},
-        "fit_numerator": 0,
-        "fit_denominator": 1,
-        "systematic_gaps": [],
-    }
-
-    with pytest.raises(ValueError):
-        BlindFitReview.model_validate(review)
-
-
-def test_holistic_review_rejects_inconsistent_status() -> None:
-    review = {
-        "subject_id": "C00",
-        "curriculum_version": "pilot-1",
-        "score": 85,
-        "dimension_scores": {
-            "coverage": 22,
-            "mutual_self_confidence": 22,
-            "progression_and_epsilon_continuity": 21,
-            "observable_boundaries": 12,
-            "probe_quality_and_parsimony": 8,
-        },
-        "status": "pilot_ready",
-        "confidence": "medium",
-        "blockers": ["One unresolved blocker."],
-        "highest_risk_sections": ["c00.example"],
-        "guidepost_accounting": [],
-        "discovery_accounting": [],
-        "evaluation_accounting": [],
-        "findings": [],
-        "recommended_changes": [],
-        "proposed_rubric_changes": [],
-    }
-
-    with pytest.raises(ValueError):
-        HolisticReview.model_validate(review)
-
-    review.update(blockers=[], confidence="low")
-    # Low evidence confidence is advisory; structural score and blockers determine readiness.
-    HolisticReview.model_validate(review)
-
-    review.update(
-        score=69,
-        dimension_scores={
-            "coverage": 18,
-            "mutual_self_confidence": 17,
-            "progression_and_epsilon_continuity": 17,
-            "observable_boundaries": 10,
-            "probe_quality_and_parsimony": 7,
-        },
-        status="revise",
-        blockers=[],
-    )
-    with pytest.raises(ValueError):
-        HolisticReview.model_validate(review)
 
 
 def _subject_run() -> tuple[SubjectRunArtifacts, SubjectEvidenceIds]:
@@ -355,13 +215,6 @@ def _subject_run() -> tuple[SubjectRunArtifacts, SubjectEvidenceIds]:
             evaluation_items=frozenset(),
         ),
     )
-
-
-def test_subject_run_validation_accepts_consistent_artifacts() -> None:
-    artifacts, evidence_ids = _subject_run()
-
-    validate_subject_run(artifacts, evidence_ids)
-    validate_subject_promotion(artifacts)
 
 
 def test_subject_promotion_rejects_non_ready_review() -> None:

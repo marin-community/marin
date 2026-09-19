@@ -21,9 +21,9 @@ regressed blind fit from 22/24 to 9/24 without improving its score, so the catal
 other 44 subjects use v2.
 
 Every selected subject passes `Curriculum.check_generation_contract(maximum_depth=4)` and schema and cross-reference
-validation through `validate_subject_run`. That validation is mechanical, not a quality gate. Only the three
-`pilot_ready` subjects named below pass `validate_subject_promotion`. The catalog round-trips through `load_catalog`,
-contains exactly D01–D45, and has globally unique section IDs.
+validation through `validate_subject_run`. Three `pilot_ready` subjects also pass the quality gates in
+`validate_subject_promotion`. The catalog round-trips through `load_catalog`, contains exactly D01–D45, and has
+globally unique section IDs.
 
 ## Result
 
@@ -76,7 +76,7 @@ blockers include missing major guidepost operations, several mixed operation fam
 - Evidence SHA-256: `cd127af6afbffc188e94359d2995ad833e8a54ce8d0962dc036592e0d02cfc74`
 - Model: `gpt-5.6-sol`, high reasoning effort
 - Prompt versions: `subject-generator-wave10-v1`, `blind-tasks-v1`, `holistic-review-v1`, and `blind-fit-v1`
-- Viewer revision: [revision 2](https://applets.marina.oa.dev/a/67f69132-2ef4-4c9e-b8b5-77cabd126442/v/2/)
+- Viewer revision: [revision 3](https://applets.marina.oa.dev/a/67f69132-2ef4-4c9e-b8b5-77cabd126442/v/3/)
 
 Version names serve different layers: cross-domain v1 names this experiment; `2026.09.18-cross-domain-v1` is the
 catalog's internal version; `2026.09.18.2` is the Marin `ArtifactStep` version; and each selected subject carries a
@@ -107,25 +107,21 @@ tar -xzf /tmp/curriculum-wave10-evidence.tar.gz -C /tmp
 
 The archive's `curriculum_wave10/run_wave10.py`, `finalize_wave10.py`, `run_manifest.json`, and
 `catalog_summary.json` preserve the runner, provenance, validation, and metric-recomputation inputs. Role prompts in
-the runner define the exact allowed-read sets; these are context-isolated roles using the same model, not independent
-models or providers.
+the runner define the exact allowed-read sets. Each role used an isolated context with the same model and provider.
 
 ## Known limitations and follow-up
 
-The catalog is a useful broad baseline, not 45 fully promoted curricula. Common residual issues are broad integration
-capabilities, entry-to-representative jumps, under-specified probes, and uncertain cross-disciplinary boundaries.
-The selected graphs contain 16 prerequisite edges that survived the completed-artifact counterfactual. This may
-reflect true dependency sparsity or insufficient evidence and should be retested.
+The catalog is a broad baseline; 42 subjects remain below the promotion gate. Common residual issues are broad
+integration capabilities, entry-to-representative jumps, under-specified probes, and uncertain cross-disciplinary
+boundaries. The selected graphs contain 16 prerequisite edges that survived the completed-artifact counterfactual.
+This may reflect true dependency sparsity or insufficient evidence and should be retested.
 
-The acceptance terms used here are defined in [`../rubric.md`](../rubric.md): mutual self-confidence, epsilon
+The acceptance terms used here are defined in [`../prompts/rubric.md`](../prompts/rubric.md): mutual self-confidence, epsilon
 continuity, and the completed-artifact counterfactual govern capability boundaries and dependencies. Exact home,
 defensibly ambiguous, systematic gap, and blocking disposition are defined by the blind-fit and promotion contracts
 in [`../workflow.md`](../workflow.md).
 
-The next evidence-quality iteration is a source survey, not another blind optimization loop. For a representative
-five-domain comparison, freeze public college course sequences, established textbook contents and exercise families,
-and relevant accreditation or professional standards before generation. Use them to amend root guideposts and expose
-canonical operations or candidate progression. Course chapters do not define curriculum capabilities or prerequisite
-edges: mutual self-confidence, epsilon continuity, executable probes, the completed-artifact counterfactual, holistic
-review, and frozen blind fit remain the acceptance tests. If the five-domain comparison yields recurring gains,
-apply the survey procedure across all roots in the next inventory version.
+The completed [five-domain source survey](../source_survey/README.md) uses public college curricula, textbook exercise
+families, and professional standards. Those sources improved sampled coverage but weakened structural quality during
+direct regeneration. Future runs should use source briefs for bounded gap and progression repairs, then repeat the
+same holistic and frozen-fit checks.

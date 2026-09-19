@@ -5,12 +5,11 @@ keeps curriculum design separate from task correctness:
 TaskCompendium owns model-visible task semantics and private verifier contracts; a curriculum describes observable
 capabilities, boundaries, examples, and prerequisites.
 
-The canonical cross-domain v1 catalog is the immutable object registered by `catalog_artifact.py`. Here, canonical
-means versioned and addressable, not promotion-ready: the breadth-first catalog deliberately includes provisional
-subjects after the one-repair stopping rule. It contains all
-45 D-series subject roots and 2,252 globally unique nodes: 1,853 trainable capabilities and 399 organizational
-groups. The wave reports preserve the experimental evidence and identify provisional subjects; the 3.7 MB YAML
-payload lives in CoreWeave S3 rather than git.
+The canonical cross-domain v1 catalog is the immutable object registered by `catalog_artifact.py`. Canonical means
+versioned and addressable. The breadth-first catalog also includes provisional subjects after the one-repair stopping
+rule. It contains all 45 D-series subject roots and 2,252 globally unique nodes: 1,853 trainable capabilities and 399
+organizational groups. The wave reports identify provisional subjects and preserve the experimental evidence. The
+3.7 MB YAML payload lives in CoreWeave S3.
 
 - Artifact handle: `TASK_CURRICULUM`, version `2026.09.18.2`
 - Catalog: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.18-72a763b98f9e/curriculum.yaml`
@@ -35,9 +34,11 @@ their task environment.
   guideposts. It is a cross-domain redesign rather than a one-to-one rename of the earlier TaskTrove-derived roots.
   ISCED-F, CIP, Frascati, evaluation inventories, and occupational taxonomies are coverage checks rather than
   curriculum node definitions.
-- `rubric.md` defines the cross-subject review criteria.
-- `workflow.md` is the resumable operating procedure, including the exact generator, blind-task, fit-judge, holistic-
-  review, and optional Luna prompts.
+- `prompts/rubric.md` defines the cross-subject review criteria. The other files in `prompts/` are the exact durable
+  role prompts.
+- `workflow.md` is the resumable operating procedure and defines role isolation, artifact contracts, and promotion.
+- `source_survey/README.md` compares source-guided regeneration against the frozen cross-domain v1 baseline and
+  records the final practical TaskTrove placement audit.
 - In the general workflow, a small set of model-visible TaskTrove tasks supplies concrete discovery evidence. In-distribution examples listed
   by the evaluation policy are held-out coverage probes. Out-of-distribution evaluations contribute domain and task
   format metadata only. Source names, solutions, and verifier implementations are excluded from generation. The
@@ -122,7 +123,7 @@ hardest and required operations rank capabilities after graph selection. Groups 
 task mappings.
 
 Annotate each task once in model batches of 8–16. Persist the task-content hash, annotation prompt version, and model.
-Do not include curriculum labels in the prompt. `cli.py` caches each embedding by text and model, derives bootstrap
+Do not include curriculum labels in the prompt. `task_mapping/cli.py` caches each embedding by text and model, derives bootstrap
 anchors from curriculum outcomes and includes, accepts separate assignment anchors, and ranks with NumPy in bounded
 row batches. A curriculum edit re-embeds changed anchors and reuses task vectors. A semantic-key schema change requires
 reannotation; an embedding-model change requires re-embedding.
@@ -130,7 +131,7 @@ reannotation; an embedding-model change requires re-embedding.
 Run a pilot mapping with:
 
 ```bash
-uv run python -m experiments.post_training.task_curriculum.cli \
+uv run python -m experiments.post_training.task_curriculum.task_mapping.cli \
   --annotations /tmp/task-annotations-000.jsonl \
   --catalog /tmp/task-curriculum-cross-domain-v1.yaml \
   --assignment-anchors /tmp/assignment-anchors.jsonl \
@@ -141,9 +142,9 @@ uv run python -m experiments.post_training.task_curriculum.cli \
 ```
 
 The output contains a membership score and section candidates for every graph. Thresholds are calibrated independently
-per graph on a frozen member, close-neighbor, overlap, and out-of-scope sample; scores from distinct projections are
-not comparable. The mapper has no source-specific rules or per-task exceptions. Mapping is a diagnostic signal, not a
-curriculum blocker; roughly 70% reasonable placement is adequate for initial scale-out.
+per graph on a frozen member, close-neighbor, overlap, and out-of-scope sample. Compare scores only within one
+projection. The mapper has no source-specific rules or per-task exceptions. Mapping is a diagnostic signal and is
+excluded from the curriculum promotion gate. Roughly 70% reasonable placement is adequate for initial scale-out.
 
 For the full TaskTrove run, materialize the approximately 4 GB clean release and shard annotation and embedding work.
 Keep these artifacts outside the curriculum YAML:
@@ -269,7 +270,7 @@ E/A/G/I denotes exact, ambiguous, gap, and invalid. Every final systematic-gap l
 Loom artifact `curriculum-wave7-evidence`, revision 1, branch scope `zooq8ec9`, SHA-256
 `49fc55b3fd0a82ca1d2e62b4435ebfa28ebadfd101382a97b0c5d70779e73e6d`, associated with session channel
 `s2uyqg34`. It contains the manifest, frozen blind tasks, final curricula, design audits, fit judgments, and holistic
-reviews. Wave seven calibrated the procedure; the current prompts in `workflow.md` include the resulting corrections
+reviews. Wave seven calibrated the procedure; the current files in `prompts/` include the resulting corrections
 and are the normative inputs for the next wave.
 
 The initial software-testing score and fit rate show that a high holistic score can coexist with sampled coverage

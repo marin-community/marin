@@ -86,7 +86,7 @@ The next useful work is evidence-led iteration:
 
 ## Reproducibility
 
-The exact role prompts and isolation rules are in `../workflow.md`; the scoring criteria are in `../rubric.md`. The
+The role isolation rules are in `../workflow.md`; the exact prompts and scoring criteria are in `../prompts/`. The
 wave manifest pins the source release, source hashes, role models, prompt versions, blind-task hashes, discovery-task
 hashes, and evaluation revision. The Loom evidence artifact contains that manifest, all frozen inputs, selected final
 curricula and design audits, and the latest independent review and fit outputs.

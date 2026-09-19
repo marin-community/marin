@@ -22,8 +22,6 @@ class ProbeKind(StrEnum):
 
 
 EXPECTED_PROBE_KINDS = (ProbeKind.ENTRY, ProbeKind.REPRESENTATIVE)
-MIN_COSINE_SIMILARITY = -1.0
-MAX_COSINE_SIMILARITY = 1.0
 PILOT_READY_SCORE = 85
 REGENERATE_SCORE = 70
 
@@ -175,16 +173,15 @@ class Curriculum(StrictModel):
 
 
 class RoutingFacet(StrEnum):
+    """Semantic-key projection used to route tasks into a curriculum graph."""
+
     SUBJECT_DOMAIN = "subject_domain"
     TASK_MECHANIC = "task_mechanic"
 
 
-class AnchorKind(StrEnum):
-    GRAPH = "graph"
-    SECTION = "section"
-
-
 class CatalogCurriculum(StrictModel):
+    """One subject curriculum and its declared graph-routing projection."""
+
     routing_facet: RoutingFacet
     curriculum: Curriculum
 
@@ -204,80 +201,9 @@ class CurriculumCatalog(StrictModel):
         return self
 
 
-class AssignmentAnchor(StrictModel):
-    kind: AnchorKind
-    subject_id: str
-    section_id: str | None
-    text: str = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def validate_target(self) -> AssignmentAnchor:
-        if self.kind == AnchorKind.GRAPH and self.section_id is not None:
-            raise ValueError("graph anchors cannot name a section")
-        if self.kind == AnchorKind.SECTION and self.section_id is None:
-            raise ValueError("section anchors must name a section")
-        return self
-
-
-class SemanticKey(StrictModel):
-    subject_domain: str = Field(
-        min_length=1,
-        description="Operational knowledge domain needed to solve the task, excluding narrative subject matter",
-    )
-    task_mechanic: str = Field(
-        min_length=1,
-        description="Domain-independent transformation or reasoning action required by the task",
-    )
-    summary: str = Field(min_length=1, description="Requested result without source or curriculum labels")
-    hardest_operation: str = Field(min_length=1)
-    required_operations: list[str] = Field(min_length=1)
-    answer_form: str = Field(min_length=1)
-
-    def membership_text(self, facet: RoutingFacet) -> str:
-        if facet == RoutingFacet.SUBJECT_DOMAIN:
-            return f"Subject domain: {self.subject_domain}."
-        return f"Task mechanic: {self.task_mechanic}."
-
-    def operation_text(self) -> str:
-        return (
-            f"Task: {self.summary}. "
-            f"Hardest operation: {self.hardest_operation}. "
-            f"Required operations: {'; '.join(self.required_operations)}. "
-            f"Answer form: {self.answer_form}."
-        )
-
-
-class TaskAnnotation(StrictModel):
-    task_id: str
-    task_hash: str
-    model: str
-    prompt_version: str
-    key: SemanticKey
-
-
-class MappingCandidate(StrictModel):
-    section_id: str
-    similarity: float = Field(ge=MIN_COSINE_SIMILARITY, le=MAX_COSINE_SIMILARITY)
-
-
-class GraphMapping(StrictModel):
-    subject_id: str
-    routing_facet: RoutingFacet
-    membership_similarity: float = Field(ge=MIN_COSINE_SIMILARITY, le=MAX_COSINE_SIMILARITY)
-    candidates: list[MappingCandidate]
-
-
-class TaskMapping(StrictModel):
-    task_id: str
-    task_hash: str
-    annotation_model: str
-    annotation_prompt_version: str
-    catalog_version: str
-    embedding_model: str
-    graphs: list[GraphMapping]
-
-
 class DifficultyIntent(StrEnum):
+    """Sampling role used to audit blind-set diversity and hidden from the fit judge."""
+
     ENTRY = "entry"
     REPRESENTATIVE = "representative"
     BOUNDARY = "boundary"

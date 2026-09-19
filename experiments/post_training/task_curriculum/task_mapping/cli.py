@@ -13,15 +13,16 @@ import numpy as np
 from openai import OpenAI
 from pydantic import BaseModel
 
-from experiments.post_training.task_curriculum.cache import EmbeddingCache, cached_embeddings
 from experiments.post_training.task_curriculum.catalog import load_catalog
-from experiments.post_training.task_curriculum.mapping import (
+from experiments.post_training.task_curriculum.models import RoutingFacet
+from experiments.post_training.task_curriculum.task_mapping.cache import EmbeddingCache, cached_embeddings
+from experiments.post_training.task_curriculum.task_mapping.embedding import (
     MappingInputs,
     graph_anchors,
     map_task_vectors,
     section_anchors,
 )
-from experiments.post_training.task_curriculum.models import AssignmentAnchor, RoutingFacet, TaskAnnotation
+from experiments.post_training.task_curriculum.task_mapping.models import AssignmentAnchor, TaskAnnotation
 
 
 def _read_jsonl[ModelT: BaseModel](path: Path, model: type[ModelT]) -> list[ModelT]:
