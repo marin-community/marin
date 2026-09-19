@@ -19,6 +19,8 @@ _PALOMA_RAW = "raw/paloma-fc6827/65cd6fc"
 # In-region byte-lossless text reconstruction of the eval sets (see experiments/datakit/paloma_detok.py).
 # Use this raw_prefix to rebuild the caches under any tokenizer without the out-of-region raw.
 _PALOMA_DETOK_RAW = "raw/paloma-detok"
+# Default cache version; bump when repointing raw or rebuilding under a new tokenizer.
+_PALOMA_VERSION = "2026.06.28"
 
 # The Paloma eval subsets and their directories within the HF dataset
 # (https://huggingface.co/datasets/allenai/paloma). The subset name keys the handle;
@@ -49,7 +51,7 @@ def paloma_dataset(
     tokenizer: str = llama3_tokenizer,
     tag: str = "llama3",
     raw_prefix: str = _PALOMA_RAW,
-    version: str = "2026.06.28",
+    version: str = _PALOMA_VERSION,
 ) -> ArtifactStep[TokenizedCache]:
     """One Paloma subset as a validation handle.
 
@@ -75,7 +77,7 @@ def paloma_datasets(
     tokenizer: str = llama3_tokenizer,
     tag: str = "llama3",
     raw_prefix: str = _PALOMA_RAW,
-    version: str = "2026.06.28",
+    version: str = _PALOMA_VERSION,
 ) -> dict[str, ArtifactStep[TokenizedCache]]:
     """All Paloma subsets, keyed by subset name."""
     return {

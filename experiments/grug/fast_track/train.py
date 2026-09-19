@@ -566,7 +566,7 @@ def _make_train_step(
     @functools.partial(jax.jit, donate_argnums=(0,))
     def train_step(state: GrugTrainState, batch):
         # Apply pending QB betas to router biases inside JIT (avoids eager
-        # host-side TPU kernel launches that can cause SPMD sync issues).
+        # host-side kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
 
         (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
@@ -662,7 +662,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
 
     # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
-    # Keep the mesh compact so the batch pspec derived by `_batch_spec(mesh)` spans slices directly.
+    # Keep the mesh compact so the batch pspec derived by `_batch_spec()` spans slices directly.
     # replica_axis_size=None lets compact_grug_mesh default to jax.process_count() (full
     # cross-slice replication); set it to 1 on GrugTrainerConfig for cross-slice FSDP.
     mesh = compact_grug_mesh(

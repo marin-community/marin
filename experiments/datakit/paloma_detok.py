@@ -14,9 +14,9 @@ import gzip
 import json
 
 import click
-import fsspec
 import numpy as np
 from levanter.store.tree_store import TreeStore
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoTokenizer
 
 from experiments.datasets.paloma import _PALOMA_SUBSETS
@@ -28,12 +28,11 @@ _EXEMPLAR = {"input_ids": np.zeros((0,), dtype=np.int32)}
 def detok_subset(subset: str, *, in_prefix: str, src_tokenizer: str, src_tag: str, version_in: str, out: str) -> int:
     """Decode one subset's token cache to text jsonl.gz. Returns the document count written."""
     tok = AutoTokenizer.from_pretrained(src_tokenizer)
-    cache_path = f"{in_prefix}/{subset}-{src_tag}/{version_in}/validation"
+    cache_path = prefix_join(in_prefix, f"{subset}-{src_tag}/{version_in}/validation")
     store = TreeStore.open(_EXEMPLAR, cache_path, mode="r")
-    out_path = f"{out}/{_PALOMA_SUBSETS[subset]}/val/val-00000.jsonl.gz"
-    fs, _ = fsspec.core.url_to_fs(out_path)
+    out_path = prefix_join(out, f"{_PALOMA_SUBSETS[subset]}/val/val-00000.jsonl.gz")
     n = 0
-    with fs.open(out_path, "wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb") as gz:
+    with StoragePath(out_path).open("wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb") as gz:
         for i in range(len(store)):
             ids = np.asarray(store[i]["input_ids"]).tolist()
             text = tok.decode(ids, clean_up_tokenization_spaces=False, skip_special_tokens=True)
