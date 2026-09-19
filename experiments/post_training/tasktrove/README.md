@@ -75,25 +75,26 @@ columns before reading the packed task payloads.
 | `solution_binary` | optional gzip-compressed oracle solution archive |
 
 The routing stage loads the complete `route-mappings.jsonl` artifact into memory and applies it as a
-map-side lookup. MCQA rows routed to RL remain in the RL set. SFT rows retain their task and solution
-archives in the separate SFT Parquet. Garbage rows and mechanically valid MCQA rows absent from the
-mapping are rejected without payloads. Non-MCQA rows remain in the RL set.
+map-side lookup. MCQA rows routed to RL remain in `tasks/` and are also written to `rl/`. SFT rows
+retain their task and solution archives in the separate SFT Parquet. Garbage rows and mechanically
+valid MCQA rows absent from the mapping are rejected without payloads. Non-MCQA rows remain in
+`tasks/`.
 
-`rl/part-00000.parquet` is the complete RL corpus. `tasks/part-00000.parquet` contains the same rows
-with the previous release schema, so existing Harbor, SkyRL, and Hugging Face consumers continue to
-read `tasks/` without configuration changes.
+`tasks/part-00000.parquet` is the complete RL-compatible corpus with the previous release schema, so
+existing Harbor, SkyRL, and Hugging Face consumers continue to read `tasks/` without configuration
+changes. `rl/part-00000.parquet` contains only the MCQA rows newly routed to RL.
 
 Each physical split is a single Parquet file. Source-specific files can be materialized from the
 `source` column when needed; the canonical release stays single-shard per split so each has one
 immutable object, one footer, and one row-count contract.
 
 The current release is under
-`s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.2/`:
+`s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3/`:
 
 | path | contents |
 |---|---|
 | `tasks/part-00000.parquet` | compatibility view of the complete RL corpus with the previous schema |
-| `rl/part-00000.parquet` | complete RL corpus with MCQA route provenance; non-MCQA route fields are empty |
+| `rl/part-00000.parquet` | MCQA rows routed to RL, including route provenance and task payloads |
 | `sft/part-00000.parquet` | MCQA rows routed to SFT, including route provenance and task payloads |
 | `ledger.parquet` | rejected source and row decisions |
 | `manifest.json` | counts by route, source, status, converter, grader, tag, and environment |
@@ -112,7 +113,7 @@ Publish a built release with an `HF_TOKEN` that can write to the destination dat
 
 ```bash
 uv run python -m experiments.post_training.tasktrove.publish huggingface \
-  s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.2
+  s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3
 ```
 
 The destination defaults to `open-athena/task-trove`; pass `--repo-id organization/dataset` to

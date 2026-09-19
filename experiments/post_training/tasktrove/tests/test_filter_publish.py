@@ -214,8 +214,8 @@ def test_route_tasks_splits_mcqa_and_fails_closed(tmp_path):
     publish_release(routed, release, tool_ref="ref")
     assert set(_rows(tmp_path / "release" / "tasks")) == {"rl.tar.gz", "other.tar.gz"}
     rl_rows = _rows(tmp_path / "release" / "rl")
-    assert set(rl_rows) == {"rl.tar.gz", "other.tar.gz"}
-    assert rl_rows["other.tar.gz"]["route"] == ""
+    assert set(rl_rows) == {"rl.tar.gz"}
+    assert rl_rows["rl.tar.gz"]["route"] == "rl"
     assert set(_rows(tmp_path / "release" / "sft")) == {"sft.tar.gz"}
     manifest = json.loads((tmp_path / "release" / "manifest.json").read_text())
     assert manifest["by_route"] == {"rl": 1, "sft": 1, "garbage": 1}

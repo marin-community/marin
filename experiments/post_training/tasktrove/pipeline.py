@@ -42,7 +42,7 @@ from experiments.post_training.tasktrove.task_templates import build_template_in
 from experiments.post_training.tasktrove.verify import filter_tasks
 
 STAGES = ("raw", "summaries", "templates", "converted", "filtered", "routing", "routed", "release")
-PIPELINE_VERSION = "2026.09.18.2"
+PIPELINE_VERSION = "2026.09.18.3"
 RAW_VERSION = "2026.09.09"
 """Pinned download version; bump only when ``TASKTROVE_REVISION`` changes, so reruns reuse the download."""
 

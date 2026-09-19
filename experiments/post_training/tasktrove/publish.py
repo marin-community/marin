@@ -4,7 +4,7 @@
 """Publish the retained TaskTrove rows and their rejection ledger.
 
     tasks/part-00000.parquet RL compatibility view with the previous row schema
-    rl/part-00000.parquet    complete RL corpus, with MCQA routing provenance
+    rl/part-00000.parquet    MCQA tasks routed to RL, with routing provenance
     sft/part-00000.parquet   MCQA tasks routed to SFT, with routing provenance
     ledger.parquet           one row per task omitted from ``tasks/``: its status and reason
     manifest.json            revision, tool ref, counts per status, route, source, converter, mode,
@@ -142,6 +142,10 @@ def _is_main_task(row: dict) -> bool:
     return row["status"] == ConvertStatus.CONVERTED
 
 
+def _is_rl_task(row: dict) -> bool:
+    return row["status"] == ConvertStatus.CONVERTED and row["route"] == Route.RL
+
+
 def _is_sft_task(row: dict) -> bool:
     return row["status"] == ROUTED_SFT_STATUS
 
@@ -156,7 +160,7 @@ def _write_tasks(routed_path: str, output_path: str, split: str) -> None:
     elif split == Route.RL:
         columns = ROUTED_TASK_COLUMNS
         schema = ROUTED_TASKS_SCHEMA
-        predicate = _is_main_task
+        predicate = _is_rl_task
     elif split == Route.SFT:
         columns = ROUTED_TASK_COLUMNS
         schema = ROUTED_TASKS_SCHEMA
