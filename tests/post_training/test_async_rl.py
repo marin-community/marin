@@ -262,13 +262,23 @@ def test_recipe_engine_parallelism_reaches_the_run_unopposed(owner, monkeypatch)
     monkeypatch.setattr(
         async_rl,
         "SNOWBALL_RECIPE",
-        replace(async_rl.SNOWBALL_RECIPE, engine_data_parallel_size=4, engine_expert_parallel_size=4),
+        replace(
+            async_rl.SNOWBALL_RECIPE,
+            role_plan=replace(
+                async_rl.SNOWBALL_RECIPE.role_plan,
+                inference_engine_tensor_parallel_size=2,
+                inference_engine_data_parallel_size=4,
+                inference_engine_expert_parallel_size=4,
+            ),
+        ),
     )
     run = async_rl.build_run(SNOWBALL_POLICY, async_rl.SMOKE_PRESET, version="2026.09.18")
     request = run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args.keys(), run.rl.deps)).request
     generator = yaml.safe_load(request.config_yaml)["generator"]
     assert generator["inference_engine_data_parallel_size"] == 4
     assert generator["inference_engine_expert_parallel_size"] == 4
+    assert asdict(request.topology.role_plan)["inference_engine_data_parallel_size"] == 4
+    assert asdict(request.topology.role_plan)["inference_engine_expert_parallel_size"] == 4
     keys = {override.lstrip("+").partition("=")[0] for override in request.overrides}
     assert keys.isdisjoint(async_rl.RECIPE_OWNED_SETTINGS), request.overrides
     # An override on a key the rendered config says nothing about still reaches the run.

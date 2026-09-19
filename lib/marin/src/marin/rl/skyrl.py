@@ -80,6 +80,9 @@ class SkyRLRolePlan:
     policy_mini_batch_size: int
     micro_train_batch_size_per_gpu: int
     n_samples_per_prompt: int
+    inference_engine_pipeline_parallel_size: int = 1
+    inference_engine_data_parallel_size: int = 1
+    inference_engine_expert_parallel_size: int = 1
 
 
 @dataclass(frozen=True)

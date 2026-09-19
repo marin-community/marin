@@ -109,7 +109,7 @@ class ChatTemplate:
 CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="marin_tokenizer")
 QWEN_CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="qwen3_without_thinking")
 # This revision includes the score-centering learner and exact behavior top-k capture.
-SCORE_CENTERING_SKYRL_COMMIT = "65bda669779d3a659fb19ee8eb6439e69e727b7f"
+SCORE_CENTERING_SKYRL_COMMIT = "fcff0812962fde42875031fac7c25df9b5d1a733"
 
 
 @dataclass(frozen=True)
@@ -141,10 +141,6 @@ class TrainingRecipe:
     max_grad_norm: float
     # Megatron parallelism for the policy and the reference model.
     megatron: MegatronGeometry
-    # Data and expert parallelism of the one vLLM engine, which spans one node. The role plan
-    # MarinSkyRL receives carries neither, so these reach the run through the rendered config.
-    engine_data_parallel_size: int
-    engine_expert_parallel_size: int
     # Host memory per training task; Megatron checkpoint staging needs 1800GB where the policy
     # spec's 512GB covers only the FSDP load.
     host_memory: str
@@ -156,6 +152,15 @@ class TrainingRecipe:
             self.role_plan.policy_num_nodes + self.role_plan.num_inference_engines
         ):
             raise ValueError("separate policy and engine roles require one node bundle per inference engine")
+        plan = self.role_plan
+        rollout_gpus = (
+            plan.num_inference_engines
+            * plan.inference_engine_tensor_parallel_size
+            * plan.inference_engine_pipeline_parallel_size
+            * plan.inference_engine_data_parallel_size
+        )
+        if not plan.colocate_all and rollout_gpus != plan.num_inference_engines * plan.policy_num_gpus_per_node:
+            raise ValueError("separate rollout engines must use every allocated GPU")
 
     @property
     def strategy(self) -> str:
@@ -179,6 +184,8 @@ SNOWBALL_RECIPE = TrainingRecipe(
         # One sequence per GPU per micro-step: 32 micro-steps over 16 data-parallel ranks.
         micro_train_batch_size_per_gpu=1,
         n_samples_per_prompt=ANSWERS_PER_PROMPT,
+        inference_engine_data_parallel_size=GPUS_PER_NODE,
+        inference_engine_expert_parallel_size=GPUS_PER_NODE,
     ),
     learning_rate=1.0e-6,
     weight_decay=1e-2,
@@ -190,8 +197,6 @@ SNOWBALL_RECIPE = TrainingRecipe(
         expert_model_parallel_size=8,
         expert_tensor_parallel_size=1,
     ),
-    engine_data_parallel_size=GPUS_PER_NODE,
-    engine_expert_parallel_size=GPUS_PER_NODE,
     host_memory="1800GB",
     # The Triton MoE kernels; the fused defaults do not cover this expert layout.
     engine_init_kwargs={"moe_backend": "triton"},
@@ -212,6 +217,7 @@ QWEN_RECIPE = TrainingRecipe(
         policy_mini_batch_size=32,
         micro_train_batch_size_per_gpu=2,
         n_samples_per_prompt=ANSWERS_PER_PROMPT,
+        inference_engine_data_parallel_size=GPUS_PER_NODE,
     ),
     learning_rate=1.0e-6,
     weight_decay=1e-2,
@@ -223,8 +229,6 @@ QWEN_RECIPE = TrainingRecipe(
         expert_model_parallel_size=1,
         expert_tensor_parallel_size=1,
     ),
-    engine_data_parallel_size=GPUS_PER_NODE,
-    engine_expert_parallel_size=1,
     host_memory="128GB",
     engine_init_kwargs={},
 )
@@ -352,8 +356,8 @@ TOPOLOGY_OWNED_SETTINGS = frozenset(
         "trainer.max_ckpts_to_keep",
     }
 )
-# The engine geometry the recipe owns. The launcher writes it into the config and drops any
-# inherited override on it, so it changes with the recipe beside the role plan it must agree with.
+# The role plan carries engine geometry to MarinSkyRL, which writes it over the config. Drop
+# inherited overrides so the config and role plan agree.
 RECIPE_OWNED_SETTINGS = frozenset(
     {
         "generator.inference_engine_data_parallel_size",
@@ -555,9 +559,9 @@ def training_config(
         "batched": False,
         "num_inference_engines": plan.num_inference_engines,
         "inference_engine_tensor_parallel_size": plan.inference_engine_tensor_parallel_size,
-        "inference_engine_pipeline_parallel_size": 1,
-        "inference_engine_data_parallel_size": recipe.engine_data_parallel_size,
-        "inference_engine_expert_parallel_size": recipe.engine_expert_parallel_size,
+        "inference_engine_pipeline_parallel_size": plan.inference_engine_pipeline_parallel_size,
+        "inference_engine_data_parallel_size": plan.inference_engine_data_parallel_size,
+        "inference_engine_expert_parallel_size": plan.inference_engine_expert_parallel_size,
         "n_samples_per_prompt": plan.n_samples_per_prompt,
         # Fraction of each engine GPU vLLM may occupy, weights and KV cache together; the rest
         # leaves room for the NCCL weight-sync buffers.
