@@ -93,8 +93,10 @@ from config import (
     BridgeConfig,
     ClusterTarget,
 )
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from errors import FinelogUnavailableError, UpstreamError
-from finelog.errors import QueryResultTooLargeError
+from finelog.errors import QueryResultTooLargeError, QueryTimeoutError, StatsError
 from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth
@@ -140,12 +142,15 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from training_stalls import telemetry_query, training_stall_alert_rows
 from vllm_observability import (
+    VLLM_DETAIL_MAX_WINDOW_MS,
     VLLM_MAX_RESULT_ROWS,
     VLLM_MAX_SERIES,
     VLLM_OVERVIEW_SECTIONS,
     VllmIdentityField,
     vllm_overview_query,
     vllm_overview_table,
+    vllm_run_summary_samples_query,
+    vllm_run_summary_table,
 )
 from wandb_source import WandbSource
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
@@ -323,6 +328,31 @@ class _BadRequest(Exception):
     """A malformed request, surfaced as HTTP 400."""
 
 
+def _vllm_status_row(status: str, message: str) -> dict[str, object]:
+    return {
+        "t": None,
+        "section": "diagnostic_status",
+        "metric": "query",
+        "stat": "state",
+        "series": message,
+        "value": None,
+        "unit": None,
+        "status": status,
+        "samples": None,
+        "gap_seconds": None,
+    }
+
+
+def _vllm_query_timed_out(error: BaseException) -> bool:
+    while error is not None:
+        if isinstance(error, (QueryTimeoutError, TimeoutError)):
+            return True
+        if isinstance(error, ConnectError) and error.code == Code.DEADLINE_EXCEEDED:
+            return True
+        error = error.__cause__
+    return False
+
+
 def _require(params, name: str) -> str:
     value = params.get(name)
     if not value:
@@ -444,7 +474,7 @@ def create_app(
             except ValueError as err:
                 allowed = ", ".join(field.value for field in VllmIdentityField)
                 raise _BadRequest(f"identity_kind must be one of: {allowed}") from err
-            identity = _require(params, "identity")
+            identity = params.get("identity_override") or _require(params, "identity")
             view = params.get("view")
             if view and view not in VLLM_OVERVIEW_SECTIONS:
                 raise _BadRequest(f"unknown vLLM overview view {view!r}; configured: {sorted(VLLM_OVERVIEW_SECTIONS)}")
@@ -484,21 +514,63 @@ def create_app(
                     overview.start_ms,
                     overview.end_ms,
                 )
+                if overview.end_ms - overview.start_ms > VLLM_DETAIL_MAX_WINDOW_MS:
+                    series = finelog_sources[target.name].query(
+                        vllm_run_summary_samples_query(overview), max_rows=VLLM_MAX_SERIES
+                    )
+                    table = vllm_run_summary_table(overview, series, vllm_projection_lock, max_rows=config.max_rows)
+                    rows = rows_to_json(table)
+                    if not rows:
+                        return [_vllm_status_row("empty", "No vLLM telemetry for this serve and time range")]
+                    hours = (overview.end_ms - overview.start_ms) / 3_600_000
+                    rows.append(
+                        _vllm_status_row(
+                            "summary_only",
+                            f"{hours:g}h selected: hourly tokens and observed summary signals only. "
+                            "Zoom to 7h or less for engine, latency, and outcome detail.",
+                        )
+                    )
+                    return rows
+
                 series = finelog_sources[target.name].query(overview.samples_sql, max_rows=VLLM_MAX_SERIES)
                 table = vllm_overview_table(
-                    overview,
-                    series,
-                    vllm_projection_lock,
-                    max_rows=min(config.max_rows, VLLM_MAX_RESULT_ROWS),
+                    overview, series, vllm_projection_lock, max_rows=min(config.max_rows, VLLM_MAX_RESULT_ROWS)
                 )
-                return rows_to_json(table)
+                rows = rows_to_json(table)
+                empty = any(row["section"] == "freshness" and row["status"] == "no_data" for row in rows)
+                rows.extend(
+                    {**row, "section": "run_summary"}
+                    for row in tuple(rows)
+                    if row["section"] in ("counter_total", "request_outcome", "length_finish_fraction")
+                )
+                rows.append(
+                    _vllm_status_row(
+                        "empty" if empty else "detail",
+                        (
+                            "No vLLM telemetry for this serve and time range"
+                            if empty
+                            else "Detailed engine telemetry for the selected range"
+                        ),
+                    )
+                )
+                return rows
 
-            rows = finelog_cache.get_or_compute(key, run)
+            def run_with_status():
+                # Cache the classified status itself. Cached exceptions lose their
+                # cause, which otherwise turns a timeout into a generic error.
+                try:
+                    return run()
+                except QueryResultTooLargeError as err:
+                    return [_vllm_status_row("sample_limit", f"{err}; zoom to a shorter range")]
+                except StatsError as err:
+                    logger.warning("vLLM diagnostic query failed: %s", err)
+                    status = "query_timeout" if _vllm_query_timed_out(err) else "query_error"
+                    return [_vllm_status_row(status, f"Finelog {status.replace('_', ' ')}; retry or narrow the range")]
+
+            rows = finelog_cache.get_or_compute(key, run_with_status)
             return JSONResponse(rows if not view else [row for row in rows if row.get("section") == view])
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
-        except QueryResultTooLargeError as err:
-            return JSONResponse({"error": f"{err}; narrow the vLLM time range"}, status_code=400)
 
     def rl_producers(request: Request) -> JSONResponse:
         try:

@@ -118,22 +118,24 @@ def selector_params(dashboard: dict, params: dict[str, str | int]) -> dict[str, 
     return result
 
 
-def panel_requests(dashboard: dict) -> list[tuple[str, str, str]]:
+def panel_requests(dashboard: dict) -> list[tuple[str, str, str, str]]:
     requests = []
     for panel in dashboard["panels"]:
         for target in panel.get("targets", []):
-            view = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "view")
-            requests.append((panel["title"], target["url"], view))
+            target_params = {param["key"]: param["value"] for param in target["url_options"]["params"]}
+            requests.append((panel["title"], target["url"], target_params["view"], target_params["bucket_ms"]))
     return requests
 
 
-def fetch_panel(client: TestClient, params: dict[str, str | int], request: tuple[str, str, str]) -> dict:
-    title, path, view = request
+def fetch_panel(client: TestClient, params: dict[str, str | int], request: tuple[str, str, str, str]) -> dict:
+    title, path, view, bucket = request
+    bucket_ms = int(params["bucket_ms"]) if bucket == "${__interval_ms}" else int(bucket)
     started = time.monotonic()
-    response = client.get(f"/finelog/{FINELOG_CLUSTER}{path}", params={**params, "view": view})
+    response = client.get(f"/finelog/{FINELOG_CLUSTER}{path}", params={**params, "view": view, "bucket_ms": bucket_ms})
     return {
         "title": title,
         "view": view,
+        "bucket_ms": bucket_ms,
         "status": response.status_code,
         "seconds": time.monotonic() - started,
         "rows": response.json() if response.status_code == 200 else response.text,
