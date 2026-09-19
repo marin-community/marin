@@ -18,7 +18,7 @@ Plan or run::
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default --run
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default \\
         --set trainer.fully_async.max_staleness_steps=2 --run
-    python -m experiments.post_training.async_rl --version 2026.09.19.2 --policy qwen --preset smoke \\
+    python -m experiments.post_training.async_rl --version 2026.09.19.3 --policy qwen --preset smoke \\
         --override documents/curriculum-rl-pool=2026.08.29.1 \\
         --override models/curriculum-rl-qwen3-0.6b=2026.08.29 \\
         --wandb-entity marin-community --set trainer.algorithm.use_tis=true \\
@@ -112,7 +112,7 @@ class ChatTemplate:
 CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="marin_tokenizer")
 QWEN_CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="qwen3_without_thinking")
 # This revision includes the score-centering learner and exact behavior top-k capture.
-SCORE_CENTERING_SKYRL_COMMIT = "d5ec8990bf36b6a0ac2905fa76afe1ff157f0894"
+SCORE_CENTERING_SKYRL_COMMIT = "e3186d29f29bfccddc37bca5c9940231b878761b"
 
 
 @dataclass(frozen=True)
