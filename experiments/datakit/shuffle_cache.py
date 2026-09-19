@@ -3,9 +3,11 @@
 
 """Global document shuffle of a tokenized Levanter cache.
 
-The hero flat caches under ``hero_tok/v*/train`` were written cell-by-cell, so their on-disk
-document order is domain-contiguous: a training run reading them sequentially sweeps one domain
-at a time, which the block shuffle in the data loader only partly hides (window-scale loss bumps).
+The hero flat caches under ``hero_tok/v*/train`` (built by the Datakit tokenization pipeline; see
+``experiments/datakit/hero_data.py`` for the source/tokenizer/artifact-version pins) were written
+cell-by-cell, so their on-disk document order is domain-contiguous: a training run reading them
+sequentially sweeps one domain at a time, which the block shuffle in the data loader only partly
+hides (window-scale loss bumps).
 This job rewrites the cache with a globally-shuffled document order so sequential reads already
 interleave domains and the loader's cheap block shuffle suffices.
 

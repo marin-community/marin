@@ -425,6 +425,7 @@ class GrugTrainState:
     step: jax.Array
     params: Transformer
     master_params: Transformer | None
+    ema_params: Transformer | None  # EMA of params for eval/checkpoint; None unless ema_beta is set.
     opt_state: optax.OptState
     pending_qb_betas: jax.Array
 
@@ -445,6 +446,7 @@ def initial_state(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     key: PRNGKeyArray,
+    ema_beta: float | None = None,
 ) -> GrugTrainState:
     initialized_params = Transformer.init(model_config, key=key)
     num_moe_layers = model_config.num_layers
@@ -455,6 +457,7 @@ def initial_state(
         step=jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
         params=params,
         master_params=master_params,
+        ema_params=params if ema_beta is not None else None,
         opt_state=opt_state,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
     )
@@ -547,6 +550,7 @@ def _make_train_step(
     mp: jmp.Policy,
     *,
     z_loss_weight: float,
+    ema_beta: float | None = None,
     watch_config: WatchConfig | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
@@ -581,6 +585,15 @@ def _make_train_step(
             params = optax.apply_updates(qb_params, updates)
             master_params = None
 
+        if ema_beta is None:
+            ema_params = None
+        else:
+            # EMA tracks the QB-biased params, so re-apply the pending betas before blending.
+            qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
+            ema_params = jax.tree_util.tree_map(
+                lambda old, new: ema_beta * old + (1.0 - ema_beta) * new, qb_ema_params, params
+            )
+
         watch_stats = None
         if watch_config is not None:
             watch_stats = compute_watch_stats(
@@ -601,6 +614,7 @@ def _make_train_step(
             step=state.step + one,
             params=params,
             master_params=master_params,
+            ema_params=ema_params,
             opt_state=opt_state,
             # Dense blocks have no router, so the forward emits no qb_beta_per_layer; keep the
             # (zeros) pending betas -- _apply_qb_betas is already a no-op for dense.

@@ -1,9 +1,11 @@
 # fast_track — dense vs MoE scaling ladder (H100, 16k BPE)
 
 Self-contained grug variant for the 16k-vocab (BPE) dense-vs-MoE comparison + MFU study on 8×H100.
-Entry point is [`launch.py`](launch.py). Data: the in-region `v16384_shuf` flat cache; eval: Paloma +
-uncheatable bits-per-byte (in-region, detokenized — see
-[`../../datakit/paloma_detok.py`](../../datakit/paloma_detok.py)).
+Entry point is [`launch.py`](launch.py). Data: the in-region `v16384_shuf` flat cache — a document
+shuffle (see [`../../datakit/shuffle_cache.py`](../../datakit/shuffle_cache.py)) of the tokenized
+`v16384` cache built by the Datakit pipeline (see [`../../datakit/hero_data.py`](../../datakit/hero_data.py)
+for the source/tokenizer/version pins). Eval: Paloma + uncheatable bits-per-byte (in-region,
+detokenized — see [`../../datakit/paloma_detok.py`](../../datakit/paloma_detok.py)).
 
 ## Files
 

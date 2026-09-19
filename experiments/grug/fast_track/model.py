@@ -300,7 +300,10 @@ class CausalSelfAttention(eqx.Module):
             q = jnp.where(keep, q_roped, q)
             k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
-        attn_out = attention(q, k, v, mask, implementation="gpu_fa4_cute")
+        # The fa4-cute kernel is GPU-only; fall back to auto-select off-GPU so the model still lowers
+        # on CPU (e.g. the grug variant-contract tests).
+        attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
+        attn_out = attention(q, k, v, mask, implementation=attn_impl)
         # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
