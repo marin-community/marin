@@ -151,6 +151,12 @@ class TrainingRecipe:
     # vLLM engine settings the model needs beyond the ones the launcher writes itself.
     engine_init_kwargs: dict[str, object]
 
+    def __post_init__(self) -> None:
+        if not self.role_plan.colocate_all and self.num_nodes != (
+            self.role_plan.policy_num_nodes + self.role_plan.num_inference_engines
+        ):
+            raise ValueError("separate policy and engine roles require one node bundle per inference engine")
+
     @property
     def strategy(self) -> str:
         return _STRATEGY_FOR_PROFILE[self.profile]
@@ -192,7 +198,7 @@ SNOWBALL_RECIPE = TrainingRecipe(
 )
 
 
-# Keep the learner on one H100 node and place eight independent Qwen3 engines on another.
+# Keep the learner on one H100 node and place one eight-rank Qwen3 engine on another.
 QWEN_RECIPE = TrainingRecipe(
     profile=SkyRLRuntimeProfile.MEGATRON,
     num_nodes=2,
@@ -200,7 +206,7 @@ QWEN_RECIPE = TrainingRecipe(
         colocate_all=False,
         policy_num_nodes=1,
         policy_num_gpus_per_node=GPUS_PER_NODE,
-        num_inference_engines=GPUS_PER_NODE,
+        num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
         train_batch_size=32,
         policy_mini_batch_size=32,
@@ -217,7 +223,7 @@ QWEN_RECIPE = TrainingRecipe(
         expert_model_parallel_size=1,
         expert_tensor_parallel_size=1,
     ),
-    engine_data_parallel_size=1,
+    engine_data_parallel_size=GPUS_PER_NODE,
     engine_expert_parallel_size=1,
     host_memory="128GB",
     engine_init_kwargs={},

@@ -321,6 +321,11 @@ def test_qwen_smoke_selects_megatron_policy_and_pinned_skyrl_runtime(owner):
     assert config["generator"]["chat_template"]["name_or_path"] == "qwen3_without_thinking"
 
 
+def test_separate_engine_recipe_rejects_unallocated_node_bundles():
+    with pytest.raises(ValueError, match="one node bundle per inference engine"):
+        replace(async_rl.QWEN_RECIPE, role_plan=replace(async_rl.QWEN_RECIPE.role_plan, num_inference_engines=2))
+
+
 def test_score_centering_setting_changes_only_the_correction_at_matched_capture():
     matched = ("trainer.algorithm.use_tis=true", "generator.sampling_params.logprobs=32")
     tis = flattened(async_rl.training_config(async_rl.QWEN_SMOKE, matched, recipe=async_rl.QWEN_RECIPE))
