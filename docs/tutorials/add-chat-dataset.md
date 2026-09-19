@@ -242,10 +242,8 @@ from earlier turns is retained, and records may end with unanswered tool calls.
 Supported per-record `chat_template_kwargs` are `tools` (a list of
 recorded function definitions), `enable_thinking` (a boolean), and
 `custom_instructions` (a string). Chat normalization sets `enable_thinking` from
-the canonical messages: conversations containing assistant analysis use `/think`,
-and conversations without assistant analysis use `/nothink`. Direct
-`render_marin_chat` calls may omit the setting, in which case the template adds
-neither instruction. The setting does not remove reasoning.
+the canonical messages: it is enabled when the conversation contains assistant
+analysis and disabled otherwise. The setting does not remove reasoning.
 
 All rendering helpers are in `marin.datakit.chat_render`.
 For an existing directory of normalized chat Parquet, use

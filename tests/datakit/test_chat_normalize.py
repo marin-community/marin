@@ -180,6 +180,22 @@ def test_normalization_filters_repeated_tool_call_after_identical_replies(tmp_pa
     assert result.counters.get("normalize_chat/records_quarantined", 0) == 0
 
 
+def test_normalization_counts_conversations_with_long_final_responses_once(tmp_path: Path):
+    messages = [
+        Message.from_role_and_content(Role.USER, "First question"),
+        Message.from_role_and_content(Role.ASSISTANT, "word " * 2_001).with_channel(ChatChannel.FINAL),
+        Message.from_role_and_content(Role.USER, "Second question"),
+        Message.from_role_and_content(Role.ASSISTANT, "word " * 2_001).with_channel(ChatChannel.FINAL),
+    ]
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "data.jsonl").write_text(json.dumps({"messages": [message.to_dict() for message in messages]}))
+
+    result = normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(tmp_path / "normalized"))
+
+    assert result.counters["normalize_chat/conversations_with_final_over_2k_estimated_tokens"] == 1
+
+
 @pytest.mark.parametrize("replies", [("43% complete", "65% complete"), ("same result", "same result")])
 def test_tool_call_repetition_requires_unchanged_feedback_and_sequential_calls(replies):
     user = Message.from_role_and_content(Role.USER, "Search.")
