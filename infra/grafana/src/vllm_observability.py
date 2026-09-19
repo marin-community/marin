@@ -18,6 +18,8 @@ VLLM_SNAPSHOT_LOOKBACK_MS = 3 * VLLM_SCRAPE_INTERVAL_MS
 VLLM_FRESHNESS_THRESHOLD_MS = 3 * VLLM_SCRAPE_INTERVAL_MS
 VLLM_MAX_FRESHNESS_DETAILS = 128
 VLLM_MAX_IDENTITY_LENGTH = 512
+VLLM_TELEMETRY_HEALTH_SECTION = "telemetry_health"
+VLLM_COLLECTOR_METRIC = "collector"
 VLLM_OVERVIEW_SECTIONS = frozenset(
     {
         "counter_total",
@@ -29,7 +31,7 @@ VLLM_OVERVIEW_SECTIONS = frozenset(
         "request_rate",
         "saturation",
         "saturation_summary",
-        "telemetry_health",
+        VLLM_TELEMETRY_HEALTH_SECTION,
         "token_rate",
         "workload",
     }
@@ -86,7 +88,7 @@ _HISTOGRAM_COMPONENTS = ("bucket", "count", "sum")
 _HISTOGRAM_NAMES = tuple(
     f"{family}_{component}" for family, _ in _HISTOGRAM_FAMILIES for component in _HISTOGRAM_COMPONENTS
 )
-_SERVING_METRIC_NAMES = (*_TOKEN_COUNTERS, *_PREEMPTION_COUNTERS, *_OUTCOME_COUNTERS, *_GAUGES, *_HISTOGRAM_NAMES)
+_SERVING_METRIC_NAMES = (*_TOKEN_COUNTERS, *_PREEMPTION_COUNTERS, *_OUTCOME_COUNTERS, *_GAUGES)
 _HEALTH_METRIC_NAMES = (
     "prometheus_source_available",
     "prometheus_stage_failures",
@@ -169,10 +171,6 @@ def vllm_overview_query(
     preemption_counters = _sql_values(_PREEMPTION_COUNTERS)
     outcome_counters = _sql_values(_OUTCOME_COUNTERS)
     gauges = _sql_values(_GAUGES)
-    histogram_names = _sql_values(_HISTOGRAM_NAMES)
-    histogram_family = _case_for(_histogram_name_mapping(), "name")
-    histogram_component = _case_for(_histogram_component_mapping(), "name")
-    histogram_source_family = _case_for(_histogram_source_mapping(), "name")
 
     sql = f"""
 WITH base AS (
@@ -222,12 +220,6 @@ WITH base AS (
            ) AS previous_value
     FROM base
     WHERE json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'
-      -- Reject legacy mixed-engine histograms before computing their unused deltas.
-      AND (
-          name NOT IN ({histogram_names})
-          OR service = 'vllm'
-          OR json_get(attributes_json, 'engine_index') IS NOT NULL
-      )
 ), increments AS (
     SELECT origin_cluster,
            service,
@@ -382,144 +374,6 @@ WITH base AS (
     FROM canonical_gauge_bins AS bins
     JOIN raw_gauge_peaks AS raw USING (name)
     GROUP BY 1, raw.peak
-), histogram_component_samples AS (
-    SELECT origin_cluster,
-           service,
-           resource_attributes_json,
-           attributes_json,
-           COALESCE(json_get(attributes_json, 'engine'), resource_attributes_json) AS producer_identity,
-           timestamp_ms,
-           timestamp_ms - timestamp_ms % {VLLM_HISTOGRAM_COHERENCE_MS} AS sample_t,
-           name,
-           {histogram_source_family} AS source_family,
-           {histogram_family} AS family,
-           {histogram_component} AS component,
-           json_get(attributes_json, 'le') AS upper_bound,
-           CASE
-               WHEN previous_value IS NULL OR value < previous_value THEN NULL
-               ELSE value - previous_value
-           END AS delta,
-           CASE WHEN previous_value IS NULL OR value < previous_value THEN 1 ELSE 0 END AS invalid_component
-    FROM cumulative_samples
-    WHERE name IN ({histogram_names})
-      AND (
-          service = 'vllm'
-          OR json_get(attributes_json, 'engine_index') IS NOT NULL
-      )
-), histogram_series AS (
-    SELECT DISTINCT origin_cluster,
-           service,
-           resource_attributes_json,
-           producer_identity,
-           source_family,
-           name,
-           attributes_json
-    FROM histogram_component_samples
-), histogram_expected_series AS (
-    SELECT origin_cluster,
-           service,
-           resource_attributes_json,
-           producer_identity,
-           source_family,
-           COUNT(*) AS expected_series
-    FROM histogram_series
-    GROUP BY 1, 2, 3, 4, 5
-), histogram_sample_validity AS (
-    SELECT samples.origin_cluster,
-           samples.service,
-           samples.resource_attributes_json,
-           samples.producer_identity,
-           samples.source_family,
-           samples.sample_t,
-           CASE
-               WHEN MAX(samples.invalid_component) = 1 OR COUNT(*) < MAX(expected.expected_series) THEN 0
-               ELSE 1
-           END AS valid_sample
-    FROM histogram_component_samples AS samples
-    JOIN histogram_expected_series AS expected
-      ON samples.origin_cluster = expected.origin_cluster
-     AND samples.service = expected.service
-     AND samples.resource_attributes_json = expected.resource_attributes_json
-     AND samples.producer_identity = expected.producer_identity
-     AND samples.source_family = expected.source_family
-    WHERE samples.timestamp_ms >= {start_ms}
-    GROUP BY 1, 2, 3, 4, 5, 6
-), coherent_histogram_increments AS (
-    SELECT samples.sample_t,
-           samples.family,
-           samples.component,
-           samples.upper_bound,
-           samples.delta
-    FROM histogram_component_samples AS samples
-    JOIN histogram_sample_validity AS validity
-      ON samples.origin_cluster = validity.origin_cluster
-     AND samples.service = validity.service
-     AND samples.resource_attributes_json = validity.resource_attributes_json
-     AND samples.producer_identity = validity.producer_identity
-     AND samples.source_family = validity.source_family
-     AND samples.sample_t = validity.sample_t
-    WHERE validity.valid_sample = 1
-), histogram_time_means AS (
-    SELECT {start_ms} + (sample_t - {start_ms}) - (sample_t - {start_ms}) % {bucket_ms} AS t,
-           family,
-           SUM(CASE WHEN component = 'sum' THEN delta ELSE 0 END)
-               / NULLIF(SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END), 0) AS mean,
-           SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) AS samples
-    FROM coherent_histogram_increments
-    GROUP BY 1, 2
-    HAVING SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) > 0
-), histogram_means AS (
-    SELECT family,
-           SUM(CASE WHEN component = 'sum' THEN delta ELSE 0 END)
-               / NULLIF(SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END), 0) AS mean,
-           SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) AS samples
-    FROM coherent_histogram_increments
-    GROUP BY 1
-    HAVING SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) > 0
-), histogram_buckets AS (
-    SELECT family, upper_bound, SUM(delta) AS bucket_count
-    FROM coherent_histogram_increments
-    WHERE component = 'bucket'
-    GROUP BY 1, 2
-), histogram_ranked_buckets AS (
-    SELECT family,
-           upper_bound,
-           bucket_count,
-           MAX(bucket_count) OVER (PARTITION BY family) AS total_count
-    FROM histogram_buckets
-), histogram_quantiles AS (
-    SELECT family,
-           MIN(CASE
-               WHEN upper_bound NOT IN ('+Inf', 'Inf') AND bucket_count >= total_count * 0.50
-               THEN CAST(upper_bound AS DOUBLE)
-           END) AS p50,
-           MIN(CASE
-               WHEN upper_bound NOT IN ('+Inf', 'Inf') AND bucket_count >= total_count * 0.90
-               THEN CAST(upper_bound AS DOUBLE)
-           END) AS p90,
-           MIN(CASE
-               WHEN upper_bound NOT IN ('+Inf', 'Inf') AND bucket_count >= total_count * 0.99
-               THEN CAST(upper_bound AS DOUBLE)
-           END) AS p99
-    FROM histogram_ranked_buckets
-    GROUP BY 1
-), histogram_stats AS (
-    SELECT means.family, means.mean, means.samples, quantiles.p50, quantiles.p90, quantiles.p99
-    FROM histogram_means AS means
-    LEFT JOIN histogram_quantiles AS quantiles USING (family)
-), histogram_evidence AS (
-    SELECT family,
-           quantile.stat,
-           CASE quantile.stat
-               WHEN 'mean' THEN mean
-               WHEN 'p50' THEN p50
-               WHEN 'p90' THEN p90
-               ELSE p99
-           END AS value,
-           samples
-    FROM histogram_stats
-    -- A UNION per statistic would repeat the histogram pipeline in Finelog's plan.
-    CROSS JOIN (VALUES ('mean'), ('p50'), ('p90'), ('p99')) AS quantile(stat)
 ), outcome_increments AS (
     SELECT timestamp_ms,
            service,
@@ -812,21 +666,6 @@ WITH base AS (
 
     UNION ALL
 
-    SELECT t AS t,
-           'saturation' AS section,
-           'iteration_tokens' AS metric,
-           'mean' AS stat,
-           'iteration tokens per engine step' AS series,
-           mean AS value,
-           'tokens' AS unit,
-           CAST(NULL AS VARCHAR) AS status,
-           CAST(NULL AS BIGINT) AS samples,
-           CAST(NULL AS DOUBLE) AS gap_seconds
-    FROM histogram_time_means
-    WHERE family = 'iteration_tokens'
-
-    UNION ALL
-
     SELECT CAST(NULL AS BIGINT) AS t,
            'saturation_summary' AS section,
            name AS metric,
@@ -852,36 +691,6 @@ WITH base AS (
            CAST(NULL AS BIGINT) AS samples,
            CAST(NULL AS DOUBLE) AS gap_seconds
     FROM gauge_stats
-
-    UNION ALL
-
-    SELECT CAST(NULL AS BIGINT) AS t,
-           CASE WHEN family = 'output_tokens' THEN 'workload' ELSE 'latency' END AS section,
-           family AS metric,
-           stat AS stat,
-           family AS series,
-           value AS value,
-           CASE WHEN family = 'output_tokens' THEN 'tokens' ELSE 's' END AS unit,
-           CAST(NULL AS VARCHAR) AS status,
-           CAST(samples AS BIGINT) AS samples,
-           CAST(NULL AS DOUBLE) AS gap_seconds
-    FROM histogram_evidence
-    WHERE family <> 'iteration_tokens'
-
-    UNION ALL
-
-    SELECT t AS t,
-           'latency' AS section,
-           family AS metric,
-           'mean_over_time' AS stat,
-           CASE WHEN family = 'tpot' THEN 'time per output token' ELSE family END AS series,
-           mean AS value,
-           's' AS unit,
-           CAST(NULL AS VARCHAR) AS status,
-           CAST(samples AS BIGINT) AS samples,
-           CAST(NULL AS DOUBLE) AS gap_seconds
-    FROM histogram_time_means
-    WHERE family NOT IN ('iteration_tokens', 'output_tokens')
 
     UNION ALL
 
@@ -914,8 +723,8 @@ WITH base AS (
     UNION ALL
 
     SELECT CAST(NULL AS BIGINT) AS t,
-           'telemetry_health' AS section,
-           'collector' AS metric,
+           {sql_string(VLLM_TELEMETRY_HEALTH_SECTION)} AS section,
+           {sql_string(VLLM_COLLECTOR_METRIC)} AS metric,
            'polls' AS stat,
            'all resources' AS series,
            CAST(polls AS DOUBLE) AS value,
@@ -928,7 +737,7 @@ WITH base AS (
     UNION ALL
 
     SELECT CAST(NULL AS BIGINT) AS t,
-           'telemetry_health' AS section,
+           {sql_string(VLLM_TELEMETRY_HEALTH_SECTION)} AS section,
            'source availability' AS metric,
            'unavailable polls' AS stat,
            'all resources' AS series,
@@ -943,7 +752,7 @@ WITH base AS (
     UNION ALL
 
     SELECT CAST(NULL AS BIGINT) AS t,
-           'telemetry_health' AS section,
+           {sql_string(VLLM_TELEMETRY_HEALTH_SECTION)} AS section,
            'collection failures' AS metric,
            'delta' AS stat,
            stage AS series,
@@ -957,7 +766,7 @@ WITH base AS (
     UNION ALL
 
     SELECT CAST(NULL AS BIGINT) AS t,
-           'telemetry_health' AS section,
+           {sql_string(VLLM_TELEMETRY_HEALTH_SECTION)} AS section,
            'dropped samples' AS metric,
            'total' AS stat,
            drop_reason AS series,
@@ -1014,7 +823,11 @@ WITH base AS (
 SELECT t, section, metric, stat, series, value, unit, status, samples, gap_seconds
 FROM output
 ORDER BY section,
-         CASE WHEN section = 'telemetry_health' AND metric = 'collector' THEN 0 ELSE 1 END,
+         CASE
+             WHEN section = {sql_string(VLLM_TELEMETRY_HEALTH_SECTION)}
+              AND metric = {sql_string(VLLM_COLLECTOR_METRIC)}
+             THEN 0 ELSE 1
+         END,
          t,
          metric,
          stat,

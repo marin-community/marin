@@ -13,6 +13,7 @@ import pytest
 import requests
 import zstandard
 from rigging import telemetry
+from rigging.telemetry import metrics
 
 
 @dataclass
@@ -268,6 +269,53 @@ def test_pending_and_queued_records_share_hard_caps(
     assert status.queued_bytes <= queue_bytes
     assert status.lost_records > 0
     transport.release.set()
+
+
+def test_cumulative_histogram_bundle_queue_loss_is_atomic_and_preserves_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = BlockingTransport()
+    configure(monkeypatch, transport, max_queue_records=1, max_batch_records=1)
+    publisher = metrics.CumulativeHistogramBundleSnapshotPublisher(max_records=1)
+
+    def bundle(timestamp_ms: int, sequence: int, counts: tuple[int, ...], total: float):
+        return metrics.CumulativeHistogramBundleSnapshot(
+            name="vllm_histogram_bundle",
+            histograms=(
+                metrics.CumulativeHistogramSnapshot(
+                    name="latency_seconds",
+                    finite_bounds=(0.1, 1.0),
+                    cumulative_counts=counts,
+                    count=counts[-1],
+                    total=total,
+                    unit="s",
+                ),
+            ),
+            attributes={"engine": "a"},
+            timestamp_ms=timestamp_ms,
+            sample_sequence=sequence,
+        )
+
+    first = publisher.publish((bundle(1_000, 1, (1, 2, 2), 0.2),))
+    assert transport.started.wait(1)
+    second = publisher.publish((bundle(2_000, 2, (2, 3, 3), 0.3),))
+
+    assert first.enqueued_records == 1
+    assert second.telemetry_lost_records == 1
+    assert telemetry.runtime_status().lost_records == 1
+    transport.release.set()
+
+    deadline = time.monotonic() + 1
+    while telemetry.runtime_status().queued_records and time.monotonic() < deadline:
+        threading.Event().wait(0.001)
+    third = publisher.publish((bundle(3_000, 3, (3, 4, 4), 0.4),))
+    deadline = time.monotonic() + 1
+    while len(transport.requests) < 2 and time.monotonic() < deadline:
+        threading.Event().wait(0.001)
+
+    assert third.enqueued_records == 1
+    third_record = json.loads(transport.requests[-1][1])["records"][0]
+    assert third_record["body"]["histograms"]["latency_seconds"]["delta_cumulative_counts"] == [2, 2, 2]
 
 
 def test_terminal_response_drops_batch_and_records_loss(monkeypatch: pytest.MonkeyPatch) -> None:
