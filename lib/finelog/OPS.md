@@ -144,6 +144,17 @@ coverage), and the backfill rebuilds them a few per tick and deletes the
 superseded Parquet files. A widened copy under a second name leaves both being
 built for every new segment forever.
 
+The `session-discovery` projection contains `num_requests_running` telemetry
+with the structured `job_id`, `run_id`, and `execution_uid` columns plus the
+metric attributes and timestamp. Standalone vLLM and embedded SkyRL scrapes
+emit this current-snapshot gauge while they are observable. Inference dashboard
+selectors filter by this exact name and, for SkyRL, by
+`json_get(attributes_json, 'metric_source') = 'vllm'`. Keeping the time bound on
+these rows makes the picker mean “observed in the selected window,” including
+long-lived sessions whose start predates that window. The exact name posting
+accelerates uncovered segments while the projection backfills through normal
+index maintenance.
+
 For broad low-cardinality summaries, set `ColumnIndex.value_counts`.
 Unfiltered `SELECT col, count(*) FROM table GROUP BY col` and `count(col)` then
 rewrite to a `FinelogIndexAggregate` node that combines exact per-segment
