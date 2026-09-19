@@ -59,10 +59,8 @@ source filters counted as well so drops can be investigated.
 
 If the source already supplies separate reasoning, pass it as `reasoning_content`
 on the assistant message. For tools, pass the recorded definitions through
-`chat_template_kwargs={"tools": tools}`. The shared chat extraction helper sets
-`enable_thinking` for each conversation from its assistant analysis messages.
-Preserve call IDs in source messages so the converter can associate results with
-calls before producing Harmony messages.
+`chat_template_kwargs={"tools": tools}`. Preserve call IDs in source messages so
+the converter can associate results with calls before producing Harmony messages.
 Do not reconstruct tool definitions from observed arguments.
 
 Some agent datasets use a text protocol instead of API tool calls. Terminus is
@@ -243,11 +241,11 @@ reply IDs are resolved to function names; the rendered text omits the IDs. Reaso
 from earlier turns is retained, and records may end with unanswered tool calls.
 Supported per-record `chat_template_kwargs` are `tools` (a list of
 recorded function definitions), `enable_thinking` (a boolean), and
-`custom_instructions` (a string). Extracted chat records always set
-`enable_thinking`: conversations with assistant analysis use `/think`, and those
-without analysis use `/nothink`. Normalization rejects missing or contradictory
-values. Direct `render_marin_chat` calls may omit the setting; in that case the
-template adds neither instruction.
+`custom_instructions` (a string). Chat normalization sets `enable_thinking` from
+the canonical messages: conversations containing assistant analysis use `/think`,
+and conversations without assistant analysis use `/nothink`. Direct
+`render_marin_chat` calls may omit the setting, in which case the template adds
+neither instruction. The setting does not remove reasoning.
 
 All rendering helpers are in `marin.datakit.chat_render`.
 For an existing directory of normalized chat Parquet, use

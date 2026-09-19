@@ -21,7 +21,6 @@ from marin.datakit.chat_normalize import CHAT_SCHEMA, ChatChannel, normalize_cha
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     CHAT_CONTROL_TOKEN,
-    CHAT_DOCUMENT_VERSION,
     REASONING_TOKEN,
     chat_document,
     load_parquet_batched,
@@ -127,7 +126,6 @@ def glm53_format_following_chat_normalize_steps() -> tuple[StepSpec, ...]:
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
         hash_attrs={
-            "chat_document_version": CHAT_DOCUMENT_VERSION,
             "version": "2026.09.13",
             "source_revision": SOURCE_REVISION,
             "split": "train",

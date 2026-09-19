@@ -17,11 +17,7 @@ from zephyr.readers import load_parquet
 
 from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import (
-    CHAT_DOCUMENT_VERSION,
-    checked_openai_chat_document,
-    text_document,
-)
+from marin.datakit.download.rollout_transforms import checked_openai_chat_document, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -148,7 +144,7 @@ def synthetic1_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/synthetic-1",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"chat_document_version": CHAT_DOCUMENT_VERSION, "version": "2026.09.05.4.harmony-arrow"},
+        hash_attrs={"version": "2026.09.05.4.harmony-arrow"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/synthetic-1", download=processed

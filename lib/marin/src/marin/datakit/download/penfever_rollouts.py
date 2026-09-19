@@ -26,7 +26,6 @@ from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.opencode import opencode_conversation, opencode_protocol_messages
 from marin.datakit.download.rollout_transforms import (
-    CHAT_DOCUMENT_VERSION,
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
     TRAJECTORY_UNVERIFIED_TAG,
@@ -1251,7 +1250,6 @@ def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
         deps=[download],
         fn=lambda output_path: transform_chat(dataset, download.output_path, output_path),
         hash_attrs={
-            "chat_document_version": CHAT_DOCUMENT_VERSION,
             "version": (
                 {
                     "qwen35-122b-131k-opencode": "2026.09.09.continuations",

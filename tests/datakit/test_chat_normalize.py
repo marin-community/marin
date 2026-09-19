@@ -18,7 +18,6 @@ from marin.datakit.chat_normalize import (
 from marin.datakit.chat_render import render_chat_record
 from marin.datakit.download.coderforge import SOURCE_CHAT_SCHEMA
 from marin.datakit.download.coderforge import transform_chat as transform_coderforge_chat
-from marin.datakit.download.rollout_transforms import openai_chat_document
 from openai_harmony import Author, Message, Role
 
 
@@ -39,62 +38,30 @@ def test_normalization_preserves_native_harmony_channels_without_interpreting_te
             ChatChannel.FINAL
         ),
     ]
-    record = {
-        "messages": [message.to_dict() for message in messages],
-        "chat_template_kwargs": {"enable_thinking": True},
-    }
+    record = {"messages": [message.to_dict() for message in messages]}
     normalized = _normalize_chat_record(record, "messages", "id")
     assert normalized["messages"] == record["messages"]
     assert _normalize_chat_record(normalized, "messages", "id")["id"] == normalized["id"]
 
 
 @pytest.mark.parametrize(
-    ("reasoning", "expected_mode", "expected_instruction"),
+    ("analysis", "expected_mode", "expected_instruction"),
     [(None, False, "Reasoning: /nothink"), ("Check the answer.", True, "Reasoning: /think")],
 )
-def test_extracted_conversation_mode_matches_reasoning_and_rendering(reasoning, expected_mode, expected_instruction):
-    source_messages = [
-        {"role": "user", "content": "What is two plus two?"},
-        {"role": "assistant", "content": "Four.", "reasoning_content": reasoning},
-    ]
-    source = openai_chat_document(
-        source_messages, "example", chat_template_kwargs={"enable_thinking": not expected_mode}
-    )
-    normalized = _normalize_chat_record(source, "messages", "id")
-
-    assert json.loads(source["chat_template_kwargs"])["enable_thinking"] is expected_mode
-    rendered = render_chat_record(normalized)["text"]
-    assert expected_instruction in rendered
-    assert ("<|start_think|>" in rendered) is expected_mode
-
-
-@pytest.mark.parametrize("mode", [None, "true", True, False])
-def test_normalization_rejects_missing_or_inconsistent_thinking_mode(mode):
-    messages = [
-        Message.from_role_and_content(Role.USER, "Question"),
-        Message.from_role_and_content(Role.ASSISTANT, "Reasoning").with_channel(ChatChannel.ANALYSIS),
-        Message.from_role_and_content(Role.ASSISTANT, "Answer").with_channel(ChatChannel.FINAL),
-    ]
-    record = {"messages": [message.to_dict() for message in messages]}
-    if mode is not None:
-        record["chat_template_kwargs"] = {"enable_thinking": mode}
-    if mode is True:
-        assert _normalize_chat_record(record, "messages", "id")["messages"] == record["messages"]
-    else:
-        with pytest.raises(ValueError, match="enable_thinking"):
-            _normalize_chat_record(record, "messages", "id")
-
-
-def test_normalization_rejects_thinking_mode_without_analysis():
+def test_normalization_derives_conversation_mode_from_analysis(analysis, expected_mode, expected_instruction):
+    messages = [Message.from_role_and_content(Role.USER, "What is two plus two?")]
+    if analysis is not None:
+        messages.append(Message.from_role_and_content(Role.ASSISTANT, analysis).with_channel(ChatChannel.ANALYSIS))
+    messages.append(Message.from_role_and_content(Role.ASSISTANT, "Four.").with_channel(ChatChannel.FINAL))
     record = {
-        "messages": [
-            Message.from_role_and_content(Role.USER, "Question").to_dict(),
-            Message.from_role_and_content(Role.ASSISTANT, "Answer").with_channel(ChatChannel.FINAL).to_dict(),
-        ],
-        "chat_template_kwargs": {"enable_thinking": True},
+        "messages": [message.to_dict() for message in messages],
+        "chat_template_kwargs": {"enable_thinking": not expected_mode},
     }
-    with pytest.raises(ValueError, match="enable_thinking"):
-        _normalize_chat_record(record, "messages", "id")
+
+    normalized = _normalize_chat_record(record, "messages", "id")
+
+    assert json.loads(normalized["chat_template_kwargs"])["enable_thinking"] is expected_mode
+    assert expected_instruction in render_chat_record(normalized)["text"]
 
 
 def test_normalization_rejects_legacy_source_turns():
@@ -118,8 +85,7 @@ def test_chat_identity_includes_tool_definitions():
             {
                 "messages": [message.to_dict() for message in messages],
                 "chat_template_kwargs": {
-                    "enable_thinking": False,
-                    "tools": [{"name": "run", "description": description, "parameters": {"type": "object"}}],
+                    "tools": [{"name": "run", "description": description, "parameters": {"type": "object"}}]
                 },
             },
             "messages",
@@ -143,15 +109,11 @@ def test_harmony_tool_handoff_requires_matching_observations_before_continuation
         .with_recipient("assistant")
     )
     final = Message.from_role_and_content(Role.ASSISTANT, "Done.").with_channel(ChatChannel.FINAL)
-    record = {
-        "messages": [message.to_dict() for message in [user, call, observation, final]],
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
+    record = {"messages": [message.to_dict() for message in [user, call, observation, final]]}
     with pytest.raises(ValueError, match="no explicit definition"):
         _normalize_chat_record(record, "messages", "id")
     record["chat_template_kwargs"] = {
-        "enable_thinking": False,
-        "tools": [{"name": "read", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}],
+        "tools": [{"name": "read", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}]
     }
     normalized = _normalize_chat_record(record, "messages", "id")
     assert normalized["messages"] == record["messages"]
@@ -195,13 +157,10 @@ def test_normalization_filters_repeated_tool_call_after_identical_replies(tmp_pa
         Message.from_role_and_content(Role.ASSISTANT, "Hi.").with_channel(ChatChannel.FINAL),
     ]
     records = [
-        {"messages": [message.to_dict() for message in clean], "chat_template_kwargs": {"enable_thinking": False}},
+        {"messages": [message.to_dict() for message in clean]},
         {
             "messages": [message.to_dict() for message in repeated],
-            "chat_template_kwargs": {
-                "enable_thinking": False,
-                "tools": [{"name": "search", "parameters": {"type": "object"}}],
-            },
+            "chat_template_kwargs": {"tools": [{"name": "search", "parameters": {"type": "object"}}]},
         },
     ]
     input_dir = tmp_path / "input"
@@ -249,10 +208,7 @@ def test_tool_call_repetition_requires_unchanged_feedback_and_sequential_calls(r
         ]
     record = {
         "messages": [message.to_dict() for message in messages],
-        "chat_template_kwargs": {
-            "enable_thinking": False,
-            "tools": [{"name": "search", "parameters": {"type": "object"}}],
-        },
+        "chat_template_kwargs": {"tools": [{"name": "search", "parameters": {"type": "object"}}]},
     }
 
     assert _normalize_chat_record(record, "messages", "id")["messages"] == record["messages"]
@@ -316,10 +272,7 @@ def test_normalize_chat_to_parquet_keeps_varying_tool_schemas_arrow_stable(tmp_p
         records.append(
             {
                 "messages": [message.to_dict() for message in messages],
-                "chat_template_kwargs": {
-                    "enable_thinking": False,
-                    "tools": [{"name": name, "parameters": {"type": "object"}}],
-                },
+                "chat_template_kwargs": {"tools": [{"name": name, "parameters": {"type": "object"}}]},
             }
         )
     (input_dir / "data.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
@@ -342,16 +295,12 @@ def test_normalization_quarantines_bad_harmony_and_enforces_source_health(tmp_pa
     output_dir = tmp_path / "output"
     input_dir.mkdir()
     valid = {
-        "chat_template_kwargs": {"enable_thinking": False},
         "messages": [
             Message.from_role_and_content(Role.USER, "Question").to_dict(),
             Message.from_role_and_content(Role.ASSISTANT, "Answer").with_channel(ChatChannel.FINAL).to_dict(),
-        ],
+        ]
     }
-    invalid = {
-        "messages": [*valid["messages"], valid["messages"][-1]],
-        "chat_template_kwargs": valid["chat_template_kwargs"],
-    }
+    invalid = {"messages": [*valid["messages"], valid["messages"][-1]]}
     (input_dir / "data.jsonl").write_text(
         "".join(json.dumps(record) + "\n" for record in [*[valid] * valid_count, invalid])
     )
@@ -436,7 +385,6 @@ def test_source_writer_preserves_tool_fields_first_seen_after_plain_conversation
 def test_normalization_retains_source_provenance_across_repeated_normalization(source_id):
     record = {
         "id": "intermediate-content-hash",
-        "chat_template_kwargs": {"enable_thinking": False},
         "messages": [
             Message.from_role_and_content(Role.USER, "Hello").to_dict(),
             Message.from_role_and_content(Role.ASSISTANT, "Hi").with_channel(ChatChannel.FINAL).to_dict(),

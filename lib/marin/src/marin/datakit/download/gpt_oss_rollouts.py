@@ -22,7 +22,6 @@ from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.opencode import INLINE_TOOL_CALL
 from marin.datakit.download.rollout_transforms import (
     CHAT_CONTROL_TOKEN,
-    CHAT_DOCUMENT_VERSION,
     checked_openai_chat_document,
     text_document,
 )
@@ -147,7 +146,7 @@ def gpt_oss_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/gpt-oss-20b-rollouts",
         deps=[download],
         fn=lambda output_path: transform_chat(download.output_path, output_path),
-        hash_attrs={"chat_document_version": CHAT_DOCUMENT_VERSION, "version": "2026.09.11.review-fixes"},
+        hash_attrs={"version": "2026.09.11.review-fixes"},
     )
     return processed, normalize_chat_step(
         output_schema=CHAT_SCHEMA, name="normalized-chat/gpt-oss-rollouts", download=processed

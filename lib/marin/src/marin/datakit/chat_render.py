@@ -16,13 +16,15 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
-from marin.datakit.chat_normalize import END_THINK, START_THINK, ChatChannel, message_text
+from marin.datakit.chat_normalize import ChatChannel, message_text
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.datakit.normalize import DEFAULT_MAX_WORKERS
 from marin.execution.step_spec import StepSpec
 
 CHAT_RENDER_VERSION = "marin-v3"
 MARIN_BOS_TOKEN = "<|begin_of_text|>"
+START_THINK = "<|start_think|>"
+END_THINK = "<|end_think|>"
 RENDERED_CHAT_SCHEMA = pa.schema(
     [pa.field("id", pa.string(), nullable=False), pa.field("text", pa.string(), nullable=False)]
 )
