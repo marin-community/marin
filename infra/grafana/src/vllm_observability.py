@@ -1192,7 +1192,7 @@ def vllm_overview_table(
 
 
 def vllm_run_summary_samples_query(overview: VllmOverviewQuery) -> str:
-    """Select only the signals needed for a long-range summary."""
+    """Keep the detail scan bounds and caps while selecting fewer metric names."""
     return _vllm_samples_query(
         overview.identity_field,
         overview.identity,
@@ -1203,7 +1203,7 @@ def vllm_run_summary_samples_query(overview: VllmOverviewQuery) -> str:
 
 
 def vllm_run_summary_query(overview: VllmOverviewQuery) -> str:
-    """Project compact series into a reset-aware summary inside the bridge."""
+    """Render reset-aware local summary SQL over the compact Finelog result."""
     return f"""
 WITH base AS MATERIALIZED (
     SELECT origin_cluster, service, name, kind,
