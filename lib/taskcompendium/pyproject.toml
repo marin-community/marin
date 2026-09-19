@@ -7,7 +7,10 @@ name = "taskcompendium"
 version = "0.1.0"
 description = "Semantic answer tasks and Harbor direct-chat lowerings"
 requires-python = ">=3.12"
-dependencies = ["tasktrove-verify[answer]"]
+dependencies = ["msgspec>=0.18", "tasktrove-verify[answer]"]
+
+[project.entry-points."taskcompendium.verifiers"]
+exact_answer = "taskcompendium.grading:exact_answer_handler"
 
 [project.optional-dependencies]
 harbor = ["harbor"]

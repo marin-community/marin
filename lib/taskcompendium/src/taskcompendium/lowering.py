@@ -8,19 +8,24 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from taskcompendium.models import ExactAnswer, Source, TaskRequirements, TaskSpec
+import msgspec
+
+from taskcompendium.grading import validate_verifier
+from taskcompendium.models import SCHEMA_VERSION, Source, TaskRequirements, TaskSpec, VerifierSpec
 from taskcompendium.rendering import AnswerFormat, Rendering, render_instruction
+
+DIRECT_CHAT_ENVIRONMENT = "direct_chat"
 
 
 @dataclass(frozen=True)
 class HarborTaskBinding:
     """The environment and tools this Harbor lowering exposes to the agent."""
 
-    environment: str = "direct_chat"
+    environment: str = DIRECT_CHAT_ENVIRONMENT
     tools: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.environment != "direct_chat" or self.tools:
+        if self.environment != DIRECT_CHAT_ENVIRONMENT or self.tools:
             raise ValueError("This lowering supports direct chat without tools")
 
 
@@ -35,10 +40,12 @@ def validate_binding(specification: TaskSpec, binding: HarborTaskBinding) -> Non
 def read_specification(path: Path) -> TaskSpec:
     """Read the private semantic record from an exported Harbor task."""
     data = json.loads(path.read_text())
-    return TaskSpec(
+    if data["schema_version"] != SCHEMA_VERSION:
+        raise ValueError(f"Unsupported TaskSpec schema: {data['schema_version']}")
+    specification = TaskSpec(
         id=data["id"],
         instructions=data["instructions"],
-        verifier=ExactAnswer(**data["verifier"]),
+        verifier=msgspec.convert(data["verifier"], type=VerifierSpec, strict=True),
         source=Source(**data["source"]),
         requirements=TaskRequirements(
             capabilities=tuple(data["requirements"]["capabilities"]),
@@ -46,6 +53,8 @@ def read_specification(path: Path) -> TaskSpec:
         ),
         schema_version=data["schema_version"],
     )
+    validate_verifier(specification.verifier)
+    return specification
 
 
 def read_binding(path: Path) -> HarborTaskBinding:
@@ -68,6 +77,7 @@ def lower_to_harbor(
 ) -> Path:
     """Write one custom-verifier task; launch agent selection remains separate."""
     validate_binding(specification, binding)
+    validate_verifier(specification.verifier)
     if not rendering.id:
         raise ValueError("A rendering id is required")
     instruction = render_instruction(specification, rendering)
