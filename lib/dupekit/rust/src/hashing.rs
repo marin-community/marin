@@ -5,7 +5,7 @@ use xxhash_rust::xxh3;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 // Generate __eq__ and __hash__
-#[pyclass(eq, eq_int)]
+#[pyclass(eq, eq_int, from_py_object)]
 pub enum HashAlgorithm {
     Blake2b,
     Blake3,
