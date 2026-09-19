@@ -8,6 +8,7 @@ import dataclasses
 import importlib
 import itertools
 import json
+import math
 import time
 
 import jax
@@ -169,6 +170,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--physical-stages", type=int)
     parser.add_argument("--stages", type=int, default=2)
     parser.add_argument("--expert-axis-size", type=int, default=1)
+    parser.add_argument("--context-axis-size", type=int, default=1)
     parser.add_argument("--microbatches", type=int, default=2)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--sequence-length", type=int)
@@ -197,8 +199,8 @@ def _parse_args() -> argparse.Namespace:
         parser.error("sequence-length must be positive")
     if args.expert_waves < 1:
         parser.error("expert-waves must be positive")
-    if args.steps < 1 or args.expert_axis_size < 1:
-        parser.error("steps and expert-axis-size must be positive")
+    if min(args.steps, args.expert_axis_size, args.context_axis_size) < 1:
+        parser.error("steps, expert-axis-size, and context-axis-size must be positive")
 
     if (args.schedule == AutomaticPipelineSchedule.DUALPIPE_V) != (args.physical_stages is not None):
         raise ValueError("DualPipeV requires physical-stages; other schedules use one logical stage per physical stage")
@@ -272,10 +274,14 @@ def main() -> None:
         stages=args.stages, microbatches=args.microbatches, physical_stages=args.physical_stages
     )
     placements = automatic_stage_to_mpmd_indices(config, args.schedule)
-    mesh, mpmd_mesh = make_pipeline_mesh(config, expert_axis_size=args.expert_axis_size, replica_axis_size=1)
+    mesh, mpmd_mesh = make_pipeline_mesh(
+        config, expert_axis_size=args.expert_axis_size, context_axis_size=args.context_axis_size, replica_axis_size=1
+    )
     model_config = _model_config(args)
     full_hero = args.full_hero and args.diagnostic_layers is None
-    batch_multiple = args.microbatches * jax.device_count() // config.mpmd_stages
+    if model_config.max_seq_len % args.context_axis_size:
+        raise ValueError("sequence length must be divisible by context-axis-size")
+    batch_multiple = args.microbatches * math.prod(mesh.shape[axis] for axis in BATCH_AXES)
     batch_size = args.batch_size if args.batch_size is not None else batch_multiple
     if batch_size < 1 or batch_size % batch_multiple:
         raise ValueError(f"batch-size must be a positive multiple of {batch_multiple}")
@@ -298,6 +304,7 @@ def main() -> None:
         schedule=args.schedule,
         placements=placements,
         experts=args.expert_axis_size,
+        context=args.context_axis_size,
         microbatches=args.microbatches,
         devices=jax.device_count(),
         optimizer=f"{args.optimizer}_bf16",
@@ -327,7 +334,8 @@ def main() -> None:
     weights = np.ones_like(tokens, dtype=np.float32)
     weights[:, -1] = 0
     with jax.set_mesh(mesh):
-        sharding = NamedSharding(mesh, P(BATCH_AXES, None))
+        sequence_axis = "context" if args.context_axis_size > 1 else None
+        sharding = NamedSharding(mesh, P(BATCH_AXES, sequence_axis))
         batch = GrugLmExample(tokens=jax.device_put(tokens, sharding), loss_weight=jax.device_put(weights, sharding))
         denominator = jnp.sum(batch.loss_weight)
         batches = reshape_batch_into_microbatches(batch, args.microbatches)
