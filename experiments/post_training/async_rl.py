@@ -656,6 +656,7 @@ def build_run(
     *,
     recipe: TrainingRecipe | None = None,
     chat_template: ChatTemplate = CHAT_TEMPLATE,
+    wandb_entity: str | None = None,
 ) -> AsyncRun:
     """Assemble the RL step and its evaluation for one policy and preset."""
     recipe = recipe or SNOWBALL_RECIPE
@@ -700,9 +701,8 @@ def build_run(
             priority="interactive",
             # One automatic retry, then fail; a healthy run resumes from its latest checkpoint on resubmission.
             max_retries=1,
-            # The W&B key decides the entity; a hard-coded one fails at runtime for a key that
-            # cannot write there.
-            wandb_entity=None,
+            # The launch's W&B credential must have write access to this entity.
+            wandb_entity=wandb_entity,
         ),
     )
     # The evaluation serves the rendered window, so a --set on the budget reaches the server; these
@@ -730,6 +730,7 @@ def build_run(
 @click.command(help=__doc__)
 @click.option("--preset", type=click.Choice(sorted(PRESETS)), default="smoke", show_default=True)
 @click.option("--policy", "policy_name", type=click.Choice(("qwen", "snowball")), default="snowball", show_default=True)
+@click.option("--wandb-entity", help="W&B entity that the launch credential can write to.")
 @click.option(
     "--set",
     "settings",
@@ -745,12 +746,26 @@ def build_run(
     help="Terminal stage; evaluation includes the RL run automatically.",
 )
 @build_options
-def main(preset: str, settings: tuple[str, ...], stage: str, policy_name: str = "snowball") -> dict[str, ArtifactStep]:
+def main(
+    preset: str,
+    settings: tuple[str, ...],
+    stage: str,
+    policy_name: str = "snowball",
+    wandb_entity: str | None = None,
+) -> dict[str, ArtifactStep]:
     policy = QWEN_POLICY if policy_name == "qwen" else SNOWBALL_POLICY
     recipe = QWEN_RECIPE if policy_name == "qwen" else SNOWBALL_RECIPE
     chat_template = QWEN_CHAT_TEMPLATE if policy_name == "qwen" else CHAT_TEMPLATE
     presets = QWEN_PRESETS if policy_name == "qwen" else PRESETS
-    run = build_run(policy, presets[preset], version=None, settings=settings, recipe=recipe, chat_template=chat_template)
+    run = build_run(
+        policy,
+        presets[preset],
+        version=None,
+        settings=settings,
+        recipe=recipe,
+        chat_template=chat_template,
+        wandb_entity=wandb_entity,
+    )
     return {f"{policy.label}-{preset}": getattr(run, stage)}
 
 

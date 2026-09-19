@@ -344,6 +344,18 @@ def test_qwen_smoke_selects_megatron_policy_and_pinned_skyrl_runtime(owner):
     assert config["generator"]["chat_template"]["name_or_path"] == "qwen3_without_thinking"
 
 
+def test_wandb_entity_is_explicit_in_execution(owner):
+    run = async_rl.build_run(
+        QWEN_POLICY,
+        async_rl.QWEN_SMOKE,
+        version="2026.09.18",
+        recipe=async_rl.QWEN_RECIPE,
+        chat_template=async_rl.QWEN_CHAT_TEMPLATE,
+        wandb_entity="romain-yon",
+    )
+    assert run.rl.runtime_args["skyrl_execution"].wandb_entity == "romain-yon"
+
+
 def test_separate_engine_recipe_rejects_unallocated_node_bundles():
     with pytest.raises(ValueError, match="one node bundle per inference engine"):
         replace(async_rl.QWEN_RECIPE, role_plan=replace(async_rl.QWEN_RECIPE.role_plan, num_inference_engines=2))
