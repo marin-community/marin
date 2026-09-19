@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import IO, cast
 
 import pytest
+import yaml
 from marin.evaluation.model_config import ModelConfig, ResourceHint
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -21,7 +22,11 @@ from marin.external_dependencies import MARIN_SKYRL
 from marin.rl.skyrl import (
     SKYRL_POLICY_LOCATION,
     ArtifactDataSource,
+    ArtifactEagleDraft,
     ArtifactHfModel,
+    EagleDraftDistillationSpec,
+    EagleDraftModel,
+    EagleDraftSource,
     IrisSkyRLExecution,
     ResolvedDirectoryDataSource,
     ResolvedModelLocator,
@@ -39,6 +44,8 @@ from marin.rl.skyrl import (
     TaskTroveDataSource,
     TaskTroveSelection,
     TaskTroveTagMatch,
+    eagle_draft_distillation_step,
+    run_eagle_draft_distillation,
     run_skyrl,
     skyrl_step,
     skyrl_temporary_run_path,
@@ -187,6 +194,80 @@ def test_skyrl_step_declares_model_and_data_dependencies() -> None:
         ("tests/iceball-sft", "2026.08.01"),
         ("tests/iceball-gsm8k", "2026.08.01"),
     ]
+
+
+def test_eagle_distillation_step_injects_draft_and_uses_validation_data() -> None:
+    spec = EagleDraftDistillationSpec(
+        name="users/tester/tests/iceball-eagle",
+        version="2026.09.19",
+        config_yaml=(
+            "entrypoint: generate\n"
+            "generator:\n"
+            "  speculative_decoding:\n"
+            "    method: eagle3\n"
+            "    model: {}\n"
+            "    num_speculative_tokens: 3\n"
+            "    training: {max_tokens_per_update: 1000000}\n"
+        ),
+        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        target_model=_spec().model,
+        initial_draft=EagleDraftSource(
+            uri="hf://laion/eagle3-draft",
+            identity="4bdb47c08e5b5190bea3c7a93c3e14470230e469",
+        ),
+        data=(ArtifactDataSource(_data_step(), relative_path="validation.parquet"),),
+        topology=dataclasses.replace(
+            _spec().topology,
+            num_nodes=8,
+            role_plan=dataclasses.replace(
+                _role_plan(),
+                colocate_all=False,
+                policy_num_nodes=1,
+                policy_num_gpus_per_node=8,
+                num_inference_engines=1,
+                inference_engine_data_parallel_size=64,
+                inference_engine_expert_parallel_size=64,
+                evaluation_only=True,
+            ),
+        ),
+        retention=SkyRLRetentionPolicy(),
+        seed=17,
+    )
+    step = eagle_draft_distillation_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps))
+    resolved = yaml.safe_load(config.request.config_yaml)
+
+    assert resolved["generator"]["speculative_decoding"]["model"] == {
+        "source_uri": "hf://laion/eagle3-draft",
+        "source_identity": "4bdb47c08e5b5190bea3c7a93c3e14470230e469",
+    }
+    assert config.request.train_data == ()
+    assert config.launcher_requirement.endswith(f"@{spec.runtime.commit}")
+    assert [source.relative_path for source in config.request.validation_data] == ["validation.parquet"]
+    assert [(dep.name, dep.version) for dep in step.deps] == [
+        ("tests/iceball-sft", "2026.08.01"),
+        ("tests/iceball-gsm8k", "2026.08.01"),
+    ]
+
+
+def test_skyrl_step_resolves_distilled_draft_dependency() -> None:
+    draft_step = ArtifactStep.adopt(
+        "tests/iceball-eagle",
+        "2026.09.19",
+        "s3://test/iceball-eagle/terminal.json",
+        kind=EagleDraftModel,
+    )
+    config_yaml = "generator:\n  speculative_decoding:\n    method: eagle3\n    model: {}\n"
+    step = skyrl_step(
+        dataclasses.replace(
+            _spec(),
+            config_yaml=config_yaml,
+            draft_model=ArtifactEagleDraft(draft_step),
+        ),
+        _execution(),
+    )
+
+    assert ("tests/iceball-eagle", "2026.09.19") in [(dep.name, dep.version) for dep in step.deps]
 
 
 def test_skyrl_step_routes_disposable_state_to_ttl_storage(
@@ -347,6 +428,49 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
     assert catalog_rows[0].status == "succeeded"
     assert catalog_rows[0].rollout_uri == f"{output.attempts_root}/trajectories"
     assert catalog_rows[0].job_id == "01KTEST"
+
+
+def test_run_eagle_distillation_returns_published_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _launch_request()
+    response = {
+        "run_id": request.run_id,
+        "attempt_id": request.attempt_id,
+        "state": "succeeded",
+        "iris_job_id": "01KDRAFT",
+        "iris_job_state": "succeeded",
+        "runtime": asdict(request.runtime),
+        "failure": None,
+        "model": None,
+        "draft_model": {
+            "uri": "s3://test/run/checkpoints/drafts/draft-step-1",
+            "revision": "draft-step-1",
+            "source_identity": "initial-draft",
+            "target_identity": request.model.identity,
+            "checkpoint_root": "s3://test/run/checkpoints/drafts",
+            "terminal_manifest_uri": request.output.terminal_manifest_uri,
+        },
+    }
+
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda command, **kwargs: _FakeLauncherProcess(
+            response=json.dumps(response), returncode=0, stdout=kwargs["stdout"]
+        ),
+    )
+
+    draft = run_eagle_draft_distillation(
+        SkyRLRunConfig(
+            request=request,
+            execution=_execution(),
+            launcher_requirement=MARIN_SKYRL.requirement(),
+        )
+    )
+
+    assert draft.uri.endswith("draft-step-1")
+    assert draft.revision == "draft-step-1"
+    assert draft.target_identity == request.model.identity
+    assert draft.iris_job_id == "01KDRAFT"
 
 
 def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:

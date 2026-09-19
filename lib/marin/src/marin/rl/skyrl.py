@@ -11,7 +11,7 @@ import sys
 import tempfile
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Literal, cast
@@ -60,7 +60,7 @@ class SkyRLRuntime:
     """Identity-bearing SkyRL revision and locked dependency profile."""
 
     profile: SkyRLRuntimeProfile
-    commit: str = field(init=False, default=MARIN_SKYRL.commit)
+    commit: str = MARIN_SKYRL.commit
 
 
 @dataclass(frozen=True)
@@ -76,6 +76,10 @@ class SkyRLRolePlan:
     policy_mini_batch_size: int
     micro_train_batch_size_per_gpu: int
     n_samples_per_prompt: int
+    inference_engine_pipeline_parallel_size: int = 1
+    inference_engine_data_parallel_size: int = 1
+    inference_engine_expert_parallel_size: int = 1
+    evaluation_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -291,6 +295,50 @@ class SkyRLSpec:
     retention: SkyRLRetentionPolicy
     seed: int
     overrides: tuple[str, ...] = ()
+    draft_model: ArtifactEagleDraft | None = None
+
+
+@dataclass(frozen=True)
+class EagleDraftSource:
+    """An immutable EAGLE draft checkpoint accepted by MarinSkyRL."""
+
+    uri: str
+    identity: str
+
+
+@dataclass(frozen=True)
+class ArtifactEagleDraft:
+    """A distilled EAGLE checkpoint produced by another Marin step."""
+
+    step: ArtifactStep[EagleDraftModel]
+
+    def deps(self) -> tuple[ArtifactStep, ...]:
+        return (self.step,)
+
+    def resolve(self, ctx: StepContext) -> EagleDraftSource:
+        if ctx.is_fingerprint:
+            return EagleDraftSource(
+                uri=f"s3://artifact/{_artifact_identity(self.step)}", identity=self.step.fingerprint()
+            )
+        draft = ctx.resolved(self.step)
+        return EagleDraftSource(uri=draft.uri, identity=draft.revision)
+
+
+@dataclass(frozen=True)
+class EagleDraftDistillationSpec:
+    """Offline EAGLE distillation from target-model rollouts."""
+
+    name: str
+    version: str
+    config_yaml: str
+    runtime: SkyRLRuntime
+    target_model: ArtifactHfModel
+    initial_draft: EagleDraftSource
+    data: tuple[SkyRLDataSource, ...]
+    topology: SkyRLTopology
+    retention: SkyRLRetentionPolicy
+    seed: int
+    overrides: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -388,6 +436,18 @@ class SkyRLModel(Artifact):
     iris_job_id: str
 
 
+class EagleDraftModel(Artifact):
+    """A distilled EAGLE draft checkpoint and its exact target lineage."""
+
+    uri: str
+    revision: str
+    source_identity: str
+    target_identity: str
+    checkpoint_root: str
+    terminal_manifest_uri: str
+    iris_job_id: str
+
+
 class _SkyRLTerminalModel(BaseModel):
     policy_export_uri: str
     global_step: int
@@ -397,11 +457,21 @@ class _SkyRLTerminalModel(BaseModel):
     terminal_manifest_uri: str
 
 
+class _SkyRLTerminalDraft(BaseModel):
+    uri: str
+    revision: str
+    source_identity: str
+    target_identity: str
+    checkpoint_root: str
+    terminal_manifest_uri: str
+
+
 class _SkyRLLaunchResponse(BaseModel):
     state: str
     iris_job_id: str | None = None
     failure: str | None = None
     model: _SkyRLTerminalModel | None = None
+    draft_model: _SkyRLTerminalDraft | None = None
 
 
 @dataclass(frozen=True)
@@ -448,6 +518,27 @@ def _launcher_command(requirement: str, request_path: str) -> list[str]:
         "--request",
         request_path,
     ]
+
+
+def _launcher_requirement(runtime: SkyRLRuntime) -> str:
+    return f"{MARIN_SKYRL.distribution} @ git+{MARIN_SKYRL.repository}@{runtime.commit}"
+
+
+def _config_with_eagle_draft(config_yaml: str, draft: EagleDraftSource) -> str:
+    config = yaml.safe_load(config_yaml)
+    if not isinstance(config, dict):
+        raise ValueError("EAGLE configuration must be a YAML mapping")
+    generator = config.get("generator")
+    if not isinstance(generator, dict):
+        raise ValueError("EAGLE configuration requires generator")
+    speculative = generator.get("speculative_decoding")
+    if not isinstance(speculative, dict):
+        raise ValueError("EAGLE configuration requires generator.speculative_decoding")
+    speculative["model"] = {
+        "source_uri": draft.uri,
+        "source_identity": draft.identity,
+    }
+    return yaml.safe_dump(config, sort_keys=False)
 
 
 def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -517,6 +608,45 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
     return result
 
 
+def run_eagle_draft_distillation(config: SkyRLRunConfig) -> EagleDraftModel:
+    """Run offline EAGLE distillation and return its published draft checkpoint."""
+    envelope = {
+        "request": asdict(config.request),
+        "execution": {
+            **asdict(config.execution),
+            "job_name": sanitize_job_name(f"{config.request.run_id}-{config.request.attempt_id}"),
+        },
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as request_file:
+        json.dump(envelope, request_file, sort_keys=True)
+        request_file.flush()
+        completed = _run_launcher(_launcher_command(config.launcher_requirement, request_file.name))
+    if not completed.stdout.strip():
+        raise RuntimeError(
+            f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
+            f"{completed.stderr.strip() or '(the launcher wrote nothing to stderr)'}"
+        )
+    response = _SkyRLLaunchResponse.model_validate_json(completed.stdout)
+    if completed.returncode != 0 or response.state != "succeeded":
+        failure = response.failure or f"launcher exited {completed.returncode}"
+        raise RuntimeError(
+            f"MarinSkyRL attempt {config.request.attempt_id} failed: {failure}\n{completed.stderr.strip()}"
+        )
+    draft = response.draft_model
+    if draft is None or response.iris_job_id is None:
+        raise ValueError("successful EAGLE distillation response requires draft_model and iris_job_id")
+    return EagleDraftModel(
+        path=config.request.output.terminal_manifest_uri,
+        uri=draft.uri,
+        revision=draft.revision,
+        source_identity=draft.source_identity,
+        target_identity=draft.target_identity,
+        checkpoint_root=draft.checkpoint_root,
+        terminal_manifest_uri=draft.terminal_manifest_uri,
+        iris_job_id=response.iris_job_id,
+    )
+
+
 def _record_skyrl_run(config: SkyRLRunConfig, status: str, response: _SkyRLLaunchResponse | None) -> None:
     output = config.request.output
     record_rollout_run(
@@ -546,6 +676,7 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         dict.fromkeys(
             (
                 *spec.model.deps(),
+                *(spec.draft_model.deps() if spec.draft_model is not None else ()),
                 *(dep for source in spec.train_data for dep in source.deps()),
                 *(dep for source in spec.validation_data for dep in source.deps()),
             )
@@ -574,10 +705,13 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             f"++terminal_bench_config.trials_dir='{prefix_join(attempts_root, _TRACE_JOBS_SUBDIR)}'",
             f"++generator.trajectory_retention.output_path='{prefix_join(attempts_root, _TRAJECTORIES_SUBDIR)}'",
         )
+        config_yaml = spec.config_yaml
+        if spec.draft_model is not None:
+            config_yaml = _config_with_eagle_draft(config_yaml, spec.draft_model.resolve(ctx))
         request = SkyRLLaunchRequest(
             run_id=f"{step_name}-{spec.version}",
             attempt_id=attempt_id,
-            config_yaml=spec.config_yaml,
+            config_yaml=config_yaml,
             runtime=spec.runtime,
             model=spec.model.resolve(ctx),
             train_data=tuple(source.resolve(ctx) for source in spec.train_data),
@@ -590,7 +724,7 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         return SkyRLRunConfig(
             request=request,
             execution=cast(IrisSkyRLExecution, ctx.runtime_arg(_EXECUTION)),
-            launcher_requirement=MARIN_SKYRL.requirement(),
+            launcher_requirement=_launcher_requirement(spec.runtime),
         )
 
     return ArtifactStep(
@@ -598,6 +732,82 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         version=spec.version,
         artifact_type=SkyRLModel,
         run=run_skyrl,
+        build_config=build_config,
+        deps=deps,
+        runtime_args={_EXECUTION: execution},
+    )
+
+
+def _eagle_distillation_config(spec: EagleDraftDistillationSpec) -> str:
+    config = yaml.safe_load(spec.config_yaml)
+    if not isinstance(config, dict) or config.get("entrypoint") != "generate":
+        raise ValueError("EAGLE draft distillation config_yaml must declare entrypoint: generate")
+    generator = config.get("generator")
+    speculative = generator.get("speculative_decoding") if isinstance(generator, dict) else None
+    if not isinstance(speculative, dict) or not isinstance(speculative.get("training"), dict):
+        raise ValueError("EAGLE draft distillation config_yaml requires speculative_decoding.training")
+    return _config_with_eagle_draft(spec.config_yaml, spec.initial_draft)
+
+
+def eagle_draft_distillation_step(
+    spec: EagleDraftDistillationSpec,
+    execution: IrisSkyRLExecution,
+) -> ArtifactStep[EagleDraftModel]:
+    """Build an artifact that captures target rollouts and distills one EAGLE draft."""
+    deps = tuple(
+        dict.fromkeys(
+            (
+                *spec.target_model.deps(),
+                *(dep for source in spec.data for dep in source.deps()),
+            )
+        )
+    )
+
+    def build_config(ctx: StepContext) -> SkyRLRunConfig:
+        attempt_id = "<attempt_id>" if ctx.is_fingerprint else uuid.uuid4().hex[:12]
+        temporary_root = (
+            "<temporary_output_path>"
+            if ctx.is_fingerprint
+            else skyrl_temporary_run_path(
+                ctx.output_path,
+                ttl_days=spec.retention.temporary_storage_ttl_days,
+            )
+        )
+        attempts_root = prefix_join(temporary_root, "attempts")
+        output = SkyRLOutputPaths(
+            checkpoint_root=prefix_join(temporary_root, "checkpoints"),
+            export_root=prefix_join(ctx.output_path, "exports"),
+            attempts_root=attempts_root,
+            resolved_config_uri=prefix_join(ctx.output_path, "resolved-skyrl.json"),
+            terminal_manifest_uri=prefix_join(ctx.output_path, "terminal.json"),
+        )
+        request = SkyRLLaunchRequest(
+            run_id=f"{spec.name}-{spec.version}",
+            attempt_id=attempt_id,
+            config_yaml=_eagle_distillation_config(spec),
+            runtime=spec.runtime,
+            model=spec.target_model.resolve(ctx),
+            train_data=(),
+            validation_data=tuple(source.resolve(ctx) for source in spec.data),
+            topology=spec.topology,
+            output=output,
+            seed=spec.seed,
+            overrides=(
+                *spec.overrides,
+                f"++generator.trajectory_retention.output_path='{prefix_join(attempts_root, _TRAJECTORIES_SUBDIR)}'",
+            ),
+        )
+        return SkyRLRunConfig(
+            request=request,
+            execution=cast(IrisSkyRLExecution, ctx.runtime_arg(_EXECUTION)),
+            launcher_requirement=_launcher_requirement(spec.runtime),
+        )
+
+    return ArtifactStep(
+        name=spec.name,
+        version=spec.version,
+        artifact_type=EagleDraftModel,
+        run=run_eagle_draft_distillation,
         build_config=build_config,
         deps=deps,
         runtime_args={_EXECUTION: execution},
