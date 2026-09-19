@@ -3344,7 +3344,10 @@ mod tests {
             effective.column("worker_id").unwrap().index.exact_values,
             ["w-1"]
         );
-        assert_eq!(effective.projections, [projection.clone()]);
+        assert_eq!(
+            effective.projections.as_slice(),
+            std::slice::from_ref(&projection)
+        );
 
         store.publish_object_catalog("iris.worker").await.unwrap();
         store.shutdown(Duration::from_secs(1)).await;
