@@ -343,6 +343,7 @@ def test_qwen_smoke_selects_megatron_policy_and_pinned_skyrl_runtime(owner):
     assert config["trainer"]["strategy"] == "megatron"
     assert config["generator"]["chat_template"]["name_or_path"] == "qwen3_without_thinking"
     assert config["generator"]["num_inference_engines"] == 8
+    assert config["generator"]["rollout_num_nodes"] == 1
     assert config["generator"]["inference_engine_data_parallel_size"] == 1
     assert built.request.topology.role_plan.rollout_num_nodes == 1
 

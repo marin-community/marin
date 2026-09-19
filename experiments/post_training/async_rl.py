@@ -109,7 +109,7 @@ class ChatTemplate:
 CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="marin_tokenizer")
 QWEN_CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="qwen3_without_thinking")
 # This revision includes the score-centering learner and exact behavior top-k capture.
-SCORE_CENTERING_SKYRL_COMMIT = "ba6421bf930fa320c5cd410605a5d34ecbe6ef15"
+SCORE_CENTERING_SKYRL_COMMIT = "29a93d6edacf2052234f6d4aaf537e3470e6cb4e"
 
 
 @dataclass(frozen=True)
@@ -345,6 +345,7 @@ TOPOLOGY_OWNED_SETTINGS = frozenset(
         "trainer.placement.ref_num_gpus_per_node",
         "generator.run_engines_locally",
         "generator.num_inference_engines",
+        "generator.rollout_num_nodes",
         "generator.inference_engine_tensor_parallel_size",
         "trainer.train_batch_size",
         "trainer.policy_mini_batch_size",
@@ -558,6 +559,7 @@ def training_config(
         # Requests go one prompt at a time, as the chat route submits them.
         "batched": False,
         "num_inference_engines": plan.num_inference_engines,
+        "rollout_num_nodes": plan.effective_rollout_num_nodes,
         "inference_engine_tensor_parallel_size": plan.inference_engine_tensor_parallel_size,
         "inference_engine_pipeline_parallel_size": plan.inference_engine_pipeline_parallel_size,
         "inference_engine_data_parallel_size": plan.inference_engine_data_parallel_size,
