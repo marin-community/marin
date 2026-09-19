@@ -1,19 +1,14 @@
 {
-  "type": "barchart",
-  "title": "Finished requests by outcome",
-  "description": "Window totals by the stored finish reason, including stop, length limit, abort, or error when emitted. request_success_total is a metric name, not proof that every finish was successful. Missing error/timeout families cannot prove zero failures. These are engine finishes, not upstream arrivals.",
+  "type": "table",
+  "title": "Query status",
+  "description": "The bridge reports detail, summary-only, empty data, timeout, or sample-limit rejection.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
   },
   "fieldConfig": {
     "defaults": {
-      "custom": {
-        "lineWidth": 1,
-        "fillOpacity": 80,
-        "gradientMode": "none",
-        "axisPlacement": "auto"
-      }
+      "noValue": "Query status unavailable"
     },
     "overrides": []
   },
@@ -54,38 +49,26 @@
           },
           {
             "key": "view",
-            "value": "request_outcome"
+            "value": "diagnostic_status"
           }
         ]
       },
       "columns": [
         {
-          "selector": "series",
-          "text": "outcome",
+          "selector": "status",
+          "text": "state",
           "type": "string"
         },
         {
-          "selector": "value",
-          "text": "requests",
-          "type": "number"
+          "selector": "series",
+          "text": "detail",
+          "type": "string"
         }
       ]
     }
   ],
   "options": {
-    "orientation": "horizontal",
-    "xTickLabelRotation": 0,
-    "showValue": "auto",
-    "stacking": "none",
-    "legend": {
-      "showLegend": false,
-      "displayMode": "list",
-      "placement": "bottom",
-      "calcs": []
-    },
-    "tooltip": {
-      "mode": "single",
-      "sort": "none"
-    }
+    "showHeader": true,
+    "cellHeight": "sm"
   }
 }
