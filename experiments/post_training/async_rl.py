@@ -109,7 +109,7 @@ class ChatTemplate:
 CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="marin_tokenizer")
 QWEN_CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="qwen3_without_thinking")
 # This revision includes the score-centering learner and exact behavior top-k capture.
-SCORE_CENTERING_SKYRL_COMMIT = "fcff0812962fde42875031fac7c25df9b5d1a733"
+SCORE_CENTERING_SKYRL_COMMIT = "ba6421bf930fa320c5cd410605a5d34ecbe6ef15"
 
 
 @dataclass(frozen=True)
@@ -129,7 +129,7 @@ class TrainingRecipe:
 
     # MarinSkyRL runtime profile: the frozen dependency set the run installs.
     profile: SkyRLRuntimeProfile
-    # Nodes the job holds: the policy nodes plus one per engine.
+    # Nodes the job holds: policy nodes plus rollout nodes.
     num_nodes: int
     # Placement and batch shape; MarinSkyRL writes these over the config from the topology.
     role_plan: SkyRLRolePlan
@@ -148,18 +148,16 @@ class TrainingRecipe:
     engine_init_kwargs: dict[str, object]
 
     def __post_init__(self) -> None:
-        if not self.role_plan.colocate_all and self.num_nodes != (
-            self.role_plan.policy_num_nodes + self.role_plan.num_inference_engines
-        ):
-            raise ValueError("separate policy and engine roles require one node bundle per inference engine")
         plan = self.role_plan
+        if not plan.colocate_all and self.num_nodes != plan.policy_num_nodes + plan.effective_rollout_num_nodes:
+            raise ValueError("separate policy and engine roles require the declared rollout node count")
         rollout_gpus = (
             plan.num_inference_engines
             * plan.inference_engine_tensor_parallel_size
             * plan.inference_engine_pipeline_parallel_size
             * plan.inference_engine_data_parallel_size
         )
-        if not plan.colocate_all and rollout_gpus != plan.num_inference_engines * plan.policy_num_gpus_per_node:
+        if not plan.colocate_all and rollout_gpus != plan.effective_rollout_num_nodes * plan.policy_num_gpus_per_node:
             raise ValueError("separate rollout engines must use every allocated GPU")
 
     @property
@@ -203,7 +201,7 @@ SNOWBALL_RECIPE = TrainingRecipe(
 )
 
 
-# Keep the learner on one H100 node and place one eight-rank Qwen3 engine on another.
+# Keep the learner on one H100 node and place eight independent Qwen3 engines on another.
 QWEN_RECIPE = TrainingRecipe(
     profile=SkyRLRuntimeProfile.MEGATRON,
     num_nodes=2,
@@ -211,13 +209,13 @@ QWEN_RECIPE = TrainingRecipe(
         colocate_all=False,
         policy_num_nodes=1,
         policy_num_gpus_per_node=GPUS_PER_NODE,
-        num_inference_engines=1,
+        num_inference_engines=8,
         inference_engine_tensor_parallel_size=1,
         train_batch_size=32,
         policy_mini_batch_size=32,
         micro_train_batch_size_per_gpu=2,
         n_samples_per_prompt=ANSWERS_PER_PROMPT,
-        inference_engine_data_parallel_size=GPUS_PER_NODE,
+        rollout_num_nodes=1,
     ),
     learning_rate=1.0e-6,
     weight_decay=1e-2,

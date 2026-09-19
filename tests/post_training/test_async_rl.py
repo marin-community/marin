@@ -342,6 +342,9 @@ def test_qwen_smoke_selects_megatron_policy_and_pinned_skyrl_runtime(owner):
     assert built.launcher_requirement.endswith(f"@{async_rl.SCORE_CENTERING_SKYRL_COMMIT}")
     assert config["trainer"]["strategy"] == "megatron"
     assert config["generator"]["chat_template"]["name_or_path"] == "qwen3_without_thinking"
+    assert config["generator"]["num_inference_engines"] == 8
+    assert config["generator"]["inference_engine_data_parallel_size"] == 1
+    assert built.request.topology.role_plan.rollout_num_nodes == 1
 
 
 def test_wandb_entity_is_explicit_in_execution(owner):
@@ -351,14 +354,14 @@ def test_wandb_entity_is_explicit_in_execution(owner):
         version="2026.09.18",
         recipe=async_rl.QWEN_RECIPE,
         chat_template=async_rl.QWEN_CHAT_TEMPLATE,
-        wandb_entity="romain-yon",
+        wandb_entity="marin-community",
     )
-    assert run.rl.runtime_args["skyrl_execution"].wandb_entity == "romain-yon"
+    assert run.rl.runtime_args["skyrl_execution"].wandb_entity == "marin-community"
 
 
 def test_separate_engine_recipe_rejects_unallocated_node_bundles():
-    with pytest.raises(ValueError, match="one node bundle per inference engine"):
-        replace(async_rl.QWEN_RECIPE, role_plan=replace(async_rl.QWEN_RECIPE.role_plan, num_inference_engines=2))
+    with pytest.raises(ValueError, match="declared rollout node count"):
+        replace(async_rl.QWEN_RECIPE, role_plan=replace(async_rl.QWEN_RECIPE.role_plan, rollout_num_nodes=2))
 
 
 def test_score_centering_setting_changes_only_the_correction_at_matched_capture():

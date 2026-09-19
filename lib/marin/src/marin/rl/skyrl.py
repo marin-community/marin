@@ -83,6 +83,11 @@ class SkyRLRolePlan:
     inference_engine_pipeline_parallel_size: int = 1
     inference_engine_data_parallel_size: int = 1
     inference_engine_expert_parallel_size: int = 1
+    rollout_num_nodes: int | None = None
+
+    @property
+    def effective_rollout_num_nodes(self) -> int:
+        return self.num_inference_engines if self.rollout_num_nodes is None else self.rollout_num_nodes
 
 
 @dataclass(frozen=True)
