@@ -3,14 +3,13 @@
 
 """Bounded Finelog query for one standalone or MarinSkyRL-embedded vLLM serve."""
 
-import math
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from enum import StrEnum
 
 import duckdb
 import pyarrow as pa
-import pyarrow.compute as pc
+from dashboard_dataset import bounded_bucket_ms, projection_database, validate_table_budget, validate_value
 from finelog.errors import QueryResultTooLargeError
 
 VLLM_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
@@ -128,7 +127,7 @@ def sql_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _sql_values(values: tuple[str, ...]) -> str:
+def sql_values(values: tuple[str, ...]) -> str:
     return ", ".join(sql_string(value) for value in values)
 
 
@@ -136,7 +135,7 @@ def _vllm_samples_query(
     identity_field: VllmIdentityField, identity: str, scan_start_ms: int, end_ms: int, names: tuple[str, ...]
 ) -> str:
     identity_literal = sql_string(identity)
-    metric_names = _sql_values(names)
+    metric_names = sql_values(names)
     return f"""
 WITH base AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
@@ -189,22 +188,6 @@ def _histogram_source_mapping() -> tuple[tuple[str, str], ...]:
     )
 
 
-def _validate_identity(identity: str) -> None:
-    if not identity:
-        raise ValueError("identity must not be empty")
-    if len(identity) > VLLM_MAX_IDENTITY_LENGTH:
-        raise ValueError(f"identity exceeds {VLLM_MAX_IDENTITY_LENGTH} characters")
-    if any(ord(character) < 32 for character in identity):
-        raise ValueError("identity must not contain control characters")
-
-
-def _bounded_bucket_ms(start_ms: int, end_ms: int, requested_bucket_ms: int) -> int:
-    if requested_bucket_ms <= 0:
-        raise ValueError("bucket_ms must be positive")
-    minimum_for_result_cap = math.ceil((end_ms - start_ms) / VLLM_MAX_POINTS)
-    return min(end_ms - start_ms, max(requested_bucket_ms, VLLM_MIN_BUCKET_MS, minimum_for_result_cap))
-
-
 def vllm_overview_query(
     identity_field: VllmIdentityField,
     identity: str,
@@ -213,21 +196,24 @@ def vllm_overview_query(
     requested_bucket_ms: int,
 ) -> VllmOverviewQuery:
     """Render the fixed vLLM overview query after validating its safety bounds."""
-    _validate_identity(identity)
-    if start_ms < 0 or end_ms <= start_ms:
-        raise ValueError("to must be later than from and both times must be nonnegative")
-    if end_ms - start_ms > VLLM_MAX_WINDOW_MS:
-        raise ValueError("vLLM overview range must not exceed 7 days")
-
-    bucket_ms = _bounded_bucket_ms(start_ms, end_ms, requested_bucket_ms)
+    validate_value("identity", identity, max_length=VLLM_MAX_IDENTITY_LENGTH)
+    bucket_ms = bounded_bucket_ms(
+        start_ms,
+        end_ms,
+        requested_bucket_ms,
+        max_window_ms=VLLM_MAX_WINDOW_MS,
+        max_window_error="vLLM overview range must not exceed 7 days",
+        min_bucket_ms=VLLM_MIN_BUCKET_MS,
+        max_points=VLLM_MAX_POINTS,
+    )
     standalone_bucket_ms = max(bucket_ms, VLLM_SCRAPE_INTERVAL_MS)
     scan_start_ms = max(0, start_ms - VLLM_SNAPSHOT_LOOKBACK_MS)
-    serving_metric_names = _sql_values(_SERVING_METRIC_NAMES)
-    token_counters = _sql_values(_TOKEN_COUNTERS)
-    preemption_counters = _sql_values(_PREEMPTION_COUNTERS)
-    outcome_counters = _sql_values(_OUTCOME_COUNTERS)
-    gauges = _sql_values(_GAUGES)
-    histogram_names = _sql_values(_HISTOGRAM_NAMES)
+    serving_metric_names = sql_values(_SERVING_METRIC_NAMES)
+    token_counters = sql_values(_TOKEN_COUNTERS)
+    preemption_counters = sql_values(_PREEMPTION_COUNTERS)
+    outcome_counters = sql_values(_OUTCOME_COUNTERS)
+    gauges = sql_values(_GAUGES)
+    histogram_names = sql_values(_HISTOGRAM_NAMES)
     histogram_family = _case_for(_histogram_name_mapping(), "name")
     histogram_component = _case_for(_histogram_component_mapping(), "name")
     histogram_source_family = _case_for(_histogram_source_mapping(), "name")
@@ -1153,13 +1139,9 @@ LIMIT {VLLM_MAX_RESULT_ROWS + 1}
 def _vllm_project_table(
     sql: str, series: pa.Table, projection_lock: AbstractContextManager[None], *, max_rows: int
 ) -> pa.Table:
-    sample_count = pc.sum(pc.list_value_length(series["points"])).as_py() or 0
-    if series.num_rows > VLLM_MAX_SERIES or sample_count > VLLM_MAX_SAMPLES:
-        raise QueryResultTooLargeError("vLLM sample budget exceeded")
-    with (
-        projection_lock,
-        duckdb.connect(config={"threads": 1, "memory_limit": "512MB", "temp_directory": ""}) as database,
-    ):
+    """Project one compact Finelog scan into the shared diagnostic result."""
+    validate_table_budget("vLLM samples", series, max_rows=VLLM_MAX_SERIES, max_samples=VLLM_MAX_SAMPLES)
+    with projection_lock, projection_database() as database:
         database.register("series", series)
         # Dictionary labels stay compact through repeated window and histogram
         # joins. Ordered dictionaries preserve the original string tie breaks.
@@ -1265,7 +1247,7 @@ WITH base AS MATERIALIZED (
            SUM(delta) AS value, 'engine finishes' AS unit, CAST(NULL AS VARCHAR) AS status,
            CAST(COUNT(delta) AS BIGINT) AS samples, CAST(NULL AS DOUBLE) AS gap_seconds
     FROM increments
-    WHERE name IN ({_sql_values(_OUTCOME_COUNTERS)})
+    WHERE name IN ({sql_values(_OUTCOME_COUNTERS)})
     GROUP BY name, COALESCE(json_get(attributes_json, 'finished_reason'),
                             json_get(attributes_json, 'finish_reason'), 'unknown')
     HAVING COUNT(delta) > 0

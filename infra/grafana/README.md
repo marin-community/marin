@@ -30,6 +30,10 @@ fetch server-side, so nothing outside the container reaches it.
 
 ```
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
+GET /finelog/{cluster}/v1/{node,training,runs,rl,accelerator,jobs}/overview
+                                                    bounded shared dashboard datasets
+GET /finelog/{cluster}/v1/zephyr/overview        bounded ranked shuffle snapshot
+GET /finelog/{cluster}/v1/rl/recent              bounded recent RL runs
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/relay_status                  direct regional relay heartbeats
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
@@ -141,6 +145,25 @@ waits two minutes and advances the window. To compare the original draft, extrac
 that extracted `src/`, and pass its parent as `--grafana-dir`. Keep the identity,
 window, and request sequence the same, and use a separate output directory.
 These are read-only live queries; repeat only the windows needed for comparison.
+
+The Node Details, Zephyr, Training, Runs, RL, Accelerators, Jobs, and Home
+dashboards use the same shared-dataset contract. Each endpoint validates every
+identity and time input, runs a small fixed set of domain queries, and projects all
+panel views locally. Concurrent panel requests coalesce on one logical cache key;
+the `view` parameter only filters the cached result. A cold traversal uses one
+Finelog source for Node and Zephyr, three for Training, two for Runs, three for RL,
+three for Accelerators, and five for Jobs. Those boundaries are intentional:
+crossing namespaces or mixing fleet-wide per-device data with compact summaries
+just to reach one RPC would make the query less predictable.
+
+`src/dashboard_dataset.py` owns only cache-independent execution rules: declared
+row/sample caps, one-thread DuckDB projection, a 512 MB memory cap, and no disk
+spill. The domain modules own metric names, source SQL, windows, cardinality caps,
+and counter/latest-state semantics. Fleet accelerator raster data is additionally
+limited to 60 time slices; aggregate charts retain up to 100. A budget breach is a
+400 asking the operator to narrow the filters or window, never an unbounded retry.
+Selectors remain independent `/query` requests because discovery has different
+indexing and window requirements from panel calculation.
 
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
@@ -826,11 +849,19 @@ token is attenuated to that subset even if the app holds broader grants.
 
 ## Adding a dashboard
 
-Drop JSON in `dashboards/` and redeploy. Panels use the Infinity datasource with
-`url: /query` and an `sql` param, plus `from`/`to` set to `${__from}`/`${__to}`.
-Write the window into the SQL as `{{from}}` / `{{to}}`, and bin the time axis with
-`date_bin(INTERVAL '${__interval_ms} milliseconds', ts)` so Grafana sizes the
-buckets to the panel — see `dashboards/jobs.json`.
+Drop JSON in `dashboards/` and redeploy. A one-off panel can use the Infinity
+datasource with `url: /query`, an `sql` param, and `from`/`to` set to
+`${__from}`/`${__to}`. Write the window into that SQL as `{{from}}` / `{{to}}`,
+and bin the time axis with
+`date_bin(INTERVAL '${__interval_ms} milliseconds', ts)`.
+
+When two or more panels scan the same identity, namespace, and window, add a fixed
+shared-dataset endpoint instead. Put the bounded source query and fixed local views
+in a domain module, use `DashboardDataset` for its caps and cache key, and have each
+panel pass the same query-affecting parameters plus its `view`. Do not accept SQL or
+metric names from the request. Keep separate sources when namespaces or cardinality
+profiles differ; Jobs deliberately uses five sources, while Node uses one. Add a
+page-level test that requests every view and asserts the cold Finelog call count.
 
 Dashboards address the `finelog-marin` hub directly rather than through a
 datasource variable. The hub is the fleet view: the CoreWeave clusters forward
