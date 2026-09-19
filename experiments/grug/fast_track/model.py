@@ -591,9 +591,9 @@ class MoEMLP(eqx.Module):
             report_capacity_overflow=True,
         )
         routed_flat, capacity_overflow = moe_out
-        dropped_assignments = capacity_overflow.total
-        sender_dropped_assignments = capacity_overflow.sender
-        receiver_dropped_assignments = capacity_overflow.receiver
+        dropped_assignments = capacity_overflow.dropped
+        sender_dropped_assignments = capacity_overflow.sender_dropped
+        receiver_dropped_assignments = capacity_overflow.receiver_dropped
         router_stats["capacity_overflow"] = dropped_assignments
         router_stats["sender_capacity_overflow"] = sender_dropped_assignments
         router_stats["receiver_capacity_overflow"] = receiver_dropped_assignments
