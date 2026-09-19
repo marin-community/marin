@@ -350,37 +350,31 @@ def test_wandb_points_follow_report_runset_and_drop_null_metric_rows():
                 200,
                 json={"data": {"view": {"displayName": "Hero report", "spec": json.dumps(spec)}}},
             )
-        return httpx.Response(
-            200,
-            json={
-                "data": {
-                    "project": {
-                        "run": {
-                            "state": "running",
-                            "sampledHistory": [
-                                [
-                                    {"throughput/total_tokens": 10, "throughput/mfu": 0.42},
-                                    {"throughput/total_tokens": 20, "throughput/mfu": None},
-                                ]
-                            ],
-                        }
-                    }
-                }
-            },
-        )
+        spec = json.loads(body["variables"]["specs"][0])
+        points = [
+            {"_step": 99, "throughput/total_tokens": 10, "throughput/mfu": 0.42},
+            {"_step": 100, "throughput/total_tokens": 20, "throughput/mfu": None},
+            {"_step": 101, "throughput/total_tokens": 30, "throughput/mfu": 0.44},
+        ]
+        if "minStep" not in spec:
+            points = points[:2]  # Whole-run sampling misses the child metric.
+        points = [point for point in points if point["_step"] >= spec.get("minStep", 0)]
+        run = {"branchPoint": {"step": 99}, "sampledHistory": [points]}
+        return httpx.Response(200, json={"data": {"project": {"run": run}}})
 
     assert _wandb(handler).points("mfu") == [
         {
             "chart": "MFU (%)",
             "run": "hero",
-            "tokens": 10,
-            "value": 0.42,
+            "tokens": tokens,
+            "value": value,
             "report_title": "Hero report",
             "report_url": (
                 "https://wandb.ai/marin-community/marin_moe/reports/"
                 "535B-A23B-18T-Token-Hero-Run-Scaling-Ladder--VmlldzoxNzc2MDM5Ng"
             ),
         }
+        for tokens, value in [(10, 0.42), (30, 0.44)]
     ]
 
 

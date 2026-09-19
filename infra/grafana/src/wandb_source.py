@@ -180,14 +180,24 @@ class WandbSource:
         branch_point = run_data.get("branchPoint")
         return _SampledHistory(points, int(branch_point["step"]) if branch_point else None)
 
-    def _sampled_history(
-        self, *, project: str, run: str, x_key: str, y_key: str, samples: int
-    ) -> list[tuple[float, float]] | None:
-        """Numeric (x, y) pairs from one run's sampled history, or None if it is absent."""
-        history = self._sampled_run_history(project=project, run=run, keys=(x_key, y_key), samples=samples)
+    def _sampled_plot_points(
+        self, *, project: str, run: str, keys: tuple[str, ...], samples: int
+    ) -> list[dict[str, float]] | None:
+        """Return step-ordered plot points, preserving detail in a fork's child segment."""
+        history = self._sampled_run_history(project=project, run=run, keys=keys, samples=samples)
         if history is None:
             return None
-        return [(point[x_key], point[y_key]) for point in history.points]
+        points = history.points
+        if history.branch_step is not None:
+            # Inherited history can consume almost the entire sample budget.
+            # Sample the child's segment separately, retaining the parent prefix.
+            child = self._sampled_run_history(
+                project=project, run=run, keys=keys, samples=samples, min_step=history.branch_step + 1
+            )
+            if child is None:
+                raise UpstreamError("wandb", f"run {run!r} disappeared while reading history", status_code=502)
+            points = [point for point in points if point[_STEP_KEY] <= history.branch_step] + child.points
+        return sorted(points, key=lambda point: point[_STEP_KEY])
 
     def _search_projects(self, run: str, project: str | None, read: Callable[[str], list[dict] | None]) -> list[dict]:
         """Return the first non-empty `read(candidate)` over the projects that may hold `run`.
@@ -209,21 +219,21 @@ class WandbSource:
         report_title, runs = self._report()
         rows: list[dict] = []
         for run in runs:
-            pairs = self._sampled_history(
-                project=_PROJECT, run=run, x_key=_TOTAL_TOKENS_KEY, y_key=metric, samples=_SAMPLES
+            points = self._sampled_plot_points(
+                project=_PROJECT, run=run, keys=(_STEP_KEY, _TOTAL_TOKENS_KEY, metric), samples=_SAMPLES
             )
-            if pairs is None:
+            if points is None:
                 raise UpstreamError("wandb", f"run {run!r} not found", status_code=502)
             rows.extend(
                 {
                     "chart": chart_title,
                     "run": run,
-                    "tokens": tokens,
-                    "value": value,
+                    "tokens": point[_TOTAL_TOKENS_KEY],
+                    "value": point[metric],
                     "report_title": report_title,
                     "report_url": _REPORT_URL,
                 }
-                for tokens, value in pairs
+                for point in points
             )
         return rows
 
@@ -237,26 +247,11 @@ class WandbSource:
         """
 
         def read(candidate: str) -> list[dict] | None:
-            history = self._sampled_run_history(
+            points = self._sampled_plot_points(
                 project=candidate, run=run, keys=(_STEP_KEY, metric), samples=_RUN_HISTORY_SAMPLES
             )
-            if history is None:
+            if points is None:
                 return None
-            points = history.points
-            if history.branch_step is not None:
-                # Inherited history can consume almost the entire sample budget.
-                # Sample the child's segment separately, retaining the parent prefix.
-                child = self._sampled_run_history(
-                    project=candidate,
-                    run=run,
-                    keys=(_STEP_KEY, metric),
-                    samples=_RUN_HISTORY_SAMPLES,
-                    min_step=history.branch_step + 1,
-                )
-                if child is None:
-                    raise UpstreamError("wandb", f"run {run!r} disappeared while reading history", status_code=502)
-                points = [point for point in points if point[_STEP_KEY] <= history.branch_step] + child.points
-            points = sorted(points, key=lambda point: point[_STEP_KEY])
             run_url = _RUN_URL.format(entity=_ENTITY, project=candidate, run=run)
             return [
                 {"run": run, "project": candidate, "run_url": run_url, "step": point[_STEP_KEY], "value": point[metric]}
