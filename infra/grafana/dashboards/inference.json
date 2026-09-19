@@ -48,12 +48,12 @@
         "name": "identity",
         "label": "Serve",
         "type": "query",
-        "description": "Standalone vLLM serves and MarinSkyRL processes carrying metric_source=vllm under the selected identity kind. One identity at a time: every panel is entity-scoped.",
+        "description": "Standalone vLLM serves and MarinSkyRL processes that reported request-state telemetry under the selected identity kind. One identity at a time: every panel is entity-scoped.",
         "datasource": {
           "type": "yesoreyeram-infinity-datasource",
           "uid": "finelog-marin"
         },
-        "definition": "distinct ${identity_kind} from standalone or embedded vLLM telemetry",
+        "definition": "distinct ${identity_kind} from indexed request-state rows",
         "query": {
           "queryType": "infinity",
           "refId": "variable-identity",
@@ -69,7 +69,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "WITH telemetry AS (SELECT job_id, run_id, execution_uid, timestamp_ms FROM \"telemetry_v1.vllm\" WHERE service = 'vllm' UNION ALL SELECT job_id, run_id, execution_uid, timestamp_ms FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'vllm') SELECT DISTINCT CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END AS value FROM telemetry WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END IS NOT NULL ORDER BY 1"
+                  "value": "WITH sessions AS (SELECT job_id, run_id, execution_uid, timestamp_ms FROM \"telemetry_v1.vllm\" WHERE service = 'vllm' AND name = 'num_requests_running' UNION ALL SELECT job_id, run_id, execution_uid, timestamp_ms FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'num_requests_running' AND json_get(attributes_json, 'metric_source') = 'vllm') SELECT DISTINCT CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END AS value FROM sessions WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END IS NOT NULL ORDER BY 1"
                 },
                 {
                   "key": "from",

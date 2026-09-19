@@ -244,7 +244,11 @@ The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old
 links and panel IDs; `marin-inference-overview` is the entry point from Home.
 Shared charts use the existing panel-fragment stitcher. Both dashboards read
-the cached `/v1/vllm/overview` result; no new collector or metric is required.
+the cached `/v1/vllm/overview` result. Their identity picker reads only
+`num_requests_running` rows from Finelog's `session-discovery` projection,
+including MarinSkyRL rows whose `metric_source` is `vllm`. These current-state
+samples preserve the selected time-window semantics and include long-lived
+sessions observed during the window. No new collector or metric is required.
 
 Inference rates describe the observed engines, not upstream demand. Running
 requests are admitted to scheduling, not a GPU batch size; iteration tokens mix

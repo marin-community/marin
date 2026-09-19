@@ -15,6 +15,39 @@ from starlette.testclient import TestClient
 from vllm_observability import VLLM_OVERVIEW_SECTIONS
 
 
+@pytest.mark.parametrize("filename", ["inference.json", "inference_overview.json"])
+def test_inference_identity_selector_reads_request_state_rows(filename: str) -> None:
+    database = duckdb.connect()
+    columns = """service VARCHAR, job_id VARCHAR, run_id VARCHAR, execution_uid VARCHAR,
+        timestamp_ms BIGINT, name VARCHAR, attributes_json VARCHAR"""
+    database.execute(f'CREATE TABLE "telemetry_v1.vllm"({columns})')
+    database.execute(f'CREATE TABLE "telemetry_v1.marinskyrl"({columns})')
+    database.execute("CREATE MACRO json_get(d, f) AS json_extract_string(d, concat('$.', f))")
+    database.execute(
+        """INSERT INTO "telemetry_v1.vllm" VALUES
+           ('vllm', '/serve', 'serve-run', 'serve-execution', 1000, 'num_requests_running', '{}'),
+           ('vllm', '/metric-only', 'metric-run', 'metric-execution', 2000, 'generation_tokens_total', '{}')"""
+    )
+    database.execute(
+        """INSERT INTO "telemetry_v1.marinskyrl" VALUES
+           ('marinskyrl', '/train', 'r1', 'e1', 3000, 'num_requests_running', '{"metric_source":"vllm"}'),
+           ('marinskyrl', '/foreign', 'r2', 'e2', 4000, 'num_requests_running', '{"metric_source":"ray"}')"""
+    )
+
+    dashboard = json.loads((Path(__file__).parents[1] / "dashboards" / filename).read_text())
+    variable = next(item for item in dashboard["templating"]["list"] if item["name"] == "identity")
+    sql = next(
+        item["value"] for item in variable["query"]["infinityQuery"]["url_options"]["params"] if item["key"] == "sql"
+    )
+    sql = (
+        sql.replace("${identity_kind}", "job_id")
+        .replace("{{from}}", "TIMESTAMP '1970-01-01 00:00:00'")
+        .replace("{{to}}", "TIMESTAMP '1970-01-01 00:04:00'")
+    )
+
+    assert database.execute(sql).fetchall() == [("/serve",), ("/train",)]
+
+
 @pytest.mark.parametrize("invalid_histogram", ["reset", "missing_component"])
 def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
     database = duckdb.connect()
