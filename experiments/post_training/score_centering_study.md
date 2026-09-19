@@ -31,8 +31,8 @@ GPU work.
   prompt, 32 generation workers, an eight-group buffer, and a 1,024-token response cap. It
   disables evaluation to isolate the training path. Qwen's default preset evaluates all 756 held-out
   prompts in batches of 256 every five updates, with one greedy response per prompt. TIS is enabled with cap 2.0.
-  The qualification correction width is 32; a width of 128 and capture-only controls are still
-  needed before the main comparison. All work uses Iris `interactive` priority.
+  The main comparison width is 32; width-8 and width-128 cost controls and capture-only controls
+  have completed. All work uses Iris `interactive` priority.
 
 For one sampled token, let `q` be the behavior policy that sampled it, `o` the stored trainer
 policy at the start of the optimizer update, and `p` the trainer policy being differentiated.
@@ -66,11 +66,11 @@ failures count toward the campaign's total task cost.
 | r11 | Yes | Top-k 128 score-centering cost control; two updates trained, export pending. |
 | r12 | Yes | Top-k 32 capture with score centering disabled; succeeded. |
 | r13 | Yes | TIS with sampled-token logprobs but no top-k capture; succeeded. |
-| r14 | Yes | Full-cap default schedule, TIS plus top-k 32 capture, eight-update age calibration; running. |
-| r15 | Yes | Full-cap 128-worker, age-limit-eight schedule, TIS plus top-k 32 capture, eight-update age calibration; running. |
+| r14 | Yes | Full-cap default schedule, TIS plus top-k 32 capture, eight-update age calibration; succeeded with terminal export. |
+| r15 | Yes | Full-cap 128-worker, age-limit-eight schedule, TIS plus top-k 32 capture, eight-update age calibration; succeeded with terminal export. |
 | r16 | Yes | Top-k 8 score-centering cost control; two updates trained, export pending. |
 | r17 | Yes | Explicit W&B finish worked: the primary run reports `finished` and retains step 2. Tail-mass mean telemetry became NaN on padded rows; correction stayed finite. |
-| r18 | Pending | Tests masked tail-mass telemetry and every-two-step weight publication on four updates. |
+| r18 | Yes | Four updates tested finite masked tail-mass telemetry and every-two-step weight publication. |
 
 The r8 retained trajectory archive confirms sampled-token logprobs and exact engine token IDs
 reached generation without alignment alerts. It does not contain top-k evidence; the learner
@@ -109,8 +109,31 @@ response; top-k 8 with SC took 37.1 seconds and 1.01 MB; top-k 32 capture withou
 77.0 seconds and 3.49 MB; top-k 32 with SC took 75.3 seconds and 3.50 MB; top-k 128 with SC
 took 261.6 seconds and 13.48 MB. These concurrent short runs suggest top-k collection and
 transport dominate the correction's incremental learner cost. They do not isolate cluster
-contention or predict Snowball throughput. The top-k 8 correction has not yet been qualified
-for its omitted tail probability.
+contention or predict Snowball throughput. The top-k 8 tail approximation needs a separate
+full-vocabulary error measurement before it could replace k32 in a quality run; that measurement
+follows here.
+
+`measure_score_centering_tail.py` now compares the implemented proportional-tail coefficient
+with an exact full-vocabulary score gradient at the start of a one-pass PPO update (`p=o`). It
+uses full Qwen3-0.6B distributions at six positions on each of the first four held-out GSM8K
+and Math500 prompts, with the `.08.29` model as behavior `q` and r14's update-8 exported model
+as current `p`. On these 48 deterministic contexts, behavior's mean omitted probability was
+0.00233 at k8, 0.000297 at k32, and 0.0000748 at k128. The actual checkpoint pair had mean
+behavior-weighted absolute log ratio 0.00370 and no behavior mass above the configured TIS cap
+2.0. The exact correction gradient and k8/k32/k128 approximation error were zero to numerical
+precision in that case. At a diagnostic cap of 1.05, k32's mean L1 gradient error was
+4.24e-7, or 0.17% of the mean exact correction L1 norm.
+
+The training GPU's trainer-versus-behavior absolute log ratio was about 0.016 at measured age
+five, so the same script also makes a **synthetic sensitivity check**: it perturbs the real Qwen
+full-vocabulary vectors to behavior-weighted absolute log ratios of 0.016 and 0.05, using a
+fixed seed per context. At magnitude 0.016 and cap 2.0, k32's mean L1 error was 0.000133,
+0.94% of the mean exact correction norm; k8 was 1.46% and k128 0.68%. At cap 1.05, k32's
+corresponding error was 0.46%. These are ratios of aggregate means, not per-context maxima.
+The synthetic perturbations match only one mismatch statistic and cannot stand in for actual
+vLLM/Megatron distribution differences or later generation positions. The output CSV is
+`/tmp/score-centering-qwen-tail-error-01a0bb6f.csv`; rerun the script with the exact S3
+model and evaluation paths to reproduce it.
 
 The full-cap [age-limit-four calibration](https://wandb.ai/marin-community/marin-async-rl/runs/g0iq70y0)
 used 64 generation workers. Its token-weighted mean consumed age rose from 0 to 2.72 by update
@@ -119,8 +142,33 @@ used 64 generation workers. Its token-weighted mean consumed age rose from 0 to 
 used 128 workers and consumed all update-5 tokens at age four. It took 510 seconds for its first
 training cycle, versus 279 seconds for the 64-worker schedule, while using fewer response tokens
 in that first batch. Both used TIS and top-k 32 capture without SC and scored 93/756 completed
-correct at update 5. This establishes age separation but is a scheduling comparison, not an SC
+correct at update 5. At update 8, the age-limit-four run consumed tokens at mean age 2.70 and
+scored 85/756 completed correct; the age-limit-eight run consumed tokens at mean age 5.0 and
+scored 88/756. Both fell below their update-5 scores, which is why the comparison needs a longer
+quality curve. The nominal eight-update step cycles used 3.96 and 5.36 GPU-hours respectively
+across 16 allocated H100s, including their in-run evaluations but excluding setup and terminal
+export. Iris child-task durations give total accelerator occupancy of 7.42 and 8.89 GPU-hours
+respectively, including setup and each eight-GPU terminal export; the parent wall times were
+30:55 and 36:38. This establishes age separation but is a scheduling comparison, not an SC
 effect estimate.
+
+The r18 cadence probe used top-k 8 and SC with a two-update publication interval. Its four
+updates published weights after updates 2 and 4; `timing/sync_weights` was zero after updates 1
+and 3. Behavior, stored-old, and current top-k tail-mass means were finite, around 0.006–0.008.
+Its consumed-token mean age was 0, 1, 2, and 1.53 across the four updates. It qualifies the
+implementation of delayed publication; the 1,024-token smoke cap leaves quality uninterpretable.
+Iris reports the parent and three accelerator children successful; its total accelerator occupancy
+was 2.82 GPU-hours across two eight-GPU training tasks and one eight-GPU export task.
+
+The present one-pass Qwen preset offers little opportunity for SC to change the gradient.
+`policy_mini_batch_size=train_batch_size` and `update_epochs_per_batch=1` mean the differentiated
+policy `p` equals the stored-old policy `o` during each update. The calibration runs report a
+zero `policy/log_ratio_abs_mean`, confirming this on the GPU. Where TIS is uncapped and PPO is
+unclipped, the exact score coefficient is `q * (o/q) * (p/o) = p`; its full-vocabulary score
+expectation and the implemented head-plus-tail correction have zero gradient. The measured TIS
+cap fraction stayed at or below 0.000189 through the eight-update calibrations, including mean
+consumed age five. A null effect under this preset would show that the correction is largely
+inactive here; it would not establish that SC cannot help when caps or clips are active.
 
 ## Comparison contract
 
@@ -155,6 +203,25 @@ The Qwen screen decides which comparison merits a matched Snowball follow-up. A 
 change, such as allowing more age or changing the worker pool, will be reported as a separate
 configuration comparison. No quality-loss margin or target score has been selected, so this study
 will not claim non-inferiority or time-to-target until one is fixed before confirmation.
+
+The first 40-update screen uses seed 17, an evaluation every ten updates plus step zero and
+terminal evaluation, the frozen `.08.29.1` pool and `.08.29` model, and MarinSkyRL
+`a7b51d31`. All four TIS arms capture behavior top-k 32, including the SC-disabled controls.
+The older schedule uses 128 generation workers, a 32-group buffer, age limit eight, and weight
+publication after each update. The near-fresh schedule uses 32 workers, a 16-group buffer, and
+age limit zero. The five jobs are:
+
+| Job | Objective | Schedule |
+| --- | --- | --- |
+| [r19](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-seed17-01a0bb6f-r19) | TIS, SC off | Older |
+| [r20](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-seed17-01a0bb6f-r20) | TIS plus SC32 | Older |
+| [r21](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-fresh-tis-seed17-01a0bb6f-r21) | TIS, SC off | Near-fresh |
+| [r22](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-fresh-sc-seed17-01a0bb6f-r22) | TIS plus SC32 | Near-fresh |
+| [r23](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-ppo-seed17-01a0bb6f-r23) | Plain PPO, TIS off | Older |
+
+The async engine's response sampling and GPU scheduling remain nondeterministic, even with a
+fixed training seed. The step-zero correct counts in the first four runs differ; comparisons
+must include each run's starting point and between-seed uncertainty.
 
 `analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
 `WANDB_MIRROR` lines. It writes separate CSV files for completion-aware quality and per-update
