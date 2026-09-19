@@ -138,10 +138,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from training_stalls import telemetry_query, training_stall_alert_rows
+from vllm_histograms import vllm_histogram_overview_queries
 from vllm_observability import (
     VLLM_MAX_RESULT_ROWS,
     VLLM_OVERVIEW_SECTIONS,
     VllmIdentityField,
+    VllmOverviewQuery,
     vllm_overview_query,
 )
 from wandb_source import WandbSource
@@ -404,6 +406,30 @@ class _FinelogQueries:
             return JSONResponse([])
 
 
+def _vllm_overview_rows(
+    source: MetricSource,
+    overview: VllmOverviewQuery,
+    histogram_overviews: tuple[VllmOverviewQuery, VllmOverviewQuery],
+    max_rows: int,
+) -> list[dict[str, object]]:
+    tables = [source.query(query.sql, max_rows=max_rows) for query in (overview, *histogram_overviews)]
+    rows = [row for table in tables for row in rows_to_json(table)]
+    if len(rows) > max_rows:
+        raise QueryResultTooLargeError(f"combined vLLM overview returned {len(rows)} rows, exceeds max_rows={max_rows}")
+    rows.sort(
+        key=lambda row: (
+            str(row.get("section", "")),
+            0 if row.get("section") == "telemetry_health" and row.get("metric") == "collector" else 1,
+            row.get("t") is not None,
+            row.get("t") or 0,
+            str(row.get("metric", "")),
+            str(row.get("stat", "")),
+            str(row.get("series", "")),
+        )
+    )
+    return rows
+
+
 def _iris_for(name: str, sources: Mapping[str, IrisSource]) -> IrisSource:
     if name not in sources:
         raise _BadRequest(f"unknown cluster {name!r}; configured: {sorted(sources)}")
@@ -456,6 +482,7 @@ def create_app(
                     round(end.timestamp() * 1000),
                     requested_bucket_ms,
                 )
+                histogram_overviews = vllm_histogram_overview_queries(overview)
             except ValueError as err:
                 raise _BadRequest(str(err)) from err
 
@@ -478,11 +505,12 @@ def create_app(
                     overview.start_ms,
                     overview.end_ms,
                 )
-                table = finelog_sources[target.name].query(
-                    overview.sql,
-                    max_rows=min(config.max_rows, VLLM_MAX_RESULT_ROWS),
+                return _vllm_overview_rows(
+                    finelog_sources[target.name],
+                    overview,
+                    histogram_overviews,
+                    min(config.max_rows, VLLM_MAX_RESULT_ROWS),
                 )
-                return rows_to_json(table)
 
             rows = finelog_cache.get_or_compute(key, run)
             return JSONResponse(rows if not view else [row for row in rows if row.get("section") == view])

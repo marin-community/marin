@@ -662,10 +662,44 @@ def _emit_to_runtime(
                 raise ValueError("metric value must be finite")
             record["unit"] = unit
             record["value"] = numeric
-        return runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()))
-    except Exception:
+        return _queue_record(runtime, record)
+    except (TypeError, ValueError, OverflowError):
         runtime.count_lost()
         return False
+
+
+def _emit_structured_event_to_runtime(
+    runtime: _Runtime,
+    name: str,
+    *,
+    body: Mapping[str, object],
+    timestamp_ms: int,
+    attributes: Mapping[str, str],
+) -> bool:
+    """Queue one caller-validated nested event with its source timestamp."""
+    try:
+        serialization.validate_string(name, "name")
+        serialization.validate_attributes(attributes)
+        record = {
+            "attributes": dict(attributes),
+            "body": dict(body),
+            "kind": _EVENT_KIND,
+            "name": name,
+            "timestamp_ms": timestamp_ms,
+        }
+        return _queue_record(runtime, record)
+    except (TypeError, ValueError, OverflowError):
+        runtime.count_lost()
+        return False
+
+
+def _queue_record(runtime: _Runtime, record: Mapping[str, object]) -> bool:
+    try:
+        payload = serialization.json_bytes_bounded(record, runtime.max_record_bytes())
+    except (TypeError, ValueError, OverflowError):
+        runtime.count_lost()
+        return False
+    return runtime.emit(payload)
 
 
 def _valid_ack(response: _Response, batch_id: str) -> bool:

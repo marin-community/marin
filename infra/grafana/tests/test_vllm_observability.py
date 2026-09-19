@@ -48,14 +48,17 @@ def test_inference_identity_selector_reads_request_state_rows(filename: str) -> 
     assert database.execute(sql).fetchall() == [("/serve",), ("/train",)]
 
 
+@pytest.mark.parametrize("histogram_representation", ["legacy", "dual_scalar_only", "structured", "mixed"])
 @pytest.mark.parametrize("invalid_histogram", ["reset", "missing_component"])
-def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
+def test_dashboard_vllm_overview_end_to_end(invalid_histogram, histogram_representation):
     database = duckdb.connect()
     columns = """cluster VARCHAR, service VARCHAR, job_id VARCHAR, name VARCHAR, kind VARCHAR,
-        value DOUBLE, resource_attributes_json VARCHAR, attributes_json VARCHAR, timestamp_ms BIGINT, seq BIGINT"""
+        value DOUBLE, body_json VARCHAR, resource_attributes_json VARCHAR, attributes_json VARCHAR,
+        timestamp_ms BIGINT, seq BIGINT"""
     database.execute(f'CREATE TABLE "telemetry_v1.marinskyrl"({columns})')
     database.execute(f'CREATE TABLE "telemetry_v1.vllm"({columns})')
     database.execute("CREATE MACRO json_get(d, f) AS json_extract_string(d, concat('$.', f))")
+    database.execute("CREATE MACRO string_to_array(s, d) AS string_split(s, d)")
 
     def sample(name, value, timestamp, **labels):
         attributes = {"metric_source": "vllm", "engine": "physical-a", "engine_index": "0", **labels}
@@ -75,19 +78,30 @@ def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
         sample("request_success_total", value, timestamp, finished_reason="stop", **cumulative)
         for timestamp, value in ((0, 0), (15_000, 1))
     ]
-    for family, mean in (
+    histograms = (
         ("request_time_per_output_token_seconds", 0.1),
         ("time_to_first_token_seconds", 2),
         ("request_prefill_time_seconds", 1),
         ("request_decode_time_seconds", 10),
         ("request_generation_tokens", 100),
-    ):
-        for component, final in (("sum", mean), ("count", 1), ("bucket", 1)):
-            labels = {**cumulative, **({"le": str(mean)} if component == "bucket" else {})}
-            samples += [
-                sample(f"{family}_{component}", value, timestamp, **labels)
-                for timestamp, value in ((0, 0), (15_000, final))
-            ]
+    )
+    if histogram_representation in ("legacy", "dual_scalar_only", "mixed"):
+        for family, mean in histograms:
+            for component, final in (("sum", mean), ("count", 1), ("bucket", 1)):
+                labels = {**cumulative, **({"le": str(mean)} if component == "bucket" else {})}
+                rows = []
+                for sequence, (timestamp, value) in enumerate(((0, 0), (15_000, final))):
+                    if histogram_representation in ("dual_scalar_only", "mixed"):
+                        labels = {
+                            **labels,
+                            "histogram_collection_timestamp_ms": str(timestamp),
+                            "histogram_publication_id": f"physical-a:{timestamp}:{sequence}",
+                            "histogram_sample_sequence": str(sequence),
+                            "histogram_schema": f"schema:{family}",
+                            "histogram_series": '{"engine":"physical-a","engine_index":"0"}',
+                        }
+                    rows.append(sample(f"{family}_{component}", value, timestamp, **labels))
+                samples += rows
     # A second engine must not skew the fleet mean/tails with a reset or partial scrape.
     for component in ("sum", "count", "bucket"):
         labels = {**cumulative, "engine": "physical-b", "engine_index": "1"}
@@ -114,9 +128,71 @@ def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
     ]
     database.executemany(
         """INSERT INTO "telemetry_v1.marinskyrl"
-           VALUES ('cw-a', 'marinskyrl', '/train', ?, 'gauge', ?, '{"worker":"driver"}', ?, ?, ?)""",
+           VALUES ('cw-a', 'marinskyrl', '/train', ?, 'gauge', ?, NULL,
+                   '{"worker":"driver"}', ?, ?, ?)""",
         [(*row, seq) for seq, row in enumerate(samples)],
     )
+    if histogram_representation in ("structured", "mixed"):
+        bundles = []
+        for sequence, timestamp in enumerate((0, 15_000)):
+            body_histograms = {}
+            delta_family_names = []
+            delta_family_indexes = []
+            delta_component_kinds = []
+            delta_component_bounds = []
+            delta_component_values = []
+            for family_index, (family, mean) in enumerate(histograms):
+                # Structured subtraction must happen as int64 before dashboard projection to double.
+                count = ((1 << 53) + 1 if histogram_representation == "structured" else 0) + sequence
+                body_histograms[family] = {
+                    "attributes": {"engine": "physical-a", "engine_index": "0"},
+                    "count": count,
+                    "cumulative_counts": [count, count],
+                    "delta_valid": sequence > 0,
+                    "encoding": "explicit_bounds_cumulative_with_delta_v1",
+                    "finite_bounds": [mean],
+                    "schema": f"schema:{family}",
+                    "series": f"series:{family}",
+                    "sum": mean * sequence,
+                    "unit": "{token}" if family == "request_generation_tokens" else "s",
+                }
+                if sequence > 0:
+                    delta_family_names.append(family)
+                    delta_family_indexes.extend((str(family_index),) * 4)
+                    delta_component_kinds.extend(("bucket", "bucket", "count", "sum"))
+                    delta_component_bounds.extend((str(mean), "+Inf", "_", "_"))
+                    delta_component_values.extend(("1", "1", "1", str(mean)))
+            body = {
+                "encoding": "explicit_bounds_cumulative_bundle_v2",
+                "histograms": body_histograms,
+                "sample_sequence": sequence,
+            }
+            if sequence > 0:
+                body.update(
+                    {
+                        "delta_component_bounds_csv": "|".join(delta_component_bounds),
+                        "delta_component_kinds_csv": "|".join(delta_component_kinds),
+                        "delta_component_values_csv": "|".join(delta_component_values),
+                        "delta_family_indexes_csv": "|".join(delta_family_indexes),
+                        "delta_family_names_csv": "|".join(delta_family_names),
+                    }
+                )
+            attributes = {
+                "engine": "physical-a",
+                "engine_index": "0",
+                "histogram_encoding": "explicit_bounds_cumulative_bundle_v2",
+                "histogram_publication_id": f"physical-a:{timestamp}:{sequence}",
+                "metric_source": "vllm",
+                "source_kind": "histogram_bundle",
+                "source_temporality": "cumulative_snapshot",
+            }
+            bundles.append((json.dumps(body), json.dumps(attributes), timestamp))
+        database.executemany(
+            """INSERT INTO "telemetry_v1.marinskyrl"
+               VALUES ('cw-a', 'marinskyrl', '/train', 'vllm_histogram_bundle', 'event', NULL, ?,
+                       '{"worker":"driver"}', ?, ?, ?)""",
+            [(*row, len(samples) + seq) for seq, row in enumerate(bundles)],
+        )
 
     source = Record(
         target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"),
@@ -164,7 +240,9 @@ def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
     assert values[("latency", "tpot", "mean_over_time", "time per output token", 15_000)] == 0.1
     assert values[("latency", "ttft", "mean_over_time", "ttft", 15_000)] == 2
     assert values[("latency", "prefill", "mean", "prefill", None)] == 1
+    assert values[("latency", "prefill", "p50", "prefill", None)] == 1
     assert values[("latency", "prefill", "p90", "prefill", None)] == 1
+    assert values[("latency", "prefill", "p99", "prefill", None)] == 1
     assert values[("latency", "decode", "mean", "decode", None)] == 10
     assert values[("workload", "output_tokens", "mean", "output_tokens", None)] == 100
     histogram_rows = [row for row in rows if row["section"] in ("latency", "workload")]
