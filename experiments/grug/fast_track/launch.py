@@ -247,8 +247,10 @@ def _ablate_model(model: GrugModelConfig, ablation: str) -> GrugModelConfig:
         return dataclasses.replace(model, use_attn_gate=False)
     if ablation == "drop_gated_norm":
         return dataclasses.replace(model, use_gated_norm=False)
-    if ablation == "drop_latent":  # experts on full hidden -> ~2x wider
-        return dataclasses.replace(model, latent_dim=None)
+    if ablation == "drop_latent":
+        # Experts on full hidden (width doubles); halve the expert intermediate so per-expert params
+        # stay ~matched to the baseline, isolating the latent-compression effect (not a capacity bump).
+        return dataclasses.replace(model, latent_dim=None, intermediate_dim=model.intermediate_dim // 2)
     if ablation == "full_rope_local":
         return dataclasses.replace(model, full_rope_local=True)
     if ablation == "drop_sconv":
