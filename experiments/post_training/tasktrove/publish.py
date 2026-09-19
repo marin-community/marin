@@ -4,7 +4,7 @@
 """Publish the retained TaskTrove rows and their rejection ledger.
 
     tasks/part-00000.parquet every surviving Harbor task with its selection columns
-    rl/part-00000.parquet    MCQA tasks routed to RL, with routing provenance
+    rl/part-00000.parquet    complete RL corpus, with MCQA routing provenance
     sft/part-00000.parquet   MCQA tasks routed to SFT, with routing provenance
     ledger.parquet           one row per task omitted from ``tasks/``: its status and reason
     manifest.json            revision, tool ref, counts per status, route, source, converter, mode,
@@ -42,6 +42,12 @@ from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from experiments.post_training.tasktrove.apply_mcqa_routing import (
+    ROUTED_GLOB,
+    ROUTED_SCHEMA,
+    ROUTED_SFT_STATUS,
+    ROUTING_COLUMNS,
+)
 from experiments.post_training.tasktrove.convert import CONVERTED_SCHEMA
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.dataset import (
@@ -52,12 +58,6 @@ from experiments.post_training.tasktrove.dataset import (
     load_source_verdicts,
 )
 from experiments.post_training.tasktrove.mcqa_routing import Route
-from experiments.post_training.tasktrove.routing_cleanup import (
-    ROUTED_GLOB,
-    ROUTED_SCHEMA,
-    ROUTED_SFT_STATUS,
-    ROUTING_COLUMNS,
-)
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, read_task_binary
 from experiments.post_training.tasktrove.verify import VERIFIED_STATUS
 
@@ -147,7 +147,7 @@ def _is_main_task(row: dict) -> bool:
 
 
 def _is_rl_task(row: dict) -> bool:
-    return row["route"] == Route.RL
+    return row["status"] == ConvertStatus.CONVERTED
 
 
 def _is_sft_task(row: dict) -> bool:

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Apply the MCQA routing ledger to verified TaskTrove rows."""
+"""Apply the MCQA routing artifact to verified TaskTrove rows."""
 
 import json
 
@@ -14,7 +14,7 @@ from zephyr.dataset import Dataset
 from experiments.post_training.tasktrove.convert import CONVERTED_SCHEMA
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.dataset import APPROX_SHARD_BYTES, WORKER_RESOURCES, WORKING_SHARDS
-from experiments.post_training.tasktrove.mcqa_routing import MCQA_SOURCE, Route
+from experiments.post_training.tasktrove.mcqa_routing import MCQA_SOURCE, ROUTE_MAPPINGS_FILENAME, Route
 from experiments.post_training.tasktrove.verify import FILTERED_GLOB
 
 ROUTED_GLOB = "graded/*.parquet"
@@ -84,9 +84,9 @@ def load_route_mappings(route_mappings_path: str) -> dict[str, dict]:
     return mappings
 
 
-def route_tasks(filtered_path: str, route_mappings_path: str, output_path: str) -> None:
-    """Apply the canonical mapping to verified tasks and write routed Parquet shards."""
-    mappings = load_route_mappings(route_mappings_path)
+def route_tasks(filtered_path: str, routing_artifact_path: str, output_path: str) -> None:
+    """Apply the routing artifact to verified tasks and write routed Parquet shards."""
+    mappings = load_route_mappings(str(StoragePath(routing_artifact_path) / ROUTE_MAPPINGS_FILENAME))
     rows = Dataset.from_files(str(StoragePath(filtered_path) / FILTERED_GLOB)).load_parquet(
         approx_shard_bytes=APPROX_SHARD_BYTES
     )

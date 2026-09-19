@@ -12,6 +12,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from experiments.post_training.tasktrove.apply_mcqa_routing import (
+    ROUTED_GARBAGE_STATUS,
+    ROUTED_MISSING_STATUS,
+    ROUTED_SFT_STATUS,
+    route_tasks,
+)
 from experiments.post_training.tasktrove.convert import ConvertedRecord, convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
@@ -22,12 +28,6 @@ from experiments.post_training.tasktrove.publish import (
     export_task,
     publish_release,
     publish_to_huggingface,
-)
-from experiments.post_training.tasktrove.routing_cleanup import (
-    ROUTED_GARBAGE_STATUS,
-    ROUTED_MISSING_STATUS,
-    ROUTED_SFT_STATUS,
-    route_tasks,
 )
 from experiments.post_training.tasktrove.task_format import VERIFIER_TOML
 from experiments.post_training.tasktrove.taskbinary import INSTRUCTION, TaskFiles, read_task_binary, write_task_binary
@@ -99,7 +99,8 @@ def _write_routes(path: Path, routes: dict[str, str]) -> Path:
         }
         for task_id, route in routes.items()
     ]
-    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    path.mkdir()
+    (path / "route-mappings.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
     return path
 
 
@@ -144,7 +145,7 @@ def test_publish_writes_survivors_and_rejection_ledger(tmp_path):
     filtered, routed, release = (str(tmp_path / name) for name in ("filtered", "routed", "release"))
 
     filter_tasks(str(converted), filtered, max_tasks_per_source=None)
-    _route(filtered, routed, tmp_path / "routes.jsonl", {"good.tar.gz": "rl"})
+    _route(filtered, routed, tmp_path / "routing-artifact", {"good.tar.gz": "rl"})
     publish_release(routed, release, tool_ref="ref")
 
     assert [path.name for path in (tmp_path / "release" / "tasks").glob("*.parquet")] == ["part-00000.parquet"]
@@ -194,7 +195,7 @@ def test_route_tasks_splits_mcqa_and_fails_closed(tmp_path):
     _route(
         filtered,
         routed,
-        tmp_path / "routes.jsonl",
+        tmp_path / "routing-artifact",
         {"rl.tar.gz": "rl", "sft.tar.gz": "sft", "garbage.tar.gz": "garbage"},
     )
 
@@ -211,7 +212,9 @@ def test_route_tasks_splits_mcqa_and_fails_closed(tmp_path):
 
     publish_release(routed, release, tool_ref="ref")
     assert set(_rows(tmp_path / "release" / "tasks")) == {"rl.tar.gz", "other.tar.gz"}
-    assert set(_rows(tmp_path / "release" / "rl")) == {"rl.tar.gz"}
+    rl_rows = _rows(tmp_path / "release" / "rl")
+    assert set(rl_rows) == {"rl.tar.gz", "other.tar.gz"}
+    assert rl_rows["other.tar.gz"]["route"] == ""
     assert set(_rows(tmp_path / "release" / "sft")) == {"sft.tar.gz"}
     manifest = json.loads((tmp_path / "release" / "manifest.json").read_text())
     assert manifest["by_route"] == {"rl": 1, "sft": 1, "garbage": 1}
@@ -224,7 +227,7 @@ def test_huggingface_publish_uploads_tasks_and_audit_metadata(tmp_path):
     routed = str(tmp_path / "routed")
     release = str(tmp_path / "release")
     filter_tasks(str(converted), filtered, max_tasks_per_source=None)
-    _route(filtered, routed, tmp_path / "routes.jsonl", {"good.tar.gz": "rl"})
+    _route(filtered, routed, tmp_path / "routing-artifact", {"good.tar.gz": "rl"})
     publish_release(routed, release, tool_ref="ref")
     api = RecordingHubApi()
 

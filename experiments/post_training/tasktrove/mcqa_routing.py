@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Route TaskTrove MCQA tasks to RL, SFT, or garbage with GLM-5.3.
+"""Classify TaskTrove MCQA tasks as RL, SFT, or garbage with GLM-5.3.
 
-The command is designed for an Iris job with one or more replicas. Each replica
+The worker runs as an Iris job with one or more replicas. Each replica
 reads a disjoint set of Parquet row groups, applies deterministic structural
 checks, selects its share of an optional hash sample, and submits one persistent
 GLM Batch API job. Outputs are written below a replica-specific object-storage
@@ -12,7 +12,6 @@ prefix so a retried task can resume the submitted GLM batch.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import heapq
 import json
@@ -41,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 MCQA_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
 POLICY_VERSION = "tasktrove-mcqa-glm53-v1"
+ROUTE_MAPPINGS_FILENAME = "route-mappings.jsonl"
 VERIFIER_TOML = "tests/verifier.toml"
 _OPTION_RE = re.compile(r"(?m)^\s*\(?([A-J])[.):]\s+(.+?)\s*$")
 _ALL_OR_NONE_RE = re.compile(r"(?i)\b(?:all|none) of the above\b")
@@ -721,7 +721,7 @@ def run_worker(config: RoutingConfig) -> None:
         {key: row[key] for key in ("task_id", "route", "route_source", "policy_version", "reason_codes")}
         for row in routed
     ]
-    (output_root / "route-mappings.jsonl").write_text(_jsonl(mappings))
+    (output_root / ROUTE_MAPPINGS_FILENAME).write_text(_jsonl(mappings))
 
     route_subject = defaultdict(Counter)
     for row in routed:
@@ -764,47 +764,3 @@ def run_worker(config: RoutingConfig) -> None:
     local_output.mkdir(parents=True, exist_ok=True)
     (local_output / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print("MCQA_ROUTING_SUMMARY=" + json.dumps(summary, separators=(",", ":")), flush=True)
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", required=True, help="TaskTrove release Parquet path")
-    parser.add_argument("--output", required=True, help="Output directory, usually region-local object storage")
-    parser.add_argument("--source", default=MCQA_SOURCE)
-    parser.add_argument("--git-revision", required=True, help="Marin revision bundled into this routing job")
-    parser.add_argument(
-        "--sample-size",
-        type=int,
-        default=0,
-        help="Total sample size across all Iris replicas; zero routes all survivors",
-    )
-    parser.add_argument("--sample-seed", default="tasktrove-mcqa-glm53-v1")
-    parser.add_argument(
-        "--request-batch-size", type=int, default=20, help="Questions packed into each chat-completion request"
-    )
-    parser.add_argument("--relay-job", default="/muchanem/glm53-relay-08a")
-    parser.add_argument("--poll-seconds", type=float, default=10)
-    args = parser.parse_args()
-    if args.request_batch_size <= 0:
-        parser.error("--request-batch-size must be positive")
-    if args.sample_size < 0:
-        parser.error("--sample-size must be non-negative")
-    return args
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    args = parse_args()
-    run_worker(
-        RoutingConfig(
-            input_path=args.input,
-            output_path=args.output,
-            source=args.source,
-            git_revision=args.git_revision,
-            sample_size=args.sample_size,
-            sample_seed=args.sample_seed,
-            request_batch_size=args.request_batch_size,
-            relay_job=args.relay_job,
-            poll_seconds=args.poll_seconds,
-        )
-    )
