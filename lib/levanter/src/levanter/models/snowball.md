@@ -46,8 +46,11 @@ so downstream floating-point auxiliary transport can represent counts exactly.
 
 The June model retains optimization barriers after RMS variance, embedding
 gather, and router sigmoid. These prevent demonstrated forward/AD rounding
-changes caused by fusion; each boundary has a scoring-versus-AD regression
-test at its production shapes. The model-only tests cover HF mappings, masks and
+changes caused by fusion. Only the RMS boundary reproduces on CPU, so only its
+regression test fails when the barrier is removed; the embedding-gather and
+router-sigmoid barriers guard GPU kernel-layout effects that do not reproduce
+on CPU, and their scoring-versus-AD tests pin equality without being able to
+observe a missing barrier. The model-only tests cover HF mappings, masks and
 positions, forward/gradient agreement, stage ownership, uneven partitions, the
 two-device expert-parallel stage path, and the telemetry bound. The wider GRPO
 migration additionally required a scorer-only compute-weight
