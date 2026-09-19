@@ -1,0 +1,45 @@
+{
+  "upstream": {
+    "repository": "NVIDIA-NeMo/Gym",
+    "revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+    "license": "Apache-2.0"
+  },
+  "source_fixture": {
+    "github_path": "resources_servers/workplace_assistant/data/example.jsonl",
+    "github_blob": "b39e9c4c794abeab670ed7f0b41d81b4db50461a",
+    "raw_sha256": "2df8a2537121aa40041b46a96683f0397cc945bf5de83062b76ca6e3eaf6296d",
+    "fixture": "workplace-0.json",
+    "fixture_raw_sha256": "a92e1627d61734c323071765bba22a7f25bc3ec7e096b77b0c8d4f7e2848f447",
+    "fixture_canonical_json_sha256": "7eda1a09927c09d96f8748d2928a617fc8d8e1b04ae1211905df9e2a8f2efe93",
+    "selector": {"field": "id", "value": 0},
+    "dataset": "nvidia/Nemotron-RL-agent-workplace_assistant",
+    "dataset_revision": "c86a908379e0a361a573c395e175d3c1aa128e6c"
+  },
+  "server_contract": {
+    "app.py": {"github_blob": "2eea41839e9bcc5aae9a398487a02c9954ab9b23", "raw_sha256": "06dc285a48b0cf51d538b0bc8dacee7a7f68b5b071bf2859b4494b5485625d7c"},
+    "task_data.py": {"github_blob": "f846eb007dacb5ed4bcab17a3b2130021c9ff4ac", "raw_sha256": "352b5739ca9daf89615a46eefa2abd81e604c83e269fb556dbcf99fd7dc7c482"},
+    "configs/workplace_assistant.yaml": {"github_blob": "f86c5f0e79bb7536c4beef489f765551a3c2bc80", "raw_sha256": "d738507eb02c5e144accf1e6c50931942f563d40f3d892dff411d8e611f95990"},
+    "tools": {
+      "analytics.py": {"github_blob": "a7e17357cf7dad23a1eefc7f5066c42623409693", "raw_sha256": "96fc35e61ceed6dc323485960cdf644ec8c7390421bb65eadab86b28a6a919e0"},
+      "calendar.py": {"github_blob": "d112fd8b8e4c7c898fb765f46315642aff636b79", "raw_sha256": "88016c51f7fcecc98897c1a4060bece2ee3804d60b5f85a80f85869303088fef"},
+      "company_directory.py": {"github_blob": "db0885f81f37855bc8dfd98479e859923005c010", "raw_sha256": "7d5f3bbe1b2e6d6f41d1b8a06db0bc1c4eaacb423915b44e058af15fcd09c7dd"},
+      "customer_relationship_manager.py": {"github_blob": "9729de4a9f3f29edffd8cd51823ad47d42cc22ca", "raw_sha256": "1db9d57324ce097aeb41cbdde06655442de0a34138293e90bdfeca6ae44a2b2c"},
+      "email.py": {"github_blob": "64e38dc09e62c62708a2dc6146eb6e6fd9134167", "raw_sha256": "2c710f6cc5d6d7d3b2830b4567dec8ab34bb04b2249765152bc41f2864a64ac5"},
+      "project_management.py": {"github_blob": "24e49406ac2a199792f6036b4ec5717b1e5ec18d", "raw_sha256": "1eccec5636e01dee6fcda583dbb6189b3a998c3f5572c2038194ac223995dbc9"}
+    }
+  },
+  "seed": {
+    "seed_sha256": "abcfd3d4727c66b6dfc145b59f720b819ac9de1b65df285cd30bc80bc10b3b8b",
+    "algorithm": "sha256 of each CSV path relative to csv_data, a NUL byte, then its raw bytes in lexical path order",
+    "files": {
+      "processed/analytics_data.csv": {"github_blob": "bfdaf1e69fe5be89bd3653b1cd9ea0c856631b7f", "raw_sha256": "4a0df10aabc07980f1cc074dc9ab36406ce98dead7e14fe11f72a9f1ba788688"},
+      "processed/calendar_events.csv": {"github_blob": "f306ebf3155838893e80db3b2df41aa828807b54", "raw_sha256": "6c9df1872d54d0b0d068d1b066766a8ddbc29c3933f1d56c9efd554926312295"},
+      "processed/customer_relationship_manager_data.csv": {"github_blob": "59a8cc50b2a584c48090edc199f11d3387b39d3a", "raw_sha256": "599057e4eec3a7c25ac04b4d655ea2c034b7b7782205dc367a28122756e04c41"},
+      "processed/emails.csv": {"github_blob": "a24d94f5092117b926d38afab0c94ae85590ceb7", "raw_sha256": "1809e341a0e4f1fd78cf1b759964a42abd28db8c9b9dca364456efc31f82bb31"},
+      "processed/project_tasks.csv": {"github_blob": "ca2eeaf251ee010da2d185baf09fd1d9d6c3bf02", "raw_sha256": "fa0c05d5609f49e905342bd12592b09f23eff6147dcf607b808703f45ddbeaeb"},
+      "raw/email_addresses.csv": {"github_blob": "8de61e2fd293e52eeda17c2cee1367f6990fe713", "raw_sha256": "1f3465b92eb41b90a973a9b00f35757a23d16839652b5e352e9d217d8e404b0b"}
+    }
+  },
+  "verification_change": "The source verifier continues after malformed gold actions. This adapter treats malformed or unexecutable private gold as invalid_task so an invalid verifier contract cannot silently become an ordinary score. Agent action errors retain the source error-as-observation behavior.",
+  "verification_scope": "Preserves the source comparator: calendar, email, analytics plot, project-management, and CRM mutable tables are compared after lowercasing string columns except status, list_name, and board. Company-directory output and immutable analytics rows are not state targets, and tool-result text is agent context rather than a scored output."
+}

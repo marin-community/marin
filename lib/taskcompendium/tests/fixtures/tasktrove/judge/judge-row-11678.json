@@ -1,0 +1,27 @@
+{
+  "mode_requested": "judge",
+  "row": {
+    "row": 11678,
+    "source": "laion__nemotron-gym-knowledge-openqa-v4",
+    "path": "openqa-bc21b85a71ee.tar.gz",
+    "family": "qa-short-answer",
+    "converter": "nemotron_openqa",
+    "mode": "judge",
+    "dockerfile_id": "557bbaae3948",
+    "environment": "python:3.12-slim-bookworm",
+    "language": "",
+    "tags": [
+      "qa",
+      "openqa",
+      "judge",
+      "reference",
+      "nemotron",
+      "knowledge"
+    ],
+    "has_solution": false
+  },
+  "archive_path": "/tmp/tasktrove-pr9061.Cya2vg/samples/judge-row-11678.tar.gz",
+  "metadata_path": "/tmp/tasktrove-pr9061.Cya2vg/samples/judge-row-11678.json",
+  "archive_bytes": 1733,
+  "archive_sha256": "15058ea87bcef490699bdf35d83078a0d8ff1b93538155cda8f4ffba1a0c2c11"
+}

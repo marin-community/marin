@@ -1,0 +1,7 @@
+This directory contains the bounded Workplace Assistant provider implementation
+from NVIDIA-NeMo/Gym at revision 1e668906d2e69a9e8ee9aaafc60050a4025d9688.
+
+The tool modules under vendor/ retain their upstream SPDX Apache-2.0
+notices. The bundled source and immutable CSV seeds use the Apache-2.0
+license reproduced in LICENSE. Source object and raw-content digests are recorded in
+lib/taskcompendium/tests/fixtures/nemo/workplace-0.provenance.json.

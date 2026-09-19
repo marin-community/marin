@@ -1,0 +1,50 @@
+{
+  "task_id": "tasktrove-16636",
+  "schema_version": "0.3",
+  "specification_sha256": "085c595c0903baad113c16ff21e9f30cf4200d763e84172a406587f2340081bd",
+  "candidate": {
+    "propertyType": "singleFamilyHome",
+    "budget": {
+      "maxPrice": 123,
+      "downPayment": 0
+    },
+    "location": {
+      "city": "Atlantis",
+      "neighborhood": "Invented",
+      "proximityToSchools": true
+    },
+    "preferredFeatures": [
+      "garage"
+    ],
+    "mortgageStatus": {
+      "applicationSubmitted": true,
+      "preApproved": true,
+      "interestRate": 99
+    },
+    "inspectionResults": {
+      "inspectionDate": "2020-01-01",
+      "issuesFound": [
+        "Invented problem"
+      ],
+      "recommendations": {
+        "repairsNeeded": true,
+        "negotiation": {
+          "buyerRequested": "Invented request",
+          "sellerResponse": "Invented response"
+        }
+      }
+    },
+    "closingTimeline": {
+      "estimatedClosingDate": "2020-01-02",
+      "contingencyPeriod": 0,
+      "escrowProvider": "Invented company"
+    }
+  },
+  "observed_result": {
+    "status": "graded",
+    "reward": 1.0,
+    "detail": {
+      "reason": "valid"
+    }
+  }
+}

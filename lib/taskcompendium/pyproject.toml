@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "taskcompendium"
+version = "0.1.0"
+description = "Semantic task specifications and reproducible Harbor lowerings."
+requires-python = ">=3.12"
+dependencies = [
+    "fsspec>=2025.3.0",
+    "msgspec>=0.18",
+    "pandas>=2.2",
+    "pyarrow>=23",
+    "tasktrove-verify[answer,schema,judge]",
+    "tomlkit>=0.13",
+]
+
+[project.scripts]
+taskcompendium = "taskcompendium.cli:main"
+
+[project.optional-dependencies]
+harbor = ["harbor", "pydantic-settings"]
+s3 = ["s3fs"]
+
+[dependency-groups]
+test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
+
+[tool.uv.workspace]
+
+[tool.uv.sources]
+tasktrove-verify = { git = "https://github.com/marin-community/marin.git", rev = "b76d03131cd88bd9fc711dba206659027edba3a8", subdirectory = "lib/tasktrove-verify" }
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "93147ea9e07b04ec8d2eb5afd2916386f1aacc69" }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/taskcompendium"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+timeout = 60
+addopts = "--import-mode=importlib -m 'not integration and not docker and not manual'"
+markers = ["integration: live external service", "docker: requires a Docker daemon", "manual: explicitly invoked validation", "harbor_conformance: end-to-end TaskCompendium to Harbor compatibility suite"]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+extend-exclude = ["src/taskcompendium/providers/nemo_workplace/vendor/workplace_assistant_tools"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["taskcompendium"]
+known-local-folder = []
+
+[tool.pyrefly]
+project-includes = ["src"]
+project-excludes = ["src/taskcompendium/providers/nemo_workplace/vendor/workplace_assistant_tools/**"]
+search-path = ["src", "src/taskcompendium/importers/r2e_assets"]
+python-interpreter = ".venv/bin/python"

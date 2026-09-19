@@ -1,0 +1,10 @@
+{
+  "good": {
+    "name": "authenticate_user",
+    "arguments": "{\"user_id\": \"GROOM2024\", \"event_confirmation_code\": \"NIGHTCLUB2024\"}"
+  },
+  "wrong": {
+    "name": "get_event_details",
+    "arguments": "{}"
+  }
+}

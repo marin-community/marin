@@ -1,0 +1,629 @@
+{
+  "gsm8k-train/0": {
+    "coverage_tags": [
+      "competency:quantitative_reasoning",
+      "shape:answer",
+      "subject:math.arithmetic"
+    ],
+    "difficulty": 1
+  },
+  "gsm8k-train/1": {
+    "coverage_tags": [
+      "competency:quantitative_reasoning",
+      "shape:answer",
+      "subject:finance.personal"
+    ],
+    "difficulty": 2
+  },
+  "gsm8k-train/2": {
+    "coverage_tags": [
+      "competency:quantitative_reasoning",
+      "shape:answer",
+      "subject:finance.personal"
+    ],
+    "difficulty": 2
+  },
+  "nemo-predicted-action-100006de9c5795f992b54542d6368012170b333990b37202780ab19f60d2185f": {
+    "coverage_tags": [
+      "competency:rule_application",
+      "context:customer_service",
+      "interaction:single_tool_call",
+      "shape:predicted_action",
+      "subject:business"
+    ],
+    "difficulty": 6
+  },
+  "nemo/code-answer/c69268d8bdb4da0685d7b187c88296c1": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:algorithm_design",
+      "shape:code_generation",
+      "subject:computing.algorithms"
+    ],
+    "difficulty": 8
+  },
+  "nemo/ifeval/17616/binary": {
+    "coverage_tags": [
+      "artifact:prose",
+      "competency:constraint_satisfaction",
+      "context:creative_writing",
+      "shape:constrained_generation"
+    ],
+    "difficulty": 3
+  },
+  "nemo/ifeval/17616/fraction": {
+    "coverage_tags": [
+      "artifact:prose",
+      "competency:constraint_satisfaction",
+      "context:creative_writing",
+      "shape:constrained_generation"
+    ],
+    "difficulty": 3
+  },
+  "nemo/mcqa/0dfcf12c-bc99-535f-9c8c-6687a545f35d": {
+    "coverage_tags": [
+      "artifact:prose",
+      "competency:recall",
+      "shape:multiple_choice",
+      "subject:medicine"
+    ],
+    "difficulty": 5
+  },
+  "nemo/mcqa/abb2b851-363c-54fa-890c-44d67c37c9b8": {
+    "coverage_tags": [
+      "artifact:prose",
+      "competency:rule_application",
+      "shape:multiple_choice",
+      "subject:law"
+    ],
+    "difficulty": 7
+  },
+  "nemo/open_math/0": {
+    "coverage_tags": [
+      "artifact:numeric_answer",
+      "competency:quantitative_reasoning",
+      "shape:calculation",
+      "subject:math.number_theory"
+    ],
+    "difficulty": 4
+  },
+  "nemo/open_math/1": {
+    "coverage_tags": [
+      "artifact:formula",
+      "competency:quantitative_reasoning",
+      "shape:calculation",
+      "subject:math.algebra"
+    ],
+    "difficulty": 8
+  },
+  "nemo/open_qa/ae045132-7beb-5f97-bf65-a27d7d86b998": {
+    "coverage_tags": [
+      "artifact:prose",
+      "competency:recall",
+      "shape:answer",
+      "subject:chemistry"
+    ],
+    "difficulty": 4
+  },
+  "nemo/open_qa/bd761808-13a7-5faf-9852-961422532fbe": {
+    "coverage_tags": [
+      "artifact:prose",
+      "competency:rule_application",
+      "shape:explanation",
+      "subject:law"
+    ],
+    "difficulty": 7
+  },
+  "nemo/reasoning_gym/cf876b7f-0007-40a4-ab3a-f49fe8cdd8e2": {
+    "coverage_tags": [
+      "artifact:numeric_answer",
+      "competency:quantitative_reasoning",
+      "shape:calculation"
+    ],
+    "difficulty": 2
+  },
+  "nemo/reasoning_gym/d06d0d00-6b32-4ed1-9a73-1ee720d4aa42": {
+    "coverage_tags": [
+      "artifact:prose",
+      "competency:information_extraction",
+      "shape:answer"
+    ],
+    "difficulty": 1
+  },
+  "nemo/science/c0d8dc56ce5d485bb989483047fa661c": {
+    "coverage_tags": [
+      "artifact:formula",
+      "competency:quantitative_reasoning",
+      "shape:explanation",
+      "subject:physics"
+    ],
+    "difficulty": 3
+  },
+  "nemo/stack_math/0": {
+    "coverage_tags": [
+      "artifact:formula",
+      "competency:quantitative_reasoning",
+      "shape:calculation",
+      "subject:math.geometry"
+    ],
+    "difficulty": 5
+  },
+  "nemo/stack_math/1": {
+    "coverage_tags": [
+      "artifact:numeric_answer",
+      "competency:quantitative_reasoning",
+      "shape:calculation",
+      "subject:math.algebra"
+    ],
+    "difficulty": 4
+  },
+  "nemo/workplace/0": {
+    "coverage_tags": [
+      "context:workplace_assistant",
+      "interaction:single_tool_call",
+      "shape:stateful_domain",
+      "state:provider"
+    ],
+    "difficulty": 4
+  },
+  "nemo/workplace/0-derived-multistep": {
+    "coverage_tags": [
+      "competency:state_tracking",
+      "context:workplace_assistant",
+      "interaction:multi_action_workflow",
+      "shape:sequential_requirements",
+      "state:provider"
+    ],
+    "difficulty": 8
+  },
+  "nemo/workplace/1163": {
+    "coverage_tags": [
+      "competency:constraint_satisfaction",
+      "context:workplace_assistant",
+      "interaction:single_tool_call",
+      "shape:stateful_domain",
+      "state:provider"
+    ],
+    "difficulty": 6
+  },
+  "nemo/workplace/536": {
+    "coverage_tags": [
+      "context:workplace_assistant",
+      "interaction:single_tool_call",
+      "shape:stateful_domain"
+    ],
+    "difficulty": 2
+  },
+  "r2egym/269e2a176b9b2b8e00be46f5a59e840625879bf9": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 5
+  },
+  "r2egym/2d9617bd0cb1f0ba61771258410ab8fae8e7e24d": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 6
+  },
+  "r2egym/3758d8594d8738e51b3a738e06858ae7fc3cbdf1": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 5
+  },
+  "r2egym/4651e73c8ea9a502d4fd6ee25f33ece07b693b37": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 6
+  },
+  "r2egym/70a4df334835bcb9ea7c6b0eb11b4f5f7e117f36": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 4
+  },
+  "r2egym/74ffccc1d4a1dbb877490c9d6b59e6f501d5e438": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 4
+  },
+  "r2egym/7c9de553a279791535aa8ec927bef47801b819f1": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 5
+  },
+  "r2egym/7f5c9dace89a846e6fb7aed86e4ff7eb05e01dc0": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 6
+  },
+  "r2egym/9764be4fa30b1ae85db3b875039f0a2983531a9d": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 4
+  },
+  "r2egym/9b5494e26f407b75e79699c9d40be6df1d80a040": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.machine_learning"
+    ],
+    "difficulty": 5
+  },
+  "r2egym/a95245e37f35446f9870feb68f5ebb97d1c279ce": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 6
+  },
+  "r2egym/aae8c47f823197a04010a74570793464eb7352fe": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 5
+  },
+  "r2egym/ad202ae0d526f208bfde4ed9ef47190f078be7de": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 5
+  },
+  "r2egym/b0d83c555eda061014ae1d04dc0af07a569650e6": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 6
+  },
+  "r2egym/b983e25212aa3c006c37089ef970688e3c01c369": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 5
+  },
+  "r2egym/d61803f7181e7ad525d4bb1dd71ca500bb41617e": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 4
+  },
+  "r2egym/df34d9081e1fbe25466980b17a082ce210e821b5": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 6
+  },
+  "r2egym/e48a32f29bd3736e53efb7290cae64d5688357d6": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 6
+  },
+  "r2egym/ea8c3b0ce9ff87f849b1462aab0b34bd3e35d4ed": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 4
+  },
+  "r2egym/ef8363b650134f6415704b064573707a6d304ca3": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 4
+  },
+  "r2egym/f5b986b11e518191441420df8f8b84154c92e81c": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:debugging",
+      "context:repository",
+      "shape:environment_modification",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 5
+  },
+  "synthetic/conversational-revision": {
+    "coverage_tags": [
+      "artifact:prose",
+      "competency:state_tracking",
+      "interaction:conversation_revision",
+      "shape:constrained_generation"
+    ],
+    "difficulty": 2
+  },
+  "synthetic/sequential-greeting": {
+    "coverage_tags": [
+      "artifact:source_code",
+      "competency:state_tracking",
+      "shape:code_implementation",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 3
+  },
+  "tasktrove-0": {
+    "coverage_tags": [
+      "artifact:program",
+      "competency:algorithm_design",
+      "shape:algorithmic_programming",
+      "state:workspace",
+      "subject:math.geometry"
+    ],
+    "difficulty": 4
+  },
+  "tasktrove-1": {
+    "coverage_tags": [
+      "artifact:program",
+      "competency:algorithm_design",
+      "shape:algorithmic_programming",
+      "state:workspace",
+      "subject:computing.algorithms"
+    ],
+    "difficulty": 8
+  },
+  "tasktrove-114": {
+    "coverage_tags": [
+      "artifact:numeric_answer",
+      "competency:quantitative_reasoning",
+      "shape:calculation",
+      "subject:math.geometry"
+    ],
+    "difficulty": 4
+  },
+  "tasktrove-115": {
+    "coverage_tags": [
+      "competency:quantitative_reasoning",
+      "shape:calculation",
+      "subject:math.number_theory"
+    ],
+    "difficulty": 3
+  },
+  "tasktrove-11676": {
+    "coverage_tags": [
+      "competency:rule_application",
+      "shape:explanation",
+      "subject:law.real_estate"
+    ],
+    "difficulty": 6
+  },
+  "tasktrove-11677": {
+    "coverage_tags": [
+      "competency:causal_reasoning",
+      "context:experimental_measurement",
+      "shape:explanation",
+      "subject:physics.particle"
+    ],
+    "difficulty": 8
+  },
+  "tasktrove-11678": {
+    "coverage_tags": [
+      "artifact:formula",
+      "competency:quantitative_reasoning",
+      "shape:calculation",
+      "subject:physics.optics"
+    ],
+    "difficulty": 5
+  },
+  "tasktrove-119": {
+    "coverage_tags": [
+      "competency:causal_reasoning",
+      "context:experimental_observations",
+      "shape:answer"
+    ],
+    "difficulty": 3
+  },
+  "tasktrove-1487": {
+    "coverage_tags": [
+      "artifact:python_package",
+      "shape:code_implementation",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 5
+  },
+  "tasktrove-1488": {
+    "coverage_tags": [
+      "artifact:python_module",
+      "shape:code_implementation",
+      "state:workspace",
+      "subject:computing.python"
+    ],
+    "difficulty": 3
+  },
+  "tasktrove-1489": {
+    "coverage_tags": [
+      "artifact:python_module",
+      "shape:code_implementation",
+      "state:workspace",
+      "subject:computing.machine_learning"
+    ],
+    "difficulty": 6
+  },
+  "tasktrove-16158": {
+    "coverage_tags": [
+      "artifact:shell_output",
+      "interaction:terminal",
+      "shape:shell_workflow",
+      "state:workspace"
+    ],
+    "difficulty": null
+  },
+  "tasktrove-16159": {
+    "coverage_tags": [
+      "artifact:shell_output",
+      "competency:planning",
+      "interaction:terminal",
+      "shape:shell_workflow",
+      "state:workspace"
+    ],
+    "difficulty": 5
+  },
+  "tasktrove-16160": {
+    "coverage_tags": [
+      "artifact:shell_output",
+      "competency:planning",
+      "interaction:terminal",
+      "shape:shell_workflow",
+      "state:workspace"
+    ],
+    "difficulty": 4
+  },
+  "tasktrove-16634": {
+    "coverage_tags": [
+      "artifact:application/xml",
+      "shape:structured_extraction",
+      "subject:humanities.history"
+    ],
+    "difficulty": null
+  },
+  "tasktrove-16636": {
+    "coverage_tags": [
+      "artifact:application/json",
+      "shape:structured_extraction"
+    ],
+    "difficulty": null
+  },
+  "tasktrove-1972": {
+    "coverage_tags": [
+      "competency:recall",
+      "shape:multiple_choice",
+      "subject:design.ergonomics"
+    ],
+    "difficulty": 3
+  },
+  "tasktrove-Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz": {
+    "coverage_tags": [
+      "competency:causal_reasoning",
+      "shape:multiple_choice",
+      "subject:medicine.oncology"
+    ],
+    "difficulty": 8
+  },
+  "tasktrove-Nemotron-RL-knowledge-mcqa-cce3426cf566.tar.gz": {
+    "coverage_tags": [
+      "competency:causal_reasoning",
+      "shape:multiple_choice",
+      "subject:chemistry"
+    ],
+    "difficulty": 8
+  },
+  "tasktrove-openqa-80f6c461ebcf.tar.gz": {
+    "coverage_tags": [
+      "competency:rule_application",
+      "shape:explanation",
+      "subject:math.calculus"
+    ],
+    "difficulty": 5
+  },
+  "tasktrove-openqa-c7e9374b56ea.tar.gz": {
+    "coverage_tags": [
+      "competency:causal_reasoning",
+      "shape:explanation",
+      "subject:biology"
+    ],
+    "difficulty": 6
+  }
+}

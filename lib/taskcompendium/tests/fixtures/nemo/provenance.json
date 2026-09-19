@@ -1,0 +1,31 @@
+{
+  "upstream": {
+    "repository": "NVIDIA-NeMo/Gym",
+    "revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+    "license": "Apache-2.0"
+  },
+  "instruction_following": {
+    "fixture": "instruction-following-17616.json",
+    "selector": {"field": "id", "value": 17616},
+    "github_path": "resources_servers/instruction_following/data/example.jsonl",
+    "github_blob": "a3cf7bc0f11db0f3fa598d0f2527a85fdb2f58fc",
+    "raw_sha256": "9eac27ae9be397cd51ffb2c0a854c40ee10fce3289e5b5ad1eaac22992457d86",
+    "canonical_jq_cS_sha256": "e695e85f4fa400cf74b7ce92252cbee1deb593b4719eadff8ae9d5182a09e144",
+    "dataset": "nvidia/Nemotron-RL-instruction_following",
+    "dataset_revision": "3b253899665cb71334bb54c14eb5d91751beaad7",
+    "dataset_license": "ODC-BY-1.0"
+  },
+  "code_answer": {
+    "fixture": "code-answer-c69268d8bdb4da0685d7b187c88296c1.json",
+    "selector": {"field": "hash_id", "value": "c69268d8bdb4da0685d7b187c88296c1"},
+    "github_path": "resources_servers/code_gen/data/example.jsonl",
+    "github_blob": "2bab199f3f23437024d53788d88a3ee6aa8d91ee",
+    "raw_sha256": "cd7ece7134aa095726aa1c455ba1880ddfd2b2d450de0935515abd48656a5adf",
+    "canonical_jq_cS_sha256": "741ef4c71a7f8def429d108a658232536b1d2661a5ecdd2beef123f5623a8325",
+    "dataset": "nvidia/Nemotron-RL-coding-competitive_coding",
+    "dataset_revision": "ae1f446f299823ea3c4c00217942b53787278b31",
+    "dataset_license": "CC-BY-SA-4.0",
+    "dataset_card_text_claim": "CC-BY-4.0",
+    "source_checker_change": "The source's fenced-code extraction is normalized into a raw-code rendering before private materialization. The upstream remote LiveCodeBench worker is replaced with a private Docker-isolated standard-input checker for this bounded row."
+  }
+}

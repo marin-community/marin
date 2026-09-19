@@ -1,0 +1,176 @@
+{
+  "review": "viewer-fallback",
+  "sampling": {
+    "samples_per_corpus": 2,
+    "source": "nemo_gym_sampling.py fallback-first-rows",
+    "generated": "2026-09-14"
+  },
+  "corpora": [
+    {
+      "dataset": "nvidia/Nemotron-RL-instruction_following",
+      "revision": "3b253899665cb71334bb54c14eb5d91751beaad7",
+      "config": "default",
+      "split": "train",
+      "num_rows": null,
+      "samples": [
+        {
+          "offset": 0,
+          "disposition": "accepted",
+          "evidence": "id=17616; instruction_id_list contains length_constraints:nth_paragraph_first_word and last_word:last_word_answer; kwargs are parallel; responses_create_params has one user input matching prompt.",
+          "mapping": {
+            "specification": "existing import_instruction_following(row), binary aggregation",
+            "verifier": "ConstraintVerifier with the two source instruction constraints",
+            "rendering": "text AssistantFinal answer",
+            "environment": "answer-only TaskRequirements with no capabilities; source row private verifier resource"
+          }
+        },
+        {
+          "offset": 1,
+          "disposition": "accepted",
+          "evidence": "id=44654; instruction_id_list contains length_constraints:number_paragraphs, count:lowercase_counting, and detectable_format:number_bullet_lists; kwargs are parallel; one user input.",
+          "mapping": {
+            "specification": "existing import_instruction_following(row), binary aggregation",
+            "verifier": "ConstraintVerifier with the three source instruction constraints",
+            "rendering": "text AssistantFinal answer",
+            "environment": "answer-only TaskRequirements with no capabilities; source row private verifier resource"
+          }
+        }
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-math-OpenMathReasoning",
+      "revision": "5ef69384b65f13f08c35b73ddd5e7bf5e4621043",
+      "config": "default",
+      "split": "train",
+      "num_rows": 112867,
+      "samples": [
+        {
+          "offset": 0,
+          "disposition": "accepted",
+          "evidence": "Question asks a 1000-digit divisibility count; expected_answer is 32; responses_create_params requests only boxed answer.",
+          "mapping": {
+            "specification": "import_hub_row in nemo_static",
+            "verifier": "shared symbolic math verifier with private expected answer",
+            "rendering": "plain, boxed, JSON, and XML answer lowerings",
+            "environment": "answer-only TaskRequirements with no capabilities; source row and provenance remain private"
+          }
+        },
+        {
+          "offset": 1,
+          "disposition": "accepted",
+          "evidence": "Question asks a recurrence value x_2016; expected_answer is a radical expression; responses_create_params requests only boxed answer.",
+          "mapping": {
+            "specification": "import_hub_row in nemo_static",
+            "verifier": "shared symbolic math verifier with private expected answer",
+            "rendering": "plain, boxed, JSON, and XML answer lowerings",
+            "environment": "answer-only TaskRequirements with no capabilities; source row and provenance remain private"
+          }
+        }
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-math-stack_overflow",
+      "revision": "be489b25f36ef92864546a7ace22edec4e053ac3",
+      "config": "default",
+      "split": "train",
+      "num_rows": null,
+      "samples": [
+        {
+          "offset": 0,
+          "disposition": "accepted",
+          "evidence": "Geometry question asks rope length for half grazing area; expected_answer is L approximately 1.159 R; boxed answer requested.",
+          "mapping": {
+            "specification": "import_hub_row in nemo_static",
+            "verifier": "shared symbolic math verifier with private expected answer",
+            "rendering": "plain, boxed, JSON, and XML answer lowerings",
+            "environment": "answer-only TaskRequirements with no capabilities; source row and provenance remain private"
+          }
+        },
+        {
+          "offset": 1,
+          "disposition": "accepted",
+          "evidence": "Timed ball-removal process question; expected_answer is 0; boxed answer requested.",
+          "mapping": {
+            "specification": "import_hub_row in nemo_static",
+            "verifier": "shared symbolic math verifier with private expected answer",
+            "rendering": "plain, boxed, JSON, and XML answer lowerings",
+            "environment": "answer-only TaskRequirements with no capabilities; source row and provenance remain private"
+          }
+        }
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2",
+      "revision": "bbf79030fcff484c29321faecaeec91a21ba2259",
+      "config": "default",
+      "split": "train",
+      "num_rows": 62696,
+      "samples": [
+        {
+          "offset": 0,
+          "disposition": "deferred",
+          "evidence": "schema_type=xml and schema_str is a nested JSON Schema; prompt requires XML with root <output> and supplies pet/owner/report fields.",
+          "blocker": "No existing verifier validates source JSON Schema expressed as XML; accepting requires a source-specific schema/serialization verifier."
+        },
+        {
+          "offset": 1,
+          "disposition": "deferred",
+          "evidence": "schema_type=yaml and schema_str is a JSON Schema; prompt requires YAML for a detailed home-repair document.",
+          "blocker": "No existing verifier validates source JSON Schema expressed as YAML; accepting requires a source-specific schema/serialization verifier."
+        }
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-ReasoningGym-v1",
+      "revision": "ad2c929b2dfd64ca30afb4d60e2f69a5a1919c4d",
+      "config": "default",
+      "split": "train",
+      "num_rows": null,
+      "samples": [
+        {
+          "offset": 0,
+          "disposition": "accepted",
+          "evidence": "Question is a long constraint reasoning puzzle with answer field and agent_ref; responses_create_params contains the user question.",
+          "mapping": {
+            "specification": "import_hub_row in nemo_static",
+            "verifier": "shared reference-answer verifier, limited to this reviewed answer-only row",
+            "rendering": "plain, boxed, JSON, and XML answer lowerings",
+            "environment": "answer-only TaskRequirements with no capabilities; source row and provenance remain private"
+          }
+        },
+        {
+          "offset": 1,
+          "disposition": "accepted",
+          "evidence": "Question asks a friend-count word problem; answer field and agent_ref are present, with one user input.",
+          "mapping": {
+            "specification": "import_hub_row in nemo_static",
+            "verifier": "shared symbolic math verifier, limited to this reviewed answer-only row",
+            "rendering": "plain, boxed, JSON, and XML answer lowerings",
+            "environment": "answer-only TaskRequirements with no capabilities; source row and provenance remain private"
+          }
+        }
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-SysBench-v1",
+      "revision": "7083ab2bdd5928c7001914f028f7fdeb0e727e58",
+      "config": "default",
+      "split": "train",
+      "num_rows": null,
+      "samples": [
+        {
+          "offset": 0,
+          "disposition": "deferred",
+          "evidence": "Financial Reasoning Engine system persona plus user messages; instructions contains keyword existence criteria and llm_judge metadata.",
+          "blocker": "Source-specific judge and persona interaction are not a supported deterministic verifier; hidden judge criteria must remain private."
+        },
+        {
+          "offset": 1,
+          "disposition": "deferred",
+          "evidence": "Vintage automobile persona plus user messages; instructions contains keyword and detectable-format criteria and llm_judge metadata.",
+          "blocker": "Source-specific judge and persona interaction are not a supported deterministic verifier; hidden judge criteria must remain private."
+        }
+      ]
+    }
+  ]
+}

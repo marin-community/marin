@@ -1,0 +1,5 @@
+# Action wire-format follow-up
+
+All four candidates contain extra Responses API items beyond simple role/content messages. The recurring private records are `reasoning` (`id`, `summary`, `status`), `function_call` (`arguments`, `call_id`, `name`, `id`, `status`), and `function_call_output` (`call_id`, `output`). Assistant output records use `type: message`, `id`, `content` as `output_text` items, `role`, and `status`; initial system/user records omit `type`.
+
+Each row can be normalized syntactically by converting role/content records to `type: message` and filtering private reasoning, calls, and outputs. That transformation is insufficient for safe ingestion: 4039's conditional stock request depends on a removed business-scope result; 8849's expected response contains a removed similarity result; 43611 depends on removed authentication state; and 92095 depends on removed authentication and contract-access state. All four are therefore deferred. No source result, hidden reasoning, expected action, or judge data is placed in a model-visible prompt.

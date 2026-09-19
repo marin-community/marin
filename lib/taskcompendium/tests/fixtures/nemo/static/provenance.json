@@ -1,0 +1,35 @@
+{
+  "mcqa-132738.json": {
+    "raw_sha256": "42df4d90c8c3acf058003b743ac94e9bd52b69a401b9602576e8718d2dddd736"
+  },
+  "mcqa-441248.json": {
+    "raw_sha256": "d19d7b5c72eb95c6b239ef036d4abaf4054d9ae39bfe952c525953ec361d5aff"
+  },
+  "open-math-0.json": {
+    "raw_sha256": "33ca8bcb317f0b77c263070c1b9fda01e2f70b78460ceb229c359a1accbe9312"
+  },
+  "open-math-1.json": {
+    "raw_sha256": "c2216436eef8a9a754bbd3f551f0a80cb29514d154f1176e787111c0af6d3b88"
+  },
+  "stack-math-0.json": {
+    "raw_sha256": "02c02f77024b45a3dd3770e991c7dcbc5c8c7397fec41cb5f251615f2c2eaf4f"
+  },
+  "stack-math-1.json": {
+    "raw_sha256": "7fed2d7f68c14607789680d3571d26c060f169f83a3c715c11edf8903034e97b"
+  },
+  "open-qa-25704.json": {
+    "raw_sha256": "5366f6295150ae0a188fc2a5a93f68a3e900a46b2a83ad69433b4e4ca5c00dd7"
+  },
+  "open-qa-86898.json": {
+    "raw_sha256": "19993b65f2c1317ae0da8b0afdfd921dd2fb9f749bb95be247eb04ce6f928120"
+  },
+  "science-144924.json": {
+    "raw_sha256": "3421fbad081eedcddaf2253090ecf39dfc3be910856021e0d6a3c7a7680846a3"
+  },
+  "reasoning-gym-0.json": {
+    "raw_sha256": "7c072fedc4b66d52330dda89796bab48301466fdd228d867e0e4cad53454d97c"
+  },
+  "reasoning-gym-1.json": {
+    "raw_sha256": "c2c6c8dfacdd4be40acfdc27abc8f0299570d56cf48a9d8d9b8e8844aa08350c"
+  }
+}

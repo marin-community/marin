@@ -1,0 +1,629 @@
+{
+  "version": 1,
+  "date": "2026-09-13",
+  "status": "bounded_static_audit",
+  "investigators": [
+    {
+      "model": "gpt-5.6-terra",
+      "context": "fresh",
+      "scope": "NeMo source/config/fixture inspection"
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "context": "fresh",
+      "scope": "TaskTrove inventory and bounded fidelity"
+    }
+  ],
+  "nemo_revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+  "tasktrove": {
+    "uri": "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8",
+    "version": "2026.09.10.8",
+    "status": "release manifest and ledger were not readable: this host has no CoreWeave S3 credentials. The existing Marina TaskTrove app is not an alternate clean-release reader: its browser only reads raw open-thoughts/TaskTrove from Hugging Face, and unauthenticated production requests receive an IAP OAuth 302.",
+    "verified_row_count": null,
+    "verified_source_counts": null,
+    "do_not_substitute": [
+      "the 44-specification local POC manifest",
+      "historical clean-2026.09.10.7 counts",
+      "the current Hugging Face viewer aggregate"
+    ]
+  },
+  "provenance": {
+    "raw_dataset": "open-thoughts/TaskTrove",
+    "raw_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+    "producer_revision": "ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2",
+    "inspected_converter_revision": "bef70bb8584d7e0c1391d88c9eacb1605b551a90",
+    "verifier_revision": "b2b68d8b0a770cdc0ab3903780172c4b3eea81b1",
+    "revision_join": "ccc5ff is an ancestor of bef70bb; b2b68d is an ancestor of ccc5ff. The local inspected-constant corrects the prompt typo (1391d, not 139d/1398d).",
+    "producer_pipeline_constants": {
+      "pipeline_version": "2026.09.10.8",
+      "raw_hf_id": "open-thoughts/TaskTrove",
+      "raw_revision_short": "0292300",
+      "verify_tool_ref": "b2b68d8b0a770cdc0ab3903780172c4b3eea81b1"
+    }
+  },
+  "limitations": [
+    "Clean .8 manifest/ledger inaccessible: no complete release membership or counts claimed.",
+    "Producer keep/drop policy is distinct from observed release contents.",
+    "Local fixtures record sample provenance and source joins; they do not independently prove remote clean-release membership.",
+    "Current upstream dataset SHA does not prove historical TaskTrove row parity.",
+    "A shared execution shape is not a dataset identity match.",
+    "No new environment or live model was executed for this audit."
+  ],
+  "families": [
+    {
+      "family": "MCQA",
+      "nemo_source": {
+        "dataset_id": "nvidia/Nemotron-RL-knowledge-mcqa",
+        "revision": "62a1eec1f952723eab2ee3832222f533b8138067",
+        "artifact": "train/validation parquet; Gym config maps to train.jsonl and validation.jsonl"
+      },
+      "nemo_implementation": "resources_servers/mcqa",
+      "shape": {
+        "capabilities": [],
+        "tools": "none",
+        "state": "none",
+        "verification": "extract configured final option letter then exact-match expected_answer",
+        "simulator": "none",
+        "actual_tool_execution": false,
+        "parallel_execution": false,
+        "reactive_user": false
+      },
+      "tasktrove_sources": [
+        "laion__nemotron-gym-knowledge-mcqa-v2"
+      ],
+      "overlap_level": "dataset_identity_confirmed",
+      "clean_release_membership_evidence": "recorded_sample_provenance_only",
+      "clean_release_count": null,
+      "producer_policy": "keep; qa-short-answer; nemotron_mcqa/mcq",
+      "taskcompendium_support": "supported by tasktrove_answers for one-letter MCQ",
+      "next_action": "reuse",
+      "assessment": "Existing MCQA fixture is a baseline; historical and current upstream dataset revisions are not proven identical.",
+      "evidence": [
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/mcqa/README.md",
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/mcqa/configs/mcqa.yaml",
+        "source_verdicts.json@ccc5ff: laion__nemotron-gym-knowledge-mcqa-v2",
+        "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/nemotron_gym.py"
+      ],
+      "evidence_artifacts": [
+        "nemo-catalog.json",
+        "tasktrove-inventory.json"
+      ]
+    },
+    {
+      "family": "Math with judge",
+      "nemo_source": {
+        "dataset_id": "nvidia/Nemotron-RL-math-OpenMathReasoning",
+        "revision": "5ef69384b65f13f08c35b73ddd5e7bf5e4621043",
+        "artifact": "train.jsonl; validation.jsonl"
+      },
+      "nemo_implementation": "resources_servers/math_with_judge",
+      "shape": {
+        "capabilities": [],
+        "tools": "none",
+        "state": "none",
+        "verification": "Math-Verify in a bounded child process; optionally LLM equivalence judge only after library failure (default config should_use_judge=false)",
+        "simulator": "optional judge model, not an agent tool",
+        "actual_tool_execution": false,
+        "parallel_execution": false,
+        "reactive_user": false
+      },
+      "tasktrove_sources": [
+        "laion__nemotron-gym-math-openmathreasoning-v2",
+        "laion__nemotron-gym-math-stack-overflow-v3",
+        "laion__nemotron-gym-math-v5"
+      ],
+      "overlap_level": "family_match",
+      "clean_release_membership_evidence": "keep_policy_only",
+      "clean_release_count": null,
+      "producer_policy": "keep; typed MathSpec conversion exists in nemotron_gym.py",
+      "taskcompendium_support": "not supported for these Nemotron converters; current math importer accepts only all_puzzles",
+      "next_action": "importer_gap",
+      "assessment": "Typed math and conditional judging need source adapter coverage; no new agent environment is implied.",
+      "evidence": [
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/math_with_judge/app.py",
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/math_with_judge/configs/math_with_judge.yaml",
+        "source_verdicts.json@ccc5ff: the three named math keys",
+        "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/nemotron_gym.py"
+      ],
+      "evidence_artifacts": [
+        "nemo-catalog.json",
+        "tasktrove-inventory.json"
+      ]
+    },
+    {
+      "family": "Instruction following",
+      "nemo_source": {
+        "dataset_id": "nvidia/Nemotron-RL-instruction_following",
+        "revision": "3b253899665cb71334bb54c14eb5d91751beaad7",
+        "artifact": "instruction_following.jsonl"
+      },
+      "nemo_implementation": "resources_servers/instruction_following",
+      "shape": {
+        "capabilities": [],
+        "tools": "none",
+        "state": "none",
+        "verification": "local verifiable_instructions registry; binary all-pass or fraction",
+        "simulator": "none",
+        "actual_tool_execution": false,
+        "parallel_execution": false,
+        "reactive_user": false
+      },
+      "tasktrove_sources": [
+        "laion__nemotron-gym-instruction-following-v3",
+        "laion__nemotron-gym-instruction-following-structured-v3"
+      ],
+      "overlap_level": "family_match",
+      "clean_release_membership_evidence": "keep_policy_only",
+      "clean_release_count": null,
+      "producer_policy": "keep; IFEval and JSON-schema converter paths",
+      "taskcompendium_support": "not supported by a TaskTrove importer",
+      "next_action": "importer_gap",
+      "assessment": "Add a bounded constraint-aggregation adapter and verify per-constraint behavior.",
+      "evidence": [
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/instruction_following/app.py",
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/instruction_following/configs/instruction_following.yaml",
+        "source_verdicts.json@ccc5ff: laion__nemotron-gym-instruction-following-v3 and -structured-v3",
+        "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/nemotron_ifeval.py"
+      ],
+      "evidence_artifacts": [
+        "nemo-catalog.json",
+        "tasktrove-inventory.json"
+      ]
+    },
+    {
+      "family": "Competitive code generation",
+      "nemo_source": {
+        "dataset_id": "nvidia/Nemotron-RL-coding-competitive_coding",
+        "revision": "ae1f446f299823ea3c4c00217942b53787278b31",
+        "artifact": "opencodereasoning_filtered_25k_train.jsonl; validation.jsonl"
+      },
+      "nemo_implementation": "resources_servers/code_gen",
+      "shape": {
+        "capabilities": [],
+        "tools": "none",
+        "state": "candidate answer only",
+        "verification": "extract code and execute LiveCodeBench unit tests through its remote checker; code comment says verifier itself has no sandbox",
+        "simulator": "none",
+        "actual_tool_execution": false,
+        "parallel_execution": "verifier concurrency only, not agent actions",
+        "reactive_user": false
+      },
+      "tasktrove_sources": [
+        "laion__nemotron-gym-competitive-coding-v2"
+      ],
+      "overlap_level": "family_match",
+      "clean_release_membership_evidence": "keep_policy_only",
+      "clean_release_count": null,
+      "producer_policy": "The direct NeMo source is kept by nemotron_competitive with 50 hidden stdin/stdout cases. Codeforces and DCAgent are separate, non-NeMo sources with the same execution shape.",
+      "taskcompendium_support": "The direct NeMo competitive source is not supported. Codeforces and self-contained pytest are supported with caller-supplied immutable native/Python images.",
+      "next_action": "importer_gap",
+      "assessment": "Direct NeMo competitive source is distinct from supported generic Codeforces/pytest. Exercise code-as-answer with private isolated execution.",
+      "evidence": [
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/code_gen/app.py",
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/code_gen/configs/code_gen.yaml",
+        "source_verdicts.json@ccc5ff: laion__nemotron-gym-competitive-coding-v2",
+        "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/nemotron_competitive.py",
+        "upstream nvidia/Nemotron-RL-coding-competitive_coding@ae1f446f299823ea3c4c00217942b53787278b31; join hash_id"
+      ],
+      "evidence_artifacts": [
+        "nemo-catalog.json",
+        "tasktrove-inventory.json"
+      ],
+      "related_shape_sources": [
+        "laion__codeforces-v3",
+        "DCAgent__exp_rpt_curriculum-easy"
+      ]
+    },
+    {
+      "family": "Single-step function-calling pivot",
+      "nemo_source": {
+        "dataset_id": "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1",
+        "revision": "9643c8103d7bfbc2d7fc4d15991d6739c612ff58",
+        "artifact": "train.jsonl"
+      },
+      "nemo_implementation": "resources_servers/single_step_tool_use_with_argument_comparison",
+      "shape": {
+        "capabilities": [],
+        "tools": "predicted OpenAI function_call or chat next action; no route is invoked",
+        "state": "fixed trajectory prefix in prompt",
+        "verification": "structural/fuzzy expected_action comparison",
+        "simulator": "none",
+        "actual_tool_execution": false,
+        "parallel_execution": "function_call_batch is an unordered multiset comparison, not parallel runtime execution",
+        "reactive_user": false
+      },
+      "tasktrove_sources": [
+        "laion__nemotron-gym-agentic-function-calling-pivot-v3"
+      ],
+      "overlap_level": "family_match_revision_unverified",
+      "clean_release_membership_evidence": "drop_policy",
+      "clean_release_count": null,
+      "producer_policy": "drop; frozen transcript next-call matching is not an executable tool environment",
+      "taskcompendium_support": "not supported",
+      "next_action": "submission_contract_gap",
+      "assessment": "Predicted actions are submissions. An unordered batch scorer does not provide parallel tool execution.",
+      "evidence": [
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/single_step_tool_use_with_argument_comparison/README.md",
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/single_step_tool_use_with_argument_comparison/app.py",
+        "source_verdicts.json@ccc5ff: laion__nemotron-gym-agentic-function-calling-pivot-v3"
+      ],
+      "evidence_artifacts": [
+        "nemo-catalog.json",
+        "tasktrove-inventory.json"
+      ]
+    },
+    {
+      "family": "Workplace Assistant",
+      "nemo_source": {
+        "dataset_id": "nvidia/Nemotron-RL-agent-workplace_assistant",
+        "revision": "c86a908379e0a361a573c395e175d3c1aa128e6c",
+        "artifact": "train.jsonl; validation.jsonl"
+      },
+      "nemo_implementation": "resources_servers/workplace_assistant",
+      "shape": {
+        "capabilities": [
+          "domain function calls"
+        ],
+        "tools": "27 actual in-process tools over per-session email/calendar/analytics/project-management/CRM state",
+        "state": "fresh seeded tool environment per session",
+        "verification": "replay predicted and gold calls in fresh environments then compare result/state",
+        "simulator": "deterministic tool server; no LLM user simulator",
+        "actual_tool_execution": true,
+        "parallel_execution": "not evidenced; config max_steps=6",
+        "reactive_user": false
+      },
+      "tasktrove_sources": [
+        "laion__nemotron-gym-agent-workplace-v2"
+      ],
+      "overlap_level": "family_match",
+      "clean_release_membership_evidence": "membership_unknown",
+      "clean_release_count": null,
+      "producer_policy": "no entry in ccc5ff source_verdicts.json",
+      "taskcompendium_support": "not supported",
+      "next_action": "stateful_domain_tools_gap",
+      "assessment": "Need deterministic seeded domain tools, isolated per-run state, and state-based verification.",
+      "evidence": [
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/workplace_assistant/app.py",
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/workplace_assistant/task_data.py",
+        "raw catalog source directory laion__nemotron-gym-agent-workplace-v2",
+        "upstream nvidia/Nemotron-RL-agent-workplace_assistant@c86a908; join id"
+      ],
+      "evidence_artifacts": [
+        "nemo-catalog.json",
+        "tasktrove-inventory.json"
+      ]
+    },
+    {
+      "family": "SWE pivot",
+      "nemo_source": {
+        "dataset_id": "nvidia/Nemotron-RL-Agentic-SWE-Pivot-v1",
+        "revision": "4947a3c8ea803413a65f9eca14a96ef521b2ddf5",
+        "artifact": "config itself points to GitLab swe_pivot 0.0.1; Hub identity exists but split provenance was not joined in this bounded audit"
+      },
+      "nemo_implementation": "resources_servers/swe_pivot",
+      "shape": {
+        "capabilities": [],
+        "tools": "predicted edit/bash/search/read/planning/finish action only",
+        "state": "trajectory prefix, no repository or shell executed",
+        "verification": "tool-category, target path/command, argument similarity and optional diff-size shaping",
+        "simulator": "none",
+        "actual_tool_execution": false,
+        "parallel_execution": false,
+        "reactive_user": false
+      },
+      "tasktrove_sources": [
+        "laion__nemotron-gym-agentic-swe-pivot-v4"
+      ],
+      "overlap_level": "family_match_revision_unverified",
+      "clean_release_membership_evidence": "drop_policy",
+      "clean_release_count": null,
+      "producer_policy": "The direct NeMo SWE pivot is dropped: no repository is present and a 9B judge rates one predicted next action. Rebench and swesmith are unrelated non-NeMo sources retained through trusted-test/patch converters.",
+      "taskcompendium_support": "No direct NeMo SWE support. Rebench/swesmith remain outside tasktrove_coding, which intentionally accepts only python_unit_tests and codeforces.",
+      "next_action": "submission_contract_gap",
+      "assessment": "A next terminal action is not a repo repair. Do not join this family to SWE-Gym execution tasks.",
+      "evidence": [
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/swe_pivot/README.md",
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/swe_pivot/app.py",
+        "source_verdicts.json@ccc5ff: laion__nemotron-gym-agentic-swe-pivot-v4, DCAgent__swe_rebench_v2_patched_oracle-v2, laion__swesmith-oracle-filtered-v2",
+        "candidate upstream pivot nvidia/Nemotron-RL-Agentic-SWE-Pivot-v1@4947a3c8ea803413a65f9eca14a96ef521b2ddf5 is not a proven TaskTrove join"
+      ],
+      "evidence_artifacts": [
+        "nemo-catalog.json",
+        "tasktrove-inventory.json"
+      ],
+      "related_shape_sources": [
+        "DCAgent__swe_rebench_v2_patched_oracle-v2",
+        "laion__swesmith-oracle-filtered-v2"
+      ]
+    },
+    {
+      "family": "Mini-SWE-Agent / SWE-Gym and SWE-bench",
+      "nemo_source": {
+        "dataset_id": "SWE-Gym/SWE-Gym",
+        "revision": "bb94ed9e39bbeb96a7fcbfb533b80f25a7fd59cb",
+        "artifact": "Mini-SWE train",
+        "validation_dataset_id": "princeton-nlp/SWE-bench_Verified",
+        "validation_revision": "c104f840cc67f8b6eec6f759ebc8b2693d585d4a"
+      },
+      "nemo_implementation": "responses_api_agents/mini_swe_agent; resources_servers/swebench",
+      "shape": {
+        "capabilities": [
+          "filesystem",
+          "shell",
+          "process"
+        ],
+        "tools": "native Mini-SWE harness terminal actions",
+        "state": "per-instance repository image/sandbox",
+        "verification": "apply generated patch then run SWE-bench test harness in an AsyncSandbox",
+        "simulator": "Mini-SWE-Agent is an agent harness; SWE-bench server supplies sandbox lifecycle",
+        "actual_tool_execution": true,
+        "parallel_execution": "per-instance concurrency is configuration, not a single-task parallel-action contract",
+        "reactive_user": false
+      },
+      "tasktrove_sources": [],
+      "overlap_level": "execution_shape_only",
+      "clean_release_membership_evidence": "direct_source_membership_unknown",
+      "clean_release_count": null,
+      "producer_policy": "No direct SWE-Gym/SWE-bench dataset policy join established. Related rebench/swesmith sources are kept; the separately cataloged NeMo SWE pivot is dropped.",
+      "taskcompendium_support": "R2E already exercises repository/process/test execution. A direct NeMo SWE-Gym data adapter is not implemented.",
+      "next_action": "reuse_shape",
+      "assessment": "Existing R2E covers repo/test execution shape; rebench/swesmith are other sources, not proof of a NeMo SWE-Gym data intersection.",
+      "evidence": [
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/responses_api_agents/mini_swe_agent/README.md",
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/swebench/app.py",
+        "source_verdicts.json@ccc5ff: laion__nemotron-gym-agentic-swe-pivot-v4, DCAgent__swe_rebench_v2_patched_oracle-v2, laion__swesmith-oracle-filtered-v2",
+        "candidate upstream pivot nvidia/Nemotron-RL-Agentic-SWE-Pivot-v1@4947a3c8ea803413a65f9eca14a96ef521b2ddf5 is not a proven TaskTrove join"
+      ],
+      "evidence_artifacts": [
+        "nemo-catalog.json",
+        "tasktrove-inventory.json"
+      ],
+      "related_shape_sources": [
+        "DCAgent__swe_rebench_v2_patched_oracle-v2",
+        "laion__swesmith-oracle-filtered-v2"
+      ]
+    },
+    {
+      "family": "Google Search MCQA",
+      "nemo_source": {
+        "dataset_id": "nvidia/Nemotron-RL-knowledge-web_search-mcqa",
+        "revision": "0feb60b8347ff5389139ada2d8e52a8bdad434f8",
+        "artifact": "mcqa_search.jsonl"
+      },
+      "nemo_implementation": "resources_servers/google_search",
+      "shape": {
+        "capabilities": [
+          "domain HTTP tools"
+        ],
+        "tools": "actual search(query) uses Google Programmable Search; browse(url) fetches/extracts webpage text",
+        "state": "external web and credentials; no task-local mutable state",
+        "verification": "final boxed option exact-match expected_answer",
+        "simulator": "live remote Google/custom web wrapper",
+        "actual_tool_execution": true,
+        "parallel_execution": "prompt says one tool call at a time; fixture sets parallel_tool_calls=false",
+        "reactive_user": false
+      },
+      "tasktrove_sources": [
+        "laion__nemotron-gym-knowledge-web-search-mcqa-v2"
+      ],
+      "overlap_level": "family_match",
+      "clean_release_membership_evidence": "drop_policy",
+      "clean_release_count": null,
+      "producer_policy": "drop; promised web search has no supplied tool",
+      "taskcompendium_support": "not supported",
+      "next_action": "external_service_gap",
+      "assessment": "Faithful support requires a live external-service adapter; cached replay cannot establish live provider coverage.",
+      "evidence": [
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/google_search/README.md",
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/google_search/app.py",
+        "source_verdicts.json@ccc5ff: laion__nemotron-gym-knowledge-web-search-mcqa-v2"
+      ],
+      "evidence_artifacts": [
+        "nemo-catalog.json",
+        "tasktrove-inventory.json"
+      ]
+    },
+    {
+      "family": "Reasoning Gym",
+      "nemo_source": {
+        "dataset_id": "nvidia/Nemotron-RL-ReasoningGym-v1",
+        "revision": "ad2c929b2dfd64ca30afb4d60e2f69a5a1919c4d",
+        "artifact": "data/train.jsonl"
+      },
+      "nemo_implementation": "resources_servers/reasoning_gym",
+      "shape": {
+        "capabilities": [],
+        "tools": "none",
+        "state": "none at evaluation; tasks are generator-produced",
+        "verification": "delegates answer scoring to external reasoning_gym task named by metadata.source_dataset",
+        "simulator": "generator is offline data preparation, not runtime interaction",
+        "actual_tool_execution": false,
+        "parallel_execution": false,
+        "reactive_user": false
+      },
+      "tasktrove_sources": [
+        "laion__nemotron-gym-reasoning-gym-v2"
+      ],
+      "overlap_level": "family_match",
+      "clean_release_membership_evidence": "keep_policy_only",
+      "clean_release_count": null,
+      "producer_policy": "keep; library scorer, source substring fallback removed",
+      "taskcompendium_support": "not supported by a TaskTrove importer",
+      "next_action": "importer_gap",
+      "assessment": "Preserve library and generator seed/config/version; current TaskCompendium lowering rejects this verifier mode.",
+      "evidence": [
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/reasoning_gym/app.py",
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/reasoning_gym/configs/reasoning_gym.yaml",
+        "source_verdicts.json@ccc5ff: laion__nemotron-gym-reasoning-gym-v2",
+        "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/nemotron_reasoning.py"
+      ],
+      "evidence_artifacts": [
+        "nemo-catalog.json",
+        "tasktrove-inventory.json"
+      ]
+    },
+    {
+      "family": "Structured outputs v4",
+      "nemo_source": {
+        "dataset_id": null,
+        "revision": null,
+        "artifact": "v4 config names internal GitLab structured_outputs_v4_tool_call 0.0.1; older text dataset is nvidia/Nemotron-RL-instruction_following-structured_outputs@2f6c28af6c5196dc6683be67ae72d7ccc974c82e, but is not evidence for v4 identity"
+      },
+      "nemo_implementation": "resources_servers/structured_outputs",
+      "shape": {
+        "capabilities": [],
+        "tools": "v4 emits one function call as final structured output; configured non-executing agent",
+        "state": "none",
+        "verification": "JSON-decode selected call payload and validate schema; content correctness intentionally ungraded",
+        "simulator": "none",
+        "actual_tool_execution": false,
+        "parallel_execution": "rows may allow parallel_tool_calls but verifier requires exactly one function call",
+        "reactive_user": false
+      },
+      "tasktrove_sources": [
+        "laion__nemotron-gym-structured-outputs-v4"
+      ],
+      "overlap_level": "different_versions",
+      "clean_release_membership_evidence": "older_version_recorded_sample_provenance_only",
+      "clean_release_count": null,
+      "producer_policy": "keep JSON/YAML/TOML with JSON-schema validation; XML/CSV structural paths are weaker",
+      "taskcompendium_support": "supports this converter only for JSON and XML",
+      "next_action": "submission_contract_gap",
+      "assessment": "Current NeMo v4 is a non-executing final function call. Local TaskTrove examples join an older text-output dataset and have known semantic-check defects; these are separate contracts.",
+      "evidence": [
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/structured_outputs/README.md",
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/structured_outputs/app.py",
+        "source_verdicts.json@ccc5ff: laion__nemotron-gym-structured-outputs-v4",
+        "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/nemotron_structured_outputs.py"
+      ],
+      "evidence_artifacts": [
+        "nemo-catalog.json",
+        "tasktrove-inventory.json"
+      ]
+    },
+    {
+      "family": "Calendar v2",
+      "nemo_source": {
+        "dataset_id": "nvidia/Nemotron-RL-Instruction-Following-Calendar-v2",
+        "revision": "556a3b1ab3eb12bab38327bf0ec4cdbeab452338",
+        "artifact": "train.jsonl; validation.jsonl",
+        "generation_source": "nvidia/Nemotron-Personas-USA@5b4cd35ab46490c1da1bd2b5a2324d6f871be180"
+      },
+      "nemo_implementation": "resources_servers/calendar",
+      "shape": {
+        "capabilities": [],
+        "tools": "none",
+        "state": "conversation history is supplied in the row; expected calendar state is private verifier data",
+        "verification": "parse final JSON list and check event count, IDs, duration, conflicts, bounds and natural-language constraints",
+        "simulator": "synthetic multi-turn conversation generation occurred offline; no runtime user simulator",
+        "actual_tool_execution": false,
+        "parallel_execution": false,
+        "reactive_user": false
+      },
+      "tasktrove_sources": [
+        "laion__nemotron-gym-agent-calendar-v2"
+      ],
+      "overlap_level": "family_match",
+      "clean_release_membership_evidence": "keep_policy_only",
+      "clean_release_count": null,
+      "producer_policy": "keep; static deterministic schedule checker, dedupe against calendar-v3. It scores a final JSON list of pre-materialized events, not interactions with a calendar tool.",
+      "taskcompendium_support": "not supported by a TaskTrove importer",
+      "next_action": "importer_gap",
+      "assessment": "Static materialized conversation plus final schedule JSON; no reactive user runtime is required.",
+      "evidence": [
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/calendar/configs/calendar_v2.yaml",
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/calendar/app.py",
+        "source_verdicts.json@ccc5ff: laion__nemotron-gym-agent-calendar-v2",
+        "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/agent_calendar.py",
+        "upstream nvidia/Nemotron-RL-Instruction-Following-Calendar-v2@556a3b1a; join row hash"
+      ],
+      "evidence_artifacts": [
+        "nemo-catalog.json",
+        "tasktrove-inventory.json"
+      ]
+    },
+    {
+      "family": "Indian Banking",
+      "nemo_source": {
+        "dataset_id": "NPCI/nemo-gym-indian-banking",
+        "revision": "b58b627a3b366bc0fdc5064bc66cb59e92dee2c3",
+        "artifact": "train.jsonl; validation.jsonl plus db.json and kb.json"
+      },
+      "nemo_implementation": "resources_servers/indian_banking",
+      "shape": {
+        "capabilities": [
+          "domain function calls",
+          "persistent per-episode state",
+          "reactive conversation"
+        ],
+        "tools": "33 deterministic in-process banking tools plus terminal transfer_to_human_agents",
+        "state": "fresh copy of synthetic DB per session, KB shared",
+        "verification": "terminal ACTION/DB/COMMUNICATE deterministic rewards plus optional NL assertion LLM judge",
+        "simulator": "LLM role-swapped customer after text turns; config requires a non-policy simulator/judge model",
+        "actual_tool_execution": true,
+        "parallel_execution": "multiple calls in one model turn are executed in order; no parallel-action semantics evidenced",
+        "reactive_user": true
+      },
+      "tasktrove_sources": [],
+      "overlap_level": "no_proven_join",
+      "clean_release_membership_evidence": "membership_unknown",
+      "clean_release_count": null,
+      "producer_policy": "no literal source directory match in the 133-source raw catalog",
+      "taskcompendium_support": "no evidence of support",
+      "next_action": "deferred_conversation",
+      "assessment": "Live user simulation and domain state require a future conversational interface.",
+      "evidence": [
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/indian_banking/README.md",
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/indian_banking/app.py",
+        "no literal source directory named Indian banking in raw catalog",
+        "upstream NPCI/nemo-gym-indian-banking@b58b627a; join task_id; no proven TaskTrove source join"
+      ],
+      "evidence_artifacts": [
+        "nemo-catalog.json",
+        "tasktrove-inventory.json"
+      ]
+    },
+    {
+      "family": "Indirect prompt injection",
+      "nemo_source": {
+        "dataset_id": null,
+        "revision": null,
+        "artifact": "config names internal GitLab indirect_prompt_injection 0.0.1; README says full dataset will be released in the future"
+      },
+      "nemo_implementation": "resources_servers/indirect_prompt_injection",
+      "shape": {
+        "capabilities": [
+          "domain function calls",
+          "per-session state"
+        ],
+        "tools": "actual in-process domain handlers across nine domains",
+        "state": "deep-copied task environment per session",
+        "verification": "trace scan: target tool plus strict discriminator arguments means compromise; all required legitimate tools must also appear",
+        "simulator": "deterministic tool server; no LLM judge or reactive user",
+        "actual_tool_execution": true,
+        "parallel_execution": "not evidenced",
+        "reactive_user": false
+      },
+      "tasktrove_sources": [
+        "laion__nemotron-gym-agentic-indirect-prompt-injection-v3"
+      ],
+      "overlap_level": "family_match_revision_unverified",
+      "clean_release_membership_evidence": "drop_policy",
+      "clean_release_count": null,
+      "producer_policy": "drop; checker rewards any non-injected action, including unrelated replies",
+      "taskcompendium_support": "not supported",
+      "next_action": "stateful_domain_tools_gap",
+      "assessment": "Use as a later seeded-domain observation-boundary test; old negative-only TaskTrove checker is insufficient for legitimate-task success.",
+      "evidence": [
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/indirect_prompt_injection/README.md",
+        "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/indirect_prompt_injection/verifier.py",
+        "source_verdicts.json@ccc5ff: laion__nemotron-gym-agentic-indirect-prompt-injection-v3",
+        "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/prompt_injection.py"
+      ],
+      "evidence_artifacts": [
+        "nemo-catalog.json",
+        "tasktrove-inventory.json"
+      ]
+    }
+  ]
+}

@@ -36,6 +36,7 @@ from marin.rl.skyrl import (
     SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
+    TaskCompendiumDataSource,
     TaskTroveDataSource,
     TaskTroveSelection,
     TaskTroveTagMatch,
@@ -223,6 +224,36 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
         "++terminal_bench_config.trials_dir=" "'s3://temp/ttl=14d/skyrl/users/alice/run/attempts/trace_jobs'",
         "++generator.trajectory_retention.output_path="
         "'s3://temp/ttl=14d/skyrl/users/alice/run/attempts/trajectories'",
+    )
+
+
+def test_taskcompendium_attempts_are_archived_with_the_durable_artifact() -> None:
+    spec = dataclasses.replace(
+        _spec(),
+        train_data=(TaskCompendiumDataSource(_data_step(), relative_path="lowerings"),),
+    )
+    step = skyrl_step(spec, _execution())
+    output_path = "s3://durable/users/alice/taskcompendium-smoke/dev"
+
+    config = step.build_config(
+        StepContext.for_run(
+            output_path=output_path,
+            prefix="s3://durable",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+    )
+
+    assert config.request.train_data == (
+        ResolvedDirectoryDataSource(
+            uri="s3://test/iceball-gsm8k",
+            identity=f"{_data_step().name}@{_data_step().version}:{_data_step().fingerprint()}",
+            local_path="/tmp/marinskyrl/data/iceball-gsm8k",
+            relative_path="lowerings",
+        ),
+    )
+    assert config.request.overrides[-1] == (
+        "++taskcompendium.archive_uri=" "'s3://durable/users/alice/taskcompendium-smoke/dev/semantic-attempts'"
     )
 
 

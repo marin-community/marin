@@ -1,0 +1,14 @@
+{
+  "task_id": "tasktrove-16634",
+  "schema_version": "0.3",
+  "specification_sha256": "565bd1c1a3123c2897499283d02eaf785a02a0afc1d6bf6b57e58676895ea5e0",
+  "candidate": "<aircraft><aircraft_name>Invented</aircraft_name><role>Invented</role><manufacturer>Invented</manufacturer><designer>Invented</designer><first_flight_year>not a year</first_flight_year><number_built>not a number</number_built></aircraft>",
+  "observed_result": {
+    "status": "graded",
+    "reward": 1.0,
+    "detail": {
+      "reason": "names_present",
+      "names": 7
+    }
+  }
+}

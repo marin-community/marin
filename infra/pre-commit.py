@@ -48,6 +48,8 @@ HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
 MARIN_RUFF_CONFIG = ROOT_DIR / "lib/marin/pyproject.toml"
 
 EXCLUDE_PATTERNS = [
+    # Pinned upstream seed bytes are checked by the provider provenance tests.
+    "lib/taskcompendium/src/taskcompendium/providers/nemo_workplace/vendor/csv_data/**",
     ".git/**",
     ".github/**",
     "tests/snapshots/**",
@@ -59,6 +61,7 @@ EXCLUDE_PATTERNS = [
     "**/*.index",
     "**/*.ico",
     "**/*.npy",
+    "**/*.parquet",
     "**/*.lock",
     "**/*.png",
     "**/*.jpg",

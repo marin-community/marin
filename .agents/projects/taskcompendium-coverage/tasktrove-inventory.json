@@ -1,0 +1,201 @@
+{
+  "release": {
+    "uri": "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.8",
+    "version": "2026.09.10.8",
+    "status": "release manifest and ledger were not readable: this host has no CoreWeave S3 credentials. The existing Marina TaskTrove app is not an alternate clean-release reader: its browser only reads raw open-thoughts/TaskTrove from Hugging Face, and unauthenticated production requests receive an IAP OAuth 302.",
+    "verified_row_count": null,
+    "verified_source_counts": null,
+    "do_not_substitute": [
+      "the 44-specification local POC manifest",
+      "historical clean-2026.09.10.7 counts",
+      "the current Hugging Face viewer aggregate"
+    ]
+  },
+  "fixture_provenance": {
+    "status": "The checked-in POC manifest records the .8 root, the same three code revisions, fixture hashes, and exports named tasktrove-<fixture row>. This is recorded sample provenance, not an independent membership proof against the remote .8 Parquet.",
+    "why_not_independent": "The fixture archive task.toml records TaskTrove source/path and upstream row identity, but no clean-release version. build_poc.py supplies the fixture filename row to read_archive(), which constructs a .8 Source label.",
+    "evidence_paths": ["lib/taskcompendium/examples/poc/manifest.json", "lib/taskcompendium/examples/build_poc.py", "lib/taskcompendium/src/taskcompendium/importers/tasktrove.py"]
+  },
+  "provenance": {
+    "raw_dataset": "open-thoughts/TaskTrove",
+    "raw_revision": "02923004846e4e73862c20962f823a6d05100e7a",
+    "producer_revision": "ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2",
+    "inspected_converter_revision": "bef70bb8584d7e0c1391d88c9eacb1605b551a90",
+    "verifier_revision": "b2b68d8b0a770cdc0ab3903780172c4b3eea81b1",
+    "revision_join": "ccc5ff is an ancestor of bef70bb; b2b68d is an ancestor of ccc5ff. The local inspected-constant corrects the prompt typo (1391d, not 139d/1398d).",
+    "producer_pipeline_constants": {
+      "pipeline_version": "2026.09.10.8",
+      "raw_hf_id": "open-thoughts/TaskTrove",
+      "raw_revision_short": "0292300",
+      "verify_tool_ref": "b2b68d8b0a770cdc0ab3903780172c4b3eea81b1"
+    }
+  },
+  "raw_catalog": {
+    "source_directory_count": 133,
+    "catalog_endpoint": "https://huggingface.co/api/datasets/open-thoughts/TaskTrove/revision/0292300",
+    "size_endpoint": "https://datasets-server.huggingface.co/size?dataset=open-thoughts%2FTaskTrove&revision=0292300",
+    "confidence": "High for the pinned raw-revision request and source-directory presence; low for reconstructing the historical .8 input set because the Viewer aggregates conflict with producer-era accounting.",
+    "viewer_metadata": {
+      "default_rows": 1604128,
+      "deprecated_rows": 296667,
+      "total_rows": 1900795,
+      "warning": "This is current Dataset Viewer metadata for the supplied raw revision request. It conflicts with the producer-era 1,739,326 input count and is not evidence for the clean .8 release."
+    },
+    "literal_source_name_absences": ["Indian banking"]
+  },
+  "coverage": [
+    {
+      "area": "MCQA",
+      "raw_source": "laion__nemotron-gym-knowledge-mcqa-v2",
+      "producer_policy": "keep; qa-short-answer; nemotron_mcqa/mcq",
+      "taskcompendium": "supported by tasktrove_answers for one-letter MCQ",
+      "release_count": null,
+      "fidelity": "The semantic importer retains question/options and an exact expected option while removing the source delivery wrapper; no agent environment is required.",
+      "evidence": ["source_verdicts.json@ccc5ff: laion__nemotron-gym-knowledge-mcqa-v2", "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/nemotron_gym.py"]
+    },
+    {
+      "area": "math",
+      "raw_sources": ["laion__nemotron-gym-math-openmathreasoning-v2", "laion__nemotron-gym-math-stack-overflow-v3", "laion__nemotron-gym-math-v5"],
+      "producer_policy": "keep; typed MathSpec conversion exists in nemotron_gym.py",
+      "taskcompendium": "not supported for these Nemotron converters; current math importer accepts only all_puzzles",
+      "release_count": null,
+      "fidelity": "TaskTrove has richer typed math semantics than the present TaskCompendium import boundary.",
+      "evidence": ["source_verdicts.json@ccc5ff: the three named math keys", "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/nemotron_gym.py"]
+    },
+    {
+      "area": "instruction following",
+      "raw_sources": ["laion__nemotron-gym-instruction-following-v3", "laion__nemotron-gym-instruction-following-structured-v3"],
+      "producer_policy": "keep; IFEval and JSON-schema converter paths",
+      "taskcompendium": "not supported by a TaskTrove importer",
+      "release_count": null,
+      "evidence": ["source_verdicts.json@ccc5ff: laion__nemotron-gym-instruction-following-v3 and -structured-v3", "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/nemotron_ifeval.py"]
+    },
+    {
+      "area": "code generation",
+      "raw_sources": ["laion__nemotron-gym-competitive-coding-v2", "laion__codeforces-v3", "DCAgent__exp_rpt_curriculum-easy"],
+      "producer_policy": "The direct NeMo source is kept by nemotron_competitive with 50 hidden stdin/stdout cases. Codeforces and DCAgent are separate, non-NeMo sources with the same execution shape.",
+      "taskcompendium": "The direct NeMo competitive source is not supported. Codeforces and self-contained pytest are supported with caller-supplied immutable native/Python images.",
+      "release_count": null,
+      "fidelity": "The supported generic paths make filesystem, shell and process capabilities explicit and retain hidden cases/tests as verifier-only resources; that proves shape coverage, not a NeMo-dataset intersection.",
+      "evidence": ["source_verdicts.json@ccc5ff: laion__nemotron-gym-competitive-coding-v2", "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/nemotron_competitive.py", "upstream nvidia/Nemotron-RL-coding-competitive_coding@ae1f446f299823ea3c4c00217942b53787278b31; join hash_id"]
+    },
+    {
+      "area": "function-calling pivot",
+      "raw_source": "laion__nemotron-gym-agentic-function-calling-pivot-v3",
+      "producer_policy": "drop; frozen transcript next-call matching is not an executable tool environment",
+      "taskcompendium": "not supported",
+      "release_count": null,
+      "evidence": ["source_verdicts.json@ccc5ff: laion__nemotron-gym-agentic-function-calling-pivot-v3"]
+    },
+    {
+      "area": "workplace",
+      "raw_source": "laion__nemotron-gym-agent-workplace-v2",
+      "producer_policy": "no entry in ccc5ff source_verdicts.json",
+      "taskcompendium": "not supported",
+      "release_count": null,
+      "fidelity": "Raw-catalog presence does not establish inclusion in .8.",
+      "evidence": ["raw catalog source directory laion__nemotron-gym-agent-workplace-v2", "upstream nvidia/Nemotron-RL-agent-workplace_assistant@c86a908; join id"]
+    },
+    {
+      "area": "SWE",
+      "raw_sources": ["laion__nemotron-gym-agentic-swe-pivot-v4", "DCAgent__swe_rebench_v2_patched_oracle-v2", "laion__swesmith-oracle-filtered-v2"],
+      "producer_policy": "The direct NeMo SWE pivot is dropped: no repository is present and a 9B judge rates one predicted next action. Rebench and swesmith are unrelated non-NeMo sources retained through trusted-test/patch converters.",
+      "taskcompendium": "No direct NeMo SWE support. Rebench/swesmith remain outside tasktrove_coding, which intentionally accepts only python_unit_tests and codeforces.",
+      "release_count": null,
+      "evidence": ["source_verdicts.json@ccc5ff: laion__nemotron-gym-agentic-swe-pivot-v4, DCAgent__swe_rebench_v2_patched_oracle-v2, laion__swesmith-oracle-filtered-v2", "candidate upstream pivot nvidia/Nemotron-RL-Agentic-SWE-Pivot-v1@4947a3c8ea803413a65f9eca14a96ef521b2ddf5 is not a proven TaskTrove join"]
+    },
+    {
+      "area": "web search",
+      "raw_source": "laion__nemotron-gym-knowledge-web-search-mcqa-v2",
+      "producer_policy": "drop; promised web search has no supplied tool",
+      "taskcompendium": "not supported",
+      "release_count": null,
+      "evidence": ["source_verdicts.json@ccc5ff: laion__nemotron-gym-knowledge-web-search-mcqa-v2"]
+    },
+    {
+      "area": "ReasoningGym",
+      "raw_source": "laion__nemotron-gym-reasoning-gym-v2",
+      "producer_policy": "keep; library scorer, source substring fallback removed",
+      "taskcompendium": "not supported by a TaskTrove importer",
+      "release_count": null,
+      "evidence": ["source_verdicts.json@ccc5ff: laion__nemotron-gym-reasoning-gym-v2", "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/nemotron_reasoning.py"]
+    },
+    {
+      "area": "structured outputs",
+      "raw_source": "laion__nemotron-gym-structured-outputs-v4",
+      "producer_policy": "keep JSON/YAML/TOML with JSON-schema validation; XML/CSV structural paths are weaker",
+      "taskcompendium": "supports this converter only for JSON and XML",
+      "release_count": null,
+      "fidelity": "Known false-positive evidence exists for both JSON row 16636 and XML row 16634; syntactic acceptance is not semantic extraction fidelity.",
+      "evidence": ["source_verdicts.json@ccc5ff: laion__nemotron-gym-structured-outputs-v4", "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/nemotron_structured_outputs.py"]
+    },
+    {
+      "area": "Calendar v2",
+      "raw_source": "laion__nemotron-gym-agent-calendar-v2",
+      "producer_policy": "keep; static deterministic schedule checker, dedupe against calendar-v3. It scores a final JSON list of pre-materialized events, not interactions with a calendar tool.",
+      "taskcompendium": "not supported by a TaskTrove importer",
+      "release_count": null,
+      "fidelity": "This is source semantics, not a loss introduced by the TaskTrove conversion: the NeMo Calendar v2 runtime consumes history plus expected calendar state and emits a final JSON answer; its multi-turn generation is offline.",
+      "evidence": ["source_verdicts.json@ccc5ff: laion__nemotron-gym-agent-calendar-v2", "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/agent_calendar.py", "upstream nvidia/Nemotron-RL-Instruction-Following-Calendar-v2@556a3b1a; join row hash"]
+    },
+    {
+      "area": "Indian banking",
+      "raw_source": null,
+      "producer_policy": "no literal source directory match in the 133-source raw catalog",
+      "taskcompendium": "no evidence of support",
+      "release_count": null,
+      "fidelity": "A content-level search was unavailable; this is not a claim that no individual task mentions banking.",
+      "evidence": ["no literal source directory named Indian banking in raw catalog", "upstream NPCI/nemo-gym-indian-banking@b58b627a; join task_id; no proven TaskTrove source join"]
+    },
+    {
+      "area": "indirect prompt injection",
+      "raw_source": "laion__nemotron-gym-agentic-indirect-prompt-injection-v3",
+      "producer_policy": "drop; checker rewards any non-injected action, including unrelated replies",
+      "taskcompendium": "not supported",
+      "release_count": null,
+      "evidence": ["source_verdicts.json@ccc5ff: laion__nemotron-gym-agentic-indirect-prompt-injection-v3", "https://github.com/marin-community/marin/blob/ccc5ff24cd16112a1e68c5dc6ca9f5ee4f6a52c2/experiments/post_training/tasktrove/converters/prompt_injection.py"]
+    }
+  ],
+  "fidelity_candidates": [
+    {
+      "fixture": "lib/taskcompendium/tests/fixtures/tasktrove/answers/mcq-row-1972.tar.gz",
+      "fixture_row": "1972",
+      "join": {"tasktrove_source": "laion__nemotron-gym-knowledge-mcqa-v2", "tasktrove_path": "Nemotron-RL-knowledge-mcqa-71fea0780ee9.tar.gz", "upstream_dataset": "nvidia/Nemotron-RL-knowledge-mcqa", "upstream_row_index": 595578, "source_uuid": "634bfa88-f91f-5a99-a540-7f0ffdaa9b84"},
+      "outcome": "supported importer scope; static audit found semantic answer task with no required agent tools"
+    },
+    {
+      "fixture": "lib/taskcompendium/tests/fixtures/tasktrove/judge/judge-row-11676.tar.gz",
+      "fixture_row": "11676",
+      "join": {"tasktrove_source": "laion__nemotron-gym-knowledge-openqa-v4", "tasktrove_path": "openqa-0b723ddc24b3.tar.gz", "upstream_dataset": "nvidia/Nemotron-RL-knowledge-openqa", "upstream_row_index": 120859, "source_uuid": "57826cc2-4190-5013-b3ee-1c2196fdcbd8"},
+      "outcome": "supported only with explicit JudgeConfig; exact references are retained but live judge quality is unvalidated"
+    },
+    {
+      "fixture": "lib/taskcompendium/tests/fixtures/structured/json-row-16636.tar.gz",
+      "fixture_row": "16636",
+      "join": {"tasktrove_source": "laion__nemotron-gym-structured-outputs-v4", "tasktrove_path": "if-structured-v2-ee9a4d8b2f81.tar.gz", "upstream_dataset": "nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2", "upstream_row_index": 14056},
+      "outcome": "supported syntactically but fidelity failed: a schema-valid invented home-buying answer received reward 1 in recorded evidence"
+    },
+    {
+      "fixture": "lib/taskcompendium/tests/fixtures/shell/script-row-16158.tar.gz",
+      "fixture_row": "16158",
+      "join": {"tasktrove_source": "DCAgent2__nl2bash-tasks-cleaned-oracle-v2", "tasktrove_path": "task_5407"},
+      "outcome": "supported with ShellSim-like filesystem/shell requirements and a caller-supplied immutable verifier runtime; resources remain role-separated"
+    },
+    {
+      "fixture": "lib/taskcompendium/tests/fixtures/coding/stdio-row-0.tar.gz",
+      "fixture_row": "0",
+      "join": {"tasktrove_source": "laion__codeforces-v3", "tasktrove_path": "codeforces-06236"},
+      "outcome": "supported only after caller supplies immutable native toolchain image; static importer preserves hidden cases and separates them from agent state"
+    },
+    {
+      "fixture": null,
+      "acquisition_pointer": "select a row from laion__nemotron-gym-instruction-following-v3; upstream nvidia/Nemotron-RL-instruction_following@3b253899; join id",
+      "outcome": "No local fixture is checked in. TaskTrove converter is present; TaskCompendium has no importer."
+    },
+    {
+      "fixture": null,
+      "acquisition_pointer": "select a row from laion__nemotron-gym-reasoning-gym-v2; upstream nvidia/Nemotron-RL-ReasoningGym-v1@ad2c929b; join metadata.source_dataset plus pinned generator seed/config",
+      "outcome": "No local fixture is checked in. TaskTrove converter is present; TaskCompendium has no importer."
+    }
+  ]
+}

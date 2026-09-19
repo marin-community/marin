@@ -1,0 +1,11 @@
+{
+  "repository": "NVIDIA-NeMo/Gym",
+  "repository_revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+  "path": "resources_servers/single_step_tool_use_with_argument_comparison/data/example.jsonl",
+  "github_blob_sha1": "f7dc270084858ac2e7eda3f037a9170357ff6f60",
+  "dataset": "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1",
+  "dataset_revision": "9643c8103d7bfbc2d7fc4d15991d6739c612ff58",
+  "record_index": 0,
+  "canonical_json_sha256": "ea1f092b52902d98c29d8b579be1b724fdb29e3d00ae5a9cafc9d302f6b620f5",
+  "canonicalization": "UTF-8 json.dumps(sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False)"
+}

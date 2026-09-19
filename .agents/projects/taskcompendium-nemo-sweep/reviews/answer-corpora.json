@@ -1,0 +1,255 @@
+{
+  "review": "answer-corpora",
+  "sampling": {
+    "samples_per_corpus": 2,
+    "source": "nemo_gym_sampling.py",
+    "generated": "2026-09-14"
+  },
+  "corpora": [
+    {
+      "dataset": "nvidia/Nemotron-RL-knowledge-web_search-mcqa",
+      "revision": "0feb60b8347ff5389139ada2d8e52a8bdad434f8",
+      "config": "default",
+      "split": "train",
+      "num_rows": 2929,
+      "samples": [
+        {
+          "offset": 1173,
+          "disposition": "deferred",
+          "evidence": "responses_create_params has search and browse function tools; prompt requires issuing tool calls and returning boxed option A.",
+          "blocker": "Required web-search interaction has no supported generic MCP/search provider binding; source tool schemas cannot be preserved by Chat or existing Workplace/terminal bindings."
+        },
+        {
+          "offset": 2638,
+          "disposition": "deferred",
+          "evidence": "responses_create_params has search and browse function tools; prompt requires web grounding and boxed option C.",
+          "blocker": "Required web-search interaction has no supported generic MCP/search provider binding; source tool schemas cannot be preserved by Chat or existing Workplace/terminal bindings."
+        }
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-instruction_following",
+      "revision": "3b253899665cb71334bb54c14eb5d91751beaad7",
+      "config": "default",
+      "split": "train",
+      "num_rows": null,
+      "samples": [
+        {
+          "offset": null,
+          "disposition": "deferred",
+          "evidence": "Dataset Viewer size endpoint failed with config-size error; sampling command produced no row.",
+          "blocker": "Source rows and deterministic offsets are unavailable from the pinned Viewer, so prompt and instruction_id_list/kwargs semantics cannot be inspected or preserved."
+        },
+        {
+          "offset": null,
+          "disposition": "deferred",
+          "evidence": "Dataset Viewer size endpoint failed with config-size error; sampling command produced no row.",
+          "blocker": "Source rows and deterministic offsets are unavailable from the pinned Viewer, so prompt and instruction_id_list/kwargs semantics cannot be inspected or preserved."
+        }
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-instruction_following-structured_outputs",
+      "revision": "2f6c28af6c5196dc6683be67ae72d7ccc974c82e",
+      "config": "default",
+      "split": "train",
+      "num_rows": 9437,
+      "samples": [
+        {
+          "offset": 2794,
+          "disposition": "deferred",
+          "evidence": "schema_type=json, schema_fields_count=10, schema_str is a JSON Schema; user input requests a structured JSON response.",
+          "blocker": "No existing verifier contract validates arbitrary source JSON Schema output; accepting would require inventing a schema verifier and preserving source semantics."
+        },
+        {
+          "offset": 7513,
+          "disposition": "deferred",
+          "evidence": "schema_type=json, schema_fields_count=4, schema_str is a JSON Schema; user input requests a structured JSON response.",
+          "blocker": "No existing verifier contract validates arbitrary source JSON Schema output; accepting would require inventing a schema verifier and preserving source semantics."
+        }
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-knowledge-mcqa",
+      "revision": "62a1eec1f952723eab2ee3832222f533b8138067",
+      "config": "default",
+      "split": "train",
+      "num_rows": 617020,
+      "samples": [
+        {
+          "offset": 132738,
+          "disposition": "accepted",
+          "evidence": "responses_create_params is answer-only MCQA with required final Answer:A/B/... formatting; row has expected_answer B and options/reward_profiles.",
+          "mapping": {
+            "specification": "import_hub_row in nemo_static",
+            "verifier": "shared MCQA verifier with a private expected option",
+            "rendering": "plain, boxed, JSON, and XML answer lowerings",
+            "environment": "answer-only TaskRequirements with no capabilities; source row and provenance remain private"
+          }
+        },
+        {
+          "offset": 441248,
+          "disposition": "accepted",
+          "evidence": "responses_create_params is answer-only MCQA with required final Answer:A/B/... formatting; row has expected_answer B and options/reward_profiles.",
+          "mapping": {
+            "specification": "import_hub_row in nemo_static",
+            "verifier": "shared MCQA verifier with a private expected option",
+            "rendering": "plain, boxed, JSON, and XML answer lowerings",
+            "environment": "answer-only TaskRequirements with no capabilities; source row and provenance remain private"
+          }
+        }
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-math-OpenMathReasoning",
+      "revision": "5ef69384b65f13f08c35b73ddd5e7bf5e4621043",
+      "config": "default",
+      "split": "train",
+      "num_rows": 112867,
+      "samples": [
+        {
+          "offset": null,
+          "disposition": "deferred",
+          "evidence": "Dataset Viewer row request timed out during sampling; pinned repository revision is recorded but no row was returned.",
+          "blocker": "Sample row fields and verifier semantics could not be inspected, so no safe TaskSpecification can be established."
+        },
+        {
+          "offset": null,
+          "disposition": "deferred",
+          "evidence": "Dataset Viewer row request timed out during sampling; pinned repository revision is recorded but no row was returned.",
+          "blocker": "Sample row fields and verifier semantics could not be inspected, so no safe TaskSpecification can be established."
+        }
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-knowledge-openqa",
+      "revision": "3604d4119623f2961c9cd0a3a5365e0cff0dd393",
+      "config": "default",
+      "split": "train",
+      "num_rows": 122389,
+      "samples": [
+        {
+          "offset": 25704,
+          "disposition": "accepted",
+          "evidence": "Answer-only boxed open QA prompt; expected_answer is 19F and reward_profiles use model pass rates.",
+          "mapping": {
+            "specification": "import_hub_row in nemo_static",
+            "verifier": "shared reference-answer verifier with private reference and explicit judge policy",
+            "rendering": "plain, boxed, JSON, and XML answer lowerings",
+            "environment": "answer-only TaskRequirements with no capabilities; source row and provenance remain private"
+          }
+        },
+        {
+          "offset": 86898,
+          "disposition": "accepted",
+          "evidence": "Answer-only boxed legal open QA prompt; expected_answer is a long explanation and reward_profiles use model pass rates.",
+          "mapping": {
+            "specification": "import_hub_row in nemo_static",
+            "verifier": "shared reference-answer verifier with private reference and explicit judge policy",
+            "rendering": "plain, boxed, JSON, and XML answer lowerings",
+            "environment": "answer-only TaskRequirements with no capabilities; source row and provenance remain private"
+          }
+        }
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-math-advanced_calculations",
+      "revision": "9fc99bffc0c80786d3e94e4226208492226b5fc7",
+      "config": "default",
+      "split": "train",
+      "num_rows": 6000,
+      "samples": [
+        {
+          "offset": 445,
+          "disposition": "deferred",
+          "evidence": "Prompt says compute eight values using only given tools; row has ground_truth, expanded_completion, simplifications and simplified_values but no tool declarations.",
+          "blocker": "Required tool interface and execution state are absent from the row; no existing provider/verifier contract can preserve tool-only semantics."
+        },
+        {
+          "offset": 3445,
+          "disposition": "deferred",
+          "evidence": "Prompt says compute seven values using only given tools; row has nested simplifications and simplified_values but no tool declarations.",
+          "blocker": "Required tool interface and execution state are absent from the row; no existing provider/verifier contract can preserve tool-only semantics."
+        }
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-math-stack_overflow",
+      "revision": "be489b25f36ef92864546a7ace22edec4e053ac3",
+      "config": "default",
+      "split": "train",
+      "num_rows": null,
+      "samples": [
+        {
+          "offset": null,
+          "disposition": "deferred",
+          "evidence": "Dataset Viewer size endpoint failed with config-size error; sampling command produced no row.",
+          "blocker": "Source rows and deterministic offsets are unavailable from the pinned Viewer, so math prompt and verifier semantics cannot be inspected."
+        },
+        {
+          "offset": null,
+          "disposition": "deferred",
+          "evidence": "Dataset Viewer size endpoint failed with config-size error; sampling command produced no row.",
+          "blocker": "Source rows and deterministic offsets are unavailable from the pinned Viewer, so math prompt and verifier semantics cannot be inspected."
+        }
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-coding-competitive_coding",
+      "revision": "ae1f446f299823ea3c4c00217942b53787278b31",
+      "config": "default",
+      "split": "train",
+      "num_rows": 16083,
+      "samples": [
+        {
+          "offset": 5135,
+          "disposition": "accepted",
+          "evidence": "hash_id=ced8ee9e1a54129fab130febf5c4e3f5; user prompt is Python standard-input competitive programming; verifier_metadata.unit_tests has parallel string inputs/outputs and no fn_name.",
+          "mapping": {
+            "specification": "existing import_code_answer",
+            "verifier": "CodeAnswerVerifier wrapping private stdio script",
+            "rendering": "text answer extracted to answer.txt",
+            "environment": "private immutable Docker verifier runtime supplied by caller; no agent filesystem/process capability required"
+          }
+        },
+        {
+          "offset": 13176,
+          "disposition": "accepted",
+          "evidence": "hash_id present; user prompt is Python standard-input competitive programming; verifier_metadata.unit_tests has packed/standard test data and no function-call requirement.",
+          "mapping": {
+            "specification": "existing import_code_answer",
+            "verifier": "CodeAnswerVerifier wrapping private stdio script",
+            "rendering": "text answer extracted to answer.txt",
+            "environment": "private immutable Docker verifier runtime supplied by caller; no agent filesystem/process capability required"
+          }
+        }
+      ]
+    },
+    {
+      "dataset": "nvidia/Nemotron-RL-Science-v1",
+      "revision": "a7f55756f14bdd16c6469b94601d86be15e4c4fc",
+      "config": "default",
+      "split": "so_openq",
+      "num_rows": 150644,
+      "samples": [
+        {
+          "offset": 69602,
+          "disposition": "deferred",
+          "evidence": "Open physics question with boxed output instruction, expected_answer, and equivalence_llm_judge verifier_type; one row advertises stateful_python_code_exec.",
+          "blocker": "Equivalence LLM judge and optional Python tool execution are not a supported pinned verifier/provider contract."
+        },
+        {
+          "offset": 144924,
+          "disposition": "accepted",
+          "evidence": "Open physics question with bold final-answer format, expected_answer, and model-agent metadata; no deterministic verifier field.",
+          "mapping": {
+            "specification": "import_hub_row in nemo_static",
+            "verifier": "shared reference-answer verifier with private reference and explicit judge policy",
+            "rendering": "plain, boxed, JSON, and XML answer lowerings",
+            "environment": "answer-only TaskRequirements with no capabilities; source row and provenance remain private"
+          }
+        }
+      ]
+    }
+  ]
+}

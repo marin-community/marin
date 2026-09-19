@@ -1,0 +1,72 @@
+{
+  "nemo/mcqa/abb2b851-363c-54fa-890c-44d67c37c9b8": [
+    "artifact:prose",
+    "competency:legal_reasoning",
+    "difficulty:hard",
+    "shape:multiple_choice"
+  ],
+  "nemo/mcqa/0dfcf12c-bc99-535f-9c8c-6687a545f35d": [
+    "artifact:prose",
+    "competency:medical_science_reasoning",
+    "difficulty:medium",
+    "shape:multiple_choice"
+  ],
+  "nemo/open_math/0": [
+    "artifact:numeric_answer",
+    "competency:number_theoretic_reasoning",
+    "difficulty:hard",
+    "domain:number_theory",
+    "shape:calculation"
+  ],
+  "nemo/open_math/1": [
+    "artifact:formula",
+    "competency:math",
+    "difficulty:hard",
+    "domain:arithmetic",
+    "shape:calculation"
+  ],
+  "nemo/stack_math/0": [
+    "artifact:formula",
+    "competency:geometric_reasoning",
+    "difficulty:hard",
+    "domain:computational_geometry",
+    "shape:calculation"
+  ],
+  "nemo/stack_math/1": [
+    "artifact:numeric_answer",
+    "competency:math",
+    "difficulty:medium",
+    "domain:arithmetic",
+    "shape:calculation"
+  ],
+  "nemo/open_qa/ae045132-7beb-5f97-bf65-a27d7d86b998": [
+    "artifact:prose",
+    "competency:scientific_reasoning",
+    "difficulty:medium",
+    "domain:experimental_measurement",
+    "shape:explanation"
+  ],
+  "nemo/open_qa/bd761808-13a7-5faf-9852-961422532fbe": [
+    "artifact:prose",
+    "competency:legal_reasoning",
+    "difficulty:medium",
+    "shape:explanation"
+  ],
+  "nemo/science/c0d8dc56ce5d485bb989483047fa661c": [
+    "artifact:formula",
+    "competency:physics_reasoning",
+    "difficulty:easy",
+    "shape:explanation"
+  ],
+  "nemo/reasoning_gym/d06d0d00-6b32-4ed1-9a73-1ee720d4aa42": [
+    "competency:knowledge_recall",
+    "difficulty:easy",
+    "shape:answer"
+  ],
+  "nemo/reasoning_gym/cf876b7f-0007-40a4-ab3a-f49fe8cdd8e2": [
+    "competency:causal_reasoning",
+    "difficulty:easy",
+    "domain:graph_theory",
+    "shape:calculation"
+  ]
+}
