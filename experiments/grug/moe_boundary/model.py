@@ -9,7 +9,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import equinox as eqx
 import jax
@@ -288,7 +288,15 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
-def split_prelude_core_coda(num_layers: int) -> tuple[int, int, int]:
+class BlockSplit(NamedTuple):
+    """Layer counts for the prelude / core / coda partition of a boundary-operator model."""
+
+    prelude: int
+    core: int
+    coda: int
+
+
+def split_prelude_core_coda(num_layers: int) -> "BlockSplit":
     """Paper A.2.1 block allocation: split num_layers as evenly as possible across
     prelude, core, and coda, assigning remainders first to the core, then the coda.
     Example: 6 -> (2, 2, 2), 8 -> (2, 3, 3), 11 -> (3, 4, 4), 13 -> (4, 5, 4)."""
@@ -297,7 +305,7 @@ def split_prelude_core_coda(num_layers: int) -> tuple[int, int, int]:
     base, rem = divmod(num_layers, 3)
     core_extra = min(rem, 1)
     coda_extra = rem - core_extra
-    return base, base + core_extra, base + coda_extra
+    return BlockSplit(prelude=base, core=base + core_extra, coda=base + coda_extra)
 
 
 class CausalSelfAttention(eqx.Module):

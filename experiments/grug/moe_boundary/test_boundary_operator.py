@@ -49,7 +49,8 @@ def _small_config(**overrides) -> GrugModelConfig:
 def _boundary_config(**overrides) -> GrugModelConfig:
     """Small config with the boundary operator on and a valid 6-layer split."""
     overrides = dict(overrides)
-    prelude_len, _, coda_len = split_prelude_core_coda(6)
+    split = split_prelude_core_coda(6)
+    prelude_len, coda_len = split.prelude, split.coda
     if "prelude_len" in overrides and "coda_len" not in overrides:
         # Caller pins the prelude: keep the paper rule for the coda, core is the rest.
         overrides.setdefault("coda_len", min(coda_len, 6 - overrides["prelude_len"] - 1))

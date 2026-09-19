@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Boundary-operator compute-optimal cells (arXiv 2609.19107, Phase 0).
+"""Boundary-operator compute-optimal cells (arXiv 2609.19107).
 
 Runs the prelude-core-coda boundary operator (no looping, no growth) at the
 May Recipe compute-optimal budgets from ``experiments/grug/moe/README.md``,
@@ -14,9 +14,9 @@ z-loss off), so each cell pins those flags and the batch/steps of the README
 table rather than re-deriving them from the rounded budgets. Cell budgets:
 d512 / 3.82e17, d768 / 2.81e18, d1024 / 1.16e19, d1280 / 3.46e19.
 
-Phase 0 runs one arm at a time: ``--dim 512 --alpha 1.0`` first, then the
-alpha-insurance twin ``--alpha 0.707``; the winner proceeds to d768/d1024/
-d1280 (gate 1 / gate 2).
+Phase 0 of the replication plan runs one arm at a time: ``--dim 512
+--alpha 1.0`` first, then the alpha-insurance twin ``--alpha 0.707``; the
+winner proceeds to d768/d1024/d1280 (gate 1 / gate 2).
 
 Submit (v4-32, EP=1)::
 
@@ -36,25 +36,16 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
-from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
 
-from experiments.datasets.nemotron import nemotron_datasets
-from experiments.datasets.paloma import paloma_datasets
-from experiments.datasets.proofpile import proofpile_dataset
-from experiments.datasets.starcoder import starcoder_dataset
-from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe_boundary.heuristic import build_from_heuristic
 from experiments.grug.moe_boundary.launch import (
-    _NEMOTRON_WEIGHTS,
-    _PROOFPILE_WEIGHT,
-    _STARCODER_WEIGHT,
     GrugMoeLaunchConfig,
+    grug_moe_boundary_mix,
     run_grug_moe_trial,
 )
 from experiments.grug.moe_boundary.model import split_prelude_core_coda
 from experiments.grug.moe_boundary.train import GrugEvalConfig, GrugTrainerConfig
-from experiments.llama import llama3_tokenizer
 
 _SEQ: int = 4096  # README baseline measurement condition
 _EP: int = 1
@@ -70,21 +61,6 @@ _BASELINE_CELLS: dict[int, tuple[float, int, int]] = {
 _TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-32")
 
 
-def _boundary_train_and_validation() -> (
-    tuple[dict[ArtifactStep[TokenizedCache], float], list[ArtifactStep[TokenizedCache]]]
-):
-    """Nemotron + starcoder + proofpile train mix, Paloma/uncheatable validation (baseline wiring)."""
-    nem = nemotron_datasets(tokenizer=llama3_tokenizer)
-    train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
-    train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
-    train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
-    validation = [
-        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
-        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
-    ]
-    return train, validation
-
-
 def boundary_cell(*, hidden_dim: int, alpha: float, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Compute-optimal boundary-operator cell at a May Recipe baseline point.
 
@@ -96,7 +72,8 @@ def boundary_cell(*, hidden_dim: int, alpha: float, version: str | None = None) 
     # measurement conditions and add the boundary operator with the paper's
     # even P/C/D split.
     model, optimizer, _, _ = build_from_heuristic(budget=budget, hidden_dim=hidden_dim, seq_len=_SEQ)
-    prelude_len, _, coda_len = split_prelude_core_coda(model.num_layers)
+    split = split_prelude_core_coda(model.num_layers)
+    prelude_len, coda_len = split.prelude, split.coda
     boundary_model = dataclasses.replace(
         model,
         max_seq_len=_SEQ,
@@ -109,7 +86,7 @@ def boundary_cell(*, hidden_dim: int, alpha: float, version: str | None = None) 
     )
     name = f"grug/moe_boundary_compute_opt_d{hidden_dim}_ep{_EP}_alpha{alpha:g}"
     version = resolve_version(name, version)
-    train, validation = _boundary_train_and_validation()
+    train, validation = grug_moe_boundary_mix()
     run_id = f"moe_boundary_compute_opt_d{hidden_dim}_ep{_EP}_alpha{alpha:g}"
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:

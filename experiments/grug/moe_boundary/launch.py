@@ -199,6 +199,19 @@ _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_f
 )
 
 
+def grug_moe_boundary_mix() -> tuple[dict[ArtifactStep[TokenizedCache], float], list[ArtifactStep[TokenizedCache]]]:
+    """Baseline train mix + validation: the same handles ``grug_moe_baseline`` wires."""
+    nem = nemotron_datasets(tokenizer=llama3_tokenizer)
+    train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
+    train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
+    train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
+    validation = [
+        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
+        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
+    ]
+    return train, validation
+
+
 def grug_moe_baseline(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """The baseline grug MoE (QB+GN+XSA+zloss) on the Nemotron mix as a lazy checkpoint.
 
@@ -208,14 +221,7 @@ def grug_moe_baseline(*, version: str | None = None) -> ArtifactStep[LevanterChe
     """
     name = "grug/4_10_baseline_moe"
     version = resolve_version(name, version)
-    nem = nemotron_datasets(tokenizer=llama3_tokenizer)
-    train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
-    train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
-    train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
-    validation = [
-        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
-        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
-    ]
+    train, validation = grug_moe_boundary_mix()
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         return GrugMoeLaunchConfig(

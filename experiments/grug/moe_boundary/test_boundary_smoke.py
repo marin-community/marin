@@ -3,11 +3,15 @@
 
 """End-to-end smoke test: a few real training steps with the boundary operator on.
 
-Covers the wiring the unit tests cannot: eval, checkpointing, and loss going
-down with the operator active.
+Covers the wiring the unit tests cannot: eval, checkpointing, and the training
+loss actually going down with the operator active.
 """
 
 import dataclasses
+import json
+import logging
+import uuid
+from io import StringIO
 
 import jax
 import jax.numpy as jnp
@@ -54,7 +58,16 @@ def _small_boundary_config() -> GrugModelConfig:
 
 @pytest.mark.timeout(300)
 def test_boundary_training_smoke_loss_decreases(tmp_path):
-    """Train ~10 steps with the operator on; the run must complete and record metrics."""
+    """Train ~10 steps with the operator on; loss must decrease and the run must finish."""
+    logger_name = f"test-grug-boundary-smoke-{uuid.uuid4().hex}"
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    logger = logging.getLogger(logger_name)
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
     seq_len = _SEQ
     vocab_size = _VOCAB
     examples = []
@@ -79,7 +92,7 @@ def test_boundary_training_smoke_loss_decreases(tmp_path):
         id="test-grug-boundary-smoke",
         num_train_steps=10,
         train_batch_size=max(1, len(jax.devices())),
-        tracker=JsonLoggerConfig(logger_name="test-grug-boundary-smoke"),
+        tracker=JsonLoggerConfig(logger_name=logger_name),
         require_accelerator=False,
         use_explicit_mesh_axes=True,
         distributed=DistributedConfig(initialize_jax_distributed=False),
@@ -101,4 +114,19 @@ def test_boundary_training_smoke_loss_decreases(tmp_path):
         ),
         optimizer=AdamConfig(learning_rate=1e-3),
     )
-    train_module.run_grug(run_cfg)
+    try:
+        train_module.run_grug(run_cfg)
+    finally:
+        logger.removeHandler(handler)
+
+    records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+    train_losses = [
+        r["metrics"]["train/loss"] for r in records if r.get("event") == "log" and "train/loss" in r.get("metrics", {})
+    ]
+    assert len(train_losses) >= 2, "expected at least two logged training steps"
+    assert (
+        train_losses[-1] < train_losses[0]
+    ), f"training loss did not decrease with the boundary operator on: {train_losses}"
+    finish_records = [r for r in records if r.get("event") == "finish"]
+    assert len(finish_records) == 1, "run must finish exactly once"
+    assert "throughput/total_tokens" in finish_records[0]["summary"]
