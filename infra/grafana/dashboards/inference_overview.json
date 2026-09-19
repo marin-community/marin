@@ -145,7 +145,7 @@
     {
       "type": "table",
       "title": "Observed server summary",
-      "description": "Full-range totals use reset-aware engine counters. Peaks are observed samples; native ITL is a token-weighted mean. This summary omits latency tails, output-length distribution, per-engine detail, and client/proxy time.",
+      "description": "Selected-range totals use reset-aware engine counters. Peaks are observed samples; native ITL is a token-weighted mean. This summary omits latency tails, output-length distribution, per-engine detail, and client/proxy time.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

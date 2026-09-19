@@ -110,9 +110,9 @@ TPOT.
 The identity picker retains request-state discovery. For ranges longer than
 seven hours, it scans the first seven hours to stay within Finelog's deadline.
 Paste an exact job, run, or execution ID into **Manual serve ID** when the
-desired session began later. Both pages link job selections to Iris, where the
-evaluator child logs expose proxy 504s and client retries. vLLM counters do not
-measure that time.
+desired session began later. The diagnostics page links the selected or manual
+serve to Iris; follow its evaluator child to inspect proxy 504s and client
+retries. vLLM counters do not measure that time.
 
 To replay both pages against the existing four-node data in
 [Marin #8929](https://github.com/marin-community/marin/issues/8929), run from the
