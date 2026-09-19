@@ -55,6 +55,7 @@ def _row(
     run_id: str | None = None,
     job_id: str | None = None,
     node_name: str | None = None,
+    execution_uid: str = "iris:/atqamar/snowball-e6-muonh-0-attempt-0/0:attempt:0",
     role: str = "",
     attributes: dict[str, str] | None = None,
 ) -> tuple:
@@ -64,7 +65,7 @@ def _row(
         service,
         run_id,
         job_id,
-        "iris:/atqamar/snowball-e6-muonh-0-attempt-0/0:attempt:0",
+        execution_uid,
         node_name,
         # Production stamps no process_index: it is NULL on every row of a real capture, so the
         # counter windows have to separate replicas without it.
@@ -406,6 +407,63 @@ def test_the_trainer_panels_render_for_that_run(store) -> None:
     # than doubling. 6e9 used over 8e9 total.
     occupancy = store.execute(_panel_sql("Ray object store occupancy · needs the Ray collector")).fetchall()
     assert [row[1] for row in occupancy] == [pytest.approx(0.75)] * 6
+
+
+def test_percentile_panels_compute_over_all_executions_in_each_bucket(store) -> None:
+    moment = WINDOW_START
+    timestamp_ms = _millis(moment)
+    store.execute(
+        'DELETE FROM "telemetry_v1.marinskyrl" '
+        "WHERE timestamp_ms = ? AND name IN ('phase_duration_seconds', 'rollout_staleness_steps')",
+        [timestamp_ms],
+    )
+    rows = []
+    grouped_values = (("attempt-a", (0.0, 100.0)), ("attempt-b", (10.0, 10.0, 10.0, 10.0, 10.0)))
+    for execution_uid, values in grouped_values:
+        for seq, value in enumerate(values):
+            rows.append(
+                _row(
+                    service="marinskyrl",
+                    name="rollout_staleness_steps",
+                    value=value,
+                    moment=moment,
+                    seq=seq,
+                    run_id=RUN_ID,
+                    execution_uid=execution_uid,
+                )
+            )
+            rows.append(
+                _row(
+                    service="marinskyrl",
+                    name="phase_duration_seconds",
+                    value=value,
+                    moment=moment,
+                    seq=seq,
+                    run_id=RUN_ID,
+                    execution_uid=execution_uid,
+                    attributes={
+                        "phase": "rollout_or_inference_wait",
+                        "clock_domain": "critical_path",
+                        "outcome": "success",
+                    },
+                )
+            )
+    store.executemany(f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})', rows)
+    expected_p50, expected_p99 = store.execute(
+        "SELECT quantile_cont(value, 0.5), quantile_cont(value, 0.99) "
+        'FROM "telemetry_v1.marinskyrl" '
+        "WHERE timestamp_ms = ? AND name = 'rollout_staleness_steps'",
+        [timestamp_ms],
+    ).fetchone()
+
+    staleness = store.execute(_panel_sql("Off-policy staleness (optimizer steps behind) · async runs only")).fetchall()
+    first_bucket = min(row[0] for row in staleness)
+    first_staleness = {row[1]: row[2] for row in staleness if row[0] == first_bucket}
+    straggler = store.execute(_panel_sql("Straggler proxy: rollout wait p99 ÷ p50")).fetchall()
+    first_straggler = next(row[2] for row in straggler if row[0] == first_bucket)
+
+    assert first_staleness == {"p50": pytest.approx(expected_p50), "p99": pytest.approx(expected_p99)}
+    assert first_straggler == pytest.approx(expected_p99 / expected_p50)
 
 
 def test_the_node_agent_joins_through_node_name_without_a_run_id(store) -> None:

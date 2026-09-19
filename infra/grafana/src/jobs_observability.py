@@ -123,15 +123,18 @@ WITH averages AS (
     SELECT task_id, AVG(memory_mb) AS memory_mb, AVG(cpu_millicores) AS cpu_millicores
     FROM "iris.task" WHERE ts >= {start} AND ts < {end} GROUP BY 1
 ), selected_ids AS (
-    SELECT task_id FROM (SELECT task_id, ROW_NUMBER() OVER (ORDER BY memory_mb DESC) AS memory_rank,
-                                        ROW_NUMBER() OVER (ORDER BY cpu_millicores DESC) AS cpu_rank
-                         FROM averages)
+    SELECT task_id, memory_rank, cpu_rank
+    FROM (SELECT task_id, ROW_NUMBER() OVER (ORDER BY memory_mb DESC, task_id) AS memory_rank,
+                         ROW_NUMBER() OVER (ORDER BY cpu_millicores DESC, task_id) AS cpu_rank
+          FROM averages)
     WHERE memory_rank <= {JOBS_RESOURCE_SERIES_LIMIT} OR cpu_rank <= {JOBS_RESOURCE_SERIES_LIMIT}
 )
-SELECT {bucket} AS t, task_id, AVG(memory_mb) AS memory_mb, AVG(cpu_millicores) AS cpu_millicores
-FROM "iris.task"
-WHERE ts >= {start} AND ts < {end} AND task_id IN (SELECT task_id FROM selected_ids)
-GROUP BY 1, 2 ORDER BY 1, 2
+SELECT {bucket} AS t, task.task_id,
+       AVG(task.memory_mb) AS memory_mb, AVG(task.cpu_millicores) AS cpu_millicores,
+       selected_ids.memory_rank, selected_ids.cpu_rank
+FROM "iris.task" AS task JOIN selected_ids USING (task_id)
+WHERE task.ts >= {start} AND task.ts < {end}
+GROUP BY 1, 2, 5, 6 ORDER BY 1, 2
 LIMIT {JOBS_MAX_RESOURCE_ROWS + 1}
 """.strip()
     worker_sql = f"""
@@ -139,15 +142,18 @@ WITH averages AS (
     SELECT worker_id, AVG(cpu_pct) AS cpu_pct, AVG(mem_bytes) AS mem_bytes
     FROM "iris.worker" WHERE ts >= {start} AND ts < {end} GROUP BY 1
 ), selected_ids AS (
-    SELECT worker_id FROM (SELECT worker_id, ROW_NUMBER() OVER (ORDER BY cpu_pct DESC) AS cpu_rank,
-                                            ROW_NUMBER() OVER (ORDER BY mem_bytes DESC) AS memory_rank
-                           FROM averages)
+    SELECT worker_id, cpu_rank, memory_rank
+    FROM (SELECT worker_id, ROW_NUMBER() OVER (ORDER BY cpu_pct DESC, worker_id) AS cpu_rank,
+                           ROW_NUMBER() OVER (ORDER BY mem_bytes DESC, worker_id) AS memory_rank
+          FROM averages)
     WHERE cpu_rank <= {JOBS_RESOURCE_SERIES_LIMIT} OR memory_rank <= {JOBS_RESOURCE_SERIES_LIMIT}
 )
-SELECT {bucket} AS t, worker_id, AVG(cpu_pct) AS cpu_pct, AVG(mem_bytes) AS mem_bytes
-FROM "iris.worker"
-WHERE ts >= {start} AND ts < {end} AND worker_id IN (SELECT worker_id FROM selected_ids)
-GROUP BY 1, 2 ORDER BY 1, 2
+SELECT {bucket} AS t, worker.worker_id,
+       AVG(worker.cpu_pct) AS cpu_pct, AVG(worker.mem_bytes) AS mem_bytes,
+       selected_ids.cpu_rank, selected_ids.memory_rank
+FROM "iris.worker" AS worker JOIN selected_ids USING (worker_id)
+WHERE worker.ts >= {start} AND worker.ts < {end}
+GROUP BY 1, 2, 5, 6 ORDER BY 1, 2
 LIMIT {JOBS_MAX_RESOURCE_ROWS + 1}
 """.strip()
     views = {
@@ -182,10 +188,10 @@ FROM task_state WHERE kind = 'historical' AND root_job_id <> '' GROUP BY 1, 2 OR
 """.strip()
         ),
         "active_jobs": (
-            """
+            f"""
 SELECT origin_cluster AS cluster, root_job_id AS job, pending, assigned, building, running,
        oldest_pending_age_ms, oldest_building_age_ms
-FROM task_state WHERE kind = 'latest' AND root_job_id <> ''
+FROM task_state WHERE kind = 'latest' AND root_job_id <> '' AND {selected_jobs}
 ORDER BY GREATEST(oldest_building_age_ms, oldest_pending_age_ms) DESC
 """.strip()
         ),
@@ -193,10 +199,22 @@ ORDER BY GREATEST(oldest_building_age_ms, oldest_pending_age_ms) DESC
             "SELECT ts, origin_cluster AS cluster, task_id, attempt_id, reason, source, message, count "
             "FROM events WHERE kind = 'recent' ORDER BY ts DESC"
         ),
-        "task_memory": "SELECT t, task_id AS series, memory_mb AS value FROM tasks ORDER BY 1",
-        "task_cpu": "SELECT t, task_id AS series, cpu_millicores AS value FROM tasks ORDER BY 1",
-        "worker_cpu": "SELECT t, worker_id AS series, cpu_pct AS value FROM workers ORDER BY 1",
-        "worker_memory": "SELECT t, worker_id AS series, mem_bytes AS value FROM workers ORDER BY 1",
+        "task_memory": (
+            f"SELECT t, task_id AS series, memory_mb AS value FROM tasks "
+            f"WHERE memory_rank <= {JOBS_RESOURCE_SERIES_LIMIT} ORDER BY 1"
+        ),
+        "task_cpu": (
+            f"SELECT t, task_id AS series, cpu_millicores AS value FROM tasks "
+            f"WHERE cpu_rank <= {JOBS_RESOURCE_SERIES_LIMIT} ORDER BY 1"
+        ),
+        "worker_cpu": (
+            f"SELECT t, worker_id AS series, cpu_pct AS value FROM workers "
+            f"WHERE cpu_rank <= {JOBS_RESOURCE_SERIES_LIMIT} ORDER BY 1"
+        ),
+        "worker_memory": (
+            f"SELECT t, worker_id AS series, mem_bytes AS value FROM workers "
+            f"WHERE memory_rank <= {JOBS_RESOURCE_SERIES_LIMIT} ORDER BY 1"
+        ),
         "fleet_tasks": (
             "SELECT SUM(running) AS running, SUM(building) AS building, SUM(pending) AS pending "
             "FROM task_state WHERE kind = 'latest' AND root_job_id = ''"

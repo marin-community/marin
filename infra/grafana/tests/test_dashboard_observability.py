@@ -7,9 +7,11 @@ from pathlib import Path
 from types import SimpleNamespace as Record
 
 import duckdb
+import pytest
 from accelerator_observability import accelerator_overview_dataset
 from config import ClusterTarget
 from conftest import bridge_config
+from dashboard_dataset import DashboardDataset
 from dashboard_stitch import stitch_all
 from jobs_observability import jobs_overview_dataset
 from node_observability import node_overview_dataset
@@ -47,6 +49,19 @@ def _source_and_queries(database: duckdb.DuckDBPyConnection):
 
 def _app(source, *, max_rows: int = 1000):
     return create_app(replace(bridge_config(), max_rows=max_rows), {"marin": source}, {}, None, None, None)
+
+
+def _materialize_sources(database: duckdb.DuckDBPyConnection, dataset: DashboardDataset, *names: str) -> None:
+    selected = set(names)
+    for source in dataset.sources:
+        if source.name in selected:
+            database.execute(f'CREATE TEMP TABLE "{source.name}" AS {source.sql}')
+
+
+def _result_rows(database: duckdb.DuckDBPyConnection, sql: str) -> list[dict[str, object]]:
+    result = database.execute(sql)
+    columns = [description[0] for description in result.description]
+    return [dict(zip(columns, row, strict=True)) for row in result.fetchall()]
 
 
 def test_node_overview_serves_every_panel_from_one_source_query() -> None:
@@ -268,3 +283,132 @@ def test_domain_source_counts_stay_within_the_declared_budget() -> None:
         "jobs": 5,
         "recent_rl": 1,
     }
+
+
+def test_accelerator_sources_preserve_stale_devices_and_aggregate_each_gpu_once() -> None:
+    database = duckdb.connect()
+    database.execute(
+        """CREATE TABLE "telemetry_v1.node_agent"(
+               cluster VARCHAR, node_name VARCHAR, service VARCHAR, name VARCHAR,
+               attributes_json VARCHAR, timestamp_ms BIGINT, value DOUBLE)"""
+    )
+    database.execute(
+        """CREATE TABLE "levanter.metrics"(
+               cluster VARCHAR, node_name VARCHAR, run_id VARCHAR, step BIGINT, timestamp_ms BIGINT)"""
+    )
+    database.execute("CREATE MACRO json_get(document, key) AS json_extract_string(document, '$.' || key)")
+    rows = []
+    for gpu, watts in (("GPU-0", 100.0), ("GPU-1", 200.0)):
+        attributes = json.dumps({"gpu_uuid": gpu, "gpu_index": gpu[-1], "gpu_model": "H100"})
+        rows.extend(
+            [
+                ("cw-a", "node-a", "iris-node-agent", "gpu_power_watts", attributes, 0, watts),
+                ("cw-a", "node-a", "iris-node-agent", "gpu_power_watts", attributes, 1_000, watts),
+                ("cw-a", "node-a", "iris-node-agent", "hardware_inventory", attributes, 900_000, 1.0),
+            ]
+        )
+    database.executemany('INSERT INTO "telemetry_v1.node_agent" VALUES (?, ?, ?, ?, ?, ?, ?)', rows)
+    database.execute("INSERT INTO \"levanter.metrics\" VALUES ('cw-a', 'node-a', 'run-a', 1, 0)")
+    dataset = accelerator_overview_dataset(("cw-a",), 0, 1_200_000, 30_000)
+    _materialize_sources(database, dataset, "devices", "attribution")
+
+    freshness = _result_rows(database, dataset.views["freshness"])
+    model_power = _result_rows(database, dataset.views["model_power"])
+    run_power = _result_rows(database, dataset.views["run_power"])
+
+    assert freshness == [{"cluster": "cw-a", "gpus": 2, "nodes": 1, "lag_seconds": 1199.0}]
+    assert model_power[0]["value"] == pytest.approx(0.3)
+    assert run_power[0]["value"] == pytest.approx(0.3)
+
+
+def test_jobs_views_keep_selected_jobs_and_independent_top_twenty_rankings() -> None:
+    database = duckdb.connect()
+    database.execute(
+        """CREATE TABLE "iris.task_state"(
+               ts TIMESTAMP, cluster VARCHAR, root_job_id VARCHAR,
+               pending BIGINT, assigned BIGINT, building BIGINT, running BIGINT,
+               oldest_pending_age_ms BIGINT, oldest_building_age_ms BIGINT)"""
+    )
+    database.execute(
+        """CREATE TABLE "iris.task"(
+               ts TIMESTAMP, task_id VARCHAR, memory_mb DOUBLE, cpu_millicores DOUBLE)"""
+    )
+    database.execute('CREATE TABLE "iris.worker"(ts TIMESTAMP, worker_id VARCHAR, cpu_pct DOUBLE, mem_bytes DOUBLE)')
+    database.execute(
+        "CREATE MACRO to_timestamp_millis(ms) AS TIMESTAMP '1970-01-01 00:00:00' + ms * INTERVAL 1 MILLISECOND"
+    )
+    database.execute("CREATE MACRO date_bin(width, moment) AS time_bucket(width, moment)")
+    database.executemany(
+        'INSERT INTO "iris.task_state" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            ("1970-01-01 00:00:01", "cw-a", "selected", 1, 0, 0, 1, 0, 0),
+            ("1970-01-01 00:00:01", "cw-a", "unrelated-stuck", 1, 0, 0, 0, 1_000_000, 0),
+        ],
+    )
+    database.executemany(
+        'INSERT INTO "iris.task" VALUES (?, ?, ?, ?)',
+        [("1970-01-01 00:00:01", f"task-{index:02}", 21 - index, index) for index in range(21)],
+    )
+    database.executemany(
+        'INSERT INTO "iris.worker" VALUES (?, ?, ?, ?)',
+        [("1970-01-01 00:00:01", f"worker-{index:02}", index, 21 - index) for index in range(21)],
+    )
+    dataset = jobs_overview_dataset(("cw-a",), ("selected",), 0, 60_000, 15_000)
+    _materialize_sources(database, dataset, "task_state", "tasks", "workers")
+
+    assert [row["job"] for row in _result_rows(database, dataset.views["active_jobs"])] == ["selected"]
+    assert _result_rows(database, dataset.views["stuck_jobs"]) == [{"stuck": 1}]
+    assert {row["series"] for row in _result_rows(database, dataset.views["task_memory"])} == {
+        f"task-{index:02}" for index in range(20)
+    }
+    assert {row["series"] for row in _result_rows(database, dataset.views["task_cpu"])} == {
+        f"task-{index:02}" for index in range(1, 21)
+    }
+    assert {row["series"] for row in _result_rows(database, dataset.views["worker_cpu"])} == {
+        f"worker-{index:02}" for index in range(1, 21)
+    }
+    assert {row["series"] for row in _result_rows(database, dataset.views["worker_memory"])} == {
+        f"worker-{index:02}" for index in range(20)
+    }
+
+
+def test_runs_views_use_run_wide_cardinality_training_freshness_and_global_node_ownership() -> None:
+    database = duckdb.connect()
+    database.execute(
+        """CREATE TABLE "levanter.metrics"(
+               cluster VARCHAR, node_name VARCHAR, run_id VARCHAR, step BIGINT,
+               process_index VARCHAR, name VARCHAR, value DOUBLE, timestamp_ms BIGINT)"""
+    )
+    database.execute(
+        """CREATE TABLE "telemetry_v1.node_agent"(
+               cluster VARCHAR, node_name VARCHAR, service VARCHAR, name VARCHAR,
+               attributes_json VARCHAR, value DOUBLE, timestamp_ms BIGINT)"""
+    )
+    database.execute("CREATE MACRO json_get(document, key) AS json_extract_string(document, '$.' || key)")
+    database.executemany(
+        'INSERT INTO "levanter.metrics" VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            ("cw-a", "node-a", "selected", 1, "0", "train_loss", 3.0, 0),
+            ("cw-a", "node-b", "selected", 2, "1", "train_loss", 2.0, 20_000),
+            ("cw-a", "node-c", "selected", 2, "2", "eval_loss", 1.0, 90_000),
+            ("cw-a", "node-a", "other", 1, "0", "train_loss", 4.0, 1_000),
+            ("cw-a", "node-a", "other", 1, "1", "throughput_mfu", 0.5, 2_000),
+            ("cw-a", "node-a", "other", 1, "2", "throughput_tokens_per_second", 10.0, 3_000),
+        ],
+    )
+    database.executemany(
+        'INSERT INTO "telemetry_v1.node_agent" VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [
+            ("cw-a", "node-a", "iris-node-agent", "gpu_power_watts", json.dumps({"gpu_uuid": "GPU-0"}), 100, 0),
+            ("cw-a", "node-a", "iris-node-agent", "gpu_power_watts", json.dumps({"gpu_uuid": "GPU-1"}), 200, 0),
+        ],
+    )
+    dataset = runs_overview_dataset(("cw-a",), ("selected",), 0, 120_000, 15_000)
+    _materialize_sources(database, dataset, "metrics", "power")
+
+    active = _result_rows(database, dataset.views["active"])
+
+    assert active[0]["nodes"] == 2
+    assert active[0]["processes"] == 2
+    assert active[0]["sample_age_seconds"] == 100.0
+    assert _result_rows(database, dataset.views["power"]) == []

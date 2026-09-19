@@ -82,7 +82,7 @@ UNION ALL SELECT * FROM other
 ORDER BY t, "cluster", name
 LIMIT {ACCELERATOR_MAX_FLEET_ROWS + 1}
 """.strip()
-    latest_start_ms = max(start_ms, end_ms - 10 * 60 * 1000)
+    inventory_start_ms = max(start_ms, end_ms - 10 * 60 * 1000)
     device_sql = f"""
 WITH latest AS (
     SELECT 'latest' AS kind,
@@ -102,7 +102,7 @@ WITH latest AS (
     FROM "telemetry_v1.node_agent"
     WHERE service = 'iris-node-agent'
       AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({cluster_values})
-      AND timestamp_ms >= {latest_start_ms}
+      AND timestamp_ms >= {start_ms}
       AND timestamp_ms < {end_ms}
       AND name IN ('gpu_power_watts', 'hardware_inventory')
 ), faults AS (
@@ -164,30 +164,37 @@ WITH latest AS (
     FROM "telemetry_v1.node_agent"
     WHERE service = 'iris-node-agent'
       AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({cluster_values})
-      AND timestamp_ms >= {latest_start_ms}
+      AND timestamp_ms >= {inventory_start_ms}
       AND timestamp_ms < {end_ms}
       AND name = 'hardware_inventory'
     GROUP BY 1
+), power_per_gpu AS (
+    SELECT {start_ms} + (timestamp_ms - {start_ms})
+               - (timestamp_ms - {start_ms}) % {bucket_ms} AS t,
+           json_get(attributes_json, 'gpu_uuid') AS gpu_uuid,
+           AVG(value) AS watts,
+           MAX(timestamp_ms) AS last_ms
+    FROM "telemetry_v1.node_agent"
+    WHERE service = 'iris-node-agent'
+      AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({cluster_values})
+      AND timestamp_ms >= {start_ms}
+      AND timestamp_ms < {end_ms}
+      AND name = 'gpu_power_watts'
+    GROUP BY 1, 2
 ), model_power AS (
     SELECT 'model_power' AS kind,
-           {start_ms} + (power.timestamp_ms - {start_ms})
-               - (power.timestamp_ms - {start_ms}) % {bucket_ms} AS t,
+           power.t,
            CAST(NULL AS VARCHAR) AS "cluster",
            CAST(NULL AS VARCHAR) AS node,
            CAST(NULL AS VARCHAR) AS gpu,
            CAST(NULL AS VARCHAR) AS gpu_uuid,
            'gpu_power_watts' AS name,
-           SUM(value) / 1000.0 AS value,
+           SUM(power.watts) / 1000.0 AS value,
            COALESCE(model.gpu_model, 'unknown') AS series,
-           MAX(power.timestamp_ms) AS last_ms,
+           MAX(power.last_ms) AS last_ms,
            1 AS rn
-    FROM "telemetry_v1.node_agent" AS power
-    LEFT JOIN model ON json_get(power.attributes_json, 'gpu_uuid') = model.gpu_uuid
-    WHERE power.service = 'iris-node-agent'
-      AND COALESCE(NULLIF(power.cluster, ''), 'marin') IN ({cluster_values})
-      AND power.timestamp_ms >= {start_ms}
-      AND power.timestamp_ms < {end_ms}
-      AND power.name = 'gpu_power_watts'
+    FROM power_per_gpu AS power
+    LEFT JOIN model USING (gpu_uuid)
     GROUP BY 2, 9
 )
 SELECT kind, t, "cluster", node, gpu, gpu_uuid, name, value, series, last_ms
@@ -206,10 +213,11 @@ WITH gpu AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
            {bucket} AS t,
            node_name AS node,
+           json_get(attributes_json, 'gpu_uuid') AS gpu_uuid,
            AVG(value) AS watts
     FROM "telemetry_v1.node_agent"
     WHERE {common_filter} AND name = 'gpu_power_watts'
-    GROUP BY 1, 2, 3
+    GROUP BY 1, 2, 3, 4
 ), run_raw AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
            {bucket} AS t,
