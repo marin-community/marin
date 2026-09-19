@@ -46,6 +46,8 @@ from experiments.grug.moe_hero_ep.pipeline import (
 )
 from experiments.grug.moe_hero_ep.train import _compute_flops
 
+_MULTIHOST_TIMEOUT = 600
+
 
 def _log(event: str, **fields) -> None:
     if jax.process_index() == 0:
@@ -59,7 +61,7 @@ def _global_loss(value) -> float:
     local = value if isinstance(value, jax.Array) else value.to_mpmd_local_array
     report = np.array([local is not None, 0.0 if local is None else float(local)], dtype=np.float64)
     # Finished stages must not launch GPU collectives while other stages still execute.
-    reports = np.asarray(multihost_allgather_sync(report.tolist(), timeout=600)).reshape(-1, 2)
+    reports = np.asarray(multihost_allgather_sync(report.tolist(), timeout=_MULTIHOST_TIMEOUT)).reshape(-1, 2)
     losses = reports[reports[:, 0] != 0, 1]
     if not len(losses) or not np.all(np.isfinite(losses)):
         raise FloatingPointError(f"Pipeline loss absent or nonfinite: {reports.tolist()}")
@@ -125,7 +127,7 @@ def _initialize_pipeline_communicators(mpmd_mesh, placements: tuple[int, ...]) -
                 dime2.get_or_create_comm(dime2.UniqueDevices(target, source))
             else:
                 dime2.get_or_create_comm(dime2.UniqueSortedDevices(source, target))
-    barrier_sync_named("hero_pipeline_communicators_initialized", timeout=600)
+    barrier_sync_named("hero_pipeline_communicators_initialized", timeout=_MULTIHOST_TIMEOUT)
 
     # NCCL establishes P2P transports on the first send/recv, even after
     # communicator initialization. Connect both directions in a common edge
@@ -151,10 +153,10 @@ def _initialize_pipeline_communicators(mpmd_mesh, placements: tuple[int, ...]) -
             actual = np.asarray(shard.data)
             if not np.all(actual == remote_stage):
                 raise RuntimeError(f"Pipeline channel {remote_stage}->{local_stage} received {actual}")
-    barrier_sync_named("hero_pipeline_channels_connected", timeout=600)
+    barrier_sync_named("hero_pipeline_channels_connected", timeout=_MULTIHOST_TIMEOUT)
 
 
-def main() -> None:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--full-hero", action="store_true")
     parser.add_argument("--diagnostic-layers", type=int, help="Use fewer full-width hero layers for fault isolation")
@@ -198,28 +200,12 @@ def main() -> None:
     if args.steps < 1 or args.expert_axis_size < 1:
         parser.error("steps and expert-axis-size must be positive")
 
-    # Configure both caches before Iris initialization can select object storage.
-    jax.config.update("jax_compilation_cache_dir", args.compilation_cache)
-    install_cutlass_cache(PersistentKvCache.in_memory())
-    initialize_jax()
-    if args.run_id and jax.process_index() == 0:
-        wandb.init(
-            entity="marin-community",
-            project="marin_moe",
-            id=args.run_id,
-            name=args.run_id,
-            group="hero-h100-pipeline",
-            resume="never",
-            config=vars(args),
-            settings=wandb.Settings(save_code=False, console="redirect"),
-        )
-    config = GrugMoePipelineConfig(
-        stages=args.stages, microbatches=args.microbatches, physical_stages=args.physical_stages
-    )
     if (args.schedule == AutomaticPipelineSchedule.DUALPIPE_V) != (args.physical_stages is not None):
         raise ValueError("DualPipeV requires physical-stages; other schedules use one logical stage per physical stage")
-    placements = automatic_stage_to_mpmd_indices(config, args.schedule)
-    mesh, mpmd_mesh = make_pipeline_mesh(config, expert_axis_size=args.expert_axis_size, replica_axis_size=1)
+    return args
+
+
+def _model_config(args: argparse.Namespace) -> GrugModelConfig:
     if args.full_hero:
         model_config = dataclasses.replace(
             HERO_MODEL_CONFIG,
@@ -262,6 +248,32 @@ def main() -> None:
         model_config = dataclasses.replace(model_config, max_seq_len=args.sequence_length)
     if args.offload_activations:
         model_config = dataclasses.replace(model_config, remat_mode="offload_carry")
+    return model_config
+
+
+def main() -> None:
+    args = _parse_args()
+    # Configure both caches before Iris initialization can select object storage.
+    jax.config.update("jax_compilation_cache_dir", args.compilation_cache)
+    install_cutlass_cache(PersistentKvCache.in_memory())
+    initialize_jax()
+    if args.run_id and jax.process_index() == 0:
+        wandb.init(
+            entity="marin-community",
+            project="marin_moe",
+            id=args.run_id,
+            name=args.run_id,
+            group="hero-h100-pipeline",
+            resume="never",
+            config=vars(args),
+            settings=wandb.Settings(save_code=False, console="redirect"),
+        )
+    config = GrugMoePipelineConfig(
+        stages=args.stages, microbatches=args.microbatches, physical_stages=args.physical_stages
+    )
+    placements = automatic_stage_to_mpmd_indices(config, args.schedule)
+    mesh, mpmd_mesh = make_pipeline_mesh(config, expert_axis_size=args.expert_axis_size, replica_axis_size=1)
+    model_config = _model_config(args)
     full_hero = args.full_hero and args.diagnostic_layers is None
     batch_multiple = args.microbatches * jax.device_count() // config.mpmd_stages
     batch_size = args.batch_size if args.batch_size is not None else batch_multiple
@@ -351,7 +363,7 @@ def main() -> None:
         state = restore_pipeline_state(parked)
         del parked
         _log("pipeline_state_restored")
-    barrier_sync_named("hero_pipeline_tasks_warmed", timeout=600)
+    barrier_sync_named("hero_pipeline_tasks_warmed", timeout=_MULTIHOST_TIMEOUT)
     _log("pipeline_tasks_warmed", task_count=task_count, elapsed_seconds=time.monotonic() - started)
     started = time.monotonic()
     _initialize_pipeline_communicators(mpmd_mesh, placements)
@@ -377,7 +389,7 @@ def main() -> None:
         )
         if args.run_id and jax.process_index() == 0:
             wandb.log({"train/loss": loss, "step_seconds": elapsed, "throughput/mfu": mfu_percent}, step=completed_steps)
-    barrier_sync_named("hero_pipeline_smoke_complete", timeout=600)
+    barrier_sync_named("hero_pipeline_smoke_complete", timeout=_MULTIHOST_TIMEOUT)
     _log("pipeline_complete", steps=args.steps, full_hero=full_hero)
     if args.run_id and jax.process_index() == 0:
         wandb.finish()

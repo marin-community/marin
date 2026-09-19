@@ -70,6 +70,7 @@ else:
 TRAIN_LOSS_KEY = "train/loss"
 _QB_BETA_PER_LAYER_KEY = "qb_beta_per_layer"
 _PIPELINE_AXIS = "pipeline"
+_HOST_MEMORY_KIND = "pinned_host"
 
 type _ArrayValue = jax.Array | jax.ShapeDtypeStruct | jaxpp.MpmdArray
 
@@ -183,7 +184,7 @@ class GrugMoePipelineStage(eqx.Module):
                 names_which_can_be_saved=[],
                 names_which_can_be_offloaded=[LAYER_CARRY_REMAT_NAME],
                 offload_src="device",
-                offload_dst="pinned_host",
+                offload_dst=_HOST_MEMORY_KIND,
             )
         else:
             remat_policy = None
@@ -249,10 +250,6 @@ class GrugMoePipelineStage(eqx.Module):
             block_sizes=_CE_BLOCK_SIZES,
         )
 
-    def local_router_loss(self, router_metrics: dict[str, jax.Array]) -> jax.Array:
-        # The hero logs router z-loss but does not optimize it.
-        return jnp.asarray(0.0, dtype=jnp.float32)
-
 
 @register_dataclass
 @dataclass(frozen=True)
@@ -260,12 +257,6 @@ class GrugMoeAutomaticPipelineState:
     """Array state for JaxPP's automatic pipeline transform."""
 
     trainable_params: tuple[GrugMoePipelineStage, ...]
-    opt_state: tuple[optax.OptState, ...]
-    pending_qb_betas: tuple[jax.Array, ...]
-
-
-@dataclass(frozen=True)
-class _InitializedMpmdStageState:
     opt_state: tuple[optax.OptState, ...]
     pending_qb_betas: tuple[jax.Array, ...]
 
@@ -316,34 +307,6 @@ def split_transformer(
             )
         )
     return tuple(stages)
-
-
-def split_automatic_stages(
-    model: Transformer,
-    *,
-    num_stages: int,
-    layer_counts: tuple[int, ...] | None = None,
-) -> tuple[tuple[GrugMoePipelineStage, ...], tuple[GrugMoePipelineStage, ...]]:
-    """Partition automatic-schedule stages into trainable and static pytrees.
-
-    Returns:
-        The trainable and static stage tuples. Router biases are removed from
-        both because the pending QB update supplies them separately.
-    """
-    stages = split_transformer(model, num_stages, layer_counts=layer_counts)
-    trainable_stages = []
-    static_stages = []
-    for stage in stages:
-        trainable_stage, static_stage = eqx.partition(stage, eqx.is_array)
-        for block_index in range(len(stage.blocks)):
-            trainable_stage = eqx.tree_at(
-                lambda current, index=block_index: current.blocks[index].mlp.router_bias,
-                trainable_stage,
-                None,
-            )
-        trainable_stages.append(trainable_stage)
-        static_stages.append(static_stage)
-    return tuple(trainable_stages), tuple(static_stages)
 
 
 def initialize_stage_local_pipeline_state(
@@ -409,7 +372,7 @@ def initialize_stage_local_pipeline_state(
                 trainable = eqx.tree_at(lambda current, index=i: current.blocks[index].mlp.router_bias, trainable, None)
             opt_state = optimizer.init(trainable)
             if offload_opt_state:
-                opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
+                opt_state = _tree_to_memory_kind(opt_state, _HOST_MEMORY_KIND)
             return (
                 trainable,
                 opt_state,
@@ -428,7 +391,7 @@ def initialize_stage_local_pipeline_state(
 
         stage_params = jax.tree.map(to_mpmd, values[0], shapes[0])
         # Abstract shape tracing does not retain memory kind; specify it for every process.
-        opt_memory_kind = "pinned_host" if offload_opt_state else "device"
+        opt_memory_kind = _HOST_MEMORY_KIND if offload_opt_state else "device"
         opt_state = jax.tree.map(partial(to_mpmd, memory_kind=opt_memory_kind), values[1], shapes[1])
         qb = jax.tree.map(to_mpmd, values[2], shapes[2])
         params.append(stage_params)
@@ -441,102 +404,6 @@ def initialize_stage_local_pipeline_state(
 def _process_has_sharding(sharding: NamedSharding) -> bool:
     process_index = jax.process_index()
     return any(device.process_index == process_index for device in sharding.mesh.devices.flat)
-
-
-def _empty_sharded_array(shape: tuple[int, ...], dtype, sharding: NamedSharding) -> jax.Array:
-    return jax.make_array_from_single_device_arrays(shape, sharding, [], dtype=dtype)
-
-
-def _stage_local_scalar(value: jax.Array, sharding: NamedSharding) -> jax.Array:
-    if not _process_has_sharding(sharding):
-        return _empty_sharded_array((), value.dtype, sharding)
-    return jax.device_put(np.asarray(value), sharding)
-
-
-def _localize_optimizer_scalars(mpmd_mesh, stage_index: int, opt_state):
-    stage_mesh = mpmd_mesh.unstack[stage_index]
-
-    def localize(value):
-        if _is_array(value) and value.shape == ():
-            return _stage_local_scalar(value, NamedSharding(stage_mesh, P()))
-        return value
-
-    return jax.tree.map(localize, opt_state)
-
-
-def _initialize_mpmd_stage_state(
-    stages: tuple[GrugMoePipelineStage, ...],
-    optimizer: optax.GradientTransformation,
-    mpmd_mesh,
-    stage_to_mpmd_index: tuple[int, ...],
-    memory_threshold: int | None,
-) -> _InitializedMpmdStageState:
-    pp, _ = _jaxpp_modules()
-    qb_targets = tuple(
-        pp.MpmdSharding(mpmd_mesh, mesh_ids={mpmd_index}, spec=P(None, None)) for mpmd_index in stage_to_mpmd_index
-    )
-    pending_qb_betas = pp.spmd_to_mpmd_reshard(
-        mpmd_mesh,
-        tuple(jnp.zeros((len(stage.blocks), stage.config.num_experts), dtype=jnp.float32) for stage in stages),
-        qb_targets,
-        threshold=memory_threshold,
-    )
-    opt_state = tuple(
-        _localize_optimizer_scalars(mpmd_mesh, mpmd_index, optimizer.init(stage))
-        for mpmd_index, stage in zip(stage_to_mpmd_index, stages, strict=True)
-    )
-    return _InitializedMpmdStageState(
-        opt_state=opt_state,
-        pending_qb_betas=pending_qb_betas,
-    )
-
-
-def initialize_mpmd_automatic_pipeline_state(
-    model: Transformer,
-    optimizer: optax.GradientTransformation,
-    mpmd_mesh,
-    *,
-    num_stages: int,
-    layer_counts: tuple[int, ...] | None = None,
-    stage_to_mpmd_index: tuple[int, ...] | None = None,
-    memory_threshold: int | None = None,
-) -> tuple[GrugMoeAutomaticPipelineState, tuple[GrugMoePipelineStage, ...]]:
-    """Return automatic state and static stages using the requested placement."""
-    pp, _ = _jaxpp_modules()
-    if stage_to_mpmd_index is None:
-        stage_to_mpmd_index = tuple(range(num_stages))
-    if len(stage_to_mpmd_index) != num_stages:
-        raise ValueError(f"expected {num_stages} stage placements, got {len(stage_to_mpmd_index)}")
-    trainable_stages, static_stages = split_automatic_stages(
-        model,
-        num_stages=num_stages,
-        layer_counts=layer_counts,
-    )
-    trainable_targets = tuple(
-        _mpmd_sharding_tree(mpmd_mesh, mpmd_index, stage)
-        for mpmd_index, stage in zip(stage_to_mpmd_index, trainable_stages, strict=True)
-    )
-    trainable_stages = pp.spmd_to_mpmd_reshard(
-        mpmd_mesh,
-        trainable_stages,
-        trainable_targets,
-        threshold=memory_threshold,
-    )
-    initialized = _initialize_mpmd_stage_state(
-        trainable_stages,
-        optimizer,
-        mpmd_mesh,
-        stage_to_mpmd_index,
-        memory_threshold,
-    )
-    return (
-        GrugMoeAutomaticPipelineState(
-            trainable_params=trainable_stages,
-            opt_state=initialized.opt_state,
-            pending_qb_betas=initialized.pending_qb_betas,
-        ),
-        static_stages,
-    )
 
 
 def _apply_qb_betas(stage: GrugMoePipelineStage, qb_betas: jax.Array) -> GrugMoePipelineStage:
@@ -599,18 +466,6 @@ def _partition_spec_tree(tree):
     return jax.tree.map(partition_spec, tree)
 
 
-def _mpmd_sharding_tree(mpmd_mesh, stage_index: int, tree):
-    pp, _ = _jaxpp_modules()
-
-    def sharding(value):
-        if not _is_array(value):
-            return None
-        spec = value.sharding.spec if isinstance(value.sharding, NamedSharding) else P(*([None] * value.ndim))
-        return pp.MpmdSharding(mpmd_mesh, mesh_ids={stage_index}, spec=spec)
-
-    return jax.tree.map(sharding, tree)
-
-
 def make_automatic_pipeline_step(
     optimizer: optax.GradientTransformation,
     mp_policy: jmp.Policy,
@@ -643,7 +498,6 @@ def make_automatic_pipeline_step(
 
         def loss_fn(trainable_stages: tuple[GrugMoePipelineStage, ...], batch: GrugLmExample):
             hidden = None
-            router_loss = jnp.array(0.0, dtype=jnp.float32)
             next_qb_betas = []
             last_stage = None
             for stage_index, (trainable_stage, static_stage) in enumerate(
@@ -655,7 +509,6 @@ def make_automatic_pipeline_step(
                     hidden = stage.embed(batch.tokens)
                 assert hidden is not None
                 hidden, router_metrics = stage.run_blocks(hidden, batch.attn_mask)
-                router_loss = router_loss + stage.local_router_loss(router_metrics) / config.microbatches
                 next_qb_betas.append(router_metrics[_QB_BETA_PER_LAYER_KEY])
                 if stage_index < config.stages - 1:
                     hidden = pp.mark_stage_end(hidden)
@@ -670,7 +523,7 @@ def make_automatic_pipeline_step(
                 logsumexp_weight=logsumexp_weight,
                 reduction="sum",
             )
-            loss = cross_entropy_sum / loss_denominator + router_loss
+            loss = cross_entropy_sum / loss_denominator
             loss = pp.mark_stage_end(loss)
             return loss, tuple(next_qb_betas)
 
@@ -693,7 +546,7 @@ def make_automatic_pipeline_step(
                 opt_state = _tree_to_memory_kind(opt_state, "device")
             updates, stage_opt_state = optimizer.update(stage_grads, opt_state, params)
             if offload_opt_state:
-                stage_opt_state = _tree_to_memory_kind(stage_opt_state, "pinned_host")
+                stage_opt_state = _tree_to_memory_kind(stage_opt_state, _HOST_MEMORY_KIND)
             next_params.append(mp_policy.cast_to_param(eqx.apply_updates(params, updates)))
             next_opt_state.append(stage_opt_state)
         next_state = dataclasses.replace(
@@ -710,7 +563,7 @@ def make_automatic_pipeline_step(
         def host_sharding(value):
             if not _is_array(value):
                 return None
-            return NamedSharding(mpmd_mesh.lowering_mesh(), value.sharding.spec, memory_kind="pinned_host")
+            return NamedSharding(mpmd_mesh.lowering_mesh(), value.sharding.spec, memory_kind=_HOST_MEMORY_KIND)
 
         state_shardings = dataclasses.replace(
             state_shardings, opt_state=jax.tree.map(host_sharding, sample_state.opt_state)
@@ -731,7 +584,7 @@ class ParkedPipelineState:
 
 
 def _copy_array_to_host(array: jax.Array) -> jax.Array:
-    return jax.device_put(array, array.sharding.with_memory_kind("pinned_host"), may_alias=False)
+    return jax.device_put(array, array.sharding.with_memory_kind(_HOST_MEMORY_KIND), may_alias=False)
 
 
 def park_pipeline_state(state: GrugMoeAutomaticPipelineState) -> ParkedPipelineState:
@@ -750,7 +603,7 @@ def park_pipeline_state(state: GrugMoeAutomaticPipelineState) -> ParkedPipelineS
         assert isinstance(value, pp.MpmdArray)
         original = value._mpmd_sharding
         original_shardings.append(original)
-        if original.memory_kind == "pinned_host":
+        if original.memory_kind == _HOST_MEMORY_KIND:
             parked.append(value)
             continue
         local = value.to_mpmd_local_array
@@ -766,7 +619,7 @@ def park_pipeline_state(state: GrugMoeAutomaticPipelineState) -> ParkedPipelineS
         parked.append(
             pp.MpmdArray(
                 host_arrays,
-                dataclasses.replace(original, memory_kind="pinned_host"),
+                dataclasses.replace(original, memory_kind=_HOST_MEMORY_KIND),
                 shape=value.shape,
                 dtype=value.dtype,
             )
@@ -783,7 +636,7 @@ def restore_pipeline_state(parked: ParkedPipelineState) -> GrugMoeAutomaticPipel
     values, tree = jax.tree.flatten(parked.state)
     restored = []
     for value, original in zip(values, parked.original_shardings, strict=True):
-        if original.memory_kind == "pinned_host":
+        if original.memory_kind == _HOST_MEMORY_KIND:
             restored.append(value)
             continue
         local = value.to_mpmd_local_array
@@ -798,7 +651,6 @@ def restore_pipeline_state(parked: ParkedPipelineState) -> GrugMoeAutomaticPipel
 
 
 def precompile_automatic_mpmd_step(step) -> int:
-    """Compile and warm local executables using disposable inputs before communication."""
     _jaxpp_modules()
     return mpmd_primitives.precompile_pipeline_tasks(step.local_jaxpr, step.mpmd_mesh)
 
