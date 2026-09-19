@@ -1,21 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Create a Zephyr benchmark sample by copying or regenerating normalized data.
+"""Create a Zephyr benchmark sample and its reusable MinHash inputs.
 
 ``--mode copy`` copies normalized Parquet shards from any existing sample to a
 new sample root, rewriting ``NormalizedData`` artifacts for that destination.
 ``--mode regenerate`` downloads the registered source data, normalizes it, and
-samples the requested token count (100B by default) into a new sample root. See
+samples the requested token count (100B by default) into a new sample root.
+Both modes then compute the permanent MinHash artifacts used by shuffle-only
+benchmarks. ``--mode minhash`` backfills those artifacts into an existing
+sample without copying or regenerating normalized data. See
 ``experiments/datakit/README.md`` for the required region-local Iris commands
 and cost caveats.
 """
 
 import argparse
 import logging
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
+from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact
@@ -25,26 +29,63 @@ from rigging.filesystem.cluster_config import data_config, use_data_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
+from zephyr.context import ZephyrContext
 
-from experiments.datakit.reference_pipeline import sample_sources
-from experiments.datakit.testbed.sampler import proportional_sample_fractions, sample_normalized_shards
-from experiments.datakit.zephyr_benchmark import (
-    COREWEAVE_BENCHMARK_SAMPLE_PREFIX,
-    GCP_BENCHMARK_SAMPLE_PREFIX,
+from experiments.datakit.reference_pipeline import (
+    DEFAULT_SCALE,
+    SMOKE_SCALE,
+    PipelineScale,
+    datakit_zephyr_context,
+    sample_sources,
+    scale_with_pool,
+    zephyr_datakit_steps,
 )
+from experiments.datakit.testbed.sampler import proportional_sample_fractions, sample_normalized_shards
 
 DEFAULT_MAX_CONCURRENT = 4
 MATERIALIZE_STEP_PREFIX = "datakit/benchmark_sample"
 DEFAULT_TARGET_TOTAL_TOKENS_B = 100.0
+BENCHMARK_SAMPLE_INPUTS_DIR = "_benchmark_inputs"
+GCP_BENCHMARK_SAMPLE_PREFIX = "gs://marin-eu-west4/datakit/sample_100b_8ae7a94f"
+COREWEAVE_BENCHMARK_SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f"
 
 logger = logging.getLogger(__name__)
 
 
 class SampleMode(StrEnum):
-    """How to create the benchmark sample."""
+    """Work performed by the benchmark sample materializer."""
 
     COPY = "copy"
     REGENERATE = "regenerate"
+    MINHASH = "minhash"
+
+
+@dataclass(frozen=True)
+class BenchmarkSampleFuzzySteps:
+    """Sample-owned MinHash steps and the fuzzy step that consumes them."""
+
+    minhash: dict[str, StepSpec]
+    fuzzy_dedup: StepSpec
+
+
+def benchmark_sample_inputs_prefix(sample_prefix: str) -> str:
+    return prefix_join(sample_prefix, BENCHMARK_SAMPLE_INPUTS_DIR)
+
+
+def benchmark_sample_fuzzy_steps(
+    sample_prefix: str,
+    sources: dict[str, StepSpec],
+    scale: PipelineScale,
+    zephyr_context: ZephyrContext,
+) -> BenchmarkSampleFuzzySteps:
+    """Build canonical MinHash inputs and their fuzzy-dedup consumer."""
+    steps = zephyr_datakit_steps(
+        sources,
+        scale,
+        zephyr_context,
+        output_path_prefix=benchmark_sample_inputs_prefix(sample_prefix),
+    )
+    return BenchmarkSampleFuzzySteps(minhash=steps.minhash, fuzzy_dedup=steps.fuzzy_dedup)
 
 
 def _sample_main_output_step(
@@ -127,7 +168,7 @@ def _verify_source_set(expected_names: set[str], destination_prefix: str) -> Non
         )
 
 
-def main() -> None:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=list(SampleMode), type=SampleMode, default=SampleMode.COPY)
     parser.add_argument("--source-prefix", default=COREWEAVE_BENCHMARK_SAMPLE_PREFIX)
@@ -138,14 +179,29 @@ def main() -> None:
     )
     parser.add_argument("--target-total-tokens-b", type=float, default=DEFAULT_TARGET_TOTAL_TOKENS_B)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
-    args = parser.parse_args()
+    parser.add_argument("--minhash-max-concurrent", required=True, type=int)
+    parser.add_argument("--pool-workers", required=True, type=int)
+    parser.add_argument("--pool-cpu", type=float, default=DEFAULT_SCALE.pool.worker.cpu)
+    parser.add_argument("--pool-ram", default=DEFAULT_SCALE.pool.worker.ram)
+    parser.add_argument("--pool-disk", default=DEFAULT_SCALE.pool.worker.disk)
+    return parser.parse_args()
 
-    configure_logging(logging.INFO)
+
+def _validate_args(args: argparse.Namespace) -> None:
     if args.max_concurrent < 1:
         raise ValueError(f"max concurrent must be positive: {args.max_concurrent}")
-    if args.target_total_tokens_b <= 0:
+    if args.minhash_max_concurrent < 1:
+        raise ValueError(f"minhash max concurrent must be positive: {args.minhash_max_concurrent}")
+    if args.pool_workers < 1:
+        raise ValueError(f"pool workers must be positive: {args.pool_workers}")
+    if args.mode is SampleMode.REGENERATE and args.target_total_tokens_b <= 0:
         raise ValueError(f"target total tokens must be positive: {args.target_total_tokens_b}")
-    if args.source_prefix.startswith("s3://"):
+
+
+def _prepare_sample_sources(args: argparse.Namespace) -> set[str]:
+    if args.destination_prefix.startswith("s3://") or (
+        args.mode is not SampleMode.MINHASH and args.source_prefix.startswith("s3://")
+    ):
         configure_coreweave_s3()
 
     if args.mode is SampleMode.COPY:
@@ -154,19 +210,62 @@ def main() -> None:
         if StoragePath(args.source_prefix) == StoragePath(args.destination_prefix):
             raise ValueError("source and destination prefixes must differ")
         steps = copy_sample_steps(args.source_prefix, args.destination_prefix)
-    else:
+    elif args.mode is SampleMode.REGENERATE:
         if args.data_prefix is None:
             raise ValueError("--data-prefix is required for --mode regenerate")
         _validate_data_prefix(args.data_prefix, args.destination_prefix)
         with use_data_config(replace(data_config(), root=args.data_prefix)):
             steps = regenerate_sample_steps(args.source_prefix, args.destination_prefix, args.target_total_tokens_b)
             StepRunner().run(steps, max_concurrent=args.max_concurrent)
+    else:
+        if args.data_prefix is not None:
+            raise ValueError("--data-prefix applies only to --mode regenerate")
+        steps = []
     if args.mode is SampleMode.COPY:
         StepRunner().run(steps, max_concurrent=args.max_concurrent)
 
-    source_names = {step.name.removeprefix(f"{MATERIALIZE_STEP_PREFIX}/") for step in steps}
-    _verify_source_set(source_names, args.destination_prefix)
-    logger.info("Created %d benchmark sources at %s with %s", len(steps), args.destination_prefix, args.mode)
+    if steps:
+        source_names = {step.name.removeprefix(f"{MATERIALIZE_STEP_PREFIX}/") for step in steps}
+        _verify_source_set(source_names, args.destination_prefix)
+        return source_names
+
+    source_names = set(sample_sources(args.destination_prefix))
+    if not source_names:
+        raise ValueError(f"no normalized source artifacts found under {args.destination_prefix}")
+    return source_names
+
+
+def _materialize_minhash(args: argparse.Namespace, source_names: set[str]) -> None:
+    worker = ResourceConfig(cpu=args.pool_cpu, ram=args.pool_ram, disk=args.pool_disk)
+    scale = scale_with_pool(SMOKE_SCALE, args.pool_workers, worker)
+    zephyr_context = datakit_zephyr_context(
+        "zephyr-benchmark-sample-minhash",
+        scale,
+        args.minhash_max_concurrent,
+    )
+    sources = sample_sources(args.destination_prefix, sorted(source_names))
+    minhash_steps = benchmark_sample_fuzzy_steps(
+        args.destination_prefix,
+        sources,
+        scale,
+        zephyr_context,
+    ).minhash
+    with zephyr_context:
+        StepRunner().run(list(minhash_steps.values()), max_concurrent=args.minhash_max_concurrent)
+    logger.info(
+        "Created %d normalized benchmark sources and MinHash artifacts at %s with %s",
+        len(source_names),
+        args.destination_prefix,
+        args.mode,
+    )
+
+
+def main() -> None:
+    args = _parse_args()
+    configure_logging(logging.INFO)
+    _validate_args(args)
+    source_names = _prepare_sample_sources(args)
+    _materialize_minhash(args, source_names)
 
 
 if __name__ == "__main__":

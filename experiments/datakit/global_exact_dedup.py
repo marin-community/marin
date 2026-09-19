@@ -171,6 +171,7 @@ def global_exact_deduplicate(
     output_path: str,
     worker_resources: ResourceConfig,
     max_workers: int,
+    max_parallelism: int,
     zephyr_context: ZephyrContext | None = None,
 ) -> GlobalExactDedupData:
     """Mark duplicate record IDs across all normalized sources.
@@ -186,7 +187,7 @@ def global_exact_deduplicate(
         name="datakit-global-exact-dedup", resources=worker_resources, max_workers=max_workers
     )
     context.put(_SHARED_ENTRIES_KEY, entries)
-    shuffle_shards = min(max_workers, len(entries))
+    shuffle_shards = min(max_parallelism, len(entries))
     pipeline = (
         Dataset.from_list(entries)
         .flat_map(_read_record_ids)
@@ -194,8 +195,8 @@ def global_exact_deduplicate(
             key=lambda record: record["id"],
             reducer=_select_duplicates,
             sort_by=lambda record: (record["file_idx"], record["row_index"]),
-            # Bound the cross-source ID shuffle by worker capacity. The next
-            # group_by inherits this output shard count.
+            # Bound the cross-source ID shuffle by the configured logical
+            # parallelism. The next group_by inherits this output shard count.
             num_output_shards=shuffle_shards,
         )
         .group_by(
