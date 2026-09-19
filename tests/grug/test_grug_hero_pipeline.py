@@ -99,6 +99,8 @@ def test_pipeline_embedding_recompute_preserves_values_and_gradients(dtype):
         )
 
 
+# Per-primitive dispatch with JIT disabled can exceed a minute on shared CI CPUs.
+@pytest.mark.timeout(180)
 @pytest.mark.parametrize("qb_estimator", [QbEstimator.TOPK, QbEstimator.HIST])
 def test_hero_pipeline_preserves_hidden_states_and_router_statistics(qb_estimator):
     mesh, model = _tiny_hero(qb_estimator)
