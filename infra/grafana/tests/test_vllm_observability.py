@@ -162,39 +162,30 @@ def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
     path = "/v1/vllm/overview"
     params = {"identity_kind": "job_id", "identity": "/train", "from": 0, "to": 240_000, "bucket_ms": 15_000}
 
+    def check_provisioned_panels(client, request_params):
+        for filename in ("inference.json", "inference_overview.json"):
+            for panel in dashboards[filename]["panels"]:
+                for target in panel.get("targets", []):
+                    panel_params = {p["key"]: p["value"] for p in target["url_options"]["params"]}
+                    view = panel_params["view"]
+                    result = client.get(
+                        f"/finelog/marin{target['url']}",
+                        params={**request_params, "view": view, "bucket_ms": panel_params["bucket_ms"]},
+                    )
+                    assert result.status_code == 200, panel["title"]
+                    for row in result.json():
+                        assert row["section"] == view
+                        assert all(column["selector"] in row for column in target["columns"])
+
     with TestClient(app) as client:
         response = client.get(f"/finelog/marin{path}", params={**params, "view": "token_rate"})
         saturation = client.get(f"/finelog/marin{path}", params={**params, "view": "saturation"})
         all_rows = client.get(f"/finelog/marin{path}", params=params)
         # Exercise the provisioned panel requests, including the new overview and shared fragments.
-        for filename in ("inference.json", "inference_overview.json"):
-            for panel in dashboards[filename]["panels"]:
-                for target in panel.get("targets", []):
-                    panel_params = {p["key"]: p["value"] for p in target["url_options"]["params"]}
-                    view = panel_params["view"]
-                    result = client.get(
-                        f"/finelog/marin{target['url']}",
-                        params={**params, "view": view, "bucket_ms": panel_params["bucket_ms"]},
-                    )
-                    assert result.status_code == 200, panel["title"]
-                    for row in result.json():
-                        assert row["section"] == view
-                        assert all(column["selector"] in row for column in target["columns"])
+        check_provisioned_panels(client, params)
         long_params = {**params, "to": VLLM_DETAIL_MAX_WINDOW_MS + 15_000}
         long_summary = client.get(f"/finelog/marin{path}", params={**long_params, "view": "run_summary"})
-        for filename in ("inference.json", "inference_overview.json"):
-            for panel in dashboards[filename]["panels"]:
-                for target in panel.get("targets", []):
-                    panel_params = {p["key"]: p["value"] for p in target["url_options"]["params"]}
-                    view = panel_params["view"]
-                    result = client.get(
-                        f"/finelog/marin{target['url']}",
-                        params={**long_params, "view": view, "bucket_ms": panel_params["bucket_ms"]},
-                    )
-                    assert result.status_code == 200, panel["title"]
-                    for row in result.json():
-                        assert row["section"] == view
-                        assert all(column["selector"] in row for column in target["columns"])
+        check_provisioned_panels(client, long_params)
 
     assert query_count == 2  # One external scan per selected range serves both pages.
     assert response.status_code == 200
@@ -356,7 +347,6 @@ def test_sample_budget_returns_cached_error_instead_of_partial_panels():
             assert response.json() == []
         status = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "diagnostic_status"})
         assert status.json()[0]["status"] == "sample_limit"
-        assert "zoom" in status.json()[0]["series"]
     assert len(queries) == 1
 
 

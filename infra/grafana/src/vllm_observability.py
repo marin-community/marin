@@ -1187,7 +1187,7 @@ def vllm_overview_table(overview: VllmOverviewQuery, series: pa.Table, *, max_ro
 
 
 def vllm_run_summary_samples_query(overview: VllmOverviewQuery) -> str:
-    """Fetch only the signals needed for a long-range summary in two scans."""
+    """Select only the signals needed for a long-range summary."""
     return _vllm_samples_query(
         overview.identity_field,
         overview.identity,
@@ -1309,5 +1309,5 @@ LIMIT {VLLM_MAX_SUMMARY_ROWS + 1}
 
 
 def vllm_run_summary_table(overview: VllmOverviewQuery, series: pa.Table, *, max_rows: int) -> pa.Table:
-    """Project the selected long-range signals without more Finelog scans."""
+    """Return a bounded summary of the selected long-range signals."""
     return _vllm_project_table(vllm_run_summary_query(overview), series, max_rows=min(max_rows, VLLM_MAX_SUMMARY_ROWS))
