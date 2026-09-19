@@ -137,12 +137,18 @@ def test_resolve_model_path_returns_filesystem_path_for_local_cache(monkeypatch,
     assert resolve_model_path("Qwen/Qwen3-0.6B", 14, revision) == "/models/cached model"
 
 
-def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
-    observed: dict[str, object] = {}
+@pytest.mark.parametrize(
+    ("weights", "expected_revision"),
+    [("org/model", "abc123"), ("gs://cache/quick-serve/model", None)],
+)
+def test_vllm_backend_revision_argument_follows_weights_kind(monkeypatch, weights, expected_revision):
+    """vLLM gets ``--revision`` only for bare hub ids; a resolved cache path carries its own pin."""
+
+    observed_extra_args: list[list[str]] = []
 
     @contextmanager
     def environment(**kwargs):
-        observed.update(kwargs)
+        observed_extra_args.append(kwargs["extra_args"])
         yield SimpleNamespace(
             model_id="public-model",
             server_url="http://127.0.0.1:8000/v1",
@@ -153,7 +159,7 @@ def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
     monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda config: object())
     monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: "{{ messages }}")
     spec = ModelSpec(
-        weights="org/model",
+        weights=weights,
         revision="abc123",
         api_model="public-model",
         num_chips=1,
@@ -166,9 +172,11 @@ def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
     with VllmBackend(VllmEngineConfig()).serve(spec):
         pass
 
-    extra_args = observed["extra_args"]
-    assert isinstance(extra_args, list)
-    assert extra_args[extra_args.index("--revision") + 1] == "abc123"
+    extra_args = observed_extra_args[0]
+    if expected_revision is None:
+        assert "--revision" not in extra_args
+    else:
+        assert extra_args[extra_args.index("--revision") + 1] == expected_revision
 
 
 def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
@@ -214,40 +222,6 @@ def test_resolved_model_keeps_revision_for_cached_weights(monkeypatch):
 
     assert resolved.weights == "gs://cache/quick-serve/ling-lite"
     assert resolved.revision == "ef1ac33ce4c3"
-
-
-def test_vllm_backend_omits_revision_for_cached_weights(monkeypatch):
-    observed: dict[str, object] = {}
-
-    @contextmanager
-    def environment(**kwargs):
-        observed.update(kwargs)
-        yield SimpleNamespace(
-            model_id="public-model",
-            server_url="http://127.0.0.1:8000/v1",
-            wait_until_ready=lambda: None,
-        )
-
-    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
-    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda config: object())
-    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: "{{ messages }}")
-    spec = ModelSpec(
-        weights="gs://cache/quick-serve/ling-lite",
-        revision="ef1ac33ce4c3",
-        api_model="public-model",
-        num_chips=1,
-        tensor_parallel_size=1,
-        dtype="bfloat16",
-        max_model_len=1024,
-        chat_template_content=None,
-    )
-
-    with VllmBackend(VllmEngineConfig()).serve(spec):
-        pass
-
-    extra_args = observed["extra_args"]
-    assert isinstance(extra_args, list)
-    assert "--revision" not in extra_args
 
 
 @pytest.mark.parametrize(
