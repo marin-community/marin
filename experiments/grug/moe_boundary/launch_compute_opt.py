@@ -15,8 +15,14 @@ table rather than re-deriving them from the rounded budgets. Cell budgets:
 d512 / 3.82e17, d768 / 2.81e18, d1024 / 1.16e19, d1280 / 3.46e19.
 
 Phase 0 of the replication plan runs one arm at a time: ``--dim 512
---alpha 1.0`` first, then the alpha-insurance twin ``--alpha 0.707``; the
+``--alpha 1.0`` first, then the alpha-insurance twin ``--alpha 0.707``; the
 winner proceeds to d768/d1024/d1280 (gate 1 / gate 2).
+
+If gate 1 fails at d512, the debug ladder sweeps the learning rate around the
+heuristic value: ``--lr-scale 0.5`` and ``--lr-scale 2.0`` at the winning
+alpha. The paper's transfer-regret table (7.8e-3 for Operator-1) predicts a
+transferred recipe underperforms a re-centered one, and GLR is its most
+sensitive knob.
 
 Submit (v4-32, EP=1)::
 
@@ -61,11 +67,14 @@ _BASELINE_CELLS: dict[int, tuple[float, int, int]] = {
 _TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-32")
 
 
-def boundary_cell(*, hidden_dim: int, alpha: float, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+def boundary_cell(
+    *, hidden_dim: int, alpha: float, lr_scale: float = 1.0, version: str | None = None
+) -> ArtifactStep[LevanterCheckpoint]:
     """Compute-optimal boundary-operator cell at a May Recipe baseline point.
 
     ``hidden_dim`` is one of the four README scales; ``alpha`` is the boundary
-    operator's injection weight (paper arms: 0.707 and 1.0).
+    operator's injection weight (paper arms: 0.707 and 1.0). ``lr_scale``
+    multiplies the heuristic's optimizer learning rates (debug ladder only).
     """
     budget, batch_size, steps = _BASELINE_CELLS[hidden_dim]
     # Model + optimizer from the heuristic at this budget, then pin the legacy
@@ -74,6 +83,10 @@ def boundary_cell(*, hidden_dim: int, alpha: float, version: str | None = None) 
     model, optimizer, _, _ = build_from_heuristic(budget=budget, hidden_dim=hidden_dim, seq_len=_SEQ)
     split = split_prelude_core_coda(model.num_layers)
     prelude_len, coda_len = split.prelude, split.coda
+    if lr_scale != 1.0:
+        optimizer = dataclasses.replace(
+            optimizer, learning_rate=optimizer.learning_rate * lr_scale, adam_lr=optimizer.adam_lr * lr_scale
+        )
     boundary_model = dataclasses.replace(
         model,
         max_seq_len=_SEQ,
@@ -85,9 +98,13 @@ def boundary_cell(*, hidden_dim: int, alpha: float, version: str | None = None) 
         injection_scale=alpha,
     )
     name = f"grug/moe_boundary_compute_opt_d{hidden_dim}_ep{_EP}_alpha{alpha:g}"
+    if lr_scale != 1.0:
+        name += f"_lr{lr_scale:g}"
     version = resolve_version(name, version)
     train, validation = grug_moe_boundary_mix()
     run_id = f"moe_boundary_compute_opt_d{hidden_dim}_ep{_EP}_alpha{alpha:g}"
+    if lr_scale != 1.0:
+        run_id += f"_lr{lr_scale:g}"
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         return GrugMoeLaunchConfig(
@@ -131,10 +148,11 @@ def boundary_cell(*, hidden_dim: int, alpha: float, version: str | None = None) 
 @click.command()
 @click.option("--dim", type=click.Choice(["512", "768", "1024", "1280"]), required=True)
 @click.option("--alpha", type=float, default=1.0, help="Boundary-operator injection scale (paper: 0.707 or 1.0).")
+@click.option("--lr-scale", type=float, default=1.0, help="Multiplier on the heuristic LR (debug ladder: 0.5/2.0).")
 @build_options
-def build(dim: str, alpha: float):
+def build(dim: str, alpha: float, lr_scale: float):
     """Build one boundary-operator compute-optimal cell."""
-    return boundary_cell(hidden_dim=int(dim), alpha=alpha)
+    return boundary_cell(hidden_dim=int(dim), alpha=alpha, lr_scale=lr_scale)
 
 
 if __name__ == "__main__":
