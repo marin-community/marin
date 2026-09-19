@@ -228,7 +228,7 @@ def build_h100_ladder_run(
     vocab_size: int = V16384_VOCAB,
     no_eval: bool = False,
     dense: bool = False,
-    no_save_checkpoints: bool = False,
+    save_checkpoints: bool = False,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -284,7 +284,7 @@ def build_h100_ladder_run(
         log_every=1,
         z_loss_weight=1e-4,
         watch_mode=WatchMode.INLINE,
-        save_checkpoints=not no_save_checkpoints,
+        save_checkpoints=save_checkpoints,
         expert_axis_size=expert_axis_size,
         replica_axis_size=replica_axis_size,
     )
@@ -320,7 +320,7 @@ def build_h100_ladder_run(
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
-                tags=["h100", "fasttrack", "vocab-16k", "fasttrack-baseline"],
+                tags=["h100", "fasttrack", "vocab-16k"],
                 group="fasttrack-scaling-ladder",
                 name=run_id,
                 replicate_path=ctx.output_path,
@@ -407,10 +407,10 @@ def build_h100_ladder_run(
 @click.option("--no-eval", is_flag=True, help="Disable in-run eval (clean MFU probes).")
 @click.option("--dense", is_flag=True, help="Dense baseline: 3x hidden SwiGLU per block, no MoE.")
 @click.option(
-    "--no-save-checkpoints",
+    "--save-checkpoints",
     is_flag=True,
     default=False,
-    help="Disable all checkpointing (no final model to S3, no recovery).",
+    help="Save a permanent final checkpoint to S3 (off by default; also enables recovery).",
 )
 @build_options
 def main(
@@ -421,7 +421,7 @@ def main(
     num_steps: int | None,
     no_eval: bool,
     dense: bool,
-    no_save_checkpoints: bool,
+    save_checkpoints: bool,
 ) -> ArtifactStep[ThroughputResult]:
     return build_h100_ladder_run(
         run_id=run_id,
@@ -431,7 +431,7 @@ def main(
         num_steps=num_steps,
         no_eval=no_eval,
         dense=dense,
-        no_save_checkpoints=no_save_checkpoints,
+        save_checkpoints=save_checkpoints,
     )
 
 

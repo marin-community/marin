@@ -65,22 +65,19 @@ batch (steps rescale to hold the match), or `--num-steps` to set the count expli
 Dense (data-match baseline):
 
 ```bash
-irun dense-d768 --run-id dense-d768 --size d768 --dense \
-  --no-save-checkpoints --version 2026.09.17
+irun dense-d768 --run-id dense-d768 --size d768 --dense --version 2026.09.17
 ```
 
 MoE (data-match baseline; bump the batch — steps halve to hold tokens):
 
 ```bash
-irun moe-d768 --run-id moe-d768 --size d768 --batch-size 256 \
-  --no-save-checkpoints --version 2026.09.17
+irun moe-d768 --run-id moe-d768 --size d768 --batch-size 256 --version 2026.09.17
 ```
 
 MFU probe (any size, quick — explicit short budget):
 
 ```bash
-irun probe-d1280 --run-id probe-d1280 --size d1280 --num-steps 20 \
-  --no-eval --no-save-checkpoints --version 2026.09.17
+irun probe-d1280 --run-id probe-d1280 --size d1280 --num-steps 20 --no-eval --version 2026.09.17
 ```
 
 ### Useful flags (all on `launch.py`)
@@ -94,7 +91,7 @@ irun probe-d1280 --run-id probe-d1280 --size d1280 --num-steps 20 \
 | `--batch-size` | override the rung's baseline batch (steps rescale to hold the match) |
 | `--num-steps N` | set the step budget explicitly (ignores `--match`) |
 | `--no-eval` | skip eval (clean MFU probes) |
-| `--no-save-checkpoints` | no checkpoints (throughput runs) |
+| `--save-checkpoints` | save a permanent final checkpoint to S3 (off by default) |
 
 Results land in W&B `marin-community/marin_moe`; eval bpb keys are `eval/paloma/macro_bpb`,
 `eval/uncheatable_eval/macro_bpb` (MoE dropless eval logs under the normal `eval/` prefix).

@@ -103,8 +103,8 @@ the dense baseline. The step budget derives from the variant baseline (`--match`
 default `data`) unless `--num-steps` is given; `--batch-size` defaults to the
 rung's baseline batch. `--version` sets the checkpoint version (use `dev` for
 scratch, a calendar `YYYY.MM.DD` for coordinated runs); `--run` submits (without
-it the lowered plan is printed and nothing runs). Omit `--no-save-checkpoints` for
-runs whose final model you want to keep.
+it the lowered plan is printed and nothing runs). Pass `--save-checkpoints` (off by
+default) for runs whose final model you want to keep.
 
 ## Monitoring
 
