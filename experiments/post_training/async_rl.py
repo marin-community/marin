@@ -9,7 +9,8 @@ evaluation wiring and adds the fully asynchronous training loop and the Megatron
 presets bundle them and ``--set`` changes one. The launcher writes every setting it decides into
 the rendered config, including values MarinSkyRL's base config or the curriculum template already
 hold, so a run never depends on a default changing underneath it, and two runs that differ in any
-setting never share an address.
+setting never share an address. A Hydra override inherited from the curriculum policy is dropped
+where the launcher writes its key, since Hydra applies overrides after the config.
 
 Plan or run::
 
@@ -65,8 +66,8 @@ from experiments.post_training.curriculum_rl.launch import (
     POOL_ARTIFACT_NAME,
     SEED,
     SNOWBALL_POLICY,
+    SNOWBALL_SMOKE,
     PolicySpec,
-    ScalePreset,
     evaluation_serving,
     model_step,
     rl_config_yaml,
@@ -133,7 +134,8 @@ class TrainingRecipe:
     max_grad_norm: float
     # Megatron parallelism for the policy and the reference model.
     megatron: MegatronGeometry
-    # Data and expert parallelism of the one vLLM engine, which spans one node.
+    # Data and expert parallelism of the one vLLM engine, which spans one node. The role plan
+    # MarinSkyRL receives carries neither, so these reach the run through the rendered config.
     engine_data_parallel_size: int
     engine_expert_parallel_size: int
     # Host memory per training task; Megatron checkpoint staging needs 1800GB where the policy
@@ -185,7 +187,8 @@ SNOWBALL_RECIPE = TrainingRecipe(
 
 @dataclass(frozen=True)
 class AsyncPreset:
-    """One bundle of async-loop settings; ``smoke`` proves wiring, ``default`` is the full loop."""
+    """One bundle of async-loop settings: ``default`` is the house loop, ``smoke`` proves the wiring
+    in two short updates, and ``on_policy`` admits only groups the current weights sampled."""
 
     label: str
     # Optimizer updates the run performs before it stops; the epoch bound never fires first.
@@ -223,9 +226,8 @@ class AsyncPreset:
     grad_cosine: bool = False
 
 
-# The default loop: staleness 4 with 192 workers and 32 groups buffered, 100 updates in an
-# 8192-token window with a 4096-token cap, evaluated every 10. An evaluation pauses generation for
-# its 256 prompts; a run at every 5 spent longer evaluating than training.
+# The house loop the module docstring sizes. An evaluation pauses generation for its 256 prompts,
+# and at every 5 updates a run spent longer evaluating than training, so it evaluates every 10.
 DEFAULT = AsyncPreset(
     label="default",
     max_steps=100,
@@ -258,20 +260,12 @@ def checkpoint_interval(max_steps: int, eval_interval: int) -> int:
     return max_steps if eval_interval <= 0 else eval_interval
 
 
-def scale_point(preset: AsyncPreset) -> ScalePreset:
-    """The curriculum scale point ``preset`` renders through; its data and environment sections survive."""
-    return ScalePreset(
-        label=preset.label,
-        num_nodes=SNOWBALL_RECIPE.num_nodes,
-        role_plan=SNOWBALL_RECIPE.role_plan,
-        max_steps=preset.max_steps,
-        eval_interval=preset.eval_interval,
-        ckpt_interval=checkpoint_interval(preset.max_steps, preset.eval_interval),
-        request_window_tokens=preset.request_window_tokens,
-        max_new_tokens=preset.max_new_tokens,
-        micro_forward_batch_size_per_gpu=1,
-        evals=preset.evals,
-    )
+# The curriculum scale point this launcher renders the template through. Only the template's data
+# and environment sections survive: entrypoint, context_budget, trainer and generator are rewritten
+# in full below, so no field of the scale point reaches a run, and the two fields
+# ``evaluation_serving`` reads are replaced with the rendered context budget before it sees them.
+# Every scale point renders the same two sections; this is the curriculum's Snowball smoke point.
+CURRICULUM_TEMPLATE = SNOWBALL_SMOKE
 
 
 class Setting(NamedTuple):
@@ -301,14 +295,20 @@ TOPOLOGY_OWNED_SETTINGS = frozenset(
         "generator.run_engines_locally",
         "generator.num_inference_engines",
         "generator.inference_engine_tensor_parallel_size",
-        "generator.inference_engine_data_parallel_size",
-        "generator.inference_engine_expert_parallel_size",
         "trainer.train_batch_size",
         "trainer.policy_mini_batch_size",
         "trainer.micro_train_batch_size_per_gpu",
         "generator.n_samples_per_prompt",
         "trainer.resume_mode",
         "trainer.max_ckpts_to_keep",
+    }
+)
+# The engine geometry the recipe owns. The launcher writes it into the config and drops any
+# inherited override on it, so it changes with the recipe beside the role plan it must agree with.
+RECIPE_OWNED_SETTINGS = frozenset(
+    {
+        "generator.inference_engine_data_parallel_size",
+        "generator.inference_engine_expert_parallel_size",
     }
 )
 # Keys MarinSkyRL derives from context_budget and rejects as direct YAML.
@@ -332,6 +332,8 @@ def apply_setting(config: dict, setting: Setting) -> None:
         raise click.BadParameter("this launcher is the fully asynchronous loop; entrypoint cannot change")
     if key in TOPOLOGY_OWNED_SETTINGS:
         raise click.BadParameter(f"{key!r} is written from the topology after the config; change the recipe instead")
+    if key in RECIPE_OWNED_SETTINGS:
+        raise click.BadParameter(f"{key!r} is the engine geometry the recipe decides; change SNOWBALL_RECIPE instead")
     if key in DERIVED_CONTEXT_SETTINGS:
         raise click.BadParameter(f"MarinSkyRL derives {key!r} from context_budget; set context_budget instead")
     if key in EVAL_DERIVED_SETTINGS:
@@ -383,14 +385,15 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     plan = recipe.role_plan
     # The curriculum template supplies the data and environment sections; every other section is
     # written below in full.
-    config = yaml.safe_load(rl_config_yaml(scale_point(preset)))
+    config = yaml.safe_load(rl_config_yaml(CURRICULUM_TEMPLATE))
     config["entrypoint"] = "fully_async"
     # The one public context declaration; MarinSkyRL derives the prompt, generation and engine
     # lengths from it.
     config["context_budget"] = {
         "request_window_tokens": preset.request_window_tokens,
         "max_new_tokens_per_turn": preset.max_new_tokens,
-        # Single-turn math: one answer per prompt.
+        # Single-turn math: the policy answers once and the episode ends. The four answers per
+        # prompt are separate rollouts of it, not turns.
         "max_turns": 1,
     }
     config["trainer"] = {
@@ -435,7 +438,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "algorithm": {
             # Group-relative advantages over each prompt's answers.
             "advantage_estimator": "grpo",
-            # The plain clipped loss; the off-policy mask is MarinSkyRL#628.
+            # The plain clipped loss: every sampled token contributes, with no off-policy mask or
+            # reweighting of the tokens the current weights did not sample.
             "policy_loss_type": "regular",
             # No KL term against the reference, in the loss or in the reward.
             "use_kl_loss": False,
@@ -496,7 +500,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "inference_engine_data_parallel_size": recipe.engine_data_parallel_size,
         "inference_engine_expert_parallel_size": recipe.engine_expert_parallel_size,
         "n_samples_per_prompt": plan.n_samples_per_prompt,
-        # KV-cache share of each engine GPU; the rest holds the weights and the sync buffers.
+        # Fraction of each engine GPU vLLM may occupy, weights and KV cache together; the rest
+        # leaves room for the NCCL weight-sync buffers.
         "gpu_memory_utilization": 0.75,
         # Concurrent sequences per engine rank, above the 512 answers one update needs.
         "max_num_seqs": 1024,
@@ -532,6 +537,32 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     trainer["ckpt_interval"] = checkpoint_interval(trainer["max_steps"], trainer["eval_interval"])
     check_loop_shape(config)
     return config
+
+
+def config_keys(node: dict, prefix: str = "") -> set[str]:
+    """Every dotted key the rendered config sets, sections included."""
+    keys: set[str] = set()
+    for key, value in node.items():
+        keys.add(f"{prefix}{key}")
+        if isinstance(value, dict):
+            keys |= config_keys(value, f"{prefix}{key}.")
+    return keys
+
+
+def request_overrides(policy: PolicySpec, config: dict) -> tuple[str, ...]:
+    """The policy's inherited Hydra overrides minus every key this launcher writes itself.
+
+    MarinSkyRL applies the request's overrides as Hydra arguments after the config, so an inherited
+    override on a key the launcher writes would win over the rendered value and a recipe edit would
+    change nothing. The launcher's written value wins: an inherited override survives only where the
+    config says nothing about its key.
+    """
+    written = config_keys(config)
+    return tuple(
+        override
+        for override in (*BASE_OVERRIDES, *policy.overrides)
+        if override.lstrip("+").partition("=")[0] not in written
+    )
 
 
 @dataclass(frozen=True)
@@ -573,7 +604,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             retention=RETENTION,
             # The request's seed is what MarinSkyRL writes over the config, so it follows a --set.
             seed=config["trainer"]["seed"],
-            overrides=(*BASE_OVERRIDES, *policy.overrides),
+            overrides=request_overrides(policy, config),
         ),
         IrisSkyRLExecution(
             cluster=policy.cluster,
@@ -589,10 +620,11 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             wandb_entity=None,
         ),
     )
-    # The evaluation serves the rendered window, so a --set on the budget reaches the server.
+    # The evaluation serves the rendered window, so a --set on the budget reaches the server; these
+    # two fields are the only ones evaluation_serving reads.
     budget = config["context_budget"]
     served = replace(
-        scale_point(preset),
+        CURRICULUM_TEMPLATE,
         request_window_tokens=budget["request_window_tokens"],
         max_new_tokens=budget["max_new_tokens_per_turn"],
     )

@@ -3,17 +3,17 @@
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, replace
 
 import click
 import pytest
+import yaml
 from click.testing import CliRunner
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import StepContext
 
 from experiments.post_training import async_rl
-from experiments.post_training.curriculum_rl.launch import SNOWBALL_POLICY
+from experiments.post_training.curriculum_rl.launch import BASE_OVERRIDES, SNOWBALL_POLICY, rl_config_yaml
 
 # Every key the launcher decides beyond the ones its own tables and dataclasses name.
 EXPLICIT_KEYS = (
@@ -123,7 +123,7 @@ PRESET_LOOPS = {
 
 
 def ruled_keys() -> set[str]:
-    keys = set(EXPLICIT_KEYS) | set(async_rl.TOPOLOGY_OWNED_SETTINGS)
+    keys = set(EXPLICIT_KEYS) | set(async_rl.TOPOLOGY_OWNED_SETTINGS) | set(async_rl.RECIPE_OWNED_SETTINGS)
     for section in ("trainer.policy.megatron_config", "trainer.ref.megatron_config"):
         keys |= {f"{section}.{field.name}" for field in fields(async_rl.MegatronGeometry)}
     keys |= {f"generator.chat_template.{field.name}" for field in fields(async_rl.ChatTemplate)}
@@ -142,6 +142,13 @@ def flattened(node: dict, prefix: str = "") -> dict[str, object]:
 
 def rendered(preset=async_rl.DEFAULT, settings=()) -> dict:
     return async_rl.training_config(preset, settings)
+
+
+@pytest.fixture
+def owner(monkeypatch):
+    """Fix the artifact owner so run and evaluation addresses are deterministic."""
+    monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
+    monkeypatch.setattr(async_rl, "username_segment", lambda: "alice")
 
 
 @pytest.mark.parametrize("label", sorted(PRESET_LOOPS))
@@ -205,11 +212,68 @@ def test_set_refuses_keys_the_topology_overwrites():
         rendered(settings=("trainer.train_batch_size=64",))
     with pytest.raises(click.BadParameter, match="written from the topology"):
         rendered(settings=("generator.num_inference_engines=2",))
+    with pytest.raises(click.BadParameter, match="engine geometry the recipe decides"):
+        rendered(settings=("generator.inference_engine_data_parallel_size=4",))
 
 
-def test_run_wires_the_curriculum_pool_and_snowball_export_into_one_chain(monkeypatch):
-    monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
-    monkeypatch.setattr(async_rl, "username_segment", lambda: "alice")
+def test_curriculum_template_supplies_only_the_data_and_environment_sections(monkeypatch):
+    """No field of the scale point the template renders with reaches the rendered config."""
+    template = yaml.safe_load(rl_config_yaml(async_rl.CURRICULUM_TEMPLATE))
+    config = rendered()
+    assert {section for section in template if config.get(section) == template[section]} == {"data", "environment"}
+    plan = replace(
+        async_rl.CURRICULUM_TEMPLATE.role_plan,
+        colocate_all=True,
+        policy_num_nodes=1,
+        policy_num_gpus_per_node=2,
+        num_inference_engines=3,
+        inference_engine_tensor_parallel_size=4,
+        train_batch_size=5,
+        policy_mini_batch_size=5,
+        micro_train_batch_size_per_gpu=6,
+        n_samples_per_prompt=7,
+    )
+    monkeypatch.setattr(
+        async_rl,
+        "CURRICULUM_TEMPLATE",
+        replace(
+            async_rl.CURRICULUM_TEMPLATE,
+            label="other",
+            num_nodes=9,
+            role_plan=plan,
+            max_steps=11,
+            eval_interval=13,
+            ckpt_interval=17,
+            request_window_tokens=19,
+            max_new_tokens=23,
+            micro_forward_batch_size_per_gpu=29,
+            evals="none",
+        ),
+    )
+    assert rendered() == config
+
+
+def test_recipe_engine_parallelism_reaches_the_run_unopposed(owner, monkeypatch):
+    """The launcher's engine geometry must beat the curriculum policy's inherited override."""
+    inherited = {override.lstrip("+").partition("=")[0] for override in SNOWBALL_POLICY.overrides}
+    assert "generator.inference_engine_data_parallel_size" in inherited, SNOWBALL_POLICY.overrides
+    monkeypatch.setattr(
+        async_rl,
+        "SNOWBALL_RECIPE",
+        replace(async_rl.SNOWBALL_RECIPE, engine_data_parallel_size=4, engine_expert_parallel_size=4),
+    )
+    run = async_rl.build_run(SNOWBALL_POLICY, async_rl.SMOKE_PRESET, version="2026.09.18")
+    request = run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args.keys(), run.rl.deps)).request
+    generator = yaml.safe_load(request.config_yaml)["generator"]
+    assert generator["inference_engine_data_parallel_size"] == 4
+    assert generator["inference_engine_expert_parallel_size"] == 4
+    keys = {override.lstrip("+").partition("=")[0] for override in request.overrides}
+    assert keys.isdisjoint(async_rl.RECIPE_OWNED_SETTINGS), request.overrides
+    # An override on a key the rendered config says nothing about still reaches the run.
+    assert {override.lstrip("+").partition("=")[0] for override in BASE_OVERRIDES} <= keys
+
+
+def test_run_wires_the_curriculum_pool_and_snowball_export_into_one_chain(owner):
     run = async_rl.build_run(SNOWBALL_POLICY, async_rl.SMOKE_PRESET, version="2026.09.18")
     assert run.rl.name == "users/alice/checkpoints/async-rl/snowball-smoke"
     assert any(dep.name == async_rl.POOL_ARTIFACT_NAME for dep in run.rl.deps)
@@ -229,9 +293,7 @@ def test_run_wires_the_curriculum_pool_and_snowball_export_into_one_chain(monkey
     assert served.model.serve.max_model_len == 4096 + async_rl.SMOKE_PRESET.max_new_tokens
 
 
-def test_command_plans_without_running(monkeypatch):
-    monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
-    monkeypatch.setattr(async_rl, "username_segment", lambda: "alice")
+def test_command_plans_without_running(owner):
     result = CliRunner().invoke(async_rl.main, ["--version", "2026.09.18", "--preset", "smoke"])
     assert result.exit_code == 0, result.output
     with build_context(BuildContext(versions=VersionCodex(default="2026.09.18"))):
@@ -239,14 +301,11 @@ def test_command_plans_without_running(monkeypatch):
     assert list(handles) == ["snowball-smoke"]
 
 
-def test_seed_setting_reaches_the_config_and_the_request(monkeypatch):
+def test_seed_setting_reaches_the_config_and_the_request(owner):
     """MarinSkyRL writes the request's seed over the config, so both must carry the --set value."""
-    monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
-    monkeypatch.setattr(async_rl, "username_segment", lambda: "alice")
     assert rendered()["trainer"]["seed"] == async_rl.SEED
     assert rendered(settings=("trainer.seed=23",))["trainer"]["seed"] == 23
     run = async_rl.build_run(SNOWBALL_POLICY, async_rl.SMOKE_PRESET, version="2026.09.18", settings=("trainer.seed=23",))
     built = run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args.keys(), run.rl.deps))
     seeds = {key: value for key, value in flattened(asdict(built)).items() if key.endswith("seed")}
     assert seeds and all(value == 23 for value in seeds.values()), seeds
-    assert "seed: 23" in json.dumps(asdict(built), default=str)
