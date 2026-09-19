@@ -8,7 +8,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from conftest import finelog_dialect_macros, queried_namespace
+from conftest import install_finelog_dialect_macros, queried_namespace
 from dashboard_stitch import stitch_all
 from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
 
@@ -19,6 +19,7 @@ NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
 WINDOW_START = NOW - timedelta(hours=1)
 CLUSTER = "cw-rno2a"
 RUN_ID = "snowball-e6-muonh-0"
+ASYNC_RUN_ID = "snowball-e6-muonh-0-async"
 _NOW_MS = round(NOW.timestamp() * 1000)
 _WINDOW_START_MS = round(WINDOW_START.timestamp() * 1000)
 JOB_ID = "/atqamar/snowball-e6-muonh-0-attempt-0"
@@ -56,9 +57,10 @@ def _row(
     job_id: str | None = None,
     node_name: str | None = None,
     role: str = "",
+    training_loop: str = "sync",
     attributes: dict[str, str] | None = None,
 ) -> tuple:
-    resource = {"role": role, "training_loop": "sync"} if role else {"training_loop": "sync"}
+    resource = {"role": role, "training_loop": training_loop} if role else {"training_loop": training_loop}
     return (
         CLUSTER,
         service,
@@ -131,21 +133,6 @@ def _run_rows() -> list[tuple]:
                     node_name=NODES[0],
                     role="trainer",
                     attributes={"work_kind": work_kind},
-                )
-            )
-        for name, value in (("rollout_queue_depth", 12.0), ("rollout_capacity", 32.0)):
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name=name,
-                    value=value,
-                    moment=moment,
-                    seq=bucket,
-                    run_id=RUN_ID,
-                    job_id=JOB_ID,
-                    node_name=NODES[0],
-                    role="trainer",
-                    attributes={"queue": "rollout_buffer"},
                 )
             )
         # The Ray controller, forwarded under a different role. Forwarded snapshots always arrive
@@ -288,23 +275,6 @@ def _run_rows() -> list[tuple]:
                         attributes={"metric_source": "vllm", "engine": engine, "finished_reason": reason},
                     )
                 )
-        # Staleness as the trainer records it: one observation per admitted group, measured where
-        # the consuming step is known. A group can wait in the buffer across step boundaries.
-        for staleness in (0.0, 1.0, 1.0, 2.0, 4.0):
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name="rollout_staleness_steps",
-                    value=staleness,
-                    moment=moment,
-                    seq=bucket,
-                    run_id=RUN_ID,
-                    job_id=JOB_ID,
-                    node_name=NODES[0],
-                    role="trainer",
-                    attributes={"step": str(bucket)},
-                )
-            )
     return rows
 
 
@@ -341,7 +311,7 @@ def store() -> duckdb.DuckDBPyConnection:
     # One table per semantic stream, seeded by routing each row on its service as the server does.
     for stream in sorted(set(_SEMANTIC_STREAM.values())):
         database.execute(f'CREATE TABLE "{stream}"{_SCHEMA}')
-    finelog_dialect_macros(database)
+    install_finelog_dialect_macros(database)
     placeholders = ", ".join("?" for _ in _COLUMNS)
     service_index = _COLUMNS.index("service")
     routed: dict[str, list] = {}
@@ -400,9 +370,6 @@ def test_the_trainer_panels_render_for_that_run(store) -> None:
 
     work = store.execute(_panel_sql("Rollouts, samples and tokens completed")).fetchall()
     assert [row[1] for row in work] == [64.0] * 6
-
-    buffer = store.execute(_panel_sql("Rollout buffer occupancy (groups) · async runs only")).fetchall()
-    assert [(row[1], row[2]) for row in buffer] == [(12.0, 32.0)] * 6
 
     # Occupancy is a ratio, so two nodes reporting 3 GB used of 4 GB still reads 0.75 rather
     # than doubling. 6e9 used over 8e9 total.
@@ -659,11 +626,55 @@ def test_a_listed_run_opens_the_view_framed_on_that_run() -> None:
     ]
     (url,) = [link["url"] for link in links]
 
-    assert url.startswith("/d/marin-rl-runs?")
+    # The list spans both training loops and each has its own dashboard, so the row carries the
+    # uid of the one whose run picker can select it.
+    assert url.startswith("/d/${__data.fields.dashboard}?")
     # Without all four the link lands on an empty dashboard: no run selected, or a window that
     # predates the run.
     for parameter in ("var-run=", "var-cluster=", "from=", "to="):
         assert parameter in url, parameter
+
+
+def _run_picker_sql(uid: str) -> str:
+    """The run picker of the dashboard published under this uid, resolved to this window."""
+    (dashboard,) = [board for board in stitch_all(DASHBOARDS, DASHBOARDS / "panels").values() if board.get("uid") == uid]
+    (variable,) = [item for item in dashboard["templating"]["list"] if item["name"] == "run"]
+    (parameter,) = [
+        param for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
+    ]
+    return _in_window(parameter["value"]).replace("${cluster:sqlstring}", f"'{CLUSTER}'")
+
+
+def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
+    # Home's list is loop-blind and each dashboard's run picker takes only its own loop, so an
+    # async row routed to the sync dashboard would land on a picker that cannot select it.
+    for bucket in range(2):
+        store.execute(
+            f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})',
+            list(
+                _row(
+                    service="marinskyrl",
+                    name="policy_step",
+                    value=float(bucket),
+                    moment=WINDOW_START + timedelta(minutes=5 * bucket),
+                    seq=bucket,
+                    run_id=ASYNC_RUN_ID,
+                    job_id=JOB_ID,
+                    node_name=NODES[0],
+                    role="trainer",
+                    training_loop="async",
+                )
+            ),
+        )
+
+    result = store.execute(_recent_runs_sql())
+    columns = [description[0] for description in result.description]
+    routed = {row["run"]: row["dashboard"] for row in (dict(zip(columns, r, strict=True)) for r in result.fetchall())}
+
+    assert routed == {RUN_ID: "marin-rl-runs", ASYNC_RUN_ID: "marin-async-rl"}
+    for uid in set(routed.values()):
+        offered = {run for (run,) in store.execute(_run_picker_sql(uid)).fetchall()}
+        assert offered == {run for run, target in routed.items() if target == uid}, uid
 
 
 def test_the_recent_runs_query_returns_a_row_per_run_and_cluster(store) -> None:

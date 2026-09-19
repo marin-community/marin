@@ -160,7 +160,7 @@
       "id": 3,
       "type": "timeseries",
       "title": "Optimizer step and policy lag",
-      "description": "The trainer's optimizer step, and the newest policy version whose generated work was consumed in the same bucket.\n\nThe gap between the lines is the policy lag in optimizer steps. A widening gap means generation is falling behind; a flat gap means admission is clamping it.\n\nBoth lines are counters and only rise, so a flat line is the failure signal. The gap is a per-bucket maximum and reads as a best case. The measured distribution is on the off-policy staleness panel. Data from telemetry_v1.marinskyrl.",
+      "description": "The trainer's optimizer step, and the newest policy version whose generated work was consumed in the same bucket.\n\nThe gap between the lines is the policy lag in optimizer steps. A widening gap means generation is falling behind; a flat gap means admission is clamping it.\n\nBoth lines are counters and only rise, so a flat line is the failure signal. The gap is a per-bucket maximum and reads as a best case. The measured staleness distribution is on RL Post-training (async), which charts the asynchronous loop. Data from telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -356,7 +356,7 @@
       "id": 1,
       "type": "table",
       "title": "Producers reporting this run",
-      "description": "One row per service, role and metric source that stamped this run id, with the time each last reported.\n\nA healthy async run shows several marinskyrl rows, one vllm row, and one harbor row. A missing row is the only evidence that a producer failed to start telemetry.\n\nThe Iris node agent never appears here, because it stamps no run id. Rows come from the marinskyrl, vllm and harbor tables in telemetry_v1.",
+      "description": "One row per service, role and metric source that stamped this run id, with the time each last reported.\n\nA healthy run shows several marinskyrl rows, one vllm row, and one harbor row. A missing row is the only evidence that a producer failed to start telemetry.\n\nThe Iris node agent never appears here, because it stamps no run id. Rows come from the marinskyrl, vllm and harbor tables in telemetry_v1.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -568,95 +568,6 @@
       "interval": "1m"
     },
     {
-      "id": 5,
-      "type": "timeseries",
-      "title": "Rollout buffer occupancy (groups) · async runs only",
-      "description": "Completed rollout groups waiting in the async buffer, against the buffer's capacity.\n\nPinned at capacity means generation is ahead and the trainer is the bottleneck. Near zero while the trainer waits means the opposite.\n\nOne group is one prompt's n samples, so this counts groups. Only the async trainer fills this buffer, so a sync run is blank. Data from telemetry_v1.marinskyrl.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 10
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "rollout groups"
-          },
-          "min": 0,
-          "noValue": "No rollout-buffer rows. Sync trainer, or the buffer never reported — this is not a starved buffer.",
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/query",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'rollout_queue_depth' THEN value END) AS depth, AVG(CASE WHEN name = 'rollout_capacity' THEN value END) AS capacity FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name IN ('rollout_queue_depth', 'rollout_capacity') AND json_get(attributes_json, 'queue') = 'rollout_buffer' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "depth",
-              "text": "groups waiting",
-              "type": "number"
-            },
-            {
-              "selector": "capacity",
-              "text": "buffer capacity",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
       "id": 8,
       "type": "timeseries",
       "title": "GPU utilization on this run's nodes",
@@ -668,7 +579,7 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 16,
+        "x": 8,
         "y": 10
       },
       "fieldConfig": {
@@ -1340,96 +1251,6 @@
       "panels": []
     },
     {
-      "id": 14,
-      "type": "timeseries",
-      "title": "Off-policy staleness (optimizer steps behind) · async runs only",
-      "description": "How many optimizer steps old each admitted group's policy was when the trainer consumed it.\n\nWatch p99. The trainer asserts staleness stays under the configured maximum, so a p99 climbing toward it is the last thing visible before the run aborts.\n\nMeasured at admission, one observation per group. The producer cannot compute it, because a group can wait in the buffer across step boundaries. Only the async trainer records it, so a sync run is blank. Data from telemetry_v1.marinskyrl.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 36
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "optimizer steps behind"
-          },
-          "min": 0,
-          "noValue": "No staleness rows. Async trainer only; a sync run is on-policy by construction.",
-          "unit": "none",
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/query",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'p50' AS series, approx_percentile_cont(value, 0.5) AS value FROM \"telemetry_v1.marinskyrl\" WHERE name = 'rollout_staleness_steps' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 UNION ALL SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'p99' AS series, approx_percentile_cont(value, 0.99) AS value FROM \"telemetry_v1.marinskyrl\" WHERE name = 'rollout_staleness_steps' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
       "id": 18,
       "type": "timeseries",
       "title": "Why engine requests finished",
@@ -1441,7 +1262,7 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
+        "x": 0,
         "y": 36
       },
       "fieldConfig": {

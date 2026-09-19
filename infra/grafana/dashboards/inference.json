@@ -111,7 +111,7 @@
       "title": "",
       "options": {
         "mode": "markdown",
-        "content": "Requests are not GPU batch size. Compare **running/waiting**, **iteration tokens**, and **time per output token** over the same rollout phase. These metrics do not split in-flight requests into prefill vs decode, expose ready upstream work, or measure CUDA-graph/kernel efficiency. Use **RL Post-training** for phase timing and **Fleet accelerators** for GPU context."
+        "content": "Requests are not GPU batch size. Compare **running/waiting**, **iteration tokens**, and **time per output token** over the same rollout phase. These metrics do not split in-flight requests into prefill vs decode, expose ready upstream work, or measure CUDA-graph/kernel efficiency. Use the **RL Post-training** views for phase timing and **Fleet accelerators** for GPU context."
       },
       "id": 12,
       "gridPos": {

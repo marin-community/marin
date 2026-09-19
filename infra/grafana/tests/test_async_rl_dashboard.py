@@ -4,14 +4,27 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 import duckdb
 import pyarrow as pa
 import pytest
-from conftest import finelog_dialect_macros
+from conftest import install_finelog_dialect_macros
 
 DASHBOARD = json.loads((Path(__file__).parents[1] / "dashboards/async_rl.json").read_text())
 PANELS = {panel["title"]: panel for panel in DASHBOARD["panels"] if "targets" in panel}
+
+# The finelog namespace every async panel reads, quoted the way the dashboards spell it.
+TABLE = '"telemetry_v1.marinskyrl"'
+
+# The identity the panels are asked about: one cluster, run, job and its two executions. Rows
+# carrying any other value are distractors the predicates have to drop.
+SERVICE = "marinskyrl"
+CLUSTER = "cw-us-east-02a"
+RUN_ID = "run"
+JOB_ID = "job"
+DRIVER = "driver"
+WORKER = "worker"
 
 # The selected window, and the instant seeded rows land on. Panels bound their scans by
 # {{from}}/{{to}}, so rows must fall inside it for any panel to return them; tests that
@@ -30,10 +43,10 @@ def resolve(sql):
         "{{from}}": _window_literal(WINDOW_START_MS),
         "{{to}}": _window_literal(WINDOW_START_MS + WINDOW_MS),
         "${__interval_ms}": str(WINDOW_MS),
-        "${cluster:sqlstring}": "'cw-us-east-02a'",
-        "${run:sqlstring}": "'run'",
-        "${job:sqlstring}": "'job'",
-        "${execution:sqlstring}": "'driver','worker'",
+        "${cluster:sqlstring}": f"'{CLUSTER}'",
+        "${run:sqlstring}": f"'{RUN_ID}'",
+        "${job:sqlstring}": f"'{JOB_ID}'",
+        "${execution:sqlstring}": f"'{DRIVER}','{WORKER}'",
     }.items():
         sql = sql.replace(macro, value)
     return sql
@@ -45,13 +58,34 @@ def run_variable_sql():
     return next(param["value"] for param in params if param["key"] == "sql")
 
 
+def panel_sql(title):
+    target = PANELS[title]["targets"][0]
+    return next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
+
+
 def query(database, title):
     target = PANELS[title]["targets"][0]
-    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
-    cursor = database.execute(resolve(sql))
+    cursor = database.execute(resolve(panel_sql(title)))
     columns = [column[0] for column in cursor.description]
     assert columns == [column["selector"] for column in target["columns"]]
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+
+class TelemetryRow(NamedTuple):
+    """One row in the finelog schema, in the column order the table declares."""
+
+    cluster: str
+    service: str
+    run_id: str | None
+    job_id: str | None
+    execution_uid: str | None
+    timestamp_ms: int
+    seq: int
+    name: str
+    value: float
+    attributes_json: str
+    resource_attributes_json: str
+    body_json: str
 
 
 SCHEMA = pa.schema(
@@ -70,41 +104,40 @@ SCHEMA = pa.schema(
         ("body_json", pa.string()),
     ]
 )
-COLUMN = {field.name: index for index, field in enumerate(SCHEMA)}
 
 
 def seed(database, rows):
     # DuckDB's executemany costs milliseconds a row; one Arrow batch costs microseconds.
     database.register("seeded_rows", pa.table([list(column) for column in zip(*rows, strict=True)], schema=SCHEMA))
-    database.execute('INSERT INTO "telemetry_v1.marinskyrl" SELECT * FROM seeded_rows')
+    database.execute(f"INSERT INTO {TABLE} SELECT * FROM seeded_rows")
 
 
 def telemetry_row(
     name,
     value=0,
     *,
-    job="job",
-    execution="driver",
+    job=JOB_ID,
+    execution=DRIVER,
     timestamp=BASE_EPOCH_MS,
     seq=0,
     attributes=None,
     resource=None,
     body=None,
-):
-    """One row in the finelog schema."""
-    return (
-        "cw-us-east-02a",
-        "marinskyrl",
-        "run",
-        job,
-        execution,
-        timestamp,
-        seq,
-        name,
-        value,
-        json.dumps(attributes or {}),
-        json.dumps(resource or {}),
-        json.dumps(body or {}),
+) -> TelemetryRow:
+    """One row the selected run, job and execution reported."""
+    return TelemetryRow(
+        cluster=CLUSTER,
+        service=SERVICE,
+        run_id=RUN_ID,
+        job_id=job,
+        execution_uid=execution,
+        timestamp_ms=timestamp,
+        seq=seq,
+        name=name,
+        value=value,
+        attributes_json=json.dumps(attributes or {}),
+        resource_attributes_json=json.dumps(resource or {}),
+        body_json=json.dumps(body or {}),
     )
 
 
@@ -112,8 +145,8 @@ def telemetry_row(
 def telemetry_table():
     with duckdb.connect() as database:
         database.register("finelog_schema", SCHEMA.empty_table())
-        database.execute('CREATE TABLE "telemetry_v1.marinskyrl" AS SELECT * FROM finelog_schema')
-        finelog_dialect_macros(database)
+        database.execute(f"CREATE TABLE {TABLE} AS SELECT * FROM finelog_schema")
+        install_finelog_dialect_macros(database)
         yield database
 
 
@@ -122,7 +155,7 @@ def store(telemetry_table):
     database = telemetry_table
     rows = []
 
-    def add(name, value=0, *, attributes=None, body=None, process="trainer", execution="driver", timestamp=None):
+    def add(name, value=0, *, attributes=None, body=None, process="trainer", execution=DRIVER, timestamp=None):
         rows.append(
             telemetry_row(
                 name,
@@ -172,13 +205,13 @@ def store(telemetry_table):
         "phase_duration_seconds",
         8,
         attributes={"phase": "ppo_train", "outcome": "success", "rank": "0", "backend": "megatron"},
-        execution="worker",
+        execution=WORKER,
     )
     add(
         "phase_duration_seconds",
         -0.5,
         attributes={"phase": "ppo_train_residual", "outcome": "success", "rank": "0", "backend": "megatron"},
-        execution="worker",
+        execution=WORKER,
     )
     add("event_loop_lag_seconds", 0.1)
     # The training window below spans BASE_EPOCH_MS to BASE_EPOCH_MS + 10 s; calls a and b
@@ -237,7 +270,7 @@ def store(telemetry_table):
         )
     add(
         "cuda_memory_observation",
-        execution="worker",
+        execution=WORKER,
         process="learner",
         attributes={
             "worker_role": "policy",
@@ -346,12 +379,10 @@ def store(telemetry_table):
             ("execution_uid", None),
             ("timestamp_ms", WINDOW_START_MS - 1000),
         ):
-            other = list(row)
-            other[COLUMN[column]] = replacement
-            other[COLUMN["value"]] = 1000
+            other = row._replace(**{column: replacement}, value=1000)
             if column == "run_id":
-                other[COLUMN["resource_attributes_json"]] = sync_resource
-            distractors.append(tuple(other))
+                other = other._replace(resource_attributes_json=sync_resource)
+            distractors.append(other)
     seed(database, rows + distractors)
     return database
 
@@ -415,6 +446,12 @@ def test_shipped_panel_sql_returns_declared_fields_for_selected_attempt(store, t
     assert len(query(store, title)) == PANEL_SERIES[title]
 
 
+def test_the_seeded_row_matches_the_table_it_is_inserted_into():
+    # seed() inserts positionally, so a column added to one and not the other would shift every
+    # field after it onto the wrong column instead of failing.
+    assert TelemetryRow._fields == tuple(SCHEMA.names)
+
+
 def test_wait_means_use_await_counts_and_queue_gauges_use_last_value(store):
     waits = {row["series"]: row["value"] for row in query(store, "Generation worker await duration")}
     assert waits == {"slot mean · driver": pytest.approx(40 / 12), "slot max · driver": 18}
@@ -428,7 +465,7 @@ def test_drift_panels_preserve_signed_values_and_do_not_invent_missing_observati
         "policy/mismatch/pooled/log_ratio_mean · driver": -0.1,
         "policy/mismatch/pooled/log_ratio_abs_p99 · driver": 0.7,
     }
-    store.execute("DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='training_metric_value'")
+    store.execute(f"DELETE FROM {TABLE} WHERE name='training_metric_value'")
     assert query(store, "Drift coverage and token-weight concentration") == []
 
 
@@ -447,24 +484,17 @@ def test_consumed_length_stops_distinguish_zero_from_incomplete_coverage(store):
         "consumed/length_stop_fraction · driver": 0.25,
         "consumed/stop_reason_coverage · driver": 1,
     }
-    store.execute(
-        'UPDATE "telemetry_v1.marinskyrl" SET value=0 '
-        "WHERE json_get(attributes_json,'metric')='consumed/length_stop_fraction'"
-    )
+    store.execute(f"UPDATE {TABLE} SET value=0 WHERE json_get(attributes_json,'metric')='consumed/length_stop_fraction'")
     assert next(row["value"] for row in query(store, title) if "length_stop_fraction" in row["series"]) == 0
+    store.execute(f"DELETE FROM {TABLE} WHERE json_get(attributes_json,'metric')='consumed/length_stop_fraction'")
     store.execute(
-        'DELETE FROM "telemetry_v1.marinskyrl" '
-        "WHERE json_get(attributes_json,'metric')='consumed/length_stop_fraction'"
-    )
-    store.execute(
-        'UPDATE "telemetry_v1.marinskyrl" SET value=0.5 '
-        "WHERE json_get(attributes_json,'metric')='consumed/stop_reason_coverage'"
+        f"UPDATE {TABLE} SET value=0.5 WHERE json_get(attributes_json,'metric')='consumed/stop_reason_coverage'"
     )
     assert {row["series"]: row["value"] for row in query(store, title)} == {
         "consumed/length_stop_fraction · driver": None,
         "consumed/stop_reason_coverage · driver": 0.5,
     }
-    store.execute("DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='training_metric_value'")
+    store.execute(f"DELETE FROM {TABLE} WHERE name='training_metric_value'")
     assert query(store, title) == []
 
 
@@ -474,11 +504,11 @@ def test_overlap_counts_calls_finishing_inside_the_training_window_and_distingui
         {"execution_uid": "driver", "step": 1, "coverage": "observed", "completed_calls": 2, "returned_tokens": 18}
     ]
     store.execute(
-        "DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='rollout_call' "
+        f"DELETE FROM {TABLE} WHERE name='rollout_call' "
         f"AND CAST(json_get(body_json,'finished_unix_ms') AS BIGINT)<{BASE_EPOCH_MS + 10000}"
     )
     assert query(store, title)[0]["completed_calls"] == 0
-    store.execute("DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='rollout_call'")
+    store.execute(f"DELETE FROM {TABLE} WHERE name='rollout_call'")
     assert query(store, title)[0]["completed_calls"] is None
     assert query(store, title)[0]["returned_tokens"] is None
     assert query(store, title)[0]["coverage"] == "no rollout records"
@@ -486,12 +516,12 @@ def test_overlap_counts_calls_finishing_inside_the_training_window_and_distingui
 
 def test_window_clipped_training_window_reports_unknown_overlap(store):
     store.execute(
-        'UPDATE "telemetry_v1.marinskyrl" SET body_json=json_merge_patch(body_json, '
+        f"UPDATE {TABLE} SET body_json=json_merge_patch(body_json, "
         f"'{{\"started_unix_ms\": {WINDOW_START_MS - 1000}}}') "
         "WHERE name='async_phase_window' AND json_get(attributes_json,'phase')='training'"
     )
     store.execute(
-        f"UPDATE \"telemetry_v1.marinskyrl\" SET timestamp_ms={WINDOW_START_MS - 1000} WHERE name='rollout_call' "
+        f"UPDATE {TABLE} SET timestamp_ms={WINDOW_START_MS - 1000} WHERE name='rollout_call' "
         f"AND CAST(json_get(body_json,'finished_unix_ms') AS BIGINT)<{BASE_EPOCH_MS + 10000}"
     )
     row = query(store, "Rollouts completing during policy training")[0]
@@ -512,7 +542,7 @@ def test_health_sums_nonfinite_deltas_and_keeps_exporter_processes_separate(stor
         # carry the fixture's attributes: a second "trainer/trainer" group would tie with the
         # fixture's under ORDER BY and make the dict below keep whichever sorted last.
         store.execute(
-            'INSERT INTO "telemetry_v1.marinskyrl" VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+            f"INSERT INTO {TABLE} VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             telemetry_row(
                 name,
                 value,
@@ -545,7 +575,7 @@ def test_native_work_and_residuals_are_not_clamped_or_merged_across_attempts(sto
 
 
 def test_empty_telemetry_is_unknown_and_startup_only_runs_are_discoverable(store):
-    store.execute("DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name NOT IN ('lifecycle','terminal')")
+    store.execute(f"DELETE FROM {TABLE} WHERE name NOT IN ('lifecycle','terminal')")
     assert store.execute(resolve(run_variable_sql())).fetchall() == [("run",)]
     assert query(store, "Generated and consumed response tokens / s") == []
     assert query(store, "Rollouts completing during policy training") == []
@@ -603,15 +633,14 @@ def test_core_gpu_hours_charge_both_roles_and_require_complete_counts(store):
     title = "Cumulative core GPU-hours in selected window"
     assert query(store, title)[0]["value"] == pytest.approx(10 * 16 / 3600)
     store.execute(
-        'DELETE FROM "telemetry_v1.marinskyrl" '
-        "WHERE json_get(attributes_json,'metric')='async/performance/configured_inference_gpus'"
+        f"DELETE FROM {TABLE} WHERE json_get(attributes_json,'metric')='async/performance/configured_inference_gpus'"
     )
     assert query(store, title) == []
 
 
 def test_phase_service_rates_reject_clock_adjusted_windows(store):
     store.execute(
-        'UPDATE "telemetry_v1.marinskyrl" '
+        f"UPDATE {TABLE} "
         "SET body_json=json_merge_patch(body_json,'{\"duration_seconds\":99}') WHERE name='async_phase_window'"
     )
     assert query(store, "Inference sampled throughput by learner phase") == []
@@ -638,7 +667,7 @@ STALENESS_METRICS = {
 }
 
 
-def add_staleness_batch(database, step, *, omit=None, job="job", execution="driver", phase="train", **changes):
+def add_staleness_batch(database, step, *, omit=None, job=JOB_ID, execution=DRIVER, phase="train", **changes):
     values = dict(
         staleness_min=1,
         staleness_max=1,
@@ -685,7 +714,7 @@ def test_weighting_mixed_duplicates_and_filters(staleness_store):
     add_staleness_batch(staleness_store, 4, job="other-job", loss=10000)
     add_staleness_batch(staleness_store, 4, execution="other-execution", loss=10000)
     add_staleness_batch(staleness_store, 4, phase="eval", loss=10000)
-    table, c = query_staleness_panels(staleness_store)
+    table, coverage = query_staleness_panels(staleness_store)
     assert len(table) == 1
     row = table[0]
     assert row["staleness"] == 1 and row["updates"] == 2
@@ -693,11 +722,11 @@ def test_weighting_mixed_duplicates_and_filters(staleness_store):
     assert row["token_weighted_mslr"] == pytest.approx(0.25)
     assert row["minimum_ess_fraction"] == 0.8 and row["mean_update_raw_reward"] == 0.5
     assert (
-        c["uniform_staleness_token_fraction"] == 0.4
-        and c["mixed_staleness_loss_tokens"] == 600
-        and c["observed_loss_tokens"] == 1000
+        coverage["uniform_staleness_token_fraction"] == 0.4
+        and coverage["mixed_staleness_loss_tokens"] == 600
+        and coverage["observed_loss_tokens"] == 1000
     )
-    assert c["uniform_updates"] == 2 and c["excluded_updates"] == 1
+    assert coverage["uniform_updates"] == 2 and coverage["excluded_updates"] == 1
 
 
 @pytest.mark.parametrize(
@@ -723,35 +752,37 @@ def test_weighting_mixed_duplicates_and_filters(staleness_store):
 def test_incomplete_or_invalid_batch_keeps_token_denominator(staleness_store, change):
     add_staleness_batch(staleness_store, 1)
     add_staleness_batch(staleness_store, 2, loss=300, **change)
-    table, c = query_staleness_panels(staleness_store)
+    table, coverage = query_staleness_panels(staleness_store)
     assert table[0]["updates"] == 1
-    assert c["uniform_staleness_token_fraction"] == 0.25 and c["observed_loss_tokens"] == 400
+    assert coverage["uniform_staleness_token_fraction"] == 0.25 and coverage["observed_loss_tokens"] == 400
 
 
 @pytest.mark.parametrize("loss", [None, -1, 0.5, float("inf"), float("nan")])
 def test_invalid_loss_denominator_is_unavailable(staleness_store, loss):
     add_staleness_batch(staleness_store, 1)
     add_staleness_batch(staleness_store, 2, loss=loss)
-    _, c = query_staleness_panels(staleness_store)
-    assert c["uniform_staleness_token_fraction"] is None and c["observed_loss_tokens"] is None
+    _, coverage = query_staleness_panels(staleness_store)
+    assert coverage["uniform_staleness_token_fraction"] is None and coverage["observed_loss_tokens"] is None
 
 
 def test_conflicting_diagnostic_excluded_but_conflicting_loss_invalidates_coverage(staleness_store):
     add_staleness_batch(staleness_store, 1)
     add_staleness_batch(staleness_store, 1, mslr=0.2)
-    table, c = query_staleness_panels(staleness_store)
+    table, coverage = query_staleness_panels(staleness_store)
     assert (
-        table[0]["staleness"] is None and c["uniform_staleness_token_fraction"] == 0 and c["observed_loss_tokens"] == 100
+        table[0]["staleness"] is None
+        and coverage["uniform_staleness_token_fraction"] == 0
+        and coverage["observed_loss_tokens"] == 100
     )
     add_staleness_batch(staleness_store, 1, loss=101)
-    _, c = query_staleness_panels(staleness_store)
-    assert c["uniform_staleness_token_fraction"] is None
+    _, coverage = query_staleness_panels(staleness_store)
+    assert coverage["uniform_staleness_token_fraction"] is None
 
 
 def test_empty_selection_is_explicit_and_unavailable(staleness_store):
-    table, c = query_staleness_panels(staleness_store)
+    table, coverage = query_staleness_panels(staleness_store)
     assert table[0]["status"] == "No qualifying uniform-staleness batches" and table[0]["staleness"] is None
-    assert c["uniform_staleness_token_fraction"] is None and c["observed_loss_tokens"] is None
+    assert coverage["uniform_staleness_token_fraction"] is None and coverage["observed_loss_tokens"] is None
 
 
 def test_evaluation_stop_panels_preserve_score_contributions_and_missing_coverage(store):
@@ -770,7 +801,7 @@ def test_evaluation_stop_panels_preserve_score_contributions_and_missing_coverag
         "eval/all/completed_stop_score_contribution · driver": 0.05,
     }
     store.execute(
-        'DELETE FROM "telemetry_v1.marinskyrl" WHERE '
+        f"DELETE FROM {TABLE} WHERE "
         "json_get(attributes_json,'metric') LIKE 'eval/%/length_stop_%' OR "
         "json_get(attributes_json,'metric') LIKE 'eval/%/completed_stop_%'"
     )
@@ -779,7 +810,7 @@ def test_evaluation_stop_panels_preserve_score_contributions_and_missing_coverag
     assert len(length) == 3
     assert query(store, "Evaluation score contributions by stop class")[0]["value"] == 0.25
     assert len(query(store, "Evaluation score contributions by stop class")) == 1
-    store.execute('DELETE FROM "telemetry_v1.marinskyrl"')
+    store.execute(f"DELETE FROM {TABLE}")
     assert query(store, "Evaluation response length and stop coverage") == []
     assert query(store, "Evaluation score contributions by stop class") == []
 
@@ -787,7 +818,7 @@ def test_evaluation_stop_panels_preserve_score_contributions_and_missing_coverag
 def test_periodic_evaluation_metrics_logged_in_train_phase_are_visible(store):
     # The real trainer logs the initial eval separately, then merges periodic evals into its training row.
     store.execute(
-        'UPDATE "telemetry_v1.marinskyrl" SET '
+        f"UPDATE {TABLE} SET "
         'attributes_json=json_merge_patch(attributes_json, \'{"payload_kind":"train"}\') '
         "WHERE json_get(attributes_json,'metric') LIKE 'eval/%'"
     )
@@ -804,13 +835,13 @@ def test_consumed_staleness_panels_count_groups_and_sum_tokens_per_staleness(sto
     assert [row["value"] for row in tokens if row["series"].startswith("staleness 0 ·")] == [10, 20]
     assert tokens[0]["t"] == tokens[1]["t"] and tokens[2]["t"] == tokens[3]["t"]
     store.execute(
-        'DELETE FROM "telemetry_v1.marinskyrl" WHERE '
+        f"DELETE FROM {TABLE} WHERE "
         "(name='rollout_staleness_steps' AND value<>0) OR "
         "(name='consumed_staleness' AND json_get(body_json,'staleness')='1')"
     )
     for title in ("Consumed staleness — groups per step", "Consumed staleness — tokens per step"):
         assert all(row["series"].startswith("staleness 0 ·") for row in query(store, title))
-    store.execute("DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='consumed_staleness'")
+    store.execute(f"DELETE FROM {TABLE} WHERE name='consumed_staleness'")
     assert query(store, "Consumed staleness — tokens per step") == []
 
 
@@ -833,10 +864,7 @@ def test_ratio_panels_read_mismatch_and_learner_drift_families_separately(store)
     assert [row["value"] for row in staleness if "/staleness1/" in row["series"]] == [0.3, 0.6]
     assert [row["value"] for row in drift if row["series"].startswith("policy/log_ratio_abs_mean ·")] == [0.05, 0.1]
     assert not any("mismatch" in row["series"] for row in drift)
-    store.execute(
-        'DELETE FROM "telemetry_v1.marinskyrl" WHERE '
-        "json_get(attributes_json,'metric') LIKE 'policy/mismatch/staleness1/%'"
-    )
+    store.execute(f"DELETE FROM {TABLE} WHERE json_get(attributes_json,'metric') LIKE 'policy/mismatch/staleness1/%'")
     assert not any("/staleness1/" in row["series"] for row in query(store, "Learner/vLLM mismatch by staleness bucket"))
 
 
@@ -861,7 +889,5 @@ def test_correction_panel_distinguishes_populations_and_bounds_reference_coverag
     assert [row["value"] for row in rows if "policy/tis/imp_ratio_capped_fraction" in row["series"]] == [0.12, 0.24]
     assert [row["value"] for row in rows if "offpolicy_mask/masked_fraction" in row["series"]] == [0.05, 0.1]
     assert [row["value"] for row in rows if row["series"].startswith("M2 reference")] == [0.04, 0.04]
-    store.execute(
-        'DELETE FROM "telemetry_v1.marinskyrl" WHERE ' "json_get(attributes_json,'metric')='policy/m2_mask/m2_before'"
-    )
+    store.execute(f"DELETE FROM {TABLE} WHERE json_get(attributes_json,'metric')='policy/m2_mask/m2_before'")
     assert not any(row["series"].startswith("M2 reference") for row in query(store, "Correction activity"))

@@ -237,17 +237,19 @@ of repeating the Kubernetes object name.
 | Workload | Inference diagnostics | `inference.json` | Which engines, request stages, or workload changes explain the slowdown? | identity kind, serve |
 | Services | Infra | `infra.json` | Are nightly runs, main CI, workers, and hero training healthy? | none |
 
-Getting a run onto the RL Post-training view is a MarinSkyRL-side question: which launch paths export
-the telemetry environment, what a run id should look like, and which panels a synchronous run
-leaves blank by design. MarinSkyRL documents it at `docs/grafana-rl-runs.md`.
+Getting a run onto an RL Post-training view is a MarinSkyRL-side question: which launch paths export
+the telemetry environment, what a run id should look like, and which training loop the run stamps on
+its records — each view's run picker offers only its own loop. MarinSkyRL documents it at
+`docs/grafana-rl-runs.md`.
 
 RL Post-training (async) (`marin-async-rl`) reads native MarinSkyRL records from
 Finelog. Select a cluster, run, exact training job, and its driver and worker
 executions. It links from Home and RL Post-training (sync) and needs no additional
-datasource or W&B credentials. Its panels stay empty until a run exports the
-matching records: MarinSkyRL gates them behind `trainer.training_metrics`,
-`trainer.async_spans`, `trainer.generate_spans` and `trainer.policy_train_spans`,
-each off by default.
+datasource or W&B credentials. Every panel description names the records it
+reads: lifecycle, step, buffer, staleness, phase-wall and exporter series arrive
+whenever MarinSkyRL telemetry is configured, while the training-metric, span and
+Megatron panels stay empty until the run exports `trainer.training_metrics`,
+`trainer.async_spans` or `trainer.policy_train_spans`.
 
 Native token counters are summed; queue gauges use their latest observation.
 Concurrent producer waits can exceed elapsed time. Rollout completions are joined

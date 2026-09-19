@@ -19,7 +19,7 @@ KUEUE_SLICES = "/apis/discovery.k8s.io/v1/namespaces/kueue-system/endpointslices
 NODE_POOLS = "/apis/compute.coreweave.com/v1alpha1/nodepools"
 
 
-def finelog_dialect_macros(database) -> None:
+def install_finelog_dialect_macros(database) -> None:
     """Teach a DuckDB connection the finelog spellings the dashboards write."""
     database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)::TIMESTAMP")
     database.execute("CREATE MACRO date_bin(width, moment) AS time_bucket(width, moment)")
