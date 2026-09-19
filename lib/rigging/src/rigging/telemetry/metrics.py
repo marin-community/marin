@@ -17,6 +17,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from itertools import pairwise
 
 from rigging import telemetry
@@ -112,8 +113,16 @@ class _ValidatedHistogram:
 class _HistogramDelta:
     body: dict[str, object]
     component_values: tuple[str, ...]
-    valid: bool
-    advance_baseline: bool
+    status: "_HistogramDeltaStatus"
+
+
+class _HistogramDeltaStatus(Enum):
+    INITIAL = auto()
+    OUT_OF_ORDER = auto()
+    SERIES_CHANGED = auto()
+    SCHEMA_CHANGED = auto()
+    RESET = auto()
+    VALID = auto()
 
 
 class MetricSnapshotPublisher:
@@ -260,11 +269,7 @@ def _validated_histogram_bundle(
     bundle_series = cumulative_histogram_series(
         {key: value for key, value in snapshot.attributes.items() if key not in _HISTOGRAM_PUBLICATION_ATTRIBUTES}
     )
-    delta_family_names: list[str] = []
-    delta_family_indexes: list[str] = []
-    delta_component_kinds: list[str] = []
-    delta_component_bounds: list[str] = []
-    delta_component_values: list[str] = []
+    query_index_entries: list[tuple[str, _ValidatedHistogram, _HistogramDelta]] = []
     for histogram in snapshot.histograms:
         if _HISTOGRAM_QUERY_DELIMITER in histogram.name:
             raise ValueError(f"histogram names must not contain {_HISTOGRAM_QUERY_DELIMITER!r} in a bundle")
@@ -287,14 +292,9 @@ def _validated_histogram_bundle(
         )
         delta = _histogram_delta(baselines.get(baseline_key), next_baseline)
         body = {**validated.body, **delta.body}
-        if delta.valid:
-            family_index = str(len(delta_family_names))
-            delta_family_names.append(histogram.name)
-            delta_family_indexes.extend((family_index,) * len(delta.component_values))
-            delta_component_kinds.extend(validated.component_kinds)
-            delta_component_bounds.extend(validated.component_bounds)
-            delta_component_values.extend(delta.component_values)
-        if delta.advance_baseline:
+        if delta.status is _HistogramDeltaStatus.VALID:
+            query_index_entries.append((histogram.name, validated, delta))
+        if delta.status is not _HistogramDeltaStatus.OUT_OF_ORDER:
             next_baselines[baseline_key] = next_baseline
         histograms[histogram.name] = body
     bundle: dict[str, object] = {
@@ -302,18 +302,38 @@ def _validated_histogram_bundle(
         "histograms": histograms,
         "sample_sequence": sample_sequence,
     }
-    if delta_component_values:
-        query_index = {
-            "delta_component_bounds_csv": _HISTOGRAM_QUERY_DELIMITER.join(delta_component_bounds),
-            "delta_component_kinds_csv": _HISTOGRAM_QUERY_DELIMITER.join(delta_component_kinds),
-            "delta_component_values_csv": _HISTOGRAM_QUERY_DELIMITER.join(delta_component_values),
-            "delta_family_indexes_csv": _HISTOGRAM_QUERY_DELIMITER.join(delta_family_indexes),
-            "delta_family_names_csv": _HISTOGRAM_QUERY_DELIMITER.join(delta_family_names),
-        }
-        for field, value in query_index.items():
-            serialization.validate_string(value, field)
-        bundle.update(query_index)
+    bundle.update(_histogram_query_index(query_index_entries))
     return bundle, next_baselines
+
+
+def _histogram_query_index(
+    entries: Sequence[tuple[str, _ValidatedHistogram, _HistogramDelta]],
+) -> dict[str, str]:
+    if not entries:
+        return {}
+
+    family_names: list[str] = []
+    family_indexes: list[str] = []
+    component_kinds: list[str] = []
+    component_bounds: list[str] = []
+    component_values: list[str] = []
+    for family_index, (name, validated, delta) in enumerate(entries):
+        family_names.append(name)
+        family_indexes.extend((str(family_index),) * len(delta.component_values))
+        component_kinds.extend(validated.component_kinds)
+        component_bounds.extend(validated.component_bounds)
+        component_values.extend(delta.component_values)
+
+    query_index = {
+        "delta_component_bounds_pipe": _HISTOGRAM_QUERY_DELIMITER.join(component_bounds),
+        "delta_component_kinds_pipe": _HISTOGRAM_QUERY_DELIMITER.join(component_kinds),
+        "delta_component_values_pipe": _HISTOGRAM_QUERY_DELIMITER.join(component_values),
+        "delta_family_indexes_pipe": _HISTOGRAM_QUERY_DELIMITER.join(family_indexes),
+        "delta_family_names_pipe": _HISTOGRAM_QUERY_DELIMITER.join(family_names),
+    }
+    for field_name, value in query_index.items():
+        serialization.validate_string(value, field_name)
+    return query_index
 
 
 def _histogram_delta(
@@ -322,12 +342,14 @@ def _histogram_delta(
 ) -> _HistogramDelta:
     """Compute one interval and whether admission should replace its baseline."""
     if previous is None:
-        return _HistogramDelta({"delta_valid": False}, (), False, True)
+        return _HistogramDelta({"delta_valid": False}, (), _HistogramDeltaStatus.INITIAL)
     ordered = current.sample_sequence > previous.sample_sequence and current.timestamp_ms >= previous.timestamp_ms
     if not ordered:
-        return _HistogramDelta({"delta_valid": False}, (), False, False)
-    if current.series != previous.series or current.schema != previous.schema:
-        return _HistogramDelta({"delta_valid": False}, (), False, True)
+        return _HistogramDelta({"delta_valid": False}, (), _HistogramDeltaStatus.OUT_OF_ORDER)
+    if current.series != previous.series:
+        return _HistogramDelta({"delta_valid": False}, (), _HistogramDeltaStatus.SERIES_CHANGED)
+    if current.schema != previous.schema:
+        return _HistogramDelta({"delta_valid": False}, (), _HistogramDeltaStatus.SCHEMA_CHANGED)
     monotonic = (
         len(current.cumulative_counts) == len(previous.cumulative_counts)
         and all(now >= before for now, before in zip(current.cumulative_counts, previous.cumulative_counts, strict=True))
@@ -335,7 +357,7 @@ def _histogram_delta(
         and current.total >= previous.total
     )
     if not monotonic:
-        return _HistogramDelta({"delta_valid": False}, (), False, True)
+        return _HistogramDelta({"delta_valid": False}, (), _HistogramDeltaStatus.RESET)
 
     delta_counts = tuple(
         now - before for now, before in zip(current.cumulative_counts, previous.cumulative_counts, strict=True)
@@ -353,8 +375,7 @@ def _histogram_delta(
             "delta_valid": True,
         },
         tuple(component_values),
-        True,
-        True,
+        _HistogramDeltaStatus.VALID,
     )
 
 

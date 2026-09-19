@@ -170,11 +170,11 @@ def test_dashboard_vllm_overview_end_to_end(invalid_histogram, histogram_represe
             if sequence > 0:
                 body.update(
                     {
-                        "delta_component_bounds_csv": "|".join(delta_component_bounds),
-                        "delta_component_kinds_csv": "|".join(delta_component_kinds),
-                        "delta_component_values_csv": "|".join(delta_component_values),
-                        "delta_family_indexes_csv": "|".join(delta_family_indexes),
-                        "delta_family_names_csv": "|".join(delta_family_names),
+                        "delta_component_bounds_pipe": "|".join(delta_component_bounds),
+                        "delta_component_kinds_pipe": "|".join(delta_component_kinds),
+                        "delta_component_values_pipe": "|".join(delta_component_values),
+                        "delta_family_indexes_pipe": "|".join(delta_family_indexes),
+                        "delta_family_names_pipe": "|".join(delta_family_names),
                     }
                 )
             attributes = {

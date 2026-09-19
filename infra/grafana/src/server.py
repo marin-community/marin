@@ -140,8 +140,10 @@ from starlette.routing import Route
 from training_stalls import telemetry_query, training_stall_alert_rows
 from vllm_histograms import vllm_histogram_overview_queries
 from vllm_observability import (
+    VLLM_COLLECTOR_METRIC,
     VLLM_MAX_RESULT_ROWS,
     VLLM_OVERVIEW_SECTIONS,
+    VLLM_TELEMETRY_HEALTH_SECTION,
     VllmIdentityField,
     VllmOverviewQuery,
     vllm_overview_query,
@@ -419,7 +421,11 @@ def _vllm_overview_rows(
     rows.sort(
         key=lambda row: (
             str(row.get("section", "")),
-            0 if row.get("section") == "telemetry_health" and row.get("metric") == "collector" else 1,
+            (
+                0
+                if row.get("section") == VLLM_TELEMETRY_HEALTH_SECTION and row.get("metric") == VLLM_COLLECTOR_METRIC
+                else 1
+            ),
             row.get("t") is not None,
             row.get("t") or 0,
             str(row.get("metric", "")),

@@ -246,11 +246,11 @@ def test_cumulative_histogram_bundle_is_one_exact_event_record(monkeypatch: pyte
     assert delta["delta_sum"] == 0.5
     assert delta["delta_from_sample_sequence"] == 7
     assert delta["delta_from_timestamp_ms"] == snapshot.timestamp_ms
-    assert records[-1]["body"]["delta_component_bounds_csv"] == "0.01|0.1|+Inf|_|_"
-    assert records[-1]["body"]["delta_component_kinds_csv"] == "bucket|bucket|bucket|count|sum"
-    assert records[-1]["body"]["delta_component_values_csv"] == "1|2|3|3|0.5"
-    assert records[-1]["body"]["delta_family_indexes_csv"] == "0|0|0|0|0"
-    assert records[-1]["body"]["delta_family_names_csv"] == "request_queue_time_seconds"
+    assert records[-1]["body"]["delta_component_bounds_pipe"] == "0.01|0.1|+Inf|_|_"
+    assert records[-1]["body"]["delta_component_kinds_pipe"] == "bucket|bucket|bucket|count|sum"
+    assert records[-1]["body"]["delta_component_values_pipe"] == "1|2|3|3|0.5"
+    assert records[-1]["body"]["delta_family_indexes_pipe"] == "0|0|0|0|0"
+    assert records[-1]["body"]["delta_family_names_pipe"] == "request_queue_time_seconds"
 
 
 def test_cumulative_histogram_series_is_canonical_and_label_sensitive() -> None:
@@ -290,7 +290,7 @@ def test_cumulative_histogram_delta_skips_reset_then_recovers(monkeypatch: pytes
     records = transport.wait_for(3)
     bodies = [record["body"] for record in records]
     assert [body["histograms"]["latency_seconds"]["delta_valid"] for body in bodies] == [False, False, True]
-    assert bodies[-1]["delta_component_values_csv"] == "1|1|1|1|0.09999999999999998"
+    assert bodies[-1]["delta_component_values_pipe"] == "1|1|1|1|0.09999999999999998"
 
 
 def test_cumulative_histogram_delta_ignores_out_of_order_baseline_and_allows_same_timestamp(

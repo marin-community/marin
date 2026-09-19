@@ -18,6 +18,8 @@ VLLM_SNAPSHOT_LOOKBACK_MS = 3 * VLLM_SCRAPE_INTERVAL_MS
 VLLM_FRESHNESS_THRESHOLD_MS = 3 * VLLM_SCRAPE_INTERVAL_MS
 VLLM_MAX_FRESHNESS_DETAILS = 128
 VLLM_MAX_IDENTITY_LENGTH = 512
+VLLM_TELEMETRY_HEALTH_SECTION = "telemetry_health"
+VLLM_COLLECTOR_METRIC = "collector"
 VLLM_OVERVIEW_SECTIONS = frozenset(
     {
         "counter_total",
@@ -29,7 +31,7 @@ VLLM_OVERVIEW_SECTIONS = frozenset(
         "request_rate",
         "saturation",
         "saturation_summary",
-        "telemetry_health",
+        VLLM_TELEMETRY_HEALTH_SECTION,
         "token_rate",
         "workload",
     }
@@ -721,8 +723,8 @@ WITH base AS (
     UNION ALL
 
     SELECT CAST(NULL AS BIGINT) AS t,
-           'telemetry_health' AS section,
-           'collector' AS metric,
+           {sql_string(VLLM_TELEMETRY_HEALTH_SECTION)} AS section,
+           {sql_string(VLLM_COLLECTOR_METRIC)} AS metric,
            'polls' AS stat,
            'all resources' AS series,
            CAST(polls AS DOUBLE) AS value,
@@ -735,7 +737,7 @@ WITH base AS (
     UNION ALL
 
     SELECT CAST(NULL AS BIGINT) AS t,
-           'telemetry_health' AS section,
+           {sql_string(VLLM_TELEMETRY_HEALTH_SECTION)} AS section,
            'source availability' AS metric,
            'unavailable polls' AS stat,
            'all resources' AS series,
@@ -750,7 +752,7 @@ WITH base AS (
     UNION ALL
 
     SELECT CAST(NULL AS BIGINT) AS t,
-           'telemetry_health' AS section,
+           {sql_string(VLLM_TELEMETRY_HEALTH_SECTION)} AS section,
            'collection failures' AS metric,
            'delta' AS stat,
            stage AS series,
@@ -764,7 +766,7 @@ WITH base AS (
     UNION ALL
 
     SELECT CAST(NULL AS BIGINT) AS t,
-           'telemetry_health' AS section,
+           {sql_string(VLLM_TELEMETRY_HEALTH_SECTION)} AS section,
            'dropped samples' AS metric,
            'total' AS stat,
            drop_reason AS series,
@@ -821,7 +823,11 @@ WITH base AS (
 SELECT t, section, metric, stat, series, value, unit, status, samples, gap_seconds
 FROM output
 ORDER BY section,
-         CASE WHEN section = 'telemetry_health' AND metric = 'collector' THEN 0 ELSE 1 END,
+         CASE
+             WHEN section = {sql_string(VLLM_TELEMETRY_HEALTH_SECTION)}
+              AND metric = {sql_string(VLLM_COLLECTOR_METRIC)}
+             THEN 0 ELSE 1
+         END,
          t,
          metric,
          stat,

@@ -174,11 +174,11 @@ WITH legacy_base AS (
            resource_attributes_json,
            timestamp_ms,
            json_get(attributes_json, 'histogram_publication_id') AS publication_id,
-           json_get(body_json, 'delta_family_names_csv') AS delta_family_names_csv,
-           json_get(body_json, 'delta_family_indexes_csv') AS delta_family_indexes_csv,
-           json_get(body_json, 'delta_component_kinds_csv') AS delta_component_kinds_csv,
-           json_get(body_json, 'delta_component_bounds_csv') AS delta_component_bounds_csv,
-           json_get(body_json, 'delta_component_values_csv') AS delta_component_values_csv
+           json_get(body_json, 'delta_family_names_pipe') AS delta_family_names_pipe,
+           json_get(body_json, 'delta_family_indexes_pipe') AS delta_family_indexes_pipe,
+           json_get(body_json, 'delta_component_kinds_pipe') AS delta_component_kinds_pipe,
+           json_get(body_json, 'delta_component_bounds_pipe') AS delta_component_bounds_pipe,
+           json_get(body_json, 'delta_component_values_pipe') AS delta_component_values_pipe
     FROM "telemetry_v1.marinskyrl"
     WHERE service = 'marinskyrl'
       AND {identity_field.value} = {identity_literal}
@@ -199,23 +199,23 @@ WITH legacy_base AS (
 ), structured_bundle_base AS (
     SELECT *
     FROM bundle_base
-    WHERE delta_component_values_csv IS NOT NULL
+    WHERE delta_component_values_pipe IS NOT NULL
 ), structured_components AS (
     SELECT timestamp_ms,
-           delta_family_names_csv,
-           UNNEST(string_to_array(delta_family_indexes_csv, {sql_string(VLLM_HISTOGRAM_QUERY_DELIMITER)}))
+           delta_family_names_pipe,
+           UNNEST(string_to_array(delta_family_indexes_pipe, {sql_string(VLLM_HISTOGRAM_QUERY_DELIMITER)}))
                AS family_index,
-           UNNEST(string_to_array(delta_component_kinds_csv, {sql_string(VLLM_HISTOGRAM_QUERY_DELIMITER)}))
+           UNNEST(string_to_array(delta_component_kinds_pipe, {sql_string(VLLM_HISTOGRAM_QUERY_DELIMITER)}))
                AS component,
-           UNNEST(string_to_array(delta_component_bounds_csv, {sql_string(VLLM_HISTOGRAM_QUERY_DELIMITER)}))
+           UNNEST(string_to_array(delta_component_bounds_pipe, {sql_string(VLLM_HISTOGRAM_QUERY_DELIMITER)}))
                AS component_bound,
-           UNNEST(string_to_array(delta_component_values_csv, {sql_string(VLLM_HISTOGRAM_QUERY_DELIMITER)}))
+           UNNEST(string_to_array(delta_component_values_pipe, {sql_string(VLLM_HISTOGRAM_QUERY_DELIMITER)}))
                AS component_value
     FROM structured_bundle_base
 ), structured_named AS (
     SELECT *,
            split_part(
-               delta_family_names_csv,
+               delta_family_names_pipe,
                {sql_string(VLLM_HISTOGRAM_QUERY_DELIMITER)},
                TRY_CAST(family_index AS BIGINT) + 1
            ) AS source_family
