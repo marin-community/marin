@@ -349,7 +349,7 @@ def _newtonschulz_padded_stack_sharded(
     updated = jax.vmap(local)(Xd)
     if target_sharding is not None:
         target_spec = target_sharding.spec
-        if target_spec and target_spec[0] is not None:
+        if pad and target_spec and target_spec[0] is not None:
             raise ValueError("padded stack Newton-Schulz requires a replicated parameter layer axis")
         updated = reshard(updated, target_sharding)
         return updated[:layers] if pad else updated

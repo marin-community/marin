@@ -57,7 +57,7 @@ goes stale on the next commit.
 - Origin: `moe_hero_fsdp` at PR 7876
 - Introduced: b0d20062a
 - Status: active
-- Purpose: one-rack GB200 EP64 throughput and MFU baseline.
+- Purpose: one-rack GB200 EP64 baseline and experimental H100 Hero pipeline. The full 535B model completed ten synthetic 65K updates with PP24/EP8 at 15.523% MFU; checkpoint continuation remains unvalidated. See [H100 results](https://github.com/marin-community/marin/issues/9277).
 - Issue: https://github.com/marin-community/marin/issues/7279
 
 ### grugformer-vs-hackable-125m
