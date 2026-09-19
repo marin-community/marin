@@ -74,6 +74,7 @@ Loom one also exchanges tokens and creates a run over HTTP.
 
 import json
 import logging
+import threading
 from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -429,6 +430,9 @@ def create_app(
     github_cache: TtlCache = TtlCache(config.github_cache_ttl)
     k8s_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     wandb_cache: TtlCache = TtlCache(config.github_cache_ttl)
+    # Grafana and the bridge share one CPU and 2 GiB. Serialize these bounded
+    # local projections within one app; the cache coalesces identical panels.
+    vllm_projection_lock = threading.Lock()
     finelog_queries = _FinelogQueries(config, finelog_sources, finelog_cache)
 
     def vllm_overview(request: Request) -> JSONResponse:
@@ -481,7 +485,12 @@ def create_app(
                     overview.end_ms,
                 )
                 series = finelog_sources[target.name].query(overview.samples_sql, max_rows=VLLM_MAX_SERIES)
-                table = vllm_overview_table(overview, series, max_rows=min(config.max_rows, VLLM_MAX_RESULT_ROWS))
+                table = vllm_overview_table(
+                    overview,
+                    series,
+                    vllm_projection_lock,
+                    max_rows=min(config.max_rows, VLLM_MAX_RESULT_ROWS),
+                )
                 return rows_to_json(table)
 
             rows = finelog_cache.get_or_compute(key, run)

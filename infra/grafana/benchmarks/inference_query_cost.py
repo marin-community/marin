@@ -13,6 +13,7 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pyarrow.ipc as ipc
@@ -23,36 +24,52 @@ from finelog.deploy.config import load_finelog_config
 from finelog.deploy.connect import open_client
 from starlette.testclient import TestClient
 
+FINELOG_CLUSTER = "marin"
+INFERENCE_DASHBOARDS = ("inference_overview.json", "inference.json")
+
+
+@dataclass
+class QueryRecord:
+    """One Finelog call made by the replay."""
+
+    index: int
+    seconds: float | None = None
+    rows: int | None = None
+    bytes: int | None = None
+    error: str | None = None
+
 
 class RecordingSource:
     """Record actual Finelog calls made by the bridge, including shared failures."""
 
     def __init__(self, client, output: Path):
-        self.target = ClusterTarget("marin", "project", "zone", "fleet", "cluster")
+        self.target = ClusterTarget(FINELOG_CLUSTER, "project", "zone", "fleet", "cluster")
         self.client = client
         self.output = output
-        self.calls = []
+        self.calls: list[QueryRecord] = []
         self.guard = threading.Lock()
 
     def query(self, sql: str, *, max_rows: int):
         with self.guard:
-            index = len(self.calls)
-            record = {"index": index}
+            record = QueryRecord(index=len(self.calls))
             self.calls.append(record)
-        (self.output / f"query-{index}.sql").write_text(sql)
+        (self.output / f"query-{record.index}.sql").write_text(sql)
         started = time.monotonic()
         try:
             table = self.client.query(sql, max_rows=max_rows)
-            record.update(seconds=time.monotonic() - started, rows=table.num_rows, bytes=table.nbytes)
-            with ipc.new_file(str(self.output / f"query-{index}.arrow"), table.schema) as writer:
+            record.seconds = time.monotonic() - started
+            record.rows = table.num_rows
+            record.bytes = table.nbytes
+            with ipc.new_file(str(self.output / f"query-{record.index}.arrow"), table.schema) as writer:
                 writer.write_table(table)
             return table
         except Exception as error:
-            record.update(seconds=time.monotonic() - started, error=str(error))
+            record.seconds = time.monotonic() - started
+            record.error = str(error)
             raise
 
 
-def main():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--grafana-dir", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--identity", required=True)
@@ -65,14 +82,11 @@ def main():
         "--refresh-after", type=int, default=0, help="Wait this many seconds, then advance the window and refresh"
     )
     parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    assert (
-        Path(server.__file__).resolve().parent == args.grafana_dir.resolve() / "src"
-    ), "PYTHONPATH must select this bridge"
-    args.output.mkdir(parents=True, exist_ok=True)
-    directory = args.grafana_dir / "dashboards"
-    dashboards = stitch_all(directory, directory / "panels")
-    config = BridgeConfig(
+    return parser.parse_args()
+
+
+def replay_bridge_config() -> BridgeConfig:
+    return BridgeConfig(
         max_rows=10_000,
         cache_ttl=20,
         query_timeout_ms=20_000,
@@ -84,6 +98,80 @@ def main():
         cw_read_token=None,
         loom_alerts=None,
     )
+
+
+def selector_params(dashboard: dict, params: dict[str, str | int]) -> dict[str, str]:
+    variable = next(item for item in dashboard["templating"]["list"] if item["name"] == "identity")["query"][
+        "infinityQuery"
+    ]
+    substitutions = {
+        "${identity_kind}": str(params["identity_kind"]),
+        "${__from}": str(params["from"]),
+        "${__to}": str(params["to"]),
+    }
+    result = {}
+    for param in variable["url_options"]["params"]:
+        value = param["value"]
+        for macro, replacement in substitutions.items():
+            value = value.replace(macro, replacement)
+        result[param["key"]] = value
+    return result
+
+
+def panel_requests(dashboard: dict) -> list[tuple[str, str, str]]:
+    requests = []
+    for panel in dashboard["panels"]:
+        for target in panel.get("targets", []):
+            view = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "view")
+            requests.append((panel["title"], target["url"], view))
+    return requests
+
+
+def fetch_panel(client: TestClient, params: dict[str, str | int], request: tuple[str, str, str]) -> dict:
+    title, path, view = request
+    started = time.monotonic()
+    response = client.get(f"/finelog/{FINELOG_CLUSTER}{path}", params={**params, "view": view})
+    return {
+        "title": title,
+        "view": view,
+        "status": response.status_code,
+        "seconds": time.monotonic() - started,
+        "rows": response.json() if response.status_code == 200 else response.text,
+    }
+
+
+def replay_page(
+    client: TestClient,
+    source: RecordingSource,
+    dashboard: dict,
+    filename: str,
+    phase: str,
+    params: dict[str, str | int],
+) -> dict:
+    started, before = time.monotonic(), len(source.calls)
+    selector = client.get(f"/finelog/{FINELOG_CLUSTER}/query", params=selector_params(dashboard, params))
+    requests = panel_requests(dashboard)
+    with ThreadPoolExecutor(max_workers=len(requests)) as pool:
+        panels = list(pool.map(lambda request: fetch_panel(client, params, request), requests))
+    return {
+        "phase": phase,
+        "dashboard": filename,
+        "params": dict(params),
+        "seconds": time.monotonic() - started,
+        "query_count": len(source.calls) - before,
+        "selector_status": selector.status_code,
+        "selector": selector.json() if selector.status_code == 200 else selector.text,
+        "panels": panels,
+    }
+
+
+def run_replay(args: argparse.Namespace) -> None:
+    assert (
+        Path(server.__file__).resolve().parent == args.grafana_dir.resolve() / "src"
+    ), "PYTHONPATH must select this bridge"
+    args.output.mkdir(parents=True, exist_ok=True)
+    dashboard_dir = args.grafana_dir / "dashboards"
+    dashboards = stitch_all(dashboard_dir, dashboard_dir / "panels")
     params = {
         "identity_kind": args.identity_kind,
         "identity": args.identity,
@@ -91,13 +179,12 @@ def main():
         "to": args.to_ms,
         "bucket_ms": args.bucket_ms,
     }
+    filenames = INFERENCE_DASHBOARDS if args.first_page == "overview" else INFERENCE_DASHBOARDS[::-1]
     pages = []
-    filenames = ("inference_overview.json", "inference.json")
-    if args.first_page == "diagnostics":
-        filenames = filenames[::-1]
-    with open_client(load_finelog_config("marin"), "marin", tunnel_timeout=30, request_timeout=20) as upstream:
+    config = load_finelog_config(FINELOG_CLUSTER)
+    with open_client(config, FINELOG_CLUSTER, tunnel_timeout=30, request_timeout=20) as upstream:
         source = RecordingSource(upstream, args.output)
-        app = server.create_app(config, {"marin": source}, {}, None, None, None)
+        app = server.create_app(replay_bridge_config(), {FINELOG_CLUSTER: source}, {}, None, None, None)
         with TestClient(app, raise_server_exceptions=False) as client:
             phases = ["cold", "warm"] + (["refresh"] if args.refresh_after else [])
             for phase in phases:
@@ -106,58 +193,15 @@ def main():
                     params["from"] += args.refresh_after * 1000
                     params["to"] += args.refresh_after * 1000
                 for filename in filenames:
-                    dashboard = dashboards[filename]
-                    started, before = time.monotonic(), len(source.calls)
-                    variable = next(v for v in dashboard["templating"]["list"] if v["name"] == "identity")["query"][
-                        "infinityQuery"
-                    ]
-                    substitutions = {
-                        "${identity_kind}": args.identity_kind,
-                        "${__from}": str(params["from"]),
-                        "${__to}": str(params["to"]),
-                    }
-                    selector_params = {}
-                    for param in variable["url_options"]["params"]:
-                        value = param["value"]
-                        for macro, replacement in substitutions.items():
-                            value = value.replace(macro, replacement)
-                        selector_params[param["key"]] = value
-                    selector = client.get("/finelog/marin/query", params=selector_params)
-                    requests = []
-                    for panel in dashboard["panels"]:
-                        for target in panel.get("targets", []):
-                            view = next(p["value"] for p in target["url_options"]["params"] if p["key"] == "view")
-                            requests.append((panel["title"], target["url"], view))
-
-                    def fetch(request):
-                        title, path, view = request
-                        began = time.monotonic()
-                        response = client.get("/finelog/marin" + path, params={**params, "view": view})
-                        return {
-                            "title": title,
-                            "view": view,
-                            "status": response.status_code,
-                            "seconds": time.monotonic() - began,
-                            "rows": response.json() if response.status_code == 200 else response.text,
-                        }
-
-                    with ThreadPoolExecutor(max_workers=len(requests)) as pool:
-                        panels = list(pool.map(fetch, requests))
-                    result = {
-                        "phase": phase,
-                        "dashboard": filename,
-                        "params": dict(params),
-                        "seconds": time.monotonic() - started,
-                        "query_count": len(source.calls) - before,
-                        "selector_status": selector.status_code,
-                        "selector": selector.json() if selector.status_code == 200 else selector.text,
-                        "panels": panels,
-                    }
+                    result = replay_page(client, source, dashboards[filename], filename, phase, params)
                     pages.append(result)
-                    (args.output / "result.json").write_text(
-                        json.dumps({"queries": source.calls, "pages": pages}, indent=2)
-                    )
-                    print(json.dumps({k: v for k, v in result.items() if k not in ("panels", "selector")}), flush=True)
+                    payload = {"queries": [asdict(record) for record in source.calls], "pages": pages}
+                    (args.output / "result.json").write_text(json.dumps(payload, indent=2))
+                    print(json.dumps({key: value for key, value in result.items() if key not in ("panels", "selector")}))
+
+
+def main() -> None:
+    run_replay(parse_args())
 
 
 if __name__ == "__main__":

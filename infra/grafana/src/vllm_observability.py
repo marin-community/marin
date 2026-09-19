@@ -4,7 +4,7 @@
 """Bounded Finelog query for one standalone or MarinSkyRL-embedded vLLM serve."""
 
 import math
-import threading
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -19,9 +19,6 @@ VLLM_MAX_POINTS = 360
 VLLM_MAX_RESULT_ROWS = 10_000
 VLLM_MAX_SAMPLES = 1_000_000
 VLLM_MAX_SERIES = 50_000
-# Grafana and the bridge share one CPU and 2 GiB. Serialize these bounded local
-# projections; the existing cache still coalesces every panel of an overview.
-_PROJECTION_LOCK = threading.Lock()
 VLLM_MIN_BUCKET_MS = 15_000
 VLLM_SCRAPE_INTERVAL_MS = 60_000
 VLLM_HISTOGRAM_COHERENCE_MS = 15_000
@@ -108,6 +105,7 @@ _HEALTH_METRIC_NAMES = (
     "metric_publication_dropped_records",
 )
 _METRIC_NAMES = (*_SERVING_METRIC_NAMES, *_HEALTH_METRIC_NAMES)
+_HISTOGRAM_BOUND_ORDER_SQL = "CASE WHEN upper_bound IN ('+Inf', 'Inf') THEN 1e308 ELSE CAST(upper_bound AS DOUBLE) END"
 
 
 def sql_string(value: str) -> str:
@@ -545,8 +543,7 @@ WITH base AS MATERIALIZED (
 ), output_length_distribution AS (
     SELECT upper_bound,
            bucket_count - COALESCE(LAG(bucket_count) OVER (
-               ORDER BY CASE WHEN upper_bound IN ('+Inf', 'Inf') THEN 1e308
-                             ELSE CAST(upper_bound AS DOUBLE) END
+               ORDER BY {_HISTOGRAM_BOUND_ORDER_SQL}
            ), 0) AS value,
            total_count
     FROM histogram_ranked_buckets
@@ -1133,7 +1130,7 @@ ORDER BY section,
          metric,
          stat,
          CASE WHEN section = 'output_length_distribution'
-              THEN CASE WHEN series IN ('+Inf', 'Inf') THEN 1e308 ELSE CAST(series AS DOUBLE) END
+              THEN {_HISTOGRAM_BOUND_ORDER_SQL.replace('upper_bound', 'series')}
               ELSE 0 END,
          series
 LIMIT {VLLM_MAX_RESULT_ROWS + 1}
@@ -1149,13 +1146,19 @@ LIMIT {VLLM_MAX_RESULT_ROWS + 1}
     )
 
 
-def vllm_overview_table(overview: VllmOverviewQuery, series: pa.Table, *, max_rows: int) -> pa.Table:
+def vllm_overview_table(
+    overview: VllmOverviewQuery,
+    series: pa.Table,
+    projection_lock: AbstractContextManager[None],
+    *,
+    max_rows: int,
+) -> pa.Table:
     """Project one compact Finelog scan into the shared diagnostic result."""
     sample_count = pc.sum(pc.list_value_length(series["points"])).as_py() or 0
     if series.num_rows > VLLM_MAX_SERIES or sample_count > VLLM_MAX_SAMPLES:
         raise QueryResultTooLargeError("vLLM sample budget exceeded")
     with (
-        _PROJECTION_LOCK,
+        projection_lock,
         duckdb.connect(config={"threads": 1, "memory_limit": "512MB", "temp_directory": ""}) as database,
     ):
         database.register("series", series)
