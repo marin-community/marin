@@ -285,9 +285,8 @@ def test_subject_promotion_rejects_gap_in_uncovered_guidepost() -> None:
         validate_subject_promotion(replace(artifacts, fit_review=uncovered_fit, holistic_review=uncovered_review))
 
 
-def test_mapping_ranks_sections_independently_inside_each_graph() -> None:
+def test_section_anchors_include_only_capabilities() -> None:
     catalog = _catalog()
-    graph_anchor_rows = graph_anchors(catalog)
     section_anchor_rows = section_anchors(catalog)
     section_ids = [anchor.section_id for anchor in section_anchor_rows]
     assert set(section_ids) == {
@@ -296,6 +295,10 @@ def test_mapping_ranks_sections_independently_inside_each_graph() -> None:
         "practice.files.search",
         "practice.processes.logs",
     }
+
+
+def test_section_anchors_reject_groups() -> None:
+    catalog = _catalog()
     with pytest.raises(ValueError, match="unknown section"):
         section_anchors(
             catalog,
@@ -308,6 +311,13 @@ def test_mapping_ranks_sections_independently_inside_each_graph() -> None:
                 )
             ],
         )
+
+
+def test_mapping_ranks_sections_independently_inside_each_graph() -> None:
+    catalog = _catalog()
+    graph_anchor_rows = graph_anchors(catalog)
+    section_anchor_rows = section_anchors(catalog)
+    section_ids = [anchor.section_id for anchor in section_anchor_rows]
     annotations = [_annotation("file-task"), _annotation("log-task"), _annotation("process-task")]
     graph_vectors = np.asarray([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]], dtype=np.float32)
     membership_vectors = {

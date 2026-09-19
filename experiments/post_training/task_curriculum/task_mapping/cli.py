@@ -11,7 +11,8 @@ from pathlib import Path
 import click
 import numpy as np
 from openai import OpenAI
-from pydantic import BaseModel
+from zephyr.readers import load_jsonl
+from zephyr.writers import write_jsonl_file
 
 from experiments.post_training.task_curriculum.catalog import load_catalog
 from experiments.post_training.task_curriculum.models import RoutingFacet
@@ -23,15 +24,6 @@ from experiments.post_training.task_curriculum.task_mapping.embedding import (
     section_anchors,
 )
 from experiments.post_training.task_curriculum.task_mapping.models import AssignmentAnchor, TaskAnnotation
-
-
-def _read_jsonl[ModelT: BaseModel](path: Path, model: type[ModelT]) -> list[ModelT]:
-    return [model.model_validate_json(line) for line in path.read_text().splitlines() if line.strip()]
-
-
-def _write_jsonl(path: Path, values: Sequence[BaseModel]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(value.model_dump_json() + "\n" for value in values))
 
 
 def _openai_embedding_function(model: str, batch_size: int) -> Callable[[Sequence[str]], np.ndarray]:
@@ -68,8 +60,8 @@ def main(
     output: Path,
 ) -> None:
     """Rank annotated tasks within each graph in the canonical curriculum catalog."""
-    task_rows = [row for path in annotations for row in _read_jsonl(path, TaskAnnotation)]
-    anchor_rows = [row for path in assignment_anchors for row in _read_jsonl(path, AssignmentAnchor)]
+    task_rows = [TaskAnnotation.model_validate(row) for path in annotations for row in load_jsonl(str(path))]
+    anchor_rows = [AssignmentAnchor.model_validate(row) for path in assignment_anchors for row in load_jsonl(str(path))]
     catalog_row = load_catalog(catalog)
     graph_anchor_rows = graph_anchors(catalog_row, anchor_rows)
     section_anchor_rows = section_anchors(catalog_row, anchor_rows)
@@ -117,7 +109,7 @@ def main(
             row_batch_size=mapping_batch_size,
         )
     )
-    _write_jsonl(output, mappings)
+    write_jsonl_file((mapping.model_dump(mode="json") for mapping in mappings), str(output))
 
 
 if __name__ == "__main__":

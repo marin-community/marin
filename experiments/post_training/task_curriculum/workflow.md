@@ -269,7 +269,7 @@ rewrite archived results to match it.
    as `waveN-R`, where `N` is the wave and `R` is the catalog revision within it. Validate the entire file with
    `load_catalog`, which checks routing values and global subject/section uniqueness. Recompute catalog counts from
    the parsed object. Upload the complete YAML to a new immutable S3 directory, verify its SHA-256 by reading it back,
-   and update `CATALOG_URI`, `CATALOG_SHA256`, and `TASK_CURRICULUM` in `catalog_artifact.py`. Do not check the catalog
+   and update `CATALOG_ROOT_URI`, `CATALOG_SHA256`, and `TASK_CURRICULUM` in `catalog_artifact.py`. Do not check the catalog
    payload into git. Task mapping remains a diagnostic and is not a promotion gate.
 
    ```bash

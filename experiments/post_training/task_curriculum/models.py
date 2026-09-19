@@ -168,7 +168,6 @@ class Curriculum(StrictModel):
             raise ValueError(f"sections must have one entry and one representative probe in order: {wrong_probes}")
 
     def capability_sections(self) -> list[CapabilitySection]:
-        """Return trainable sections that may receive task assignments."""
         return [section for section in self.sections if isinstance(section, CapabilitySection)]
 
 
