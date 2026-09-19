@@ -118,6 +118,8 @@ def test_hero_pipeline_preserves_hidden_states_and_router_statistics(qb_estimato
         np.testing.assert_allclose(actual, expected_metrics[name], rtol=1e-5, atol=1e-5)
 
 
+# Compiling both gradient paths can exceed the default minute on shared CI CPUs.
+@pytest.mark.timeout(180)
 @pytest.mark.parametrize("remat_mode", ["recompute_all", "offload_carry"])
 def test_hero_pipeline_loss_and_gradients_match_unsplit_model(remat_mode):
     mesh, model = _tiny_hero(QbEstimator.HIST)
