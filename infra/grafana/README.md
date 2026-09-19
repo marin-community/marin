@@ -83,6 +83,57 @@ latency/outcomes, and worst-replica freshness after a serve exits; reset-aware
 deltas preserve replica identity, and an explicit no-data row distinguishes
 missing telemetry from healthy application silence.
 
+The inference pages open on five minutes and refresh every five minutes. Ranges of
+seven hours or less fetch one compact Finelog result with the selected series'
+samples; the bridge computes all panels locally with DuckDB and shares the result
+across both pages. Every dashboard panel requests the same 15-second bucket;
+the bridge raises it as needed to cap each trend at 360 points. The fetch retains
+a three-minute counter lookback and rejects
+more than one million samples or 50,000 series. Local calculation uses one thread,
+a 512 MB memory limit, no disk spill, and a lock because Grafana and the bridge
+share one CPU. Dense short ranges may still hit the sample limit.
+
+Longer ranges, up to seven days, fetch only the signals used by the summary in
+one compact result across the vLLM and MarinSkyRL namespaces (two physical
+Finelog scans). The bridge aggregates these samples locally. The summary
+shows reset-aware token and outcome totals, an hourly generated-token timeline,
+observed waiting and KV-cache peaks, and native ITL from coherent counter pairs.
+The same sample and memory limits apply. It omits latency
+tails, output-length distribution, per-engine detail, and client or proxy time.
+Zoom to seven hours or less for those server details. The query status panel
+distinguishes an empty selection, a Finelog timeout, a sample-limit rejection,
+and the summary-only view; other panels point to that status when they have no
+data. Missing historical ITL stays unavailable rather than being inferred from
+TPOT.
+
+The identity picker retains request-state discovery. For ranges longer than
+seven hours, it scans the first seven hours to stay within Finelog's deadline.
+Paste an exact job, run, or execution ID into **Manual serve ID** when the
+desired session began later. Both pages link job selections to Iris, where the
+evaluator child logs expose proxy 504s and client retries. vLLM counters do not
+measure that time.
+
+To replay both pages against the existing four-node data in
+[Marin #8929](https://github.com/marin-community/marin/issues/8929), run from the
+repository root (the replay uses the repository's Finelog connection helpers):
+
+```bash
+PYTHONPATH=infra/grafana/src uv run python infra/grafana/benchmarks/inference_query_cost.py \
+  --identity snowball-throughput-20260905-four-node \
+  --from-ms 1788576120000 --to-ms 1788576150000 \
+  --output /tmp/inference-query-after
+```
+
+The replay requests the selector, sends each page's panels in parallel, then
+repeats both pages with a warm cache. It saves SQL, Arrow inputs, responses,
+upstream call counts and durations, and page latency. `--refresh-after 300` also
+waits five minutes and advances the window. To compare the original draft, extract
+`infra/grafana/{src,dashboards}` from commit
+`4ace1ba5eb91cd184dec17c704ec7aa5962a9ac3` with `git archive`, point `PYTHONPATH` at
+that extracted `src/`, and pass its parent as `--grafana-dir`. Keep the identity,
+window, and request sequence the same, and use a separate output directory.
+These are read-only live queries; repeat only the windows needed for comparison.
+
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
 at or above 5 seconds is slow. Clusters' finelog row adds effective pod
