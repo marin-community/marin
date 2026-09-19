@@ -12,12 +12,13 @@ from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator, Transformer
 from experiments.grug.moe_hero_ep.pipeline import _copy_array_to_host, split_transformer
 
 
-def _tiny_hero(qb_estimator: QbEstimator) -> tuple[Mesh, Transformer]:
+def _tiny_hero(qb_estimator: QbEstimator, context_axis_size: int = 1) -> tuple[Mesh, Transformer]:
     config = GrugModelConfig(
         vocab_size=16,
         hidden_dim=8,
@@ -45,9 +46,9 @@ def _tiny_hero(qb_estimator: QbEstimator) -> tuple[Mesh, Transformer]:
         initializer_std=0.2,
     )
     mesh = Mesh(
-        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1),
-        ("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 4,
+        np.asarray(jax.devices()[:context_axis_size]).reshape(1, 1, context_axis_size, 1, 1),
+        ("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
     )
     with jax.set_mesh(mesh):
         model = Transformer.init(config, key=jax.random.key(42))
@@ -98,11 +99,16 @@ def test_pipeline_embedding_recompute_preserves_values_and_gradients(dtype):
         )
 
 
+# Per-primitive dispatch with JIT disabled can exceed a minute on shared CI CPUs.
+@pytest.mark.timeout(180)
 @pytest.mark.parametrize("qb_estimator", [QbEstimator.TOPK, QbEstimator.HIST])
 def test_hero_pipeline_preserves_hidden_states_and_router_statistics(qb_estimator):
     mesh, model = _tiny_hero(qb_estimator)
     batch = _packed_batch()
-    with jax.set_mesh(mesh):
+    # Histogram binning is discontinuous: scan fusion can move a margin across a
+    # bin edge through rounding. Compare router statistics at the same per-layer execution
+    # boundaries; the tests below separately cover compiled loss and gradients.
+    with jax.set_mesh(mesh), jax.disable_jit():
         expected_hidden, expected_metrics = model(batch.tokens, batch.attn_mask)
         stages = split_transformer(model, 2, layer_counts=(2, 3))
         hidden = stages[0].embed(batch.tokens)
@@ -175,3 +181,46 @@ def test_parked_host_copy_survives_device_alias_deletion_and_restores_bits():
     parked.delete()
     assert restored.sharding == sharding
     np.testing.assert_array_equal(np.asarray(restored).view(np.uint32), values.view(np.uint32))
+
+
+@pytest.mark.timeout(300)
+def test_context_pipeline_loss_and_gradients_match_unsharded_model(monkeypatch):
+    monkeypatch.setenv("JAX_NUM_CPU_DEVICES", "2")
+    run_on_cpu_devices(
+        """
+import dataclasses
+import runpy
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import NamedSharding, PartitionSpec as P
+from experiments.grug.moe_hero_ep.model import QbEstimator
+from experiments.grug.moe_hero_ep.pipeline import split_transformer
+
+helpers = runpy.run_path("tests/grug/test_grug_hero_pipeline.py")
+results = []
+for context_size in (1, 2):
+    mesh, model = helpers["_tiny_hero"](QbEstimator.HIST, context_size)
+    model = dataclasses.replace(model, config=dataclasses.replace(model.config, remat_mode="offload_carry"))
+    batch = helpers["_packed_batch"]()
+    spec = NamedSharding(mesh, P(None, "context"))
+    with jax.set_mesh(mesh):
+        tokens = jax.device_put(batch.tokens, spec)
+        weights = jax.device_put(batch.loss_weight, spec)
+        mask = batch.attn_mask
+        def loss(params):
+            if context_size == 1:
+                return params.next_token_loss(tokens, weights, mask=mask, logsumexp_weight=0.01)
+            stages = split_transformer(params, 2, layer_counts=(2, 3))
+            hidden = stages[0].embed(tokens)
+            for stage in stages:
+                hidden, _ = stage.run_blocks(hidden, mask)
+            assert jax.typeof(hidden).sharding.spec[1] == "context"
+            return stages[-1].cross_entropy_loss(stages[-1].finish(hidden), tokens, weights, logsumexp_weight=0.01)
+        result = jax.value_and_grad(loss)(model)
+        results.append([np.asarray(x) for x in jax.tree.leaves(result)])
+for actual, expected in zip(results[1], results[0], strict=True):
+    np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+""",
+        device_count=2,
+    )
