@@ -40,6 +40,12 @@ def _vllm_model_path(path: str) -> str:
     return unquote(parsed.path)
 
 
+def is_hub_model_id(weights: str) -> bool:
+    """True when *weights* is a bare Hugging Face repo id (``org/model``) rather than a path."""
+
+    return "://" not in weights and not weights.startswith("/") and len(weights.split("/")) == 2
+
+
 def select_tensor_parallel_size(
     num_attention_heads: int,
     num_chips: int,
