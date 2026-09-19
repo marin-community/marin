@@ -29,6 +29,7 @@ from marin.datakit.download.superior_reasoning import superior_reasoning_chat_no
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_chat_normalize_steps
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_chat_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_chat_normalize_steps
+from marin.datakit.download.synthetic_misconceptions import synthetic_misconceptions_chat_normalize_steps
 from marin.datakit.normalize import normalize_step
 from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
@@ -176,6 +177,7 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
         ("swe-rebench-openhands", swe_rebench_openhands_chat_normalize_steps),
         ("swe-zero-12m", swe_zero_12m_chat_normalize_steps),
         ("synthetic-1", synthetic1_chat_normalize_steps),
+        ("synthetic-misconceptions-conversations", synthetic_misconceptions_chat_normalize_steps),
     ]
     rows.extend(
         (name, lambda source_name=name: penfever_steps()[source_name])
@@ -206,6 +208,7 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     # Initial sharding estimates; token-store preparation measures the actual mixture sizes.
     token_counts["agenttrove-glm53-compactions"] = 0.25
     token_counts["wildchat-glm53-format-completions"] = 0.01
+    token_counts["synthetic-misconceptions-conversations"] = 0.002
     return {
         name: DatakitChatSource(
             name=name,
