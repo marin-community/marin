@@ -8,9 +8,11 @@ GPU work.
 ## Implementation and frozen inputs
 
 - MarinSkyRL branch `goal/score-centering-01a0bb6f`, pinned at
-  `218e492ed63f39bdce87d9f411f5b2bb01ef0deb` by the launcher. Qualification runs r10-r16
-  used earlier commit `e3186d29f29bfccddc37bca5c9940231b878761b`; the newer commit only
-  adds tail-mass metrics. The correction applies to the regular clipped PPO loss
+  `a7b51d31d7ed44157219b5852f49ffd69de4038b` by the launcher. Qualification runs r10-r16
+  used earlier commit `e3186d29f29bfccddc37bca5c9940231b878761b`; r17 uses
+  `c7b4ac4bdd9c57de18f9b01809f082227e2dae06`. The newer commits add tail-mass metrics,
+  explicit W&B finish, and an optional delayed weight-publication cadence. The correction applies to the
+  regular clipped PPO loss
   with truncated importance sampling (TIS). It uses behavior top-k token probabilities captured by
   the serving engine, plus current and stored-old trainer probabilities for the same token IDs.
   It leaves the sampled-token PPO/TIS term intact and adds a detached, per-token control variate.
@@ -27,8 +29,8 @@ GPU work.
   matched arms must keep that revision and their evaluation prompt membership fixed.
 - The Qwen smoke config has two optimizer updates, 32 prompts per update, four samples per
   prompt, 32 generation workers, an eight-group buffer, and a 1,024-token response cap. It
-  disables evaluation to isolate the training path. Qwen's default preset evaluates 256 held-out
-  prompts every five updates, with one greedy response per prompt. TIS is enabled with cap 2.0.
+  disables evaluation to isolate the training path. Qwen's default preset evaluates all 756 held-out
+  prompts in batches of 256 every five updates, with one greedy response per prompt. TIS is enabled with cap 2.0.
   The qualification correction width is 32; a width of 128 and capture-only controls are still
   needed before the main comparison. All work uses Iris `interactive` priority.
 
@@ -61,12 +63,14 @@ failures count toward the campaign's total task cost.
 | r8 | Yes | The fully async plain-chat HTTP client omitted behavior top-k from request and response. |
 | r9 | Yes | Top-k reached Megatron, but selected-logprob gathering assumed padded response positions survived left-padding compaction. |
 | r10 | Yes | Two Qwen optimizer updates completed with captured top-k 32, score centering, and exact sampled-token alignment. The terminal HF export is a separate child job. |
-| r11 | Yes | Top-k 128 score-centering cost and stability control; running. |
-| r12 | Yes | Top-k 32 capture with score centering disabled; running. |
-| r13 | Yes | TIS with sampled-token logprobs but no top-k capture; running. |
+| r11 | Yes | Top-k 128 score-centering cost control; two updates trained, export pending. |
+| r12 | Yes | Top-k 32 capture with score centering disabled; succeeded. |
+| r13 | Yes | TIS with sampled-token logprobs but no top-k capture; succeeded. |
 | r14 | Yes | Full-cap default schedule, TIS plus top-k 32 capture, eight-update age calibration; running. |
 | r15 | Yes | Full-cap 128-worker, age-limit-eight schedule, TIS plus top-k 32 capture, eight-update age calibration; running. |
-| r16 | Pending | Top-k 8 score-centering cost and approximation-width control; submitted. |
+| r16 | Yes | Top-k 8 score-centering cost control; two updates trained, export pending. |
+| r17 | Yes | Explicit W&B finish worked: the primary run reports `finished` and retains step 2. Tail-mass mean telemetry became NaN on padded rows; correction stayed finite. |
+| r18 | Pending | Tests masked tail-mass telemetry and every-two-step weight publication on four updates. |
 
 The r8 retained trajectory archive confirms sampled-token logprobs and exact engine token IDs
 reached generation without alignment alerts. It does not contain top-k evidence; the learner
@@ -85,6 +89,38 @@ first two measured training cycles took 75.3 and 91.1 seconds, of which weight s
 and 30.8 seconds. The cost controls use the same smoke cap and geometry, with [top-k 128 plus
 SC](https://wandb.ai/marin-community/marin-async-rl/runs/1pld6uwv) and [top-k 32 capture
 only](https://wandb.ai/marin-community/marin-async-rl/runs/iqmow1j2) as separate runs.
+
+Iris reports r10, r12 and r13 successful, with clean checkpoints and exports, but W&B marks
+their runs crashed and retains only the first training step. The terminal step is present in
+Iris `WANDB_MIRROR` logs. These runs used an older source pin that relied on process teardown to
+finish W&B; `c7b4ac4b` explicitly finishes the primary run after fully async trainer teardown.
+The Iris mirror and saved evaluation dumps remain the durable measurement sources for the
+earlier runs. The r17 top-k 8 smoke verifies the W&B finish fix.
+
+The r17 [W&B run](https://wandb.ai/marin-community/marin-async-rl/runs/ajbwdxcd) reports
+`finished` with both optimizer steps after explicit trainer shutdown. Its new tail-mass means are
+NaN because padded selected-logprob sentinels entered the telemetry reduction; score-centering
+losses and gradients remained finite. Commit `a7b51d31` masks those positions, with a CPU
+regression test, and r18 tests it on GPUs.
+
+The first smoke cycle gives a useful collection-cost control at almost equal consumed-token
+counts (about 115,000–116,000). TIS without top-k took 21.3 seconds and returned 0.09 MB per
+response; top-k 8 with SC took 37.1 seconds and 1.01 MB; top-k 32 capture without SC took
+77.0 seconds and 3.49 MB; top-k 32 with SC took 75.3 seconds and 3.50 MB; top-k 128 with SC
+took 261.6 seconds and 13.48 MB. These concurrent short runs suggest top-k collection and
+transport dominate the correction's incremental learner cost. They do not isolate cluster
+contention or predict Snowball throughput. The top-k 8 correction has not yet been qualified
+for its omitted tail probability.
+
+The full-cap [age-limit-four calibration](https://wandb.ai/marin-community/marin-async-rl/runs/g0iq70y0)
+used 64 generation workers. Its token-weighted mean consumed age rose from 0 to 2.72 by update
+5 and stayed below age four through update 8, with no stale-group rejection. The
+[age-limit-eight calibration](https://wandb.ai/marin-community/marin-async-rl/runs/b61qmnym)
+used 128 workers and consumed all update-5 tokens at age four. It took 510 seconds for its first
+training cycle, versus 279 seconds for the 64-worker schedule, while using fewer response tokens
+in that first batch. Both used TIS and top-k 32 capture without SC and scored 93/756 completed
+correct at update 5. This establishes age separation but is a scheduling comparison, not an SC
+effect estimate.
 
 ## Comparison contract
 
@@ -107,7 +143,23 @@ fraction from each dumped response's score and stop reason, after checking that 
 does not reshape correctness rewards. We will also hash the held-out prompts and ground truths to
 confirm the evaluated questions match across arms.
 
+The two full-cap calibration runs' step-0 dumps contain 256 GSM8K and 500 Math500 rows each.
+Their sorted prompt plus ground-truth SHA-256 is the same,
+`448615d2489352d13e1c4e994bfe458485d7503c1076ddf0aa608fd6c637048d`. The age-limit-four
+run had 78/756 completed correct (66 GSM8K, 12 Math500); the age-limit-eight run had 76/756
+(68 GSM8K, 8 Math500). The accepted stop was `stop` for all completed responses; length stops
+were 228 and 236. This step-0 variation occurred before any optimizer update despite the same
+model artifact and held-out membership, and should not be mistaken for a training effect.
+
 The Qwen screen decides which comparison merits a matched Snowball follow-up. A scheduling
 change, such as allowing more age or changing the worker pool, will be reported as a separate
 configuration comparison. No quality-loss margin or target score has been selected, so this study
 will not claim non-inferiority or time-to-target until one is fixed before confirmation.
+
+`analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
+`WANDB_MIRROR` lines. It writes separate CSV files for completion-aware quality and per-update
+age, mismatch, consumed tokens, cycle time, and nominal GPU-hours across inclusive step cycles.
+The step-cycle cost includes in-run evaluation and checkpointing but excludes setup, terminal
+export, and failed attempts; those require Iris task durations in the total-cost table. The
+script checks that prompt and ground-truth membership
+match at every evaluation step and across the compared runs.

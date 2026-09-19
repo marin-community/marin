@@ -112,7 +112,7 @@ class ChatTemplate:
 CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="marin_tokenizer")
 QWEN_CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="qwen3_without_thinking")
 # This revision includes the score-centering learner and exact behavior top-k capture.
-SCORE_CENTERING_SKYRL_COMMIT = "218e492ed63f39bdce87d9f411f5b2bb01ef0deb"
+SCORE_CENTERING_SKYRL_COMMIT = "a7b51d31d7ed44157219b5852f49ffd69de4038b"
 
 
 @dataclass(frozen=True)
@@ -542,6 +542,7 @@ def training_config(
         # Group-scale knobs of the fully asynchronous loop; see AsyncPreset for each.
         "fully_async": {
             "max_staleness_steps": preset.max_staleness_steps,
+            "weight_sync_interval_steps": 1,
             "num_parallel_generation_workers": preset.generation_workers,
             "max_buffered_groups": preset.max_buffered_groups,
             "pause_mode": PAUSE_MODE,
