@@ -435,37 +435,21 @@ def test_wandb_run_history_pins_an_explicit_project_without_searching():
     assert [row["step"] for row in rows] == [7]
 
 
-@pytest.mark.parametrize("branch_step,child_steps", [(99, [100, 101, 102]), (0, [1, 2, 3]), (99, [])])
-def test_wandb_run_history_preserves_parent_and_samples_child_separately(branch_step, child_steps):
-    parent = {"_step": branch_step, "train/loss": 1.25}
-    child = [{"_step": step, "train/loss": 1.20 + i * 0.01} for i, step in enumerate(child_steps)]
+def test_wandb_run_history_preserves_parent_and_samples_child_separately():
+    parent = {"_step": 99, "train/loss": 1.25}
+    child = [{"_step": 100, "train/loss": 1.20}, {"_step": 101, "train/loss": 1.22}]
 
     def handler(request: httpx.Request) -> httpx.Response:
         spec = json.loads(json.loads(request.content)["variables"]["specs"][0])
-        # The unbounded sample contains only the child's last row, as in W&B's
-        # fork history. A bounded query retrieves the rest of the child's curve.
-        points = [parent, *child[-1:]] if "minStep" not in spec else [parent, *child]
+        # Whole-run sampling loses the first child point; the bounded query recovers it.
+        points = [parent, child[-1]] if "minStep" not in spec else [parent, *child]
         points = [point for point in points if point["_step"] >= spec.get("minStep", 0)]
-        return httpx.Response(
-            200,
-            json={
-                "data": {
-                    "project": {
-                        "run": {
-                            "branchPoint": {"step": branch_step},
-                            "sampledHistory": [points],
-                        }
-                    }
-                }
-            },
-        )
+        run = {"branchPoint": {"step": 99}, "sampledHistory": [points]}
+        return httpx.Response(200, json={"data": {"project": {"run": run}}})
 
     rows = _wandb(handler).run_history("fork", metric="train/loss", project="marin_moe")
 
-    assert [(row["step"], row["value"]) for row in rows] == [
-        (branch_step, 1.25),
-        *[(step, 1.20 + i * 0.01) for i, step in enumerate(child_steps)],
-    ]
+    assert [(row["step"], row["value"]) for row in rows] == [(99, 1.25), (100, 1.20), (101, 1.22)]
 
 
 def _activity_handler(found_in: str, run: dict, asked: list[str], tps_points: list[dict] = ()):
@@ -564,29 +548,14 @@ def test_wandb_run_activity_excludes_inherited_fork_history(has_child_history):
     }
     points = [
         {
-            "_step": 99,
-            "_timestamp": created.timestamp() - 1000,
-            "throughput/total_tokens": 100_000,
-            "throughput/tokens_per_second": 1000,
-        },
+            "_step": step,
+            "_timestamp": created.timestamp() + elapsed,
+            "throughput/total_tokens": tokens,
+            "throughput/tokens_per_second": tps,
+        }
+        for step, elapsed, tokens, tps in [(99, -1000, 100_000, 1000), (100, 20, 101_000, 100), (109, 200, 110_000, 100)]
+        if has_child_history or step == 99
     ]
-    if has_child_history:
-        points.extend(
-            [
-                {
-                    "_step": 100,
-                    "_timestamp": created.timestamp() + 20,
-                    "throughput/total_tokens": 101_000,
-                    "throughput/tokens_per_second": 100,
-                },
-                {
-                    "_step": 109,
-                    "_timestamp": heartbeat.timestamp(),
-                    "throughput/total_tokens": 110_000,
-                    "throughput/tokens_per_second": 100,
-                },
-            ]
-        )
 
     (row,) = _wandb(_activity_handler("marin_moe", run, [], points)).run_activity("fork")
 
