@@ -21,9 +21,11 @@ from fsspec.implementations.local import LocalFileSystem
 from iris.env_resources import TaskResources
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import memory_budget
+from zephyr.reducer_balance import ReduceTarget
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
+    _KEY_HASH_COL,
     _PAYLOAD_COL,
     _SCATTER_MAX_ROW_GROUPS_PER_CHUNK,
     _SHARD_COL,
@@ -93,7 +95,7 @@ def test_scatter_roundtrip(tmp_path):
 
     recovered = []
     for shard_idx in range(num_shards):
-        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
+        shard = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(shard_idx))
         recovered.extend(_read_shard(shard))
 
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
@@ -106,10 +108,30 @@ def test_scatter_each_shard_gets_correct_items(tmp_path):
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=num_shards)
 
     for shard_idx in range(num_shards):
-        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
+        shard = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(shard_idx))
         recovered = sorted(_read_shard(shard), key=lambda x: x["v"])
         expected = sorted([x for x in items if _target(x["k"], num_shards) == shard_idx], key=lambda x: x["v"])
         assert recovered == expected, f"shard {shard_idx} mismatch"
+
+
+def test_scatter_reader_slices_partition_target_by_key(tmp_path):
+    items = [{"k": key, "v": value} for key in range(80) for value in range(2)]
+    scatter_paths = _build_shard(tmp_path, items, num_output_shards=2)
+    target = 0
+    expected = _read_shard(ScatterReader.from_sidecars(scatter_paths, ReduceTarget(target)))
+
+    slices = [
+        _read_shard(ScatterReader.from_sidecars(scatter_paths, ReduceTarget(target, index, 4))) for index in range(4)
+    ]
+
+    assert sorted((row["k"], row["v"]) for rows in slices for row in rows) == sorted(
+        (row["k"], row["v"]) for row in expected
+    )
+    key_slices: dict[int, set[int]] = {}
+    for index, rows in enumerate(slices):
+        for row in rows:
+            key_slices.setdefault(row["k"], set()).add(index)
+    assert all(len(indices) == 1 for indices in key_slices.values())
 
 
 def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
@@ -119,6 +141,7 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
         {
             _PAYLOAD_COL: [cloudpickle.dumps({"k": "a"})],
             _SHARD_COL: [0],
+            _KEY_HASH_COL: pl.Series([0], dtype=pl.UInt64),
             _SORT_KEY_COL: [OrderedDict([("key", b"a"), ("sort_value", None)])],
         }
     ).lazy()
@@ -134,7 +157,7 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
     schema = frame.collect_schema()
     reader = ScatterReader(
         chunk_files=[_ChunkFile(path=path, schema=schema)],
-        target_shard=0,
+        reduce_target=ReduceTarget(0),
         avg_item_bytes=1.0,
     )
     rows = reader.get_frames()[0].collect().to_dicts()
@@ -157,7 +180,7 @@ def test_scatter_roundtrip_sorted_chunks(tmp_path):
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=2)
 
     for shard_idx in range(2):
-        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
+        shard = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(shard_idx))
         for lf in shard.get_frames():
             chunk = list(_dataframe_to_items(lf.collect()))
             keys = [_key(x) for x in chunk]
@@ -179,7 +202,7 @@ def test_merge_sorted_chunks_basic(tmp_path):
     writer.write(_items_to_dataframe(items[2:], _key, None, 1))
     scatter_paths = list(writer.close())
 
-    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    shard = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(0))
     external_dir = tmp_path / "sort_work"
     merged = list(shard.merge_sorted_chunks(external_sort_dir=str(external_dir)))
 
@@ -201,7 +224,7 @@ def test_merge_sorted_chunks_secondary_sort(tmp_path):
     writer.write(_items_to_dataframe([items[1]], _key, lambda x: x["ts"], 1))
     scatter_paths = list(writer.close())
 
-    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    shard = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(0))
     merged = list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path)))
 
     assert len(merged) == 2
@@ -234,7 +257,7 @@ def test_scatter_sort_fn_null_batch_then_concrete(tmp_path):
     writer.write(frame_concrete)
     scatter_paths = list(writer.close())
 
-    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    shard = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(0))
     recovered = _read_shard(shard)
     assert sorted(x["v"] for x in recovered) == [0, 1, 2, 3]
 
@@ -264,7 +287,7 @@ def test_merge_sorted_chunks_cross_shard_null_sort_value(tmp_path):
     )
     paths_1 = list(writer_1.close())
 
-    shard = ScatterReader.from_sidecars(paths_0 + paths_1, target_shard=0)
+    shard = ScatterReader.from_sidecars(paths_0 + paths_1, ReduceTarget(0))
     # Currently raises SchemaError: struct field sort_value is Null in shard 0's
     # file but Int64 in shard 1's file; pl.merge_sorted requires identical schemas.
     merged = list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort")))
@@ -292,7 +315,7 @@ def test_scatter_reader_uses_sidecar_schemas_at_scan_boundary(tmp_path, monkeypa
         writer.write(frame)
         paths.extend(writer.close())
 
-    reader = ScatterReader.from_sidecars(paths, target_shard=0)
+    reader = ScatterReader.from_sidecars(paths, ReduceTarget(0))
     polars_scan_parquet = pl.scan_parquet
     scanned_schemas = []
 
@@ -322,7 +345,7 @@ def test_scatter_with_combiner(tmp_path):
     writer.write(_items_to_dataframe(items, _key, None, 1))
     scatter_paths = list(writer.close())
 
-    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    shard = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(0))
     recovered = _read_shard(shard)
     assert len(recovered) == 1
     assert recovered[0] == {"k": "a", "v": 3}
@@ -338,7 +361,7 @@ def test_merge_sorted_chunks_external_trigger(tmp_path):
         writer.write(_items_to_dataframe([items[i]], _key, None, 1))
     scatter_paths = list(writer.close())
 
-    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    shard = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(0))
 
     external_dir = tmp_path / "sort_work"
     external_dir.mkdir()
@@ -356,7 +379,7 @@ def test_merge_sorted_chunks_skips_empty_target_shard(tmp_path):
     populated_shard = _target(key, 2)
     empty_shard = 1 - populated_shard
     scatter_paths = _build_shard(tmp_path, [{"k": key, "v": 1}], num_output_shards=2)
-    reader = ScatterReader.from_sidecars(scatter_paths, empty_shard)
+    reader = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(empty_shard))
 
     assert reader.total_chunks == 0
     assert reader.shard_payload_bytes == 0
@@ -383,7 +406,7 @@ def test_scatter_reader_skips_mappers_with_no_rows_for_target(tmp_path):
             )
         )
 
-    reader = ScatterReader.from_sidecars(scatter_paths, 0)
+    reader = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(0))
 
     assert reader.total_chunks == 1, "reducer kept a chunk file from the mapper that wrote nothing for it"
     assert list(reader.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort"))) == [{"k": keys[0], "v": 0}]
@@ -397,7 +420,7 @@ def test_scatter_null_keys(tmp_path):
 
     # Both should go to the same shard
     shard_idx = deterministic_hash(None) % num_shards
-    shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
+    shard = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(shard_idx))
     recovered = _read_shard(shard)
     assert len(recovered) == 2
 
@@ -405,7 +428,7 @@ def test_scatter_null_keys(tmp_path):
 def test_scatter_empty_input(tmp_path):
     """Scatter handles zero items gracefully."""
     scatter_paths = _build_shard(tmp_path, [], num_output_shards=1)
-    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    shard = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(0))
     assert _read_shard(shard) == []
     assert list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path))) == []
 
@@ -442,7 +465,7 @@ def test_scatter_handles_arbitrary_python_objects(tmp_path):
 
     recovered = []
     for shard_idx in range(2):
-        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
+        shard = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(shard_idx))
         recovered.extend(_read_shard(shard))
 
     def _ord(x):
@@ -463,7 +486,7 @@ def test_scatter_byte_budget_preserves_all_items(tmp_path):
 
     recovered = []
     for shard_idx in range(num_shards):
-        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
+        shard = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(shard_idx))
         recovered.extend(_read_shard(shard))
 
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
@@ -479,6 +502,7 @@ def test_scatter_bounds_parquet_row_groups(tmp_path):
                 dtype=pl.Binary,
             ),
             _SHARD_COL: pl.Series(range(num_targets), dtype=pl.Int32),
+            _KEY_HASH_COL: pl.Series(range(num_targets), dtype=pl.UInt64),
             _SORT_KEY_COL: [
                 OrderedDict([("key", target.to_bytes(4, "big")), ("sort_value", None)]) for target in range(num_targets)
             ],
@@ -494,7 +518,7 @@ def test_scatter_bounds_parquet_row_groups(tmp_path):
     chunk_path = f"{data_path}c0000.parquet"
     reader = ScatterReader(
         chunk_files=[_ChunkFile(path=chunk_path, schema=pl.scan_parquet(chunk_path).collect_schema())],
-        target_shard=513,
+        reduce_target=ReduceTarget(513),
         avg_item_bytes=1.0,
     )
     assert _read_shard(reader) == [{"k": 513}]
@@ -534,7 +558,7 @@ def test_scatter_auto_flush_uses_task_memory_budget(tmp_path):
     finally:
         _worker_ctx_var.reset(token)
 
-    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    shard = ScatterReader.from_sidecars(scatter_paths, ReduceTarget(0))
     assert shard.total_chunks == 2
     assert sorted(row["v"] for row in _read_shard(shard)) == sorted([*range(100), *range(100)])
 
@@ -826,7 +850,7 @@ def test_merge_sorted_frames_across_source_shards(tmp_path):
         writer.write(_items_to_dataframe(items, _key, None, 1))
         writer.close()
 
-    shard = ScatterReader.from_sidecars(paths, target_shard=0)
+    shard = ScatterReader.from_sidecars(paths, ReduceTarget(0))
     assert shard.total_chunks == 2, "expected one Parquet file per source shard"
 
     external_dir = tmp_path / "sort_work"
@@ -891,7 +915,7 @@ def test_scatter_reader_reports_input_totals_including_empty_targets(tmp_path):
     for row in rows:
         expected_rows[deterministic_hash(row["k"]) % 8] += 1
     for target, count in enumerate(expected_rows):
-        reader = ScatterReader.from_sidecars(paths, target)
+        reader = ScatterReader.from_sidecars(paths, ReduceTarget(target))
         assert reader.shard_payload_rows == count == len(_read_shard(reader))
         assert reader.shard_payload_bytes == sum(
             len(cloudpickle.dumps(row)) for row in rows if deterministic_hash(row["k"]) % 8 == target
@@ -899,5 +923,5 @@ def test_scatter_reader_reports_input_totals_including_empty_targets(tmp_path):
         assert reader.contributing_sidecars == sum(
             any(deterministic_hash(row["k"]) % 8 == target for row in chunk) for chunk in (rows[:5], rows[5:], [])
         )
-    empty_reader = ScatterReader.from_sidecars([], 0)
+    empty_reader = ScatterReader.from_sidecars([], ReduceTarget(0))
     assert empty_reader.shard_payload_rows == empty_reader.shard_payload_bytes == empty_reader.contributing_sidecars == 0

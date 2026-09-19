@@ -7,7 +7,11 @@ import hashlib
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from fray.types import ResourceConfig
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
+from zephyr.reducer_balance import ReducerBalancePolicy
+from zephyr.shard_keys import deterministic_hash
 from zephyr.writers import infer_arrow_schema
 
 
@@ -204,6 +208,53 @@ def test_group_by_num_output_shards_smaller_than_input(zephyr_ctx, tmp_path):
     )
     for p in output_files:
         assert "of-00003" in p, f"unexpected total in {p}"
+
+
+def test_group_by_balances_oversized_target_into_unique_output_tasks(local_client, tmp_path):
+    num_targets = 4
+    hot_target = 0
+    hot_keys: list[int] = []
+    cold_keys: list[int] = []
+    candidate = 0
+    while len(hot_keys) < 40 or len(cold_keys) < num_targets - 1:
+        target = deterministic_hash(candidate) % num_targets
+        if target == hot_target and len(hot_keys) < 40:
+            hot_keys.append(candidate)
+        elif target > 0 and all(deterministic_hash(key) % num_targets != target for key in cold_keys):
+            cold_keys.append(candidate)
+        candidate += 1
+
+    rows = [{"key": key, "value": key} for key in hot_keys + cold_keys]
+    output_pattern = str(tmp_path / "out" / "data-{shard:05d}-of-{total:05d}.parquet")
+    context = ZephyrContext(
+        client=local_client,
+        max_workers=4,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="balanced-reducers",
+        reducer_balance=ReducerBalancePolicy(skew_factor=2, max_slices=4, min_split_bytes=0),
+    )
+    dataset = (
+        Dataset.from_list(rows)
+        .reshard(2)
+        .group_by(
+            key=lambda row: row["key"],
+            reducer=lambda key, items: {"key": key, "count": sum(1 for _ in items)},
+            num_output_shards=num_targets,
+        )
+        .write_parquet(output_pattern)
+    )
+
+    outcome = context.execute(dataset)
+    output_files = outcome.results
+
+    assert outcome.counters["zephyr/reducer_splits"] == 3
+    assert len(output_files) == len(set(output_files)) == 7
+    assert all("of-00007" in path for path in output_files)
+    actual = [row for path in output_files for row in pq.read_table(path).to_pylist()]
+    assert sorted(actual, key=lambda row: row["key"]) == [
+        {"key": key, "count": 1} for key in sorted(hot_keys + cold_keys)
+    ]
 
 
 def test_group_by_with_hash_key_large(zephyr_ctx, large_document_dataset):
