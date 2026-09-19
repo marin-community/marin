@@ -11,16 +11,18 @@ from pathlib import Path
 from taskcompendium.models import ExactAnswer, Source, TaskRequirements, TaskSpec
 from taskcompendium.rendering import AnswerFormat, Rendering, render_instruction
 
+DIRECT_CHAT_ENVIRONMENT = "direct_chat"
+
 
 @dataclass(frozen=True)
 class HarborTaskBinding:
     """The environment and tools this Harbor lowering exposes to the agent."""
 
-    environment: str = "direct_chat"
+    environment: str = DIRECT_CHAT_ENVIRONMENT
     tools: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.environment != "direct_chat" or self.tools:
+        if self.environment != DIRECT_CHAT_ENVIRONMENT or self.tools:
             raise ValueError("This lowering supports direct chat without tools")
 
 
