@@ -112,7 +112,7 @@ class ChatTemplate:
 CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="marin_tokenizer")
 QWEN_CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="qwen3_without_thinking")
 # This revision includes the score-centering learner and exact behavior top-k capture.
-SCORE_CENTERING_SKYRL_COMMIT = "a7b51d31d7ed44157219b5852f49ffd69de4038b"
+SCORE_CENTERING_SKYRL_COMMIT = "e291ade790a7046f77ab18d8c96ecbc7c5185895"
 
 
 @dataclass(frozen=True)
@@ -472,6 +472,9 @@ def training_config(
         "eval_interval": preset.eval_interval,
         # Keep per-answer dumps so completion, correctness, and truncation can be re-scored.
         "dump_eval_results": True,
+        # Optional token-level A/B/C probe; it adds a frozen reference scorer without
+        # changing the training loss.
+        "mismatch_decomposition": {"enabled": False, "sample_rows_per_step": 8},
         # No periodic HF export; the terminal export the launcher performs after training stays.
         "hf_save_interval": -1,
         # Resume from the latest resumable checkpoint on resubmission.
