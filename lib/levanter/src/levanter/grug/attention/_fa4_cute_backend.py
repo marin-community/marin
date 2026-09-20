@@ -835,6 +835,9 @@ def _segmented_flash_attention_custom_vjp_bwd(
     dq, dk, dv = segmented_flash_attention_backward(
         q, k, v, out, cot, lse, lower_bounds, valid, rel_bias, softmax_scale=softmax_scale, kernel_config=kernel_config
     )
+    if os.environ.get("FAST_TRACK_INKLING_ZERO_DA") == "1":
+        # Throughput-isolation only (WRONG grads): measures fwd + fused dq/dk/dv without the dA pass.
+        return dq, dk, dv, None, None, jnp.zeros_like(rel_bias)
     d_rel_bias = rel_bias_backward(
         jnp.swapaxes(q, 1, 2),
         jnp.swapaxes(k, 1, 2),
