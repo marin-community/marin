@@ -169,9 +169,9 @@ def segmented_flash_attention_backward(
         raise _optional_dependency_error() from exc
 
     qhead_per_kvhead = q.shape[2] // k.shape[2]
-    # The sm90-native backward path (external flash_attn.cute) has no Inkling bias support, so when a
-    # rel_bias is present route to the segmented backward, which adds it in its S-recompute.
-    if rel_bias is None and kernel_config.sm90_backward is not None and qhead_per_kvhead > 1 and q.shape[-1] == 128:
+    # The sm90-native (Hopper WGMMA) backward gives the fast dQ/dK/dV path. The Inkling rel_bias is
+    # added to its recomputed scores via the kernel's score_mod, so it is used with or without a bias.
+    if kernel_config.sm90_backward is not None and qhead_per_kvhead > 1 and q.shape[-1] == 128:
         sm90_config = kernel_config.sm90_backward
         sparse_metadata = _packed_segment_backward_block_sparse_indices_with_full(
             lower_bounds,
@@ -179,6 +179,8 @@ def segmented_flash_attention_backward(
             tile_m=sm90_config.tile[0],
             tile_n=sm90_config.tile[1],
         )
+        # rel_bias (if any) is added in the kernel's score_mod so dQ/dK/dV are correct; the bias
+        # gradient dA is computed by the custom_vjp bwd (a banded gather of dScore), not here.
         return segmented_flash_attention_backward_sm90_native(
             q,
             k,
@@ -192,6 +194,7 @@ def segmented_flash_attention_backward(
             sparse_metadata.partial_block_idx,
             sparse_metadata.full_block_cnt,
             sparse_metadata.full_block_idx,
+            rel_bias=rel_bias,
             softmax_scale=softmax_scale,
             kernel_config=kernel_config,
             window_size_left=None,
@@ -246,11 +249,17 @@ def segmented_flash_attention_backward_sm90_native(
     full_block_cnt: jax.Array | None = None,
     full_block_idx: jax.Array | None = None,
     *,
+    rel_bias: jax.Array | None = None,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
     window_size_left: int | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Run the native SM90 segmented backward path for D128 GQA kernels."""
+    """Run the native SM90 segmented backward path for D128 GQA kernels.
+
+    ``rel_bias`` (Inkling A [B, Hq, S, L]) is added to the recomputed scores via the kernel's
+    ``score_mod`` so dQ/dK/dV match the biased forward; ``None`` runs the plain (RoPE) path.
+    """
+    use_rel_bias = rel_bias is not None
     _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale)
     _validate_backward_inputs(q, k, v, out, dout, lse)
     sm90_config = kernel_config.sm90_backward
@@ -306,6 +315,7 @@ def segmented_flash_attention_backward_sm90_native(
         qhead_per_kvhead=q.shape[2] // k.shape[2],
         config=sm90_config,
         window_size_left=window_size_left,
+        use_rel_bias=use_rel_bias,
     )
     qhead_per_kvhead = q.shape[2] // k.shape[2]
     if qhead_per_kvhead == 1:
@@ -326,6 +336,8 @@ def segmented_flash_attention_backward_sm90_native(
     dpsum, lse_log2, _dq_accum = preprocess_call(out, dout, lse)
 
     backward_input_spec, backward_output_spec = _cutlass_attention_backward_sm90_accum_specs(modules, vector_elems=8)
+    if not use_rel_bias:
+        rel_bias = jnp.zeros((q.shape[0], q.shape[2], q.shape[1], 1), dtype=q.dtype)
     backward_output_shape_dtype = _cutlass_attention_backward_sm90_backward_output_shapes(q, k, v, sm90_config.tile)
     backward_call = cutlass_call(
         backward_launcher,
@@ -348,6 +360,7 @@ def segmented_flash_attention_backward_sm90_native(
         mask_block_idx,
         full_block_cnt,
         full_block_idx,
+        rel_bias.astype(q.dtype),
     )
     postprocess_input_spec, postprocess_output_spec = _cutlass_attention_backward_sm90_postprocess_specs(
         modules,
@@ -471,6 +484,8 @@ def _cutlass_attention_backward_sm90_accum_specs(
     metadata_spec = tensor_spec(mode=(0, 1), static=True)
     sparse_cnt_spec = tensor_spec(mode=(0, 1, 2), static=True)
     sparse_idx_spec = tensor_spec(mode=(0, 1, 2, 3), static=True)
+    # rel_bias A [B,Hq,S,L] -> kernel [S,L,Hq,B] (mode=(2,3,1,0)); zero [.,1] when unused.
+    rel_bias_spec = tensor_spec(mode=(2, 3, 1, 0), static=True)
     input_spec = (
         qkv_spec,
         qkv_spec,
@@ -484,6 +499,7 @@ def _cutlass_attention_backward_sm90_accum_specs(
         sparse_idx_spec,
         sparse_cnt_spec,
         sparse_idx_spec,
+        rel_bias_spec,
     )
     return input_spec, (scratch_spec, scratch_spec, scratch_spec)
 

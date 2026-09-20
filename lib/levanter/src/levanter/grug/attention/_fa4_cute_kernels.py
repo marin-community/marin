@@ -1240,8 +1240,15 @@ def segmented_flash_attention_backward_sm90_launcher(
     qhead_per_kvhead: int,
     config: Flash4CuteSm90BackwardConfig,
     window_size_left: int | None = None,
+    use_rel_bias: bool = False,
 ) -> Any:
-    """Build the native Hopper segmented backward mainloop launcher."""
+    """Build the native Hopper segmented backward mainloop launcher.
+
+    When ``use_rel_bias`` is set, an Inkling relative-position bias A (passed as the third aux tensor,
+    kernel layout ``[S, L, Hq, B]``) is added to the recomputed scores via ``score_mod`` so dQ/dK/dV
+    match the biased forward. The bias is additive in the logits, so its backward chain rule is the
+    identity for dQ/dK/dV (``score_mod_bwd=None``); the bias gradient dA is computed separately.
+    """
     _validate_sm90_native_config(
         head_dim=head_dim,
         head_dim_v=head_dim_v,
@@ -1294,6 +1301,35 @@ def segmented_flash_attention_backward_sm90_launcher(
         mask_value = query_in_bounds and query_valid and key_after_lower_bound and key_before_query
         return utils_module.scalar_to_ssa(mask_value, cutlass.Boolean)
 
+    # Inkling relative-position bias score_mod: add A[query, delta=query-key] (natural logit units)
+    # to the recomputed score tile. score_mod sees scores already multiplied by softmax_scale, so we
+    # add A directly (no scale conversion). Additive bias -> identity backward for dQ/dK/dV, so no
+    # score_mod_bwd. head_idx/q_idx/kv_idx arrive as per-lane SSA vectors (logical q head for GQA).
+    inkling_score_mod = None
+    if use_rel_bias:
+
+        @cute.jit
+        def _grug_inkling_score_mod(score, batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors):
+            del seqlen_info
+            rel_bias_t = aux_tensors[2]  # kernel layout [S, L, Hq, B]
+            rel_extent = rel_bias_t.shape[1]
+            vec = cutlass.const_expr(cute.size(score.shape))
+            b0 = batch_idx[0]
+            result = cute.make_rmem_tensor(vec, cutlass.Float32)
+            for j in cutlass.range_constexpr(vec):
+                delta = q_idx[j] - kv_idx[j]
+                delta_safe = cutlass.min(cutlass.max(delta, cutlass.Int32(0)), rel_extent - 1)
+                s = score[j]
+                in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(cutlass.Int32(-1), delta)
+                if in_band:
+                    # score arrives already multiplied by softmax_scale (softmax_scale_log2 == LOG2E for
+                    # score_mod), so add the natural-unit bias A directly (no 1/scale factor).
+                    s = s + rel_bias_t[q_idx[j], delta_safe, head_idx[j], b0].to(cutlass.Float32)
+                result[j] = s
+            return result.load()
+
+        inkling_score_mod = _grug_inkling_score_mod
+
     tile_m, tile_n = config.tile
     backward = FlashAttentionBackwardSm90(
         cute_dtype,
@@ -1316,10 +1352,10 @@ def segmented_flash_attention_backward_sm90_launcher(
         AtomLayoutMdQ=config.atom_layout_m_dq,
         num_threads=config.num_threads,
         V_in_regs=False,
-        score_mod=None,
+        score_mod=inkling_score_mod,
         score_mod_bwd=None,
         mask_mod=None if use_builtin_sliding_window else _grug_segment_mask_mod,
-        has_aux_tensors=not use_builtin_sliding_window,
+        has_aux_tensors=use_rel_bias or not use_builtin_sliding_window,
         q_subtile_factor=1,
         dQ_single_wg=config.dq_single_wg,
     )
@@ -1372,6 +1408,7 @@ def segmented_flash_attention_backward_sm90_launcher(
         mask_block_idx: cute.Tensor,
         full_block_cnt: cute.Tensor,
         full_block_idx: cute.Tensor,
+        rel_bias: cute.Tensor,
         dq_accum: cute.Tensor,
         dk_accum: cute.Tensor,
         dv_accum: cute.Tensor,
@@ -1417,7 +1454,7 @@ def segmented_flash_attention_backward_sm90_launcher(
                 dk_accum_gmem,
                 dv_accum_gmem,
                 softmax_scale,
-                aux_data=AuxData(tensors=(lower_bounds, valid)),
+                aux_data=AuxData(tensors=(lower_bounds, valid, rel_bias) if use_rel_bias else (lower_bounds, valid)),
                 blocksparse_tensors=blocksparse_tensors,
                 stream=stream,
             )

@@ -102,3 +102,42 @@ GPU validation order: (1) fwd vs reference (`attention(...,implementation="refer
   score_mod adds bias[b,h,q, clamp(q-k)] for 0<=q-k<L; score_mod_bwd = identity (dA is computed
   separately by rel_bias_backward in the custom_vjp, not the kernel). Then wire the custom_vjp
   (rel_bias as differentiable arg; bwd returns dq,dk,dv,dA) and the wrapper.
+
+---
+
+## sm90-native backward fork — validated design (2026-09-20)
+
+### Why (data)
+d512 H100 b28, zero-dA isolation probes:
+- RoPE (sm90-native bwd): **8.04% MFU** (2.30M tps)
+- Inkling fwd + fused segmented dq/dk/dv, **no dA**: 6.49% (rel_extent=1024), 7.13% (rel_extent=256)
+- Inkling full correct (blocked dA): 5.25%
+
+Two independent costs:
+1. **Fixed segmented-vs-sm90 overhead** ~1.55pt (extrapolated ~7.38% floor even at zero band/no-dA). The rel_bias forces the bwd OFF the external Hopper WGMMA kernel onto our Ampere segmented kernel.
+2. **dA** ~1.24pt (a standalone banded attention-sized recompute).
+Neither alone reaches the <10%-impact target (>7.24% MFU). Must fix BOTH.
+
+### Key facts discovered
+- The external `flash_attn.cute.flash_bwd_sm90.FlashAttentionBackwardSm90` already exposes FlexAttention-style hooks: `score_mod`, `score_mod_bwd`, `has_aux_tensors`, `aux_data=AuxData(tensors=(...))`. The grug sm90 launcher currently passes `score_mod=None`. **No source fork needed** — inject via callbacks.
+- Wheel `flash_attn_4-4.0.0b28-py3-none-any.whl` is pure-python; source extracted at `../fa4wheel/extracted/flash_attn/cute/` for reference (softmax.py apply_score_mod_inner/bwd_inner, flash_bwd_sm90.py apply_score_mod/apply_score_mod_bwd, utils.py scalar_to_ssa/ssa_to_scalar/AuxData/compute_softmax_scale_log2).
+- **score_mod signature**: `score_mod(score_ssa, batch_idx, head_idx, q_idx=?, kv_idx=?, seqlen_info=?, aux_tensors=?)` → modified score_ssa. All are size-`vec_size` SSA vectors; batch/head are broadcast-constant per tile. `call_score_mod` passes them as kwargs.
+- **score convention with score_mod present**: `compute_softmax_scale_log2` returns `(LOG2E, softmax_scale)` — softmax_scale is applied to raw qk BEFORE score_mod, and score_mod sees NATURAL-unit scores. So an additive logit bias A is added directly (no /softmax_scale conversion, unlike the Ampere fwd). exp2(x*LOG2E - lse).
+- **Additive-bias backward is identity for dq/dk/dv**: S=qk+A ⇒ d/d(qk)=1 ⇒ score_mod_bwd returns grad unchanged.
+- **dA is free**: dA[b,h,i,delta] = dS[b,h,i,i-delta] (in band). The kernel computes `grad_val = P*(dP - dPsum)` = dS right before calling score_mod_bwd. Each (q,kv)→(q,delta) is unique ⇒ score_mod_bwd can SCATTER grad_val into a dA output aux tensor with no races, and return grad unchanged.
+
+### Implementation steps
+**STEP 1 (fast dq/dk/dv, dA still standalone):**
+- Dispatch (`_fa4_cute_backend.py` ~L174): allow sm90-native path when rel_bias is not None (drop the `rel_bias is None` guard; still require sm90_backward/GQA/d128).
+- `segmented_flash_attention_backward_sm90_native`: add rel_bias as an operand + input spec (mode like fwd: A[B,Hq,S,L] -> kernel [S,L,Hq,B]).
+- `segmented_flash_attention_backward_sm90_launcher`: build an Inkling `score_mod` (adds A gathered by (q_meta, delta=q-kv), gated 0<=delta<rel_extent, using the fwd scalar idiom per-lane over vec_size) and pass `score_mod=_inkling_score_mod, score_mod_bwd=_identity, has_aux_tensors=True, aux_data.tensors=(lower_bounds, valid, rel_bias)`. Keep `_grug_segment_mask_mod` for the causal/segment mask (uses aux[0],aux[1]).
+- Keep dA via existing standalone `rel_bias_backward`. Measure MFU (expect ~6.8-7%).
+
+**STEP 2 (free dA): eliminate standalone pass**
+- Add a dA output tensor to the sm90 launcher's cutlass_call output specs (zero-filled).
+- score_mod_bwd scatters grad_val into dA[b,h,q,delta] per-lane (in band); returns grad unchanged.
+- Drop the standalone rel_bias_backward when on sm90 path. Measure (target <10% impact = >7.24%).
+
+### Risks
+- CuTe DSL per-lane aux gather/scatter inside a @cute.jit score_mod (vec_size lanes): extract `q_idx_ssa[j]`, build result via rmem tensor + `.load()`. Idiom mirrors apply_score_mod_inner's per-lane index extraction; validate with a GPU grad probe FIRST (correctness before MFU).
+- fwd (Ampere, materialized A) and bwd (score_mod reading same A) must add identical A. Both use same aux A, same band gate ⇒ P matches.
