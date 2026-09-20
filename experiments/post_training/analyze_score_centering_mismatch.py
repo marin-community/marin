@@ -75,12 +75,14 @@ def summarize(prefix: str) -> list[dict]:
     rows = []
     for step, fs, path in sources:
         record = _read(fs, path)
-        if record["schema_version"] != 1 or record["consuming_step"] != step:
+        if record["schema_version"] not in (1, 2) or record["consuming_step"] != step:
             raise ValueError(f"unexpected diagnostic schema or step in {path}")
         if record["reference_version"] != 0 or record["other_version_tokens"]:
             raise ValueError(f"{path}: this fixed-version analysis requires only published version zero")
         if record["reference_tokens"] != record["selected_tokens"]:
             raise ValueError(f"{path}: selected tokens lack a matching-weight trainer score")
+        if record["schema_version"] == 2 and record["matched_tokens"] != record["selected_tokens"]:
+            raise ValueError(f"{path}: selected tokens lack a matched B score")
         expected_age = step - 1
         if record["summaries"]["all"] != record["summaries"][f"age_{expected_age}"]:
             raise ValueError(f"{path}: unexpected policy age")
