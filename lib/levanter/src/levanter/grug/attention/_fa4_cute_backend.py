@@ -817,10 +817,12 @@ def _segmented_flash_attention_custom_vjp_bwd(
             q, k, v, out, cot, lse, lower_bounds, valid, softmax_scale=softmax_scale, kernel_config=kernel_config
         )
         return dq, dk, dv, None, None, jnp.zeros_like(rel_bias)
-    # Inkling bias present. Fused path: the segmented backward computes dq/dk/dv with the bias in its
-    # S-recompute (efficient, no S^2); dA is the verified banded gather of dScore. Set
-    # FAST_TRACK_INKLING_REF_BWD=1 to fall back to the materialized reference VJP (slow but simplest).
-    if os.environ.get("FAST_TRACK_INKLING_REF_BWD") == "1":
+    # Inkling bias present. Default: materialized reference VJP (correct; ~2.8% MFU at d512 because it
+    # forms an [S,S] score matrix). Opt in to the fused segmented backward with
+    # FAST_TRACK_INKLING_FUSED_BWD=1 -- correct at single-config shapes, but the external
+    # flash_attn.cute preprocess/postprocess aux kernels are version-drifted with shape / local-vs-global
+    # dependent arities, so it does not yet run across the interleaved sliding-window + global layers.
+    if os.environ.get("FAST_TRACK_INKLING_FUSED_BWD") != "1":
         dq, dk, dv, d_rel_bias = _reference_bias_vjp(q, k, v, lower_bounds, valid, rel_bias, cot, softmax_scale)
         return (
             dq.astype(q.dtype),
