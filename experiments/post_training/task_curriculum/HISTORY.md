@@ -1,7 +1,7 @@
 # Task curriculum experiment history
 
-This file summarizes the completed experiments that shaped the current schema, rubric, prompts, and cross-domain v1
-catalog. Detailed task-level inputs and outputs remain in the cited external artifacts rather than the repository.
+This file summarizes the completed experiments that shaped the current schema, rubric, prompts, and cross-domain
+catalogs. Detailed task-level inputs and outputs remain in the cited external artifacts rather than the repository.
 
 ## Three-area pilot
 
@@ -42,3 +42,30 @@ Wave nine added the remaining 12 C-series areas. The retired 34-root catalog con
 ## Wave ten: cross-domain v1
 
 Wave ten replaced the practice-heavy C-series roots with 45 D-series subjects spanning academic, professional, service, sports, safety, transport, and practical domains. All subjects received one generation, blind-task, review, fit, and bounded-repair cycle. The selected catalog contains 2,252 nodes, including 1,853 capabilities, and fits 993/1,072 valid frozen tasks (92.6%); its mean holistic score is 81.3, three subjects pass promotion, and seven retain blocking repeated gaps. The canonical catalog is `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.18-72a763b98f9e/curriculum.yaml` with SHA-256 `72a763b98f9ecf7f8f598b788c4f59e7ace213c01a30b403768a8f8f16f55382`; its evidence archive SHA-256 is `cd127af6afbffc188e94359d2995ad833e8a54ce8d0962dc036592e0d02cfc74`.
+
+## Source survey and bounded audit
+
+A five-subject survey tested public course sequences, textbook exercise families, and professional standards as
+direct generator inputs. Source-first graphs improved sampled fit from 99/120 to 106/120 but reduced the paired
+holistic mean from 84.4 to 71.6 by copying course groupings and sequence into capabilities and prerequisites. A v3
+follow-up instead applied source evidence as bounded patches to D01, D08, D17, D31, and D41 and added a real-task D02
+command-environment repair. V3 was preferred to both alternatives in all five anonymous comparisons, with a mean
+holistic score of 93.4. The source survey and v3 remain immutable experimental artifacts documented in
+`source_survey/README.md` and `source_audit/README.md`.
+
+## Production bounded repair: cross-domain v2
+
+The production pass started from v3 and attempted one bounded repair on 42 roots, leaving D08, D17, and D31
+unchanged. Anonymous same-call review preferred 41 repairs and tied D32, whose baseline was retained. The paired mean
+rose from 78.36 to 92.81. The selected catalog contains 2,405 nodes: 1,999 capabilities and 406 groups. Twenty-four
+subjects are `pilot_ready`; 21 are preserved as provisional rather than recursively optimized. Frozen fit is
+1,001/1,080, but is explicitly a reused diagnostic rather than a fresh holdout because the earlier baseline repair
+had seen an earlier fit summary.
+
+A separate routing audit placed all 24 practical TaskTrove shell, repository-workspace, and bug-repair tasks in D02.
+Twenty-one mapped to one complete capability; three distinct gaps did not justify another catch-all. Evaluation-policy
+and AAII metadata found subject homes across all 45 roots, while ten entries were correctly treated as reusable task
+mechanics rather than subjects. The canonical catalog is
+`s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/curriculum.yaml`, with SHA-256
+`2578589fb0de23b179765e6eba999730c7117b9f083140b266ccc391dde9685d`. Its evidence archive SHA-256 is
+`f9d495bcf5afd3b2ae01eb8de60abc9c99e00abfbcd8e90709cce7424d50d74a`.

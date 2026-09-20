@@ -1,5 +1,8 @@
 # Bounded source-audit v3
 
+> Historical experiment: cross-domain v2 is now canonical. This report preserves the six-root v3 result that
+> established the production bounded-repair method.
+
 V3 applies source and real-task evidence as small patches to the cross-domain v1 catalog. It does not regenerate a
 subject from source headings. In a five-subject comparison, v3 was preferred over v1 and source-first v2 in every
 anonymous review. Its mean holistic score was 93.4, compared with 85.8 for v1 and 72.0 for v2 in the same calls. Blind

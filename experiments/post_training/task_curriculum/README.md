@@ -5,24 +5,28 @@ keeps curriculum design separate from task correctness:
 TaskCompendium owns model-visible task semantics and private verifier contracts; a curriculum describes observable
 capabilities, boundaries, examples, and prerequisites.
 
-The canonical cross-domain v1 catalog is the immutable object registered by `catalog_artifact.py`. Canonical means
-versioned and addressable. The breadth-first catalog also includes provisional subjects after the one-repair stopping
-rule. It contains all 45 D-series subject roots and 2,252 globally unique nodes: 1,853 trainable capabilities and 399
-organizational groups. `HISTORY.md` records the experiments that produced it and identifies provisional subjects. The
-3.7 MB YAML payload lives in CoreWeave S3.
+The canonical cross-domain v2 catalog is the immutable object registered by `catalog_artifact.py`. Canonical means
+versioned and addressable. It contains all 45 D-series subject roots and 2,405 globally unique nodes: 1,999 trainable
+capabilities and 406 organizational groups. One bounded repair pass raised the same-call holistic mean from 78.36 to
+92.81 across 42 reviewed subjects; 41 repairs were selected, one baseline was retained, and three previously accepted
+graphs were unchanged. Twenty-four subjects are `pilot_ready`; 21 remain explicitly provisional after the stopping
+rule. `HISTORY.md` records the experiments and tradeoffs. The 4.0 MB YAML payload lives in CoreWeave S3.
 
-- Artifact handle: `TASK_CURRICULUM`, version `2026.09.18.2`
-- Catalog: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.18-72a763b98f9e/curriculum.yaml`
-- SHA-256: `72a763b98f9ecf7f8f598b788c4f59e7ace213c01a30b403768a8f8f16f55382`
-- Evidence: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.18-72a763b98f9e/evidence.tar.gz`
+- Artifact handle: `TASK_CURRICULUM`, version `2026.09.19.1`
+- Catalog: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/curriculum.yaml`
+- SHA-256: `2578589fb0de23b179765e6eba999730c7117b9f083140b266ccc391dde9685d`
+- Summary: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/catalog_summary.json`
+- Comparison: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/comparison.json`
+- Routing audit: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/routing_audit.json`
+- Evidence: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/evidence.tar.gz`
 - Human viewer: [Task curriculum](https://applets.marina.oa.dev/a/67f69132-2ef4-4c9e-b8b5-77cabd126442/)
 
 Materialize the YAML before local validation or mapping:
 
 ```bash
 uv run fsutil cp \
-  s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.18-72a763b98f9e/curriculum.yaml \
-  /tmp/task-curriculum-cross-domain-v1.yaml
+  s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/curriculum.yaml \
+  /tmp/task-curriculum-cross-domain-v2.yaml
 ```
 
 `fsutil` reads `CW_KEY_ID` and `CW_KEY_SECRET` for this bucket. CoreWeave Iris tasks receive the same credentials from
@@ -52,8 +56,18 @@ their task environment.
 
 The five-subject source survey tested public college course sequences, textbook exercise families, and professional
 standards as generator inputs. `source_survey/README.md` records the result and the bounded-repair recommendation.
-The subsequent v3 experiment applied that recommendation. V1 remains canonical; v3 is an immutable experimental
-catalog registered as `TASK_CURRICULUM_SOURCE_AUDIT_V3`.
+The subsequent v3 experiment applied that recommendation to six roots. Production v2 then used the bounded method
+across the remaining catalog. V1 and experimental v3 remain immutable as `TASK_CURRICULUM_V1` and
+`TASK_CURRICULUM_SOURCE_AUDIT_V3`.
+
+Production v2 used anonymous same-call comparisons rather than absolute score deltas from different reviewers. A
+repair was selected only when the reviewer preferred it and it scored at least 70. The frozen blind tasks were reused
+as a diagnostic: the production repair could not see them, but the older baseline had been shaped by an earlier fit
+summary, so the aggregate 1,001/1,080 fit is not a fresh holdout claim. A separate practical routing audit placed all
+24 sampled shell, repository-workspace, and bug-repair tasks in D02; 21/24 then had one complete capability home. The
+three misses were unrelated operation families, not evidence for another omnibus capability. Evaluation-policy and
+AAII metadata found subject homes across all 45 roots; ten benchmark entries were classified as cross-domain task
+mechanics rather than subjects.
 
 ## Curriculum iteration
 
@@ -132,7 +146,7 @@ Run a pilot mapping with:
 ```bash
 uv run python -m experiments.post_training.task_curriculum.task_mapping.cli \
   --annotations /tmp/task-annotations-000.jsonl \
-  --catalog /tmp/task-curriculum-cross-domain-v1.yaml \
+  --catalog /tmp/task-curriculum-cross-domain-v2.yaml \
   --assignment-anchors /tmp/assignment-anchors.jsonl \
   --cache /tmp/curriculum-embeddings.sqlite \
   --embedding-model text-embedding-3-small \
@@ -159,8 +173,9 @@ The local SQLite cache is only a single-node development cache.
 
 ## Experiment history
 
-[`HISTORY.md`](HISTORY.md) summarizes the ten generation, review, blind-fit, and mapping experiments that led to the
-cross-domain v1 catalog. Full one-off inputs and outputs remain in the external evidence artifacts named there.
+[`HISTORY.md`](HISTORY.md) summarizes the generation, review, blind-fit, source-survey, and production-repair
+experiments that led to the cross-domain v2 catalog. Full one-off inputs and outputs remain in the external evidence
+artifacts named there.
 
 ## Provenance
 

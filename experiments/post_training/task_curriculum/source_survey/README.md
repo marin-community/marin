@@ -1,5 +1,8 @@
 # Source-guided curriculum follow-up
 
+> Historical experiment: cross-domain v2 is now canonical. This report preserves the v1-versus-source-first result
+> that motivated the bounded-repair method.
+
 This follow-up tests whether public college curricula, textbook exercise structures, and professional standards
 should become universal inputs to curriculum generation. It preserves the 45-root cross-domain v1 catalog as the
 baseline and regenerates five representative subjects in a separate experiment artifact. The result favors retaining

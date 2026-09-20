@@ -269,8 +269,9 @@ rewrite archived results to match it.
    as `waveN-R`, where `N` is the wave and `R` is the catalog revision within it. Validate the entire file with
    `load_catalog`, which checks routing values and global subject/section uniqueness. Recompute catalog counts from
    the parsed object. Upload the complete YAML to a new immutable S3 directory, verify its SHA-256 by reading it back,
-   and update `CATALOG_ROOT_URI`, `CATALOG_SHA256`, and `TASK_CURRICULUM` in `catalog_artifact.py`. Do not check the catalog
-   payload into git. Task mapping remains a diagnostic and is not a promotion gate.
+   and update `CATALOG_ROOT_URI`, `CATALOG_SHA256`, and `TASK_CURRICULUM` in `catalog_artifact.py`. Preserve the prior
+   immutable handle for comparison and rollback. Do not check the catalog payload into git. Task mapping remains a
+   diagnostic and is not a promotion gate.
 
    ```bash
    uv run python -c 'from pathlib import Path; from experiments.post_training.task_curriculum.catalog import load_catalog; c=load_catalog(Path("/tmp/task-curriculum-next.yaml")); print(len(c.curricula), sum(len(x.curriculum.sections) for x in c.curricula), sum(len(x.curriculum.capability_sections()) for x in c.curricula))'
@@ -280,6 +281,27 @@ rewrite archived results to match it.
    and catalog version. Archive raw one-off artifacts at the manifest URI, or delete them only after the wave is
    accepted and no repair needs the frozen task set. Do not check them into this directory.
 8. Run focused tests, type checking, and the repository lint workflow before publishing the change.
+
+## Catalog-wide bounded repair
+
+For a production-scale revision, freeze the current catalog and attempt at most one repair per selected subject. The
+repair role receives the complete subject graph, its latest review, the inventory guideposts, and a compact evidence
+brief; it does not receive blind tasks or alternative generated graphs. Require an exact unchanged/changed section
+partition and flag repairs that replace more than 35% of baseline sections for manual review. Regeneration is reserved
+for a graph whose current review explicitly says `regenerate`.
+
+Compare the complete baseline and repaired graphs anonymously in one high-reasoning review call. Select the repair
+only when it is preferred and scores at least 70; retain the established graph on ties or regressions. A separate
+fit call may reuse frozen tasks to compare the two candidates, but label that result as a reused diagnostic whenever
+an earlier baseline repair saw those tasks or their summary. It is not a fresh holdout claim and does not override
+mutual-confidence, epsilon-progression, boundary, or probe findings.
+
+Before publication, merge selected subjects mechanically and validate global identifiers, parents, prerequisites,
+probes, inventory coverage, and serialized round-trip equality. Run a cross-root audit on a small stratified set of
+real tasks plus evaluation metadata. Around 70% reasonable initial task placement is sufficient; repeated operation-
+family gaps require follow-up, while isolated misses remain recorded. Publish the catalog, summary, comparison,
+routing audit, exact prompts and schemas, raw role outputs, runner source, repository commit, and file manifest under
+one new immutable prefix, then read every object back and verify its hash.
 
 ## Resume checklist
 
